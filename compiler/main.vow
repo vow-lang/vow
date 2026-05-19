@@ -250,6 +250,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
     let in_flight_h: Vec<i64> = Vec::new();
     let in_flight_fi: Vec<i64> = Vec::new();
+    let in_flight_tmp: Vec<String> = Vec::new();
     let mut fi: i64 = 0;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
@@ -259,10 +260,12 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
             while in_flight_h.len() >= jobs {
                 let oldest_h: i64 = in_flight_h[0];
                 let oldest_fi: i64 = in_flight_fi[0];
+                let oldest_tmp: String = in_flight_tmp[0];
                 let oldest_f: IrFunction = fns[oldest_fi];
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
-                let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                vec_string_remove_front(in_flight_tmp);
+                let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -273,9 +276,10 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
                     any_skipped = 1;
                 } else {
                     eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
-                    let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
-                    in_flight_h.push(h);
+                    let started: EsbmcStart = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    in_flight_h.push(started.handle);
                     in_flight_fi.push(fi);
+                    in_flight_tmp.push(started.tmp_path);
                 }
             }
         }
@@ -284,10 +288,12 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
     while in_flight_h.len() > 0 {
         let oldest_h: i64 = in_flight_h[0];
         let oldest_fi: i64 = in_flight_fi[0];
+        let oldest_tmp: String = in_flight_tmp[0];
         let oldest_f: IrFunction = fns[oldest_fi];
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        vec_string_remove_front(in_flight_tmp);
+        let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -335,6 +341,17 @@ fn resolve_verify_jobs(argv: Vec<String>) -> i64 [io] {
 fn vec_i64_remove_front(v: Vec<i64>) {
     // Caller-enforced invariant: v.len() > 0 (drain loops guard this).
     // Guard defensively so an empty Vec becomes a no-op rather than popping below zero.
+    let n: i64 = v.len();
+    if n == 0 { return; }
+    let mut i: i64 = 0;
+    while i < n - 1 {
+        v[i] = v[i + 1];
+        i = i + 1;
+    }
+    v.pop();
+}
+
+fn vec_string_remove_front(v: Vec<String>) {
     let n: i64 = v.len();
     if n == 0 { return; }
     let mut i: i64 = 0;
@@ -393,7 +410,7 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>) -> Vec<String> {
 }
 
 fn verify_collect_and_report(
-    h: i64, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
+    h: i64, tmp_path: String, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64,
 ) -> i64 [io] {
@@ -401,12 +418,13 @@ fn verify_collect_and_report(
         // process_start failed (fork/exec error, OOM, rlimit, etc.) — this
         // is distinct from "no vows", which the caller already filters.
         // Silently skipping would mis-report an un-verified function as proven.
+        cleanup_verify_tmp_path(tmp_path);
         eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR (failed to start ESBMC)")));
         record_soft_fail(soft_meta, String::from("error"), String::from("failed to start ESBMC"), f.name);
         return 0;
     }
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
-    let vr: VerifyResult = verify_collect(h, f, effective_timeout);
+    let vr: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path);
     let st: i64 = vr.status;
     if st == VERIFY_PROVEN() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
@@ -570,13 +588,13 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
 //
 // State threading (Vow Vecs share heap backing across by-value copies, so
 // pushes/removes visible to the caller — see compiler/frontend.vow:202-204):
-//   - `in_flight_h`, `in_flight_fi`: caller-allocated FIFO queues. This phase
-//     pushes new handles and pre-drains when the pool is full. Remaining
-//     entries are drained by `build_drain_verify_phase` after codegen.
+//   - `in_flight_h`, `in_flight_fi`, `in_flight_tmp`: caller-allocated FIFO
+//     queues. This phase pushes new handles and pre-drains when the pool is
+//     full. Remaining entries are drained by `build_drain_verify_phase` after codegen.
 //   - `ces`, `soft_meta`: counterexample + soft-fail accumulators threaded
 //     through to `verify_collect_and_report`.
 // Returns `[all_proven, any_skipped]`.
-fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                      vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> Vec<i64> [io] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
@@ -589,10 +607,12 @@ fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: 
             while in_flight_h.len() >= jobs {
                 let oldest_h: i64 = in_flight_h[0];
                 let oldest_fi: i64 = in_flight_fi[0];
+                let oldest_tmp: String = in_flight_tmp[0];
                 let oldest_f: IrFunction = fns[oldest_fi];
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
-                let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                vec_string_remove_front(in_flight_tmp);
+                let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -603,9 +623,10 @@ fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: 
                     any_skipped = 1;
                 } else {
                     eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
-                    let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
-                    in_flight_h.push(h);
+                    let started: EsbmcStart = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    in_flight_h.push(started.handle);
                     in_flight_fi.push(fi);
+                    in_flight_tmp.push(started.tmp_path);
                 }
             }
         }
@@ -625,15 +646,17 @@ fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: 
 //
 // A no-op when `in_flight_h` is empty; callers may invoke it unconditionally
 // without a do_verify guard if desired.
-fn build_drain_verify_phase(in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64) -> i64 [io] {
+fn build_drain_verify_phase(in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64) -> i64 [io] {
     let mut all_proven: i64 = all_proven_in;
     while in_flight_h.len() > 0 {
         let oldest_h: i64 = in_flight_h[0];
         let oldest_fi: i64 = in_flight_fi[0];
+        let oldest_tmp: String = in_flight_tmp[0];
         let oldest_f: IrFunction = fns[oldest_fi];
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        vec_string_remove_front(in_flight_tmp);
+        let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -746,9 +769,10 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
     let in_flight_h: Vec<i64> = Vec::new();
     let in_flight_fi: Vec<i64> = Vec::new();
+    let in_flight_tmp: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
     if do_verify {
-        let phase_result: Vec<i64> = build_verify_phase(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs);
+        let phase_result: Vec<i64> = build_verify_phase(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs);
         if phase_result[0] == 0 { all_proven = 0; }
         if phase_result[1] == 1 { any_skipped = 1; }
     }
@@ -758,7 +782,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
-    all_proven = build_drain_verify_phase(in_flight_h, in_flight_fi, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven);
+    all_proven = build_drain_verify_phase(in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven);
     let status_str: String = {
         if all_proven == 0 { String::from("VerifyFailed") }
         else if any_skipped == 1 { String::from("Skipped") }
@@ -1054,6 +1078,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 let vfns: Vec<IrFunction> = ir_mod.functions;
                 let vin_flight_h: Vec<i64> = Vec::new();
                 let vin_flight_fi: Vec<i64> = Vec::new();
+                let vin_flight_tmp: Vec<String> = Vec::new();
                 let mut verify_failed: bool = false;
                 let t_dctx: DiagCtx = checked.dctx;
                 let t_const_fns: Vec<i64> = detect_const_fns(ir_mod);
@@ -1066,17 +1091,20 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         while vin_flight_h.len() >= t_jobs {
                             let oh: i64 = vin_flight_h[0];
                             let ofi: i64 = vin_flight_fi[0];
+                            let otmp: String = vin_flight_tmp[0];
                             let ovf: IrFunction = vfns[ofi];
                             vec_i64_remove_front(vin_flight_h);
                             vec_i64_remove_front(vin_flight_fi);
+                            vec_string_remove_front(vin_flight_tmp);
                             if oh == -1 {
                                 // process_start failed — treat as verification failure, not silent success.
+                                cleanup_verify_tmp_path(otmp);
                                 verify_failed = true;
                             } else if oh != -2 {
                                 // cmd_test launches verify_start with empty solver/encoding/timeout,
                                 // so effective_timeout matches what start_esbmc passed: 30s under auto.
                                 let t_eff: String = effective_timeout_for(String::from(""), String::from(""), String::from(""));
-                                let ovr: VerifyResult = verify_collect(oh, ovf, t_eff);
+                                let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp);
                                 if ovr.status == VERIFY_FAILED() {
                                     verify_failed = true;
                                 } else if ovr.status == VERIFY_TIMEOUT() {
@@ -1097,9 +1125,10 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                             if skip_if_non_modelable(vf, ir_mod, t_const_fns, t_dctx) {
                                 verify_failed = true;
                             } else {
-                                let vh: i64 = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
-                                vin_flight_h.push(vh);
+                                let vstarted: EsbmcStart = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
+                                vin_flight_h.push(vstarted.handle);
                                 vin_flight_fi.push(vfi);
+                                vin_flight_tmp.push(vstarted.tmp_path);
                             }
                         }
                     }
@@ -1108,15 +1137,18 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 while vin_flight_h.len() > 0 {
                     let oh: i64 = vin_flight_h[0];
                     let ofi: i64 = vin_flight_fi[0];
+                    let otmp: String = vin_flight_tmp[0];
                     let ovf: IrFunction = vfns[ofi];
                     vec_i64_remove_front(vin_flight_h);
                     vec_i64_remove_front(vin_flight_fi);
+                    vec_string_remove_front(vin_flight_tmp);
                     if oh == -1 {
                         // Spawn failure — critical when t_jobs >= nfns and every handle lands here.
+                        cleanup_verify_tmp_path(otmp);
                         verify_failed = true;
                     } else if oh != -2 {
                         let t_eff: String = effective_timeout_for(String::from(""), String::from(""), String::from(""));
-                        let ovr: VerifyResult = verify_collect(oh, ovf, t_eff);
+                        let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp);
                         if ovr.status == VERIFY_FAILED() {
                             verify_failed = true;
                         } else if ovr.status == VERIFY_TIMEOUT() {
