@@ -9112,7 +9112,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     // If --verify, run verification per function and update statuses
-    let exit_code: i32 = 0;
+    let mut exit_code: i32 = 0;
     if do_verify {
         if !esbmc_exists() {
             let mut ei_missing: i64 = 0;
