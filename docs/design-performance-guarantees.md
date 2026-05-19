@@ -68,6 +68,26 @@ fn sort(v: Vec<i64>) -> Vec<i64> vow {
 
 The `complexity` clause is a *vow* — a promise the function makes about its performance. It is verified differently from correctness clauses (fuzzing, not ESBMC), but it lives in the same contract block because it *is* a contract. Blame on violation: **Callee** (the implementation is too slow).
 
+#### Parsing note: `complexity:` is *not* a Vow expression
+
+The right-hand side of `complexity:` is meta-syntax — a fixed set of complexity descriptors, not a Vow expression. The parser must treat the whole clause specially:
+
+- `O(...)` is **not** a function call. `O`, `log`, and the inside of `O(...)` are reserved forms only inside the `complexity:` clause. `log(n)` does not type-check as a Vow expression (Vow is integer-typed; `log` has no Vow signature) and is never evaluated at run time.
+- `where` is a **contextual keyword** scoped to the `complexity:` clause. It is not added to the general grammar and does not collide with identifier `where` elsewhere.
+- `n`, `m`, ... in the `where` clause are **descriptor-local bindings**, not bindings in the function's scope. The right-hand sides (`v.len()`, `x`, `result.len()`, ...) *are* Vow expressions and must type-check against the function's signature.
+
+The whole clause parses into a structured AST node:
+
+```
+ComplexityDescriptor {
+    class: ComplexityClass,           // one of: Const, Log, Linear, Linearithmic, Quadratic, Cubic, Product(Vec<Var>, ...)
+    bindings: Vec<(Name, Expr)>,      // e.g. [("n", v.len())]
+    amortized: bool,
+}
+```
+
+This keeps the surface syntax familiar to humans while keeping the verifier surface small. The shape is independent of the function's expression grammar, so adding `complexity:` does not introduce a new type-system axis (in keeping with Vow design principle #1).
+
 ### Why not a separate block?
 
 Three alternatives were considered:
