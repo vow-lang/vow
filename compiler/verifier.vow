@@ -252,11 +252,16 @@ fn verify_tmp_path() -> String [io] {
     let dir: String = string_trim(process_get_stdout());
     let path: String = String::from("");
     path.push_str(dir);
+    // verify_tmp_dir_for_path hardcodes this suffix to recover the mktemp
+    // directory for fs_remove_dir; changing the filename here without updating
+    // it there silently makes cleanup_verify_tmp_path skip the directory and
+    // leak the mktemp dir on disk.
     path.push_str(String::from("/esbmc.c"));
     path
 }
 
 fn verify_tmp_dir_for_path(tmp_path: String) -> String {
+    // Suffix must match the filename appended by verify_tmp_path.
     let suffix: String = String::from("/esbmc.c");
     let n: i64 = tmp_path.len();
     let sn: i64 = suffix.len();
