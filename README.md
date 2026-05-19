@@ -19,9 +19,9 @@ export PATH="$HOME/.local/bin:$PATH"
 vowc build --no-verify examples/hello.vow -o /tmp/vow_hello
 
 # Day-to-day usage
-ulimit -v 2000000; build/vowc build examples/divide.vow              # compile + verify
-ulimit -v 2000000; build/vowc verify examples/divide.vow              # verify contracts only
-ulimit -v 2000000; build/vowc build --mode debug examples/divide.vow  # runtime vow checks
+build/vowc build examples/divide.vow              # compile + verify
+build/vowc verify examples/divide.vow              # verify contracts only
+build/vowc build --mode debug examples/divide.vow  # runtime vow checks
 ```
 
 ## Agent Setup (Claude Code Skill)
