@@ -8,6 +8,6 @@ fn is_whitespace(b: i64) -> bool vow {
     b == 32 || b == 9 || b == 10 || b == 13
 }
 
-fn main() -> i32 [io] {
+fn main() -> i32 {
     if is_whitespace(32) { 0 } else { 1 }
 }

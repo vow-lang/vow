@@ -20,6 +20,6 @@ fn eq_is_idempotent() -> bool vow {
   first == second
 }
 
-fn main() -> i32 [io] {
+fn main() -> i32 {
   if eq_is_idempotent() { 0 } else { 1 }
 }
