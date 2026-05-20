@@ -1092,8 +1092,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                             vec_i64_remove_front(vin_flight_h);
                             vec_i64_remove_front(vin_flight_fi);
                             vec_string_remove_front(vin_flight_tmp);
-                            if oh == -1 {
-                                // process_start failed — treat as verification failure, not silent success.
+                            if oh == -1 || oh == -3 {
+                                // ESBMC spawn/not-found failure: treat as verification failure, not silent success.
                                 cleanup_verify_tmp_path(otmp);
                                 verify_failed = true;
                             } else if oh != -2 {
@@ -1138,8 +1138,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     vec_i64_remove_front(vin_flight_h);
                     vec_i64_remove_front(vin_flight_fi);
                     vec_string_remove_front(vin_flight_tmp);
-                    if oh == -1 {
-                        // Spawn failure — critical when t_jobs >= nfns and every handle lands here.
+                    if oh == -1 || oh == -3 {
+                        // Spawn/not-found failure: critical when t_jobs >= nfns and every handle lands here.
                         cleanup_verify_tmp_path(otmp);
                         verify_failed = true;
                     } else if oh != -2 {
