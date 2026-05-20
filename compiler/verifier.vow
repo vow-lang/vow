@@ -371,6 +371,8 @@ fn append_timeout_arg(args: Vec<String>, timeout_secs: String) {
 }
 
 fn append_memlimit_arg(args: Vec<String>) {
+    // Self-hosted Vow has no memlimit opt-out CLI today; emit the default cap
+    // unconditionally. If Rust grows a user-facing opt-out, thread it here too.
     args.push(String::from("--memlimit"));
     args.push(DEFAULT_ESBMC_MEMLIMIT_ARG());
 }
@@ -390,10 +392,15 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     append_timeout_arg(esbmc_args, timeout_secs);
     append_memlimit_arg(esbmc_args);
     // Kernel watchdog kills the child if ESBMC's own --timeout doesn't fire.
-    let handle: i64 = process_start(esbmc_path(), esbmc_args);
-    if handle == -1 {
+    let esbmc_bin: String = esbmc_path();
+    if esbmc_bin.len() == 0 {
         cleanup_verify_tmp_path(tmp_path);
         return EsbmcRun { exit_code: -3, combined: String::from("") };
+    }
+    let handle: i64 = process_start(esbmc_bin, esbmc_args);
+    if handle == -1 {
+        cleanup_verify_tmp_path(tmp_path);
+        return EsbmcRun { exit_code: -1, combined: String::from("failed to start ESBMC") };
     }
     let watchdog_ms: i64 = watchdog_ms_for(timeout_secs);
     let exit_code: i64 = process_wait_timeout(handle, watchdog_ms);
@@ -428,7 +435,11 @@ fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name
     append_solver_args(esbmc_args, solver, encoding);
     append_timeout_arg(esbmc_args, timeout_secs);
     append_memlimit_arg(esbmc_args);
-    let handle: i64 = process_start(esbmc_path(), esbmc_args);
+    let esbmc_bin: String = esbmc_path();
+    if esbmc_bin.len() == 0 {
+        return -3;
+    }
+    let handle: i64 = process_start(esbmc_bin, esbmc_args);
     handle
 }
 
@@ -918,7 +929,7 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
 }
 
 fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_path: String) -> VerifyResult [io] {
-    if handle == -1 {
+    if handle == -3 {
         cleanup_verify_tmp_path(tmp_path);
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
@@ -927,6 +938,17 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
             var_values: Vec::new(),
             block_visits: Vec::new(),
             raw_output: String::from("esbmc not found"),
+        };
+    }
+    if handle == -1 {
+        cleanup_verify_tmp_path(tmp_path);
+        return VerifyResult {
+            status: VERIFY_ERROR(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from("failed to start ESBMC"),
         };
     }
     // Kernel watchdog sized to match ESBMC's --timeout so a runaway process can't block indefinitely.

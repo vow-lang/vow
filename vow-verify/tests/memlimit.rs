@@ -88,7 +88,10 @@ fn memlimit_probe_bounds_real_esbmc_rss_when_enabled() {
         }
         VerificationResult::Proven
         | VerificationResult::Failed(_)
-        | VerificationResult::ProvenIr => {}
+        | VerificationResult::ProvenIr => {
+            // Accept successful structured outcomes: this env-gated probe is an
+            // RSS sanity check, not the deterministic memory-limit classifier.
+        }
         other => panic!("expected a structured verifier result, got {other:?}"),
     }
 

@@ -497,7 +497,10 @@ fn verify_collect_and_report(
         return 0;
     }
     eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
-    record_soft_fail(soft_meta, String::from("error"), String::from("unrecognized ESBMC outcome"), f.name);
+    let error_message: String = {
+        if vr.raw_output.len() > 0 { vr.raw_output } else { String::from("unrecognized ESBMC outcome") }
+    };
+    record_soft_fail(soft_meta, String::from("error"), error_message, f.name);
     0
 }
 
