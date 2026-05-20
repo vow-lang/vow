@@ -811,6 +811,8 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
             raw_output: String::from("esbmc not found"),
         };
     }
+    // Spawn failures remain VERIFY_ERROR via r.combined; only the explicit
+    // not-found sentinel becomes VERIFY_NOT_FOUND.
     let combined: String = r.combined;
     let mut status: i64 = {
         if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }

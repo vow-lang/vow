@@ -527,6 +527,8 @@ fn is_memory_limit_output(combined: &str) -> bool {
 /// property` or `Unable to prove or falsify the program, giving up.` — we
 /// keep the most informative of these and fall back to a generic message.
 fn parse_unknown_reason(combined: &str) -> String {
+    // Defensive: reachable from the self-hosted path after OOM has already
+    // been mapped to UNKNOWN; run_esbmc_with_max_k_step handles this earlier.
     if is_memory_limit_output(combined) {
         return memory_limit_reason();
     }
