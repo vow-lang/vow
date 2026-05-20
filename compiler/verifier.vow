@@ -307,11 +307,17 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func
     cmd.push_str(c_path);
     cmd.push_str(String::from(" --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step "));
     cmd.push_str(max_k_step);
-    cmd.push_str(String::from(" --64\n"));
+    cmd.push_str(String::from(" --64 --memlimit "));
+    cmd.push_str(DEFAULT_ESBMC_MEMLIMIT_ARG());
+    cmd.push_str(String::from("\n"));
     fs_write(cmd_path, cmd);
 }
 
 fn DEFAULT_AUTO_TIMEOUT_STR() -> String { String::from("30") }
+
+// Mirrors DEFAULT_ESBMC_MEMLIMIT_MB in vow-verify/src/solver_strategy.rs.
+// This is a per-ESBMC-process cap, emitted as `--memlimit 4096m`.
+fn DEFAULT_ESBMC_MEMLIMIT_ARG() -> String { String::from("4096m") }
 
 // Mirrors DEFAULT_ESBMC_TIMEOUT_SECS in vow-verify/src/esbmc.rs.
 fn DEFAULT_ESBMC_TIMEOUT_MS() -> i64 { 300000 }
@@ -346,6 +352,11 @@ fn append_timeout_arg(args: Vec<String>, timeout_secs: String) {
     }
 }
 
+fn append_memlimit_arg(args: Vec<String>) {
+    args.push(String::from("--memlimit"));
+    args.push(DEFAULT_ESBMC_MEMLIMIT_ARG());
+}
+
 fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> EsbmcRun [io] {
     fs_write(tmp_path, c_source);
     save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, false);
@@ -359,11 +370,12 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     esbmc_args.push(String::from("--64"));
     append_solver_args(esbmc_args, solver, encoding);
     append_timeout_arg(esbmc_args, timeout_secs);
+    append_memlimit_arg(esbmc_args);
     // Kernel watchdog kills the child if ESBMC's own --timeout doesn't fire.
     let handle: i64 = process_start(esbmc_path(), esbmc_args);
     if handle == -1 {
         cleanup_verify_tmp_path(tmp_path);
-        return EsbmcRun { exit_code: -1, combined: String::from("") };
+        return EsbmcRun { exit_code: -3, combined: String::from("") };
     }
     let watchdog_ms: i64 = watchdog_ms_for(timeout_secs);
     let exit_code: i64 = process_wait_timeout(handle, watchdog_ms);
@@ -397,6 +409,7 @@ fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name
     esbmc_args.push(String::from("--64"));
     append_solver_args(esbmc_args, solver, encoding);
     append_timeout_arg(esbmc_args, timeout_secs);
+    append_memlimit_arg(esbmc_args);
     let handle: i64 = process_start(esbmc_path(), esbmc_args);
     handle
 }
@@ -423,6 +436,9 @@ fn parse_verify_status(combined: String) -> i64 {
     if str_find_str(combined, String::from("VERIFICATION FAILED")) >= 0 {
         return VERIFY_FAILED();
     }
+    if output_has_memory_limit(combined) {
+        return VERIFY_UNKNOWN();
+    }
     // ESBMC's third legitimate outcome: it finished without proving or
     // falsifying (e.g. k-induction's forward condition couldn't establish
     // the property). Must be checked before the generic ERROR fallback.
@@ -441,9 +457,27 @@ fn parse_verify_status(combined: String) -> i64 {
     VERIFY_ERROR()
 }
 
+fn memory_limit_reason() -> String {
+    String::from("memory limit exceeded")
+}
+
+fn output_has_memory_limit(combined: String) -> bool {
+    str_find_str(combined, String::from("Out of memory")) >= 0
+        || str_find_str(combined, String::from("out of memory")) >= 0
+        || str_find_str(combined, String::from("memory limit")) >= 0
+        || str_find_str(combined, String::from("Memory limit")) >= 0
+        || str_find_str(combined, String::from("memlimit")) >= 0
+        || str_find_str(combined, String::from("Cannot allocate memory")) >= 0
+        || str_find_str(combined, String::from("cannot allocate memory")) >= 0
+        || str_find_str(combined, String::from("std::bad_alloc")) >= 0
+}
+
 // Extract a short explanation from an ESBMC `VERIFICATION UNKNOWN` log.
 // Mirrors `parse_unknown_reason` in vow-verify/src/esbmc.rs.
 fn parse_unknown_reason(combined: String) -> String {
+    if output_has_memory_limit(combined) {
+        return memory_limit_reason();
+    }
     let lines: Vec<String> = Vec::new();
     split_lines(combined, lines);
     let n: i64 = lines.len();
@@ -740,7 +774,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let tmp_path: String = verify_tmp_path();
     let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
-    if r.exit_code == -1 {
+    if r.exit_code == -3 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
@@ -756,10 +790,12 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     };
     let mut used_combined: String = combined;
 
-    // Phase D: if BV times out under Auto encoding and the BV solver is not
-    // Bitwuzla, retry once with --z3 --ir (integer encoding). UNKNOWN is an
-    // explicit inconclusive ESBMC result; do not let an IR proof hide it.
-    if status == VERIFY_TIMEOUT() && auto_enc && bv_solver != String::from("bitwuzla") {
+    // Phase D: if BV exhausts a resource budget under Auto encoding and the
+    // BV solver is not Bitwuzla, retry once with --z3 --ir (integer encoding).
+    // Other UNKNOWN outcomes are explicit inconclusive ESBMC results; do not
+    // let an IR proof hide them.
+    let bv_memory_limit: bool = status == VERIFY_UNKNOWN() && parse_unknown_reason(combined) == memory_limit_reason();
+    if (status == VERIFY_TIMEOUT() || bv_memory_limit) && auto_enc && bv_solver != String::from("bitwuzla") {
         let ir_solver: String = String::from("z3");
         let ir_encoding: String = String::from("ir");
         let ir_timeout: String = {
@@ -767,7 +803,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         };
         let tmp_path2: String = verify_tmp_path();
         let r2: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path2, fn_name, ir_solver, ir_encoding, ir_timeout);
-        if r2.exit_code == -1 {
+        if r2.exit_code == -3 {
             // ESBMC disappeared between BV and IR runs; surface consistently with verify_function_ir_fallback.
             return VerifyResult {
                 status: VERIFY_NOT_FOUND(),
@@ -822,7 +858,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     // Rust toolchain but has no effect.
     let tmp_path: String = verify_tmp_path();
     let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, ir_solver, ir_encoding, ir_timeout);
-    if r.exit_code == -1 {
+    if r.exit_code == -3 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
@@ -878,21 +914,6 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
             var_values: Vec::new(),
             block_visits: Vec::new(),
             raw_output: String::from("(watchdog timeout)"),
-        };
-    }
-    if exit_code == -1 {
-        // try_wait error: runtime kills the child and stores a Completed entry
-        // before returning -1, so we still need to evict the PROCESS_MAP entry.
-        // For the handle-not-found case, process_kill is a no-op.
-        process_kill(handle);
-        cleanup_verify_tmp_path(tmp_path);
-        return VerifyResult {
-            status: VERIFY_NOT_FOUND(),
-            vow_id: -1,
-            var_names: Vec::new(),
-            var_values: Vec::new(),
-            block_visits: Vec::new(),
-            raw_output: String::from("esbmc not found"),
         };
     }
     let stdout: String = process_stdout_for(handle);

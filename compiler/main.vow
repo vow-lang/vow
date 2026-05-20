@@ -443,9 +443,10 @@ fn verify_collect_and_report(
         return 0;
     }
     if st == VERIFY_TIMEOUT() || st == VERIFY_UNKNOWN() {
-        // BV timeout may retry with IR before failing (Phase D fallback).
-        // UNKNOWN is an explicit inconclusive ESBMC result; do not let an IR
-        // proof hide it. Mirrors run_with_fallback in vow-verify.
+        // BV timeout or memlimit exhaustion may retry with IR before failing
+        // (Phase D fallback). Other UNKNOWN outcomes are explicit inconclusive
+        // ESBMC results; do not let an IR proof hide them. Mirrors
+        // run_with_fallback in vow-verify.
         let bv_is_unknown: bool = st == VERIFY_UNKNOWN();
         let bv_label: String = { if bv_is_unknown { String::from("unknown") } else { String::from("timeout") } };
         let bv_label_upper: String = { if bv_is_unknown { String::from("UNKNOWN") } else { String::from("TIMEOUT") } };
@@ -454,9 +455,10 @@ fn verify_collect_and_report(
             if bv_is_unknown { parse_unknown_reason(vr.raw_output) }
             else { String::from("") }
         };
+        let bv_memory_limit: bool = bv_is_unknown && bv_msg_initial == memory_limit_reason();
         let bv_solver: String = resolve_auto_bv_solver(solver);
         let auto_enc: bool = is_auto_encoding(encoding);
-        if !bv_is_unknown && auto_enc && bv_solver != String::from("bitwuzla") {
+        if (!bv_is_unknown || bv_memory_limit) && auto_enc && bv_solver != String::from("bitwuzla") {
             eprintln_str(str3(String::from("  "), f.name, String::from(": BV inconclusive, retrying with --z3 --ir...")));
             let vr2: VerifyResult = verify_function_ir_fallback(f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
             let st2: i64 = vr2.status;

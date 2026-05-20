@@ -15,5 +15,6 @@ pub use esbmc::{
     verify_function_with_module_and_const_fns_with_max_k_step,
 };
 pub use solver_strategy::{
-    DEFAULT_AUTO_TIMEOUT_SECS, Encoding, Solver, SolverConfig, classify_function, run_with_fallback,
+    DEFAULT_AUTO_TIMEOUT_SECS, DEFAULT_ESBMC_MEMLIMIT_MB, Encoding, Solver, SolverConfig,
+    classify_function, run_with_fallback,
 };

@@ -494,6 +494,10 @@ pub fn run_esbmc_with_max_k_step(
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
         VerificationResult::Failed(parse_esbmc_output(&combined))
+    } else if is_memory_limit_output(&combined) {
+        VerificationResult::Unknown {
+            reason: memory_limit_reason(),
+        }
     } else if combined.contains("VERIFICATION UNKNOWN") {
         VerificationResult::Unknown {
             reason: parse_unknown_reason(&combined),
@@ -505,11 +509,27 @@ pub fn run_esbmc_with_max_k_step(
     }
 }
 
+fn memory_limit_reason() -> String {
+    "memory limit exceeded".to_string()
+}
+
+fn is_memory_limit_output(combined: &str) -> bool {
+    let lower = combined.to_ascii_lowercase();
+    lower.contains("out of memory")
+        || lower.contains("memory limit")
+        || lower.contains("memlimit")
+        || lower.contains("cannot allocate memory")
+        || lower.contains("std::bad_alloc")
+}
+
 /// Extract the short explanation that precedes `VERIFICATION UNKNOWN` from an
 /// ESBMC log. Typical lines: `The forward condition is unable to prove the
 /// property` or `Unable to prove or falsify the program, giving up.` — we
 /// keep the most informative of these and fall back to a generic message.
 fn parse_unknown_reason(combined: &str) -> String {
+    if is_memory_limit_output(combined) {
+        return memory_limit_reason();
+    }
     let mut reason = String::new();
     for line in combined.lines() {
         let t = line.trim();
@@ -920,6 +940,70 @@ VERIFICATION FAILED";
         let combined = "ESBMC version 8.2.0\nSome unrelated output\nVERIFICATION UNKNOWN\n";
         let reason = parse_unknown_reason(combined);
         assert_eq!(reason, "ESBMC returned VERIFICATION UNKNOWN");
+    }
+
+    #[cfg(unix)]
+    fn fake_esbmc_script(body: &str) -> (tempfile::TempDir, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let esbmc = dir.path().join("fake-esbmc");
+        std::fs::write(&esbmc, body).expect("write fake esbmc");
+        let mut perms = std::fs::metadata(&esbmc).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&esbmc, perms).expect("chmod fake esbmc");
+        (dir, esbmc)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_esbmc_reports_memlimit_output_as_unknown() {
+        let (_dir, esbmc) = fake_esbmc_script(
+            r#"#!/bin/sh
+echo "Out of memory: memory limit exceeded"
+exit 6
+"#,
+        );
+        let result = run_esbmc_with_max_k_step(
+            &esbmc,
+            "int main(void) { return 0; }",
+            5,
+            "main",
+            &SolverConfig::default_config(),
+        );
+
+        match result {
+            VerificationResult::Unknown { reason } => {
+                assert_eq!(reason, "memory limit exceeded");
+            }
+            other => panic!("expected memory-limit Unknown, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_esbmc_prefers_memlimit_reason_over_generic_unknown() {
+        let (_dir, esbmc) = fake_esbmc_script(
+            r#"#!/bin/sh
+echo "ESBMC was unable to finish before the memory limit"
+echo "VERIFICATION UNKNOWN"
+exit 6
+"#,
+        );
+        let result = run_esbmc_with_max_k_step(
+            &esbmc,
+            "int main(void) { return 0; }",
+            5,
+            "main",
+            &SolverConfig::default_config(),
+        );
+
+        match result {
+            VerificationResult::Unknown { reason } => {
+                assert_eq!(reason, "memory limit exceeded");
+            }
+            other => panic!("expected memory-limit Unknown, got {other:?}"),
+        }
     }
 
     #[test]

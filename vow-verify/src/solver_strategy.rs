@@ -26,9 +26,13 @@ pub struct SolverConfig {
     pub solver: Solver,
     pub encoding: Encoding,
     pub timeout_secs: Option<u32>,
+    /// Per-ESBMC-process memory cap. `Some(n)` is emitted as `--memlimit nm`.
+    pub memlimit_mb: Option<u32>,
 }
 
 pub const DEFAULT_AUTO_TIMEOUT_SECS: u32 = 30;
+/// Default per-ESBMC-process cap. This bounds solver RSS without changing Vow contracts.
+pub const DEFAULT_ESBMC_MEMLIMIT_MB: u32 = 4096;
 
 impl SolverConfig {
     pub fn default_config() -> Self {
@@ -36,6 +40,7 @@ impl SolverConfig {
             solver: Solver::Auto,
             encoding: Encoding::Auto,
             timeout_secs: None,
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         }
     }
 
@@ -71,6 +76,7 @@ impl SolverConfig {
             solver,
             encoding,
             timeout_secs: self.timeout_secs,
+            memlimit_mb: self.memlimit_mb,
         }
     }
 
@@ -86,6 +92,10 @@ impl SolverConfig {
         match resolved.encoding {
             Encoding::Ir => args.push("--ir".to_string()),
             Encoding::Bv | Encoding::Auto => {} // bv is ESBMC default
+        }
+        if let Some(mb) = resolved.memlimit_mb {
+            args.push("--memlimit".to_string());
+            args.push(format!("{mb}m"));
         }
         args
     }
@@ -187,6 +197,7 @@ pub fn classify_function(func: &Function) -> SolverConfig {
         solver,
         encoding: Encoding::Bv, // never auto-select Ir
         timeout_secs: None,
+        memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
     }
 }
 
@@ -233,45 +244,44 @@ pub fn run_with_fallback(
         solver: config.solver,
         encoding: Encoding::Bv,
         timeout_secs,
+        memlimit_mb: config.memlimit_mb,
     }
     .resolve();
 
     let result = run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &bv_config);
 
-    match result {
-        // Timeout means BV could neither prove nor disprove within the time
-        // budget, so auto mode may retry with Z3+IR. UNKNOWN is different:
-        // ESBMC reached an inconclusive verification result, and proving the
-        // weaker IR abstraction must not hide that BV outcome.
-        VerificationResult::Timeout => {
-            // IR encoding only works with Z3. If the resolved BV solver was
-            // Boolector or Z3, we can switch to Z3+IR. Bitwuzla cannot do IR.
-            let can_ir = !matches!(bv_config.solver, Solver::Bitwuzla);
-            if !can_ir {
-                return (result, bv_config);
-            }
-
-            // Reuse the same timeout policy for the IR retry: user override
-            // if set, else the 30s default (IR is always reachable here).
-            let ir_timeout = config.timeout_secs.or(Some(DEFAULT_AUTO_TIMEOUT_SECS));
-            let ir_config = SolverConfig {
-                solver: Solver::Z3,
-                encoding: Encoding::Ir,
-                timeout_secs: ir_timeout,
-            };
-            let ir_result =
-                run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &ir_config);
-            match ir_result {
-                VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
-                // IR returned a counterexample, but IR does not model
-                // overflow — a CE found only under IR can be infeasible
-                // under BV. Report the original timeout rather than an
-                // unsound definitive Failed.
-                VerificationResult::Failed(_) => (result, ir_config),
-                other => (other, ir_config),
-            }
+    let resource_limited = matches!(&result, VerificationResult::Timeout)
+        || matches!(&result, VerificationResult::Unknown { reason } if reason == "memory limit exceeded");
+    if resource_limited {
+        // Timeout/memlimit means BV could neither prove nor disprove within
+        // the resource budget, so auto mode may retry with Z3+IR. Other
+        // UNKNOWN outcomes are explicit ESBMC inconclusive results and must
+        // not be hidden by proving the weaker IR abstraction.
+        let can_ir = !matches!(bv_config.solver, Solver::Bitwuzla);
+        if !can_ir {
+            return (result, bv_config);
         }
-        other => (other, bv_config),
+
+        // Reuse the same timeout/memlimit policy for the IR retry: user
+        // timeout override if set, else the 30s default.
+        let ir_timeout = config.timeout_secs.or(Some(DEFAULT_AUTO_TIMEOUT_SECS));
+        let ir_config = SolverConfig {
+            solver: Solver::Z3,
+            encoding: Encoding::Ir,
+            timeout_secs: ir_timeout,
+            memlimit_mb: config.memlimit_mb,
+        };
+        let ir_result = run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &ir_config);
+        match ir_result {
+            VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
+            // IR returned a counterexample, but IR does not model overflow —
+            // a CE found only under IR can be infeasible under BV. Report the
+            // original resource-limited result rather than an unsound Failed.
+            VerificationResult::Failed(_) => (result, ir_config),
+            other => (other, ir_config),
+        }
+    } else {
+        (result, bv_config)
     }
 }
 
@@ -324,6 +334,7 @@ mod tests {
             solver: Solver::Boolector,
             encoding: Encoding::Ir,
             timeout_secs: None,
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         assert!(c.validate().is_err());
     }
@@ -334,6 +345,7 @@ mod tests {
             solver: Solver::Bitwuzla,
             encoding: Encoding::Ir,
             timeout_secs: None,
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         assert!(c.validate().is_err());
     }
@@ -344,6 +356,7 @@ mod tests {
             solver: Solver::Z3,
             encoding: Encoding::Ir,
             timeout_secs: None,
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         assert!(c.validate().is_ok());
     }
@@ -354,6 +367,7 @@ mod tests {
             solver: Solver::Auto,
             encoding: Encoding::Ir,
             timeout_secs: None,
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         assert!(c.validate().is_ok());
     }
@@ -364,6 +378,7 @@ mod tests {
             solver: Solver::Auto,
             encoding: Encoding::Ir,
             timeout_secs: None,
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         let r = c.resolve();
         assert_eq!(r.solver, Solver::Z3);
@@ -379,9 +394,27 @@ mod tests {
     }
 
     #[test]
+    fn test_default_config_sets_esbmc_memlimit() {
+        let c = SolverConfig::default_config();
+        assert_eq!(c.memlimit_mb, Some(DEFAULT_ESBMC_MEMLIMIT_MB));
+    }
+
+    #[test]
+    fn test_resolve_preserves_esbmc_memlimit() {
+        let c = SolverConfig {
+            solver: Solver::Auto,
+            encoding: Encoding::Auto,
+            timeout_secs: None,
+            memlimit_mb: Some(1024),
+        };
+        let r = c.resolve();
+        assert_eq!(r.memlimit_mb, Some(1024));
+    }
+
+    #[test]
     fn test_esbmc_args_default() {
         let c = SolverConfig::default_config();
-        assert!(c.esbmc_args().is_empty());
+        assert_eq!(c.esbmc_args(), vec!["--memlimit", "4096m"]);
     }
 
     #[test]
@@ -390,9 +423,10 @@ mod tests {
             solver: Solver::Z3,
             encoding: Encoding::Ir,
             timeout_secs: None,
+            memlimit_mb: Some(2048),
         };
         let args = c.esbmc_args();
-        assert_eq!(args, vec!["--z3", "--ir"]);
+        assert_eq!(args, vec!["--z3", "--ir", "--memlimit", "2048m"]);
     }
 
     #[test]
@@ -401,9 +435,21 @@ mod tests {
             solver: Solver::Bitwuzla,
             encoding: Encoding::Bv,
             timeout_secs: None,
+            memlimit_mb: Some(512),
         };
         let args = c.esbmc_args();
-        assert_eq!(args, vec!["--bitwuzla"]);
+        assert_eq!(args, vec!["--bitwuzla", "--memlimit", "512m"]);
+    }
+
+    #[test]
+    fn test_esbmc_args_omits_memlimit_when_none() {
+        let c = SolverConfig {
+            solver: Solver::Boolector,
+            encoding: Encoding::Bv,
+            timeout_secs: None,
+            memlimit_mb: None,
+        };
+        assert!(c.esbmc_args().is_empty());
     }
 
     // -- Heuristic tests --
@@ -649,6 +695,7 @@ mod tests {
             solver: Solver::Boolector,
             encoding: Encoding::Bv,
             timeout_secs: None,
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         let (result, resolved) = run_with_fallback(&esbmc, &c_src, 5, &func.name, &cfg);
         assert!(matches!(result, VerificationResult::Proven));
@@ -673,6 +720,7 @@ mod tests {
             solver: Solver::Auto,
             encoding: Encoding::Auto,
             timeout_secs: None,
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         let (result, resolved) = run_with_fallback(&esbmc, &c_src, 5, &func.name, &cfg);
         assert!(matches!(result, VerificationResult::Proven));
@@ -698,6 +746,7 @@ mod tests {
             solver: Solver::Bitwuzla,
             encoding: Encoding::Auto,
             timeout_secs: Some(0), // force BV to time out immediately
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         let (result, resolved) = run_with_fallback(&esbmc, &c_src, 5, &func.name, &cfg);
         // The BV run might finish between spawn and the first 50ms poll; if
@@ -753,6 +802,7 @@ echo "VERIFICATION UNKNOWN"
             solver: Solver::Auto,
             encoding: Encoding::Auto,
             timeout_secs: Some(5),
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         let (result, resolved) =
             run_with_fallback(&esbmc, "int main(void) { return 0; }", 5, "main", &cfg);
@@ -765,6 +815,47 @@ echo "VERIFICATION UNKNOWN"
         }
         assert_eq!(resolved.solver, Solver::Boolector);
         assert_eq!(resolved.encoding, Encoding::Bv);
+    }
+
+    /// A memory-limit hit is a verifier resource exhaustion, like timeout,
+    /// not ESBMC's logical `VERIFICATION UNKNOWN`. Auto mode may retry IR.
+    #[cfg(unix)]
+    #[test]
+    fn fallback_auto_bv_memlimit_retries_with_ir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let esbmc = dir.path().join("fake-esbmc");
+        std::fs::write(
+            &esbmc,
+            r#"#!/bin/sh
+for arg in "$@"; do
+    if [ "$arg" = "--ir" ]; then
+        echo "VERIFICATION SUCCESSFUL"
+        exit 0
+    fi
+done
+echo "Out of memory: memory limit exceeded"
+exit 6
+"#,
+        )
+        .expect("write fake esbmc");
+        let mut perms = std::fs::metadata(&esbmc).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&esbmc, perms).expect("chmod fake esbmc");
+
+        let cfg = SolverConfig {
+            solver: Solver::Auto,
+            encoding: Encoding::Auto,
+            timeout_secs: Some(5),
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
+        };
+        let (result, resolved) =
+            run_with_fallback(&esbmc, "int main(void) { return 0; }", 5, "main", &cfg);
+
+        assert!(matches!(result, VerificationResult::ProvenIr));
+        assert_eq!(resolved.solver, Solver::Z3);
+        assert_eq!(resolved.encoding, Encoding::Ir);
     }
 
     /// Phase D: when BV times out under Auto encoding (non-Bitwuzla solver),
@@ -786,6 +877,7 @@ echo "VERIFICATION UNKNOWN"
             solver: Solver::Boolector,
             encoding: Encoding::Auto,
             timeout_secs: Some(0),
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
         };
         let (result, resolved) = run_with_fallback(&esbmc, &c_src, 5, &func.name, &cfg);
         // The BV run may or may not race the 50ms poll; accept either

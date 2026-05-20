@@ -82,6 +82,7 @@ fn make_solver_config(
         solver: s,
         encoding: e,
         timeout_secs: timeout,
+        memlimit_mb: SolverConfig::default_config().memlimit_mb,
     };
     if let Err(msg) = config.validate() {
         eprintln!("error: {msg}");
@@ -8754,6 +8755,7 @@ fn verify_one_function(
             solver: heuristic.solver,
             encoding: config.encoding,
             timeout_secs: config.timeout_secs,
+            memlimit_mb: config.memlimit_mb,
         }
     } else {
         *config
@@ -8766,6 +8768,7 @@ fn verify_one_function(
             limits.max_k_step,
             func_config.solver_str(),
             func_config.encoding_str(),
+            func_config.memlimit_mb,
         );
 
         // Security: lookup only returns FAILED entries (PROVEN is never trusted
@@ -8789,6 +8792,7 @@ fn verify_one_function(
                     limits.max_k_step,
                     resolved_config.solver_str(),
                     resolved_config.encoding_str(),
+                    resolved_config.memlimit_mb,
                 );
                 vc.store(
                     &store_key,
@@ -10012,6 +10016,7 @@ fn update_contract_statuses(
                 limits.max_k_step,
                 config.solver_str(),
                 config.encoding_str(),
+                config.memlimit_mb,
             );
 
             // Security: lookup only returns FAILED (PROVEN is never trusted
@@ -10040,6 +10045,7 @@ fn update_contract_statuses(
                         limits.max_k_step,
                         resolved_config.solver_str(),
                         resolved_config.encoding_str(),
+                        resolved_config.memlimit_mb,
                     );
                     vc.store(
                         &store_key,
