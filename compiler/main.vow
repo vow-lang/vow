@@ -446,8 +446,7 @@ fn verify_collect_and_report(
             if bv_is_unknown { parse_unknown_reason(vr.raw_output) }
             else { String::from("") }
         };
-        // Reuse the parsed UNKNOWN message here; this path needs it for reporting.
-        let bv_memory_limit: bool = bv_is_unknown && bv_msg_initial == memory_limit_reason();
+        let bv_memory_limit: bool = bv_is_unknown && output_has_memory_limit(vr.raw_output);
         let bv_solver: String = resolve_auto_bv_solver(solver);
         let auto_enc: bool = is_auto_encoding(encoding);
         if (!bv_is_unknown || bv_memory_limit) && auto_enc && bv_solver != String::from("bitwuzla") {
