@@ -955,6 +955,26 @@ VERIFICATION FAILED";
     }
 
     #[cfg(unix)]
+    #[test]
+    fn failed_output_takes_priority_over_memory_limit_text() {
+        let (_dir, esbmc) = fake_esbmc_script(
+            r#"#!/bin/sh
+echo "VERIFICATION FAILED"
+echo "std::bad_alloc"
+exit 10
+"#,
+        );
+        let result = run_esbmc_with_max_k_step(
+            &esbmc,
+            "int main(void) { __ESBMC_assert(0, \"vow:1\"); return 0; }",
+            1,
+            "main",
+            &SolverConfig::default_config(),
+        );
+        assert!(matches!(result, VerificationResult::Failed(_)));
+    }
+
+    #[cfg(unix)]
     fn fake_esbmc_script(body: &str) -> (tempfile::TempDir, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
 
