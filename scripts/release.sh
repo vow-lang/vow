@@ -20,10 +20,14 @@ case "$BUMP" in
 esac
 
 command -v gh >/dev/null || { echo "Error: gh CLI not found. Install from https://cli.github.com/" >&2; exit 1; }
+command -v git >/dev/null || { echo "Error: git not found." >&2; exit 1; }
 
-CURRENT=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' vow/Cargo.toml | head -1)
+# The workflow runs against main, so derive the preview from origin/main
+# (not the local working tree, which may be ahead/behind).
+git fetch --quiet origin main || echo "Warning: could not fetch origin/main; using cached ref" >&2
+CURRENT=$(git show origin/main:vow/Cargo.toml 2>/dev/null | sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' | head -1)
 if [ -z "$CURRENT" ]; then
-    echo "Error: could not extract version from vow/Cargo.toml" >&2
+    echo "Error: could not extract version from origin/main:vow/Cargo.toml" >&2
     exit 1
 fi
 IFS='.' read -r MAJOR MINOR REV <<< "$CURRENT"
@@ -33,7 +37,7 @@ case "$BUMP" in
     rev)   NEXT="${MAJOR}.${MINOR}.$((REV + 1))" ;;
 esac
 
-echo "Current version: $CURRENT"
+echo "Current version: $CURRENT  (from origin/main)"
 echo "Next version:    $NEXT  ($BUMP bump)"
 echo "Triggers: .github/workflows/release.yml on main"
 echo
