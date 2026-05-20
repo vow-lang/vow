@@ -333,7 +333,7 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func
 
 fn DEFAULT_AUTO_TIMEOUT_STR() -> String { String::from("30") }
 
-// Mirrors DEFAULT_ESBMC_MEMLIMIT_MB in vow-verify/src/solver_strategy.rs.
+// Mirrors DEFAULT_ESBMC_MEMLIMIT_MB = 4096 in vow-verify/src/solver_strategy.rs.
 // This is a per-ESBMC-process cap, emitted as `--memlimit 4096m`.
 fn DEFAULT_ESBMC_MEMLIMIT_ARG() -> String { String::from("4096m") }
 
@@ -440,6 +440,7 @@ fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name
     append_memlimit_arg(esbmc_args, memlimit_arg);
     let esbmc_bin: String = esbmc_path();
     if esbmc_bin.len() == 0 {
+        // Cleanup is deferred to verify_collect, which owns tmp_path after start.
         return -3;
     }
     let handle: i64 = process_start(esbmc_bin, esbmc_args);
