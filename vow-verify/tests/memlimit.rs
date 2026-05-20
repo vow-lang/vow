@@ -97,6 +97,11 @@ fn memlimit_probe_bounds_real_esbmc_rss_when_enabled() {
         .trim()
         .parse()
         .expect("rss kb");
+    // Sanity bound, not proof that this specific synthetic case always hits
+    // the cap: some ESBMC/solver versions discharge the tautology cheaply. The
+    // deterministic unit tests cover flag wiring and OOM classification; this
+    // env-gated probe checks that a capped real invocation returns a structured
+    // result and does not escape by many hundreds of MiB.
     let allowed_kb = u64::from(memlimit_mb + 512) * 1024;
     assert!(
         rss_kb <= allowed_kb,

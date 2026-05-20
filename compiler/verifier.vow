@@ -918,6 +918,17 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
 }
 
 fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_path: String) -> VerifyResult [io] {
+    if handle == -1 {
+        cleanup_verify_tmp_path(tmp_path);
+        return VerifyResult {
+            status: VERIFY_NOT_FOUND(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from("esbmc not found"),
+        };
+    }
     // Kernel watchdog sized to match ESBMC's --timeout so a runaway process can't block indefinitely.
     let exit_code: i64 = process_wait_timeout(handle, watchdog_ms_for(effective_timeout));
     if exit_code == -2 {

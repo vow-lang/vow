@@ -414,15 +414,6 @@ fn verify_collect_and_report(
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64,
 ) -> i64 [io] {
-    if h == -1 {
-        // process_start failed (fork/exec error, OOM, rlimit, etc.) — this
-        // is distinct from "no vows", which the caller already filters.
-        // Silently skipping would mis-report an un-verified function as proven.
-        cleanup_verify_tmp_path(tmp_path);
-        eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR (failed to start ESBMC)")));
-        record_soft_fail(soft_meta, String::from("error"), String::from("failed to start ESBMC"), f.name);
-        return 0;
-    }
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let vr: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path);
     let st: i64 = vr.status;
