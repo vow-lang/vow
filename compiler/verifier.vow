@@ -464,11 +464,14 @@ fn memory_limit_reason() -> String {
 fn output_has_memory_limit(combined: String) -> bool {
     str_find_str(combined, String::from("Out of memory")) >= 0
         || str_find_str(combined, String::from("out of memory")) >= 0
-        || str_find_str(combined, String::from("memory limit")) >= 0
-        || str_find_str(combined, String::from("Memory limit")) >= 0
-        || str_find_str(combined, String::from("memlimit")) >= 0
+        || str_find_str(combined, String::from("OUT OF MEMORY")) >= 0
+        || str_find_str(combined, String::from("memory limit exceeded")) >= 0
+        || str_find_str(combined, String::from("Memory limit exceeded")) >= 0
+        || str_find_str(combined, String::from("exceeded memory limit")) >= 0
+        || str_find_str(combined, String::from("Exceeded memory limit")) >= 0
         || str_find_str(combined, String::from("Cannot allocate memory")) >= 0
         || str_find_str(combined, String::from("cannot allocate memory")) >= 0
+        || str_find_str(combined, String::from("bad_alloc")) >= 0
         || str_find_str(combined, String::from("std::bad_alloc")) >= 0
 }
 

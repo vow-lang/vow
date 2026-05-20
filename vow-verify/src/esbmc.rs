@@ -516,10 +516,10 @@ fn memory_limit_reason() -> String {
 fn is_memory_limit_output(combined: &str) -> bool {
     let lower = combined.to_ascii_lowercase();
     lower.contains("out of memory")
-        || lower.contains("memory limit")
-        || lower.contains("memlimit")
+        || lower.contains("memory limit exceeded")
+        || lower.contains("exceeded memory limit")
         || lower.contains("cannot allocate memory")
-        || lower.contains("std::bad_alloc")
+        || lower.contains("bad_alloc")
 }
 
 /// Extract the short explanation that precedes `VERIFICATION UNKNOWN` from an
@@ -942,6 +942,16 @@ VERIFICATION FAILED";
         assert_eq!(reason, "ESBMC returned VERIFICATION UNKNOWN");
     }
 
+    #[test]
+    fn memory_limit_classifier_ignores_echoed_memlimit_option() {
+        let combined = "wrapper: esbmc test.c --memlimit 4096m\nVERIFICATION UNKNOWN\n";
+        assert!(!is_memory_limit_output(combined));
+        assert_eq!(
+            parse_unknown_reason(combined),
+            "ESBMC returned VERIFICATION UNKNOWN"
+        );
+    }
+
     #[cfg(unix)]
     fn fake_esbmc_script(body: &str) -> (tempfile::TempDir, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
@@ -985,7 +995,7 @@ exit 6
     fn run_esbmc_prefers_memlimit_reason_over_generic_unknown() {
         let (_dir, esbmc) = fake_esbmc_script(
             r#"#!/bin/sh
-echo "ESBMC was unable to finish before the memory limit"
+echo "terminate called after throwing an instance of std::bad_alloc"
 echo "VERIFICATION UNKNOWN"
 exit 6
 "#,
