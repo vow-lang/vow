@@ -307,7 +307,7 @@ fn cleanup_verify_tmp_path(tmp_path: String) [io] {
     }
 }
 
-fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func_name: String, debug: bool) [io] {
+fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func_name: String, memlimit_arg: String, debug: bool) [io] {
     if !debug {
         return;
     }
@@ -326,7 +326,7 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func
     cmd.push_str(String::from(" --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step "));
     cmd.push_str(max_k_step);
     cmd.push_str(String::from(" --64 --memlimit "));
-    cmd.push_str(DEFAULT_ESBMC_MEMLIMIT_ARG());
+    cmd.push_str(memlimit_arg);
     cmd.push_str(String::from("\n"));
     fs_write(cmd_path, cmd);
 }
@@ -370,16 +370,18 @@ fn append_timeout_arg(args: Vec<String>, timeout_secs: String) {
     }
 }
 
-fn append_memlimit_arg(args: Vec<String>) {
+fn append_memlimit_arg(args: Vec<String>, memlimit_arg: String) {
     // Self-hosted Vow has no memlimit opt-out CLI today; emit the default cap
-    // unconditionally. If Rust grows a user-facing opt-out, thread it here too.
+    // unconditionally. Keep callers passing the same value to save_esbmc_debug
+    // and this helper if Rust grows a user-facing opt-out.
     args.push(String::from("--memlimit"));
-    args.push(DEFAULT_ESBMC_MEMLIMIT_ARG());
+    args.push(memlimit_arg);
 }
 
 fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> EsbmcRun [io] {
     fs_write(tmp_path, c_source);
-    save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, false);
+    let memlimit_arg: String = DEFAULT_ESBMC_MEMLIMIT_ARG();
+    save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, memlimit_arg, false);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
@@ -390,7 +392,7 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     esbmc_args.push(String::from("--64"));
     append_solver_args(esbmc_args, solver, encoding);
     append_timeout_arg(esbmc_args, timeout_secs);
-    append_memlimit_arg(esbmc_args);
+    append_memlimit_arg(esbmc_args, memlimit_arg);
     // Kernel watchdog kills the child if ESBMC's own --timeout doesn't fire.
     let esbmc_bin: String = esbmc_path();
     if esbmc_bin.len() == 0 {
@@ -423,7 +425,8 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
 
 fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
-    save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, false);
+    let memlimit_arg: String = DEFAULT_ESBMC_MEMLIMIT_ARG();
+    save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, memlimit_arg, false);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
@@ -434,7 +437,7 @@ fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name
     esbmc_args.push(String::from("--64"));
     append_solver_args(esbmc_args, solver, encoding);
     append_timeout_arg(esbmc_args, timeout_secs);
-    append_memlimit_arg(esbmc_args);
+    append_memlimit_arg(esbmc_args, memlimit_arg);
     let esbmc_bin: String = esbmc_path();
     if esbmc_bin.len() == 0 {
         return -3;

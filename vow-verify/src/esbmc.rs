@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use vow_ir::{FuncId, Function, InstData, Module, Ty};
@@ -198,7 +198,33 @@ fn parse_assignment_line(line: &str) -> Option<(String, String)> {
 // Debug: save C source and command for ESBMC debugging
 // ---------------------------------------------------------------------------
 
-fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k_step: u32) {
+fn esbmc_debug_command(
+    esbmc: &Path,
+    c_name: &str,
+    max_k_step: u32,
+    config: &SolverConfig,
+) -> String {
+    let mut cmd = format!(
+        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step {} --64",
+        esbmc.display(),
+        c_name,
+        max_k_step,
+    );
+    for arg in config.esbmc_args() {
+        cmd.push(' ');
+        cmd.push_str(&arg);
+    }
+    cmd.push('\n');
+    cmd
+}
+
+fn save_esbmc_debug(
+    esbmc: &Path,
+    c_src: &str,
+    func_name: &str,
+    max_k_step: u32,
+    config: &SolverConfig,
+) {
     if std::env::var("VOW_VERIFY_DEBUG").is_err() {
         return;
     }
@@ -211,12 +237,7 @@ fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k
 
     let _ = std::fs::write(debug_dir.join(&c_name), c_src);
 
-    let cmd = format!(
-        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step {} --64\n",
-        esbmc.display(),
-        c_name,
-        max_k_step,
-    );
+    let cmd = esbmc_debug_command(esbmc, &c_name, max_k_step, config);
     let _ = std::fs::write(debug_dir.join(&cmd_name), cmd);
 }
 
@@ -393,7 +414,7 @@ pub fn run_esbmc_with_max_k_step(
         return VerificationResult::ToolError(e.to_string());
     }
 
-    save_esbmc_debug(esbmc, c_src, func_name, max_k_step);
+    save_esbmc_debug(esbmc, c_src, func_name, max_k_step, config);
 
     let mut cmd = Command::new(esbmc);
     cmd.arg(tmp.path())
@@ -951,6 +972,39 @@ VERIFICATION FAILED";
         assert_eq!(
             parse_unknown_reason(combined),
             "ESBMC returned VERIFICATION UNKNOWN"
+        );
+    }
+
+    #[test]
+    fn esbmc_debug_command_includes_solver_config_args() {
+        let config = SolverConfig {
+            solver: crate::solver_strategy::Solver::Z3,
+            encoding: crate::solver_strategy::Encoding::Ir,
+            timeout_secs: None,
+            memlimit_mb: Some(1024),
+        };
+        let cmd = esbmc_debug_command(std::path::Path::new("/usr/bin/esbmc"), "main.c", 7, &config);
+
+        assert_eq!(
+            cmd,
+            "/usr/bin/esbmc /tmp/vow-verify-debug/main.c --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step 7 --64 --z3 --ir --memlimit 1024m\n"
+        );
+    }
+
+    #[test]
+    fn esbmc_debug_command_omits_memlimit_when_config_omits_it() {
+        let config = SolverConfig {
+            solver: crate::solver_strategy::Solver::Boolector,
+            encoding: crate::solver_strategy::Encoding::Bv,
+            timeout_secs: None,
+            memlimit_mb: None,
+        };
+        let cmd = esbmc_debug_command(std::path::Path::new("/usr/bin/esbmc"), "main.c", 7, &config);
+
+        assert!(!cmd.contains("--memlimit"));
+        assert_eq!(
+            cmd,
+            "/usr/bin/esbmc /tmp/vow-verify-debug/main.c --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step 7 --64\n"
         );
     }
 
