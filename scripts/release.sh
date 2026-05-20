@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Trigger the Release workflow on GitHub Actions.
+# Usage: release.sh <rev|minor|major>
+
+cd "$(dirname "$0")/.."
+
+usage() {
+    echo "Usage: $0 <rev|minor|major>" >&2
+    exit 1
+}
+
+[ $# -eq 1 ] || usage
+
+BUMP="$1"
+case "$BUMP" in
+    rev|minor|major) ;;
+    *) echo "Error: bump type must be rev, minor, or major (got '$BUMP')" >&2; usage ;;
+esac
+
+command -v gh >/dev/null || { echo "Error: gh CLI not found. Install from https://cli.github.com/" >&2; exit 1; }
+
+CURRENT=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' vow/Cargo.toml | head -1)
+IFS='.' read -r MAJOR MINOR REV <<< "$CURRENT"
+case "$BUMP" in
+    major) NEXT="$((MAJOR + 1)).0.0" ;;
+    minor) NEXT="${MAJOR}.$((MINOR + 1)).0" ;;
+    rev)   NEXT="${MAJOR}.${MINOR}.$((REV + 1))" ;;
+esac
+
+echo "Current version: $CURRENT"
+echo "Next version:    $NEXT  ($BUMP bump)"
+echo "Triggers: .github/workflows/release.yml on main"
+echo
+read -r -p "Proceed? [y/N] " reply
+case "$reply" in
+    y|Y|yes|YES) ;;
+    *) echo "Aborted." >&2; exit 1 ;;
+esac
+
+gh workflow run release.yml --ref main -f bump="$BUMP"
+
+echo
+echo "Workflow dispatched. Watch with:"
+echo "  gh run list --workflow=release.yml --limit 1"
+echo "  gh run watch"
