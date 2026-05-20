@@ -443,7 +443,7 @@ fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name
     append_memlimit_arg(esbmc_args, memlimit_arg);
     let esbmc_bin: String = esbmc_path();
     if esbmc_bin.len() == 0 {
-        // Cleanup is deferred to verify_collect, which owns tmp_path after start.
+        // Cleanup is handled by the caller: verify_collect or run_test's sentinel branch.
         return -3;
     }
     let handle: i64 = process_start(esbmc_bin, esbmc_args);
@@ -832,7 +832,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     // BV solver is not Bitwuzla, retry once with --z3 --ir (integer encoding).
     // Other UNKNOWN outcomes are explicit inconclusive ESBMC results; do not
     // let an IR proof hide them.
-    let bv_memory_limit: bool = status == VERIFY_UNKNOWN() && parse_unknown_reason(combined) == memory_limit_reason();
+    let bv_memory_limit: bool = status == VERIFY_UNKNOWN() && output_has_memory_limit(combined);
     if (status == VERIFY_TIMEOUT() || bv_memory_limit) && auto_enc && bv_solver != String::from("bitwuzla") {
         let ir_solver: String = String::from("z3");
         let ir_encoding: String = String::from("ir");
