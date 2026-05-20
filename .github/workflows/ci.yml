@@ -113,3 +113,47 @@ jobs:
       - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify
+
+  # ─── macOS jobs (advisory) ─────────────────────────────────────────
+  #
+  # ESBMC ships no macOS release artifact (only Ubuntu + Windows zips on
+  # https://github.com/esbmc/esbmc/releases), so verification is skipped
+  # on macOS. The fixed-point bootstrap is still meaningful: verification
+  # does not affect codegen, so identical Stage 2/Stage 3 SHA-256s prove
+  # the self-hosted compiler reaches a fixed point on this platform.
+  #
+  # continue-on-error is on while we shake out platform-specific issues
+  # (libdl quirks, ulimit -v semantics, etc.). The intent is to flip
+  # these to required once they go green; tracked in a follow-up issue.
+
+  build-and-test-macos:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --all
+      - name: Build concatenated self-hosted compiler
+        run: |
+          bash scripts/concat_vow.sh clif > /tmp/compiler_clif.vow
+          ./target/debug/vow build --no-verify --no-cache /tmp/compiler_clif.vow -o /tmp/vowc_concat
+          test -x /tmp/vowc_concat
+      - run: cargo test --all
+      - run: cargo clippy --all -- -D warnings
+      - run: cargo fmt --all -- --check
+
+  bootstrap-macos:
+    # Mirrors `bootstrap` but with --no-verify (no ESBMC on macOS).
+    # The SHA-256 fixed-point check is preserved: verification does not
+    # change codegen, so a successful match here still proves the
+    # self-hosted compiler is a fixed point on macOS.
+    runs-on: macos-latest
+    continue-on-error: true
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Bootstrap (no verification — ESBMC unavailable on macOS)
+        run: scripts/bootstrap.sh --no-verify

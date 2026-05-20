@@ -2630,7 +2630,13 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
         cmd.arg(sl);
     }
     cmd.arg("-o").arg(output_path);
-    cmd.args(["-lpthread", "-ldl", "-lm"]);
+    // On macOS the dl* symbols live in libc (no separate libdl), so -ldl
+    // would cause "library not found" — only pass it on platforms that
+    // actually ship libdl as a standalone library.
+    cmd.args(["-lpthread", "-lm"]);
+    if cfg!(target_os = "linux") {
+        cmd.arg("-ldl");
+    }
 
     match cmd.status() {
         Ok(s) if s.success() => {
