@@ -414,15 +414,6 @@ fn verify_collect_and_report(
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64,
 ) -> i64 [io] {
-    if h == -1 {
-        // process_start failed (fork/exec error, OOM, rlimit, etc.) — this
-        // is distinct from "no vows", which the caller already filters.
-        // Silently skipping would mis-report an un-verified function as proven.
-        cleanup_verify_tmp_path(tmp_path);
-        eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR (failed to start ESBMC)")));
-        record_soft_fail(soft_meta, String::from("error"), String::from("failed to start ESBMC"), f.name);
-        return 0;
-    }
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let vr: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path);
     let st: i64 = vr.status;
@@ -443,9 +434,10 @@ fn verify_collect_and_report(
         return 0;
     }
     if st == VERIFY_TIMEOUT() || st == VERIFY_UNKNOWN() {
-        // BV timeout may retry with IR before failing (Phase D fallback).
-        // UNKNOWN is an explicit inconclusive ESBMC result; do not let an IR
-        // proof hide it. Mirrors run_with_fallback in vow-verify.
+        // BV timeout or memlimit exhaustion may retry with IR before failing
+        // (Phase D fallback). Other UNKNOWN outcomes are explicit inconclusive
+        // ESBMC results; do not let an IR proof hide them. Mirrors
+        // run_with_fallback in vow-verify.
         let bv_is_unknown: bool = st == VERIFY_UNKNOWN();
         let bv_label: String = { if bv_is_unknown { String::from("unknown") } else { String::from("timeout") } };
         let bv_label_upper: String = { if bv_is_unknown { String::from("UNKNOWN") } else { String::from("TIMEOUT") } };
@@ -454,9 +446,10 @@ fn verify_collect_and_report(
             if bv_is_unknown { parse_unknown_reason(vr.raw_output) }
             else { String::from("") }
         };
+        let bv_memory_limit: bool = bv_is_unknown && output_has_memory_limit(vr.raw_output);
         let bv_solver: String = resolve_auto_bv_solver(solver);
         let auto_enc: bool = is_auto_encoding(encoding);
-        if !bv_is_unknown && auto_enc && bv_solver != String::from("bitwuzla") {
+        if (!bv_is_unknown || bv_memory_limit) && auto_enc && bv_solver != String::from("bitwuzla") {
             eprintln_str(str3(String::from("  "), f.name, String::from(": BV inconclusive, retrying with --z3 --ir...")));
             let vr2: VerifyResult = verify_function_ir_fallback(f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
             let st2: i64 = vr2.status;
@@ -503,8 +496,11 @@ fn verify_collect_and_report(
         record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
         return 0;
     }
-    eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
-    record_soft_fail(soft_meta, String::from("error"), String::from("unrecognized ESBMC outcome"), f.name);
+    let error_message: String = {
+        if vr.raw_output.len() > 0 { vr.raw_output } else { String::from("unrecognized ESBMC outcome") }
+    };
+    eprintln_str(str5(String::from("  "), f.name, String::from(": ERROR ("), error_message, String::from(")")));
+    record_soft_fail(soft_meta, String::from("error"), error_message, f.name);
     0
 }
 
@@ -1096,8 +1092,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                             vec_i64_remove_front(vin_flight_h);
                             vec_i64_remove_front(vin_flight_fi);
                             vec_string_remove_front(vin_flight_tmp);
-                            if oh == -1 {
-                                // process_start failed — treat as verification failure, not silent success.
+                            if oh == -1 || oh == -3 {
+                                // ESBMC spawn/not-found failure: treat as verification failure, not silent success.
                                 cleanup_verify_tmp_path(otmp);
                                 verify_failed = true;
                             } else if oh != -2 {
@@ -1107,8 +1103,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                                 let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp);
                                 if ovr.status == VERIFY_FAILED() {
                                     verify_failed = true;
-                                } else if ovr.status == VERIFY_TIMEOUT() {
-                                    // BV timed out; retry with IR before failing.
+                                } else if ovr.status == VERIFY_TIMEOUT() || (ovr.status == VERIFY_UNKNOWN() && output_has_memory_limit(ovr.raw_output)) {
+                                    // BV timed out or hit the memory cap; retry with IR before failing.
                                     let ovr2: VerifyResult = verify_function_ir_fallback(ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                                     if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {
                                         verify_failed = true;
@@ -1142,8 +1138,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     vec_i64_remove_front(vin_flight_h);
                     vec_i64_remove_front(vin_flight_fi);
                     vec_string_remove_front(vin_flight_tmp);
-                    if oh == -1 {
-                        // Spawn failure — critical when t_jobs >= nfns and every handle lands here.
+                    if oh == -1 || oh == -3 {
+                        // Spawn/not-found failure: critical when t_jobs >= nfns and every handle lands here.
                         cleanup_verify_tmp_path(otmp);
                         verify_failed = true;
                     } else if oh != -2 {
@@ -1151,8 +1147,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp);
                         if ovr.status == VERIFY_FAILED() {
                             verify_failed = true;
-                        } else if ovr.status == VERIFY_TIMEOUT() {
-                            // Mirror the bounded-pool drain: retry IR before treating Timeout as passing.
+                        } else if ovr.status == VERIFY_TIMEOUT() || (ovr.status == VERIFY_UNKNOWN() && output_has_memory_limit(ovr.raw_output)) {
+                            // Mirror the bounded-pool drain: retry IR before treating Timeout or memlimit as passing.
                             // Without this, the common nfns <= t_jobs case silently accepts unverified functions.
                             let ovr2: VerifyResult = verify_function_ir_fallback(ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                             if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {

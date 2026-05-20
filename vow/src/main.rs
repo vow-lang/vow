@@ -17,10 +17,10 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    ConstantValue, Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig,
-    UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits, detect_constant_functions,
-    emit_verify_c_source, find_esbmc, non_modelable_reason, run_with_fallback,
-    verify_function_with_module_and_const_fns_configured,
+    ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver,
+    SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
+    detect_constant_functions, emit_verify_c_source, find_esbmc, non_modelable_reason,
+    run_with_fallback, verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedFailure, VerifyCache};
@@ -82,6 +82,7 @@ fn make_solver_config(
         solver: s,
         encoding: e,
         timeout_secs: timeout,
+        memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
     };
     if let Err(msg) = config.validate() {
         eprintln!("error: {msg}");
@@ -8754,6 +8755,7 @@ fn verify_one_function(
             solver: heuristic.solver,
             encoding: config.encoding,
             timeout_secs: config.timeout_secs,
+            memlimit_mb: config.memlimit_mb,
         }
     } else {
         *config
@@ -8766,6 +8768,7 @@ fn verify_one_function(
             limits.max_k_step,
             func_config.solver_str(),
             func_config.encoding_str(),
+            func_config.memlimit_mb,
         );
 
         // Security: lookup only returns FAILED entries (PROVEN is never trusted
@@ -8789,6 +8792,7 @@ fn verify_one_function(
                     limits.max_k_step,
                     resolved_config.solver_str(),
                     resolved_config.encoding_str(),
+                    resolved_config.memlimit_mb,
                 );
                 vc.store(
                     &store_key,
@@ -10012,6 +10016,7 @@ fn update_contract_statuses(
                 limits.max_k_step,
                 config.solver_str(),
                 config.encoding_str(),
+                config.memlimit_mb,
             );
 
             // Security: lookup only returns FAILED (PROVEN is never trusted
@@ -10040,6 +10045,7 @@ fn update_contract_statuses(
                         limits.max_k_step,
                         resolved_config.solver_str(),
                         resolved_config.encoding_str(),
+                        resolved_config.memlimit_mb,
                     );
                     vc.store(
                         &store_key,

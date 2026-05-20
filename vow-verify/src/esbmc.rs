@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use vow_ir::{FuncId, Function, InstData, Module, Ty};
@@ -198,7 +198,33 @@ fn parse_assignment_line(line: &str) -> Option<(String, String)> {
 // Debug: save C source and command for ESBMC debugging
 // ---------------------------------------------------------------------------
 
-fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k_step: u32) {
+fn esbmc_debug_command(
+    esbmc: &Path,
+    c_name: &str,
+    max_k_step: u32,
+    config: &SolverConfig,
+) -> String {
+    let mut cmd = format!(
+        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step {} --64",
+        esbmc.display(),
+        c_name,
+        max_k_step,
+    );
+    for arg in config.esbmc_args() {
+        cmd.push(' ');
+        cmd.push_str(&arg);
+    }
+    cmd.push('\n');
+    cmd
+}
+
+fn save_esbmc_debug(
+    esbmc: &Path,
+    c_src: &str,
+    func_name: &str,
+    max_k_step: u32,
+    config: &SolverConfig,
+) {
     if std::env::var("VOW_VERIFY_DEBUG").is_err() {
         return;
     }
@@ -211,12 +237,7 @@ fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k
 
     let _ = std::fs::write(debug_dir.join(&c_name), c_src);
 
-    let cmd = format!(
-        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step {} --64\n",
-        esbmc.display(),
-        c_name,
-        max_k_step,
-    );
+    let cmd = esbmc_debug_command(esbmc, &c_name, max_k_step, config);
     let _ = std::fs::write(debug_dir.join(&cmd_name), cmd);
 }
 
@@ -393,7 +414,7 @@ pub fn run_esbmc_with_max_k_step(
         return VerificationResult::ToolError(e.to_string());
     }
 
-    save_esbmc_debug(esbmc, c_src, func_name, max_k_step);
+    save_esbmc_debug(esbmc, c_src, func_name, max_k_step, config);
 
     let mut cmd = Command::new(esbmc);
     cmd.arg(tmp.path())
@@ -494,6 +515,10 @@ pub fn run_esbmc_with_max_k_step(
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
         VerificationResult::Failed(parse_esbmc_output(&combined))
+    } else if is_memory_limit_output(&combined) {
+        VerificationResult::Unknown {
+            reason: memory_limit_reason(),
+        }
     } else if combined.contains("VERIFICATION UNKNOWN") {
         VerificationResult::Unknown {
             reason: parse_unknown_reason(&combined),
@@ -505,11 +530,33 @@ pub fn run_esbmc_with_max_k_step(
     }
 }
 
+pub(crate) fn memory_limit_reason() -> String {
+    "memory limit exceeded".to_string()
+}
+
+fn is_memory_limit_output(combined: &str) -> bool {
+    let lower = combined.to_ascii_lowercase();
+    lower.contains("out of memory")
+        || lower.contains("memory limit exceeded")
+        || lower.contains("exceeded memory limit")
+        || lower.contains("cannot allocate memory")
+        // Vow programs compile to C, so this C++ allocator diagnostic can only
+        // come from ESBMC itself, not from the program being verified.
+        || lower.contains("bad_alloc")
+}
+
 /// Extract the short explanation that precedes `VERIFICATION UNKNOWN` from an
 /// ESBMC log. Typical lines: `The forward condition is unable to prove the
 /// property` or `Unable to prove or falsify the program, giving up.` — we
 /// keep the most informative of these and fall back to a generic message.
 fn parse_unknown_reason(combined: &str) -> String {
+    // Defensive: handles the edge case where combined contains both OOM markers
+    // and "VERIFICATION UNKNOWN" -- the earlier is_memory_limit_output check in
+    // run_esbmc_with_max_k_step would normally fire first, but this guard
+    // ensures correct behavior if parse_unknown_reason gains new call sites.
+    if is_memory_limit_output(combined) {
+        return memory_limit_reason();
+    }
     let mut reason = String::new();
     for line in combined.lines() {
         let t = line.trim();
@@ -920,6 +967,133 @@ VERIFICATION FAILED";
         let combined = "ESBMC version 8.2.0\nSome unrelated output\nVERIFICATION UNKNOWN\n";
         let reason = parse_unknown_reason(combined);
         assert_eq!(reason, "ESBMC returned VERIFICATION UNKNOWN");
+    }
+
+    #[test]
+    fn memory_limit_classifier_ignores_echoed_memlimit_option() {
+        let combined = "wrapper: esbmc test.c --memlimit 4096m\nVERIFICATION UNKNOWN\n";
+        assert!(!is_memory_limit_output(combined));
+        assert_eq!(
+            parse_unknown_reason(combined),
+            "ESBMC returned VERIFICATION UNKNOWN"
+        );
+    }
+
+    #[test]
+    fn esbmc_debug_command_includes_solver_config_args() {
+        let config = SolverConfig {
+            solver: crate::solver_strategy::Solver::Z3,
+            encoding: crate::solver_strategy::Encoding::Ir,
+            timeout_secs: None,
+            memlimit_mb: Some(1024),
+        };
+        let cmd = esbmc_debug_command(std::path::Path::new("/usr/bin/esbmc"), "main.c", 7, &config);
+
+        assert_eq!(
+            cmd,
+            "/usr/bin/esbmc /tmp/vow-verify-debug/main.c --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step 7 --64 --z3 --ir --memlimit 1024m\n"
+        );
+    }
+
+    #[test]
+    fn esbmc_debug_command_omits_memlimit_when_config_omits_it() {
+        let config = SolverConfig {
+            solver: crate::solver_strategy::Solver::Boolector,
+            encoding: crate::solver_strategy::Encoding::Bv,
+            timeout_secs: None,
+            memlimit_mb: None,
+        };
+        let cmd = esbmc_debug_command(std::path::Path::new("/usr/bin/esbmc"), "main.c", 7, &config);
+
+        assert!(!cmd.contains("--memlimit"));
+        assert_eq!(
+            cmd,
+            "/usr/bin/esbmc /tmp/vow-verify-debug/main.c --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step 7 --64\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_output_takes_priority_over_memory_limit_text() {
+        let (_dir, esbmc) = fake_esbmc_script(
+            r#"#!/bin/sh
+echo "VERIFICATION FAILED"
+echo "std::bad_alloc"
+exit 10
+"#,
+        );
+        let result = run_esbmc_with_max_k_step(
+            &esbmc,
+            "int main(void) { __ESBMC_assert(0, \"vow:1\"); return 0; }",
+            1,
+            "main",
+            &SolverConfig::default_config(),
+        );
+        assert!(matches!(result, VerificationResult::Failed(_)));
+    }
+
+    #[cfg(unix)]
+    fn fake_esbmc_script(body: &str) -> (tempfile::TempDir, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let esbmc = dir.path().join("fake-esbmc");
+        std::fs::write(&esbmc, body).expect("write fake esbmc");
+        let mut perms = std::fs::metadata(&esbmc).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&esbmc, perms).expect("chmod fake esbmc");
+        (dir, esbmc)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_esbmc_reports_memlimit_output_as_unknown() {
+        let (_dir, esbmc) = fake_esbmc_script(
+            r#"#!/bin/sh
+echo "Out of memory: memory limit exceeded"
+exit 6
+"#,
+        );
+        let result = run_esbmc_with_max_k_step(
+            &esbmc,
+            "int main(void) { return 0; }",
+            5,
+            "main",
+            &SolverConfig::default_config(),
+        );
+
+        match result {
+            VerificationResult::Unknown { reason } => {
+                assert_eq!(reason, "memory limit exceeded");
+            }
+            other => panic!("expected memory-limit Unknown, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_esbmc_prefers_memlimit_reason_over_generic_unknown() {
+        let (_dir, esbmc) = fake_esbmc_script(
+            r#"#!/bin/sh
+echo "terminate called after throwing an instance of std::bad_alloc"
+echo "VERIFICATION UNKNOWN"
+exit 6
+"#,
+        );
+        let result = run_esbmc_with_max_k_step(
+            &esbmc,
+            "int main(void) { return 0; }",
+            5,
+            "main",
+            &SolverConfig::default_config(),
+        );
+
+        match result {
+            VerificationResult::Unknown { reason } => {
+                assert_eq!(reason, "memory limit exceeded");
+            }
+            other => panic!("expected memory-limit Unknown, got {other:?}"),
+        }
     }
 
     #[test]

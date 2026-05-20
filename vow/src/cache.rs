@@ -157,9 +157,19 @@ impl VerifyCache {
         Some(Self { dir })
     }
 
-    pub fn cache_key(c_source: &str, max_k_step: u32, solver: &str, encoding: &str) -> String {
+    pub fn cache_key(
+        c_source: &str,
+        max_k_step: u32,
+        solver: &str,
+        encoding: &str,
+        memlimit_mb: Option<u32>,
+    ) -> String {
+        let memlimit = match memlimit_mb {
+            Some(mb) => format!("{mb}m"),
+            None => "none".to_string(),
+        };
         let combined = format!(
-            "{c_source}\n__max_k_step={max_k_step}\n__solver={solver}\n__encoding={encoding}"
+            "{c_source}\n__max_k_step={max_k_step}\n__solver={solver}\n__encoding={encoding}\n__memlimit={memlimit}"
         );
         let hash = fnv1a_hash(combined.as_bytes());
         format!("{hash:016x}")
@@ -298,16 +308,31 @@ mod tests {
 
     #[test]
     fn cache_key_includes_max_k_step() {
-        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv");
-        let k2 = VerifyCache::cache_key("int f() { return 0; }", 20, "boolector", "bv");
+        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv", Some(4096));
+        let k2 = VerifyCache::cache_key("int f() { return 0; }", 20, "boolector", "bv", Some(4096));
         assert_ne!(k1, k2);
     }
 
     #[test]
     fn cache_key_includes_solver_encoding() {
-        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv");
-        let k2 = VerifyCache::cache_key("int f() { return 0; }", 10, "z3", "ir");
+        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv", Some(4096));
+        let k2 = VerifyCache::cache_key("int f() { return 0; }", 10, "z3", "ir", Some(4096));
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_includes_esbmc_memlimit() {
+        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv", Some(1024));
+        let k2 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv", Some(4096));
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_distinguishes_uncapped_esbmc_runs() {
+        let capped =
+            VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv", Some(4096));
+        let uncapped = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv", None);
+        assert_ne!(capped, uncapped);
     }
 
     #[test]

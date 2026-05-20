@@ -143,13 +143,12 @@ fundamental redesign:
   full `DependencyManifest` (FNV-1a hashes of every transitive dependency
   source) plus mode and trace settings, so a single-file edit only invalidates
   the cache for translation units that actually depend on it. `VerifyCache`
-  persists both `Proven` and `Failed` results (failures carry counterexample
-  bindings), keyed by FNV-1a of the C source content plus the unwind bound.
-  An incremental-recompilation design layered on top of this cache must be
-  careful about what additional ESBMC parameters belong in the key — anything
-  the verifier actually varies (solver choice, encoding, additional flags)
-  needs to be part of the key or the cache will return stale results from a
-  different verification configuration.
+  persists failed results with counterexample bindings, keyed by FNV-1a of the
+  C source content plus the unwind bound, solver choice, encoding, and ESBMC
+  memory cap. An incremental-recompilation design layered on top of this cache
+  must be careful about what additional ESBMC parameters belong in the key —
+  anything the verifier actually varies needs to be part of the key or the
+  cache will return stale results from a different verification configuration.
 - **Source location tracking.** Every IR instruction carries `origin: Span`.
   Every function has `local_names` mapping instruction IDs to variable names.
 - **Effect system.** Functions declare effects (`io`, `read`, `write`, `panic`,
