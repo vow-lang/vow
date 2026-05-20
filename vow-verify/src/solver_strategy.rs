@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::esbmc::{VerificationResult, run_esbmc_with_max_k_step};
+use crate::esbmc::{VerificationResult, memory_limit_reason, run_esbmc_with_max_k_step};
 
 // ---------------------------------------------------------------------------
 // Solver / Encoding / Config types
@@ -251,7 +251,7 @@ pub fn run_with_fallback(
     let result = run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &bv_config);
 
     let resource_limited = matches!(&result, VerificationResult::Timeout)
-        || matches!(&result, VerificationResult::Unknown { reason } if reason == "memory limit exceeded");
+        || matches!(&result, VerificationResult::Unknown { reason } if reason == &memory_limit_reason());
     if resource_limited {
         // Timeout/memlimit means BV could neither prove nor disprove within
         // the resource budget, so auto mode may retry with Z3+IR. Other

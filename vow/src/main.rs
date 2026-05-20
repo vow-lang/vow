@@ -17,10 +17,10 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    ConstantValue, Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig,
-    UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits, detect_constant_functions,
-    emit_verify_c_source, find_esbmc, non_modelable_reason, run_with_fallback,
-    verify_function_with_module_and_const_fns_configured,
+    ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver,
+    SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
+    detect_constant_functions, emit_verify_c_source, find_esbmc, non_modelable_reason,
+    run_with_fallback, verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedFailure, VerifyCache};
@@ -82,7 +82,7 @@ fn make_solver_config(
         solver: s,
         encoding: e,
         timeout_secs: timeout,
-        memlimit_mb: SolverConfig::default_config().memlimit_mb,
+        memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
     };
     if let Err(msg) = config.validate() {
         eprintln!("error: {msg}");

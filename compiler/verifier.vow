@@ -67,6 +67,24 @@ fn str_find_str(haystack: String, needle: String) -> i64 {
     -1
 }
 
+fn ascii_lower_byte(b: i64) -> i64 {
+    if b >= 65 && b <= 90 {
+        return b + 32;
+    }
+    b
+}
+
+fn str_ascii_lower(s: String) -> String {
+    let out: String = String::from("");
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        out.push_byte(ascii_lower_byte(s.byte_at(i)));
+        i = i + 1;
+    }
+    out
+}
+
 fn str_substring(s: String, start: i64, end: i64) -> String {
     let r: String = String::from("");
     let mut i: i64 = start;
@@ -462,17 +480,12 @@ fn memory_limit_reason() -> String {
 }
 
 fn output_has_memory_limit(combined: String) -> bool {
-    str_find_str(combined, String::from("Out of memory")) >= 0
-        || str_find_str(combined, String::from("out of memory")) >= 0
-        || str_find_str(combined, String::from("OUT OF MEMORY")) >= 0
-        || str_find_str(combined, String::from("memory limit exceeded")) >= 0
-        || str_find_str(combined, String::from("Memory limit exceeded")) >= 0
-        || str_find_str(combined, String::from("exceeded memory limit")) >= 0
-        || str_find_str(combined, String::from("Exceeded memory limit")) >= 0
-        || str_find_str(combined, String::from("Cannot allocate memory")) >= 0
-        || str_find_str(combined, String::from("cannot allocate memory")) >= 0
-        || str_find_str(combined, String::from("bad_alloc")) >= 0
-        || str_find_str(combined, String::from("std::bad_alloc")) >= 0
+    let lower: String = str_ascii_lower(combined);
+    str_find_str(lower, String::from("out of memory")) >= 0
+        || str_find_str(lower, String::from("memory limit exceeded")) >= 0
+        || str_find_str(lower, String::from("exceeded memory limit")) >= 0
+        || str_find_str(lower, String::from("cannot allocate memory")) >= 0
+        || str_find_str(lower, String::from("bad_alloc")) >= 0
 }
 
 // Extract a short explanation from an ESBMC `VERIFICATION UNKNOWN` log.

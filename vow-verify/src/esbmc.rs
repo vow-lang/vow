@@ -509,7 +509,7 @@ pub fn run_esbmc_with_max_k_step(
     }
 }
 
-fn memory_limit_reason() -> String {
+pub(crate) fn memory_limit_reason() -> String {
     "memory limit exceeded".to_string()
 }
 
