@@ -101,8 +101,14 @@ pub fn link(
         cmd.arg(shim);
     }
     cmd.arg("-o").arg(output);
-    // Needed when linking a Rust staticlib that uses std
-    cmd.args(["-lpthread", "-ldl", "-lm"]);
+    // Needed when linking a Rust staticlib that uses std.
+    // On macOS the dl* symbols live in libc (no separate libdl), so -ldl
+    // would cause "library not found" — only pass it on platforms that
+    // actually ship libdl as a standalone library.
+    cmd.args(["-lpthread", "-lm"]);
+    if cfg!(target_os = "linux") {
+        cmd.arg("-ldl");
+    }
 
     let status = cmd
         .status()

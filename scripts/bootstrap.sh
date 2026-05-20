@@ -11,6 +11,7 @@ mkdir -p build
 
 SKIP_CARGO=false
 STAGE3_NO_VERIFY=false
+NO_VERIFY=false
 VMEM_LIMIT_KB="${VOW_BOOTSTRAP_VMEM_KB:-0}"
 if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
     echo "Error: VOW_BOOTSTRAP_VMEM_KB must be a non-negative integer (got: '$VMEM_LIMIT_KB')" >&2
@@ -18,7 +19,7 @@ if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
 fi
 
 usage() {
-    echo "Usage: $0 [--skip-cargo] [--stage3-no-verify] [--help|-h]"
+    echo "Usage: $0 [--skip-cargo] [--no-verify] [--stage3-no-verify] [--help|-h]"
     echo ""
     echo "Bootstrap the self-hosted Vow compiler and verify the fixed point."
     echo ""
@@ -31,6 +32,10 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --skip-cargo         Skip Stage 0 if Rust binary already built"
+    echo "  --no-verify          Skip ESBMC verification at every stage. Useful on"
+    echo "                       platforms where ESBMC is unavailable (e.g. macOS)."
+    echo "                       Verification does not change codegen, so the"
+    echo "                       SHA-256 fixed-point check remains meaningful."
     echo "  --stage3-no-verify   Skip ESBMC verification on Stage 3 only (Stages 1-2"
     echo "                       still verify). Verification does not change codegen,"
     echo "                       so the SHA-256 fixed-point check remains meaningful."
@@ -118,16 +123,44 @@ run_verify_stage_cmd() {
 for arg in "$@"; do
     case "$arg" in
         --skip-cargo)        SKIP_CARGO=true ;;
+        --no-verify)         NO_VERIFY=true ;;
         --stage3-no-verify)  STAGE3_NO_VERIFY=true ;;
         -h|--help)           usage ;;
         *)                   echo "Unknown flag: $arg"; usage ;;
     esac
 done
 
+stage12_build_flags="--verify-jobs 1"
 stage3_build_flags="--verify-jobs 1"
-if [ "$STAGE3_NO_VERIFY" = true ]; then
+if [ "$NO_VERIFY" = true ]; then
+    stage12_build_flags="--no-verify"
+    stage3_build_flags="--no-verify"
+elif [ "$STAGE3_NO_VERIFY" = true ]; then
     stage3_build_flags="--no-verify"
 fi
+
+# Stage 1 runs the Rust compiler (well-behaved release binary) — no vmem cap.
+# Stages 2+3 run the self-hosted compiler under VOW_BOOTSTRAP_VMEM_KB if set.
+# With --no-verify ESBMC never runs, so the "Skipped" handling in
+# run_verify_* is dead code but harmless; reusing the wrappers keeps the
+# verify-on/verify-off paths identical.
+run_rust_stage() {
+    local cmd="$1"
+    if [ "$NO_VERIFY" = true ]; then
+        run_logged "$cmd"
+    else
+        run_verify_logged "$cmd"
+    fi
+}
+
+run_self_stage() {
+    local cmd="$1"
+    if [ "$NO_VERIFY" = true ]; then
+        run_stage_cmd "$cmd"
+    else
+        run_verify_stage_cmd "$cmd"
+    fi
+}
 
 # ─── Stage 0: Build Rust compiler ────────────────────────────────────
 
@@ -148,7 +181,7 @@ fi
 # codegen + one ESBMC instead of codegen + N-fold ESBMC fan-out. See #175.
 printf "${BOLD}Stage 1:${RESET} Rust compiler -> build/vowc\n"
 t0=$(date +%s)
-if ! run_verify_logged "./target/release/vow build --verify-jobs 1 compiler/main.vow -o build/vowc"; then
+if ! run_rust_stage "./target/release/vow build $stage12_build_flags compiler/main.vow -o build/vowc"; then
     printf "  ${RED}FAILED${RESET}\n"
     exit 1
 fi
@@ -159,7 +192,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 2:${RESET} build/vowc -> build/vowc2\n"
 t0=$(date +%s)
-if ! run_verify_stage_cmd "build/vowc build --verify-jobs 1 compiler/main.vow -o build/vowc2"; then
+if ! run_self_stage "build/vowc build $stage12_build_flags compiler/main.vow -o build/vowc2"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
@@ -173,7 +206,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 3:${RESET} build/vowc2 -> build/vowc3\n"
 t0=$(date +%s)
-if ! run_verify_stage_cmd "build/vowc2 build $stage3_build_flags compiler/main.vow -o build/vowc3"; then
+if ! run_self_stage "build/vowc2 build $stage3_build_flags compiler/main.vow -o build/vowc3"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
