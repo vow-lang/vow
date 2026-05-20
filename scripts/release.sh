@@ -22,6 +22,10 @@ esac
 command -v gh >/dev/null || { echo "Error: gh CLI not found. Install from https://cli.github.com/" >&2; exit 1; }
 
 CURRENT=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' vow/Cargo.toml | head -1)
+if [ -z "$CURRENT" ]; then
+    echo "Error: could not extract version from vow/Cargo.toml" >&2
+    exit 1
+fi
 IFS='.' read -r MAJOR MINOR REV <<< "$CURRENT"
 case "$BUMP" in
     major) NEXT="$((MAJOR + 1)).0.0" ;;
