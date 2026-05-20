@@ -308,6 +308,9 @@ fn cleanup_verify_tmp_path(tmp_path: String) [io] {
 }
 
 fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func_name: String, memlimit_arg: String, debug: bool) [io] {
+    // Self-hosted VOW_VERIFY_DEBUG is not wired yet: compiler code has no
+    // getenv builtin, so callers pass false. Keep this template aligned with
+    // the real ESBMC args for the future env-var hook.
     if !debug {
         return;
     }
