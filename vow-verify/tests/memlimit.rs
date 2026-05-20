@@ -28,6 +28,15 @@ fn synthetic_solver_pressure_c_source(vars: usize) -> String {
     c
 }
 
+fn parse_time_max_rss_kb(output: &str) -> Option<u64> {
+    output
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && line.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|line| line.parse().ok())
+}
+
 #[cfg(unix)]
 #[test]
 fn memlimit_probe_bounds_real_esbmc_rss_when_enabled() {
@@ -95,11 +104,9 @@ fn memlimit_probe_bounds_real_esbmc_rss_when_enabled() {
         other => panic!("expected a structured verifier result, got {other:?}"),
     }
 
-    let rss_kb: u64 = std::fs::read_to_string(&rss_path)
-        .expect("rss file")
-        .trim()
-        .parse()
-        .expect("rss kb");
+    let rss_output = std::fs::read_to_string(&rss_path).expect("rss file");
+    let rss_kb: u64 = parse_time_max_rss_kb(&rss_output)
+        .unwrap_or_else(|| panic!("could not parse /usr/bin/time RSS output: {rss_output:?}"));
     // Sanity bound, not proof that this specific synthetic case always hits
     // the cap: some ESBMC/solver versions discharge the tautology cheaply. The
     // deterministic unit tests cover flag wiring and OOM classification; this
@@ -109,5 +116,18 @@ fn memlimit_probe_bounds_real_esbmc_rss_when_enabled() {
     assert!(
         rss_kb <= allowed_kb,
         "ESBMC max RSS {rss_kb} KiB exceeded capped run allowance {allowed_kb} KiB"
+    );
+}
+
+#[test]
+fn parses_plain_time_max_rss_output() {
+    assert_eq!(parse_time_max_rss_kb("131072\n"), Some(131072));
+}
+
+#[test]
+fn parses_time_output_after_signal_message() {
+    assert_eq!(
+        parse_time_max_rss_kb("Command terminated by signal 6\n131072\n"),
+        Some(131072)
     );
 }

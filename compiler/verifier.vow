@@ -22,7 +22,7 @@ struct VerifyResult {
     raw_output: String,
 }
 
-// exit_code sentinels: -1 spawn failure, -2 kernel watchdog kill, else child exit code.
+// exit_code sentinels: -3 ESBMC not found, -1 spawn failure, -2 kernel watchdog kill, else child exit code.
 struct EsbmcRun {
     exit_code: i64,
     combined: String,
