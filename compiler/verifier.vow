@@ -499,6 +499,8 @@ fn output_has_memory_limit(combined: String) -> bool {
         || str_find_str(lower, String::from("memory limit exceeded")) >= 0
         || str_find_str(lower, String::from("exceeded memory limit")) >= 0
         || str_find_str(lower, String::from("cannot allocate memory")) >= 0
+        // Vow programs compile to C, so this C++ allocator diagnostic can only
+        // come from ESBMC itself, not from the program being verified.
         || str_find_str(lower, String::from("bad_alloc")) >= 0
 }
 
@@ -958,6 +960,9 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
     }
     // Kernel watchdog sized to match ESBMC's --timeout so a runaway process can't block indefinitely.
     let exit_code: i64 = process_wait_timeout(handle, watchdog_ms_for(effective_timeout));
+    // exit_code == -1 is a wait/runtime error, not a missing ESBMC binary.
+    // Let it fall through to VERIFY_ERROR below; process_kill still evicts the
+    // completed handle entry from PROCESS_MAP.
     if exit_code == -2 {
         process_kill(handle);
         cleanup_verify_tmp_path(tmp_path);

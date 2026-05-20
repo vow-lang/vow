@@ -540,6 +540,8 @@ fn is_memory_limit_output(combined: &str) -> bool {
         || lower.contains("memory limit exceeded")
         || lower.contains("exceeded memory limit")
         || lower.contains("cannot allocate memory")
+        // Vow programs compile to C, so this C++ allocator diagnostic can only
+        // come from ESBMC itself, not from the program being verified.
         || lower.contains("bad_alloc")
 }
 

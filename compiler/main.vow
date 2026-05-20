@@ -496,10 +496,10 @@ fn verify_collect_and_report(
         record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
         return 0;
     }
-    eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
     let error_message: String = {
         if vr.raw_output.len() > 0 { vr.raw_output } else { String::from("unrecognized ESBMC outcome") }
     };
+    eprintln_str(str5(String::from("  "), f.name, String::from(": ERROR ("), error_message, String::from(")")));
     record_soft_fail(soft_meta, String::from("error"), error_message, f.name);
     0
 }
