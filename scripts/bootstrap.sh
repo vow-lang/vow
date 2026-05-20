@@ -142,8 +142,11 @@ fi
 # Stage 1 runs the Rust compiler (well-behaved release binary) — no vmem cap.
 # Stages 2+3 run the self-hosted compiler under VOW_BOOTSTRAP_VMEM_KB if set.
 # With --no-verify ESBMC never runs, so the "Skipped" handling in
-# run_verify_* is dead code but harmless; reusing the wrappers keeps the
-# verify-on/verify-off paths identical.
+# run_verify_* is dead code but harmless. The Stage 1/2/3 call sites
+# always invoke run_rust_stage / run_self_stage; these wrappers do the
+# conditional dispatch (verify-aware vs plain logger), so the stage
+# invocation code itself is identical in both modes — only the wrappers
+# differ.
 run_rust_stage() {
     local cmd="$1"
     if [ "$NO_VERIFY" = true ]; then
