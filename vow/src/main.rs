@@ -10457,6 +10457,14 @@ mod tests {
         path
     }
 
+    fn esbmc_not_found(status: &BuildStatus) -> bool {
+        matches!(
+            status,
+            BuildStatus::VerifyFailed { description, .. }
+                if description.contains("ESBMC not found")
+        )
+    }
+
     #[test]
     fn pipeline_compiles_function_with_param() {
         let dir = TempDir::new().unwrap();
@@ -11797,6 +11805,9 @@ fn main() -> i32 {
             TraceMode::Off,
         );
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "always_bad");
                 assert!(
@@ -11862,6 +11873,9 @@ fn main() -> i32 {
                 );
             }
             BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            status if esbmc_not_found(status) => {
                 eprintln!("SKIP: verification not run (esbmc not found)");
             }
             BuildStatus::CompileFailed { message } => {
@@ -12396,6 +12410,9 @@ fn main() -> i32 {
             TraceMode::Off,
         );
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "bad_div");
                 let ce = &result.counterexamples[0];
@@ -12461,6 +12478,9 @@ fn main() -> i32 {
         );
 
         match &broken_result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "safe_sub");
 
@@ -12623,6 +12643,9 @@ fn main() -> i32 {
         );
 
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
             BuildStatus::VerifyFailed { .. } => {
                 assert!(
                     !result.counterexamples.is_empty(),
@@ -12694,6 +12717,9 @@ fn main() -> i32 {
         let source = write_source(&dir, "good.vow", src);
         let result = run_verify_only(&source);
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: esbmc not found");
+            }
             BuildStatus::Verified => {
                 assert!(
                     result.executable.is_none(),
@@ -12727,6 +12753,9 @@ fn main() -> i32 {
         let source = write_source(&dir, "bad.vow", src);
         let result = run_verify_only(&source);
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: esbmc not found");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "always_bad");
                 assert!(
@@ -12794,6 +12823,9 @@ fn main() -> i32 {
         let result =
             run_verify_only_inner(&source, true, &limits, 4, &SolverConfig::default_config());
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: esbmc not found");
+            }
             BuildStatus::Verified => {
                 assert!(result.executable.is_none());
                 assert!(result.counterexamples.is_empty());
@@ -12843,6 +12875,9 @@ fn main() -> i32 {
         let result =
             run_verify_only_inner(&source, true, &limits, 4, &SolverConfig::default_config());
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: esbmc not found");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(
                     function, "fail_a",
@@ -12888,9 +12923,7 @@ fn main() -> i32 {
                     result.diagnostics
                 );
             }
-            BuildStatus::VerifyFailed { description, .. }
-                if description.contains("ESBMC not found") =>
-            {
+            status if esbmc_not_found(status) => {
                 eprintln!("SKIP: esbmc not found");
             }
             BuildStatus::CompileFailed { message } => {
