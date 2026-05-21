@@ -114,7 +114,7 @@ jobs:
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify
 
-  # ─── macOS jobs (advisory) ─────────────────────────────────────────
+  # ─── macOS jobs ───────────────────────────────────────────────────
   #
   # ESBMC ships no macOS release artifact (only Ubuntu + Windows zips on
   # https://github.com/esbmc/esbmc/releases), so verification is skipped
@@ -122,9 +122,9 @@ jobs:
   # does not affect codegen, so identical Stage 2/Stage 3 SHA-256s prove
   # the self-hosted compiler reaches a fixed point on this platform.
   #
-  # continue-on-error is on while we shake out platform-specific issues
-  # (libdl quirks, ulimit -v semantics, etc.). The intent is to flip
-  # these to required once they go green; tracked in a follow-up issue.
+  # `bootstrap-macos` is required (the fixed-point check is reliable here).
+  # `build-and-test-macos` remains advisory via continue-on-error while we
+  # shake out platform-specific test issues (tracked in #501).
 
   build-and-test-macos:
     runs-on: macos-latest
