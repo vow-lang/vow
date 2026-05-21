@@ -2669,6 +2669,8 @@ fn find_lib(name: &str) -> Option<String> {
     find_lib_from_parts(name, std::env::var_os(env_key), exe.as_deref())
 }
 
+// Keep in sync with vow-codegen/src/linker.rs; both linker paths must agree on
+// platform library flags.
 fn platform_link_args_for(os: &str) -> &'static [&'static str] {
     match os {
         "linux" => &["-lpthread", "-ldl", "-lm"],

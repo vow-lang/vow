@@ -21,6 +21,8 @@ permissions:
 
 env:
   ESBMC_VERSION: "8.1"
+  # SHA-256 of release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip from
+  # https://github.com/esbmc/esbmc/releases/tag/v8.1.
   ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
 
 jobs:
@@ -70,6 +72,8 @@ jobs:
             arch: x86_64
             runner: ubuntu-24.04
             verify: true
+          # The pinned ESBMC zip is Ubuntu x86_64-only; Linux aarch64 and
+          # macOS packages use --no-verify while keeping the fixed-point check.
           - os: linux
             arch: aarch64
             runner: ubuntu-24.04-arm

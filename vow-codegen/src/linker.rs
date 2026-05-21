@@ -83,6 +83,8 @@ fn find_lib_in_cargo_target(name: &str, target_dir: &Path) -> Option<PathBuf> {
         .find(|candidate| candidate.exists())
 }
 
+// Keep in sync with vow-clif-shim/src/lib.rs; both linker paths must agree on
+// platform library flags.
 fn platform_link_args_for(os: &str) -> &'static [&'static str] {
     match os {
         "linux" => &["-lpthread", "-ldl", "-lm"],
