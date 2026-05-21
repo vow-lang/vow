@@ -156,9 +156,30 @@ jobs:
           trap 'rm -rf "$tmp"' EXIT
           tar -xzf "release/$asset" -C "$tmp"
           prefix="$tmp/vow-${{ needs.prepare-version.outputs.version }}"
+          runtime_lib="$prefix/lib/vow/libvow_runtime.a"
+          shim_lib="$prefix/lib/vow/libvow_clif_shim.a"
+          for packaged_lib in "$runtime_lib" "$shim_lib"; do
+            if [ ! -f "$packaged_lib" ]; then
+              echo "::error::Missing packaged library: $packaged_lib"
+              exit 1
+            fi
+          done
+          cat > "$tmp/hello.vow" <<'EOF'
+          module Hello
+
+          fn main() -> i32 [io] {
+              print_str("Hello, world!");
+              0
+          }
+          EOF
           "$prefix/bin/vowc" --help > /dev/null
-          "$prefix/bin/vowc" build --no-verify examples/hello.vow -o "$tmp/hello"
-          "$tmp/hello"
+          (
+            cd "$tmp"
+            VOW_RUNTIME_PATH="$runtime_lib" \
+              VOW_CLIF_SHIM_PATH="$shim_lib" \
+              "$prefix/bin/vowc" build --no-verify hello.vow -o hello
+            ./hello
+          )
 
       - name: Upload toolchain package
         uses: actions/upload-artifact@v7
