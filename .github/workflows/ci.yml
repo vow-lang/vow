@@ -149,7 +149,6 @@ jobs:
     # change codegen, so a successful match here still proves the
     # self-hosted compiler is a fixed point on macOS.
     runs-on: macos-latest
-    continue-on-error: true
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
