@@ -2638,12 +2638,7 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
         cmd.arg("-ldl");
     }
     if cfg!(target_os = "macos") {
-        // `-reproducible` makes ld's LC_UUID a stable hash of the output
-        // content rather than including link-time ephemera. `-final_output,vow`
-        // pins the linker-signed ad-hoc CodeDirectory identifier to a fixed
-        // string so two builds with different `-o` names (e.g. vowc2 vs vowc3
-        // during bootstrap) produce identical CDHashes. Together they make
-        // the bootstrap SHA-256 fixed point reachable on macOS. See #500.
+        // Stabilise LC_UUID and CDHash across different -o names; see #500.
         cmd.args(["-Wl,-reproducible", "-Wl,-final_output,vow"]);
     }
 
