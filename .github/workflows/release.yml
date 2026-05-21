@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download version patch
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: version-patch
 
@@ -202,7 +202,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download version patch
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: version-patch
 
@@ -218,7 +218,7 @@ jobs:
           fi
 
       - name: Download packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: toolchain-*
           path: release
