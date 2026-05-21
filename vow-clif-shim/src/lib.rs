@@ -2637,6 +2637,10 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
     if cfg!(target_os = "linux") {
         cmd.arg("-ldl");
     }
+    if cfg!(target_os = "macos") {
+        // Stabilise LC_UUID and CDHash across different -o names; see #500.
+        cmd.args(["-Wl,-reproducible", "-Wl,-final_output,vow"]);
+    }
 
     match cmd.status() {
         Ok(s) if s.success() => {
