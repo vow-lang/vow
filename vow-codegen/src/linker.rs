@@ -83,6 +83,14 @@ fn find_lib_in_cargo_target(name: &str, target_dir: &Path) -> Option<PathBuf> {
         .find(|candidate| candidate.exists())
 }
 
+fn platform_link_args_for(os: &str) -> &'static [&'static str] {
+    match os {
+        "linux" => &["-lpthread", "-ldl", "-lm"],
+        "macos" => &["-lpthread", "-lm"],
+        _ => &["-lpthread", "-lm"],
+    }
+}
+
 /// Link one or more object files together with the vow runtime into an
 /// executable. Uses the system C compiler as the linker driver.
 /// If `shim_lib` is provided, it is also included in the link.
@@ -105,10 +113,7 @@ pub fn link(
     // On macOS the dl* symbols live in libc (no separate libdl), so -ldl
     // would cause "library not found" — only pass it on platforms that
     // actually ship libdl as a standalone library.
-    cmd.args(["-lpthread", "-lm"]);
-    if cfg!(target_os = "linux") {
-        cmd.arg("-ldl");
-    }
+    cmd.args(platform_link_args_for(std::env::consts::OS));
 
     let status = cmd
         .status()
@@ -217,6 +222,24 @@ mod tests {
 
         let found = find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, dir.path());
         assert_eq!(found.as_deref(), Some(debug_lib.as_path()));
+    }
+
+    #[test]
+    fn linux_link_args_include_dl() {
+        assert_eq!(
+            platform_link_args_for("linux"),
+            ["-lpthread", "-ldl", "-lm"]
+        );
+    }
+
+    #[test]
+    fn macos_link_args_omit_dl() {
+        assert_eq!(platform_link_args_for("macos"), ["-lpthread", "-lm"]);
+    }
+
+    #[test]
+    fn other_link_args_omit_dl() {
+        assert_eq!(platform_link_args_for("freebsd"), ["-lpthread", "-lm"]);
     }
 
     #[test]

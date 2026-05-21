@@ -2633,10 +2633,7 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
     // On macOS the dl* symbols live in libc (no separate libdl), so -ldl
     // would cause "library not found" — only pass it on platforms that
     // actually ship libdl as a standalone library.
-    cmd.args(["-lpthread", "-lm"]);
-    if cfg!(target_os = "linux") {
-        cmd.arg("-ldl");
-    }
+    cmd.args(platform_link_args_for(std::env::consts::OS));
     if cfg!(target_os = "macos") {
         // Stabilise LC_UUID and CDHash across different -o names; see #500.
         cmd.args(["-Wl,-reproducible", "-Wl,-final_output,vow"]);
@@ -2670,6 +2667,14 @@ fn find_lib(name: &str) -> Option<String> {
     };
     let exe = std::env::current_exe().ok();
     find_lib_from_parts(name, std::env::var_os(env_key), exe.as_deref())
+}
+
+fn platform_link_args_for(os: &str) -> &'static [&'static str] {
+    match os {
+        "linux" => &["-lpthread", "-ldl", "-lm"],
+        "macos" => &["-lpthread", "-lm"],
+        _ => &["-lpthread", "-lm"],
+    }
 }
 
 fn find_lib_from_parts(
@@ -3768,5 +3773,23 @@ mod tests {
             find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
         let expected = debug_lib.to_string_lossy().into_owned();
         assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn linux_link_args_include_dl() {
+        assert_eq!(
+            platform_link_args_for("linux"),
+            ["-lpthread", "-ldl", "-lm"]
+        );
+    }
+
+    #[test]
+    fn macos_link_args_omit_dl() {
+        assert_eq!(platform_link_args_for("macos"), ["-lpthread", "-lm"]);
+    }
+
+    #[test]
+    fn other_link_args_omit_dl() {
+        assert_eq!(platform_link_args_for("freebsd"), ["-lpthread", "-lm"]);
     }
 }
