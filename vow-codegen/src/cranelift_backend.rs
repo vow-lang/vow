@@ -3099,6 +3099,7 @@ impl Backend for CraneliftBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use vow_ir::{
         BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, InstData, InstId, Module, Opcode,
         RegionConstraint, RegionId, RegionSummary, StoreEffect, Ty, VowEntry, VowId,
@@ -3130,6 +3131,38 @@ mod tests {
             origin: sp(),
             region: RegionId::Root,
         }
+    }
+
+    fn compiled_object_symbols(bytes: &[u8]) -> HashSet<String> {
+        use object::{Object, ObjectSymbol};
+
+        let object = object::File::parse(bytes).expect("compiled object should parse");
+        object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(normalize_object_symbol_name))
+            .collect()
+    }
+
+    fn normalize_object_symbol_name(name: &str) -> String {
+        // Mach-O prefixes external C symbols with `_`; Vow runtime symbols
+        // already begin with `__vow`, so they appear as `___vow...` there.
+        if let Some(rest) = name.strip_prefix("___vow") {
+            format!("__vow{rest}")
+        } else {
+            name.to_string()
+        }
+    }
+
+    #[test]
+    fn normalizes_macho_vow_runtime_symbol_prefix() {
+        assert_eq!(
+            normalize_object_symbol_name("___vow_arena_alloc"),
+            "__vow_arena_alloc"
+        );
+        assert_eq!(
+            normalize_object_symbol_name("__vow_arena_alloc"),
+            "__vow_arena_alloc"
+        );
     }
 
     #[test]
@@ -4452,12 +4485,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_vec_new_in_arena"));
         assert!(!symbols.contains("__vow_vec_new"));
     }
@@ -4490,12 +4518,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_vec_new"));
         assert!(!symbols.contains("__vow_vec_new_in_arena"));
     }
@@ -4530,12 +4553,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_string_from_cstr_in_arena"));
         assert!(!symbols.contains("__vow_string_from_cstr"));
     }
@@ -4570,12 +4588,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_string_clone_in_arena"));
         assert!(!symbols.contains("__vow_string_clone"));
     }
@@ -4608,12 +4621,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(!symbols.contains("__vow_string_literal"));
         assert!(!symbols.contains("__vow_string_from_cstr"));
         assert!(
@@ -4659,12 +4667,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
 
         for (root, routed, _) in cases {
             assert!(symbols.contains(routed), "{routed} should be imported");
@@ -4700,12 +4703,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_string_from_cstr"));
         assert!(!symbols.contains("__vow_string_from_cstr_in_arena"));
     }
@@ -4757,12 +4755,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_string_push_str_in_arena"));
         assert!(!symbols.contains("__vow_string_push_str"));
     }
@@ -4815,12 +4808,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_string_push_byte_in_arena"));
         assert!(!symbols.contains("__vow_string_push_byte"));
     }
@@ -4909,12 +4897,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_string_push_byte"));
         assert!(!symbols.contains("__vow_string_push_byte_in_arena"));
     }
@@ -5033,12 +5016,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_string_push_byte_in_arena"));
         assert!(!symbols.contains("__vow_string_push_byte"));
     }
@@ -5081,12 +5059,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
 
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_vec_push_val_in_arena"));
         assert!(!symbols.contains("__vow_vec_push_val"));
     }
@@ -5116,12 +5089,7 @@ mod tests {
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(
             symbols.contains("__vow_arena_alloc"),
             "RegionAlloc must lower through __vow_arena_alloc"
@@ -5180,12 +5148,7 @@ mod tests {
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(
             symbols.contains("__vow_arena_alloc"),
             "RegionAlloc{{Block}} must import __vow_arena_alloc"
@@ -5865,12 +5828,7 @@ mod tests {
     }
 
     fn module_imports_string_clone(bytes: &[u8]) -> bool {
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes).expect("compiled object should parse");
-        object
-            .symbols()
-            .filter_map(|s| s.name().ok().map(str::to_string))
-            .any(|n| n == "__vow_string_clone_into_arena")
+        compiled_object_symbols(bytes).contains("__vow_string_clone_into_arena")
     }
 
     /// Acceptance test 2 from issue #198 (safe variant): a Phi whose
@@ -6055,12 +6013,7 @@ mod tests {
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(
             !symbols.contains("__vow_string_clone_into_arena"),
             "FreshInCaller RegionAlloc(Caller) return path must not emit a clone"
@@ -6164,12 +6117,7 @@ mod tests {
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
         let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
+        let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_arena_alloc"));
         assert!(symbols.contains("__vow_arena_open"));
         assert!(symbols.contains("__vow_arena_close"));
