@@ -50,6 +50,7 @@ jobs:
         id: bump
         run: |
           NEW_VERSION=$(scripts/bump-version.sh "${{ inputs.bump }}")
+          # Regenerate Cargo.lock after the version bump before capturing the patch.
           cargo metadata --format-version 1 > /dev/null
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
