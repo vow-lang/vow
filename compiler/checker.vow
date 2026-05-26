@@ -273,6 +273,18 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
             ai = ai + 1;
         }
     }
+    if tag == CTY_TUPLE() {
+        let lid: i64 = ty_a(e.ts, tid);
+        let tn: i64 = ts_arg_len(e.ts, lid);
+        let mut ti: i64 = 0;
+        while ti < tn {
+            recheck_tid_btreemap_linearity(e, ts_arg_get(e.ts, lid, ti), span);
+            ti = ti + 1;
+        }
+    }
+    if tag == CTY_REF() {
+        recheck_tid_btreemap_linearity(e, ty_a(e.ts, tid), span);
+    }
 }
 
 fn check_module(e: CheckEnv, m: Module) [io] {
@@ -314,17 +326,34 @@ fn check_module(e: CheckEnv, m: Module) [io] {
         let id: i64 = item_id(item);
         if kind == ITEM_STRUCT() {
             let a: AstArena = m.arena;
-            let fields_lid: i64 = sdef_fields_lid(a, id);
-            let n_pairs: i64 = list_len(a, fields_lid);
-            let n_fields: i64 = n_pairs / 2;
             let sidx: i64 = env_lookup_struct(e, arena_str(a, sdef_name_sid(a, id)));
             if sidx != -1 {
+                let nf: i64 = e.sdef_field_count[sidx];
                 let ftid_lid: i64 = e.sdef_field_tid_lids[sidx];
                 let mut fi: i64 = 0;
-                while fi < n_fields {
+                while fi < nf {
                     let ftid: i64 = ts_arg_get(e.ts, ftid_lid, fi);
                     recheck_tid_btreemap_linearity(e, ftid, sdef_span(a, id));
                     fi = fi + 1;
+                }
+            }
+        } else if kind == ITEM_ENUM() {
+            let a: AstArena = m.arena;
+            let eidx: i64 = env_lookup_enum(e, arena_str(a, edef_name_sid(a, id)));
+            if eidx != -1 {
+                let nv: i64 = e.edef_variant_count[eidx];
+                let vpayload_lid: i64 = e.edef_vpayload_lids[eidx];
+                let mut vi: i64 = 0;
+                while vi < nv {
+                    let payload_lid: i64 = ts_arg_get(e.ts, vpayload_lid, vi);
+                    let pn: i64 = ts_arg_len(e.ts, payload_lid);
+                    let mut pi: i64 = 0;
+                    while pi < pn {
+                        let ptid: i64 = ts_arg_get(e.ts, payload_lid, pi);
+                        recheck_tid_btreemap_linearity(e, ptid, edef_span(a, id));
+                        pi = pi + 1;
+                    }
+                    vi = vi + 1;
                 }
             }
         }
