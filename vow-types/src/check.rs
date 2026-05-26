@@ -301,6 +301,44 @@ impl<'e> Checker<'e> {
             }
         }
 
+        // Pass 1b-fixup: Re-validate BTreeMap value linearity now that all
+        // struct fields are populated. During Pass 1b, forward-referenced
+        // structs had empty field lists, so transitive linearity could be
+        // missed. Re-scanning with complete definitions closes the hole.
+        for item in &module.items {
+            match item {
+                Item::Struct(s) => {
+                    for f in &s.fields {
+                        if let Ok(ty) = self.env.resolve(&f.ty) {
+                            self.check_btreemap_key_in_ty(&ty, f.span);
+                        }
+                    }
+                }
+                Item::Enum(e) => {
+                    for v in &e.variants {
+                        match &v.kind {
+                            vow_syntax::ast::VariantKind::Tuple(types) => {
+                                for t in types {
+                                    if let Ok(ty) = self.env.resolve(t) {
+                                        self.check_btreemap_key_in_ty(&ty, t.span());
+                                    }
+                                }
+                            }
+                            vow_syntax::ast::VariantKind::Struct(fields) => {
+                                for f in fields {
+                                    if let Ok(ty) = self.env.resolve(&f.ty) {
+                                        self.check_btreemap_key_in_ty(&ty, f.span);
+                                    }
+                                }
+                            }
+                            vow_syntax::ast::VariantKind::Unit => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Pass 1b2: Register constants
         for item in &module.items {
             if let Item::Const(c) = item {
@@ -3537,6 +3575,81 @@ mod tests {
                 .iter()
                 .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
             "expected transitive linear rejection"
+        );
+    }
+
+    #[test]
+    fn btreemap_value_forward_ref_transitive_linear_rejected() {
+        use vow_syntax::ast::{FieldDef, Item, StructDef, Type, Visibility};
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let module = Module {
+            name: "test".to_string(),
+            uses: vec![],
+            items: vec![
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: false,
+                    name: "A".to_string(),
+                    fields: vec![FieldDef {
+                        name: "m".to_string(),
+                        ty: Type::Generic {
+                            name: "BTreeMap".to_string(),
+                            args: vec![
+                                Type::Named {
+                                    name: "i64".to_string(),
+                                    span: dummy_span(),
+                                },
+                                Type::Named {
+                                    name: "B".to_string(),
+                                    span: dummy_span(),
+                                },
+                            ],
+                            span: dummy_span(),
+                        },
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: false,
+                    name: "B".to_string(),
+                    fields: vec![FieldDef {
+                        name: "t".to_string(),
+                        ty: Type::Named {
+                            name: "Token".to_string(),
+                            span: dummy_span(),
+                        },
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: true,
+                    name: "Token".to_string(),
+                    fields: vec![FieldDef {
+                        name: "id".to_string(),
+                        ty: Type::Named {
+                            name: "i64".to_string(),
+                            span: dummy_span(),
+                        },
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+            ],
+            span: dummy_span(),
+        };
+        checker.check_module(&module);
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "forward-referenced transitive linear must be caught; got {:?}",
+            emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
         );
     }
 }

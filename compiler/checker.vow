@@ -242,6 +242,40 @@ fn is_vec_raw_parts_copy_expr(a: AstArena, eid: i64) -> bool {
     arena_str(a, first_sid) == String::from("Vec") && arena_str(a, second_sid) == String::from("from_raw_parts_copy")
 }
 
+// Walk a resolved tid; if it is BTreeMap<K, V>, check that V is non-linear.
+// Called from the post-definition re-validation pass.
+fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span_start: i64, span_len: i64) [io] {
+    let tag: i64 = ty_tag(e.ts, tid);
+    if tag == CTY_APPLIED() {
+        let base: i64 = ty_a(e.ts, tid);
+        let base_tag: i64 = ty_tag(e.ts, base);
+        if base_tag == CTY_STRUCT() {
+            let bname: String = ty_struct_name(e.ts, base);
+            if bname == String::from("BTreeMap") {
+                let lid: i64 = ty_b(e.ts, tid);
+                let nargs: i64 = ts_arg_len(e.ts, lid);
+                if nargs == 2 {
+                    let vtid: i64 = ts_arg_get(e.ts, lid, 1);
+                    if is_linear_ty(e, vtid) == 1 {
+                        let msg: String = String::from("BTreeMap value type must be non-linear; found '");
+                        msg.push_str(ty_tag_name(ty_tag(e.ts, vtid)));
+                        msg.push_str(String::from("'"));
+                        env_emit_error_code(e, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR(), msg,
+                            Span { start: span_start, len: span_len });
+                    }
+                }
+            }
+        }
+        let alid: i64 = ty_b(e.ts, tid);
+        let an: i64 = ts_arg_len(e.ts, alid);
+        let mut ai: i64 = 0;
+        while ai < an {
+            recheck_tid_btreemap_linearity(e, ts_arg_get(e.ts, alid, ai), span_start, span_len);
+            ai = ai + 1;
+        }
+    }
+}
+
 fn check_module(e: CheckEnv, m: Module) [io] {
     let n: i64 = m.items.len();
 
@@ -267,6 +301,34 @@ fn check_module(e: CheckEnv, m: Module) [io] {
             register_struct(e, m, id);
         } else if kind == ITEM_ENUM() {
             register_enum(e, m, id);
+        }
+        i = i + 1;
+    }
+
+    // Re-validate BTreeMap value linearity now that all struct/enum
+    // definitions are complete. During register_struct, forward-referenced
+    // structs may not have had their fields or is_linear flag populated.
+    i = 0;
+    while i < n {
+        let item: i64 = m.items[i];
+        let kind: i64 = item_kind(item);
+        let id: i64 = item_id(item);
+        if kind == ITEM_STRUCT() {
+            let a: AstArena = m.arena;
+            let fields_lid: i64 = sdef_fields_lid(a, id);
+            let n_pairs: i64 = list_len(a, fields_lid);
+            let n_fields: i64 = n_pairs / 2;
+            let sidx: i64 = env_lookup_struct(e, arena_str(a, sdef_name_sid(a, id)));
+            if sidx != -1 {
+                let ftid_lid: i64 = e.sdef_field_tid_lids[sidx];
+                let mut fi: i64 = 0;
+                while fi < n_fields {
+                    let ftid: i64 = ts_arg_get(e.ts, ftid_lid, fi);
+                    let fspan: Span = sdef_span(a, id);
+                    recheck_tid_btreemap_linearity(e, ftid, fspan.start, fspan.len);
+                    fi = fi + 1;
+                }
+            }
         }
         i = i + 1;
     }
