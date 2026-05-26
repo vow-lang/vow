@@ -384,53 +384,91 @@ mod tests {
         );
     }
 
-    #[test]
-    fn typecheck_error_in_dependency_module_reports_dep_file_and_valid_offset() {
-        // Regression for issue 520: TypeMismatch diagnostics on items merged
-        // from a `use`d module used to be labelled with the root file path and
-        // an offset that belonged to a *different* file's coordinate space,
-        // landing in random bytes (often comments) of the root source.
-        //
-        // The mismatch site here is `fn bad() -> i32 { true }` in lib.vow,
-        // which triggers `check.rs:550` — span = fn_def.body.span, file-local
-        // to lib.vow. The diagnostic must now report lib.vow as the file and
-        // an offset that falls inside lib.vow's actual source (the body of
-        // `bad`, which contains `true`).
+    fn assert_dep_diag_file_and_span(
+        dep_name: &str,
+        dep_src: &str,
+        main_src: &str,
+        code: ErrorCode,
+        span_contains: &str,
+    ) {
         let dir = TempDir::new().unwrap();
-        let lib_src = "module Lib\nfn bad() -> i32 { true }\n";
-        write_vow(&dir, "lib.vow", lib_src);
-        let root = write_vow(
-            &dir,
-            "main.vow",
-            "module Main\nuse lib\nfn main_fn() -> i32 { bad() }\n",
-        );
+        write_vow(&dir, dep_name, dep_src);
+        let root = write_vow(&dir, "main.vow", main_src);
 
         let error = prepare_frontend(&root, FrontendGoal::MergedAst).unwrap_err();
         let diag = error
             .diagnostics()
             .iter()
-            .find(|d| d.severity == Severity::Error && d.code == ErrorCode::TypeMismatch)
-            .expect("expected at least one TypeMismatch diagnostic");
+            .find(|d| d.severity == Severity::Error && d.code == code)
+            .unwrap_or_else(|| panic!("expected a {code:?} diagnostic"));
 
         assert!(
-            diag.primary.file.ends_with("lib.vow"),
-            "diagnostic file should be lib.vow but is `{}`",
+            diag.primary.file.ends_with(dep_name),
+            "diagnostic file should end with {dep_name} but is `{}`",
             diag.primary.file
         );
 
         let offset = diag.primary.byte_offset as usize;
         let len = diag.primary.byte_len as usize;
         assert!(
-            offset + len <= lib_src.len(),
-            "span {offset}..{} exceeds lib.vow source length {}",
+            offset + len <= dep_src.len(),
+            "span {offset}..{} exceeds {dep_name} source length {}",
             offset + len,
-            lib_src.len()
+            dep_src.len()
         );
-        let slice = std::str::from_utf8(&lib_src.as_bytes()[offset..offset + len])
-            .expect("span should slice on UTF-8 boundaries");
+        let slice = std::str::from_utf8(&dep_src.as_bytes()[offset..offset + len])
+            .unwrap_or_else(|_| panic!("span should slice on UTF-8 boundaries in {dep_name}"));
         assert!(
-            slice.contains("true"),
-            "span text `{slice}` should contain the offending body token `true`"
+            slice.contains(span_contains),
+            "span text `{slice}` in {dep_name} should contain `{span_contains}`"
+        );
+    }
+
+    #[test]
+    fn dep_module_body_type_mismatch_reports_dep_file() {
+        // Pass 2: function body type vs declared return type (check.rs:550).
+        assert_dep_diag_file_and_span(
+            "lib.vow",
+            "module Lib\nfn bad() -> i32 { true }\n",
+            "module Main\nuse lib\nfn main_fn() -> i32 { bad() }\n",
+            ErrorCode::TypeMismatch,
+            "true",
+        );
+    }
+
+    #[test]
+    fn dep_module_struct_field_type_error_reports_dep_file() {
+        // Pass 1b: struct field type resolution (check.rs:219).
+        assert_dep_diag_file_and_span(
+            "lib.vow",
+            "module Lib\nstruct Bad {\n    x: Nonexistent,\n}\n",
+            "module Main\nuse lib\nfn main_fn() -> i32 { 0 }\n",
+            ErrorCode::TypeMismatch,
+            "Nonexistent",
+        );
+    }
+
+    #[test]
+    fn dep_module_const_type_mismatch_reports_dep_file() {
+        // Pass 1b2: const value/type mismatch (check.rs:326).
+        assert_dep_diag_file_and_span(
+            "lib.vow",
+            "module Lib\nconst BAD: bool = 42;\n",
+            "module Main\nuse lib\nfn main_fn() -> i32 { 0 }\n",
+            ErrorCode::TypeMismatch,
+            "BAD",
+        );
+    }
+
+    #[test]
+    fn dep_module_fn_param_type_error_reports_dep_file() {
+        // Pass 1c: function parameter type resolution (check.rs:392).
+        assert_dep_diag_file_and_span(
+            "lib.vow",
+            "module Lib\nfn bad(x: Nonexistent) -> i32 { 0 }\n",
+            "module Main\nuse lib\nfn main_fn() -> i32 { 0 }\n",
+            ErrorCode::TypeMismatch,
+            "Nonexistent",
         );
     }
 }
