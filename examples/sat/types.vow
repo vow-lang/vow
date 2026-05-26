@@ -111,8 +111,8 @@ fn lit_var(lit: i64) -> i64 vow {
 
 fn lit_bucket(lit: i64) -> i64 vow {
     requires: lit != 0,
-    requires: lit > -4611686018427387904,
-    requires: lit < 4611686018427387904,
+    requires: lit > -4611686018427387905,
+    requires: lit < 4611686018427387905,
     ensures: result >= 0
 } {
     if lit > 0 {
