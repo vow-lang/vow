@@ -182,7 +182,7 @@ pub(crate) fn prepare_frontend_with_root(
     let mut collecting_emit = CollectingEmitter::new(&mut null_emit);
     let mut checker =
         vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
-    checker.check_module(&ast);
+    checker.check_module(&ast, &item_files);
     let has_errors = checker.has_errors();
     let string_exprs = if matches!(goal, FrontendGoal::LoweredIr) && !has_errors {
         Some(checker.into_string_exprs())
@@ -248,6 +248,7 @@ pub(crate) fn prepare_frontend_with_root(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use vow_diag::ErrorCode;
 
     fn write_vow(dir: &TempDir, name: &str, src: &str) -> PathBuf {
         let path = dir.path().join(name);
@@ -272,13 +273,11 @@ mod tests {
         assert_eq!(bundle.module().items.len(), 2);
         assert!(bundle.ir().is_none());
         assert_eq!(bundle.dependencies().paths().len(), 2);
-        assert!(
-            bundle
-                .dependencies()
-                .paths()
-                .iter()
-                .any(|path| path.ends_with("lib.vow"))
-        );
+        assert!(bundle
+            .dependencies()
+            .paths()
+            .iter()
+            .any(|path| path.ends_with("lib.vow")));
     }
 
     #[test]
@@ -296,13 +295,11 @@ mod tests {
         assert!(bundle.diagnostics().is_empty());
         assert!(bundle.ir().is_some());
         assert_eq!(bundle.dependencies().paths().len(), 2);
-        assert!(
-            bundle
-                .dependencies()
-                .paths()
-                .iter()
-                .any(|path| path.ends_with("main.vow"))
-        );
+        assert!(bundle
+            .dependencies()
+            .paths()
+            .iter()
+            .any(|path| path.ends_with("main.vow")));
     }
 
     #[test]
@@ -332,13 +329,11 @@ mod tests {
                 .unwrap();
         assert_eq!(bundle.module().name, "TestLib");
         assert_eq!(bundle.dependencies().paths().len(), 2);
-        assert!(
-            bundle
-                .dependencies()
-                .paths()
-                .iter()
-                .any(|p| p.ends_with("lib.vow"))
-        );
+        assert!(bundle
+            .dependencies()
+            .paths()
+            .iter()
+            .any(|p| p.ends_with("lib.vow")));
     }
 
     #[test]
@@ -353,12 +348,10 @@ mod tests {
         let error = prepare_frontend(&root, FrontendGoal::MergedAst).unwrap_err();
 
         assert_eq!(error.failure_message(), "module load error");
-        assert!(
-            error
-                .diagnostics()
-                .iter()
-                .any(|diag| diag.message.contains("cannot load module `missing`"))
-        );
+        assert!(error
+            .diagnostics()
+            .iter()
+            .any(|diag| diag.message.contains("cannot load module `missing`")));
     }
 
     #[test]
@@ -380,6 +373,56 @@ mod tests {
         assert_eq!(
             merged.diagnostics()[0].message,
             lowered.diagnostics()[0].message
+        );
+    }
+
+    #[test]
+    fn typecheck_error_in_dependency_module_reports_dep_file_and_valid_offset() {
+        // Regression for issue 520: TypeMismatch diagnostics on items merged
+        // from a `use`d module used to be labelled with the root file path and
+        // an offset that belonged to a *different* file's coordinate space,
+        // landing in random bytes (often comments) of the root source.
+        //
+        // The mismatch site here is `fn bad() -> i32 { true }` in lib.vow,
+        // which triggers `check.rs:550` — span = fn_def.body.span, file-local
+        // to lib.vow. The diagnostic must now report lib.vow as the file and
+        // an offset that falls inside lib.vow's actual source (the body of
+        // `bad`, which contains `true`).
+        let dir = TempDir::new().unwrap();
+        let lib_src = "module Lib\nfn bad() -> i32 { true }\n";
+        write_vow(&dir, "lib.vow", lib_src);
+        let root = write_vow(
+            &dir,
+            "main.vow",
+            "module Main\nuse lib\nfn main_fn() -> i32 { bad() }\n",
+        );
+
+        let error = prepare_frontend(&root, FrontendGoal::MergedAst).unwrap_err();
+        let diag = error
+            .diagnostics()
+            .iter()
+            .find(|d| d.severity == Severity::Error && d.code == ErrorCode::TypeMismatch)
+            .expect("expected at least one TypeMismatch diagnostic");
+
+        assert!(
+            diag.primary.file.ends_with("lib.vow"),
+            "diagnostic file should be lib.vow but is `{}`",
+            diag.primary.file
+        );
+
+        let offset = diag.primary.byte_offset as usize;
+        let len = diag.primary.byte_len as usize;
+        assert!(
+            offset + len <= lib_src.len(),
+            "span {offset}..{} exceeds lib.vow source length {}",
+            offset + len,
+            lib_src.len()
+        );
+        let slice = std::str::from_utf8(&lib_src.as_bytes()[offset..offset + len])
+            .expect("span should slice on UTF-8 boundaries");
+        assert!(
+            slice.contains("true"),
+            "span text `{slice}` should contain the offending body token `true`"
         );
     }
 }

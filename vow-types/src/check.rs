@@ -182,9 +182,17 @@ impl<'e> Checker<'e> {
         });
     }
 
-    pub fn check_module(&mut self, module: &Module) {
-        // Pass 1a: Register type names (structs and enums, no fields yet)
-        for item in &module.items {
+    pub fn check_module(&mut self, module: &Module, item_files: &[String]) {
+        debug_assert_eq!(
+            item_files.len(),
+            module.items.len(),
+            "item_files must be parallel to module.items"
+        );
+        // Pass 1a: Register type names (structs and enums, no fields yet).
+        // No emits here today, but we still set `self.file` for symmetry so
+        // any future emit added to this loop is correct by default.
+        for (i, item) in module.items.iter().enumerate() {
+            self.file = item_files[i].clone();
             match item {
                 Item::Struct(s) => {
                     self.env.define_struct(
@@ -203,7 +211,8 @@ impl<'e> Checker<'e> {
         }
 
         // Pass 1b: Resolve struct fields, enum variants, and type aliases
-        for item in &module.items {
+        for (i, item) in module.items.iter().enumerate() {
+            self.file = item_files[i].clone();
             match item {
                 Item::Struct(s) => {
                     let fields: Vec<(String, Ty)> = s
@@ -302,7 +311,8 @@ impl<'e> Checker<'e> {
         }
 
         // Pass 1b2: Register constants
-        for item in &module.items {
+        for (i, item) in module.items.iter().enumerate() {
+            self.file = item_files[i].clone();
             if let Item::Const(c) = item {
                 let ty = match self.env.resolve(&c.ty) {
                     Ok(ty) => {
@@ -377,7 +387,8 @@ impl<'e> Checker<'e> {
         }
 
         // Pass 1c: Register function signatures (all types now resolvable)
-        for item in &module.items {
+        for (i, item) in module.items.iter().enumerate() {
+            self.file = item_files[i].clone();
             match item {
                 Item::Fn(fn_def) => {
                     let params: Vec<Ty> = fn_def
@@ -451,8 +462,12 @@ impl<'e> Checker<'e> {
             }
         }
 
-        // Pass 2: Check function bodies
-        for item in &module.items {
+        // Pass 2: Check function bodies. self.file is set here before any
+        // nested emit (incl. effects/linear/exhaustiveness helpers that borrow
+        // &self.file by reference) — see "once per top-level item is
+        // sufficient" rationale in the issue 520 fix plan.
+        for (i, item) in module.items.iter().enumerate() {
+            self.file = item_files[i].clone();
             self.check_item(item);
         }
     }
@@ -1990,6 +2005,11 @@ mod tests {
         Span::new(0, 1)
     }
 
+    fn check_single_file(checker: &mut Checker, module: &Module) {
+        let files = vec!["test.vow".to_string(); module.items.len()];
+        checker.check_module(module, &files);
+    }
+
     fn make_expr(kind: ExprKind) -> Expr {
         Expr {
             kind,
@@ -2136,7 +2156,7 @@ mod tests {
             span: dummy_span(),
         };
 
-        checker.check_module(&module);
+        check_single_file(&mut checker, &module);
         assert!(!checker.has_errors());
     }
 
@@ -2946,7 +2966,7 @@ mod tests {
             items: vec![Item::Fn(fn_def)],
             span: dummy_span(),
         };
-        checker.check_module(&module);
+        check_single_file(&mut checker, &module);
         assert!(checker.has_errors());
         assert!(emitter.0[0].message.contains("return type"));
     }
@@ -2977,7 +2997,7 @@ mod tests {
             })],
             span: dummy_span(),
         };
-        checker.check_module(&module);
+        check_single_file(&mut checker, &module);
         assert!(!checker.has_errors());
         assert!(checker.env.lookup_struct("Point").is_some());
     }
@@ -3009,7 +3029,7 @@ mod tests {
             })],
             span: dummy_span(),
         };
-        checker.check_module(&module);
+        check_single_file(&mut checker, &module);
         assert!(!checker.has_errors());
         assert!(checker.env.lookup_enum("Color").is_some());
     }

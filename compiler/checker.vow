@@ -179,11 +179,13 @@ fn is_vec_raw_parts_copy_expr(a: AstArena, eid: i64) -> bool {
     arena_str(a, first_sid) == String::from("Vec") && arena_str(a, second_sid) == String::from("from_raw_parts_copy")
 }
 
-fn check_module(e: CheckEnv, m: Module) [io] {
+fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
     let n: i64 = m.items.len();
 
     let mut i: i64 = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
@@ -197,6 +199,8 @@ fn check_module(e: CheckEnv, m: Module) [io] {
 
     i = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
@@ -210,6 +214,8 @@ fn check_module(e: CheckEnv, m: Module) [io] {
 
     i = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
@@ -221,6 +227,8 @@ fn check_module(e: CheckEnv, m: Module) [io] {
 
     i = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
@@ -232,6 +240,8 @@ fn check_module(e: CheckEnv, m: Module) [io] {
 
     i = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
