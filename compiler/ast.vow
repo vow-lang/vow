@@ -202,6 +202,7 @@ fn fn_vow_lid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 7 + 5] }
 
 fn sdef_name_sid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4] }
 fn sdef_fields_lid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 1] }
+fn sdef_is_linear(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 2] }
 
 fn edef_name_sid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3] }
 fn edef_variants_lid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 1] }

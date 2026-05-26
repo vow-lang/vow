@@ -23,6 +23,69 @@ fn primitive_tid(ts: TyStore, name: String) -> i64 {
     -1
 }
 
+// Returns 1 if `tid` is or transitively contains a linear struct.
+// Mirrors vow-types/src/check.rs::is_linear_ty. Used to gate BTreeMap value
+// payloads: bitwise shift/copy in the runtime/verifier would silently
+// duplicate a linear obligation.
+fn is_linear_ty(e: CheckEnv, tid: i64) -> i64 {
+    let tag: i64 = ty_tag(e.ts, tid);
+    if tag == CTY_STRUCT() {
+        let name: String = ty_struct_name(e.ts, tid);
+        if env_struct_is_linear(e, name) == 1 {
+            return 1;
+        }
+        let sidx: i64 = env_lookup_struct(e, name);
+        if sidx == -1 {
+            return 0;
+        }
+        let nf: i64 = e.sdef_field_count[sidx];
+        let tid_lid: i64 = e.sdef_field_tid_lids[sidx];
+        let mut i: i64 = 0;
+        while i < nf {
+            let ftid: i64 = ts_arg_get(e.ts, tid_lid, i);
+            if is_linear_ty(e, ftid) == 1 {
+                return 1;
+            }
+            i = i + 1;
+        }
+        return 0;
+    }
+    if tag == CTY_APPLIED() {
+        let base: i64 = ty_a(e.ts, tid);
+        if is_linear_ty(e, base) == 1 {
+            return 1;
+        }
+        let lid: i64 = ty_b(e.ts, tid);
+        let n: i64 = ts_arg_len(e.ts, lid);
+        let mut i: i64 = 0;
+        while i < n {
+            let arg_tid: i64 = ts_arg_get(e.ts, lid, i);
+            if is_linear_ty(e, arg_tid) == 1 {
+                return 1;
+            }
+            i = i + 1;
+        }
+        return 0;
+    }
+    if tag == CTY_TUPLE() {
+        let lid: i64 = ty_a(e.ts, tid);
+        let n: i64 = ts_arg_len(e.ts, lid);
+        let mut i: i64 = 0;
+        while i < n {
+            let elem_tid: i64 = ts_arg_get(e.ts, lid, i);
+            if is_linear_ty(e, elem_tid) == 1 {
+                return 1;
+            }
+            i = i + 1;
+        }
+        return 0;
+    }
+    if tag == CTY_REF() {
+        return is_linear_ty(e, ty_a(e.ts, tid));
+    }
+    0
+}
+
 fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
     if ast_tid == -1 {
         return CTY_UNIT();
@@ -76,7 +139,8 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         }
         if name == String::from("HashMap") || name == String::from("BTreeMap") {
             // Mirrors Rust env.rs: BTreeMap requires exactly two type arguments,
-            // and K/V are restricted to i64 (Phase 1).
+            // K must be i64, V must be non-linear (linear V rejected because
+            // bitwise shift/copy would silently duplicate the obligation).
             if name == String::from("BTreeMap") {
                 if arg_tids.len() != 2 {
                     env_emit_error_code(e, EC_TYPE_MISMATCH(),
@@ -92,12 +156,11 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
                         env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, type_span(a, ast_tid));
                     }
                     let bval_tid: i64 = arg_tids[1];
-                    let bval_tag: i64 = ty_tag(e.ts, bval_tid);
-                    if bval_tag != CTY_I64() && bval_tag != CTY_NEVER() {
-                        let verr_msg: String = String::from("BTreeMap value type must be i64 in Phase 1; found '");
-                        verr_msg.push_str(ty_tag_name(bval_tag));
+                    if is_linear_ty(e, bval_tid) == 1 {
+                        let verr_msg: String = String::from("BTreeMap value type must be non-linear; found '");
+                        verr_msg.push_str(ty_tag_name(ty_tag(e.ts, bval_tid)));
                         verr_msg.push_str(String::from("'"));
-                        env_emit_error_code(e, EC_BTREEMAP_VALUE_TYPE_MUST_BE_I64(), verr_msg, type_span(a, ast_tid));
+                        env_emit_error_code(e, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR(), verr_msg, type_span(a, ast_tid));
                     }
                 }
             }
@@ -341,7 +404,8 @@ fn register_struct(e: CheckEnv, m: Module, sid: i64) [io] {
         ftids.push(resolve_ast_ty(e, m, ast_ftid));
         i = i + 1;
     }
-    env_update_struct(e, name, fnames, ftids);
+    let is_linear: i64 = sdef_is_linear(a, sid);
+    env_update_struct(e, name, fnames, ftids, is_linear);
 }
 
 fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
