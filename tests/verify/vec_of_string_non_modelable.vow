@@ -1,0 +1,18 @@
+module VecOfStringNonModelable
+
+// Regression test for issue #505. A function that pushes a freshly-built
+// String onto a Vec<String>, then reads it back via vec[0] and queries its
+// length. Both the push (value-arg is __vow_string_t) and the get_val
+// (result is __vow_string_t) used to produce `int64_t = __vow_string_t`
+// ill-typed C. The verifier must mark this function non-modelable.
+fn first_word_len() -> i64 {
+  let words: Vec<String> = Vec::new();
+  words.push(String::from("hello"));
+  let head: String = words[0];
+  head.len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(first_word_len());
+  0
+}
