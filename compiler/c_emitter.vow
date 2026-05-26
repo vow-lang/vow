@@ -1081,6 +1081,10 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
         return;
     }
     if op == IOP_RETURN() {
+        if f.return_ty == ITY_UNIT() {
+            out.push_str(String::from("  return;\n"));
+            return;
+        }
         if iargs.len() > 0 {
             let val_id: i64 = iargs[0];
             if vec_contains_i64(vec_vars, val_id) || vec_contains_i64(string_vars, val_id) || vec_contains_i64(hashmap_vars, val_id) || vec_contains_i64(btreemap_vars, val_id) || vec_contains_i64(option_vars, val_id) {

@@ -700,6 +700,7 @@ fn emit_inst(
     inst_by_id: &HashMap<u32, &Inst>,
     module: &Module,
     limits: &VerifyLimits,
+    func_return_ty: Ty,
 ) {
     let id = inst.id.0;
     match inst.opcode {
@@ -926,7 +927,9 @@ fn emit_inst(
             out.push_str(&format!("  goto block{};\n", target));
         }
         Opcode::Return => {
-            if let Some(&val_id) = inst.args.first() {
+            if func_return_ty == Ty::Unit {
+                out.push_str("  return;\n");
+            } else if let Some(&val_id) = inst.args.first() {
                 if vec_vars.contains(&val_id.0)
                     || string_vars.contains(&val_id.0)
                     || hashmap_vars.contains(&val_id.0)
@@ -1916,6 +1919,7 @@ pub fn emit_c_function_full(
                 &inst_by_id,
                 module,
                 limits,
+                func.return_ty,
             );
         }
         // Emit Upsilons: read all sources first, then write all targets.
@@ -1943,6 +1947,7 @@ pub fn emit_c_function_full(
                 &inst_by_id,
                 module,
                 limits,
+                func.return_ty,
             );
         }
     }
@@ -2539,6 +2544,29 @@ mod tests {
     }
 
     #[test]
+    fn emit_void_function_returns_bare() {
+        // Regression for issue #506: void functions must emit `return;`,
+        // not `return v{N};` or `return 0;`. The IR lowerer always attaches
+        // a ConstUnit value arg to Return, even for source-level `return;`
+        // and implicit fall-through; so the gate must be on the function's
+        // declared return type, not on whether the Return inst has args.
+        let func = make_func(
+            "void_fn",
+            vec![],
+            Ty::Unit,
+            vec![
+                inst(0, Opcode::ConstUnit, Ty::Unit, vec![], InstData::None),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("void void_fn("), "void signature: {c}");
+        assert!(c.contains("  return;\n"), "bare return: {c}");
+        assert!(!c.contains("return v0;"), "no value returned: {c}");
+        assert!(!c.contains("return 0;"), "no value returned: {c}");
+    }
+
+    #[test]
     fn emit_arithmetic_ops() {
         let func = make_func(
             "arith",
@@ -2981,7 +3009,8 @@ mod tests {
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("return 0;"), "void return: {c}");
+        assert!(c.contains("return;"), "bare void return: {c}");
+        assert!(!c.contains("return 0;"), "no value in void return: {c}");
     }
 
     #[test]
@@ -5765,6 +5794,7 @@ mod tests {
             &HashMap::new(),
             &empty_module,
             &VerifyLimits::default(),
+            Ty::I64,
         );
         assert!(out.contains("v5 = 42LL;"), "inlined constant: {out}");
     }
@@ -5804,6 +5834,7 @@ mod tests {
             &HashMap::new(),
             &empty_module,
             &VerifyLimits::default(),
+            Ty::I64,
         );
         assert!(
             out.contains("__VERIFIER_nondet_long()"),

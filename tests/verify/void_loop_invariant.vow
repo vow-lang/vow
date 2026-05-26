@@ -1,0 +1,24 @@
+// Regression for issue #506: a void function whose body ends with a
+// vow-annotated while loop must produce a well-formed C model. Before
+// the fix, the C emitter inserted `return v{N};` inside the C function
+// declared `void`, and ESBMC rejected the model with -Wreturn-mismatch
+// (causing the function to be reported FAILED for the wrong reason).
+module VoidLoopInvariant
+
+fn count_up(n: i64) vow {
+  requires: n >= 0,
+  requires: n <= 8
+} {
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        i = i + 1;
+    }
+}
+
+fn main() -> i32 [io] {
+    count_up(5);
+    0
+}
