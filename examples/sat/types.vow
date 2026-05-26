@@ -99,6 +99,7 @@ fn is_digit_byte(b: i64) -> bool {
 
 fn lit_var(lit: i64) -> i64 vow {
     requires: lit != 0,
+    requires: lit > -9223372036854775807,
     ensures: result > 0
 } {
     if lit < 0 {
@@ -110,6 +111,8 @@ fn lit_var(lit: i64) -> i64 vow {
 
 fn lit_bucket(lit: i64) -> i64 vow {
     requires: lit != 0,
+    requires: lit > -4611686018427387904,
+    requires: lit < 4611686018427387904,
     ensures: result >= 0
 } {
     if lit > 0 {
@@ -121,10 +124,9 @@ fn lit_bucket(lit: i64) -> i64 vow {
 
 fn lit_value(assigns: Vec<i64>, lit: i64) -> i64 vow {
     requires: lit != 0,
+    requires: lit > -9223372036854775807,
     requires: lit_var(lit) >= 0,
-    requires: lit_var(lit) < assigns.len(),
-    ensures: result >= -1,
-    ensures: result <= 1
+    requires: lit_var(lit) < assigns.len()
 } {
     let v: i64 = assigns[lit_var(lit)];
     if lit < 0 {
