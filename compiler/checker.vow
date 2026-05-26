@@ -244,7 +244,7 @@ fn is_vec_raw_parts_copy_expr(a: AstArena, eid: i64) -> bool {
 
 // Walk a resolved tid; if it is BTreeMap<K, V>, check that V is non-linear.
 // Called from the post-definition re-validation pass.
-fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span_start: i64, span_len: i64) [io] {
+fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
     let tag: i64 = ty_tag(e.ts, tid);
     if tag == CTY_APPLIED() {
         let base: i64 = ty_a(e.ts, tid);
@@ -260,8 +260,7 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span_start: i64, span_l
                         let msg: String = String::from("BTreeMap value type must be non-linear; found '");
                         msg.push_str(ty_tag_name(ty_tag(e.ts, vtid)));
                         msg.push_str(String::from("'"));
-                        env_emit_error_code(e, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR(), msg,
-                            Span { start: span_start, len: span_len });
+                        env_emit_error_code(e, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR(), msg, span);
                     }
                 }
             }
@@ -270,7 +269,7 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span_start: i64, span_l
         let an: i64 = ts_arg_len(e.ts, alid);
         let mut ai: i64 = 0;
         while ai < an {
-            recheck_tid_btreemap_linearity(e, ts_arg_get(e.ts, alid, ai), span_start, span_len);
+            recheck_tid_btreemap_linearity(e, ts_arg_get(e.ts, alid, ai), span);
             ai = ai + 1;
         }
     }
@@ -324,8 +323,7 @@ fn check_module(e: CheckEnv, m: Module) [io] {
                 let mut fi: i64 = 0;
                 while fi < n_fields {
                     let ftid: i64 = ts_arg_get(e.ts, ftid_lid, fi);
-                    let fspan: Span = sdef_span(a, id);
-                    recheck_tid_btreemap_linearity(e, ftid, fspan.start, fspan.len);
+                    recheck_tid_btreemap_linearity(e, ftid, sdef_span(a, id));
                     fi = fi + 1;
                 }
             }
