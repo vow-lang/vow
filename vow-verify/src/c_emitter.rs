@@ -700,9 +700,7 @@ fn first_unsupported_opcode(
                             &btreemap_vars,
                             &option_vars,
                         ) {
-                            return Some(format!(
-                                "Call extern `{name}` with non-scalar element"
-                            ));
+                            return Some(format!("Call extern `{name}` with non-scalar element"));
                         }
                     }
                     InstData::CallTarget(fid) => {
@@ -4191,7 +4189,13 @@ mod tests {
             "nested_push_arena",
             Ty::Ptr,
             vec![
-                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1000)),
+                inst(
+                    0,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1000),
+                ),
                 inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
                 inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
                 Inst {
