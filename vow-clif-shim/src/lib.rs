@@ -790,6 +790,30 @@ impl FnScratch {
 }
 
 // ---------------------------------------------------------------------------
+// ISA builder with corrected macOS triple
+// ---------------------------------------------------------------------------
+//
+// cranelift-object 0.132 writes LC_BUILD_VERSION into Mach-O .o files.
+// `Triple::host()` on macOS returns `*-apple-darwin`, which maps to
+// PLATFORM_UNKNOWN (0) — the macOS linker rejects this.  Replacing the
+// generic `Darwin` OS with `MacOSX` produces PLATFORM_MACOS instead.
+
+fn native_isa_builder() -> Result<cranelift_codegen::isa::Builder, &'static str> {
+    let mut triple = target_lexicon::Triple::host();
+    if let target_lexicon::OperatingSystem::Darwin(v) = triple.operating_system {
+        triple.operating_system = target_lexicon::OperatingSystem::MacOSX(v);
+    }
+    let mut builder = cranelift_codegen::isa::lookup(triple).map_err(|e| match e {
+        cranelift_codegen::isa::LookupError::SupportDisabled => {
+            "support for architecture disabled at compile time"
+        }
+        cranelift_codegen::isa::LookupError::Unsupported => "unsupported architecture",
+    })?;
+    cranelift_native::infer_native_flags(&mut builder)?;
+    Ok(builder)
+}
+
+// ---------------------------------------------------------------------------
 // FFI: create / destroy
 // ---------------------------------------------------------------------------
 
@@ -811,7 +835,7 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         return 0;
     }
     let flags = settings::Flags::new(flag_builder);
-    let isa = match cranelift_native::builder() {
+    let isa = match native_isa_builder() {
         Ok(b) => match b.finish(flags) {
             Ok(i) => i,
             Err(e) => {

@@ -136,6 +136,22 @@ fn collect_target_block_args(
 // ISA and type helpers
 // ---------------------------------------------------------------------------
 
+// cranelift-object 0.132 writes LC_BUILD_VERSION into Mach-O .o files.
+// `Triple::host()` on macOS returns `*-apple-darwin`, which maps to
+// PLATFORM_UNKNOWN (0) — the macOS linker rejects this.  Replacing the
+// generic `Darwin` OS with `MacOSX` produces PLATFORM_MACOS instead.
+fn native_isa_builder() -> Result<cranelift_codegen::isa::Builder, CodegenError> {
+    let mut triple = target_lexicon::Triple::host();
+    if let target_lexicon::OperatingSystem::Darwin(v) = triple.operating_system {
+        triple.operating_system = target_lexicon::OperatingSystem::MacOSX(v);
+    }
+    let mut builder = cranelift_codegen::isa::lookup(triple)
+        .map_err(|e| CodegenError::IsaBuild(format!("{e:?}")))?;
+    cranelift_native::infer_native_flags(&mut builder)
+        .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
+    Ok(builder)
+}
+
 fn make_isa(mode: BuildMode) -> Result<Arc<dyn TargetIsa>, CodegenError> {
     let mut flag_builder = settings::builder();
     flag_builder
@@ -150,8 +166,7 @@ fn make_isa(mode: BuildMode) -> Result<Arc<dyn TargetIsa>, CodegenError> {
             .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
     }
     let flags = settings::Flags::new(flag_builder);
-    cranelift_native::builder()
-        .map_err(|e| CodegenError::IsaBuild(e.to_string()))?
+    native_isa_builder()?
         .finish(flags)
         .map_err(|e| CodegenError::IsaBuild(e.to_string()))
 }
