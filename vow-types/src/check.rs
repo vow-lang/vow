@@ -291,12 +291,55 @@ impl<'e> Checker<'e> {
                     self.env.define_enum(&e.name, EnumInfo { variants });
                 }
                 Item::TypeAlias(a) => match self.env.resolve(&a.ty) {
-                    Ok(ty) => {
-                        self.check_btreemap_key_in_ty(&ty, a.ty.span());
-                        self.env.define_alias(&a.name, ty);
-                    }
+                    // BTreeMap-value linearity is validated in the Pass 1b-fixup
+                    // below, after every struct is fully registered — an alias to
+                    // a forward-referenced struct cannot be judged here yet.
+                    Ok(ty) => self.env.define_alias(&a.name, ty),
                     Err(msg) => self.emit_error(ErrorCode::TypeMismatch, msg, a.ty.span()),
                 },
+                _ => {}
+            }
+        }
+
+        // Pass 1b-fixup: Re-validate BTreeMap value linearity now that all
+        // struct fields are populated. During Pass 1b, forward-referenced
+        // structs had empty field lists, so transitive linearity could be
+        // missed. Re-scanning with complete definitions closes the hole.
+        for item in &module.items {
+            match item {
+                Item::Struct(s) => {
+                    for f in &s.fields {
+                        if let Ok(ty) = self.env.resolve(&f.ty) {
+                            self.check_btreemap_key_in_ty(&ty, f.span);
+                        }
+                    }
+                }
+                Item::Enum(e) => {
+                    for v in &e.variants {
+                        match &v.kind {
+                            vow_syntax::ast::VariantKind::Tuple(types) => {
+                                for t in types {
+                                    if let Ok(ty) = self.env.resolve(t) {
+                                        self.check_btreemap_key_in_ty(&ty, t.span());
+                                    }
+                                }
+                            }
+                            vow_syntax::ast::VariantKind::Struct(fields) => {
+                                for f in fields {
+                                    if let Ok(ty) = self.env.resolve(&f.ty) {
+                                        self.check_btreemap_key_in_ty(&ty, f.span);
+                                    }
+                                }
+                            }
+                            vow_syntax::ast::VariantKind::Unit => {}
+                        }
+                    }
+                }
+                Item::TypeAlias(a) => {
+                    if let Ok(ty) = self.env.resolve(&a.ty) {
+                        self.check_btreemap_key_in_ty(&ty, a.ty.span());
+                    }
+                }
                 _ => {}
             }
         }
@@ -1918,7 +1961,7 @@ impl<'e> Checker<'e> {
     }
 
     // K violations use BTreeMapKeyTypeMustBeI64; V violations use
-    // BTreeMapValueTypeMustBeI64. Called from the major type-resolution sites
+    // BTreeMapValueMustBeNonLinear. Called from the major type-resolution sites
     // (Stmt::Let annotations, function param / return / field / alias / const
     // types) so the error fires at type formation rather than only at
     // method-call sites.
@@ -1936,11 +1979,11 @@ impl<'e> Checker<'e> {
                 );
             }
             if let Some(val_ty) = args.get(1)
-                && !matches!(val_ty, Ty::I64 | Ty::Never)
+                && self.is_linear_ty(val_ty)
             {
                 self.emit_error(
-                    ErrorCode::BTreeMapValueTypeMustBeI64,
-                    format!("BTreeMap value type must be i64 in Phase 1; found '{val_ty}'"),
+                    ErrorCode::BTreeMapValueMustBeNonLinear,
+                    format!("BTreeMap value type must be non-linear; found '{val_ty}'"),
                     span,
                 );
             }
@@ -1960,6 +2003,58 @@ impl<'e> Checker<'e> {
             }
             Ty::Reference(inner) => self.check_btreemap_key_in_ty(inner, span),
             _ => {}
+        }
+    }
+
+    // Returns true if `ty` is or transitively contains a `linear struct`.
+    // Used to gate BTreeMap value payloads: the runtime/verifier copy entries
+    // bitwise, which would silently duplicate a linear obligation.
+    fn is_linear_ty(&self, ty: &Ty) -> bool {
+        let mut visited = HashSet::new();
+        self.is_linear_ty_rec(ty, &mut visited)
+    }
+
+    // `visited` holds the names of nominal types already on the current walk so
+    // a recursive type (e.g. `struct Node { kids: Vec<Node> }`) terminates
+    // instead of overflowing the stack. Re-entering a nominal type contributes
+    // no new linearity, so a cycle edge resolves to `false`.
+    fn is_linear_ty_rec(&self, ty: &Ty, visited: &mut HashSet<String>) -> bool {
+        match ty {
+            Ty::Struct(name) => {
+                if !visited.insert(name.clone()) {
+                    return false;
+                }
+                self.env.lookup_struct(name).is_some_and(|info| {
+                    info.is_linear
+                        || info
+                            .fields
+                            .iter()
+                            .any(|(_, t)| self.is_linear_ty_rec(t, visited))
+                })
+            }
+            Ty::Enum(name) => {
+                if !visited.insert(name.clone()) {
+                    return false;
+                }
+                self.env.lookup_enum(name).is_some_and(|info| {
+                    info.variants.iter().any(|v| match &v.kind {
+                        VariantKind::Tuple(tys) => {
+                            tys.iter().any(|t| self.is_linear_ty_rec(t, visited))
+                        }
+                        VariantKind::Struct(fields) => fields
+                            .iter()
+                            .any(|(_, t)| self.is_linear_ty_rec(t, visited)),
+                        VariantKind::Unit => false,
+                    })
+                })
+            }
+            Ty::Applied(base, args) => {
+                self.is_linear_ty_rec(base, visited)
+                    || args.iter().any(|t| self.is_linear_ty_rec(t, visited))
+            }
+            Ty::Tuple(tys) => tys.iter().any(|t| self.is_linear_ty_rec(t, visited)),
+            Ty::Reference(inner) => self.is_linear_ty_rec(inner, visited),
+            _ => false,
         }
     }
 }
@@ -3434,5 +3529,386 @@ mod tests {
             .iter()
             .any(|d| d.hints.iter().any(|h| h.contains("print_str")));
         assert!(has_hint, "expected 'did you mean' hint for print_str");
+    }
+
+    #[test]
+    fn btreemap_value_linear_struct_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        use crate::env::StructInfo;
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        let ty = Ty::Applied(
+            Box::new(Ty::Struct("BTreeMap".to_string())),
+            vec![Ty::I64, Ty::Struct("Token".to_string())],
+        );
+        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "expected BTreeMapValueMustBeNonLinear; got {:?}",
+            emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn btreemap_value_non_linear_struct_accepted() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        use crate::env::StructInfo;
+        checker.env.define_struct(
+            "Pair",
+            StructInfo {
+                fields: vec![("a".to_string(), Ty::I64), ("b".to_string(), Ty::I64)],
+                is_linear: false,
+            },
+        );
+        let ty = Ty::Applied(
+            Box::new(Ty::Struct("BTreeMap".to_string())),
+            vec![Ty::I64, Ty::Struct("Pair".to_string())],
+        );
+        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        assert!(
+            !emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "did not expect BTreeMapValueMustBeNonLinear; got {:?}",
+            emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn btreemap_value_linear_struct_field_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        use crate::env::StructInfo;
+        checker.env.define_struct(
+            "Inner",
+            StructInfo {
+                fields: vec![("fd".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.define_struct(
+            "Outer",
+            StructInfo {
+                fields: vec![("inner".to_string(), Ty::Struct("Inner".to_string()))],
+                is_linear: false,
+            },
+        );
+        let ty = Ty::Applied(
+            Box::new(Ty::Struct("BTreeMap".to_string())),
+            vec![Ty::I64, Ty::Struct("Outer".to_string())],
+        );
+        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "expected transitive linear rejection"
+        );
+    }
+
+    #[test]
+    fn btreemap_value_forward_ref_transitive_linear_rejected() {
+        use vow_syntax::ast::{FieldDef, Item, StructDef, Type, Visibility};
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let module = Module {
+            name: "test".to_string(),
+            uses: vec![],
+            items: vec![
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: false,
+                    name: "A".to_string(),
+                    fields: vec![FieldDef {
+                        name: "m".to_string(),
+                        ty: Type::Generic {
+                            name: "BTreeMap".to_string(),
+                            args: vec![
+                                Type::Named {
+                                    name: "i64".to_string(),
+                                    span: dummy_span(),
+                                },
+                                Type::Named {
+                                    name: "B".to_string(),
+                                    span: dummy_span(),
+                                },
+                            ],
+                            span: dummy_span(),
+                        },
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: false,
+                    name: "B".to_string(),
+                    fields: vec![FieldDef {
+                        name: "t".to_string(),
+                        ty: Type::Named {
+                            name: "Token".to_string(),
+                            span: dummy_span(),
+                        },
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: true,
+                    name: "Token".to_string(),
+                    fields: vec![FieldDef {
+                        name: "id".to_string(),
+                        ty: Type::Named {
+                            name: "i64".to_string(),
+                            span: dummy_span(),
+                        },
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+            ],
+            span: dummy_span(),
+        };
+        checker.check_module(&module);
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "forward-referenced transitive linear must be caught; got {:?}",
+            emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn btreemap_value_linear_in_enum_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        use crate::env::{EnumInfo, StructInfo};
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.define_enum(
+            "Wrap",
+            EnumInfo {
+                variants: vec![
+                    VariantInfo {
+                        name: "Has".to_string(),
+                        kind: VariantKind::Tuple(vec![Ty::Struct("Token".to_string())]),
+                    },
+                    VariantInfo {
+                        name: "Nope".to_string(),
+                        kind: VariantKind::Unit,
+                    },
+                ],
+            },
+        );
+        let ty = Ty::Applied(
+            Box::new(Ty::Struct("BTreeMap".to_string())),
+            vec![Ty::I64, Ty::Enum("Wrap".to_string())],
+        );
+        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "linear struct inside an enum payload must be rejected; got {:?}",
+            emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn btreemap_value_non_linear_enum_accepted() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        use crate::env::EnumInfo;
+        checker.env.define_enum(
+            "Tag",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "N".to_string(),
+                    kind: VariantKind::Tuple(vec![Ty::I64]),
+                }],
+            },
+        );
+        let ty = Ty::Applied(
+            Box::new(Ty::Struct("BTreeMap".to_string())),
+            vec![Ty::I64, Ty::Enum("Tag".to_string())],
+        );
+        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        assert!(
+            !emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "non-linear enum value must be accepted; got {:?}",
+            emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn btreemap_value_recursive_nonlinear_struct_terminates() {
+        // Without a cycle guard this would overflow the stack and abort the test.
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        use crate::env::StructInfo;
+        checker.env.define_struct(
+            "Node",
+            StructInfo {
+                fields: vec![(
+                    "kids".to_string(),
+                    Ty::Applied(
+                        Box::new(Ty::Struct("Vec".to_string())),
+                        vec![Ty::Struct("Node".to_string())],
+                    ),
+                )],
+                is_linear: false,
+            },
+        );
+        let ty = Ty::Applied(
+            Box::new(Ty::Struct("BTreeMap".to_string())),
+            vec![Ty::I64, Ty::Struct("Node".to_string())],
+        );
+        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        assert!(
+            !emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "recursive non-linear struct must be accepted, not crash"
+        );
+    }
+
+    #[test]
+    fn btreemap_value_recursive_struct_with_linear_field_rejected() {
+        // A non-linear struct that recurses through Vec<Self> AND carries a
+        // linear field: the cycle guard must terminate while still detecting the
+        // linear field.
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        use crate::env::StructInfo;
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.define_struct(
+            "Holder",
+            StructInfo {
+                fields: vec![
+                    (
+                        "kids".to_string(),
+                        Ty::Applied(
+                            Box::new(Ty::Struct("Vec".to_string())),
+                            vec![Ty::Struct("Holder".to_string())],
+                        ),
+                    ),
+                    ("tok".to_string(), Ty::Struct("Token".to_string())),
+                ],
+                is_linear: false,
+            },
+        );
+        let ty = Ty::Applied(
+            Box::new(Ty::Struct("BTreeMap".to_string())),
+            vec![Ty::I64, Ty::Struct("Holder".to_string())],
+        );
+        checker.check_btreemap_key_in_ty(&ty, dummy_span());
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "linear field reachable through a recursive struct must be caught"
+        );
+    }
+
+    #[test]
+    fn btreemap_value_forward_ref_alias_transitive_linear_rejected() {
+        use vow_syntax::ast::{FieldDef, Item, StructDef, Type, TypeAlias, Visibility};
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let module = Module {
+            name: "test".to_string(),
+            uses: vec![],
+            items: vec![
+                Item::TypeAlias(TypeAlias {
+                    vis: Visibility::Public,
+                    name: "Map".to_string(),
+                    ty: Type::Generic {
+                        name: "BTreeMap".to_string(),
+                        args: vec![
+                            Type::Named {
+                                name: "i64".to_string(),
+                                span: dummy_span(),
+                            },
+                            Type::Named {
+                                name: "Outer".to_string(),
+                                span: dummy_span(),
+                            },
+                        ],
+                        span: dummy_span(),
+                    },
+                    span: dummy_span(),
+                }),
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: false,
+                    name: "Outer".to_string(),
+                    fields: vec![FieldDef {
+                        name: "inner".to_string(),
+                        ty: Type::Named {
+                            name: "Inner".to_string(),
+                            span: dummy_span(),
+                        },
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: true,
+                    name: "Inner".to_string(),
+                    fields: vec![FieldDef {
+                        name: "id".to_string(),
+                        ty: Type::Named {
+                            name: "i64".to_string(),
+                            span: dummy_span(),
+                        },
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+            ],
+            span: dummy_span(),
+        };
+        checker.check_module(&module);
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::BTreeMapValueMustBeNonLinear),
+            "forward-referenced transitive linear in a type alias must be caught; got {:?}",
+            emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
+        );
     }
 }

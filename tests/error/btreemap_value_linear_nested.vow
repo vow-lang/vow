@@ -1,0 +1,16 @@
+// TEST: error-code BTreeMapValueMustBeNonLinear
+// TEST: stderr "BTreeMap value type must be non-linear"
+module BTreeMapValueLinearNested
+
+linear struct Inner {
+    fd: i64,
+}
+
+struct Outer {
+    inner: Inner,
+}
+
+fn main() -> i32 {
+    let m: BTreeMap<i64, Outer> = BTreeMap::new();
+    0
+}

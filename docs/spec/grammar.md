@@ -130,7 +130,7 @@ pub fn api_function(x: i64) -> i64 {
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
 | `HashMap<K, V>`    | Key-value map (linear scan)     |
-| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). Phase 1: `K = V = i64` only |
+| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type |
 
 ### User-Defined Types
 
@@ -567,9 +567,11 @@ m.contains_key(k)
 
 ### BTreeMap<K, V> Methods
 
-In Phase 1, both `K` and `V` must be `i64`. K violations raise `BTreeMapKeyTypeMustBeI64`; V violations raise `BTreeMapValueTypeMustBeI64`.
-The runtime helpers and ESBMC C model are hard-coded to i64 keys + i64 values; widening V
-to support struct payloads is a planned follow-up.
+Keys must be `i64` (K violations raise `BTreeMapKeyTypeMustBeI64`). Values may be any
+non-linear type — primitives, structs, `Vec<T>`, `Option<T>`, or nested combinations.
+A `V` that is or transitively contains a `linear struct` is rejected with
+`BTreeMapValueMustBeNonLinear`, because the runtime/verifier shift values bitwise and
+would silently duplicate a linear obligation.
 Storage is two parallel sorted arrays (binary-search lookup, sorted-insert writes).
 Iteration order is ascending by key and is **deterministic across runs and compilers** —
 prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler output.
