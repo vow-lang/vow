@@ -1,0 +1,23 @@
+module VecOfVecSkipped
+
+// Regression test for issue #505 (push side). `store_grid` pushes a freshly
+// built Vec value onto a Vec<Vec<i64>>, so `__vow_vec_push_val` carries a
+// model struct as its element. Pre-fix the verifier modeled this and emitted
+// `int64_t = __vow_vec_t` ill-typed C that ESBMC rejected; post-fix the
+// function is marked non-modelable and verification is Skipped (fail-closed).
+//
+// The contract is what makes `store_grid` an actual verification target — a
+// contract-less function is never selected for verification nor emitted as a
+// callee, so without it this file would exercise nothing (the point of moving
+// these into tests/verify-skip/, which asserts status == "Skipped").
+fn store_grid(outer: Vec<Vec<i64>>) -> i64 vow {
+  ensures: result >= 0
+} {
+  outer.push(Vec::new());
+  outer.len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

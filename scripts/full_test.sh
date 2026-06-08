@@ -521,6 +521,36 @@ for vow_file in tests/verify-fail/*.vow; do
 done
 echo ""
 
+# ─── Section 4d: Verify-Skip Tests (tests/verify-skip/) ───────────
+#
+# Functions that exercise a non-modelable construct (e.g. nested-collection
+# vec ops, issue #505) must be Skipped (fail-closed), not Verified. Such a
+# file cannot live under tests/verify/ because Section 4b requires "Verified";
+# here each file gives the offending function a contract so it becomes a real
+# verification target, then we assert status == "Skipped" with Rust/self
+# parity.
+
+section_begin "Section 4d: Verify-Skip Tests"
+for vow_file in tests/verify-skip/*.vow; do
+    name=$(basename "$vow_file" .vow)
+
+    rust_json="" self_json="" rust_exit=0 self_exit=0
+    rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
+    self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
+
+    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
+        skip "${name}/verify-skip-test" "empty output (rust=$rust_exit, self=$self_exit)"
+        continue
+    fi
+
+    compare_json "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
+    if [ -n "$actual_status" ] && [ "$actual_status" != "Skipped" ]; then
+        fail "${name}/verify-expected-skip" "expected Skipped, got $actual_status"
+    fi
+done
+echo ""
+
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
 
 section_begin "Section 5: Debug Mode"
