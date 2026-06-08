@@ -182,10 +182,8 @@ impl<'e> Checker<'e> {
         });
     }
 
-    /// Point `self.file` at the source path of item `i`, cloning only when it
-    /// changes. Items from one module are contiguous, so consecutive items
-    /// share a path and the clone is skipped — this avoids a per-item,
-    /// per-pass heap allocation across the five passes of `check_module`.
+    /// Set `self.file` to item `i`'s source path, cloning only when it changes
+    /// (consecutive items share a path, so most clones are skipped).
     fn set_item_file(&mut self, item_files: &[String], i: usize) {
         if self.file != item_files[i] {
             self.file = item_files[i].clone();
@@ -193,14 +191,12 @@ impl<'e> Checker<'e> {
     }
 
     pub fn check_module(&mut self, module: &Module, item_files: &[String]) {
-        debug_assert_eq!(
+        assert_eq!(
             item_files.len(),
             module.items.len(),
             "item_files must be parallel to module.items"
         );
         // Pass 1a: Register type names (structs and enums, no fields yet).
-        // No emits here today, but we still set `self.file` for symmetry so
-        // any future emit added to this loop is correct by default.
         for (i, item) in module.items.iter().enumerate() {
             self.set_item_file(item_files, i);
             match item {
@@ -472,10 +468,7 @@ impl<'e> Checker<'e> {
             }
         }
 
-        // Pass 2: Check function bodies. self.file is set here before any
-        // nested emit (incl. effects/linear/exhaustiveness helpers that borrow
-        // &self.file by reference) — see "once per top-level item is
-        // sufficient" rationale in the issue 520 fix plan.
+        // Pass 2: Check function bodies; self.file must be set before check_item delegates to effects/linear helpers.
         for (i, item) in module.items.iter().enumerate() {
             self.set_item_file(item_files, i);
             self.check_item(item);
