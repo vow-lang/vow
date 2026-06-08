@@ -35,7 +35,8 @@ fn parse_typecheck_and_lower(src: &str) -> bool {
     let string_exprs;
     {
         let mut checker = Checker::new("<proptest>", &mut emitter);
-        checker.check_module(&module);
+        let item_files = vec!["<proptest>".to_string(); module.items.len()];
+        checker.check_module(&module, &item_files);
         if checker.has_errors() {
             return false;
         }
@@ -148,20 +149,20 @@ proptest! {
             let mut e2 = CollectingEmitter::new();
             let se1;
             let se2;
+            let item_files1: Vec<String> = vec!["<test>".to_string(); module1.items.len()];
+            let item_files2: Vec<String> = vec!["<test>".to_string(); module2.items.len()];
             {
                 let mut c1 = Checker::new("<test>", &mut e1);
-                c1.check_module(&module1);
+                c1.check_module(&module1, &item_files1);
                 se1 = c1.into_string_exprs();
             }
             {
                 let mut c2 = Checker::new("<test>", &mut e2);
-                c2.check_module(&module2);
+                c2.check_module(&module2, &item_files2);
                 se2 = c2.into_string_exprs();
             }
 
             if e1.diagnostics.is_empty() && e2.diagnostics.is_empty() {
-                let item_files1: Vec<String> = vec!["<test>".to_string(); module1.items.len()];
-                let item_files2: Vec<String> = vec!["<test>".to_string(); module2.items.len()];
                 let ir1 = vow_ir::lower::lower_module(&module1, &item_files1, &se1);
                 let ir2 = vow_ir::lower::lower_module(&module2, &item_files2, &se2);
 

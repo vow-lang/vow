@@ -35,7 +35,8 @@ fn typecheck_source(src: &str) -> Vec<Diagnostic> {
     let mut emitter = CollectingEmitter::new();
     {
         let mut checker = Checker::new("<proptest>", &mut emitter);
-        checker.check_module(&module);
+        let item_files = vec!["<proptest>".to_string(); module.items.len()];
+        checker.check_module(&module, &item_files);
     }
     emitter.diagnostics
 }

@@ -150,7 +150,7 @@ fn frontend_prepare_path_with_root(path: String, module_root: String) -> Fronten
     };
     let n_items: i64 = all_items.len();
     let e: CheckEnv = env_new(dctx, path);
-    check_module(e, merged);
+    check_module(e, merged, item_files);
     let checked: CheckedFrontend = CheckedFrontend {
         path: path,
         dctx: dctx,

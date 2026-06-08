@@ -354,11 +354,13 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
     }
 }
 
-fn check_module(e: CheckEnv, m: Module) [io] {
+fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
     let n: i64 = m.items.len();
 
     let mut i: i64 = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
@@ -372,6 +374,8 @@ fn check_module(e: CheckEnv, m: Module) [io] {
 
     i = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
@@ -388,6 +392,8 @@ fn check_module(e: CheckEnv, m: Module) [io] {
     // structs may not have had their fields or is_linear flag populated.
     i = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
@@ -429,6 +435,8 @@ fn check_module(e: CheckEnv, m: Module) [io] {
 
     i = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
@@ -440,6 +448,8 @@ fn check_module(e: CheckEnv, m: Module) [io] {
 
     i = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
@@ -451,6 +461,8 @@ fn check_module(e: CheckEnv, m: Module) [io] {
 
     i = 0;
     while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);

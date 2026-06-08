@@ -182,7 +182,7 @@ pub(crate) fn prepare_frontend_with_root(
     let mut collecting_emit = CollectingEmitter::new(&mut null_emit);
     let mut checker =
         vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
-    checker.check_module(&ast);
+    checker.check_module(&ast, &item_files);
     let has_errors = checker.has_errors();
     let string_exprs = if matches!(goal, FrontendGoal::LoweredIr) && !has_errors {
         Some(checker.into_string_exprs())
@@ -248,6 +248,7 @@ pub(crate) fn prepare_frontend_with_root(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use vow_diag::ErrorCode;
 
     fn write_vow(dir: &TempDir, name: &str, src: &str) -> PathBuf {
         let path = dir.path().join(name);
@@ -380,6 +381,90 @@ mod tests {
         assert_eq!(
             merged.diagnostics()[0].message,
             lowered.diagnostics()[0].message
+        );
+    }
+
+    fn assert_dep_diag_file_and_span(
+        dep_name: &str,
+        dep_src: &str,
+        main_src: &str,
+        code: ErrorCode,
+        span_contains: &str,
+    ) {
+        let dir = TempDir::new().unwrap();
+        write_vow(&dir, dep_name, dep_src);
+        let root = write_vow(&dir, "main.vow", main_src);
+
+        let error = prepare_frontend(&root, FrontendGoal::MergedAst).unwrap_err();
+        let diag = error
+            .diagnostics()
+            .iter()
+            .find(|d| d.severity == Severity::Error && d.code == code)
+            .unwrap_or_else(|| panic!("expected a {code:?} diagnostic"));
+
+        assert!(
+            diag.primary.file.ends_with(dep_name),
+            "diagnostic file should end with {dep_name} but is `{}`",
+            diag.primary.file
+        );
+
+        let offset = diag.primary.byte_offset as usize;
+        let len = diag.primary.byte_len as usize;
+        assert!(
+            offset + len <= dep_src.len(),
+            "span {offset}..{} exceeds {dep_name} source length {}",
+            offset + len,
+            dep_src.len()
+        );
+        let slice = std::str::from_utf8(&dep_src.as_bytes()[offset..offset + len])
+            .unwrap_or_else(|_| panic!("span should slice on UTF-8 boundaries in {dep_name}"));
+        assert!(
+            slice.contains(span_contains),
+            "span text `{slice}` in {dep_name} should contain `{span_contains}`"
+        );
+    }
+
+    #[test]
+    fn dep_module_body_type_mismatch_reports_dep_file() {
+        assert_dep_diag_file_and_span(
+            "lib.vow",
+            "module Lib\nfn bad() -> i32 { true }\n",
+            "module Main\nuse lib\nfn main_fn() -> i32 { bad() }\n",
+            ErrorCode::TypeMismatch,
+            "true",
+        );
+    }
+
+    #[test]
+    fn dep_module_struct_field_type_error_reports_dep_file() {
+        assert_dep_diag_file_and_span(
+            "lib.vow",
+            "module Lib\nstruct Bad {\n    x: Nonexistent,\n}\n",
+            "module Main\nuse lib\nfn main_fn() -> i32 { 0 }\n",
+            ErrorCode::TypeMismatch,
+            "Nonexistent",
+        );
+    }
+
+    #[test]
+    fn dep_module_const_type_mismatch_reports_dep_file() {
+        assert_dep_diag_file_and_span(
+            "lib.vow",
+            "module Lib\nconst BAD: bool = 42;\n",
+            "module Main\nuse lib\nfn main_fn() -> i32 { 0 }\n",
+            ErrorCode::TypeMismatch,
+            "42",
+        );
+    }
+
+    #[test]
+    fn dep_module_fn_param_type_error_reports_dep_file() {
+        assert_dep_diag_file_and_span(
+            "lib.vow",
+            "module Lib\nfn bad(x: Nonexistent) -> i32 { 0 }\n",
+            "module Main\nuse lib\nfn main_fn() -> i32 { 0 }\n",
+            ErrorCode::TypeMismatch,
+            "Nonexistent",
         );
     }
 }
