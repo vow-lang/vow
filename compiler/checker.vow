@@ -23,11 +23,32 @@ fn primitive_tid(ts: TyStore, name: String) -> i64 {
     -1
 }
 
+fn linear_visited_has(v: Vec<i64>, key: i64) -> i64 {
+    let n: i64 = v.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if v[i] == key {
+            return 1;
+        }
+        i = i + 1;
+    }
+    0
+}
+
 // Returns 1 if `tid` is or transitively contains a linear struct.
 // Mirrors vow-types/src/check.rs::is_linear_ty. Used to gate BTreeMap value
 // payloads: bitwise shift/copy in the runtime/verifier would silently
 // duplicate a linear obligation.
 fn is_linear_ty(e: CheckEnv, tid: i64) -> i64 {
+    let visited: Vec<i64> = Vec::new();
+    is_linear_ty_rec(e, tid, visited)
+}
+
+// `visited` records nominal types (structs keyed sidx*2, enums eidx*2+1)
+// already on the current walk so a recursive type (e.g. `struct Node { kids:
+// Vec<Node> }`) terminates instead of overflowing the stack. A cycle edge
+// contributes no new linearity, so re-entry resolves to 0.
+fn is_linear_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
     let tag: i64 = ty_tag(e.ts, tid);
     if tag == CTY_STRUCT() {
         let name: String = ty_struct_name(e.ts, tid);
@@ -38,21 +59,55 @@ fn is_linear_ty(e: CheckEnv, tid: i64) -> i64 {
         if sidx == -1 {
             return 0;
         }
+        let skey: i64 = sidx * 2;
+        if linear_visited_has(visited, skey) == 1 {
+            return 0;
+        }
+        visited.push(skey);
         let nf: i64 = e.sdef_field_count[sidx];
         let tid_lid: i64 = e.sdef_field_tid_lids[sidx];
         let mut i: i64 = 0;
         while i < nf {
             let ftid: i64 = ts_arg_get(e.ts, tid_lid, i);
-            if is_linear_ty(e, ftid) == 1 {
+            if is_linear_ty_rec(e, ftid, visited) == 1 {
                 return 1;
             }
             i = i + 1;
         }
         return 0;
     }
+    if tag == CTY_ENUM() {
+        let ename: String = ty_struct_name(e.ts, tid);
+        let eidx: i64 = env_lookup_enum(e, ename);
+        if eidx == -1 {
+            return 0;
+        }
+        let ekey: i64 = eidx * 2 + 1;
+        if linear_visited_has(visited, ekey) == 1 {
+            return 0;
+        }
+        visited.push(ekey);
+        let nv: i64 = e.edef_variant_count[eidx];
+        let vpayload_lid: i64 = e.edef_vpayload_lids[eidx];
+        let mut vi: i64 = 0;
+        while vi < nv {
+            let payload_lid: i64 = ts_arg_get(e.ts, vpayload_lid, vi);
+            let pn: i64 = ts_arg_len(e.ts, payload_lid);
+            let mut pi: i64 = 0;
+            while pi < pn {
+                let ptid: i64 = ts_arg_get(e.ts, payload_lid, pi);
+                if is_linear_ty_rec(e, ptid, visited) == 1 {
+                    return 1;
+                }
+                pi = pi + 1;
+            }
+            vi = vi + 1;
+        }
+        return 0;
+    }
     if tag == CTY_APPLIED() {
         let base: i64 = ty_a(e.ts, tid);
-        if is_linear_ty(e, base) == 1 {
+        if is_linear_ty_rec(e, base, visited) == 1 {
             return 1;
         }
         let lid: i64 = ty_b(e.ts, tid);
@@ -60,7 +115,7 @@ fn is_linear_ty(e: CheckEnv, tid: i64) -> i64 {
         let mut i: i64 = 0;
         while i < n {
             let arg_tid: i64 = ts_arg_get(e.ts, lid, i);
-            if is_linear_ty(e, arg_tid) == 1 {
+            if is_linear_ty_rec(e, arg_tid, visited) == 1 {
                 return 1;
             }
             i = i + 1;
@@ -73,7 +128,7 @@ fn is_linear_ty(e: CheckEnv, tid: i64) -> i64 {
         let mut i: i64 = 0;
         while i < n {
             let elem_tid: i64 = ts_arg_get(e.ts, lid, i);
-            if is_linear_ty(e, elem_tid) == 1 {
+            if is_linear_ty_rec(e, elem_tid, visited) == 1 {
                 return 1;
             }
             i = i + 1;
@@ -81,7 +136,7 @@ fn is_linear_ty(e: CheckEnv, tid: i64) -> i64 {
         return 0;
     }
     if tag == CTY_REF() {
-        return is_linear_ty(e, ty_a(e.ts, tid));
+        return is_linear_ty_rec(e, ty_a(e.ts, tid), visited);
     }
     0
 }

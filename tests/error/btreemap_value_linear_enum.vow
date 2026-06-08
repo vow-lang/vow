@@ -1,0 +1,17 @@
+// TEST: error-code BTreeMapValueMustBeNonLinear
+// TEST: stderr "BTreeMap value type must be non-linear"
+module BTreeMapValueLinearEnum
+
+linear struct Token {
+    id: i64,
+}
+
+enum Wrap {
+    Has(Token),
+    Nope,
+}
+
+fn main() -> i32 {
+    let m: BTreeMap<i64, Wrap> = BTreeMap::new();
+    0
+}
