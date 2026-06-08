@@ -453,7 +453,7 @@ mod tests {
             "module Lib\nconst BAD: bool = 42;\n",
             "module Main\nuse lib\nfn main_fn() -> i32 { 0 }\n",
             ErrorCode::TypeMismatch,
-            "BAD",
+            "42",
         );
     }
 
