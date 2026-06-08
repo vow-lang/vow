@@ -35,6 +35,18 @@ fn linear_visited_has(v: Vec<i64>, key: i64) -> i64 {
     0
 }
 
+// Render a type for the `found '...'` part of a BTreeMap diagnostic. Nominal
+// types print their name (e.g. 'Token'), matching the Rust compiler's
+// `{val_ty}` output and the example in docs/spec/errors.md; other types print
+// their tag category.
+fn ty_value_display_name(ts: TyStore, tid: i64) -> String {
+    let tag: i64 = ty_tag(ts, tid);
+    if tag == CTY_STRUCT() || tag == CTY_ENUM() {
+        return ty_struct_name(ts, tid);
+    }
+    ty_tag_name(tag)
+}
+
 // Returns 1 if `tid` is or transitively contains a linear struct.
 // Mirrors vow-types/src/check.rs::is_linear_ty. Used to gate BTreeMap value
 // payloads: bitwise shift/copy in the runtime/verifier would silently
@@ -213,7 +225,7 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
                     let bval_tid: i64 = arg_tids[1];
                     if is_linear_ty(e, bval_tid) == 1 {
                         let verr_msg: String = String::from("BTreeMap value type must be non-linear; found '");
-                        verr_msg.push_str(ty_tag_name(ty_tag(e.ts, bval_tid)));
+                        verr_msg.push_str(ty_value_display_name(e.ts, bval_tid));
                         verr_msg.push_str(String::from("'"));
                         env_emit_error_code(e, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR(), verr_msg, type_span(a, ast_tid));
                     }
@@ -313,7 +325,7 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
                     let vtid: i64 = ts_arg_get(e.ts, lid, 1);
                     if is_linear_ty(e, vtid) == 1 {
                         let msg: String = String::from("BTreeMap value type must be non-linear; found '");
-                        msg.push_str(ty_tag_name(ty_tag(e.ts, vtid)));
+                        msg.push_str(ty_value_display_name(e.ts, vtid));
                         msg.push_str(String::from("'"));
                         env_emit_error_code(e, EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR(), msg, span);
                     }

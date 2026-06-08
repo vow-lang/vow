@@ -1,5 +1,5 @@
 // TEST: error-code BTreeMapValueMustBeNonLinear
-// TEST: stderr "BTreeMap value type must be non-linear"
+// TEST: stderr "must be non-linear; found 'Wrap'"
 module BTreeMapValueLinearEnum
 
 linear struct Token {
