@@ -182,8 +182,7 @@ impl<'e> Checker<'e> {
         });
     }
 
-    /// Set `self.file` to item `i`'s source path, cloning only when it changes
-    /// (consecutive items share a path, so most clones are skipped).
+    /// Skips the clone when consecutive items share the same source path.
     fn set_item_file(&mut self, item_files: &[String], i: usize) {
         if self.file != item_files[i] {
             self.file = item_files[i].clone();
