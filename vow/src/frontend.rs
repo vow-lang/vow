@@ -426,7 +426,6 @@ mod tests {
 
     #[test]
     fn dep_module_body_type_mismatch_reports_dep_file() {
-        // Pass 2: function body type vs declared return type (check.rs:550).
         assert_dep_diag_file_and_span(
             "lib.vow",
             "module Lib\nfn bad() -> i32 { true }\n",
@@ -438,7 +437,6 @@ mod tests {
 
     #[test]
     fn dep_module_struct_field_type_error_reports_dep_file() {
-        // Pass 1b: struct field type resolution (check.rs:219).
         assert_dep_diag_file_and_span(
             "lib.vow",
             "module Lib\nstruct Bad {\n    x: Nonexistent,\n}\n",
@@ -450,7 +448,6 @@ mod tests {
 
     #[test]
     fn dep_module_const_type_mismatch_reports_dep_file() {
-        // Pass 1b2: const value/type mismatch (check.rs:326).
         assert_dep_diag_file_and_span(
             "lib.vow",
             "module Lib\nconst BAD: bool = 42;\n",
@@ -462,7 +459,6 @@ mod tests {
 
     #[test]
     fn dep_module_fn_param_type_error_reports_dep_file() {
-        // Pass 1c: function parameter type resolution (check.rs:392).
         assert_dep_diag_file_and_span(
             "lib.vow",
             "module Lib\nfn bad(x: Nonexistent) -> i32 { 0 }\n",
