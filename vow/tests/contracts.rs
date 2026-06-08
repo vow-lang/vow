@@ -55,6 +55,7 @@ fn contracts_divide_requires() {
     assert_eq!(c["kind"], "requires");
     assert_eq!(c["blame"], "Caller");
     assert_eq!(c["status"], "not_verified");
+    assert_eq!(c["quality"], "substantive");
     assert!(c["description"].as_str().unwrap().contains("y != 0"));
     assert!(c["source"]["file"].as_str().unwrap().contains("divide.vow"));
     assert_eq!(json["summary"]["total"], 1);
@@ -120,12 +121,10 @@ fn contracts_where_clause() {
     for c in contracts {
         assert_eq!(c["kind"], "requires");
         assert_eq!(c["blame"], "Caller");
-        assert!(
-            c["description"]
-                .as_str()
-                .unwrap()
-                .contains("where on parameter")
-        );
+        assert!(c["description"]
+            .as_str()
+            .unwrap()
+            .contains("where on parameter"));
     }
 }
 
@@ -165,6 +164,10 @@ fn contracts_json_has_all_summary_fields() {
     assert!(summary.get("timeout").is_some());
     assert!(summary.get("error").is_some());
     assert!(summary.get("not_verified").is_some());
+    let quality = &summary["quality"];
+    assert!(quality.get("weak").is_some());
+    assert!(quality.get("tautological").is_some());
+    assert!(quality.get("substantive").is_some());
 }
 
 #[test]
@@ -178,6 +181,51 @@ fn contracts_json_has_all_entry_fields() {
     assert!(c.get("blame").is_some());
     assert!(c.get("source").is_some());
     assert!(c.get("status").is_some());
+    assert!(c.get("quality").is_some());
     assert!(c["source"].get("file").is_some());
     assert!(c["source"].get("offset").is_some());
+}
+
+#[test]
+fn contracts_quality_classifies_clause_shapes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let src = dir.path().join("quality.vow");
+    std::fs::write(
+        &src,
+        "module Quality\n\
+         fn weak_one(x: i64) -> i64 vow {\n  ensures: result >= 0\n} { 0 }\n\
+         fn strong_one(x: i64) -> i64 vow {\n  requires: x >= 0,\n  ensures: result == x + 1\n} { x + 1 }\n\
+         fn taut_one() -> i64 vow {\n  ensures: true\n} { 0 }\n",
+    )
+    .unwrap();
+    let out = Command::new(vow_bin())
+        .args(["contracts", src.to_str().unwrap()])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON from contracts: {e}\nstdout: {stdout}"));
+    let quality_of = |func: &str, kind: &str| -> String {
+        json["contracts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["function"] == func && c["kind"] == kind)
+            .unwrap_or_else(|| panic!("missing {func}/{kind}"))["quality"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // A postcondition that only bounds result by a constant is weak; an equality
+    // postcondition and a domain precondition are substantive; `ensures true` is
+    // tautological. See docs/spec/contracts-methodology.md.
+    assert_eq!(quality_of("weak_one", "ensures"), "weak");
+    assert_eq!(quality_of("strong_one", "requires"), "substantive");
+    assert_eq!(quality_of("strong_one", "ensures"), "substantive");
+    assert_eq!(quality_of("taut_one", "ensures"), "tautological");
+    let q = &json["summary"]["quality"];
+    assert_eq!(q["weak"], 1);
+    assert_eq!(q["substantive"], 2);
+    assert_eq!(q["tautological"], 1);
 }

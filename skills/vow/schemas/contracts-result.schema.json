@@ -10,7 +10,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status"],
+        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status", "quality"],
         "properties": {
           "vow_id": {
             "type": "integer",
@@ -53,6 +53,11 @@
             "type": "string",
             "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
             "description": "Verification status"
+          },
+          "quality": {
+            "type": "string",
+            "enum": ["weak", "tautological", "substantive"],
+            "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -60,7 +65,7 @@
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "quality"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -69,7 +74,18 @@
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
-        "skipped": { "type": "integer" }
+        "skipped": { "type": "integer" },
+        "quality": {
+          "type": "object",
+          "description": "Static contract-quality tallies independent of verification status",
+          "required": ["weak", "tautological", "substantive"],
+          "properties": {
+            "weak": { "type": "integer" },
+            "tautological": { "type": "integer" },
+            "substantive": { "type": "integer" }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     }
