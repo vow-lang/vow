@@ -21,7 +21,7 @@ What went wrong is **breadth outran depth**. Between `v0.2.0` and today the open
 backlog grew to **162 issues**, and the most ambitious tracks in flight are all
 *new surface area*:
 
-- **Numeric tower** (#523–#527, #529): u8/i8/i16/u16/u32/i32/i128/u128, floats,
+- **Numeric tower** (#523–#529): u8/i8/i16/u16/u32/i32/i128/u128, floats,
   BigInt/Decimal/Rational — an entire new type-system axis.
 - **BTreeMap Phase 2** (#350, #530–#540): non-i64 payloads, 11 open slices, every
   one of which touches the verifier model.
@@ -62,7 +62,7 @@ reliable*. Everything else waits.
   Root / Rodata).
 - Verification harness: `vow-runtime/verify/arena.c` (~325 lines) + a 10-line
   `Makefile`.
-- Normative spec: `docs/design/arena_memory.md` (~1670 lines, §10 covers ESBMC).
+- Normative spec: `docs/design/arena_memory.md` (~2060 lines, §10 covers ESBMC).
 
 ### 2.2 Root-cause themes (from the open issues)
 
@@ -71,7 +71,7 @@ reliable*. Everything else waits.
 | **Harness is unsound** — wrapped-pointer bound; alignment never asserted; oversized-classifier edges unchecked; addr-cap should be `<` not `<=` | `arena.c` `alloc_chunk`/`align_up` assumptions | #437, #430, #422–#426, #480 |
 | **Harness is intractable** — `--incremental-bmc --max-k-step 10` = 20 independent BMC runs, fresh symex+SMT per k, symbolic malloc in over-unwound loops → **~30 GB RSS / ~1.5 h**, OOM under the 2 GB CI ulimit | `verify/Makefile`, `full_test.sh` | #516, #546 |
 | **RegionAlloc is unverifiable** — any vowed function whose body emits `RegionAlloc` (e.g. a functional struct update) is `SkippedNonModelable`, so bootstrap can't reach overall `Verified` without a script tolerance | `c_emitter.rs` `first_unsupported_opcode` | #397 |
-| **Region inference is fragile & huge** — 8 k-line pass with a lattice fixed-point, alias-aware LUB, root-escape rewrite, AMBIGUOUS conflict gating, and a Vec-indexed lookup-table perf workaround; a steady drip of corner-case fixes (#400/#407, #372, #365–#368, #351) | `region.rs` / `region.vow` | #407, #372, #366–#368, #351 |
+| **Region inference is fragile & huge** — 8 k-line pass with a lattice fixed-point, alias-aware LUB, root-escape rewrite, AMBIGUOUS conflict gating, and a Vec-indexed lookup-table perf workaround; a steady drip of corner-case fixes (#400/#407, #372, #366–#368, #351) | `region.rs` / `region.vow` | #407, #372, #366–#368, #351 |
 | **try_extend contract gaps** — frame condition / no-mutation / success postconditions claimed but not actually asserted; reserve arithmetic can wrap | `arena.c`, runtime | #431, #432, #433, #435 |
 
 ### 2.3 The core tension
@@ -107,7 +107,7 @@ opposite of "verifiable first."
 | **Verifier-only bounds leak into contracts** — `--vec-max/--string-max/--hashmap-max/--btreemap-max` capacity flags exist as global knobs; fixtures smuggle `requires: n <= 8` (an unwind bound) into *contracts*, violating CLAUDE.md | spec + fixtures | #278, #552 |
 | **Real overflow corners missed** — `lit_var` ensures `result > 0` but `-i64::MIN` wraps negative; the contract is genuinely wrong, not an ESBMC artifact | SAT example | #504 |
 | **Expressiveness gaps** — no bounded quantifiers (`forall i in 0..n`), no `decreases` for recursion; both would *raise* contract value without a new type axis | roadmap | #467, #470 |
-| **Status discipline** — soft `UNKNOWN`/`TIMEOUT`/`Skipped` vs hard `FAILED`; caching trust boundary; differential testing of model vs runtime | — | #334–#338, #376/#377, #385/#386 |
+| **Status discipline** — soft `UNKNOWN`/`TIMEOUT`/`Skipped` vs hard `FAILED`; caching trust boundary; differential testing of model vs runtime | — | #334, #335, #337, #338, #376/#377, #385/#386 |
 
 ### 3.3 Should we drop C and target ESBMC IR directly?
 
@@ -225,7 +225,7 @@ Two halves: performance, and contract quality.
    vs single-shot `--unwind k` vs `--k-induction` across the fixtures + arena,
    recording peak RSS and wall time, and default to the cheapest that proves the
    corpus. Add `--smt-during-symex` where it lowers RSS. Wire `--memlimit` to the
-   ulimit (WS-0.4) so runaway proofs fail soft (#502).
+   ulimit (WS-0.4) so runaway proofs fail soft (follow-up to the merged #502).
 2. **Contract methodology** (#81) — the highest-value, lowest-code item. Produce
    `docs/spec/contracts-methodology.md` defining a **contract taxonomy** (range,
    uniqueness, round-trip, dispatch-totality, relational) with a worked example of
@@ -335,15 +335,15 @@ feature freeze (WS-4.1) starts on day 0.
 Arena: #397, #437, #480, #430, #431, #432, #433, #435, #422, #423, #424, #425,
 #426, #516, #546, #372, #407, #366, #367, #368, #351.
 Verification: #81, #505, #506, #504, #552, #278, #467, #334, #335, #337, #338,
-#376, #377, #385, #386, #502.
+#376, #377, #385, #386.
 
 **Deferred to 0.4.0+ (paused, not cancelled):**
-Numeric tower #523, #524, #525, #526, #527, #528, #529, #523. BTreeMap-V #350,
-#530–#540, #553–#559. Live-programming #488. vow-perf #487, #486, #482, #478, #484.
+Numeric tower #523, #524, #525, #526, #527, #528, #529. BTreeMap-V #350,
+#530–#540. Live-programming #488. vow-perf #487, #486, #482, #478, #484.
 I/O wave #521. ESBMC IR rewrite (Approach B, no issue yet — file post-0.3.0).
 
 **Hygiene / parallel-safe (land opportunistically, don't gate the release):**
-the `deferred-from-pr` and `ergonomics` clusters (#553–#557, #364, #367, etc.),
+the `deferred-from-pr` and `ergonomics` clusters (#553–#559, #364, etc.),
 CI items (#393/#399/#497), docs items.
 
 > Recommended next administrative step (not yet done — needs owner sign-off):
