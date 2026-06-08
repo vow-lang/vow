@@ -1,0 +1,21 @@
+module VecOfStringSkipped
+
+// Regression test for issue #505 (get_val side). `first_word_len` reads a
+// String out of a Vec<String> via `words[0]` — a `__vow_vec_get_val` whose
+// result is a model struct. Pre-fix this emitted `int64_t = __vow_string_t`
+// ill-typed C; post-fix the function is marked non-modelable and Skipped.
+//
+// The contract makes `first_word_len` a real verification target; the `head`
+// binding is consumed by `head.len()` so the get_val result is classified as
+// a string value and the non-scalar check fires.
+fn first_word_len(words: Vec<String>) -> i64 vow {
+  ensures: result >= 0
+} {
+  let head: String = words[0];
+  head.len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

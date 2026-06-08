@@ -150,6 +150,73 @@ fn vec_model_receiver_arg(name: &str) -> Option<usize> {
     }
 }
 
+/// Argument index of the value being stored into `__vow_vec_t::data[]` for
+/// vec store-ops.  `__vow_vec_get_val` reads from `data[]` into the call's
+/// *result* id; callers handle it via the result id instead and this
+/// function returns `None` for that case.
+fn vec_op_value_arg(name: &str) -> Option<usize> {
+    match name {
+        "__vow_vec_push_val" => Some(1),
+        "__vow_vec_push_val_in_arena" => Some(2),
+        "__vow_vec_set_val" => Some(2),
+        _ => None,
+    }
+}
+
+/// True when `id` represents a model struct value (`__vow_vec_t`,
+/// `__vow_string_t`, etc.) rather than an `int64_t`.
+fn is_structured_value_id(
+    id: u32,
+    vec_vars: &HashSet<u32>,
+    string_vars: &HashSet<u32>,
+    hashmap_vars: &HashSet<u32>,
+    btreemap_vars: &HashSet<u32>,
+    option_vars: &HashSet<u32>,
+) -> bool {
+    vec_vars.contains(&id)
+        || string_vars.contains(&id)
+        || hashmap_vars.contains(&id)
+        || btreemap_vars.contains(&id)
+        || option_vars.contains(&id)
+}
+
+/// True when `inst` is a vec store/load op whose element side is a model
+/// struct rather than a scalar — the configuration that produces
+/// `int64_t = __vow_vec_t` (issue #505) in the emitted C model.
+fn vec_op_carries_non_scalar(
+    name: &str,
+    inst: &Inst,
+    vec_vars: &HashSet<u32>,
+    string_vars: &HashSet<u32>,
+    hashmap_vars: &HashSet<u32>,
+    btreemap_vars: &HashSet<u32>,
+    option_vars: &HashSet<u32>,
+) -> bool {
+    if name == "__vow_vec_get_val" {
+        return is_structured_value_id(
+            inst.id.0,
+            vec_vars,
+            string_vars,
+            hashmap_vars,
+            btreemap_vars,
+            option_vars,
+        );
+    }
+    if let Some(arg_idx) = vec_op_value_arg(name)
+        && let Some(arg) = inst.args.get(arg_idx)
+    {
+        return is_structured_value_id(
+            arg.0,
+            vec_vars,
+            string_vars,
+            hashmap_vars,
+            btreemap_vars,
+            option_vars,
+        );
+    }
+    false
+}
+
 fn string_model_receiver_arg(name: &str) -> Option<usize> {
     match name {
         "__vow_string_push_str_in_arena"
@@ -514,7 +581,18 @@ pub fn is_modelable(
                 | Opcode::RegionClose => true,
 
                 Opcode::Call => match &inst.data {
-                    InstData::CallExtern(name) => is_known_builtin(name),
+                    InstData::CallExtern(name) => {
+                        is_known_builtin(name)
+                            && !vec_op_carries_non_scalar(
+                                name,
+                                inst,
+                                &vec_vars,
+                                &string_vars,
+                                &hashmap_vars,
+                                &btreemap_vars,
+                                &option_vars,
+                            )
+                    }
                     InstData::CallTarget(fid) => {
                         const_fns.contains_key(fid)
                             || module.functions.iter().find(|f| f.id == *fid).is_some_and(
@@ -592,6 +670,11 @@ fn first_unsupported_opcode(
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
 ) -> Option<String> {
+    let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
+    let string_vars = collect_typed_vars(func, "__vow_string_new", "__vow_string_");
+    let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
+    let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
+    let option_vars = collect_option_vars(func);
     for block in &func.blocks {
         for inst in &block.insts {
             match inst.opcode {
@@ -607,6 +690,17 @@ fn first_unsupported_opcode(
                     InstData::CallExtern(name) => {
                         if !is_known_builtin(name) {
                             return Some(format!("Call extern `{name}`"));
+                        }
+                        if vec_op_carries_non_scalar(
+                            name,
+                            inst,
+                            &vec_vars,
+                            &string_vars,
+                            &hashmap_vars,
+                            &btreemap_vars,
+                            &option_vars,
+                        ) {
+                            return Some(format!("Call extern `{name}` with non-scalar element"));
                         }
                     }
                     InstData::CallTarget(fid) => {
@@ -4009,6 +4103,274 @@ mod tests {
                 "{name} should stay non-modelable until its expanding length semantics are modeled; reason: {reason:?}"
             );
         }
+    }
+
+    fn one_block_func_module(name: &str, ret: Ty, insts: Vec<Inst>) -> (Function, Module) {
+        let func = Function {
+            id: FuncId(0),
+            name: name.to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: ret,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts,
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![func.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        (func, module)
+    }
+
+    #[test]
+    fn nested_vec_push_marked_non_modelable() {
+        let (func, module) = one_block_func_module(
+            "nested_push",
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_vec_new".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(3), InstId(4)],
+                    data: InstData::CallExtern("__vow_vec_new".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(2), InstId(5)],
+                    data: InstData::CallExtern("__vow_vec_push_val".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(7, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let reason = non_modelable_reason(&func, &module, &HashMap::new());
+        assert!(
+            matches!(reason.as_deref(), Some(text) if text.contains("non-scalar element")),
+            "nested Vec<Vec<...>> push must be non-modelable with non-scalar element reason; got: {reason:?}"
+        );
+    }
+
+    #[test]
+    fn nested_vec_push_in_arena_marked_non_modelable() {
+        // outer = __vow_vec_new_in_arena(arena, size, align)   // in vec_vars (creator)
+        // inner = __vow_vec_new_in_arena(arena, size, align)   // in vec_vars (creator)
+        // __vow_vec_push_val_in_arena(arena, outer, inner)     // value arg is at index 2
+        let (func, module) = one_block_func_module(
+            "nested_push_arena",
+            Ty::Ptr,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1000),
+                ),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_vec_new_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_vec_new_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(3), InstId(4)],
+                    data: InstData::CallExtern("__vow_vec_push_val_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(6, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+            ],
+        );
+        let reason = non_modelable_reason(&func, &module, &HashMap::new());
+        assert!(
+            matches!(reason.as_deref(), Some(text) if text.contains("__vow_vec_push_val_in_arena") && text.contains("non-scalar element")),
+            "arena push of nested vec must be flagged with non-scalar element; got: {reason:?}"
+        );
+    }
+
+    #[test]
+    fn vec_get_val_of_string_marked_non_modelable() {
+        // v       = __vow_vec_new(...)           // outer Vec, in vec_vars
+        // got     = __vow_vec_get_val(v, 0)      // result type at IR is Ptr/i64
+        // _       = __vow_string_len(got)        // forces `got` into string_vars
+        // The get_val emit would be `v{got} = v{v}.data[..];` — a __vow_string_t
+        // would be loaded from int64_t[] storage, which is ill-typed.
+        let (func, module) = one_block_func_module(
+            "vec_get_string",
+            Ty::I64,
+            vec![
+                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_vec_new".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2), InstId(3)],
+                    data: InstData::CallExtern("__vow_vec_get_val".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::I64,
+                    args: vec![InstId(4)],
+                    data: InstData::CallExtern("__vow_string_len".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+            ],
+        );
+        let reason = non_modelable_reason(&func, &module, &HashMap::new());
+        assert!(
+            matches!(reason.as_deref(), Some(text) if text.contains("__vow_vec_get_val") && text.contains("non-scalar element")),
+            "vec_get_val whose result is a string must be flagged with non-scalar element; got: {reason:?}"
+        );
+    }
+
+    #[test]
+    fn vec_set_val_with_structured_value_marked_non_modelable() {
+        // outer = __vow_vec_new                       // in vec_vars
+        // inner = __vow_vec_new                       // in vec_vars
+        // __vow_vec_set_val(outer, idx, inner)        // value arg at index 2
+        let (func, module) = one_block_func_module(
+            "vec_set_struct",
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_vec_new".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_vec_new".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(2), InstId(4), InstId(3)],
+                    data: InstData::CallExtern("__vow_vec_set_val".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(6, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let reason = non_modelable_reason(&func, &module, &HashMap::new());
+        assert!(
+            matches!(reason.as_deref(), Some(text) if text.contains("__vow_vec_set_val") && text.contains("non-scalar element")),
+            "vec_set_val with structured value must be flagged; got: {reason:?}"
+        );
+    }
+
+    #[test]
+    fn flat_vec_i64_push_still_modelable() {
+        // Regression: flat Vec<i64> with scalar pushes must remain modelable.
+        let (func, module) = one_block_func_module(
+            "flat_push",
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_vec_new".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(2), InstId(3)],
+                    data: InstData::CallExtern("__vow_vec_push_val".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(5, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        assert_eq!(
+            non_modelable_reason(&func, &module, &HashMap::new()),
+            None,
+            "flat Vec<i64> push of an i64 const must remain modelable"
+        );
     }
 
     #[test]

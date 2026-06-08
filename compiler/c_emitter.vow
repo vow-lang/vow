@@ -162,6 +162,44 @@ fn is_reserved_verifier_symbol(name: String) -> bool {
     || str_starts_with(name, String::from("__VERIFIER_"))
 }
 
+// Returns the args[] index of the value stored into __vow_vec_t::data[] for
+// vec store-ops. Returns -1 when the op is __vow_vec_get_val (the relevant id
+// is then inst.id, not an arg) or when the op is not one of these.
+fn vec_op_value_arg(name: String) -> i64 {
+    if name == String::from("__vow_vec_push_val") { return 1; }
+    if name == String::from("__vow_vec_push_val_in_arena") { return 2; }
+    if name == String::from("__vow_vec_set_val") { return 2; }
+    -1
+}
+
+// True when id represents a model struct value (__vow_vec_t, __vow_string_t,
+// etc.) rather than an int64_t.
+fn is_structured_value_id(id: i64, vec_vars: Vec<i64>, string_vars: Vec<i64>, hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, option_vars: Vec<i64>) -> bool {
+    vec_contains_i64(vec_vars, id)
+    || vec_contains_i64(string_vars, id)
+    || vec_contains_i64(hashmap_vars, id)
+    || vec_contains_i64(btreemap_vars, id)
+    || vec_contains_i64(option_vars, id)
+}
+
+// True when inst is a vec store/load op whose element side is a model struct
+// rather than a scalar — produces `int64_t = __vow_vec_t` in the emitted C
+// model (issue #505).
+fn vec_op_carries_non_scalar(name: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64>, hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, option_vars: Vec<i64>) -> bool {
+    if name == String::from("__vow_vec_get_val") {
+        return is_structured_value_id(inst.id, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars);
+    }
+    let arg_idx: i64 = vec_op_value_arg(name);
+    if arg_idx < 0 {
+        return false;
+    }
+    let iargs: Vec<i64> = inst.args;
+    if arg_idx >= iargs.len() {
+        return false;
+    }
+    is_structured_value_id(iargs[arg_idx], vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars)
+}
+
 fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelable_cache_ids: Vec<i64>, modelable_cache_vals: Vec<i64>) -> bool {
     if is_reserved_verifier_symbol(f.name) {
         return false;
@@ -233,6 +271,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                 } else if op == IOP_CALL() {
                     if inst.dk == IDATA_CALL_EXTERN() {
                         is_known_builtin(inst.ds)
+                        && !vec_op_carries_non_scalar(inst.ds, inst, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars)
                     } else if inst.dk == IDATA_CALL_TARGET() {
                         let target_fi: i64 = inst.dv;
                         if vec_contains_i64(const_fn_indices, target_fi) {
@@ -310,6 +349,11 @@ fn iop_unsupported_name(op: i64) -> String {
 }
 
 fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>) -> String {
+    let vec_vars: Vec<i64> = collect_vec_vars(f);
+    let string_vars: Vec<i64> = collect_string_vars(f);
+    let hashmap_vars: Vec<i64> = collect_hashmap_vars(f);
+    let btreemap_vars: Vec<i64> = collect_btreemap_vars(f);
+    let option_vars: Vec<i64> = collect_option_vars(f);
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
     while bi < blocks.len() {
@@ -327,6 +371,9 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
                 if inst.dk == IDATA_CALL_EXTERN() {
                     if !is_known_builtin(inst.ds) {
                         return str3(String::from("Call extern `"), inst.ds, String::from("`"));
+                    }
+                    if vec_op_carries_non_scalar(inst.ds, inst, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars) {
+                        return str3(String::from("Call extern `"), inst.ds, String::from("` with non-scalar element"));
                     }
                 } else if inst.dk == IDATA_CALL_TARGET() {
                     let target_fi: i64 = inst.dv;
