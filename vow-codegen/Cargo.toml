@@ -11,6 +11,7 @@ cranelift-frontend = "0.132"
 cranelift-module = "0.132"
 cranelift-object = "0.132"
 cranelift-native = "0.132"
+target-lexicon = "0.13"
 
 [dev-dependencies]
 vow-syntax = { path = "../vow-syntax" }
