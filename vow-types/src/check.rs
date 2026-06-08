@@ -468,7 +468,7 @@ impl<'e> Checker<'e> {
             }
         }
 
-        // Pass 2: Check function bodies; self.file must be set before check_item delegates to effects/linear helpers.
+        // Pass 2: Check function bodies.
         for (i, item) in module.items.iter().enumerate() {
             self.set_item_file(item_files, i);
             self.check_item(item);
