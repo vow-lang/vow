@@ -1,0 +1,15 @@
+// TEST: stdout "ok\n"
+// Regression: a recursive non-linear struct used as a BTreeMap value must
+// type-check without sending is_linear_ty into unbounded recursion.
+module BTreeMapRecursiveNonlinearValue
+
+struct Node {
+    val: i64,
+    kids: Vec<Node>,
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, Node> = BTreeMap::new();
+    print_str(String::from("ok\n"));
+    0
+}

@@ -72,7 +72,7 @@ jobs:
             echo "no RegionConflict warnings in compiler/*.vow"
           fi
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: pmatos/vow-lang
@@ -114,7 +114,7 @@ jobs:
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify
 
-  # ─── macOS jobs (advisory) ─────────────────────────────────────────
+  # ─── macOS jobs ───────────────────────────────────────────────────
   #
   # ESBMC ships no macOS release artifact (only Ubuntu + Windows zips on
   # https://github.com/esbmc/esbmc/releases), so verification is skipped
@@ -122,9 +122,9 @@ jobs:
   # does not affect codegen, so identical Stage 2/Stage 3 SHA-256s prove
   # the self-hosted compiler reaches a fixed point on this platform.
   #
-  # continue-on-error is on while we shake out platform-specific issues
-  # (libdl quirks, ulimit -v semantics, etc.). The intent is to flip
-  # these to required once they go green; tracked in a follow-up issue.
+  # `bootstrap-macos` is required (the fixed-point check is reliable here).
+  # `build-and-test-macos` remains advisory via continue-on-error while we
+  # shake out platform-specific test issues (tracked in #501).
 
   build-and-test-macos:
     runs-on: macos-latest
@@ -149,7 +149,6 @@ jobs:
     # change codegen, so a successful match here still proves the
     # self-hosted compiler is a fixed point on macOS.
     runs-on: macos-latest
-    continue-on-error: true
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6

@@ -31,13 +31,14 @@ use cranelift_codegen::ir::{
     AbiParam, Block, FuncRef, GlobalValue, InstBuilder, MemFlags, Signature, StackSlot,
     StackSlotData, StackSlotKind, TrapCode, Value, types,
 };
-use cranelift_codegen::isa::TargetIsa;
+use cranelift_codegen::isa::{self, TargetIsa};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use target_lexicon::{OperatingSystem, Triple};
 
 // ---------------------------------------------------------------------------
 // VowVec layout: { ptr: *mut u8, len: usize, cap: usize } = 24 bytes
@@ -793,6 +794,19 @@ impl FnScratch {
 // FFI: create / destroy
 // ---------------------------------------------------------------------------
 
+// `Triple::host()` reports macOS as `*-apple-darwin`. cranelift-object 0.132
+// maps a `Darwin` OS to Mach-O `PLATFORM_UNKNOWN` when writing its new
+// `LC_BUILD_VERSION` load command, which the macOS linker rejects with
+// "unknown platform". Rewriting `Darwin` to `MacOSX` yields `PLATFORM_MACOS`.
+// Every non-Darwin host (e.g. Linux/ELF) is returned unchanged.
+fn host_triple() -> Triple {
+    let mut triple = Triple::host();
+    if let OperatingSystem::Darwin(v) = triple.operating_system {
+        triple.operating_system = OperatingSystem::MacOSX(v);
+    }
+    triple
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
     let mut flag_builder = settings::builder();
@@ -811,16 +825,21 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         return 0;
     }
     let flags = settings::Flags::new(flag_builder);
-    let isa = match cranelift_native::builder() {
-        Ok(b) => match b.finish(flags) {
-            Ok(i) => i,
-            Err(e) => {
-                eprintln!("clif_shim: ISA build error: {e}");
-                return 0;
-            }
-        },
+    let mut isa_builder = match isa::lookup(host_triple()) {
+        Ok(b) => b,
         Err(e) => {
-            eprintln!("clif_shim: native builder error: {e}");
+            eprintln!("clif_shim: isa lookup error: {e}");
+            return 0;
+        }
+    };
+    if let Err(e) = cranelift_native::infer_native_flags(&mut isa_builder) {
+        eprintln!("clif_shim: infer native flags error: {e}");
+        return 0;
+    }
+    let isa = match isa_builder.finish(flags) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("clif_shim: ISA build error: {e}");
             return 0;
         }
     };
@@ -2633,9 +2652,10 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
     // On macOS the dl* symbols live in libc (no separate libdl), so -ldl
     // would cause "library not found" — only pass it on platforms that
     // actually ship libdl as a standalone library.
-    cmd.args(["-lpthread", "-lm"]);
-    if cfg!(target_os = "linux") {
-        cmd.arg("-ldl");
+    cmd.args(platform_link_args_for(std::env::consts::OS));
+    if cfg!(target_os = "macos") {
+        // Stabilise LC_UUID and CDHash across different -o names; see #500.
+        cmd.args(["-Wl,-reproducible", "-Wl,-final_output,vow"]);
     }
 
     match cmd.status() {
@@ -2666,6 +2686,16 @@ fn find_lib(name: &str) -> Option<String> {
     };
     let exe = std::env::current_exe().ok();
     find_lib_from_parts(name, std::env::var_os(env_key), exe.as_deref())
+}
+
+// Keep in sync with vow-codegen/src/linker.rs; both linker paths must agree on
+// platform library flags.
+fn platform_link_args_for(os: &str) -> &'static [&'static str] {
+    match os {
+        "linux" => &["-lpthread", "-ldl", "-lm"],
+        "macos" => &["-lpthread", "-lm"],
+        _ => &["-lpthread", "-lm"],
+    }
 }
 
 fn find_lib_from_parts(
@@ -3764,5 +3794,23 @@ mod tests {
             find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
         let expected = debug_lib.to_string_lossy().into_owned();
         assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn linux_link_args_include_dl() {
+        assert_eq!(
+            platform_link_args_for("linux"),
+            ["-lpthread", "-ldl", "-lm"]
+        );
+    }
+
+    #[test]
+    fn macos_link_args_omit_dl() {
+        assert_eq!(platform_link_args_for("macos"), ["-lpthread", "-lm"]);
+    }
+
+    #[test]
+    fn other_link_args_omit_dl() {
+        assert_eq!(platform_link_args_for("freebsd"), ["-lpthread", "-lm"]);
     }
 }

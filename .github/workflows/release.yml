@@ -21,10 +21,16 @@ permissions:
 
 env:
   ESBMC_VERSION: "8.1"
+  # SHA-256 of release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip from
+  # https://github.com/esbmc/esbmc/releases/tag/v8.1.
+  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
 
 jobs:
-  release:
+  prepare-version:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
     steps:
       - name: Ensure running on main
         run: |
@@ -40,63 +46,218 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache ESBMC
-        id: cache-esbmc
-        uses: actions/cache@v5
-        with:
-          path: ~/esbmc
-          key: esbmc-${{ env.ESBMC_VERSION }}-ubuntu-24.04
-
-      - name: Install ESBMC
-        if: steps.cache-esbmc.outputs.cache-hit != 'true'
-        run: |
-          curl -sL -o /tmp/esbmc.zip "https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip"
-          unzip -q /tmp/esbmc.zip -d ~/esbmc
-          rm /tmp/esbmc.zip
-
-      - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
-
       - name: Bump version
         id: bump
         run: |
           NEW_VERSION=$(scripts/bump-version.sh "${{ inputs.bump }}")
+          # Regenerate Cargo.lock after the version bump before capturing the patch.
+          cargo metadata --format-version 1 > /dev/null
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          git diff -- Cargo.lock */Cargo.toml > version.patch
+
+      - name: Upload version patch
+        uses: actions/upload-artifact@v7
+        with:
+          name: version-patch
+          path: version.patch
+          if-no-files-found: error
+
+  build-package:
+    needs: prepare-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: x86_64
+            runner: ubuntu-24.04
+            verify: true
+          # The pinned ESBMC zip is Ubuntu x86_64-only; Linux aarch64 and
+          # macOS packages use --no-verify while keeping the fixed-point check.
+          - os: linux
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+            verify: false
+          - os: macos
+            arch: aarch64
+            runner: macos-15
+            verify: false
+          - os: macos
+            arch: x86_64
+            runner: macos-15-intel
+            verify: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download version patch
+        uses: actions/download-artifact@v8
+        with:
+          name: version-patch
+
+      - name: Apply version patch
+        run: git apply version.patch
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache ESBMC
+        id: cache-esbmc
+        if: matrix.verify
+        uses: actions/cache@v5
+        with:
+          path: ~/esbmc
+          key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
+
+      - name: Install ESBMC
+        if: matrix.verify && steps.cache-esbmc.outputs.cache-hit != 'true'
+        env:
+          ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
+        run: |
+          ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
+
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
+
+          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
+
+          unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
+          rm "/tmp/$ESBMC_ZIP"
+
+      - name: Add ESBMC to PATH
+        if: matrix.verify
+        run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+
+      - name: Build Rust artifacts
+        run: cargo build --all --release
 
       - name: Bootstrap compiler
-        run: scripts/bootstrap.sh
-
-      - name: Verify compiler binary
-        run: build/vowc --help > /dev/null
-
-      - name: Package release artifacts
         run: |
-          mkdir -p release
-          cp build/vowc release/vowc-linux-x86_64
-          sha256sum release/vowc-linux-x86_64 > release/vowc-linux-x86_64.sha256
-          echo "${{ steps.bump.outputs.version }}" > release/VERSION
+          if [ "${{ matrix.verify }}" = "true" ]; then
+            scripts/bootstrap.sh --skip-cargo
+          else
+            scripts/bootstrap.sh --skip-cargo --no-verify
+          fi
 
-      - name: Commit version bump
+      - name: Package toolchain
+        run: |
+          scripts/package-toolchain.sh \
+            --version "${{ needs.prepare-version.outputs.version }}" \
+            --os "${{ matrix.os }}" \
+            --arch "${{ matrix.arch }}" \
+            --output-dir release
+
+      - name: Smoke-test packaged toolchain
+        run: |
+          asset="vow-${{ matrix.os }}-${{ matrix.arch }}.tar.gz"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          tar -xzf "release/$asset" -C "$tmp"
+          prefix="$tmp/vow-${{ needs.prepare-version.outputs.version }}"
+          runtime_lib="$prefix/lib/vow/libvow_runtime.a"
+          shim_lib="$prefix/lib/vow/libvow_clif_shim.a"
+          for packaged_lib in "$runtime_lib" "$shim_lib"; do
+            if [ ! -f "$packaged_lib" ]; then
+              echo "::error::Missing packaged library: $packaged_lib"
+              exit 1
+            fi
+          done
+          cat > "$tmp/hello.vow" <<'EOF'
+          module Hello
+
+          fn main() -> i32 [io] {
+              print_str("Hello, world!");
+              0
+          }
+          EOF
+          "$prefix/bin/vowc" --help > /dev/null
+          (
+            cd "$tmp"
+            VOW_RUNTIME_PATH="$runtime_lib" \
+              VOW_CLIF_SHIM_PATH="$shim_lib" \
+              "$prefix/bin/vowc" build --no-verify hello.vow -o hello
+            ./hello
+          )
+
+      - name: Upload toolchain package
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolchain-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            release/vow-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+            release/vow-${{ matrix.os }}-${{ matrix.arch }}.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - prepare-version
+      - build-package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download version patch
+        uses: actions/download-artifact@v8
+        with:
+          name: version-patch
+
+      - name: Apply version patch
+        run: |
+          if git apply --check version.patch; then
+            git apply version.patch
+          elif git apply --reverse --check version.patch; then
+            echo "Version patch already applied; continuing"
+          else
+            echo "::error::Version patch does not apply cleanly"
+            exit 1
+          fi
+
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: toolchain-*
+          path: release
+          merge-multiple: true
+
+      - name: Commit version bump and tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add */Cargo.toml Cargo.lock
-          git commit -m "Release v${{ steps.bump.outputs.version }}"
-          git tag "v${{ steps.bump.outputs.version }}"
-          git push origin HEAD:${{ github.ref_name }} "refs/tags/v${{ steps.bump.outputs.version }}"
+
+          if ! git diff --quiet; then
+            git add */Cargo.toml Cargo.lock
+            git commit -m "Release v${{ needs.prepare-version.outputs.version }}"
+            git push origin HEAD:${{ github.ref_name }}
+          else
+            echo "No version changes to commit"
+          fi
+
+          TAG="${{ needs.prepare-version.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists"
+          else
+            git tag "$TAG"
+            git push origin "refs/tags/$TAG"
+          fi
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ steps.bump.outputs.tag }}"
+          TAG="${{ needs.prepare-version.outputs.tag }}"
+          printf "%s\n" "${{ needs.prepare-version.outputs.version }}" > release/VERSION
           if gh release view "$TAG" &>/dev/null; then
             echo "Release $TAG already exists, deleting stale release"
             gh release delete "$TAG" --yes
           fi
           gh release create "$TAG" \
-            --title "Vow ${{ steps.bump.outputs.version }}" \
+            --title "Vow ${{ needs.prepare-version.outputs.version }}" \
             --generate-notes \
-            release/vowc-linux-x86_64 \
-            release/vowc-linux-x86_64.sha256 \
+            release/vow-*.tar.gz \
+            release/vow-*.tar.gz.sha256 \
             release/VERSION

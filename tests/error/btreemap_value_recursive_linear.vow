@@ -1,0 +1,17 @@
+// TEST: error-code BTreeMapValueMustBeNonLinear
+// TEST: stderr "BTreeMap value type must be non-linear"
+module BTreeMapValueRecursiveLinear
+
+linear struct Token {
+    id: i64,
+}
+
+struct Holder {
+    kids: Vec<Holder>,
+    tok: Token,
+}
+
+fn main() -> i32 {
+    let m: BTreeMap<i64, Holder> = BTreeMap::new();
+    0
+}

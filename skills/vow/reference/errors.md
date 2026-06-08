@@ -193,20 +193,21 @@ fn f() -> () {
 
 **Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash or intern them to `i64` at the call site and keep a side-table for the originals.
 
-### BTreeMapValueTypeMustBeI64
+### BTreeMapValueMustBeNonLinear
 
 **Phase:** Type Checker
-**Meaning:** A `BTreeMap<K, V>` was instantiated with `V` not equal to `i64`. Phase 1 only supports `i64` values; the runtime helpers and ESBMC C model are hard-coded to i64 values. Widening V to struct payloads is a planned follow-up to the BTreeMap stdlib work.
+**Meaning:** A `BTreeMap<K, V>` was instantiated with a `V` that is or transitively contains a `linear struct`. Non-linear containers like `BTreeMap`, `Vec`, and `HashMap` cannot hold linear values because their internal shift/copy operations are bitwise and would silently duplicate the linear ownership obligation.
 
 ```vow
+linear struct Token { id: i64 }
 fn f() -> () {
-    let n: BTreeMap<i64, String> = BTreeMap::new();
+    let m: BTreeMap<i64, Token> = BTreeMap::new();
 }
 ```
 
-**Output:** `BTreeMap value type must be i64 in Phase 1; found 'String'`
+**Output:** `BTreeMap value type must be non-linear; found 'Token'`
 
-**Fix:** Use `BTreeMap<i64, i64>`. For richer values, store an integer index/handle and keep the actual values in a separate `Vec<V>`.
+**Fix:** Either drop the `linear` qualifier on the struct, or keep handles in a `Vec<i64>` indirection and consume the linear values via direct function calls outside the map.
 
 ### MissingContract
 

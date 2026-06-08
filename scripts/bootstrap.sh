@@ -120,6 +120,18 @@ run_verify_stage_cmd() {
     run_verify_logged "$cmd"
 }
 
+sha256_file() {
+    local path="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$path" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$path" | awk '{print $1}'
+    else
+        echo "Error: neither sha256sum nor shasum is available" >&2
+        exit 1
+    fi
+}
+
 for arg in "$@"; do
     case "$arg" in
         --skip-cargo)        SKIP_CARGO=true ;;
@@ -222,8 +234,8 @@ printf "  done in %ds\n" $((t1 - t0))
 # ─── Verify: SHA-256 fixed point ─────────────────────────────────────
 
 printf "${BOLD}Verify:${RESET}  SHA-256 fixed point (vowc2 == vowc3)\n"
-sha_vowc2=$(sha256sum build/vowc2 | awk '{print $1}')
-sha_vowc3=$(sha256sum build/vowc3 | awk '{print $1}')
+sha_vowc2=$(sha256_file build/vowc2)
+sha_vowc3=$(sha256_file build/vowc3)
 
 if [ "$sha_vowc2" = "$sha_vowc3" ]; then
     printf "  ${GREEN}MATCH${RESET}  %s\n" "$sha_vowc2"
@@ -236,4 +248,3 @@ else
     printf "  vowc3: %s\n" "$sha_vowc3"
     exit 1
 fi
-

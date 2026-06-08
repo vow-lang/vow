@@ -1,0 +1,12 @@
+// TEST: error-code BTreeMapValueMustBeNonLinear
+// TEST: stderr "must be non-linear; found 'Token'"
+module BTreeMapValueLinear
+
+linear struct Token {
+    id: i64,
+}
+
+fn main() -> i32 {
+    let m: BTreeMap<i64, Token> = BTreeMap::new();
+    0
+}

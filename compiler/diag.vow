@@ -32,7 +32,7 @@ fn EC_REGION_LINEAR() -> i64 vow { ensures: result >= 0 } { 19 }
 // the verifier. Mirrors `vow_diag::ErrorCode::VerificationSkipped`.
 fn EC_VERIFICATION_SKIPPED() -> i64 vow { ensures: result >= 0 } { 20 }
 fn EC_BTREEMAP_KEY_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 21 }
-fn EC_BTREEMAP_VALUE_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 22 }
+fn EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR() -> i64 vow { ensures: result >= 0 } { 22 }
 // Note: program-lifetime root-arena placement. See arena_memory.md §4.4.
 fn EC_REGION_ROOT_ESCAPE() -> i64 vow { ensures: result >= 0 } { 23 }
 fn EC_STATIC_LITERAL_REQUIRED() -> i64 vow { ensures: result >= 0 } { 24 }
@@ -237,8 +237,8 @@ fn ec_name(code: i64) -> String {
     if code == EC_BTREEMAP_KEY_TYPE_MUST_BE_I64() {
         String::from("BTreeMapKeyTypeMustBeI64")
     } else {
-    if code == EC_BTREEMAP_VALUE_TYPE_MUST_BE_I64() {
-        String::from("BTreeMapValueTypeMustBeI64")
+    if code == EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR() {
+        String::from("BTreeMapValueMustBeNonLinear")
     } else {
     if code == EC_REGION_ROOT_ESCAPE() {
         String::from("RegionRootEscape")

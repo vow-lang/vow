@@ -1737,7 +1737,7 @@ pub fn api_function(x: i64) -> i64 {
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
 | `HashMap<K, V>`    | Key-value map (linear scan)     |
-| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). Phase 1: `K = V = i64` only |
+| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type |
 
 ### User-Defined Types
 
@@ -2174,9 +2174,11 @@ m.contains_key(k)
 
 ### BTreeMap<K, V> Methods
 
-In Phase 1, both `K` and `V` must be `i64`. K violations raise `BTreeMapKeyTypeMustBeI64`; V violations raise `BTreeMapValueTypeMustBeI64`.
-The runtime helpers and ESBMC C model are hard-coded to i64 keys + i64 values; widening V
-to support struct payloads is a planned follow-up.
+Keys must be `i64` (K violations raise `BTreeMapKeyTypeMustBeI64`). Values may be any
+non-linear type — primitives, structs, `Vec<T>`, `Option<T>`, or nested combinations.
+A `V` that is or transitively contains a `linear struct` is rejected with
+`BTreeMapValueMustBeNonLinear`, because the runtime/verifier shift values bitwise and
+would silently duplicate a linear obligation.
 Storage is two parallel sorted arrays (binary-search lookup, sorted-insert writes).
 Iteration order is ascending by key and is **deterministic across runs and compilers** —
 prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler output.
@@ -3508,20 +3510,21 @@ fn f() -> () {
 
 **Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash or intern them to `i64` at the call site and keep a side-table for the originals.
 
-### BTreeMapValueTypeMustBeI64
+### BTreeMapValueMustBeNonLinear
 
 **Phase:** Type Checker
-**Meaning:** A `BTreeMap<K, V>` was instantiated with `V` not equal to `i64`. Phase 1 only supports `i64` values; the runtime helpers and ESBMC C model are hard-coded to i64 values. Widening V to struct payloads is a planned follow-up to the BTreeMap stdlib work.
+**Meaning:** A `BTreeMap<K, V>` was instantiated with a `V` that is or transitively contains a `linear struct`. Non-linear containers like `BTreeMap`, `Vec`, and `HashMap` cannot hold linear values because their internal shift/copy operations are bitwise and would silently duplicate the linear ownership obligation.
 
 ```vow
+linear struct Token { id: i64 }
 fn f() -> () {
-    let n: BTreeMap<i64, String> = BTreeMap::new();
+    let m: BTreeMap<i64, Token> = BTreeMap::new();
 }
 ```
 
-**Output:** `BTreeMap value type must be i64 in Phase 1; found 'String'`
+**Output:** `BTreeMap value type must be non-linear; found 'Token'`
 
-**Fix:** Use `BTreeMap<i64, i64>`. For richer values, store an integer index/handle and keep the actual values in a separate `Vec<V>`.
+**Fix:** Either drop the `linear` qualifier on the struct, or keep handles in a `Vec<i64>` indirection and consume the linear values via direct function calls outside the map.
 
 ### MissingContract
 
@@ -4848,7 +4851,7 @@ pub fn api_function(x: i64) -> i64 {
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
 | `HashMap<K, V>`    | Key-value map (linear scan)     |
-| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). Phase 1: `K = V = i64` only |
+| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). `K` must be `i64`; `V` may be any non-linear type |
 
 ### User-Defined Types
 
@@ -5285,9 +5288,11 @@ m.contains_key(k)
 
 ### BTreeMap<K, V> Methods
 
-In Phase 1, both `K` and `V` must be `i64`. K violations raise `BTreeMapKeyTypeMustBeI64`; V violations raise `BTreeMapValueTypeMustBeI64`.
-The runtime helpers and ESBMC C model are hard-coded to i64 keys + i64 values; widening V
-to support struct payloads is a planned follow-up.
+Keys must be `i64` (K violations raise `BTreeMapKeyTypeMustBeI64`). Values may be any
+non-linear type — primitives, structs, `Vec<T>`, `Option<T>`, or nested combinations.
+A `V` that is or transitively contains a `linear struct` is rejected with
+`BTreeMapValueMustBeNonLinear`, because the runtime/verifier shift values bitwise and
+would silently duplicate a linear obligation.
 Storage is two parallel sorted arrays (binary-search lookup, sorted-insert writes).
 Iteration order is ascending by key and is **deterministic across runs and compilers** —
 prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler output.
@@ -6622,20 +6627,21 @@ fn f() -> () {
 
 **Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash or intern them to `i64` at the call site and keep a side-table for the originals.
 
-### BTreeMapValueTypeMustBeI64
+### BTreeMapValueMustBeNonLinear
 
 **Phase:** Type Checker
-**Meaning:** A `BTreeMap<K, V>` was instantiated with `V` not equal to `i64`. Phase 1 only supports `i64` values; the runtime helpers and ESBMC C model are hard-coded to i64 values. Widening V to struct payloads is a planned follow-up to the BTreeMap stdlib work.
+**Meaning:** A `BTreeMap<K, V>` was instantiated with a `V` that is or transitively contains a `linear struct`. Non-linear containers like `BTreeMap`, `Vec`, and `HashMap` cannot hold linear values because their internal shift/copy operations are bitwise and would silently duplicate the linear ownership obligation.
 
 ```vow
+linear struct Token { id: i64 }
 fn f() -> () {
-    let n: BTreeMap<i64, String> = BTreeMap::new();
+    let m: BTreeMap<i64, Token> = BTreeMap::new();
 }
 ```
 
-**Output:** `BTreeMap value type must be i64 in Phase 1; found 'String'`
+**Output:** `BTreeMap value type must be non-linear; found 'Token'`
 
-**Fix:** Use `BTreeMap<i64, i64>`. For richer values, store an integer index/handle and keep the actual values in a separate `Vec<V>`.
+**Fix:** Either drop the `linear` qualifier on the struct, or keep handles in a `Vec<i64>` indirection and consume the linear values via direct function calls outside the map.
 
 ### MissingContract
 
@@ -10457,6 +10463,14 @@ mod tests {
         path
     }
 
+    fn esbmc_not_found(status: &BuildStatus) -> bool {
+        matches!(
+            status,
+            BuildStatus::VerifyFailed { description, .. }
+                if description.contains("ESBMC not found")
+        )
+    }
+
     #[test]
     fn pipeline_compiles_function_with_param() {
         let dir = TempDir::new().unwrap();
@@ -11797,6 +11811,9 @@ fn main() -> i32 {
             TraceMode::Off,
         );
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "always_bad");
                 assert!(
@@ -11862,6 +11879,9 @@ fn main() -> i32 {
                 );
             }
             BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            status if esbmc_not_found(status) => {
                 eprintln!("SKIP: verification not run (esbmc not found)");
             }
             BuildStatus::CompileFailed { message } => {
@@ -12396,6 +12416,9 @@ fn main() -> i32 {
             TraceMode::Off,
         );
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "bad_div");
                 let ce = &result.counterexamples[0];
@@ -12461,6 +12484,9 @@ fn main() -> i32 {
         );
 
         match &broken_result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "safe_sub");
 
@@ -12623,6 +12649,9 @@ fn main() -> i32 {
         );
 
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
             BuildStatus::VerifyFailed { .. } => {
                 assert!(
                     !result.counterexamples.is_empty(),
@@ -12694,6 +12723,9 @@ fn main() -> i32 {
         let source = write_source(&dir, "good.vow", src);
         let result = run_verify_only(&source);
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: esbmc not found");
+            }
             BuildStatus::Verified => {
                 assert!(
                     result.executable.is_none(),
@@ -12727,6 +12759,9 @@ fn main() -> i32 {
         let source = write_source(&dir, "bad.vow", src);
         let result = run_verify_only(&source);
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: esbmc not found");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "always_bad");
                 assert!(
@@ -12794,6 +12829,9 @@ fn main() -> i32 {
         let result =
             run_verify_only_inner(&source, true, &limits, 4, &SolverConfig::default_config());
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: esbmc not found");
+            }
             BuildStatus::Verified => {
                 assert!(result.executable.is_none());
                 assert!(result.counterexamples.is_empty());
@@ -12843,6 +12881,9 @@ fn main() -> i32 {
         let result =
             run_verify_only_inner(&source, true, &limits, 4, &SolverConfig::default_config());
         match &result.status {
+            status if esbmc_not_found(status) => {
+                eprintln!("SKIP: esbmc not found");
+            }
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(
                     function, "fail_a",
@@ -12888,9 +12929,7 @@ fn main() -> i32 {
                     result.diagnostics
                 );
             }
-            BuildStatus::VerifyFailed { description, .. }
-                if description.contains("ESBMC not found") =>
-            {
+            status if esbmc_not_found(status) => {
                 eprintln!("SKIP: esbmc not found");
             }
             BuildStatus::CompileFailed { message } => {
