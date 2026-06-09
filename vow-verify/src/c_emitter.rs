@@ -48,8 +48,35 @@ pub fn detect_constant_functions(module: &Module) -> HashMap<FuncId, ConstantVal
 }
 
 // ---------------------------------------------------------------------------
-// Verification limits for bounded model checking
+// Verification model bounds for bounded model checking
+//
+// ESBMC models Vec/String/HashMap/BTreeMap as fixed-size C arrays, so the model
+// needs a finite capacity per collection. These are *internal verifier-model*
+// parameters with safe defaults — NOT language properties and NOT user-tunable.
+// The bound is a fact about the prover, not about Vow: a program that needs more
+// proof power is a prover concern (a stronger or unbounded backend), never a
+// language knob. Swap in an unbounded checker and the same source, contracts,
+// and CLI verify unchanged. See docs/design/verifier-model-bounds.md.
 // ---------------------------------------------------------------------------
+
+/// Safe default model capacity for `Vec<T>` under bounded model checking.
+pub const VEC_MODEL_CAP: usize = 128;
+/// Safe default model capacity for `String` under bounded model checking. The
+/// verifier transparently raises this per function when a string literal is
+/// longer (see `limits_with_literal_string_capacity`).
+pub const STRING_MODEL_CAP: usize = 256;
+/// Safe default model capacity for `HashMap<K, V>` under bounded model checking.
+pub const HASHMAP_MODEL_CAP: usize = 64;
+/// Safe default model capacity for `BTreeMap<K, V>` under bounded model checking.
+pub const BTREEMAP_MODEL_CAP: usize = 64;
+
+// A capacity of zero would emit a zero-length C array and an unsatisfiable
+// `len < CAP` assertion, silently breaking all collection verification. Pin the
+// positivity invariant the (now-removed) CLI `validate_limits` used to enforce.
+const _: () = assert!(
+    VEC_MODEL_CAP > 0 && STRING_MODEL_CAP > 0 && HASHMAP_MODEL_CAP > 0 && BTREEMAP_MODEL_CAP > 0,
+    "collection model capacities must be positive",
+);
 
 #[derive(Debug, Clone, Copy)]
 pub struct VerifyLimits {
@@ -64,10 +91,10 @@ impl Default for VerifyLimits {
     fn default() -> Self {
         Self {
             max_k_step: 50,
-            vec_max: 128,
-            string_max: 256,
-            hashmap_max: 64,
-            btreemap_max: 64,
+            vec_max: VEC_MODEL_CAP,
+            string_max: STRING_MODEL_CAP,
+            hashmap_max: HASHMAP_MODEL_CAP,
+            btreemap_max: BTREEMAP_MODEL_CAP,
         }
     }
 }

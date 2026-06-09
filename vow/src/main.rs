@@ -117,14 +117,6 @@ struct Args {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
-    #[arg(long, default_value = "128")]
-    vec_max: usize,
-    #[arg(long, default_value = "256")]
-    string_max: usize,
-    #[arg(long, default_value = "64")]
-    hashmap_max: usize,
-    #[arg(long, default_value = "64")]
-    btreemap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -175,14 +167,6 @@ struct BuildArgs {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
-    #[arg(long, default_value = "128")]
-    vec_max: usize,
-    #[arg(long, default_value = "256")]
-    string_max: usize,
-    #[arg(long, default_value = "64")]
-    hashmap_max: usize,
-    #[arg(long, default_value = "64")]
-    btreemap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -209,14 +193,6 @@ struct VerifyArgs {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
-    #[arg(long, default_value = "128")]
-    vec_max: usize,
-    #[arg(long, default_value = "256")]
-    string_max: usize,
-    #[arg(long, default_value = "64")]
-    hashmap_max: usize,
-    #[arg(long, default_value = "64")]
-    btreemap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -252,14 +228,6 @@ struct TestArgs {
     /// ESBMC max k-induction step (only with --verify)
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
-    #[arg(long, default_value = "128")]
-    vec_max: usize,
-    #[arg(long, default_value = "256")]
-    string_max: usize,
-    #[arg(long, default_value = "64")]
-    hashmap_max: usize,
-    #[arg(long, default_value = "64")]
-    btreemap_max: usize,
     #[arg(long)]
     verify_jobs: Option<u32>,
     #[arg(long)]
@@ -290,14 +258,6 @@ struct ContractsArgs {
     no_cache: bool,
     #[arg(long)]
     max_k_step: Option<u32>,
-    #[arg(long, default_value = "128")]
-    vec_max: usize,
-    #[arg(long, default_value = "256")]
-    string_max: usize,
-    #[arg(long, default_value = "64")]
-    hashmap_max: usize,
-    #[arg(long, default_value = "64")]
-    btreemap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -524,38 +484,6 @@ fn skill_json() -> String {
           "default": "300 (or 30 when --encoding is auto)"
         },
         {
-          "form": "--vec-max <N>",
-          "description": "Max Vec capacity for verification model (default: 128)",
-          "long": "--vec-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 128
-        },
-        {
-          "form": "--string-max <N>",
-          "description": "Max String capacity for verification model (default: 256)",
-          "long": "--string-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 256
-        },
-        {
-          "form": "--hashmap-max <N>",
-          "description": "Max HashMap capacity for verification model (default: 64)",
-          "long": "--hashmap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
-        },
-        {
-          "form": "--btreemap-max <N>",
-          "description": "Max BTreeMap capacity for verification model (default: 64)",
-          "long": "--btreemap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
-        },
-        {
           "form": "--verify-jobs <N>",
           "description": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
           "long": "--verify-jobs",
@@ -645,38 +573,6 @@ fn skill_json() -> String {
           "default": "300 (or 30 when --encoding is auto)"
         },
         {
-          "form": "--vec-max <N>",
-          "description": "Max Vec capacity for verification model (default: 128)",
-          "long": "--vec-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 128
-        },
-        {
-          "form": "--string-max <N>",
-          "description": "Max String capacity for verification model (default: 256)",
-          "long": "--string-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 256
-        },
-        {
-          "form": "--hashmap-max <N>",
-          "description": "Max HashMap capacity for verification model (default: 64)",
-          "long": "--hashmap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
-        },
-        {
-          "form": "--btreemap-max <N>",
-          "description": "Max BTreeMap capacity for verification model (default: 64)",
-          "long": "--btreemap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
-        },
-        {
           "form": "--verify-jobs <N>",
           "description": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
           "long": "--verify-jobs",
@@ -758,38 +654,6 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 50
-        },
-        {
-          "form": "--vec-max <N>",
-          "description": "Max Vec capacity for verification model (default: 128)",
-          "long": "--vec-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 128
-        },
-        {
-          "form": "--string-max <N>",
-          "description": "Max String capacity for verification model (default: 256)",
-          "long": "--string-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 256
-        },
-        {
-          "form": "--hashmap-max <N>",
-          "description": "Max HashMap capacity for verification model (default: 64)",
-          "long": "--hashmap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
-        },
-        {
-          "form": "--btreemap-max <N>",
-          "description": "Max BTreeMap capacity for verification model (default: 64)",
-          "long": "--btreemap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
         },
         {
           "form": "--verify-jobs <N>",
@@ -901,38 +765,6 @@ fn skill_json() -> String {
           "default": "auto"
         },
         {
-          "form": "--vec-max <N>",
-          "description": "Max Vec capacity for verification model (default: 128)",
-          "long": "--vec-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 128
-        },
-        {
-          "form": "--string-max <N>",
-          "description": "Max String capacity for verification model (default: 256)",
-          "long": "--string-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 256
-        },
-        {
-          "form": "--hashmap-max <N>",
-          "description": "Max HashMap capacity for verification model (default: 64)",
-          "long": "--hashmap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
-        },
-        {
-          "form": "--btreemap-max <N>",
-          "description": "Max BTreeMap capacity for verification model (default: 64)",
-          "long": "--btreemap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
-        },
-        {
           "form": "--verify-jobs <N>",
           "description": "Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)",
           "long": "--verify-jobs",
@@ -962,10 +794,6 @@ fn skill_json() -> String {
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
-    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
-    "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
-    "--btreemap-max <N>": "Max BTreeMap capacity for verification model (default: 64)",
     "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)"
   },
   "verify_options": {
@@ -974,10 +802,6 @@ fn skill_json() -> String {
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
-    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
-    "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
-    "--btreemap-max <N>": "Max BTreeMap capacity for verification model (default: 64)",
     "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)"
   },
   "test_options": {
@@ -987,10 +811,6 @@ fn skill_json() -> String {
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
     "--max-k-step <N>": "ESBMC incremental BMC max iterations (with --verify)",
-    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
-    "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
-    "--btreemap-max <N>": "Max BTreeMap capacity for verification model (default: 64)",
     "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (with --verify)"
   },
   "decl_options": {
@@ -1002,10 +822,6 @@ fn skill_json() -> String {
     "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver (with --verify)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
-    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
-    "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
-    "--btreemap-max <N>": "Max BTreeMap capacity for verification model (default: 64)",
     "--verify-jobs <N>": "Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)"
   },
   "global_options": {
@@ -1343,11 +1159,7 @@ fn skill_json() -> String {
   },
   "verification_defaults": {
     "strategy": "k-induction-parallel",
-    "max_k_step": 50,
-    "vec_max": 128,
-    "string_max": 256,
-    "hashmap_max": 64,
-    "btreemap_max": 64
+    "max_k_step": 50
   }
 }"##
     .to_string()
@@ -1379,10 +1191,6 @@ BUILD OPTIONS
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
   --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
-  --vec-max <N>           Max Vec capacity for verification model (default: 128)
-  --string-max <N>        Max String capacity for verification model (default: 256)
-  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
-  --btreemap-max <N>      Max BTreeMap capacity for verification model (default: 64)
   --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
 
 VERIFY OPTIONS
@@ -1391,10 +1199,6 @@ VERIFY OPTIONS
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
   --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
-  --vec-max <N>           Max Vec capacity for verification model (default: 128)
-  --string-max <N>        Max String capacity for verification model (default: 256)
-  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
-  --btreemap-max <N>      Max BTreeMap capacity for verification model (default: 64)
   --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
 
 TEST OPTIONS
@@ -1404,10 +1208,6 @@ TEST OPTIONS
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
   --max-k-step <N>        ESBMC incremental BMC max iterations (with --verify)
-  --vec-max <N>           Max Vec capacity for verification model (default: 128)
-  --string-max <N>        Max String capacity for verification model (default: 256)
-  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
-  --btreemap-max <N>      Max BTreeMap capacity for verification model (default: 64)
   --verify-jobs <N>       Max concurrent ESBMC verification jobs (with --verify)
 
 CONTRACTS OPTIONS
@@ -1416,10 +1216,6 @@ CONTRACTS OPTIONS
   --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)
   --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
-  --vec-max <N>           Max Vec capacity for verification model (default: 128)
-  --string-max <N>        Max String capacity for verification model (default: 256)
-  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
-  --btreemap-max <N>      Max BTreeMap capacity for verification model (default: 64)
   --verify-jobs <N>       Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)
 
 DECL OPTIONS
@@ -1473,13 +1269,9 @@ METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
 
-VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max, --btreemap-max)
+VERIFICATION DEFAULTS (--max-k-step)
   Strategy        : k-induction-parallel (incremental BMC + k-induction)
-  Incremental BMC : 50 max iterations (--max-k-step)
-  Vec<T>          : 128 max capacity
-  String          : 256 max capacity
-  HashMap<K, V>   : 64 max capacity
-  BTreeMap<K, V>  : 64 max capacity"##
+  Incremental BMC : 50 max iterations (--max-k-step)"##
         .to_string()
 }
 // GENERATE:SKILL_HUMAN:END
@@ -2492,10 +2284,6 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
-| `--string-max <N>` | `256`    | Max String capacity for verification model   |
-| `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
-| `--btreemap-max <N>` | `64`   | Max BTreeMap capacity for verification model |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
@@ -2517,10 +2305,6 @@ vow verify [OPTIONS] <source.vow>
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>`| `256`       | Max String capacity for verification model |
-| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
-| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 ### `vow contracts`
@@ -2540,10 +2324,6 @@ vow contracts [OPTIONS] <source.vow>
 | `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
-| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>`| `256`       | Max String capacity for verification model |
-| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
-| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
@@ -2589,10 +2369,6 @@ vow test [OPTIONS] [<path>]
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
 | `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
-| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>`| `256`       | Max String capacity for verification model |
-| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
-| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
@@ -3001,15 +2777,37 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### Collection Models for Verification
 
-ESBMC uses bounded models for collection types. Defaults are shown below; override with `--vec-max`, `--string-max`, `--hashmap-max`:
+ESBMC is a *bounded* model checker, so it models collection types as
+fixed-size arrays and reasons about them up to a finite capacity. These
+capacities are an internal property of the verifier, not of the language:
 
-| Type              | Default Max Capacity | CLI Flag | Supported Operations |
-|-------------------|---------------------|----------|----------------------------------------------|
-| `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |
-| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
-| `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
+| Type              | Model Capacity | Supported Operations |
+|-------------------|----------------|----------------------------------------------|
+| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
+| `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
+| `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 
-These support the same operations as the runtime but with bounded storage. String literals carry their concrete length and bytes in verification, and `String::from` copies that model from its source value. The effective string model capacity is at least the longest static string literal, even when `--string-max` is lower, so literal byte initializers fit the model array. Operations whose bytes are not statically known, such as `String::from_cstr`, produce a nondeterministic length (0 to max-1). `string_matches_literal_at` is modeled against the literal's concrete bytes and byte length; the third argument must be a string literal so the verifier never has to infer static text from a dynamic `String`.
+**These bounds are not a language feature and are not user-tunable.** A `Vec`
+in a Vow program grows dynamically on the heap with no fixed maximum; the
+capacity above only describes how far the *bounded* model checker reasons. The
+language and its contracts are deliberately decoupled from what any particular
+prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
+same source, the same contracts, and the same CLI keep working — the only
+difference is that proof covers more (or all) of the state space. For this
+reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
+`requires: v.len() <= 128`); see "Verification-Driven Bounds (Anti-Pattern)"
+below and `docs/design/verifier-model-bounds.md`.
+
+These models support the same operations as the runtime but with bounded
+storage. String literals carry their concrete length and bytes in verification,
+and `String::from` copies that model from its source value. The effective string
+model capacity is automatically at least the longest static string literal, so
+literal byte initializers always fit the model array. Operations whose bytes are
+not statically known, such as `String::from_cstr`, produce a nondeterministic
+length (0 to max-1). `string_matches_literal_at` is modeled against the
+literal's concrete bytes and byte length; the third argument must be a string
+literal so the verifier never has to infer static text from a dynamic `String`.
 
 ## Blame Model
 
@@ -3252,7 +3050,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification.
+Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic, bounded collection models) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 ## Interpreting Counterexamples
 
@@ -5607,10 +5405,6 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
-| `--string-max <N>` | `256`    | Max String capacity for verification model   |
-| `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
-| `--btreemap-max <N>` | `64`   | Max BTreeMap capacity for verification model |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
@@ -5632,10 +5426,6 @@ vow verify [OPTIONS] <source.vow>
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>`| `256`       | Max String capacity for verification model |
-| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
-| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 ### `vow contracts`
@@ -5655,10 +5445,6 @@ vow contracts [OPTIONS] <source.vow>
 | `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
-| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>`| `256`       | Max String capacity for verification model |
-| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
-| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
@@ -5704,10 +5490,6 @@ vow test [OPTIONS] [<path>]
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
 | `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
-| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>`| `256`       | Max String capacity for verification model |
-| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
-| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
@@ -6117,15 +5899,37 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### Collection Models for Verification
 
-ESBMC uses bounded models for collection types. Defaults are shown below; override with `--vec-max`, `--string-max`, `--hashmap-max`:
+ESBMC is a *bounded* model checker, so it models collection types as
+fixed-size arrays and reasons about them up to a finite capacity. These
+capacities are an internal property of the verifier, not of the language:
 
-| Type              | Default Max Capacity | CLI Flag | Supported Operations |
-|-------------------|---------------------|----------|----------------------------------------------|
-| `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |
-| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
-| `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
+| Type              | Model Capacity | Supported Operations |
+|-------------------|----------------|----------------------------------------------|
+| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
+| `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
+| `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 
-These support the same operations as the runtime but with bounded storage. String literals carry their concrete length and bytes in verification, and `String::from` copies that model from its source value. The effective string model capacity is at least the longest static string literal, even when `--string-max` is lower, so literal byte initializers fit the model array. Operations whose bytes are not statically known, such as `String::from_cstr`, produce a nondeterministic length (0 to max-1). `string_matches_literal_at` is modeled against the literal's concrete bytes and byte length; the third argument must be a string literal so the verifier never has to infer static text from a dynamic `String`.
+**These bounds are not a language feature and are not user-tunable.** A `Vec`
+in a Vow program grows dynamically on the heap with no fixed maximum; the
+capacity above only describes how far the *bounded* model checker reasons. The
+language and its contracts are deliberately decoupled from what any particular
+prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
+same source, the same contracts, and the same CLI keep working — the only
+difference is that proof covers more (or all) of the state space. For this
+reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
+`requires: v.len() <= 128`); see "Verification-Driven Bounds (Anti-Pattern)"
+below and `docs/design/verifier-model-bounds.md`.
+
+These models support the same operations as the runtime but with bounded
+storage. String literals carry their concrete length and bytes in verification,
+and `String::from` copies that model from its source value. The effective string
+model capacity is automatically at least the longest static string literal, so
+literal byte initializers always fit the model array. Operations whose bytes are
+not statically known, such as `String::from_cstr`, produce a nondeterministic
+length (0 to max-1). `string_matches_literal_at` is modeled against the
+literal's concrete bytes and byte length; the third argument must be a string
+literal so the verifier never has to infer static text from a dynamic `String`.
 
 ## Blame Model
 
@@ -6368,7 +6172,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification.
+Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic, bounded collection models) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 ## Interpreting Counterexamples
 
@@ -9845,17 +9649,6 @@ fn run_test_command(
 // Entry point
 // ---------------------------------------------------------------------------
 
-fn validate_limits(limits: &VerifyLimits) {
-    if limits.vec_max == 0
-        || limits.string_max == 0
-        || limits.hashmap_max == 0
-        || limits.btreemap_max == 0
-    {
-        eprintln!("error: --vec-max, --string-max, --hashmap-max, and --btreemap-max must be >= 1");
-        std::process::exit(1);
-    }
-}
-
 /// User value verbatim; rejects 0 with a clear error. None → num_cpus/2 clamped to ≥1.
 fn resolve_verify_jobs(opt: Option<u32>) -> usize {
     match opt {
@@ -10218,12 +10011,8 @@ fn main() {
             };
             let limits = VerifyLimits {
                 max_k_step: b.max_k_step,
-                vec_max: b.vec_max,
-                string_max: b.string_max,
-                hashmap_max: b.hashmap_max,
-                btreemap_max: b.btreemap_max,
+                ..VerifyLimits::default()
             };
-            validate_limits(&limits);
             let jobs = resolve_verify_jobs(b.verify_jobs);
             let bconfig = make_solver_config(b.solver, b.encoding, b.timeout);
             if let Ok(cwd) = std::env::current_dir() {
@@ -10260,12 +10049,8 @@ fn main() {
             };
             let limits = VerifyLimits {
                 max_k_step: v.max_k_step,
-                vec_max: v.vec_max,
-                string_max: v.string_max,
-                hashmap_max: v.hashmap_max,
-                btreemap_max: v.btreemap_max,
+                ..VerifyLimits::default()
             };
-            validate_limits(&limits);
             let jobs = resolve_verify_jobs(v.verify_jobs);
             let config = make_solver_config(v.solver, v.encoding, v.timeout);
             run_verify_command(&source, v.no_cache, &limits, jobs, &config);
@@ -10291,12 +10076,8 @@ fn main() {
             };
             let limits = VerifyLimits {
                 max_k_step: t.max_k_step,
-                vec_max: t.vec_max,
-                string_max: t.string_max,
-                hashmap_max: t.hashmap_max,
-                btreemap_max: t.btreemap_max,
+                ..VerifyLimits::default()
             };
-            validate_limits(&limits);
             let jobs = resolve_verify_jobs(t.verify_jobs);
             run_test_command(
                 &path,
@@ -10345,14 +10126,10 @@ fn main() {
             };
             let limits = VerifyLimits {
                 max_k_step: c.max_k_step.unwrap_or(DEFAULT_MAX_K_STEP),
-                vec_max: c.vec_max,
-                string_max: c.string_max,
-                hashmap_max: c.hashmap_max,
-                btreemap_max: c.btreemap_max,
+                ..VerifyLimits::default()
             };
-            validate_limits(&limits);
-            // Accepted for CLI parity; validates a 0 rejection via the same path
-            // as build/verify/test, then is discarded because update_contract_statuses
+            // Accepted for CLI parity; resolved via the same path as
+            // build/verify/test, then discarded because update_contract_statuses
             // has no pool wiring today.
             let _ = resolve_verify_jobs(c.verify_jobs);
             let config = make_solver_config(c.solver, c.encoding, c.timeout);
@@ -10421,12 +10198,8 @@ fn main() {
 
             let limits = VerifyLimits {
                 max_k_step: args.max_k_step,
-                vec_max: args.vec_max,
-                string_max: args.string_max,
-                hashmap_max: args.hashmap_max,
-                btreemap_max: args.btreemap_max,
+                ..VerifyLimits::default()
             };
-            validate_limits(&limits);
             let jobs = resolve_verify_jobs(args.verify_jobs);
             let config = make_solver_config(args.solver, args.encoding, args.timeout);
             if let Ok(cwd) = std::env::current_dir() {
@@ -10469,6 +10242,33 @@ mod tests {
             BuildStatus::VerifyFailed { description, .. }
                 if description.contains("ESBMC not found")
         )
+    }
+
+    #[test]
+    fn capacity_flags_are_not_advertised() {
+        // Issue #278: the verify-only --vec-max / --string-max / --hashmap-max /
+        // --btreemap-max flags were removed. The collection model bound is an
+        // internal verifier detail, not a CLI knob, so it must never reappear in
+        // any help or skill surface. (--max-k-step is a real, retained flag.)
+        let surfaces = [
+            skill_json(),
+            skill_human(),
+            skill_entrypoint_markdown(),
+            skill_bundle_markdown(),
+        ];
+        for surface in &surfaces {
+            for flag in [
+                "--vec-max",
+                "--string-max",
+                "--hashmap-max",
+                "--btreemap-max",
+            ] {
+                assert!(
+                    !surface.contains(flag),
+                    "removed capacity flag `{flag}` still advertised in a help/skill surface"
+                );
+            }
+        }
     }
 
     #[test]

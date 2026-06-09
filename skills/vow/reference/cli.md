@@ -25,10 +25,6 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
-| `--string-max <N>` | `256`    | Max String capacity for verification model   |
-| `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
-| `--btreemap-max <N>` | `64`   | Max BTreeMap capacity for verification model |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
@@ -50,10 +46,6 @@ vow verify [OPTIONS] <source.vow>
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
-| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>`| `256`       | Max String capacity for verification model |
-| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
-| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 ### `vow contracts`
@@ -73,10 +65,6 @@ vow contracts [OPTIONS] <source.vow>
 | `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
-| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>`| `256`       | Max String capacity for verification model |
-| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
-| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
@@ -122,10 +110,6 @@ vow test [OPTIONS] [<path>]
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
 | `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
-| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>`| `256`       | Max String capacity for verification model |
-| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
-| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
