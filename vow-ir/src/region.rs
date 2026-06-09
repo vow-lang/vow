@@ -1858,9 +1858,12 @@ fn handle_inst(
 ) {
     match inst.opcode {
         Opcode::Return => {
-            // The returned value escapes to the virtual caller. Mark it so
-            // the inst.region populate pass tags any RegionAlloc that flows
-            // into the return as Caller(0).
+            // The returned value escapes to the caller via the return path.
+            // Mark it `CallerReturn` so `lub_to_region_id` resolves it through
+            // the function's return summary (`return_escape_slots`): the
+            // param store-target slot for an `AliasOf(p)` return, slot 0 for
+            // `FreshInCaller`, or the slot-less caller fallback when the
+            // return pins no hidden slot.
             if !return_is_scalar && let Some(&arg_id) = inst.args.first() {
                 add_marker(must_outlive, arg_id, MustOutliveMarker::CallerReturn);
             }
