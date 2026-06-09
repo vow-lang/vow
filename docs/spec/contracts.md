@@ -22,15 +22,37 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### Collection Models for Verification
 
-ESBMC uses bounded models for collection types. Defaults are shown below; override with `--vec-max`, `--string-max`, `--hashmap-max`:
+ESBMC is a *bounded* model checker, so it models collection types as
+fixed-size arrays and reasons about them up to a finite capacity. These
+capacities are an internal property of the verifier, not of the language:
 
-| Type              | Default Max Capacity | CLI Flag | Supported Operations |
-|-------------------|---------------------|----------|----------------------------------------------|
-| `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |
-| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
-| `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
+| Type              | Model Capacity | Supported Operations |
+|-------------------|----------------|----------------------------------------------|
+| `Vec<T>`          | 128            | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `String`          | 256            | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
+| `HashMap<K, V>`   | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
+| `BTreeMap<K, V>`  | 64             | `new`, `insert`, `get`, `contains_key`, `len`|
 
-These support the same operations as the runtime but with bounded storage. String literals carry their concrete length and bytes in verification, and `String::from` copies that model from its source value. The effective string model capacity is at least the longest static string literal, even when `--string-max` is lower, so literal byte initializers fit the model array. Operations whose bytes are not statically known, such as `String::from_cstr`, produce a nondeterministic length (0 to max-1). `string_matches_literal_at` is modeled against the literal's concrete bytes and byte length; the third argument must be a string literal so the verifier never has to infer static text from a dynamic `String`.
+**These bounds are not a language feature and are not user-tunable.** A `Vec`
+in a Vow program grows dynamically on the heap with no fixed maximum; the
+capacity above only describes how far the *bounded* model checker reasons. The
+language and its contracts are deliberately decoupled from what any particular
+prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
+same source, the same contracts, and the same CLI keep working — the only
+difference is that proof covers more (or all) of the state space. For this
+reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
+`requires: v.len() <= 128`); see "Verification-Driven Bounds (Anti-Pattern)"
+below and `docs/design/verifier-model-bounds.md`.
+
+These models support the same operations as the runtime but with bounded
+storage. String literals carry their concrete length and bytes in verification,
+and `String::from` copies that model from its source value. The effective string
+model capacity is automatically at least the longest static string literal, so
+literal byte initializers always fit the model array. Operations whose bytes are
+not statically known, such as `String::from_cstr`, produce a nondeterministic
+length (0 to max-1). `string_matches_literal_at` is modeled against the
+literal's concrete bytes and byte length; the third argument must be a string
+literal so the verifier never has to infer static text from a dynamic `String`.
 
 ## Blame Model
 
@@ -273,7 +295,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification.
+Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic, bounded collection models) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 ## Interpreting Counterexamples
 

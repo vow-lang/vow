@@ -114,8 +114,8 @@ fn min_right_idx(i: i64) -> i64 vow {
 }
 
 // The min_left_idx/min_right_idx overflow guard (i <= 2^62 - 2) is
-// discharged in practice by n <= data.len(), which ESBMC bounds via
-// --vec-max (default 128). The loop invariant only carries i < n; the
+// discharged in practice by n <= data.len(), which ESBMC bounds via the
+// internal Vec model capacity (128). The loop invariant only carries i < n; the
 // stronger formal chain is not stated because it would require a
 // verifier-driven cap on the heap size itself.
 fn min_sift_down(data: Vec<i64>, n: i64, start: i64) vow {

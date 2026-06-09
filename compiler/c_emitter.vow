@@ -4,6 +4,12 @@ use clif
 use ir
 use ir_printer
 
+// Internal verifier-model bounds for bounded model checking. ESBMC models
+// Vec/String/HashMap/BTreeMap as fixed-size C arrays, so the model needs a
+// finite capacity per collection. These are safe defaults that are a fact about
+// the prover, not about Vow — not language properties and not user-tunable.
+// Swap in an unbounded checker and the same source verifies unchanged.
+// See docs/design/verifier-model-bounds.md.
 fn VOW_VEC_MAX() -> i64 vow { ensures: result >= 0 } { 128 }
 fn VOW_STRING_MAX() -> i64 vow { ensures: result >= 0 } { 256 }
 fn VOW_HASHMAP_MAX() -> i64 vow { ensures: result >= 0 } { 64 }

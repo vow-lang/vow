@@ -147,7 +147,7 @@ def normalize_option(
         option["value_kind"] = "enum"
         option["values"] = ["off", "calls", "full"]
         option["default"] = default
-    elif normalized_flag in ("--max-k-step <N>", "--vec-max <N>", "--string-max <N>", "--hashmap-max <N>", "--btreemap-max <N>"):
+    elif normalized_flag == "--max-k-step <N>":
         option["default"] = int(default) if default.isdigit() else default
     elif output_default is not None:
         option["default"] = output_default
@@ -295,14 +295,13 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
         contracts_options[key] = value
         contracts_option_entries.append(option)
 
-    # --- Verification defaults (configurable via CLI flags) ---
+    # --- Verification defaults ---
+    # Collection model capacities (Vec/String/HashMap/BTreeMap) are deliberately
+    # absent: they are internal verifier-model bounds, not language properties or
+    # tunable CLI flags. See docs/design/verifier-model-bounds.md.
     verification_defaults: dict[str, str | int] = {
         "strategy": "k-induction-parallel",
         "max_k_step": DEFAULT_MAX_K_STEP,
-        "vec_max": 128,
-        "string_max": 256,
-        "hashmap_max": 64,
-        "btreemap_max": 64,
     }
 
     return {
@@ -739,13 +738,9 @@ def build_help_human(data: dict) -> str:
 
     vdefaults = data.get("verification_defaults", {})
     if vdefaults:
-        lines.append("VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max, --btreemap-max)")
+        lines.append("VERIFICATION DEFAULTS (--max-k-step)")
         lines.append(f"  Strategy        : {vdefaults.get('strategy', 'k-induction-parallel')} (incremental BMC + k-induction)")
         lines.append(f"  Incremental BMC : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)")
-        lines.append(f"  Vec<T>          : {vdefaults.get('vec_max', 128)} max capacity")
-        lines.append(f"  String          : {vdefaults.get('string_max', 256)} max capacity")
-        lines.append(f"  HashMap<K, V>   : {vdefaults.get('hashmap_max', 64)} max capacity")
-        lines.append(f"  BTreeMap<K, V>  : {vdefaults.get('btreemap_max', 64)} max capacity")
 
     return "\n".join(lines)
 
