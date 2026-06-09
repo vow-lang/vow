@@ -70,6 +70,14 @@ pub const HASHMAP_MODEL_CAP: usize = 64;
 /// Safe default model capacity for `BTreeMap<K, V>` under bounded model checking.
 pub const BTREEMAP_MODEL_CAP: usize = 64;
 
+// A capacity of zero would emit a zero-length C array and an unsatisfiable
+// `len < CAP` assertion, silently breaking all collection verification. Pin the
+// positivity invariant the (now-removed) CLI `validate_limits` used to enforce.
+const _: () = assert!(
+    VEC_MODEL_CAP > 0 && STRING_MODEL_CAP > 0 && HASHMAP_MODEL_CAP > 0 && BTREEMAP_MODEL_CAP > 0,
+    "collection model capacities must be positive",
+);
+
 #[derive(Debug, Clone, Copy)]
 pub struct VerifyLimits {
     pub max_k_step: u32,

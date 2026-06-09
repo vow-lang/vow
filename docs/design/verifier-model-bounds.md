@@ -9,8 +9,10 @@ capacity flags. It is the authoritative statement of how bounded-model-checker
 limits relate to the Vow language. When this document and an implementation
 disagree, this document is normative.
 
-It fulfills roadmap workstream **WS-3.4** ("Stop leaking verifier bounds into
-contracts") of `docs/roadmap-0.3.0-foundations.md`.
+It fulfills the 0.3.0 Foundations stabilization plan
+(`docs/roadmap-0.3.0-foundations.md`, tracked in #564), workstream **WS-3**
+("Make verification tractable and meaningful"), item 4 — "Stop leaking verifier
+bounds into contracts" (#278, #552).
 
 ## The principle
 
@@ -133,7 +135,7 @@ Under this model, exceeding a collection's model capacity is a *verifier
 limitation*, not a contract violation: it means "this prover could not reason
 about this program within its model," not "this program is wrong." The honest
 classification is therefore a verifier-model outcome (a `bug`/unprovable status
-under roadmap §5.3 "No false `FAILED`"), distinct from a real contract `FAILED`
+under the roadmap's "No false `FAILED`" engineering guideline), distinct from a real contract `FAILED`
 backed by a counterexample. Today the capacity assertions already carry
 `blame = none` and no `vow_id`, so they are not attributed to any user contract.
 Tightening the *reported status* for a model-capacity hit so it never reads as a

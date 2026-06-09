@@ -10,10 +10,10 @@ use ir_printer
 // the prover, not about Vow — not language properties and not user-tunable.
 // Swap in an unbounded checker and the same source verifies unchanged.
 // See docs/design/verifier-model-bounds.md.
-fn VOW_VEC_MAX() -> i64 vow { ensures: result >= 0 } { 128 }
-fn VOW_STRING_MAX() -> i64 vow { ensures: result >= 0 } { 256 }
-fn VOW_HASHMAP_MAX() -> i64 vow { ensures: result >= 0 } { 64 }
-fn VOW_BTREEMAP_MAX() -> i64 vow { ensures: result >= 0 } { 64 }
+fn VOW_VEC_MAX() -> i64 vow { ensures: result >= 1 } { 128 }
+fn VOW_STRING_MAX() -> i64 vow { ensures: result >= 1 } { 256 }
+fn VOW_HASHMAP_MAX() -> i64 vow { ensures: result >= 1 } { 64 }
+fn VOW_BTREEMAP_MAX() -> i64 vow { ensures: result >= 1 } { 64 }
 
 fn str3(a: String, b: String, c: String) -> String {
     let r: String = String::from("");
