@@ -10,8 +10,8 @@
  *   - try_extend modifies only cursor and (on success) last_alloc_size;
  *     last_alloc_start is never changed; new last_alloc_size == new_size.
  *
- * Run via `make verify` (uses --incremental-bmc --max-k-step 10), matching
- * the vow-verify pipeline's ESBMC invocation convention.
+ * Run via `make verify` (single-shot `--unwind 5`); the reachable chunk chain
+ * is shallow, so incremental BMC is unnecessary here and far more costly (#516).
  */
 
 #include <assert.h>
@@ -244,7 +244,7 @@ int main(void) {
     /* Perform up to two symbolic allocations bounded in size. With large
      * symbolic alignments each alloc may take the oversized path (own
      * chunk), so close iterates up to 1 (first) + 2 (oversized allocs) = 3
-     * chunks — fits comfortably within incremental BMC's step bound. */
+     * chunks — well within the single-shot `--unwind 5` bound. */
     unsigned int n = nondet_uint();
     __ESBMC_assume(n <= 2);
 
