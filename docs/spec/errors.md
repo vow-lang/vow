@@ -115,7 +115,7 @@ fn f(x: u8) -> u8 {
 
 **Output:** `shift count 8 is out of range for u8 (max 7)`
 
-**Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `((x as u32) << 12) as u8` is illegal under widening-only `as`; use `(x as u32) << 12` and then a narrowing intrinsic.
+**Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
 ### StaticLiteralRequired
 
