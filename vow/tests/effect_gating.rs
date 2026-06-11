@@ -48,6 +48,18 @@ fn error_codes(json: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// `build --no-verify` of a well-typed program still runs codegen + link, which
+/// needs `libvow_runtime.a`. Run standalone (no prior `cargo build --all` or
+/// `VOW_RUNTIME_PATH`) the archive is absent and the build reports a link-only
+/// `CompileFailed`. The frontend ran to completion regardless; the sibling
+/// `region_summary_equivalence.rs` tests tolerate this same case.
+fn runtime_link_failure(json: &serde_json::Value) -> bool {
+    json["status"] == "CompileFailed"
+        && json["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("libvow_runtime.a"))
+}
+
 #[test]
 fn effectful_call_from_pure_body_fails_build() {
     let (exit, json) = build_no_verify(
@@ -102,6 +114,17 @@ fn valid_effect_discipline_compiles() {
          fn io_caller() -> i64 [io] { se() }\n\
          fn main() -> i32 [io] { 0 }\n",
     );
-    assert_eq!(exit, 0, "well-typed effect usage must compile");
-    assert_eq!(json["status"], "Unverified");
+    // A valid program proceeds through codegen + link; the effect pass passing
+    // is what this test pins. Tolerate a link-only failure when the runtime
+    // archive is absent (standalone `cargo test`), matching the convention in
+    // region_summary_equivalence.rs, so the regression test is reliable
+    // regardless of prior build state.
+    let status = json["status"].as_str();
+    let frontend_success = exit == 0 && matches!(status, Some("Verified" | "Unverified"));
+    let link_only_failure = exit != 0 && runtime_link_failure(&json);
+    assert!(
+        frontend_success || link_only_failure,
+        "well-typed effect usage must compile (or fail only on a missing runtime archive)\n\
+         exit: {exit}\njson: {json}"
+    );
 }
