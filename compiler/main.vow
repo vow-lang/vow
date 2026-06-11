@@ -3766,7 +3766,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"vacuous\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"vacuous\": 0, \"trivially_satisfiable\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3786,7 +3786,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"vacuous\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"vacuous\": 0, \"trivially_satisfiable\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3802,6 +3802,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
     r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, `\"skipped\"`, or `\"vacuous\"` |\n"));
     r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
+    r.push_str(String::from("| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational -- never affects the exit code. See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
     r.push_str(String::from("\n"));
@@ -4533,11 +4534,25 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("The clause is satisfiable and true, but so loose that an incorrect\n"));
     r.push_str(String::from("implementation also satisfies it (`ensures: result >= 0` on a computed value).\n"));
-    r.push_str(String::from("This is the 354-contract problem. **Detection (mutation-based):** mutate the\n"));
-    r.push_str(String::from("implementation -- flip a constant, swap an operator -- and re-verify. If the\n"));
-    r.push_str(String::from("contract still proves against the *mutated* body, it does not constrain that\n"));
-    r.push_str(String::from("behavior and is too weak. Vow already has the machinery for this in\n"));
-    r.push_str(String::from("`vowc mutants`; a weak contract is one whose function's mutants survive.\n"));
+    r.push_str(String::from("This is the 354-contract problem.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Detection (the body-replace probe).** `vow contracts --verify` ships this check\n"));
+    r.push_str(String::from("(#81). It mutates the implementation in the strongest possible way -- replaces the\n"));
+    r.push_str(String::from("whole body with a trivial `return <type-default>` -- and re-verifies the\n"));
+    r.push_str(String::from("`ensures`. If the contract still proves against that body, a constant-returning\n"));
+    r.push_str(String::from("implementation satisfies it, so it does not constrain the real computation: each\n"));
+    r.push_str(String::from("such `ensures` is reported `trivially_satisfiable: true`. This is exactly the\n"));
+    r.push_str(String::from("`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of\n"));
+    r.push_str(String::from("weakness (a specific trivial body satisfies the contract), but a `false` verdict\n"));
+    r.push_str(String::from("does not prove strength -- the probe uses a single default value and skips\n"));
+    r.push_str(String::from("non-scalar returns, returned parameters, and φ-merged/branchy results, so it can\n"));
+    r.push_str(String::from("miss weak contracts it cannot witness this way. It is informational and never\n"));
+    r.push_str(String::from("changes the exit code; pair it with the static `quality` field. The one known\n"));
+    r.push_str(String::from("false positive is a function whose correct result genuinely *is* the type default\n"));
+    r.push_str(String::from("(e.g. a constant `ensures result == 0` on a `{ 0 }` body) -- an equivalent mutant,\n"));
+    r.push_str(String::from("the standard caveat of mutation testing.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Tautology\n"));
     r.push_str(String::from("\n"));
@@ -4643,14 +4658,20 @@ fn skill_bundle() -> String {
     r.push_str(String::from("blocked at the *modelable* axis, not the expressible one; classify such gaps as\n"));
     r.push_str(String::from("model limitations, not contract-language limitations.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("## Tooling (planned)\n"));
+    r.push_str(String::from("## Tooling\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`vow contracts --verify` lists contracts and verifies them per function today. The\n"));
-    r.push_str(String::from("quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**\n"));
-    r.push_str(String::from("check that emits a quality signal per clause -- flagging tautologies (cheap, no\n"));
-    r.push_str(String::from("ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`\n"));
-    r.push_str(String::from("harness, weak obligations whose function's mutants survive. Until that ships, the\n"));
-    r.push_str(String::from("three detections above are checks an author can run by hand.\n"));
+    r.push_str(String::from("`vow contracts --verify` performs the **per-obligation** quality analysis tracked\n"));
+    r.push_str(String::from("in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via\n"));
+    r.push_str(String::from("ESBMC `--multi-property`), plus the three quality signals above:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("- **Tautology** -- the static `quality` field flags constant clauses (no ESBMC).\n"));
+    r.push_str(String::from("- **Vacuity** -- a contradictory `requires` is caught by the `--error-label`\n"));
+    r.push_str(String::from("  reachability probe and reported `status: \"vacuous\"` (fail-closed).\n"));
+    r.push_str(String::from("- **Weakness** -- the body-replace probe reports `trivially_satisfiable: true` for\n"));
+    r.push_str(String::from("  an `ensures` a trivial `return <default>` body satisfies (informational).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the\n"));
+    r.push_str(String::from("status and quality tallies, so an author or CI can gate on hollow proofs.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## References\n"));
     r.push_str(String::from("\n"));
@@ -7473,7 +7494,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"vacuous\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"vacuous\": 0, \"trivially_satisfiable\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -7493,7 +7514,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"vacuous\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"vacuous\": 0, \"trivially_satisfiable\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -7509,6 +7530,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
     r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, `\"skipped\"`, or `\"vacuous\"` |\n"));
     r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
+    r.push_str(String::from("| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational -- never affects the exit code. See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
     r.push_str(String::from("\n"));
@@ -8244,11 +8266,25 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("The clause is satisfiable and true, but so loose that an incorrect\n"));
     r.push_str(String::from("implementation also satisfies it (`ensures: result >= 0` on a computed value).\n"));
-    r.push_str(String::from("This is the 354-contract problem. **Detection (mutation-based):** mutate the\n"));
-    r.push_str(String::from("implementation -- flip a constant, swap an operator -- and re-verify. If the\n"));
-    r.push_str(String::from("contract still proves against the *mutated* body, it does not constrain that\n"));
-    r.push_str(String::from("behavior and is too weak. Vow already has the machinery for this in\n"));
-    r.push_str(String::from("`vowc mutants`; a weak contract is one whose function's mutants survive.\n"));
+    r.push_str(String::from("This is the 354-contract problem.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Detection (the body-replace probe).** `vow contracts --verify` ships this check\n"));
+    r.push_str(String::from("(#81). It mutates the implementation in the strongest possible way -- replaces the\n"));
+    r.push_str(String::from("whole body with a trivial `return <type-default>` -- and re-verifies the\n"));
+    r.push_str(String::from("`ensures`. If the contract still proves against that body, a constant-returning\n"));
+    r.push_str(String::from("implementation satisfies it, so it does not constrain the real computation: each\n"));
+    r.push_str(String::from("such `ensures` is reported `trivially_satisfiable: true`. This is exactly the\n"));
+    r.push_str(String::from("`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of\n"));
+    r.push_str(String::from("weakness (a specific trivial body satisfies the contract), but a `false` verdict\n"));
+    r.push_str(String::from("does not prove strength -- the probe uses a single default value and skips\n"));
+    r.push_str(String::from("non-scalar returns, returned parameters, and φ-merged/branchy results, so it can\n"));
+    r.push_str(String::from("miss weak contracts it cannot witness this way. It is informational and never\n"));
+    r.push_str(String::from("changes the exit code; pair it with the static `quality` field. The one known\n"));
+    r.push_str(String::from("false positive is a function whose correct result genuinely *is* the type default\n"));
+    r.push_str(String::from("(e.g. a constant `ensures result == 0` on a `{ 0 }` body) -- an equivalent mutant,\n"));
+    r.push_str(String::from("the standard caveat of mutation testing.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Tautology\n"));
     r.push_str(String::from("\n"));
@@ -8354,14 +8390,20 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("blocked at the *modelable* axis, not the expressible one; classify such gaps as\n"));
     r.push_str(String::from("model limitations, not contract-language limitations.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("## Tooling (planned)\n"));
+    r.push_str(String::from("## Tooling\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`vow contracts --verify` lists contracts and verifies them per function today. The\n"));
-    r.push_str(String::from("quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**\n"));
-    r.push_str(String::from("check that emits a quality signal per clause -- flagging tautologies (cheap, no\n"));
-    r.push_str(String::from("ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`\n"));
-    r.push_str(String::from("harness, weak obligations whose function's mutants survive. Until that ships, the\n"));
-    r.push_str(String::from("three detections above are checks an author can run by hand.\n"));
+    r.push_str(String::from("`vow contracts --verify` performs the **per-obligation** quality analysis tracked\n"));
+    r.push_str(String::from("in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via\n"));
+    r.push_str(String::from("ESBMC `--multi-property`), plus the three quality signals above:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("- **Tautology** -- the static `quality` field flags constant clauses (no ESBMC).\n"));
+    r.push_str(String::from("- **Vacuity** -- a contradictory `requires` is caught by the `--error-label`\n"));
+    r.push_str(String::from("  reachability probe and reported `status: \"vacuous\"` (fail-closed).\n"));
+    r.push_str(String::from("- **Weakness** -- the body-replace probe reports `trivially_satisfiable: true` for\n"));
+    r.push_str(String::from("  an `ensures` a trivial `return <default>` body satisfies (informational).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the\n"));
+    r.push_str(String::from("status and quality tallies, so an author or CI can gate on hollow proofs.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## References\n"));
     r.push_str(String::from("\n"));
@@ -10218,6 +10260,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let e_offsets: Vec<i64> = Vec::new();
     let e_statuses: Vec<String> = Vec::new();
     let e_qualities: Vec<String> = Vec::new();
+    // 1 when a trivial `return <default>` body satisfies this ensures (#81 PR-C).
+    let e_trivial: Vec<i64> = Vec::new();
 
     let nf: i64 = ir_mod.functions.len();
     let mut fi: i64 = 0;
@@ -10243,6 +10287,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             e_files.push(ve.file);
             e_offsets.push(ve.offset);
             e_statuses.push(String::from("not_verified"));
+            e_trivial.push(0);
             vi = vi + 1;
         }
         fi = fi + 1;
@@ -10330,6 +10375,20 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                                 vi2 = vi2 + 1;
                             }
                         }
+
+                        // Weakness probe (#81 PR-C): if a trivial `return
+                        // <default>` body still satisfies the ensures, mark each
+                        // ensures clause trivially_satisfiable (informational).
+                        let triv: i64 = verify_function_trivial(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        if triv == 1 {
+                            let mut ti: i64 = 0;
+                            while ti < e_func_ids.len() {
+                                if e_func_ids[ti] == func.id && e_kinds[ti] == String::from("ensures") {
+                                    e_trivial[ti] = 1;
+                                }
+                                ti = ti + 1;
+                            }
+                        }
                     }
                 }
                 fi = fi + 1;
@@ -10363,7 +10422,13 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         json.push_str(e_statuses[ci]);
         json.push_str(String::from("\",\"quality\":\""));
         json.push_str(e_qualities[ci]);
-        json.push_str(String::from("\"}"));
+        json.push_str(String::from("\",\"trivially_satisfiable\":"));
+        if e_trivial[ci] == 1 {
+            json.push_str(String::from("true"));
+        } else {
+            json.push_str(String::from("false"));
+        }
+        json.push_str(String::from("}"));
         ci = ci + 1;
     }
 
@@ -10376,9 +10441,13 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let n_not_verified: i64 = 0;
     let n_skipped: i64 = 0;
     let n_vacuous: i64 = 0;
+    let n_trivial: i64 = 0;
     let mut si: i64 = 0;
     while si < total {
         let s: String = e_statuses[si];
+        if e_trivial[si] == 1 {
+            n_trivial = n_trivial + 1;
+        }
         if s == String::from("proven") || s == String::from("proven-ir") {
             n_proven = n_proven + 1;
         } else if s == String::from("failed") {
@@ -10441,6 +10510,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     json.push_str(i64_to_str(n_skipped));
     json.push_str(String::from(",\"vacuous\":"));
     json.push_str(i64_to_str(n_vacuous));
+    json.push_str(String::from(",\"trivially_satisfiable\":"));
+    json.push_str(i64_to_str(n_trivial));
     json.push_str(String::from(",\"quality\":{\"weak\":"));
     json.push_str(i64_to_str(n_weak));
     json.push_str(String::from(",\"tautological\":"));

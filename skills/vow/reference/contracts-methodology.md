@@ -227,11 +227,25 @@ ways this happens; a contract-quality tool should distinguish them.
 
 The clause is satisfiable and true, but so loose that an incorrect
 implementation also satisfies it (`ensures: result >= 0` on a computed value).
-This is the 354-contract problem. **Detection (mutation-based):** mutate the
-implementation — flip a constant, swap an operator — and re-verify. If the
-contract still proves against the *mutated* body, it does not constrain that
-behavior and is too weak. Vow already has the machinery for this in
-`vowc mutants`; a weak contract is one whose function's mutants survive.
+This is the 354-contract problem.
+
+**Detection (the body-replace probe).** `vow contracts --verify` ships this check
+(#81). It mutates the implementation in the strongest possible way — replaces the
+whole body with a trivial `return <type-default>` — and re-verifies the
+`ensures`. If the contract still proves against that body, a constant-returning
+implementation satisfies it, so it does not constrain the real computation: each
+such `ensures` is reported `trivially_satisfiable: true`. This is exactly the
+`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.
+
+The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of
+weakness (a specific trivial body satisfies the contract), but a `false` verdict
+does not prove strength — the probe uses a single default value and skips
+non-scalar returns, returned parameters, and φ-merged/branchy results, so it can
+miss weak contracts it cannot witness this way. It is informational and never
+changes the exit code; pair it with the static `quality` field. The one known
+false positive is a function whose correct result genuinely *is* the type default
+(e.g. a constant `ensures result == 0` on a `{ 0 }` body) — an equivalent mutant,
+the standard caveat of mutation testing.
 
 ### Tautology
 
@@ -337,14 +351,20 @@ Contract expressions must be **pure** — they cannot call effectful functions
 blocked at the *modelable* axis, not the expressible one; classify such gaps as
 model limitations, not contract-language limitations.
 
-## Tooling (planned)
+## Tooling
 
-`vow contracts --verify` lists contracts and verifies them per function today. The
-quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**
-check that emits a quality signal per clause — flagging tautologies (cheap, no
-ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`
-harness, weak obligations whose function's mutants survive. Until that ships, the
-three detections above are checks an author can run by hand.
+`vow contracts --verify` performs the **per-obligation** quality analysis tracked
+in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
+ESBMC `--multi-property`), plus the three quality signals above:
+
+- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
+- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
+  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
+  an `ensures` a trivial `return <default>` body satisfies (informational).
+
+The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
+status and quality tallies, so an author or CI can gate on hollow proofs.
 
 ## References
 

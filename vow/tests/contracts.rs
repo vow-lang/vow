@@ -144,6 +144,51 @@ fn contracts_verify_detects_vacuous_contract() {
 }
 
 #[test]
+fn contracts_verify_flags_trivially_satisfiable_ensures() {
+    // PR-C (#81): a weak postcondition like `result >= 0` is satisfied by a
+    // trivial `return 0` body, so the body-replace probe flags it
+    // `trivially_satisfiable`. A tight postcondition (`result == x + 1`) is not.
+    // Informational — it does not change the exit code. Requires ESBMC.
+    let dir = tempfile::TempDir::new().unwrap();
+    let src = dir.path().join("w.vow");
+    std::fs::write(
+        &src,
+        "module M\n\
+         fn weak(x: i64) -> i64 vow {\n  requires: x >= 0,\n  ensures: result >= 0\n} { x + 1 }\n\
+         fn tight(x: i64) -> i64 vow {\n  ensures: result == x + 1\n} { x + 1 }\n\
+         fn main() -> i32 [io] { 0 }\n",
+    )
+    .unwrap();
+    let out = Command::new(vow_bin())
+        .args(["contracts", "--verify", src.to_str().unwrap()])
+        .output()
+        .expect("failed to run vow");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("contracts JSON");
+    let contracts = json["contracts"].as_array().unwrap();
+    if contracts.iter().all(|c| c["status"] == "error") {
+        return; // ESBMC absent
+    }
+    let trivial_of = |func: &str| -> bool {
+        contracts
+            .iter()
+            .find(|c| c["function"] == func && c["kind"] == "ensures")
+            .unwrap_or_else(|| panic!("missing ensures for {func}"))["trivially_satisfiable"]
+            .as_bool()
+            .unwrap()
+    };
+    assert!(
+        trivial_of("weak"),
+        "`ensures result >= 0` is satisfied by a trivial body"
+    );
+    assert!(
+        !trivial_of("tight"),
+        "`ensures result == x + 1` pins the implementation"
+    );
+    assert_eq!(json["summary"]["trivially_satisfiable"], 1);
+}
+
+#[test]
 fn contracts_verify_missing_esbmc_keeps_contracts_schema() {
     let empty_path = tempfile::TempDir::new().unwrap();
     let out = Command::new(vow_bin())
