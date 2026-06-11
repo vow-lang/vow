@@ -2865,7 +2865,7 @@ that path produces `Unverified` (exit 0).
 
 ### Quality Values
 
-`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See [contracts-methodology.md](contracts-methodology.md) for the full taxonomy.
+`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
 
 | Quality        | Meaning                                                                                      |
 |----------------|----------------------------------------------------------------------------------------------|
@@ -6009,7 +6009,7 @@ that path produces `Unverified` (exit 0).
 
 ### Quality Values
 
-`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See [contracts-methodology.md](contracts-methodology.md) for the full taxonomy.
+`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
 
 | Quality        | Meaning                                                                                      |
 |----------------|----------------------------------------------------------------------------------------------|

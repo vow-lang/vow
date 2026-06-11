@@ -3883,7 +3883,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Quality Values\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the \"proven but trivial\" problem: a `weak` contract can be `proven` while constraining almost nothing. See [contracts-methodology.md](contracts-methodology.md) for the full taxonomy.\n"));
+    r.push_str(String::from("`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the \"proven but trivial\" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Quality        | Meaning                                                                                      |\n"));
     r.push_str(String::from("|----------------|----------------------------------------------------------------------------------------------|\n"));
@@ -7041,7 +7041,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Quality Values\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the \"proven but trivial\" problem: a `weak` contract can be `proven` while constraining almost nothing. See [contracts-methodology.md](contracts-methodology.md) for the full taxonomy.\n"));
+    r.push_str(String::from("`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the \"proven but trivial\" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Quality        | Meaning                                                                                      |\n"));
     r.push_str(String::from("|----------------|----------------------------------------------------------------------------------------------|\n"));
