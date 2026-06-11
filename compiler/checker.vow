@@ -839,18 +839,19 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
         let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
         let enum_idx: i64 = env_lookup_enum(e, enum_name);
         let variant_name: String = if variant_sid != -1 { arena_str(a, variant_sid) } else { String::from("") };
+        // An env-registered enum (including a user-defined `Option`/`Result`)
+        // takes precedence; the built-in Option/Result are not registered in
+        // `env`, so their tuple payload types come from the scrutinee's applied
+        // type args instead. `is_builtin_enum` is loop-invariant.
+        let is_builtin_enum: bool =
+            enum_name == String::from("Option") || enum_name == String::from("Result");
         let mut i: i64 = 0;
         while i < n_inner {
             let ipid: i64 = list_get(a, inner_lid, i);
-            // Built-in Option/Result payload types come from the scrutinee's
-            // applied args, not the env enum table (whose registered variants
-            // carry only generic placeholders) — check them first.
-            let is_builtin_enum: bool =
-                enum_name == String::from("Option") || enum_name == String::from("Result");
-            let field_tid: i64 = if is_builtin_enum && variant_sid != -1 {
-                builtin_variant_payload(e.ts, scrutinee_tid, enum_name, variant_name, i)
-            } else if enum_idx != -1 && variant_sid != -1 {
+            let field_tid: i64 = if enum_idx != -1 && variant_sid != -1 {
                 lookup_variant_payload(e, enum_idx, variant_name, i)
+            } else if is_builtin_enum && variant_sid != -1 {
+                builtin_variant_payload(e.ts, scrutinee_tid, enum_name, variant_name, i)
             } else {
                 CTY_UNIT()
             };

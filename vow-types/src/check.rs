@@ -1936,42 +1936,35 @@ impl<'e> Checker<'e> {
                     },
                     _ => return,
                 };
-                // Built-in Option/Result are not registered in `env`, so their
-                // tuple-variant payload types come from the scrutinee's type
-                // arguments instead of an enum-table lookup. Without this, a
-                // `match Option::Some(x)` arm fails to bind `x`.
-                let builtin_variant_tys: Option<Vec<Ty>> = match (enum_name.as_str(), variant_name)
-                {
-                    ("Option", "Some") => Some(match scrutinee_ty {
-                        Ty::Applied(_, args) => args.iter().take(1).cloned().collect(),
-                        _ => vec![],
-                    }),
-                    ("Result", "Ok") => Some(match scrutinee_ty {
-                        Ty::Applied(_, args) => args.iter().take(1).cloned().collect(),
-                        _ => vec![],
-                    }),
-                    ("Result", "Err") => Some(match scrutinee_ty {
-                        Ty::Applied(_, args) => args.iter().skip(1).take(1).cloned().collect(),
-                        _ => vec![],
-                    }),
-                    _ => None,
-                };
-                let variant_tys: Vec<Ty> = match builtin_variant_tys {
-                    Some(tys) => tys,
-                    None => self
-                        .env
-                        .lookup_enum(&enum_name)
-                        .and_then(|info| {
-                            info.variants
-                                .iter()
-                                .find(|v| v.name.as_str() == variant_name)
-                                .map(|v| match &v.kind {
-                                    VariantKind::Tuple(tys) => tys.clone(),
-                                    _ => vec![],
-                                })
-                        })
-                        .unwrap_or_default(),
-                };
+                // An env-registered enum (including a user-defined Option/Result)
+                // takes precedence; the built-in Option/Result are not in `env`,
+                // so their tuple-variant payload types come from the scrutinee's
+                // type arguments instead. Without this, a `match Option::Some(x)`
+                // arm fails to bind `x`.
+                let variant_tys: Vec<Ty> = self
+                    .env
+                    .lookup_enum(&enum_name)
+                    .and_then(|info| {
+                        info.variants
+                            .iter()
+                            .find(|v| v.name.as_str() == variant_name)
+                            .map(|v| match &v.kind {
+                                VariantKind::Tuple(tys) => tys.clone(),
+                                _ => vec![],
+                            })
+                    })
+                    .or_else(|| match (enum_name.as_str(), variant_name) {
+                        ("Option", "Some") | ("Result", "Ok") => Some(match scrutinee_ty {
+                            Ty::Applied(_, args) => args.iter().take(1).cloned().collect(),
+                            _ => vec![],
+                        }),
+                        ("Result", "Err") => Some(match scrutinee_ty {
+                            Ty::Applied(_, args) => args.iter().skip(1).take(1).cloned().collect(),
+                            _ => vec![],
+                        }),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
                 for (p, t) in inner.iter().zip(variant_tys.iter()) {
                     self.bind_arm_pattern(p, t);
                 }
