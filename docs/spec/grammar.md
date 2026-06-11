@@ -169,7 +169,7 @@ Structs and enums (see below).
 ```
 
 Unsuffixed integer literals default to `i64` in expression position, and
-**context-coerce** to a narrower or unsigned annotated type when the
+**context-coerce** to any of the 10 integer types when the
 surrounding context fixes one — `let` bindings, function arguments, struct
 fields, and the typed operand of an arithmetic, bitwise, or comparison
 operator. The same coercion applies to constant expressions composed entirely
