@@ -10252,24 +10252,38 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                             ei = ei + 1;
                         }
                     } else {
-                        let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
-                        let st: i64 = vr.status;
+                        // Per-clause status via ESBMC `--multi-property`: every
+                        // `vow:N` claim is reported individually, so each clause
+                        // gets a precise verdict instead of the siblings of a
+                        // failed clause collapsing to `unknown` (#81 PR-A).
+                        let mpr: MultiPropertyResult = verify_function_multi_property(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        let overall: i64 = mpr.status;
+                        let v_ids: Vec<i64> = mpr.verdict_ids;
+                        let v_proven: Vec<i64> = mpr.verdict_proven;
                         let mut ei: i64 = 0;
                         while ei < e_func_ids.len() {
                             if e_func_ids[ei] == func.id {
-                                if st == VERIFY_PROVEN() {
-                                    e_statuses[ei] = String::from("proven");
-                                } else if st == VERIFY_PROVEN_IR() {
-                                    e_statuses[ei] = String::from("proven-ir");
-                                } else if st == VERIFY_FAILED() {
-                                    if vr.vow_id == e_vow_ids[ei] {
-                                        e_statuses[ei] = String::from("failed");
+                                let mut verdict: i64 = -1;
+                                let mut k: i64 = 0;
+                                while k < v_ids.len() {
+                                    if v_ids[k] == e_vow_ids[ei] {
+                                        verdict = v_proven[k];
+                                        k = v_ids.len();
                                     } else {
-                                        e_statuses[ei] = String::from("unknown");
+                                        k = k + 1;
                                     }
-                                } else if st == VERIFY_TIMEOUT() {
+                                }
+                                if verdict == 1 {
+                                    e_statuses[ei] = String::from("proven");
+                                } else if verdict == 0 {
+                                    e_statuses[ei] = String::from("failed");
+                                } else if overall == VERIFY_PROVEN() || overall == VERIFY_PROVEN_IR() {
+                                    e_statuses[ei] = String::from("proven");
+                                } else if overall == VERIFY_TIMEOUT() {
                                     e_statuses[ei] = String::from("timeout");
-                                } else if st == VERIFY_UNKNOWN() {
+                                } else if overall == VERIFY_UNKNOWN() {
+                                    e_statuses[ei] = String::from("unknown");
+                                } else if overall == VERIFY_FAILED() {
                                     e_statuses[ei] = String::from("unknown");
                                 } else {
                                     e_statuses[ei] = String::from("error");

@@ -20,7 +20,8 @@ use vow_verify::{
     ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver,
     SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
     detect_constant_functions, emit_verify_c_source, find_esbmc, non_modelable_reason,
-    run_with_fallback, verify_function_with_module_and_const_fns_configured,
+    run_esbmc_multi_property, run_with_fallback,
+    verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedFailure, VerifyCache};
@@ -11063,7 +11064,10 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
 fn update_contract_statuses(
     entries: &mut [ContractEntryJson],
     ir_module: &vow_ir::Module,
-    verify_cache: Option<&VerifyCache>,
+    // The per-clause `--multi-property` path runs ESBMC fresh and does not use
+    // the single-counterexample verify cache; kept in the signature for the
+    // caller's `--no-cache` plumbing (#81 PR-A).
+    _verify_cache: Option<&VerifyCache>,
     limits: &VerifyLimits,
     config: &SolverConfig,
 ) {
@@ -11082,98 +11086,45 @@ fn update_contract_statuses(
             continue;
         }
 
-        let result = if let Some(vc) = verify_cache {
-            let c_src = emit_verify_c_source(func, ir_module, &const_fns, limits);
-            let key = VerifyCache::cache_key(
-                &c_src,
-                limits.max_k_step,
-                config.solver_str(),
-                config.encoding_str(),
-                config.memlimit_mb,
-            );
-
-            // Security: lookup only returns FAILED (PROVEN is never trusted
-            // from disk); the Phase D IR-fallback probe consumed only cached
-            // PROVEN and is removed since that path can never hit.
-            if let Some(cached) = vc.lookup(&key) {
-                VerificationResult::Failed(cached.to_counterexample())
-            } else {
-                let esbmc = match find_esbmc() {
-                    Some(p) => p,
-                    None => {
-                        for entry in entries.iter_mut() {
-                            if entry.function_id == func.id.0 {
-                                entry.status = "error".to_string();
-                            }
-                        }
-                        continue;
-                    }
-                };
-                let (res, resolved_config) =
-                    run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, config);
-                // Security: never cache PROVEN.
-                if let VerificationResult::Failed(ce) = &res {
-                    let store_key = VerifyCache::cache_key(
-                        &c_src,
-                        limits.max_k_step,
-                        resolved_config.solver_str(),
-                        resolved_config.encoding_str(),
-                        resolved_config.memlimit_mb,
-                    );
-                    vc.store(
-                        &store_key,
-                        &CachedFailure {
-                            vow_id: ce.vow_id,
-                            description: ce.description.clone(),
-                            values: ce.values.clone(),
-                            block_visits: ce.block_visits.clone(),
-                            raw_output: ce.raw_output.clone(),
-                        },
-                    );
-                }
-                res
-            }
-        } else {
-            verify_function_with_module_and_const_fns_configured(
-                func,
-                ir_module,
-                &const_fns,
-                limits.max_k_step,
-                config,
-                limits,
-            )
-        };
-
-        for entry in entries.iter_mut() {
-            if entry.function_id == func.id.0 {
-                match &result {
-                    VerificationResult::Proven => {
-                        entry.status = "proven".to_string();
-                    }
-                    VerificationResult::ProvenIr => {
-                        entry.status = "proven-ir".to_string();
-                    }
-                    VerificationResult::Failed(ce) => {
-                        if ce.vow_id == Some(entry.vow_id) {
-                            entry.status = "failed".to_string();
-                        } else {
-                            entry.status = "unknown".to_string();
-                        }
-                    }
-                    VerificationResult::Timeout => {
-                        entry.status = "timeout".to_string();
-                    }
-                    VerificationResult::Unknown { .. } => {
-                        entry.status = "unknown".to_string();
-                    }
-                    VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => {
+        let esbmc = match find_esbmc() {
+            Some(p) => p,
+            None => {
+                for entry in entries.iter_mut() {
+                    if entry.function_id == func.id.0 {
                         entry.status = "error".to_string();
                     }
-                    VerificationResult::Skipped { .. } => {
-                        entry.status = "skipped".to_string();
-                    }
                 }
+                continue;
             }
+        };
+        let c_src = emit_verify_c_source(func, ir_module, &const_fns, limits);
+        // Per-clause status via ESBMC `--multi-property`: every `vow:N` claim is
+        // reported individually, so each contract clause gets a precise verdict
+        // instead of the siblings of a failed clause collapsing to `unknown`
+        // (#81 PR-A). The single-counterexample verify cache is bypassed on this
+        // path; precise per-clause status, not throughput, is the goal here.
+        let (overall, verdicts) =
+            run_esbmc_multi_property(&esbmc, &c_src, limits.max_k_step, &func.name, config);
+
+        for entry in entries.iter_mut() {
+            if entry.function_id != func.id.0 {
+                continue;
+            }
+            entry.status = match verdicts.get(&entry.vow_id) {
+                Some(true) => "proven",
+                Some(false) => "failed",
+                None => match &overall {
+                    VerificationResult::Proven | VerificationResult::ProvenIr => "proven",
+                    VerificationResult::Timeout => "timeout",
+                    VerificationResult::Unknown { .. } => "unknown",
+                    VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => "error",
+                    VerificationResult::Skipped { .. } => "skipped",
+                    // Overall verification failed but ESBMC did not report this
+                    // specific clause individually — genuinely undecided.
+                    VerificationResult::Failed(_) => "unknown",
+                },
+            }
+            .to_string();
         }
     }
 }

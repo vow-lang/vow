@@ -63,6 +63,53 @@ fn contracts_divide_requires() {
 }
 
 #[test]
+fn contracts_verify_per_clause_precise_status() {
+    // PR-A: with --multi-property, each clause gets a precise verdict — a passing
+    // `ensures` is `proven` even when a SIBLING clause fails (pre-fix it would
+    // collapse to `unknown`). Requires ESBMC; skips gracefully if absent.
+    let dir = tempfile::TempDir::new().unwrap();
+    let src = dir.path().join("m.vow");
+    std::fs::write(
+        &src,
+        "module M\n\
+         fn f(x: i64) -> i64 vow {\n  requires: x >= 0,\n  ensures: result == x,\n  ensures: result == x + 1\n} { x }\n\
+         fn main() -> i32 [io] { 0 }\n",
+    )
+    .unwrap();
+    let out = Command::new(vow_bin())
+        .args(["contracts", "--verify", src.to_str().unwrap()])
+        .output()
+        .expect("failed to run vow");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("contracts JSON");
+    let contracts = json["contracts"].as_array().unwrap();
+    // ESBMC absent → every clause is `error`; nothing to assert.
+    if contracts.iter().all(|c| c["status"] == "error") {
+        return;
+    }
+    let status_of = |desc: &str| -> String {
+        contracts
+            .iter()
+            .find(|c| c["description"] == desc)
+            .unwrap_or_else(|| panic!("missing clause {desc}"))["status"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        status_of("ensures result == x"),
+        "proven",
+        "a passing clause stays proven despite a failing sibling"
+    );
+    assert_eq!(status_of("ensures result == x + 1"), "failed");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "fail-closed on the failed clause"
+    );
+}
+
+#[test]
 fn contracts_verify_missing_esbmc_keeps_contracts_schema() {
     let empty_path = tempfile::TempDir::new().unwrap();
     let out = Command::new(vow_bin())

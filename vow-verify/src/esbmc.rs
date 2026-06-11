@@ -155,6 +155,40 @@ fn extract_vow_id(output: &str) -> Option<u32> {
     None
 }
 
+/// Parse per-claim verdicts from ESBMC `--multi-property` output. Each vowed
+/// assertion is labelled `vow:N`; ESBMC reports one line per claim, e.g.
+/// `✓ PASSED: 'vow:0' at file ...` or `✗ FAILED: 'vow:2 at file ...'`. Returns
+/// `vow_id → proven` (true = PASSED). A claim is proven only if no line reports
+/// it FAILED (ESBMC prints PASSED claims twice — during solving and in the final
+/// summary — so verdicts are AND-combined). Claims ESBMC could not decide do not
+/// appear and are treated as `unknown` by the caller. This gives precise
+/// per-clause status from one run, instead of marking siblings of a failed
+/// clause `unknown` (#81 / per-obligation verification).
+fn parse_multi_property_verdicts(output: &str) -> std::collections::HashMap<u32, bool> {
+    let mut verdicts = std::collections::HashMap::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let proven = if trimmed.contains("PASSED:") {
+            true
+        } else if trimmed.contains("FAILED:") {
+            false
+        } else {
+            continue;
+        };
+        if let Some(pos) = trimmed.find("'vow:") {
+            let rest = &trimmed[pos + "'vow:".len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(id) = digits.parse::<u32>() {
+                verdicts
+                    .entry(id)
+                    .and_modify(|v| *v &= proven)
+                    .or_insert(proven);
+            }
+        }
+    }
+    verdicts
+}
+
 fn extract_variable_assignments(output: &str) -> Vec<(String, String)> {
     let mut assignments = Vec::new();
     let mut in_counterexample = false;
@@ -396,22 +430,23 @@ pub fn run_esbmc_k_induction(
     )
 }
 
-pub fn run_esbmc_with_max_k_step(
+fn run_esbmc_capture(
     esbmc: &std::path::Path,
     c_src: &str,
     max_k_step: u32,
     func_name: &str,
     config: &SolverConfig,
-) -> VerificationResult {
+    extra_args: &[&str],
+) -> Result<String, VerificationResult> {
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
         Ok(f) => f,
-        Err(e) => return VerificationResult::ToolError(e.to_string()),
+        Err(e) => return Err(VerificationResult::ToolError(e.to_string())),
     };
     if let Err(e) = tmp.write_all(c_src.as_bytes()) {
-        return VerificationResult::ToolError(e.to_string());
+        return Err(VerificationResult::ToolError(e.to_string()));
     }
     if let Err(e) = tmp.flush() {
-        return VerificationResult::ToolError(e.to_string());
+        return Err(VerificationResult::ToolError(e.to_string()));
     }
 
     save_esbmc_debug(esbmc, c_src, func_name, max_k_step, config);
@@ -425,6 +460,9 @@ pub fn run_esbmc_with_max_k_step(
         .arg(max_k_step.to_string())
         .arg("--64");
 
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
     for arg in config.esbmc_args() {
         cmd.arg(arg);
     }
@@ -456,7 +494,7 @@ pub fn run_esbmc_with_max_k_step(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return VerificationResult::ToolError(e.to_string()),
+        Err(e) => return Err(VerificationResult::ToolError(e.to_string())),
     };
 
     // Drain stdout/stderr on background threads to prevent pipe buffer deadlock.
@@ -497,36 +535,80 @@ pub fn run_esbmc_with_max_k_step(
                 let _ = child.wait();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
-                return VerificationResult::ToolError(format!("wait error: {e}"));
+                return Err(VerificationResult::ToolError(format!("wait error: {e}")));
             }
         }
     };
     if timed_out {
         let _ = stdout_thread.join();
         let _ = stderr_thread.join();
-        return VerificationResult::Timeout;
+        return Err(VerificationResult::Timeout);
     }
 
     let stdout = stdout_thread.join().unwrap_or_default();
     let stderr = stderr_thread.join().unwrap_or_default();
     let combined = format!("{stdout}{stderr}");
+    Ok(combined)
+}
 
+/// Classify ESBMC's combined stdout+stderr into a terminal verification result.
+fn classify_esbmc_output(combined: &str) -> VerificationResult {
     if combined.contains("VERIFICATION SUCCESSFUL") {
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
-        VerificationResult::Failed(parse_esbmc_output(&combined))
-    } else if is_memory_limit_output(&combined) {
+        VerificationResult::Failed(parse_esbmc_output(combined))
+    } else if is_memory_limit_output(combined) {
         VerificationResult::Unknown {
             reason: memory_limit_reason(),
         }
     } else if combined.contains("VERIFICATION UNKNOWN") {
         VerificationResult::Unknown {
-            reason: parse_unknown_reason(&combined),
+            reason: parse_unknown_reason(combined),
         }
     } else if combined.to_lowercase().contains("timeout") {
         VerificationResult::Timeout
     } else {
         VerificationResult::ToolError(format!("unexpected esbmc output:\n{combined}"))
+    }
+}
+
+pub fn run_esbmc_with_max_k_step(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    max_k_step: u32,
+    func_name: &str,
+    config: &SolverConfig,
+) -> VerificationResult {
+    match run_esbmc_capture(esbmc, c_src, max_k_step, func_name, config, &[]) {
+        Ok(combined) => classify_esbmc_output(&combined),
+        Err(r) => r,
+    }
+}
+
+/// Per-clause verification via ESBMC `--multi-property`: returns the overall
+/// outcome plus `vow_id -> proven` for every reported claim, so `vow contracts
+/// --verify` can give each contract clause a precise status instead of marking
+/// the siblings of a failed clause `unknown`.
+pub fn run_esbmc_multi_property(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    max_k_step: u32,
+    func_name: &str,
+    config: &SolverConfig,
+) -> (VerificationResult, std::collections::HashMap<u32, bool>) {
+    match run_esbmc_capture(
+        esbmc,
+        c_src,
+        max_k_step,
+        func_name,
+        config,
+        &["--multi-property"],
+    ) {
+        Ok(combined) => (
+            classify_esbmc_output(&combined),
+            parse_multi_property_verdicts(&combined),
+        ),
+        Err(r) => (r, std::collections::HashMap::new()),
     }
 }
 
@@ -921,6 +1003,41 @@ VERIFICATION FAILED";
         assert_eq!(ce.vow_id, Some(2));
         assert_eq!(ce.values.len(), 1);
         assert_eq!(ce.values[0], ("v0".to_string(), "42".to_string()));
+    }
+
+    #[test]
+    fn parse_multi_property_verdicts_per_claim() {
+        // Real ESBMC --multi-property output shape: PASSED claims quote only the
+        // id; FAILED claims quote id + location; PASSED is also echoed in the
+        // final summary (so vow:0 appears twice).
+        let output = "\
+✓ PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main
+Solving claim 'vow:2 at file /tmp/m.c line 6 column 5 function main' with solver
+✗ FAILED: 'vow:2 at file /tmp/m.c line 6 column 5 function main'
+Violated property:
+  vow:2
+✗ FAILED: 'vow:1 at file /tmp/m.c line 5 column 5 function main'
+Properties: 3 verified ✓ 1 passed, ✗ 2 failed
+VERIFICATION FAILED
+✓ PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main";
+        let v = parse_multi_property_verdicts(output);
+        assert_eq!(v.get(&0), Some(&true), "vow:0 proven");
+        assert_eq!(v.get(&1), Some(&false), "vow:1 failed");
+        assert_eq!(v.get(&2), Some(&false), "vow:2 failed");
+        assert_eq!(v.len(), 3);
+    }
+
+    #[test]
+    fn parse_multi_property_all_proven() {
+        let output = "\
+✓ PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main
+✓ PASSED: 'vow:1' at file /tmp/m.c line 5 column 5 function main
+Properties: 2 verified ✓ 2 passed, ✗ 0 failed
+VERIFICATION SUCCESSFUL";
+        let v = parse_multi_property_verdicts(output);
+        assert_eq!(v.get(&0), Some(&true));
+        assert_eq!(v.get(&1), Some(&true));
+        assert!(v.values().all(|p| *p));
     }
 
     #[test]
