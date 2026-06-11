@@ -14048,6 +14048,11 @@ fn main() -> i32 {
             classify_contract_quality("ensures", "ensures result >= -1"),
             "weak"
         );
+        // Strict single-char operator path (`<`, not `<=`).
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result < 3"),
+            "weak"
+        );
     }
 
     #[test]
@@ -14072,6 +14077,12 @@ fn main() -> i32 {
         // A one-sided bound is a legitimate precondition, not a weak postcondition.
         assert_eq!(
             classify_contract_quality("requires", "requires v <= 255"),
+            "substantive"
+        );
+        // A `false` predicate is a contradiction, not a tautology; the static
+        // classifier leaves it substantive (vacuity detection is a follow-up).
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures false"),
             "substantive"
         );
     }
