@@ -59,6 +59,7 @@ Vow is written by agents under a finite context window. These principles apply t
 | [cli.md](cli.md)                                  | CLI commands, flags, JSON output schemas            |
 | [errors.md](errors.md)                            | Error catalog: every error code with fix            |
 | [contracts.md](contracts.md)                      | Contract patterns, verification, and anti-patterns  |
+| [contracts-methodology.md](contracts-methodology.md) | Which properties to prove: contract taxonomy & strength |
 | [examples.md](examples.md)                        | 3 worked CEGIS cycles with full JSON output         |
 | [../dev/benchmarks.md](../dev/benchmarks.md)      | Developer benchmark harnesses outside the CLI spec  |
 | [schemas/build-result.schema.json](schemas/build-result.schema.json)     | Build output JSON schema            |
