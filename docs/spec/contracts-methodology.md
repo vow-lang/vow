@@ -371,11 +371,24 @@ quality of the self-hosted compiler's own contracts: it reads
 `vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
 exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
 unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
-ratchet down as contracts harden — most of the current `weak` count is the
-constant tag-family functions the structural refactor (#81 follow-up) dissolves.
-The dispatch-totality example above (`binop_opcode`, `ensures: result != -1`) and
-`binop_result_ty` (`ensures: result == ITY_BOOL() || result == ITY_U64() ||
-result == ITY_I64()`) are enforced in `compiler/lower.vow` today.
+ratchet down as contracts harden. The dispatch-totality example above
+(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`
+(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)
+are enforced in `compiler/lower.vow` today.
+
+**Tag families are structural, not contracted.** The bulk of the old `weak`
+count was nullary tag constants — `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,
+`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures
+result >= 0` proves nothing: a constant's value is the only fact about it, and
+that fact is structural (each is a distinct literal). So these carry **no**
+contract. Their correctness is established where it matters — at use sites: the
+dispatch-totality contracts above prove every valid tag is handled, the IR
+validator and serializer round-trips exercise every kind, and the binary
+fixed-point bootstrap miscompiles if any two tags collide. Removing the
+contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11
+are genuine parametric functions (the region/span bit-packers and friends) whose
+right contract is a round-trip or enumerated postcondition — the next hardening
+target, not noise.
 
 ## References
 

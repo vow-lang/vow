@@ -1,93 +1,93 @@
 module Ast
 
-fn EXPR_LIT_INT() -> i64 vow { ensures: result >= 0 } { 0 }
-fn EXPR_LIT_BOOL() -> i64 vow { ensures: result >= 0 } { 1 }
-fn EXPR_LIT_STR() -> i64 vow { ensures: result >= 0 } { 2 }
-fn EXPR_LIT_FLOAT() -> i64 vow { ensures: result >= 0 } { 3 }
-fn EXPR_IDENT() -> i64 vow { ensures: result >= 0 } { 4 }
-fn EXPR_BINOP() -> i64 vow { ensures: result >= 0 } { 5 }
-fn EXPR_UNOP() -> i64 vow { ensures: result >= 0 } { 6 }
-fn EXPR_CALL() -> i64 vow { ensures: result >= 0 } { 7 }
-fn EXPR_METHOD() -> i64 vow { ensures: result >= 0 } { 8 }
-fn EXPR_FIELD() -> i64 vow { ensures: result >= 0 } { 9 }
-fn EXPR_INDEX() -> i64 vow { ensures: result >= 0 } { 10 }
-fn EXPR_IF() -> i64 vow { ensures: result >= 0 } { 11 }
-fn EXPR_WHILE() -> i64 vow { ensures: result >= 0 } { 12 }
-fn EXPR_MATCH() -> i64 vow { ensures: result >= 0 } { 13 }
-fn EXPR_RETURN() -> i64 vow { ensures: result >= 0 } { 14 }
-fn EXPR_BREAK() -> i64 vow { ensures: result >= 0 } { 15 }
-fn EXPR_BLOCK() -> i64 vow { ensures: result >= 0 } { 16 }
-fn EXPR_ASSIGN() -> i64 vow { ensures: result >= 0 } { 17 }
-fn EXPR_SLIT() -> i64 vow { ensures: result >= 0 } { 18 }
-fn EXPR_ECTOR() -> i64 vow { ensures: result >= 0 } { 19 }
-fn EXPR_QUESTION() -> i64 vow { ensures: result >= 0 } { 20 }
-fn EXPR_TUPLE() -> i64 vow { ensures: result >= 0 } { 21 }
-fn EXPR_RESULT() -> i64 vow { ensures: result >= 0 } { 22 }
-fn EXPR_CAST() -> i64 vow { ensures: result >= 0 } { 23 }
-fn EXPR_LOOP() -> i64 vow { ensures: result >= 0 } { 24 }
-fn EXPR_FOR() -> i64 vow { ensures: result >= 0 } { 25 }
-fn EXPR_CONTINUE() -> i64 vow { ensures: result >= 0 } { 26 }
+fn EXPR_LIT_INT() -> i64 { 0 }
+fn EXPR_LIT_BOOL() -> i64 { 1 }
+fn EXPR_LIT_STR() -> i64 { 2 }
+fn EXPR_LIT_FLOAT() -> i64 { 3 }
+fn EXPR_IDENT() -> i64 { 4 }
+fn EXPR_BINOP() -> i64 { 5 }
+fn EXPR_UNOP() -> i64 { 6 }
+fn EXPR_CALL() -> i64 { 7 }
+fn EXPR_METHOD() -> i64 { 8 }
+fn EXPR_FIELD() -> i64 { 9 }
+fn EXPR_INDEX() -> i64 { 10 }
+fn EXPR_IF() -> i64 { 11 }
+fn EXPR_WHILE() -> i64 { 12 }
+fn EXPR_MATCH() -> i64 { 13 }
+fn EXPR_RETURN() -> i64 { 14 }
+fn EXPR_BREAK() -> i64 { 15 }
+fn EXPR_BLOCK() -> i64 { 16 }
+fn EXPR_ASSIGN() -> i64 { 17 }
+fn EXPR_SLIT() -> i64 { 18 }
+fn EXPR_ECTOR() -> i64 { 19 }
+fn EXPR_QUESTION() -> i64 { 20 }
+fn EXPR_TUPLE() -> i64 { 21 }
+fn EXPR_RESULT() -> i64 { 22 }
+fn EXPR_CAST() -> i64 { 23 }
+fn EXPR_LOOP() -> i64 { 24 }
+fn EXPR_FOR() -> i64 { 25 }
+fn EXPR_CONTINUE() -> i64 { 26 }
 
-fn CLAUSE_REQUIRES() -> i64 vow { ensures: result >= 0 } { 0 }
-fn CLAUSE_ENSURES() -> i64 vow { ensures: result >= 0 } { 1 }
-fn CLAUSE_INVARIANT() -> i64 vow { ensures: result >= 0 } { 2 }
+fn CLAUSE_REQUIRES() -> i64 { 0 }
+fn CLAUSE_ENSURES() -> i64 { 1 }
+fn CLAUSE_INVARIANT() -> i64 { 2 }
 
-fn BINOP_ADD() -> i64 vow { ensures: result >= 0 } { 0 }
-fn BINOP_SUB() -> i64 vow { ensures: result >= 0 } { 1 }
-fn BINOP_MUL() -> i64 vow { ensures: result >= 0 } { 2 }
-fn BINOP_DIV() -> i64 vow { ensures: result >= 0 } { 3 }
-fn BINOP_REM() -> i64 vow { ensures: result >= 0 } { 4 }
-fn BINOP_ADD_CHK() -> i64 vow { ensures: result >= 0 } { 5 }
-fn BINOP_SUB_CHK() -> i64 vow { ensures: result >= 0 } { 6 }
-fn BINOP_MUL_CHK() -> i64 vow { ensures: result >= 0 } { 7 }
-fn BINOP_DIV_CHK() -> i64 vow { ensures: result >= 0 } { 8 }
-fn BINOP_REM_CHK() -> i64 vow { ensures: result >= 0 } { 9 }
-fn BINOP_EQ() -> i64 vow { ensures: result >= 0 } { 10 }
-fn BINOP_NE() -> i64 vow { ensures: result >= 0 } { 11 }
-fn BINOP_LT() -> i64 vow { ensures: result >= 0 } { 12 }
-fn BINOP_LE() -> i64 vow { ensures: result >= 0 } { 13 }
-fn BINOP_GT() -> i64 vow { ensures: result >= 0 } { 14 }
-fn BINOP_GE() -> i64 vow { ensures: result >= 0 } { 15 }
-fn BINOP_AND() -> i64 vow { ensures: result >= 0 } { 16 }
-fn BINOP_OR() -> i64 vow { ensures: result >= 0 } { 17 }
-fn BINOP_XOR() -> i64 vow { ensures: result >= 0 } { 18 }
-fn BINOP_BITAND() -> i64 vow { ensures: result >= 0 } { 19 }
-fn BINOP_BITOR() -> i64 vow { ensures: result >= 0 } { 20 }
-fn BINOP_SHL() -> i64 vow { ensures: result >= 0 } { 21 }
-fn BINOP_SHR() -> i64 vow { ensures: result >= 0 } { 22 }
+fn BINOP_ADD() -> i64 { 0 }
+fn BINOP_SUB() -> i64 { 1 }
+fn BINOP_MUL() -> i64 { 2 }
+fn BINOP_DIV() -> i64 { 3 }
+fn BINOP_REM() -> i64 { 4 }
+fn BINOP_ADD_CHK() -> i64 { 5 }
+fn BINOP_SUB_CHK() -> i64 { 6 }
+fn BINOP_MUL_CHK() -> i64 { 7 }
+fn BINOP_DIV_CHK() -> i64 { 8 }
+fn BINOP_REM_CHK() -> i64 { 9 }
+fn BINOP_EQ() -> i64 { 10 }
+fn BINOP_NE() -> i64 { 11 }
+fn BINOP_LT() -> i64 { 12 }
+fn BINOP_LE() -> i64 { 13 }
+fn BINOP_GT() -> i64 { 14 }
+fn BINOP_GE() -> i64 { 15 }
+fn BINOP_AND() -> i64 { 16 }
+fn BINOP_OR() -> i64 { 17 }
+fn BINOP_XOR() -> i64 { 18 }
+fn BINOP_BITAND() -> i64 { 19 }
+fn BINOP_BITOR() -> i64 { 20 }
+fn BINOP_SHL() -> i64 { 21 }
+fn BINOP_SHR() -> i64 { 22 }
 
-fn UNOP_NEG() -> i64 vow { ensures: result >= 0 } { 0 }
-fn UNOP_NOT() -> i64 vow { ensures: result >= 0 } { 1 }
+fn UNOP_NEG() -> i64 { 0 }
+fn UNOP_NOT() -> i64 { 1 }
 
-fn TY_NAMED() -> i64 vow { ensures: result >= 0 } { 0 }
-fn TY_GENERIC() -> i64 vow { ensures: result >= 0 } { 1 }
-fn TY_UNIT() -> i64 vow { ensures: result >= 0 } { 2 }
-fn TY_NEVER() -> i64 vow { ensures: result >= 0 } { 3 }
-fn TY_REF() -> i64 vow { ensures: result >= 0 } { 4 }
-fn TY_SLICE() -> i64 vow { ensures: result >= 0 } { 5 }
-fn TY_TUPLE() -> i64 vow { ensures: result >= 0 } { 6 }
+fn TY_NAMED() -> i64 { 0 }
+fn TY_GENERIC() -> i64 { 1 }
+fn TY_UNIT() -> i64 { 2 }
+fn TY_NEVER() -> i64 { 3 }
+fn TY_REF() -> i64 { 4 }
+fn TY_SLICE() -> i64 { 5 }
+fn TY_TUPLE() -> i64 { 6 }
 
-fn STMT_LET() -> i64 vow { ensures: result >= 0 } { 0 }
-fn STMT_EXPR() -> i64 vow { ensures: result >= 0 } { 1 }
+fn STMT_LET() -> i64 { 0 }
+fn STMT_EXPR() -> i64 { 1 }
 
-fn PAT_WILD() -> i64 vow { ensures: result >= 0 } { 0 }
-fn PAT_IDENT() -> i64 vow { ensures: result >= 0 } { 1 }
-fn PAT_LIT() -> i64 vow { ensures: result >= 0 } { 2 }
-fn PAT_ENUM() -> i64 vow { ensures: result >= 0 } { 3 }
-fn PAT_STRUCT() -> i64 vow { ensures: result >= 0 } { 4 }
-fn PAT_TUPLE() -> i64 vow { ensures: result >= 0 } { 5 }
-fn PAT_OR() -> i64 vow { ensures: result >= 0 } { 6 }
+fn PAT_WILD() -> i64 { 0 }
+fn PAT_IDENT() -> i64 { 1 }
+fn PAT_LIT() -> i64 { 2 }
+fn PAT_ENUM() -> i64 { 3 }
+fn PAT_STRUCT() -> i64 { 4 }
+fn PAT_TUPLE() -> i64 { 5 }
+fn PAT_OR() -> i64 { 6 }
 
-fn ITEM_FN() -> i64 vow { ensures: result >= 0 } { 0 }
-fn ITEM_STRUCT() -> i64 vow { ensures: result >= 0 } { 1 }
-fn ITEM_ENUM() -> i64 vow { ensures: result >= 0 } { 2 }
-fn ITEM_CONST() -> i64 vow { ensures: result >= 0 } { 3 }
+fn ITEM_FN() -> i64 { 0 }
+fn ITEM_STRUCT() -> i64 { 1 }
+fn ITEM_ENUM() -> i64 { 2 }
+fn ITEM_CONST() -> i64 { 3 }
 
-fn EFF_IO() -> i64 vow { ensures: result > 0 } { 1 }
-fn EFF_PANIC() -> i64 vow { ensures: result > 0 } { 2 }
-fn EFF_READ() -> i64 vow { ensures: result > 0 } { 4 }
-fn EFF_UNSAFE() -> i64 vow { ensures: result > 0 } { 8 }
-fn EFF_WRITE() -> i64 vow { ensures: result > 0 } { 16 }
+fn EFF_IO() -> i64 { 1 }
+fn EFF_PANIC() -> i64 { 2 }
+fn EFF_READ() -> i64 { 4 }
+fn EFF_UNSAFE() -> i64 { 8 }
+fn EFF_WRITE() -> i64 { 16 }
 
 struct AstArena {
     expr_data: Vec<i64>,

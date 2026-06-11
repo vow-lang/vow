@@ -5,13 +5,13 @@ use clif
 use ir
 use ir_printer
 
-fn VERIFY_PROVEN() -> i64 vow { ensures: result >= 0 } { 0 }
-fn VERIFY_FAILED() -> i64 vow { ensures: result >= 0 } { 1 }
-fn VERIFY_TIMEOUT() -> i64 vow { ensures: result >= 0 } { 2 }
-fn VERIFY_ERROR() -> i64 vow { ensures: result >= 0 } { 3 }
-fn VERIFY_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 4 }
-fn VERIFY_PROVEN_IR() -> i64 vow { ensures: result >= 0 } { 5 }
-fn VERIFY_UNKNOWN() -> i64 vow { ensures: result >= 0 } { 6 }
+fn VERIFY_PROVEN() -> i64 { 0 }
+fn VERIFY_FAILED() -> i64 { 1 }
+fn VERIFY_TIMEOUT() -> i64 { 2 }
+fn VERIFY_ERROR() -> i64 { 3 }
+fn VERIFY_NOT_FOUND() -> i64 { 4 }
+fn VERIFY_PROVEN_IR() -> i64 { 5 }
+fn VERIFY_UNKNOWN() -> i64 { 6 }
 
 struct VerifyResult {
     status: i64,
