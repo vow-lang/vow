@@ -287,7 +287,15 @@ int main(void) {
         size_t new_size = sz + grow;
         void* saved_start = a.last_alloc_start;
         uintptr_t saved_cursor = a.cursor;
+        uintptr_t saved_chunk_end = a.chunk_end;
+        /* try_extend must return 1 *exactly* when a valid extension fits
+         * (issue #433): p is the last allocation and new_size >= sz, so the
+         * sole deciding factor is whether the grow fits before chunk_end.
+         * Without this the failure branch below is also satisfied by an
+         * implementation that always returns 0, masking a growth regression. */
+        int should_fit = (saved_cursor + grow <= saved_chunk_end);
         int64_t r = __vow_arena_try_extend(&a, p, sz, new_size);
+        assert(r == (should_fit ? 1 : 0));
         if (r == 1) {
             /* Post-conditions per §10.4. */
             assert(a.last_alloc_size == new_size);
@@ -300,6 +308,14 @@ int main(void) {
             assert(a.last_alloc_start == saved_start);
             assert(a.cursor == saved_cursor);
         }
+
+        /* Negative cases: try_extend must reject mismatched calls (#433) —
+         * a wrong pointer, a wrong old_size, or a shrink each return 0. */
+        void* cur_start = a.last_alloc_start;
+        uintptr_t cur_size = a.last_alloc_size;
+        assert(__vow_arena_try_extend(&a, (char*)cur_start + 1, cur_size, cur_size + 1) == 0);
+        assert(__vow_arena_try_extend(&a, cur_start, cur_size + 1, cur_size + 2) == 0);
+        assert(__vow_arena_try_extend(&a, cur_start, cur_size, cur_size - 1) == 0);
     }
 
     /* Directed scenario for issue #391: drop an oversized non-tail chunk and
