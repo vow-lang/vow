@@ -9859,7 +9859,7 @@ fn run_pipeline_inner(
 /// verifier crash leaves verification in an unknown state, so the build must
 /// report `VerifyFailed` (exit 1) and withhold the executable — never the silent
 /// `Unverified`/exit-0 of the old `.unwrap_or((Skipped, _))` fallback (#413).
-/// The linked object is removed so no binary masquerades as built.
+/// The linked binary is removed so no executable masquerades as built.
 fn verifier_panicked_output(
     diagnostics: Vec<Diagnostic>,
     executable: Option<PathBuf>,
