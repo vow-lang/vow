@@ -121,10 +121,12 @@ fn contracts_where_clause() {
     for c in contracts {
         assert_eq!(c["kind"], "requires");
         assert_eq!(c["blame"], "Caller");
-        assert!(c["description"]
-            .as_str()
-            .unwrap()
-            .contains("where on parameter"));
+        assert!(
+            c["description"]
+                .as_str()
+                .unwrap()
+                .contains("where on parameter")
+        );
     }
 }
 

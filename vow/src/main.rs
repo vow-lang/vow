@@ -10066,8 +10066,7 @@ fn contract_predicate_text(description: &str) -> &str {
 /// is reported `substantive`, so it never over-flags a meaningful contract.
 fn classify_contract_quality(kind: &str, description: &str) -> &'static str {
     let p = contract_predicate_text(description);
-    if p.is_empty() || p == "true" || p == "false" || !p.chars().any(|c| c.is_ascii_alphabetic())
-    {
+    if p.is_empty() || p == "true" || p == "false" || !p.chars().any(|c| c.is_ascii_alphabetic()) {
         return "tautological";
     }
     if kind == "ensures" && is_weak_result_bound(p) {
