@@ -2495,7 +2495,7 @@ that path produces `Unverified` (exit 0).
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
-| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
+| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
 
@@ -2567,7 +2567,7 @@ that path produces `Unverified` (exit 0).
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
-| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, or `"tool_not_found"` |
+| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
 ## Contracts Output JSON
@@ -4428,8 +4428,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "verify_status": {
       "type": "string",
-      "enum": ["timeout", "unknown", "error", "tool_not_found"],
-      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
+      "enum": ["timeout", "unknown", "error", "tool_not_found", "panicked"],
+      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample; \"panicked\" signals the verifier worker thread crashed and the build fails closed)"
     },
     "verify_message": {
       "type": "string",
@@ -5987,7 +5987,7 @@ that path produces `Unverified` (exit 0).
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
-| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
+| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
 
@@ -6059,7 +6059,7 @@ that path produces `Unverified` (exit 0).
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
-| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, or `"tool_not_found"` |
+| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
 ## Contracts Output JSON
@@ -7920,8 +7920,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "verify_status": {
       "type": "string",
-      "enum": ["timeout", "unknown", "error", "tool_not_found"],
-      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
+      "enum": ["timeout", "unknown", "error", "tool_not_found", "panicked"],
+      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample; \"panicked\" signals the verifier worker thread crashed and the build fails closed)"
     },
     "verify_message": {
       "type": "string",

@@ -39,8 +39,8 @@
     },
     "verify_status": {
       "type": "string",
-      "enum": ["timeout", "unknown", "error", "tool_not_found"],
-      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
+      "enum": ["timeout", "unknown", "error", "tool_not_found", "panicked"],
+      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample; \"panicked\" signals the verifier worker thread crashed and the build fails closed)"
     },
     "verify_message": {
       "type": "string",
