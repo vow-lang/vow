@@ -114,8 +114,9 @@ pair compose to the identity on the valid domain.
 **When:** two functions are defined as inverses — `pack`/`unpack`,
 `encode`/`decode`, `to_bytes`/`from_bytes`.
 
-The strongest form asserts the inverse directly, calling the partner function in
-the postcondition (pure-function calls are allowed in contracts):
+Specify each direction with an exact closed-form postcondition — shape 3 applied
+to the extractor as well as the encoder, so the decoder is pinned to the exact
+arithmetic that inverts the pack:
 
 ```vow
 fn region_kind(r: i64) -> i64 vow {
@@ -125,10 +126,17 @@ fn region_kind(r: i64) -> i64 vow {
 } { r - (r / 4) * 4 }
 ```
 
-A `region_pack` then `region_kind`/`region_val` round-trip recovers `(kind, val)`
-exactly. **Strength:** very strong — round-trip is the property a serialization
-layer must have, and it catches the entire class of "encoder and decoder drifted
-apart" bugs that output-range contracts miss completely.
+Because both directions are pinned to closed forms — `region_pack`'s exact
+`ensures: result == val * 4 + kind` (shape 3 above) and the matching
+`region_kind`/`region_val` extractors — a `region_pack` then
+`region_kind`/`region_val` round-trip recovers `(kind, val)` exactly, and ESBMC
+discharges that composition with no separate assertion. The inverse can also be
+asserted directly: Vow allows pure-function calls in postconditions, so an
+`ensures: region_kind(result) == kind` on `region_pack` is expressible and
+modelable when the partner is pure (matrix shape 4). **Strength:** very strong —
+round-trip is the property a serialization layer must have, and it catches the
+entire class of "encoder and decoder drifted apart" bugs that output-range
+contracts miss completely.
 
 ### 5. Dispatch totality (fail-closed decoders)
 
