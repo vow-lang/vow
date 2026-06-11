@@ -70,6 +70,53 @@ fn f() -> i32 {
 
 **Fix:** Change the expression or the declared type to match.
 
+### LiteralOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** An integer literal appears in a typed context (annotated `let`, function argument, struct field, or const declaration) whose target type cannot hold the literal's value. The check runs after context coercion, so the offending literal is the one written in the source, not a widened intermediate.
+
+```vow
+let x: u8 = 300;
+const NEG: u16 = -1;
+```
+
+**Output:** `literal 300 does not fit in u8 (range 0..=255)`
+
+**Fix:** Use a value within the target type's range, change the target type, or write an explicit narrowing intrinsic (`i64_to_u8_try`, `i64_to_u8_wrap`, `i64_to_u8_sat`) if you intend to convert a wider value at runtime.
+
+### NarrowingCastNotAllowed
+
+**Phase:** Type Checker
+**Meaning:** The `as` operator was used to convert a wider integer type to a narrower one. `as` is widening-only; narrowing must use a named intrinsic so the agent chooses an explicit semantics (range-checked vs. truncating vs. saturating). See `grammar.md` §Type Cast.
+
+```vow
+fn f(big: i64) -> u8 {
+    big as u8
+}
+```
+
+**Output:** `cannot cast 'i64' to 'u8' via 'as'; use 'i64_to_u8_try', 'i64_to_u8_wrap', or 'i64_to_u8_sat' to choose the narrowing semantics`
+
+**Fix:** Replace the cast with the narrowing intrinsic that matches your intent:
+- `i64_to_u8_try(big) -> Option<u8>` — reject out-of-range with `None`
+- `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
+- `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
+
+### ShiftCountOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** A constant-expression shift count is greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) get a Vow contract on the operation and are checked by ESBMC and at runtime in debug mode.
+
+```vow
+fn f(x: u8) -> u8 {
+    x << 8
+}
+```
+
+**Output:** `shift count 8 is out of range for u8 (max 7)`
+
+**Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
+
 ### StaticLiteralRequired
 
 **Phase:** Type Checker

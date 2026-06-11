@@ -908,10 +908,16 @@ fn skill_json() -> String {
     },
     "casts": "x as u64 or y as i64",
     "types": [
+      "i8",
+      "i16",
       "i32",
       "i64",
+      "i128",
       "u8",
+      "u16",
+      "u32",
       "u64",
+      "u128",
       "f32",
       "f64",
       "bool",
@@ -964,8 +970,9 @@ fn skill_json() -> String {
       "string_to_lower": "fn(s: String) -> String []",
       "string_replace": "fn(s: String, from: String, to: String) -> String []",
       "string_join": "fn(parts: Vec<String>, sep: String) -> String []",
-      "parse_i64": "fn(s: String) -> i64 []",
-      "i64_to_string": "fn(v: i64) -> String []",
+      "int_to_string": "fn(v: i64) -> String []",
+      "uint_to_string": "fn(v: u64) -> String []",
+      "i64_to_string": "fn(v: i64) -> String (alias of int_to_string) []",
       "vec_sort": "fn(v: Vec<i64>) -> Vec<i64> []",
       "time_unix": "fn() -> i64 [io]",
       "time_unix_ms": "fn() -> i64 [io]",
@@ -1261,10 +1268,10 @@ LANGUAGE SUMMARY
     0
   }
 
-TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
+TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]
-            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
@@ -1434,7 +1441,7 @@ const NEG_ONE: i64 = -1;
 const DEBUG: bool = true;
 ```
 
-Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be `i64`, `i32`, or `bool`. Constants are referenced by name in expressions like any other identifier.
+Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be any of the 10 integer types (`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`) or `bool`. Integer constants are subject to the same compile-time range check as integer literals. Constants are referenced by name in expressions like any other identifier.
 
 ## Functions
 
@@ -1511,15 +1518,37 @@ pub fn api_function(x: i64) -> i64 {
 
 | Type   | Description              |
 |--------|--------------------------|
+| `i8`   | 8-bit signed integer     |
+| `i16`  | 16-bit signed integer    |
 | `i32`  | 32-bit signed integer    |
 | `i64`  | 64-bit signed integer    |
+| `i128` | 128-bit signed integer (verifier may time out; see below) |
 | `u8`   | 8-bit unsigned integer   |
+| `u16`  | 16-bit unsigned integer  |
+| `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
+| `u128` | 128-bit unsigned integer (verifier may time out; see below) |
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
 | `()`   | Unit type                |
 | `!`    | Never type (diverges)    |
+
+There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`,
+indices are `i64`. This is deliberate — it preserves binary fixed point
+reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
+
+**128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
+`I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
+exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
+verification for functions whose contracts mention 128-bit values while still
+generating native code for them.
+
+**Struct field layout:** every struct field up to 64 bits wide occupies one
+8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
+fields occupy two consecutive 8-byte slots (16 bytes). There is no packing or
+natural-alignment layout today; FFI structs that need a specific C layout must
+shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -1546,9 +1575,29 @@ Structs and enums (see below).
 0
 ```
 
-All unsuffixed integer literals are `i64`. Integer literals coerce to `u64` in annotation context (e.g. `let x: u64 = 42;`).
+Unsuffixed integer literals default to `i64` in expression position, and
+**context-coerce** to any of the 10 integer types when the
+surrounding context fixes one — `let` bindings, function arguments, struct
+fields, and the typed operand of an arithmetic, bitwise, or comparison
+operator. The same coercion applies to constant expressions composed entirely
+of unsuffixed integer literals (e.g. `1 + 2`, `1 << 3`, `-5`).
 
-Suffixed integer literals: `42u64` produces a `u64` value directly.
+Out-of-range literals in a typed context are a compile-time error:
+
+```vow
+let x: u8 = 300;   // error: LiteralOutOfRange — 300 does not fit in u8
+let y: i8 = 200;   // error: LiteralOutOfRange — i8 range is -128..=127
+```
+
+**Suffixed integer literals** force the type at the literal:
+
+```vow
+42u8     42u16     42u32     42u64     42u128
+42i8     42i16     42i32     42i64     42i128
+```
+
+Suffixed forms are supported for all 10 integer widths. They override context
+coercion and are still subject to the same compile-time range check.
 
 ### Float Literals
 
@@ -1628,9 +1677,26 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 | `<<`     | Left shift   |
 | `>>`     | Right shift  |
 
-Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
+Bitwise `& | ^` require integer operands of the same type and work on all 10
+integer widths. `>>` is **arithmetic** (sign-extending) for signed types
+(`i8`..`i128`) and **logical** (zero-extending) for unsigned types
+(`u8`..`u128`).
 
-Unsuffixed integer literals are `i64` by default but coerce to the other operand's integer type when used with a bitwise or shift operator. The same coercion applies to constant expressions composed entirely of unsuffixed integer literals — including arithmetic (`1 + 1`), bitwise (`1 << 3`), and unary negation (`-5`). For example, given `let x: u64 = ...`, the expressions `x << 3`, `3 & x`, and `x << (1 + 1)` all type-check (the literal-constant side coerces to `u64`). This matches the coercion rule already used by arithmetic operators and comparisons. Use a `u64` suffix (`3u64`) to force the `u64` type explicitly.
+**Shift count type.** The right operand of `<<` and `>>` is `u32`. Unsuffixed
+integer literals on the right side context-coerce to `u32`: given
+`let x: u8 = ...`, `x << 3` is well-typed (`3` coerces to `u32`). The left
+operand keeps its own integer type; the shift result has the left operand's
+type.
+
+**Shift count range.** A const-expression shift count `>= bit-width(LHS)` is a
+compile-time error (`ShiftCountOutOfRange`). For example, `(x: u8) << 8` does
+not compile. Dynamic shift counts (`x << n` where `n` is not a const
+expression) get a contract on the operation that ESBMC checks: the count must
+be less than the LHS width at the point of the shift.
+
+Unsuffixed literal coercion still applies for `&`, `|`, `^` operands: with
+`let x: u64 = ...`, `3 & x` and `x | 0xff` type-check because the literal
+side coerces to `u64`. Use a suffix to force a different type explicitly.
 
 ### Logical Operators
 
@@ -1663,14 +1729,56 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 
 ### Type Cast
 
+`as` is **widening-only** across integer types. Any narrower integer can be
+cast to any wider integer; signed sources sign-extend, unsigned sources
+zero-extend:
+
 ```vow
-x as u64    // i64 -> u64
-y as i64    // u64 -> i64
+let a: i32 = -1;
+let b: i64 = a as i64;     // sign-extend: -1_i64
+let c: u8  = 200;
+let d: u64 = c as u64;     // zero-extend: 200_u64
+let e: u32 = 1;
+let f: i64 = e as i64;     // unsigned-to-signed widening, value preserved
 ```
 
-The `as` operator converts between `i64` and `u64`. No implicit conversions: `i64 + u64` is a type error.
+`as` between signed and unsigned of **the same width** is also allowed
+(machine-level bit reinterpretation): `i64 as u64`, `u64 as i64`, `i32 as u32`,
+etc.
 
-In debug mode, out-of-range casts (negative i64 to u64, or u64 > i64::MAX to i64) are no-ops at the machine level (bit reinterpretation). In release mode, the same applies.
+**Narrowing via `as` is a compile-time error** (`NarrowingCastNotAllowed`):
+
+```vow
+let big: i64 = 300;
+let small: u8 = big as u8;     // error — narrowing not allowed via `as`
+```
+
+To narrow, use a named intrinsic that makes the intent explicit. For every
+narrowing pair `(src, tgt)` the compiler exposes three free functions:
+
+| Intrinsic                         | Behavior on out-of-range input          |
+|-----------------------------------|-----------------------------------------|
+| `<src>_to_<tgt>_try(x) -> Option<tgt>` | returns `Option::None`             |
+| `<src>_to_<tgt>_wrap(x) -> tgt`   | truncates (low bits, two's-complement)  |
+| `<src>_to_<tgt>_sat(x) -> tgt`    | clamps to the target type's range       |
+
+Example:
+
+```vow
+let big: i64 = 300;
+match i64_to_u8_try(big) {
+    Option::Some(b) => use_byte(b),
+    Option::None    => fallback(),
+}
+```
+
+These intrinsics are emitted by the compiler so ESBMC sees their semantics
+directly in the verification C model.
+
+No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
+operands must already have the same type. The compiler does not coerce
+across integer types at operator sites — only literals coerce, per the
+[Integer Literals](#integer-literals) rules.
 
 ## Let Bindings
 
@@ -2139,10 +2247,41 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 #### Conversion
 
+**Formatting** uses two baselines; widen via `as` for narrower types:
+
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
-| `parse_i64`      | `fn(s: String) -> i64`                     | `[]`       |
-| `i64_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+| `int_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+| `uint_to_string` | `fn(v: u64) -> String`                     | `[]`       |
+| `i64_to_string`  | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+
+```vow
+let small: u8 = 42;
+print_str(uint_to_string(small as u64));  // widen then format
+```
+
+**Parsing** exposes a try-form for every integer width:
+
+| Function       | Signature                                |
+|----------------|------------------------------------------|
+| `parse_i8`     | `fn(s: String) -> Option<i8>`            |
+| `parse_i16`    | `fn(s: String) -> Option<i16>`           |
+| `parse_i32`    | `fn(s: String) -> Option<i32>`           |
+| `parse_i64`    | `fn(s: String) -> Option<i64>` (also see `String.parse_i64()`) |
+| `parse_i128`   | `fn(s: String) -> Option<i128>`          |
+| `parse_u8`     | `fn(s: String) -> Option<u8>`            |
+| `parse_u16`    | `fn(s: String) -> Option<u16>`           |
+| `parse_u32`    | `fn(s: String) -> Option<u32>`           |
+| `parse_u64`    | `fn(s: String) -> Option<u64>` (also see `String.parse_u64()`) |
+| `parse_u128`   | `fn(s: String) -> Option<u128>`          |
+
+Each `parse_X` returns `Option::None` for malformed input, empty strings, or
+values outside the target type's range.
+
+**Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
+pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
+`<src>_to_<tgt>_sat` free functions with the semantics described in that
+section.
 
 #### Collections
 
@@ -3243,8 +3382,9 @@ pair compose to the identity on the valid domain.
 **When:** two functions are defined as inverses — `pack`/`unpack`,
 `encode`/`decode`, `to_bytes`/`from_bytes`.
 
-The strongest form asserts the inverse directly, calling the partner function in
-the postcondition (pure-function calls are allowed in contracts):
+Specify each direction with an exact closed-form postcondition — shape 3 applied
+to the extractor as well as the encoder, so the decoder is pinned to the exact
+arithmetic that inverts the pack:
 
 ```vow
 fn region_kind(r: i64) -> i64 vow {
@@ -3254,10 +3394,17 @@ fn region_kind(r: i64) -> i64 vow {
 } { r - (r / 4) * 4 }
 ```
 
-A `region_pack` then `region_kind`/`region_val` round-trip recovers `(kind, val)`
-exactly. **Strength:** very strong — round-trip is the property a serialization
-layer must have, and it catches the entire class of "encoder and decoder drifted
-apart" bugs that output-range contracts miss completely.
+Because both directions are pinned to closed forms — `region_pack`'s exact
+`ensures: result == val * 4 + kind` (shape 3 above) and the matching
+`region_kind`/`region_val` extractors — a `region_pack` then
+`region_kind`/`region_val` round-trip recovers `(kind, val)` exactly, and ESBMC
+discharges that composition with no separate assertion. The inverse can also be
+asserted directly: Vow allows pure-function calls in postconditions, so an
+`ensures: region_kind(result) == kind` on `region_pack` is expressible and
+modelable when the partner is pure (matrix shape 4). **Strength:** very strong —
+round-trip is the property a serialization layer must have, and it catches the
+entire class of "encoder and decoder drifted apart" bugs that output-range
+contracts miss completely.
 
 ### 5. Dispatch totality (fail-closed decoders)
 
@@ -3540,6 +3687,53 @@ fn f() -> i32 {
 **Output:** `function body has type 'bool' but declared return type is 'i32'`
 
 **Fix:** Change the expression or the declared type to match.
+
+### LiteralOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** An integer literal appears in a typed context (annotated `let`, function argument, struct field, or const declaration) whose target type cannot hold the literal's value. The check runs after context coercion, so the offending literal is the one written in the source, not a widened intermediate.
+
+```vow
+let x: u8 = 300;
+const NEG: u16 = -1;
+```
+
+**Output:** `literal 300 does not fit in u8 (range 0..=255)`
+
+**Fix:** Use a value within the target type's range, change the target type, or write an explicit narrowing intrinsic (`i64_to_u8_try`, `i64_to_u8_wrap`, `i64_to_u8_sat`) if you intend to convert a wider value at runtime.
+
+### NarrowingCastNotAllowed
+
+**Phase:** Type Checker
+**Meaning:** The `as` operator was used to convert a wider integer type to a narrower one. `as` is widening-only; narrowing must use a named intrinsic so the agent chooses an explicit semantics (range-checked vs. truncating vs. saturating). See `grammar.md` §Type Cast.
+
+```vow
+fn f(big: i64) -> u8 {
+    big as u8
+}
+```
+
+**Output:** `cannot cast 'i64' to 'u8' via 'as'; use 'i64_to_u8_try', 'i64_to_u8_wrap', or 'i64_to_u8_sat' to choose the narrowing semantics`
+
+**Fix:** Replace the cast with the narrowing intrinsic that matches your intent:
+- `i64_to_u8_try(big) -> Option<u8>` — reject out-of-range with `None`
+- `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
+- `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
+
+### ShiftCountOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** A constant-expression shift count is greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) get a Vow contract on the operation and are checked by ESBMC and at runtime in debug mode.
+
+```vow
+fn f(x: u8) -> u8 {
+    x << 8
+}
+```
+
+**Output:** `shift count 8 is out of range for u8 (max 7)`
+
+**Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
 ### StaticLiteralRequired
 
@@ -4925,7 +5119,7 @@ const NEG_ONE: i64 = -1;
 const DEBUG: bool = true;
 ```
 
-Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be `i64`, `i32`, or `bool`. Constants are referenced by name in expressions like any other identifier.
+Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be any of the 10 integer types (`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`) or `bool`. Integer constants are subject to the same compile-time range check as integer literals. Constants are referenced by name in expressions like any other identifier.
 
 ## Functions
 
@@ -5002,15 +5196,37 @@ pub fn api_function(x: i64) -> i64 {
 
 | Type   | Description              |
 |--------|--------------------------|
+| `i8`   | 8-bit signed integer     |
+| `i16`  | 16-bit signed integer    |
 | `i32`  | 32-bit signed integer    |
 | `i64`  | 64-bit signed integer    |
+| `i128` | 128-bit signed integer (verifier may time out; see below) |
 | `u8`   | 8-bit unsigned integer   |
+| `u16`  | 16-bit unsigned integer  |
+| `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
+| `u128` | 128-bit unsigned integer (verifier may time out; see below) |
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
 | `()`   | Unit type                |
 | `!`    | Never type (diverges)    |
+
+There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`,
+indices are `i64`. This is deliberate — it preserves binary fixed point
+reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
+
+**128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
+`I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
+exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
+verification for functions whose contracts mention 128-bit values while still
+generating native code for them.
+
+**Struct field layout:** every struct field up to 64 bits wide occupies one
+8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
+fields occupy two consecutive 8-byte slots (16 bytes). There is no packing or
+natural-alignment layout today; FFI structs that need a specific C layout must
+shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -5037,9 +5253,29 @@ Structs and enums (see below).
 0
 ```
 
-All unsuffixed integer literals are `i64`. Integer literals coerce to `u64` in annotation context (e.g. `let x: u64 = 42;`).
+Unsuffixed integer literals default to `i64` in expression position, and
+**context-coerce** to any of the 10 integer types when the
+surrounding context fixes one — `let` bindings, function arguments, struct
+fields, and the typed operand of an arithmetic, bitwise, or comparison
+operator. The same coercion applies to constant expressions composed entirely
+of unsuffixed integer literals (e.g. `1 + 2`, `1 << 3`, `-5`).
 
-Suffixed integer literals: `42u64` produces a `u64` value directly.
+Out-of-range literals in a typed context are a compile-time error:
+
+```vow
+let x: u8 = 300;   // error: LiteralOutOfRange — 300 does not fit in u8
+let y: i8 = 200;   // error: LiteralOutOfRange — i8 range is -128..=127
+```
+
+**Suffixed integer literals** force the type at the literal:
+
+```vow
+42u8     42u16     42u32     42u64     42u128
+42i8     42i16     42i32     42i64     42i128
+```
+
+Suffixed forms are supported for all 10 integer widths. They override context
+coercion and are still subject to the same compile-time range check.
 
 ### Float Literals
 
@@ -5119,9 +5355,26 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 | `<<`     | Left shift   |
 | `>>`     | Right shift  |
 
-Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
+Bitwise `& | ^` require integer operands of the same type and work on all 10
+integer widths. `>>` is **arithmetic** (sign-extending) for signed types
+(`i8`..`i128`) and **logical** (zero-extending) for unsigned types
+(`u8`..`u128`).
 
-Unsuffixed integer literals are `i64` by default but coerce to the other operand's integer type when used with a bitwise or shift operator. The same coercion applies to constant expressions composed entirely of unsuffixed integer literals — including arithmetic (`1 + 1`), bitwise (`1 << 3`), and unary negation (`-5`). For example, given `let x: u64 = ...`, the expressions `x << 3`, `3 & x`, and `x << (1 + 1)` all type-check (the literal-constant side coerces to `u64`). This matches the coercion rule already used by arithmetic operators and comparisons. Use a `u64` suffix (`3u64`) to force the `u64` type explicitly.
+**Shift count type.** The right operand of `<<` and `>>` is `u32`. Unsuffixed
+integer literals on the right side context-coerce to `u32`: given
+`let x: u8 = ...`, `x << 3` is well-typed (`3` coerces to `u32`). The left
+operand keeps its own integer type; the shift result has the left operand's
+type.
+
+**Shift count range.** A const-expression shift count `>= bit-width(LHS)` is a
+compile-time error (`ShiftCountOutOfRange`). For example, `(x: u8) << 8` does
+not compile. Dynamic shift counts (`x << n` where `n` is not a const
+expression) get a contract on the operation that ESBMC checks: the count must
+be less than the LHS width at the point of the shift.
+
+Unsuffixed literal coercion still applies for `&`, `|`, `^` operands: with
+`let x: u64 = ...`, `3 & x` and `x | 0xff` type-check because the literal
+side coerces to `u64`. Use a suffix to force a different type explicitly.
 
 ### Logical Operators
 
@@ -5154,14 +5407,56 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 
 ### Type Cast
 
+`as` is **widening-only** across integer types. Any narrower integer can be
+cast to any wider integer; signed sources sign-extend, unsigned sources
+zero-extend:
+
 ```vow
-x as u64    // i64 -> u64
-y as i64    // u64 -> i64
+let a: i32 = -1;
+let b: i64 = a as i64;     // sign-extend: -1_i64
+let c: u8  = 200;
+let d: u64 = c as u64;     // zero-extend: 200_u64
+let e: u32 = 1;
+let f: i64 = e as i64;     // unsigned-to-signed widening, value preserved
 ```
 
-The `as` operator converts between `i64` and `u64`. No implicit conversions: `i64 + u64` is a type error.
+`as` between signed and unsigned of **the same width** is also allowed
+(machine-level bit reinterpretation): `i64 as u64`, `u64 as i64`, `i32 as u32`,
+etc.
 
-In debug mode, out-of-range casts (negative i64 to u64, or u64 > i64::MAX to i64) are no-ops at the machine level (bit reinterpretation). In release mode, the same applies.
+**Narrowing via `as` is a compile-time error** (`NarrowingCastNotAllowed`):
+
+```vow
+let big: i64 = 300;
+let small: u8 = big as u8;     // error — narrowing not allowed via `as`
+```
+
+To narrow, use a named intrinsic that makes the intent explicit. For every
+narrowing pair `(src, tgt)` the compiler exposes three free functions:
+
+| Intrinsic                         | Behavior on out-of-range input          |
+|-----------------------------------|-----------------------------------------|
+| `<src>_to_<tgt>_try(x) -> Option<tgt>` | returns `Option::None`             |
+| `<src>_to_<tgt>_wrap(x) -> tgt`   | truncates (low bits, two's-complement)  |
+| `<src>_to_<tgt>_sat(x) -> tgt`    | clamps to the target type's range       |
+
+Example:
+
+```vow
+let big: i64 = 300;
+match i64_to_u8_try(big) {
+    Option::Some(b) => use_byte(b),
+    Option::None    => fallback(),
+}
+```
+
+These intrinsics are emitted by the compiler so ESBMC sees their semantics
+directly in the verification C model.
+
+No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
+operands must already have the same type. The compiler does not coerce
+across integer types at operator sites — only literals coerce, per the
+[Integer Literals](#integer-literals) rules.
 
 ## Let Bindings
 
@@ -5630,10 +5925,41 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 #### Conversion
 
+**Formatting** uses two baselines; widen via `as` for narrower types:
+
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
-| `parse_i64`      | `fn(s: String) -> i64`                     | `[]`       |
-| `i64_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+| `int_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+| `uint_to_string` | `fn(v: u64) -> String`                     | `[]`       |
+| `i64_to_string`  | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+
+```vow
+let small: u8 = 42;
+print_str(uint_to_string(small as u64));  // widen then format
+```
+
+**Parsing** exposes a try-form for every integer width:
+
+| Function       | Signature                                |
+|----------------|------------------------------------------|
+| `parse_i8`     | `fn(s: String) -> Option<i8>`            |
+| `parse_i16`    | `fn(s: String) -> Option<i16>`           |
+| `parse_i32`    | `fn(s: String) -> Option<i32>`           |
+| `parse_i64`    | `fn(s: String) -> Option<i64>` (also see `String.parse_i64()`) |
+| `parse_i128`   | `fn(s: String) -> Option<i128>`          |
+| `parse_u8`     | `fn(s: String) -> Option<u8>`            |
+| `parse_u16`    | `fn(s: String) -> Option<u16>`           |
+| `parse_u32`    | `fn(s: String) -> Option<u32>`           |
+| `parse_u64`    | `fn(s: String) -> Option<u64>` (also see `String.parse_u64()`) |
+| `parse_u128`   | `fn(s: String) -> Option<u128>`          |
+
+Each `parse_X` returns `Option::None` for malformed input, empty strings, or
+values outside the target type's range.
+
+**Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
+pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
+`<src>_to_<tgt>_sat` free functions with the semantics described in that
+section.
 
 #### Collections
 
@@ -6737,8 +7063,9 @@ pair compose to the identity on the valid domain.
 **When:** two functions are defined as inverses — `pack`/`unpack`,
 `encode`/`decode`, `to_bytes`/`from_bytes`.
 
-The strongest form asserts the inverse directly, calling the partner function in
-the postcondition (pure-function calls are allowed in contracts):
+Specify each direction with an exact closed-form postcondition — shape 3 applied
+to the extractor as well as the encoder, so the decoder is pinned to the exact
+arithmetic that inverts the pack:
 
 ```vow
 fn region_kind(r: i64) -> i64 vow {
@@ -6748,10 +7075,17 @@ fn region_kind(r: i64) -> i64 vow {
 } { r - (r / 4) * 4 }
 ```
 
-A `region_pack` then `region_kind`/`region_val` round-trip recovers `(kind, val)`
-exactly. **Strength:** very strong — round-trip is the property a serialization
-layer must have, and it catches the entire class of "encoder and decoder drifted
-apart" bugs that output-range contracts miss completely.
+Because both directions are pinned to closed forms — `region_pack`'s exact
+`ensures: result == val * 4 + kind` (shape 3 above) and the matching
+`region_kind`/`region_val` extractors — a `region_pack` then
+`region_kind`/`region_val` round-trip recovers `(kind, val)` exactly, and ESBMC
+discharges that composition with no separate assertion. The inverse can also be
+asserted directly: Vow allows pure-function calls in postconditions, so an
+`ensures: region_kind(result) == kind` on `region_pack` is expressible and
+modelable when the partner is pure (matrix shape 4). **Strength:** very strong —
+round-trip is the property a serialization layer must have, and it catches the
+entire class of "encoder and decoder drifted apart" bugs that output-range
+contracts miss completely.
 
 ### 5. Dispatch totality (fail-closed decoders)
 
@@ -7035,6 +7369,53 @@ fn f() -> i32 {
 **Output:** `function body has type 'bool' but declared return type is 'i32'`
 
 **Fix:** Change the expression or the declared type to match.
+
+### LiteralOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** An integer literal appears in a typed context (annotated `let`, function argument, struct field, or const declaration) whose target type cannot hold the literal's value. The check runs after context coercion, so the offending literal is the one written in the source, not a widened intermediate.
+
+```vow
+let x: u8 = 300;
+const NEG: u16 = -1;
+```
+
+**Output:** `literal 300 does not fit in u8 (range 0..=255)`
+
+**Fix:** Use a value within the target type's range, change the target type, or write an explicit narrowing intrinsic (`i64_to_u8_try`, `i64_to_u8_wrap`, `i64_to_u8_sat`) if you intend to convert a wider value at runtime.
+
+### NarrowingCastNotAllowed
+
+**Phase:** Type Checker
+**Meaning:** The `as` operator was used to convert a wider integer type to a narrower one. `as` is widening-only; narrowing must use a named intrinsic so the agent chooses an explicit semantics (range-checked vs. truncating vs. saturating). See `grammar.md` §Type Cast.
+
+```vow
+fn f(big: i64) -> u8 {
+    big as u8
+}
+```
+
+**Output:** `cannot cast 'i64' to 'u8' via 'as'; use 'i64_to_u8_try', 'i64_to_u8_wrap', or 'i64_to_u8_sat' to choose the narrowing semantics`
+
+**Fix:** Replace the cast with the narrowing intrinsic that matches your intent:
+- `i64_to_u8_try(big) -> Option<u8>` — reject out-of-range with `None`
+- `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
+- `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
+
+### ShiftCountOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** A constant-expression shift count is greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) get a Vow contract on the operation and are checked by ESBMC and at runtime in debug mode.
+
+```vow
+fn f(x: u8) -> u8 {
+    x << 8
+}
+```
+
+**Output:** `shift count 8 is out of range for u8 (max 7)`
+
+**Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
 ### StaticLiteralRequired
 
