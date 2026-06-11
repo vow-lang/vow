@@ -43,6 +43,7 @@ fn main() -> i32 [io] {
 - Grammar, types, effects, builtins: [reference/grammar.md](reference/grammar.md)
 - CLI commands, flags, JSON output: [reference/cli.md](reference/cli.md)
 - Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)
+- Which contracts to write (taxonomy & strength): [reference/contracts-methodology.md](reference/contracts-methodology.md)
 - Diagnostics and fixes: [reference/errors.md](reference/errors.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
 - JSON schemas: [schemas/](schemas/)
