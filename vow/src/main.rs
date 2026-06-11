@@ -9914,8 +9914,15 @@ fn run_pipeline_from_frontend(
         };
     }
 
-    // Upfront ESBMC check: abort before codegen if verification is requested but ESBMC is missing
-    if !no_verify && find_esbmc().is_none() {
+    // Upfront ESBMC check: abort before codegen if verification is requested but ESBMC is missing.
+    // The test-only VOW_TEST_VERIFIER_PANIC hook lives in the verify worker thread below, so on a
+    // machine without ESBMC this early return would short-circuit before the worker is ever spawned
+    // — making the panic regression test (#413) depend on an installed verifier. When the hook is
+    // armed, skip the early return so the worker runs and panics, exercising the real JoinError
+    // path. The env var is never set in production, and `var_os` is only reached once ESBMC is
+    // already known to be absent, so the happy path is unchanged.
+    if !no_verify && find_esbmc().is_none() && std::env::var_os("VOW_TEST_VERIFIER_PANIC").is_none()
+    {
         return verify_outcome_to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
     }
 
