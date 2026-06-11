@@ -17,10 +17,10 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver,
-    SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
-    detect_constant_functions, emit_verify_c_source, find_esbmc, non_modelable_reason,
-    run_esbmc_multi_property, run_with_fallback,
+    ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding,
+    ReachVerdict, Solver, SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
+    detect_constant_functions, emit_reach_c_source, emit_verify_c_source, find_esbmc,
+    non_modelable_reason, run_esbmc_multi_property, run_esbmc_reach, run_with_fallback,
     verify_function_with_module_and_const_fns_configured,
 };
 
@@ -2467,7 +2467,7 @@ vow contracts [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
-**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
@@ -2732,7 +2732,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2752,7 +2752,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2766,7 +2766,7 @@ that path produces `Unverified` (exit 0).
 | `description` | string  | Full contract text                                       |
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
-| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 
 ### Status Values
@@ -2781,6 +2781,7 @@ that path produces `Unverified` (exit 0).
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 ### Quality Values
 
@@ -3526,10 +3527,20 @@ years of hardware verification at IBM, ~20% of formulas were trivially valid on
 first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
-**Detection (the `false` re-check):** re-verify each obligation with its `ensures`
-replaced by `ensures: false`. If `assert(false)` still passes, the path is
-unreachable under the preconditions — the original proof was vacuous. A non-vacuous
-obligation must *fail* this check.
+**Detection (the reachability probe).** `vow contracts --verify` ships this check
+(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
+model with a `vow_reach` label planted immediately after the `requires` assumes,
+under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
+(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+every `ensures` held only vacuously — all of the function's clauses are reported
+`status: "vacuous"` and the command fails closed. If the label is **reachable**
+(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+live. This is operationally the dual of the classic `ensures: false` re-check —
+asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
+still pass?" — but it needs only one extra run per function and is unaffected by
+body divergence, since the label precedes the body. The label sits after the
+requires prefix rather than at the function end precisely so an unbounded loop or
+an `assume(0)` deeper in the body cannot make it spuriously unreachable.
 
 **Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
 for a proof that holds, emit a non-trivial *witness* — concrete inputs that
@@ -6148,7 +6159,7 @@ vow contracts [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
-**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
@@ -6413,7 +6424,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -6433,7 +6444,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -6447,7 +6458,7 @@ that path produces `Unverified` (exit 0).
 | `description` | string  | Full contract text                                       |
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
-| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 
 ### Status Values
@@ -6462,6 +6473,7 @@ that path produces `Unverified` (exit 0).
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 ### Quality Values
 
@@ -7209,10 +7221,20 @@ years of hardware verification at IBM, ~20% of formulas were trivially valid on
 first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
-**Detection (the `false` re-check):** re-verify each obligation with its `ensures`
-replaced by `ensures: false`. If `assert(false)` still passes, the path is
-unreachable under the preconditions — the original proof was vacuous. A non-vacuous
-obligation must *fail* this check.
+**Detection (the reachability probe).** `vow contracts --verify` ships this check
+(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
+model with a `vow_reach` label planted immediately after the `requires` assumes,
+under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
+(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+every `ensures` held only vacuously — all of the function's clauses are reported
+`status: "vacuous"` and the command fails closed. If the label is **reachable**
+(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+live. This is operationally the dual of the classic `ensures: false` re-check —
+asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
+still pass?" — but it needs only one extra run per function and is unaffected by
+body divergence, since the label precedes the body. The label sits after the
+requires prefix rather than at the function end precisely so an unbounded loop or
+an `assume(0)` deeper in the body cannot make it spuriously unreachable.
 
 **Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
 for a proof that holds, emit a non-trivial *witness* — concrete inputs that
@@ -9133,6 +9155,7 @@ pub struct ContractsSummaryJson {
     pub error: u32,
     pub not_verified: u32,
     pub skipped: u32,
+    pub vacuous: u32,
     pub quality: ContractsQualityJson,
 }
 
@@ -11036,6 +11059,7 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
         error: 0,
         not_verified: 0,
         skipped: 0,
+        vacuous: 0,
         quality: ContractsQualityJson {
             weak: 0,
             tautological: 0,
@@ -11050,6 +11074,7 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
             "timeout" => summary.timeout += 1,
             "error" => summary.error += 1,
             "skipped" => summary.skipped += 1,
+            "vacuous" => summary.vacuous += 1,
             _ => summary.not_verified += 1,
         }
         match e.quality.as_str() {
@@ -11126,6 +11151,24 @@ fn update_contract_statuses(
             }
             .to_string();
         }
+
+        // Vacuity probe (#81 PR-B): if the function's `requires` are
+        // contradictory, the `ensures` above all passed vacuously. Re-run with a
+        // `vow_reach` label planted after the requires; if that point is
+        // unreachable (ESBMC SUCCESSFUL), the whole contract is vacuous —
+        // override the misleading `proven`s with `vacuous`. Only functions with
+        // a `requires` are eligible (emit_reach_c_source returns None otherwise),
+        // so this adds at most one extra ESBMC run per such function.
+        if let Some(reach_src) = emit_reach_c_source(func, ir_module, &const_fns, limits)
+            && run_esbmc_reach(&esbmc, &reach_src, limits.max_k_step, &func.name, config)
+                == ReachVerdict::Vacuous
+        {
+            for entry in entries.iter_mut() {
+                if entry.function_id == func.id.0 {
+                    entry.status = "vacuous".to_string();
+                }
+            }
+        }
     }
 }
 
@@ -11139,6 +11182,7 @@ fn contracts_summary_has_failure(summary: &ContractsSummaryJson) -> bool {
         || summary.unknown > 0
         || summary.error > 0
         || summary.skipped > 0
+        || summary.vacuous > 0
 }
 
 fn run_contracts_command(
@@ -14918,6 +14962,7 @@ fn main() -> i32 {
             error: 0,
             not_verified: 0,
             skipped: 0,
+            vacuous: 0,
             quality: ContractsQualityJson {
                 weak: 0,
                 tautological: 0,
@@ -14951,6 +14996,10 @@ fn main() -> i32 {
             },
             ContractsSummaryJson {
                 skipped: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                vacuous: 1,
                 ..all_proven.clone()
             },
         ] {

@@ -110,6 +110,40 @@ fn contracts_verify_per_clause_precise_status() {
 }
 
 #[test]
+fn contracts_verify_detects_vacuous_contract() {
+    // PR-B (#81): a function whose `requires` are contradictory makes every
+    // `ensures` pass vacuously. The `--error-label vow_reach` probe finds the
+    // post-requires point unreachable and marks the whole contract `vacuous`
+    // (fail-closed, exit 1). Requires ESBMC; skips gracefully if absent.
+    let dir = tempfile::TempDir::new().unwrap();
+    let src = dir.path().join("vac.vow");
+    std::fs::write(
+        &src,
+        "module M\n\
+         fn f(x: i64) -> i64 vow {\n  requires: x > 10,\n  requires: x < 5,\n  ensures: result == x\n} { x }\n\
+         fn main() -> i32 [io] { 0 }\n",
+    )
+    .unwrap();
+    let out = Command::new(vow_bin())
+        .args(["contracts", "--verify", src.to_str().unwrap()])
+        .output()
+        .expect("failed to run vow");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("contracts JSON");
+    let contracts = json["contracts"].as_array().unwrap();
+    if contracts.iter().all(|c| c["status"] == "error") {
+        return; // ESBMC absent
+    }
+    assert!(
+        contracts.iter().all(|c| c["status"] == "vacuous"),
+        "all clauses of a contradictory-requires contract are vacuous: {contracts:?}"
+    );
+    assert_eq!(json["summary"]["vacuous"], 3);
+    assert_eq!(json["summary"]["proven"], 0);
+    assert_eq!(out.status.code(), Some(1), "fail-closed on vacuous");
+}
+
+#[test]
 fn contracts_verify_missing_esbmc_keeps_contracts_schema() {
     let empty_path = tempfile::TempDir::new().unwrap();
     let out = Command::new(vow_bin())
