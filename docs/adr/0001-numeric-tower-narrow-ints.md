@@ -118,8 +118,9 @@ BigInt subprojects.
 
 ## Open follow-ups
 
-- Const declarations: extend the existing `i32/i64/bool` restriction to all 10
-  widths (mechanical).
+- Const declarations: grammar.md §Const Declarations already specifies all 10
+  integer widths plus `bool`; the implementation widening (still `i32/i64/bool`)
+  is tracked in #527 (mechanical).
 - Validate Cranelift `I128` codegen on the supported backends.
 - Benchmark ESBMC `__int128` predicate complexity on real Vow contracts.
 - Floats and BigInt subprojects: separate ADRs.
