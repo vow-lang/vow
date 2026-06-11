@@ -1936,11 +1936,8 @@ impl<'e> Checker<'e> {
                     },
                     _ => return,
                 };
-                // An env-registered enum (including a user-defined Option/Result)
-                // takes precedence; the built-in Option/Result are not in `env`,
-                // so their tuple-variant payload types come from the scrutinee's
-                // type arguments instead. Without this, a `match Option::Some(x)`
-                // arm fails to bind `x`.
+                // Built-in Option/Result aren't in `env`; a registered (user) enum
+                // wins, else take payload types from the scrutinee's type args.
                 let variant_tys: Vec<Ty> = self
                     .env
                     .lookup_enum(&enum_name)
