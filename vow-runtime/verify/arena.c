@@ -54,7 +54,7 @@ struct VowArena {
 /* `addr + align - 1` could wrap uintptr_t for adversarial inputs. Safe here
  * because the harness constrains `align` to {1, 8, 16, 4096} and bounds every
  * chunk to alloc_chunk's non-wrapping low-address model:
- * `total <= ARENA_VERIFY_ADDR_CAP` and
+ * `total < ARENA_VERIFY_ADDR_CAP` and
  * `(uintptr_t)base <= ARENA_VERIFY_ADDR_CAP - total`. Widening either bound
  * (larger symbolic alignments, or removing the chunk-base bound) requires a
  * checked-add guard or explicit __ESBMC_assume on the sum. */
@@ -77,8 +77,12 @@ static void* alloc_chunk(uintptr_t total, int oversized) {
         /* ESBMC models malloc addresses symbolically. Constrain the abstract
          * pointer to the intended non-wrapping low-address model before any
          * base + total arithmetic, matching real hosts that do not map the
-         * top of the address space. */
-        __ESBMC_assume(total <= ARENA_VERIFY_ADDR_CAP);
+         * top of the address space. The bound is strict: addresses must stay
+         * strictly below the flag bit (ARENA_VERIFY_ADDR_CAP aliases
+         * CHUNK_OVERSIZED_FLAG), or `total == CHUNK_OVERSIZED_FLAG` would set
+         * the oversized marker in the size word and `chunk_total()` would mask
+         * the real size to 0. */
+        __ESBMC_assume(total < ARENA_VERIFY_ADDR_CAP);
         __ESBMC_assume(base_addr <= ARENA_VERIFY_ADDR_CAP - total);
         /* Regression assert in derived form: implied by the two assumes above
          * but as a distinct expression, so ESBMC actually exercises it. A
