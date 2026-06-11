@@ -287,6 +287,12 @@ int main(void) {
         void* saved_start = a.last_alloc_start;
         uintptr_t saved_cursor = a.cursor;
         uintptr_t saved_chunk_end = a.chunk_end;
+        /* Snapshot the non-owned header fields for the frame condition
+         * (issues #431/#432): try_extend modifies *only* cursor and, on
+         * success, last_alloc_size. */
+        void* saved_first_chunk = a.first_chunk;
+        void* saved_current_chunk = a.current_chunk;
+        uintptr_t saved_retained = a.retained_bytes;
         /* try_extend must return 1 *exactly* when a valid extension fits
          * (issue #433): p is the last allocation and new_size >= sz, so the
          * sole deciding factor is whether the grow fits before chunk_end.
@@ -307,6 +313,17 @@ int main(void) {
             assert(a.last_alloc_start == saved_start);
             assert(a.cursor == saved_cursor);
         }
+
+        /* Frame condition (#431/#432): regardless of success/failure,
+         * try_extend never touches any field other than cursor and (on
+         * success) last_alloc_size. A regression that corrupted, e.g.,
+         * retained_bytes or current_chunk while preserving cursor would
+         * otherwise pass the branch assertions above. */
+        assert(a.first_chunk == saved_first_chunk);
+        assert(a.current_chunk == saved_current_chunk);
+        assert(a.chunk_end == saved_chunk_end);
+        assert(a.last_alloc_start == saved_start);
+        assert(a.retained_bytes == saved_retained);
 
         /* Negative cases: try_extend must reject mismatched calls (#433) —
          * a wrong pointer, a wrong old_size, or a shrink each return 0. */
