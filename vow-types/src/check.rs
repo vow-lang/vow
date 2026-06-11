@@ -117,6 +117,32 @@ pub struct Checker<'e> {
     pub const_types: HashMap<String, Ty>,
 }
 
+/// Wraps an emitter and tallies error-severity diagnostics. The effect and
+/// linear-usage passes (`effects::check_fn_effects`, `linear::check_linear_usage`)
+/// emit directly to the emitter and never touch the checker's `error_count`, so
+/// without this their errors are reported yet the build still exits 0 — an
+/// effectful call from a pure context, an impure contract clause, or a linear
+/// value consumed twice would compile to a binary. Routing those passes through
+/// this counter folds their errors into `error_count` so `has_errors()` (the
+/// build gate) sees them.
+struct ErrorCounter<'a> {
+    inner: &'a mut dyn DiagnosticEmitter,
+    errors: usize,
+}
+
+impl DiagnosticEmitter for ErrorCounter<'_> {
+    fn try_emit(&mut self, diagnostic: &Diagnostic) -> std::io::Result<()> {
+        if diagnostic.severity == Severity::Error {
+            self.errors += 1;
+        }
+        self.inner.try_emit(diagnostic)
+    }
+
+    fn try_finish(&mut self) -> std::io::Result<()> {
+        self.inner.try_finish()
+    }
+}
+
 impl<'e> Checker<'e> {
     pub fn new(file: impl Into<String>, emitter: &'e mut dyn DiagnosticEmitter) -> Self {
         Self {
@@ -640,8 +666,16 @@ impl<'e> Checker<'e> {
 
         self.env.pop_scope();
 
-        crate::effects::check_fn_effects(fn_def, &self.env, &self.file, self.emitter);
-        crate::linear::check_linear_usage(fn_def, &self.env, &self.file, self.emitter);
+        let pass_errors = {
+            let mut counter = ErrorCounter {
+                inner: &mut *self.emitter,
+                errors: 0,
+            };
+            crate::effects::check_fn_effects(fn_def, &self.env, &self.file, &mut counter);
+            crate::linear::check_linear_usage(fn_def, &self.env, &self.file, &mut counter);
+            counter.errors
+        };
+        self.error_count += pass_errors;
 
         self.current_fn_effects = outer_effects;
         self.current_return_ty = outer_return_ty;
