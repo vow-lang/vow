@@ -607,6 +607,37 @@ fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
     env_update_enum(e, name, vnames, vpayloads);
 }
 
+// Contract clauses must be pure: a requires/ensures/invariant predicate may not
+// call an effectful function (mirrors the Rust frontend's check_vow_purity in
+// vow-types/src/effects.rs). Without this the production self-hosted compiler
+// admits e.g. `requires: read_file(p).len() > 0` into a contract — an effectful,
+// possibly-failing predicate the verifier model cannot faithfully represent
+// (issue #586). `__unwrap__` panic sites are out of scope here (issue #601),
+// matching the Rust check which also does not flag them.
+fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
+    let a: AstArena = m.arena;
+    let calls: Vec<String> = Vec::new();
+    collect_calls_in_expr(e, m, clause_eid, calls);
+    let n: i64 = calls.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let cname: String = calls[i];
+        if cname != String::from("__unwrap__") {
+            let fidx: i64 = env_lookup_fn(e, cname);
+            if fidx != -1 {
+                let callee_eff: i64 = e.fn_effects[fidx];
+                if callee_eff != 0 {
+                    let msg: String = String::from("vow predicate must be pure but calls effectful function `");
+                    msg.push_str(cname);
+                    msg.push_str(String::from("`"));
+                    env_emit_error_code(e, EC_EFFECT_VIOLATION(), msg, expr_span(a, clause_eid));
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
 fn check_vow_clause(e: CheckEnv, m: Module, vow_lid: i64, kind: i64, context: String) [io] {
     let a: AstArena = m.arena;
     let n: i64 = list_len(a, vow_lid);
@@ -629,6 +660,7 @@ fn check_vow_clause(e: CheckEnv, m: Module, vow_lid: i64, kind: i64, context: St
                 msg.push_str(String::from("` clause must be `bool`"));
                 env_emit_error_code(e, EC_CONTRACT_TYPE_MISMATCH(), msg, expr_span(a, clause_eid));
             }
+            check_clause_purity(e, m, clause_eid);
         }
         i = i + 1;
     }
