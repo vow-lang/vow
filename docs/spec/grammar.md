@@ -844,7 +844,6 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `int_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
 | `uint_to_string` | `fn(v: u64) -> String`                     | `[]`       |
 | `i64_to_string`  | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
-| `parse_i64`      | `fn(s: String) -> i64`                     | `[]`       |
 
 ```vow
 let small: u8 = 42;
