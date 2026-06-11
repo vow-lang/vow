@@ -13997,7 +13997,8 @@ fn main() -> i32 {
             function: "f".to_string(),
             function_id: 0,
             kind: "ensures".to_string(),
-            description: "ensures: true".to_string(),
+            // Description must agree with the hard-coded `quality` below.
+            description: "ensures: result == x".to_string(),
             blame: "callee".to_string(),
             source: source.clone(),
             status: status.to_string(),
