@@ -2585,10 +2585,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "not_verified"
+      "status": "not_verified",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0 }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2604,10 +2605,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "proven"
+      "status": "proven",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0 }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2622,6 +2624,7 @@ that path produces `Unverified` (exit 0).
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+| `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 
 ### Status Values
 
@@ -2635,6 +2638,16 @@ that path produces `Unverified` (exit 0).
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+
+### Quality Values
+
+`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
+
+| Quality        | Meaning                                                                                      |
+|----------------|----------------------------------------------------------------------------------------------|
+| `weak`         | An `ensures` that only bounds `result` by an integer literal (e.g. `result >= 0`). Satisfied by almost any implementation. |
+| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
+| `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
 ## Trace Output (stderr, --debug-trace)
 
@@ -4109,7 +4122,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status"],
+        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status", "quality"],
         "properties": {
           "vow_id": {
             "type": "integer",
@@ -4152,6 +4165,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
             "type": "string",
             "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
             "description": "Verification status"
+          },
+          "quality": {
+            "type": "string",
+            "enum": ["weak", "tautological", "substantive"],
+            "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -4159,7 +4177,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "quality"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -4168,7 +4186,18 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
-        "skipped": { "type": "integer" }
+        "skipped": { "type": "integer" },
+        "quality": {
+          "type": "object",
+          "description": "Static contract-quality tallies independent of verification status",
+          "required": ["weak", "tautological", "substantive"],
+          "properties": {
+            "weak": { "type": "integer" },
+            "tautological": { "type": "integer" },
+            "substantive": { "type": "integer" }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     }
@@ -5706,10 +5735,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "not_verified"
+      "status": "not_verified",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0 }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -5725,10 +5755,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "proven"
+      "status": "proven",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0 }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -5743,6 +5774,7 @@ that path produces `Unverified` (exit 0).
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+| `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 
 ### Status Values
 
@@ -5756,6 +5788,16 @@ that path produces `Unverified` (exit 0).
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+
+### Quality Values
+
+`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
+
+| Quality        | Meaning                                                                                      |
+|----------------|----------------------------------------------------------------------------------------------|
+| `weak`         | An `ensures` that only bounds `result` by an integer literal (e.g. `result >= 0`). Satisfied by almost any implementation. |
+| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
+| `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
 ## Trace Output (stderr, --debug-trace)
 
@@ -7228,7 +7270,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status"],
+        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status", "quality"],
         "properties": {
           "vow_id": {
             "type": "integer",
@@ -7271,6 +7313,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
             "type": "string",
             "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
             "description": "Verification status"
+          },
+          "quality": {
+            "type": "string",
+            "enum": ["weak", "tautological", "substantive"],
+            "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -7278,7 +7325,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "quality"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -7287,7 +7334,18 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
-        "skipped": { "type": "integer" }
+        "skipped": { "type": "integer" },
+        "quality": {
+          "type": "object",
+          "description": "Static contract-quality tallies independent of verification status",
+          "required": ["weak", "tautological", "substantive"],
+          "properties": {
+            "weak": { "type": "integer" },
+            "tautological": { "type": "integer" },
+            "substantive": { "type": "integer" }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     }
@@ -7979,6 +8037,12 @@ pub struct ContractEntryJson {
     pub blame: String,
     pub source: ContractSourceJson,
     pub status: String,
+    /// Static quality classification of the clause shape (no ESBMC): one of
+    /// `weak` (an `ensures` that only bounds `result` by a constant),
+    /// `tautological` (constant clause that says nothing about the program),
+    /// or `substantive` (equality / relational / inverse / call). See
+    /// docs/spec/contracts-methodology.md.
+    pub quality: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -7997,6 +8061,15 @@ pub struct ContractsSummaryJson {
     pub error: u32,
     pub not_verified: u32,
     pub skipped: u32,
+    pub quality: ContractsQualityJson,
+}
+
+/// Static contract-quality tallies (independent of verification status).
+#[derive(Debug, Clone, Serialize)]
+pub struct ContractsQualityJson {
+    pub weak: u32,
+    pub tautological: u32,
+    pub substantive: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -9761,6 +9834,86 @@ fn vow_kind_from_description(desc: &str) -> &'static str {
     }
 }
 
+/// Strip the leading `requires`/`ensures`/`invariant` keyword from a clause
+/// description, leaving the predicate text. `clause_description` formats every
+/// vow as `"{kind} {printed_expr}"`, so the predicate is everything after the
+/// first space.
+fn contract_predicate_text(description: &str) -> &str {
+    match description.split_once(' ') {
+        Some((_, rest)) => rest.trim(),
+        None => "",
+    }
+}
+
+/// Static, no-ESBMC quality classification of a contract clause by shape.
+/// See docs/spec/contracts-methodology.md for the methodology this implements.
+///
+/// - `tautological`: the predicate is the constant `true` or references no
+///   program value at all (e.g. `0 >= 0`) — it constrains nothing. A `false`
+///   predicate is a contradiction, not a tautology, so it is left `substantive`
+///   here; flagging it as vacuous is the deferred `false` re-check.
+/// - `weak`: an `ensures` that only bounds `result` by an integer literal on
+///   one side (e.g. `result >= 0`, `result > 0`, `result <= 3`). Satisfiable by
+///   almost any implementation — the 354-contract trap #81 was filed over.
+/// - `substantive`: everything else (equality, relational, inverse, calls).
+///
+/// The classifier is deliberately conservative: anything it cannot prove weak
+/// is reported `substantive`, so it never over-flags a meaningful contract.
+fn classify_contract_quality(kind: &str, description: &str) -> &'static str {
+    let p = contract_predicate_text(description);
+    if p.is_empty() || p == "true" || !p.chars().any(|c| c.is_ascii_alphabetic()) {
+        return "tautological";
+    }
+    if kind == "ensures" && is_weak_result_bound(p) {
+        return "weak";
+    }
+    "substantive"
+}
+
+/// True when `pred` is a single ordering comparison between `result` and an
+/// integer literal — the weak postcondition shape. Compound predicates,
+/// equalities, and calls are excluded (they are potentially substantive).
+fn is_weak_result_bound(pred: &str) -> bool {
+    if pred.contains("&&")
+        || pred.contains("||")
+        || pred.contains("==")
+        || pred.contains("!=")
+        || pred.contains('(')
+    {
+        return false;
+    }
+    for op in ["<=", ">="] {
+        if let Some((lhs, rhs)) = pred.split_once(op) {
+            return is_weak_result_comparison(lhs, rhs);
+        }
+    }
+    for op in ['<', '>'] {
+        if let Some((lhs, rhs)) = pred.split_once(op) {
+            return is_weak_result_comparison(lhs, rhs);
+        }
+    }
+    false
+}
+
+fn is_weak_result_comparison(lhs: &str, rhs: &str) -> bool {
+    let lhs = lhs.trim();
+    let rhs = rhs.trim();
+    // Reject anything with a second comparison operator on either side.
+    if has_ordering_op(lhs) || has_ordering_op(rhs) {
+        return false;
+    }
+    (lhs == "result" && is_int_literal(rhs)) || (rhs == "result" && is_int_literal(lhs))
+}
+
+fn has_ordering_op(s: &str) -> bool {
+    s.contains('<') || s.contains('>')
+}
+
+fn is_int_literal(s: &str) -> bool {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJson {
     let mut summary = ContractsSummaryJson {
         total: entries.len() as u32,
@@ -9771,6 +9924,11 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
         error: 0,
         not_verified: 0,
         skipped: 0,
+        quality: ContractsQualityJson {
+            weak: 0,
+            tautological: 0,
+            substantive: 0,
+        },
     };
     for e in entries {
         match e.status.as_str() {
@@ -9781,6 +9939,11 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
             "error" => summary.error += 1,
             "skipped" => summary.skipped += 1,
             _ => summary.not_verified += 1,
+        }
+        match e.quality.as_str() {
+            "weak" => summary.quality.weak += 1,
+            "tautological" => summary.quality.tautological += 1,
+            _ => summary.quality.substantive += 1,
         }
     }
     summary
@@ -9931,6 +10094,7 @@ fn run_contracts_command(
                 vow_diag::Blame::Callee => "Callee",
                 vow_diag::Blame::None => "None",
             };
+            let quality = classify_contract_quality(kind, &vow.description);
             entries.push(ContractEntryJson {
                 vow_id: vow.id.0,
                 function: func.name.clone(),
@@ -9943,6 +10107,7 @@ fn run_contracts_command(
                     offset: vow.offset,
                 },
                 status: "not_verified".to_string(),
+                quality: quality.to_string(),
             });
         }
     }
@@ -13632,10 +13797,12 @@ fn main() -> i32 {
             function: "f".to_string(),
             function_id: 0,
             kind: "ensures".to_string(),
-            description: "ensures: true".to_string(),
+            // Description must agree with the hard-coded `quality` below.
+            description: "ensures: result == x".to_string(),
             blame: "callee".to_string(),
             source: source.clone(),
             status: status.to_string(),
+            quality: "substantive".to_string(),
         };
         let summary = build_contracts_summary(&[
             entry("proven"),
@@ -13656,6 +13823,81 @@ fn main() -> i32 {
         assert_eq!(summary.error, 1);
         assert_eq!(summary.skipped, 1);
         assert_eq!(summary.not_verified, 1);
+        assert_eq!(summary.quality.substantive, 8);
+        assert_eq!(summary.quality.weak, 0);
+        assert_eq!(summary.quality.tautological, 0);
+    }
+
+    #[test]
+    fn classify_contract_quality_flags_weak_result_bounds() {
+        // The 354-contract trap: an ensures that only bounds result by a constant.
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result >= 0"),
+            "weak"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result > 0"),
+            "weak"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result <= 3"),
+            "weak"
+        );
+        // result vs negative literal is still a constant bound.
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result >= -1"),
+            "weak"
+        );
+        // Strict single-char operator path (`<`, not `<=`).
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result < 3"),
+            "weak"
+        );
+    }
+
+    #[test]
+    fn classify_contract_quality_keeps_substantive_clauses() {
+        // Equality, relational, inverse, totality, and call shapes are not weak.
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result == val * 4 + kind"),
+            "substantive"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result != -1"),
+            "substantive"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result >= a"),
+            "substantive"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures item_kind(result) == kind"),
+            "substantive"
+        );
+        // A one-sided bound is a legitimate precondition, not a weak postcondition.
+        assert_eq!(
+            classify_contract_quality("requires", "requires v <= 255"),
+            "substantive"
+        );
+        // A `false` predicate is a contradiction, not a tautology; the static
+        // classifier leaves it substantive (vacuity detection is a follow-up).
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures false"),
+            "substantive"
+        );
+    }
+
+    #[test]
+    fn classify_contract_quality_flags_tautologies() {
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures true"),
+            "tautological"
+        );
+        // No reference to any program value — constant comparison.
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures 0 >= 0"),
+            "tautological"
+        );
     }
 
     #[test]

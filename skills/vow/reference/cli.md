@@ -326,10 +326,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "not_verified"
+      "status": "not_verified",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0 }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -345,10 +346,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "proven"
+      "status": "proven",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0 }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -363,6 +365,7 @@ that path produces `Unverified` (exit 0).
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+| `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
 
 ### Status Values
 
@@ -376,6 +379,16 @@ that path produces `Unverified` (exit 0).
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+
+### Quality Values
+
+`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
+
+| Quality        | Meaning                                                                                      |
+|----------------|----------------------------------------------------------------------------------------------|
+| `weak`         | An `ensures` that only bounds `result` by an integer literal (e.g. `result >= 0`). Satisfied by almost any implementation. |
+| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
+| `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
 ## Trace Output (stderr, --debug-trace)
 

@@ -3620,10 +3620,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"description\": \"requires y != 0\",\n"));
     r.push_str(String::from("      \"blame\": \"Caller\",\n"));
     r.push_str(String::from("      \"source\": { \"file\": \"divide.vow\", \"offset\": 42 },\n"));
-    r.push_str(String::from("      \"status\": \"not_verified\"\n"));
+    r.push_str(String::from("      \"status\": \"not_verified\",\n"));
+    r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0 }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3639,10 +3640,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"description\": \"requires y != 0\",\n"));
     r.push_str(String::from("      \"blame\": \"Caller\",\n"));
     r.push_str(String::from("      \"source\": { \"file\": \"divide.vow\", \"offset\": 42 },\n"));
-    r.push_str(String::from("      \"status\": \"proven\"\n"));
+    r.push_str(String::from("      \"status\": \"proven\",\n"));
+    r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0 }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3657,6 +3659,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `blame`       | string  | `\"Caller\"` (requires) or `\"Callee\"` (ensures/invariant)  |\n"));
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
     r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, or `\"skipped\"` |\n"));
+    r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
     r.push_str(String::from("\n"));
@@ -3670,6 +3673,16 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Quality Values\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the \"proven but trivial\" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Quality        | Meaning                                                                                      |\n"));
+    r.push_str(String::from("|----------------|----------------------------------------------------------------------------------------------|\n"));
+    r.push_str(String::from("| `weak`         | An `ensures` that only bounds `result` by an integer literal (e.g. `result >= 0`). Satisfied by almost any implementation. |\n"));
+    r.push_str(String::from("| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |\n"));
+    r.push_str(String::from("| `substantive`  | Everything else -- equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Trace Output (stderr, --debug-trace)\n"));
     r.push_str(String::from("\n"));
@@ -5144,7 +5157,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"type\": \"array\",\n"));
     r.push_str(String::from("      \"items\": {\n"));
     r.push_str(String::from("        \"type\": \"object\",\n"));
-    r.push_str(String::from("        \"required\": [\"vow_id\", \"function\", \"kind\", \"description\", \"blame\", \"source\", \"status\"],\n"));
+    r.push_str(String::from("        \"required\": [\"vow_id\", \"function\", \"kind\", \"description\", \"blame\", \"source\", \"status\", \"quality\"],\n"));
     r.push_str(String::from("        \"properties\": {\n"));
     r.push_str(String::from("          \"vow_id\": {\n"));
     r.push_str(String::from("            \"type\": \"integer\",\n"));
@@ -5187,6 +5200,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("            \"type\": \"string\",\n"));
     r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
     r.push_str(String::from("            \"description\": \"Verification status\"\n"));
+    r.push_str(String::from("          },\n"));
+    r.push_str(String::from("          \"quality\": {\n"));
+    r.push_str(String::from("            \"type\": \"string\",\n"));
+    r.push_str(String::from("            \"enum\": [\"weak\", \"tautological\", \"substantive\"],\n"));
+    r.push_str(String::from("            \"description\": \"Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md\"\n"));
     r.push_str(String::from("          }\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"additionalProperties\": false\n"));
@@ -5194,7 +5212,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"summary\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
-    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
+    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\", \"quality\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));
     r.push_str(String::from("        \"total\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"proven\": { \"type\": \"integer\" },\n"));
@@ -5203,7 +5221,18 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"timeout\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"error\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" },\n"));
-    r.push_str(String::from("        \"skipped\": { \"type\": \"integer\" }\n"));
+    r.push_str(String::from("        \"skipped\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("        \"quality\": {\n"));
+    r.push_str(String::from("          \"type\": \"object\",\n"));
+    r.push_str(String::from("          \"description\": \"Static contract-quality tallies independent of verification status\",\n"));
+    r.push_str(String::from("          \"required\": [\"weak\", \"tautological\", \"substantive\"],\n"));
+    r.push_str(String::from("          \"properties\": {\n"));
+    r.push_str(String::from("            \"weak\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("            \"tautological\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("            \"substantive\": { \"type\": \"integer\" }\n"));
+    r.push_str(String::from("          },\n"));
+    r.push_str(String::from("          \"additionalProperties\": false\n"));
+    r.push_str(String::from("        }\n"));
     r.push_str(String::from("      },\n"));
     r.push_str(String::from("      \"additionalProperties\": false\n"));
     r.push_str(String::from("    }\n"));
@@ -6755,10 +6784,11 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("      \"description\": \"requires y != 0\",\n"));
     r.push_str(String::from("      \"blame\": \"Caller\",\n"));
     r.push_str(String::from("      \"source\": { \"file\": \"divide.vow\", \"offset\": 42 },\n"));
-    r.push_str(String::from("      \"status\": \"not_verified\"\n"));
+    r.push_str(String::from("      \"status\": \"not_verified\",\n"));
+    r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0 }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -6774,10 +6804,11 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("      \"description\": \"requires y != 0\",\n"));
     r.push_str(String::from("      \"blame\": \"Caller\",\n"));
     r.push_str(String::from("      \"source\": { \"file\": \"divide.vow\", \"offset\": 42 },\n"));
-    r.push_str(String::from("      \"status\": \"proven\"\n"));
+    r.push_str(String::from("      \"status\": \"proven\",\n"));
+    r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0 }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -6792,6 +6823,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `blame`       | string  | `\"Caller\"` (requires) or `\"Callee\"` (ensures/invariant)  |\n"));
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
     r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, or `\"skipped\"` |\n"));
+    r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
     r.push_str(String::from("\n"));
@@ -6805,6 +6837,16 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Quality Values\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the \"proven but trivial\" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Quality        | Meaning                                                                                      |\n"));
+    r.push_str(String::from("|----------------|----------------------------------------------------------------------------------------------|\n"));
+    r.push_str(String::from("| `weak`         | An `ensures` that only bounds `result` by an integer literal (e.g. `result >= 0`). Satisfied by almost any implementation. |\n"));
+    r.push_str(String::from("| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |\n"));
+    r.push_str(String::from("| `substantive`  | Everything else -- equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Trace Output (stderr, --debug-trace)\n"));
     r.push_str(String::from("\n"));
@@ -8282,7 +8324,7 @@ fn skill_support_content_6() -> String {
     r.push_str(String::from("      \"type\": \"array\",\n"));
     r.push_str(String::from("      \"items\": {\n"));
     r.push_str(String::from("        \"type\": \"object\",\n"));
-    r.push_str(String::from("        \"required\": [\"vow_id\", \"function\", \"kind\", \"description\", \"blame\", \"source\", \"status\"],\n"));
+    r.push_str(String::from("        \"required\": [\"vow_id\", \"function\", \"kind\", \"description\", \"blame\", \"source\", \"status\", \"quality\"],\n"));
     r.push_str(String::from("        \"properties\": {\n"));
     r.push_str(String::from("          \"vow_id\": {\n"));
     r.push_str(String::from("            \"type\": \"integer\",\n"));
@@ -8325,6 +8367,11 @@ fn skill_support_content_6() -> String {
     r.push_str(String::from("            \"type\": \"string\",\n"));
     r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
     r.push_str(String::from("            \"description\": \"Verification status\"\n"));
+    r.push_str(String::from("          },\n"));
+    r.push_str(String::from("          \"quality\": {\n"));
+    r.push_str(String::from("            \"type\": \"string\",\n"));
+    r.push_str(String::from("            \"enum\": [\"weak\", \"tautological\", \"substantive\"],\n"));
+    r.push_str(String::from("            \"description\": \"Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md\"\n"));
     r.push_str(String::from("          }\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"additionalProperties\": false\n"));
@@ -8332,7 +8379,7 @@ fn skill_support_content_6() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"summary\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
-    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
+    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\", \"quality\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));
     r.push_str(String::from("        \"total\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"proven\": { \"type\": \"integer\" },\n"));
@@ -8341,7 +8388,18 @@ fn skill_support_content_6() -> String {
     r.push_str(String::from("        \"timeout\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"error\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" },\n"));
-    r.push_str(String::from("        \"skipped\": { \"type\": \"integer\" }\n"));
+    r.push_str(String::from("        \"skipped\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("        \"quality\": {\n"));
+    r.push_str(String::from("          \"type\": \"object\",\n"));
+    r.push_str(String::from("          \"description\": \"Static contract-quality tallies independent of verification status\",\n"));
+    r.push_str(String::from("          \"required\": [\"weak\", \"tautological\", \"substantive\"],\n"));
+    r.push_str(String::from("          \"properties\": {\n"));
+    r.push_str(String::from("            \"weak\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("            \"tautological\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("            \"substantive\": { \"type\": \"integer\" }\n"));
+    r.push_str(String::from("          },\n"));
+    r.push_str(String::from("          \"additionalProperties\": false\n"));
+    r.push_str(String::from("        }\n"));
     r.push_str(String::from("      },\n"));
     r.push_str(String::from("      \"additionalProperties\": false\n"));
     r.push_str(String::from("    }\n"));
@@ -8892,6 +8950,127 @@ fn vow_kind_from_desc(desc: String) -> String {
     String::from("unknown")
 }
 
+// Static contract-quality classification of a clause by shape (no ESBMC).
+// Mirrors classify_contract_quality in vow/src/main.rs. See
+// docs/spec/contracts-methodology.md for the methodology.
+
+fn cq_byte_is_alpha(b: i64) -> bool {
+    (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+}
+
+fn cq_has_alpha(s: String) -> bool {
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if cq_byte_is_alpha(s.byte_at(i)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn cq_is_int_literal(s: String) -> bool {
+    let t: String = str_trim(s);
+    let n: i64 = t.len();
+    if n == 0 {
+        return false;
+    }
+    let mut i: i64 = 0;
+    if t.byte_at(0) == 45 {
+        if n == 1 {
+            return false;
+        }
+        i = 1;
+    }
+    while i < n {
+        let b: i64 = t.byte_at(i);
+        if b < 48 || b > 57 {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// Strip the leading requires/ensures/invariant keyword, leaving the predicate.
+// clause descriptions are formatted as "{kind} {printed_expr}".
+fn cq_predicate(desc: String) -> String {
+    let sp: i64 = str_find_byte(desc, 32);
+    if sp < 0 {
+        return String::from("");
+    }
+    str_trim(str_substring(desc, sp + 1, desc.len()))
+}
+
+fn cq_side_has_ordering(s: String) -> bool {
+    str_contains_byte(s, 60) || str_contains_byte(s, 62)
+}
+
+fn cq_weak_sides(lhs: String, rhs: String) -> bool {
+    let l: String = str_trim(lhs);
+    let r: String = str_trim(rhs);
+    if cq_side_has_ordering(l) || cq_side_has_ordering(r) {
+        return false;
+    }
+    let result_s: String = String::from("result");
+    (l == result_s && cq_is_int_literal(r)) || (r == result_s && cq_is_int_literal(l))
+}
+
+// True for a single ordering comparison between `result` and an integer literal.
+fn cq_is_weak_result_bound(pred: String) -> bool {
+    if str_find_str(pred, String::from("&&")) >= 0 {
+        return false;
+    }
+    if str_find_str(pred, String::from("||")) >= 0 {
+        return false;
+    }
+    if str_find_str(pred, String::from("==")) >= 0 {
+        return false;
+    }
+    if str_find_str(pred, String::from("!=")) >= 0 {
+        return false;
+    }
+    if str_contains_byte(pred, 40) {
+        return false;
+    }
+    let n: i64 = pred.len();
+    let p_le: i64 = str_find_str(pred, String::from("<="));
+    if p_le >= 0 {
+        return cq_weak_sides(str_substring(pred, 0, p_le), str_substring(pred, p_le + 2, n));
+    }
+    let p_ge: i64 = str_find_str(pred, String::from(">="));
+    if p_ge >= 0 {
+        return cq_weak_sides(str_substring(pred, 0, p_ge), str_substring(pred, p_ge + 2, n));
+    }
+    let p_lt: i64 = str_find_byte(pred, 60);
+    if p_lt >= 0 {
+        return cq_weak_sides(str_substring(pred, 0, p_lt), str_substring(pred, p_lt + 1, n));
+    }
+    let p_gt: i64 = str_find_byte(pred, 62);
+    if p_gt >= 0 {
+        return cq_weak_sides(str_substring(pred, 0, p_gt), str_substring(pred, p_gt + 1, n));
+    }
+    false
+}
+
+fn cq_classify(kind: String, desc: String) -> String {
+    let pred: String = cq_predicate(desc);
+    if pred.len() == 0 {
+        return String::from("tautological");
+    }
+    if pred == String::from("true") {
+        return String::from("tautological");
+    }
+    if !cq_has_alpha(pred) {
+        return String::from("tautological");
+    }
+    if kind == String::from("ensures") && cq_is_weak_result_bound(pred) {
+        return String::from("weak");
+    }
+    String::from("substantive")
+}
+
 fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let path: String = frontend_path_from_argv(argv, true);
     let fr: LoweredFrontend = frontend_lower_path(path);
@@ -8942,6 +9121,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let e_files: Vec<String> = Vec::new();
     let e_offsets: Vec<i64> = Vec::new();
     let e_statuses: Vec<String> = Vec::new();
+    let e_qualities: Vec<String> = Vec::new();
 
     let nf: i64 = ir_mod.functions.len();
     let mut fi: i64 = 0;
@@ -8951,11 +9131,14 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         let mut vi: i64 = 0;
         while vi < nv {
             let ve: IrVowEntry = func.vows[vi];
+            let ve_desc: String = ve.description;
+            let ve_kind: String = vow_kind_from_desc(ve_desc);
             e_vow_ids.push(ve.id);
             e_func_ids.push(func.id);
             e_func_names.push(func.name);
-            e_kinds.push(vow_kind_from_desc(ve.description));
-            e_descs.push(ve.description);
+            e_kinds.push(ve_kind);
+            e_descs.push(ve_desc);
+            e_qualities.push(cq_classify(ve_kind, ve_desc));
             if ve.blame == BLAME_CALLER() {
                 e_blames.push(String::from("Caller"));
             } else {
@@ -9051,6 +9234,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         json.push_str(i64_to_str(e_offsets[ci]));
         json.push_str(String::from("},\"status\":\""));
         json.push_str(e_statuses[ci]);
+        json.push_str(String::from("\",\"quality\":\""));
+        json.push_str(e_qualities[ci]);
         json.push_str(String::from("\"}"));
         ci = ci + 1;
     }
@@ -9084,6 +9269,23 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         si = si + 1;
     }
 
+    // Static contract-quality tallies (independent of verification status).
+    let n_weak: i64 = 0;
+    let n_taut: i64 = 0;
+    let n_subst: i64 = 0;
+    let mut qi: i64 = 0;
+    while qi < total {
+        let q: String = e_qualities[qi];
+        if q == String::from("weak") {
+            n_weak = n_weak + 1;
+        } else if q == String::from("tautological") {
+            n_taut = n_taut + 1;
+        } else {
+            n_subst = n_subst + 1;
+        }
+        qi = qi + 1;
+    }
+
     json.push_str(String::from("],\"summary\":{\"total\":"));
     json.push_str(i64_to_str(total));
     json.push_str(String::from(",\"proven\":"));
@@ -9100,7 +9302,13 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     json.push_str(i64_to_str(n_not_verified));
     json.push_str(String::from(",\"skipped\":"));
     json.push_str(i64_to_str(n_skipped));
-    json.push_str(String::from("}}"));
+    json.push_str(String::from(",\"quality\":{\"weak\":"));
+    json.push_str(i64_to_str(n_weak));
+    json.push_str(String::from(",\"tautological\":"));
+    json.push_str(i64_to_str(n_taut));
+    json.push_str(String::from(",\"substantive\":"));
+    json.push_str(i64_to_str(n_subst));
+    json.push_str(String::from("}}}"));
     print_str(json);
     exit_code
 }
