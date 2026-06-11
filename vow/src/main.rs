@@ -3640,6 +3640,17 @@ ESBMC `--multi-property`), plus the three quality signals above:
 The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
 status and quality tallies, so an author or CI can gate on hollow proofs.
 
+**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
+quality of the self-hosted compiler's own contracts: it reads
+`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
+exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
+unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
+ratchet down as contracts harden — most of the current `weak` count is the
+constant tag-family functions the structural refactor (#81 follow-up) dissolves.
+The dispatch-totality example above (`binop_opcode`, `ensures: result != -1`) and
+`binop_result_ty` (`ensures: result == ITY_BOOL() || result == ITY_U64() ||
+result == ITY_I64()`) are enforced in `compiler/lower.vow` today.
+
 ## References
 
 - N. Polikarpova, C. A. Furia, Y. Pei, Y. Wei, B. Meyer. *What Good Are Strong
@@ -7354,6 +7365,17 @@ ESBMC `--multi-property`), plus the three quality signals above:
 
 The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
 status and quality tallies, so an author or CI can gate on hollow proofs.
+
+**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
+quality of the self-hosted compiler's own contracts: it reads
+`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
+exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
+unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
+ratchet down as contracts harden — most of the current `weak` count is the
+constant tag-family functions the structural refactor (#81 follow-up) dissolves.
+The dispatch-totality example above (`binop_opcode`, `ensures: result != -1`) and
+`binop_result_ty` (`ensures: result == ITY_BOOL() || result == ITY_U64() ||
+result == ITY_I64()`) are enforced in `compiler/lower.vow` today.
 
 ## References
 

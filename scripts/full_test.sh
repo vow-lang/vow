@@ -774,6 +774,16 @@ if uv run python scripts/generate_help.py --check >/dev/null 2>&1; then
 else
     fail "help/skills-dir-drift" "skills/vow/ drifted from generated content; run 'uv run python scripts/generate_help.py'"
 fi
+
+# contract-quality/weak-gate: ratchet on static contract quality across the
+# self-hosted compiler — fail if the weak/tautological contract count exceeds the
+# committed baseline (#81). Static classification only (no ESBMC), so it is cheap.
+if run_self contracts compiler/main.vow 2>/dev/null \
+     | uv run python scripts/check_contract_quality.py; then
+    pass "contract-quality/weak-gate"
+else
+    fail "contract-quality/weak-gate" "weak/tautological contracts exceeded baseline; strengthen the new contract or adjust scripts/check_contract_quality.py with justification"
+fi
 echo ""
 
 # ─── Section 9: Bootstrap Triple Test ──────────────────────────────
