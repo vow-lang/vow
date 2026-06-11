@@ -3530,7 +3530,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, or link failure |\n"));
-    r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
+    r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
     r.push_str(String::from("\n"));
@@ -3602,7 +3602,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
-    r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, or `\"tool_not_found\"` |\n"));
+    r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Contracts Output JSON\n"));
@@ -5463,8 +5463,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"verify_status\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"enum\": [\"timeout\", \"unknown\", \"error\", \"tool_not_found\"],\n"));
-    r.push_str(String::from("      \"description\": \"Verification sub-status (present only when the verification backend did not produce a proof or counterexample)\"\n"));
+    r.push_str(String::from("      \"enum\": [\"timeout\", \"unknown\", \"error\", \"tool_not_found\", \"panicked\"],\n"));
+    r.push_str(String::from("      \"description\": \"Verification sub-status (present only when the verification backend did not produce a proof or counterexample; \\\"panicked\\\" signals the verifier worker thread crashed and the build fails closed)\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"verify_message\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
@@ -7037,7 +7037,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, or link failure |\n"));
-    r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
+    r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
     r.push_str(String::from("\n"));
@@ -7109,7 +7109,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
-    r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, or `\"tool_not_found\"` |\n"));
+    r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Contracts Output JSON\n"));
@@ -8975,8 +8975,8 @@ fn skill_support_content_6() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"verify_status\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"enum\": [\"timeout\", \"unknown\", \"error\", \"tool_not_found\"],\n"));
-    r.push_str(String::from("      \"description\": \"Verification sub-status (present only when the verification backend did not produce a proof or counterexample)\"\n"));
+    r.push_str(String::from("      \"enum\": [\"timeout\", \"unknown\", \"error\", \"tool_not_found\", \"panicked\"],\n"));
+    r.push_str(String::from("      \"description\": \"Verification sub-status (present only when the verification backend did not produce a proof or counterexample; \\\"panicked\\\" signals the verifier worker thread crashed and the build fails closed)\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"verify_message\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
