@@ -270,6 +270,10 @@ int main(void) {
         /* Allocation pointer lies within the current chunk's usable range. */
         assert((uintptr_t)p >= (uintptr_t)a.current_chunk + CHUNK_LINK_BYTES);
         assert((uintptr_t)p + sz <= a.chunk_end);
+        /* Returned pointer honours the requested alignment (issue #430):
+         * align is part of the allocator contract, so a buggy align_up that
+         * returned an in-bounds but under-aligned pointer must be rejected. */
+        assert(((uintptr_t)p & (align - 1)) == 0);
         /* last_alloc_size is what we just requested. */
         assert(a.last_alloc_size == sz);
 
