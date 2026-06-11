@@ -9241,9 +9241,6 @@ fn cq_classify(kind: String, desc: String) -> String {
     if pred == String::from("true") {
         return String::from("tautological");
     }
-    if pred == String::from("false") {
-        return String::from("tautological");
-    }
     if !cq_has_alpha(pred) {
         return String::from("tautological");
     }

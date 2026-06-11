@@ -10055,8 +10055,10 @@ fn contract_predicate_text(description: &str) -> &str {
 /// Static, no-ESBMC quality classification of a contract clause by shape.
 /// See docs/spec/contracts-methodology.md for the methodology this implements.
 ///
-/// - `tautological`: the predicate is a boolean constant or references no
-///   program value at all (e.g. `true`, `0 >= 0`) — it constrains nothing.
+/// - `tautological`: the predicate is the constant `true` or references no
+///   program value at all (e.g. `0 >= 0`) — it constrains nothing. A `false`
+///   predicate is a contradiction, not a tautology, so it is left `substantive`
+///   here; flagging it as vacuous is the deferred `false` re-check.
 /// - `weak`: an `ensures` that only bounds `result` by an integer literal on
 ///   one side (e.g. `result >= 0`, `result > 0`, `result <= 3`). Satisfiable by
 ///   almost any implementation — the 354-contract trap #81 was filed over.
@@ -10066,7 +10068,7 @@ fn contract_predicate_text(description: &str) -> &str {
 /// is reported `substantive`, so it never over-flags a meaningful contract.
 fn classify_contract_quality(kind: &str, description: &str) -> &'static str {
     let p = contract_predicate_text(description);
-    if p.is_empty() || p == "true" || p == "false" || !p.chars().any(|c| c.is_ascii_alphabetic()) {
+    if p.is_empty() || p == "true" || !p.chars().any(|c| c.is_ascii_alphabetic()) {
         return "tautological";
     }
     if kind == "ensures" && is_weak_result_bound(p) {
