@@ -75,6 +75,25 @@ fn impure_contract_clause_fails_build() {
 }
 
 #[test]
+fn linear_double_consume_fails_build() {
+    // `double_consume` passes the linear `h` to `use_handle` twice; the second
+    // call is an "already consumed" linear violation. Before the fix the linear
+    // pass emitted this to the raw emitter without touching `error_count`, so
+    // the build exited 0. `use_handle` does not error: field access does not
+    // consume, and the never-consumed backstop exempts linear params.
+    let (exit, json) = build_no_verify(
+        "module M\n\
+         linear struct Handle { fd: i64 }\n\
+         fn use_handle(h: Handle) -> i64 { h.fd }\n\
+         fn double_consume(h: Handle) -> i64 { use_handle(h) + use_handle(h) }\n\
+         fn main() -> i32 [io] { 0 }\n",
+    );
+    assert_eq!(exit, 1, "a linear double-consume must fail the build");
+    assert_eq!(json["status"], "CompileFailed");
+    assert!(error_codes(&json).contains(&"LinearTypeViolation".to_string()));
+}
+
+#[test]
 fn valid_effect_discipline_compiles() {
     // No false positive: an [io] function may call an [io] function.
     let (exit, json) = build_no_verify(
