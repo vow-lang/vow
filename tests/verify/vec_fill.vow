@@ -1,15 +1,15 @@
+// Concrete loop bound (8), not a `requires n <= 8` clause: ESBMC unwind limits
+// must never be encoded as contract bounds (see the contract-authoring rules).
 module VecFill
 
-fn fill_vec(n: i64) -> Vec<i64> vow {
-  requires: n >= 0,
-  requires: n <= 8,
-  ensures: result.len() == n
+fn fill_vec() -> Vec<i64> vow {
+  ensures: result.len() == 8
 } {
   let v: Vec<i64> = Vec::new();
   let mut i: i64 = 0;
-  while i < n vow {
+  while i < 8 vow {
     invariant: i >= 0,
-    invariant: i <= n
+    invariant: i <= 8
   } {
     v.push(i);
     i = i + 1;
@@ -18,7 +18,7 @@ fn fill_vec(n: i64) -> Vec<i64> vow {
 }
 
 fn main() -> i32 [io] {
-  let v: Vec<i64> = fill_vec(5);
+  let v: Vec<i64> = fill_vec();
   print_i64(v.len());
   0
 }
