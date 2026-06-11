@@ -787,6 +787,28 @@ fn lookup_variant_payload(e: CheckEnv, enum_idx: i64, variant_name: String, fiel
     CTY_UNIT()
 }
 
+// Built-in Option/Result are not registered in `env`; derive their tuple
+// payload types from the scrutinee's applied type arguments instead, so a
+// `match Option::Some(x)` arm binds `x` to the right type (mirrors the Rust
+// checker's bind_arm_pattern builtin special-case).
+fn builtin_variant_payload(ts: TyStore, scrutinee_tid: i64, enum_name: String, variant_name: String, field_idx: i64) -> i64 {
+    if ty_tag(ts, scrutinee_tid) != CTY_APPLIED() {
+        return CTY_UNIT();
+    }
+    let args_lid: i64 = ty_b(ts, scrutinee_tid);
+    let n: i64 = ts_arg_len(ts, args_lid);
+    if enum_name == String::from("Option") && variant_name == String::from("Some") && field_idx == 0 && n >= 1 {
+        return ts_arg_get(ts, args_lid, 0);
+    }
+    if enum_name == String::from("Result") && variant_name == String::from("Ok") && field_idx == 0 && n >= 1 {
+        return ts_arg_get(ts, args_lid, 0);
+    }
+    if enum_name == String::from("Result") && variant_name == String::from("Err") && field_idx == 0 && n >= 2 {
+        return ts_arg_get(ts, args_lid, 1);
+    }
+    CTY_UNIT()
+}
+
 fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
@@ -817,11 +839,17 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
         let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
         let enum_idx: i64 = env_lookup_enum(e, enum_name);
         let variant_name: String = if variant_sid != -1 { arena_str(a, variant_sid) } else { String::from("") };
+        // Built-in Option/Result aren't in `env`; a registered (user) enum wins,
+        // else take payload types from the scrutinee's applied args.
+        let is_builtin_enum: bool =
+            enum_name == String::from("Option") || enum_name == String::from("Result");
         let mut i: i64 = 0;
         while i < n_inner {
             let ipid: i64 = list_get(a, inner_lid, i);
             let field_tid: i64 = if enum_idx != -1 && variant_sid != -1 {
                 lookup_variant_payload(e, enum_idx, variant_name, i)
+            } else if is_builtin_enum && variant_sid != -1 {
+                builtin_variant_payload(e.ts, scrutinee_tid, enum_name, variant_name, i)
             } else {
                 CTY_UNIT()
             };
@@ -1399,7 +1427,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             env_pop_scope(e);
             if is_opaque(result_tid) {
                 result_tid = arm_tid;
-            } else if arm_tid != result_tid && !is_opaque(arm_tid) {
+            } else if !tids_equal(ts, arm_tid, result_tid) && !is_opaque(arm_tid) {
                 let arm_tag: i64 = ty_tag(ts, arm_tid);
                 let res_tag: i64 = ty_tag(ts, result_tid);
                 let coercible: bool = (arm_tag == CTY_I32() && ty_is_integer(ts, result_tid))

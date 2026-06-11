@@ -1936,6 +1936,8 @@ impl<'e> Checker<'e> {
                     },
                     _ => return,
                 };
+                // Built-in Option/Result aren't in `env`; a registered (user) enum
+                // wins, else take payload types from the scrutinee's type args.
                 let variant_tys: Vec<Ty> = self
                     .env
                     .lookup_enum(&enum_name)
@@ -1947,6 +1949,17 @@ impl<'e> Checker<'e> {
                                 VariantKind::Tuple(tys) => tys.clone(),
                                 _ => vec![],
                             })
+                    })
+                    .or_else(|| match (enum_name.as_str(), variant_name) {
+                        ("Option", "Some") | ("Result", "Ok") => Some(match scrutinee_ty {
+                            Ty::Applied(_, args) => args.iter().take(1).cloned().collect(),
+                            _ => vec![],
+                        }),
+                        ("Result", "Err") => Some(match scrutinee_ty {
+                            Ty::Applied(_, args) => args.iter().skip(1).take(1).cloned().collect(),
+                            _ => vec![],
+                        }),
+                        _ => None,
                     })
                     .unwrap_or_default();
                 for (p, t) in inner.iter().zip(variant_tys.iter()) {
