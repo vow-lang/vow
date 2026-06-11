@@ -137,10 +137,11 @@ exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
 verification for functions whose contracts mention 128-bit values while still
 generating native code for them.
 
-**Struct field layout:** every struct field is an 8-byte slot regardless of
-declared type. Narrow ints stored in struct fields are padded. There is no
-packing or natural-alignment layout today; FFI structs that need a specific C
-layout must shim through `Vec<u8>` or extern wrappers.
+**Struct field layout:** every struct field up to 64 bits wide occupies one
+8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
+fields occupy two consecutive 8-byte slots (16 bytes). There is no packing or
+natural-alignment layout today; FFI structs that need a specific C layout must
+shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 

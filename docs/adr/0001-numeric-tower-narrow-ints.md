@@ -70,9 +70,10 @@ Decimal / Rational) work are separate subprojects and out of scope here.
    formatting. Parsing exposes `parse_X(s: String) -> Option<X>` for every
    width (the narrow variants reject out-of-range).
 
-9. **Struct field layout.** All struct fields remain 8-byte slots; narrow
-   ints are stored padded. No packing, no natural-alignment layout, no FFI
-   layout matching in Phase 1.
+9. **Struct field layout.** Struct fields up to 64 bits wide each occupy one
+   8-byte slot (narrow ints stored padded); `i128`/`u128` fields occupy two
+   consecutive 8-byte slots (16 bytes). No packing, no natural-alignment
+   layout, no FFI layout matching in Phase 1.
 
 10. **Rollout.** Tracer-bullet by width, not by layer. Phase 1: `u8`
     end-to-end (typechecker, IR, codegen, verifier, narrowing intrinsics for
