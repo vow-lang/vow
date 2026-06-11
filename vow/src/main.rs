@@ -2466,6 +2466,8 @@ vow contracts [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
 ### `vow skill`
@@ -6144,6 +6146,8 @@ vow contracts [OPTIONS] <source.vow>
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
+
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
@@ -11174,6 +11178,18 @@ fn update_contract_statuses(
     }
 }
 
+/// `vow contracts --verify` fails closed when any contract is not proven —
+/// the same fail-closed set as `vow build --verify` / `vow verify` (#479).
+/// `proven` / `proven-ir` / `not_verified` pass; failed/timeout/unknown/error/
+/// skipped fail.
+fn contracts_summary_has_failure(summary: &ContractsSummaryJson) -> bool {
+    summary.failed > 0
+        || summary.timeout > 0
+        || summary.unknown > 0
+        || summary.error > 0
+        || summary.skipped > 0
+}
+
 fn run_contracts_command(
     source: &Path,
     verify: bool,
@@ -11239,6 +11255,11 @@ fn run_contracts_command(
     }
 
     let summary = build_contracts_summary(&entries);
+    // Fail closed: `vow contracts --verify` exits non-zero when any contract is
+    // not proven, matching `vow build --verify` / `vow verify` (#479).
+    if contracts_summary_has_failure(&summary) {
+        exit_code = 1;
+    }
     let result = ContractsResultJson {
         contracts: entries,
         summary,
@@ -14933,6 +14954,57 @@ fn main() -> i32 {
         assert_eq!(summary.quality.substantive, 8);
         assert_eq!(summary.quality.weak, 0);
         assert_eq!(summary.quality.tautological, 0);
+    }
+
+    #[test]
+    fn contracts_fail_closed_on_unproven_statuses() {
+        let all_proven = ContractsSummaryJson {
+            total: 1,
+            proven: 1,
+            failed: 0,
+            unknown: 0,
+            timeout: 0,
+            error: 0,
+            not_verified: 0,
+            skipped: 0,
+            quality: ContractsQualityJson {
+                weak: 0,
+                tautological: 0,
+                substantive: 1,
+            },
+        };
+        // All proven, or unverified (no --verify) → pass (exit 0).
+        assert!(!contracts_summary_has_failure(&all_proven));
+        assert!(!contracts_summary_has_failure(&ContractsSummaryJson {
+            proven: 0,
+            not_verified: 1,
+            ..all_proven.clone()
+        }));
+        // Every not-proven status fails closed (matches `vow build --verify`).
+        for failing in [
+            ContractsSummaryJson {
+                failed: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                timeout: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                unknown: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                error: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                skipped: 1,
+                ..all_proven.clone()
+            },
+        ] {
+            assert!(contracts_summary_has_failure(&failing));
+        }
     }
 
     #[test]

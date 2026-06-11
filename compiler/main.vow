@@ -3501,6 +3501,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow skill`\n"));
@@ -7195,6 +7197,8 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow skill`\n"));
@@ -10337,6 +10341,12 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             n_not_verified = n_not_verified + 1;
         }
         si = si + 1;
+    }
+
+    // Fail closed: `vow contracts --verify` exits non-zero when any contract is
+    // not proven, matching `vow build --verify` / `vow verify` (#479).
+    if n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 {
+        exit_code = 1;
     }
 
     // Static contract-quality tallies (independent of verification status).
