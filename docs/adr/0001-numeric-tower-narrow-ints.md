@@ -30,10 +30,12 @@ Decimal / Rational) work are separate subprojects and out of scope here.
    width-parametric opcodes (`WrappingAdd` with width + signedness carried on
    the instruction). Same plan applies to comparison and bitwise ops.
 
-3. **Casts.** `as` is **widening-only**: any narrower int → wider int (signed
-   sign-extends, unsigned zero-extends). Narrowing via `as` is a compile-time
-   error. Narrowing intent must be spelled at the call site with one of three
-   compiler-emitted free functions per `(src, tgt)` pair:
+3. **Casts.** `as` covers **widening** (any narrower int → wider int; signed
+   sign-extends, unsigned zero-extends) and **same-width signed/unsigned
+   reinterpretation** (`i64 as u64`, `u64 as i64`, `i32 as u32`, etc. —
+   machine-level bit reinterpretation, no range check). Narrowing via `as` is a
+   compile-time error. Narrowing intent must be spelled at the call site with one
+   of three compiler-emitted free functions per `(src, tgt)` pair:
    `<src>_to_<tgt>_try(x) -> Option<tgt>` (range-checked),
    `<src>_to_<tgt>_wrap(x) -> tgt` (truncate),
    `<src>_to_<tgt>_sat(x) -> tgt` (clamp).
