@@ -9855,6 +9855,31 @@ fn run_pipeline_inner(
     )
 }
 
+/// Fail-closed result for a panicked verifier worker (`join()` → `Err`). A
+/// verifier crash leaves verification in an unknown state, so the build must
+/// report `VerifyFailed` (exit 1) and withhold the executable — never the silent
+/// `Unverified`/exit-0 of the old `.unwrap_or((Skipped, _))` fallback (#413).
+/// The linked object is removed so no binary masquerades as built.
+fn verifier_panicked_output(
+    diagnostics: Vec<Diagnostic>,
+    executable: Option<PathBuf>,
+) -> BuildOutput {
+    if let Some(path) = &executable {
+        let _ = std::fs::remove_file(path);
+    }
+    BuildOutput {
+        status: BuildStatus::VerifyFailed {
+            function: String::new(),
+            description: "verification thread panicked".to_string(),
+        },
+        executable: None,
+        diagnostics,
+        counterexamples: vec![],
+        verify_status: Some("panicked".to_string()),
+        verify_message: Some("verification thread panicked".to_string()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_pipeline_from_frontend(
     frontend: FrontendBundle,
@@ -9909,6 +9934,12 @@ fn run_pipeline_from_frontend(
         if no_verify {
             return (VerifyOutcome::Skipped, Vec::new());
         }
+        // Test-only fault injection: simulate a verifier-worker crash so the
+        // fail-closed JoinError path (#413) is exercised end-to-end. Guarded by
+        // an env var that is never set in production; one lookup per build.
+        if std::env::var_os("VOW_TEST_VERIFIER_PANIC").is_some() {
+            panic!("injected verifier panic (VOW_TEST_VERIFIER_PANIC)");
+        }
         run_verification_sync(
             &module_for_verify,
             &file_for_verify,
@@ -9962,9 +9993,10 @@ fn run_pipeline_from_frontend(
                 };
             }
         };
-        let (verify_outcome, skipped) = verify_handle
-            .join()
-            .unwrap_or((VerifyOutcome::Skipped, Vec::new()));
+        let (verify_outcome, skipped) = match verify_handle.join() {
+            Ok(result) => result,
+            Err(_) => return verifier_panicked_output(all_diagnostics, exe_path),
+        };
         return verify_outcome_to_output_with_skipped(
             verify_outcome,
             all_diagnostics,
@@ -10032,9 +10064,10 @@ fn run_pipeline_from_frontend(
         }
     };
 
-    let (verify_outcome, skipped) = verify_handle
-        .join()
-        .unwrap_or((VerifyOutcome::Skipped, Vec::new()));
+    let (verify_outcome, skipped) = match verify_handle.join() {
+        Ok(result) => result,
+        Err(_) => return verifier_panicked_output(all_diagnostics, exe_path),
+    };
     verify_outcome_to_output_with_skipped(verify_outcome, all_diagnostics, &skipped, exe_path)
 }
 
