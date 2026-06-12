@@ -1,0 +1,19 @@
+// TEST: counterexample-fn "double_u64"
+// TEST: counterexample-blame callee
+// Regression for the self-hosted verifier pinning every u64 parameter to 0
+// (compiler/verifier.vow esbmc_nondet_call had no ITY_U64 arm, falling
+// through to "0"). With x pinned to 0 the false postcondition below would
+// verify; a correct unsigned-nondet harness must find the wrap counterexample.
+// u64 doubling wraps for x >= 2^63, so result >= x does not hold.
+module U64WrapEnsures
+
+fn double_u64(x: u64) -> u64 vow {
+  ensures: result >= x
+} {
+  x + x
+}
+
+fn main() -> i32 [io] {
+  print_u64(double_u64(5 as u64));
+  0
+}
