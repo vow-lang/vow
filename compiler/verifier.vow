@@ -477,7 +477,7 @@ fn parse_verify_status(combined: String) -> i64 {
         return VERIFY_UNKNOWN();
     }
     // ESBMC's third legitimate outcome: it finished without proving or
-    // falsifying (e.g. k-induction's forward condition couldn't establish
+    // falsifying (e.g. the incremental-BMC forward condition couldn't establish
     // the property). Must be checked before the generic ERROR fallback.
     if str_find_str(combined, String::from("VERIFICATION UNKNOWN")) >= 0 {
         return VERIFY_UNKNOWN();

@@ -1158,7 +1158,7 @@ fn skill_json() -> String {
     }
   },
   "verification_defaults": {
-    "strategy": "k-induction-parallel",
+    "strategy": "incremental-bmc",
     "max_k_step": 50
   }
 }"##
@@ -1270,7 +1270,7 @@ METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
 
 VERIFICATION DEFAULTS (--max-k-step)
-  Strategy        : k-induction-parallel (incremental BMC + k-induction)
+  Strategy        : incremental-bmc (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)
   Incremental BMC : 50 max iterations (--max-k-step)"##
         .to_string()
 }
@@ -2631,7 +2631,7 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
@@ -2770,7 +2770,7 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
+- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
@@ -5767,7 +5767,7 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
@@ -5907,7 +5907,7 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
+- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)

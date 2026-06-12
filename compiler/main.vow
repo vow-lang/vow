@@ -2193,7 +2193,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"verification_defaults\": {\n"));
-    r.push_str(String::from("    \"strategy\": \"k-induction-parallel\",\n"));
+    r.push_str(String::from("    \"strategy\": \"incremental-bmc\",\n"));
     r.push_str(String::from("    \"max_k_step\": 50\n"));
     r.push_str(String::from("  }\n"));
     r.push_str(String::from("}\n"));
@@ -2305,7 +2305,7 @@ fn skill_human() -> String {
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("VERIFICATION DEFAULTS (--max-k-step)\n"));
-    r.push_str(String::from("  Strategy        : k-induction-parallel (incremental BMC + k-induction)\n"));
+    r.push_str(String::from("  Strategy        : incremental-bmc (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)\n"));
     r.push_str(String::from("  Incremental BMC : 50 max iterations (--max-k-step)\n"));
     r
 }
@@ -3666,7 +3666,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
     r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
-    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
+    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
@@ -3805,7 +3805,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ESBMC Configuration\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)\n"));
+    r.push_str(String::from("- Verification strategy: **incremental BMC** (`--incremental-bmc`) -- base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`\n"));
     r.push_str(String::from("- Incremental BMC with `--max-k-step` (default: **50**) -- loops are verified incrementally up to N iterations\n"));
     r.push_str(String::from("- Architecture: 64-bit\n"));
     r.push_str(String::from("- Array bounds / pointer checks disabled (Vow handles these in its own model)\n"));
@@ -6816,7 +6816,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
     r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
-    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
+    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
@@ -6957,7 +6957,7 @@ fn skill_support_content_2() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ESBMC Configuration\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)\n"));
+    r.push_str(String::from("- Verification strategy: **incremental BMC** (`--incremental-bmc`) -- base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`\n"));
     r.push_str(String::from("- Incremental BMC with `--max-k-step` (default: **50**) -- loops are verified incrementally up to N iterations\n"));
     r.push_str(String::from("- Architecture: 64-bit\n"));
     r.push_str(String::from("- Array bounds / pointer checks disabled (Vow handles these in its own model)\n"));

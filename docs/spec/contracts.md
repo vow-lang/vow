@@ -15,7 +15,7 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
+- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)

@@ -300,7 +300,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
     # absent: they are internal verifier-model bounds, not language properties or
     # tunable CLI flags. See docs/design/verifier-model-bounds.md.
     verification_defaults: dict[str, str | int] = {
-        "strategy": "k-induction-parallel",
+        "strategy": "incremental-bmc",
         "max_k_step": DEFAULT_MAX_K_STEP,
     }
 
@@ -739,7 +739,7 @@ def build_help_human(data: dict) -> str:
     vdefaults = data.get("verification_defaults", {})
     if vdefaults:
         lines.append("VERIFICATION DEFAULTS (--max-k-step)")
-        lines.append(f"  Strategy        : {vdefaults.get('strategy', 'k-induction-parallel')} (incremental BMC + k-induction)")
+        lines.append(f"  Strategy        : {vdefaults.get('strategy', 'incremental-bmc')} (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)")
         lines.append(f"  Incremental BMC : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)")
 
     return "\n".join(lines)
