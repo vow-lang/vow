@@ -133,13 +133,13 @@ fn default_output(path: String) -> String {
     r
 }
 
-fn CMD_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
-fn CMD_BUILD() -> i64 vow { ensures: result >= 0 } { 1 }
-fn CMD_VERIFY() -> i64 vow { ensures: result >= 0 } { 2 }
-fn CMD_TEST() -> i64 vow { ensures: result >= 0 } { 3 }
-fn CMD_CONTRACTS() -> i64 vow { ensures: result >= 0 } { 4 }
-fn CMD_SKILL() -> i64 vow { ensures: result >= 0 } { 5 }
-fn CMD_MUTANTS() -> i64 vow { ensures: result >= 0 } { 6 }
+fn CMD_NONE() -> i64 { 0 }
+fn CMD_BUILD() -> i64 { 1 }
+fn CMD_VERIFY() -> i64 { 2 }
+fn CMD_TEST() -> i64 { 3 }
+fn CMD_CONTRACTS() -> i64 { 4 }
+fn CMD_SKILL() -> i64 { 5 }
+fn CMD_MUTANTS() -> i64 { 6 }
 
 fn get_subcommand(argv: Vec<String>) -> i64 {
     if argv.len() < 2 {
@@ -4002,6 +4002,21 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Anti-Patterns\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### Tautological Contracts\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A contract must constrain behavior the implementation could get wrong. A clause provable from the return type alone, or from a constant/literal body, verifies nothing.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn IOP_CONST() -> i64 vow { ensures: result >= 0 } { 0 }\n"));
+    r.push_str(String::from("fn sentinel() -> i64 vow { ensures: result == -1 } { -1 }\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The first is trivially true of the literal `0`; the second restates the body verbatim. Both prove nothing and only enlarge the proof surface.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** delete the `vow` block. A postcondition earns its place only when it pins a property of a **computed** result -- one that depends on the inputs or control flow and that a wrong implementation would violate (`ensures: result > 0` on a loop-computed `gcd`; `ensures: result == 0 || result == 1` on a branch-computed flag). Named-constant accessors and enum-tag functions returning a literal must carry no contract.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Crisp rule:** if the clause is true without reading past the signature and a constant body, it is a non-contract -- remove it. This is distinct from weakening a real contract (forbidden, see CLAUDE.md \"Contract Authoring\"): a tautology was never a contract, so deleting it loses no verification value.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Over-Specifying\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
@@ -7138,6 +7153,21 @@ fn skill_support_content_2() -> String {
     r.push_str(String::from("Each `where` clause can only reference its own parameter.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Anti-Patterns\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Tautological Contracts\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A contract must constrain behavior the implementation could get wrong. A clause provable from the return type alone, or from a constant/literal body, verifies nothing.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn IOP_CONST() -> i64 vow { ensures: result >= 0 } { 0 }\n"));
+    r.push_str(String::from("fn sentinel() -> i64 vow { ensures: result == -1 } { -1 }\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The first is trivially true of the literal `0`; the second restates the body verbatim. Both prove nothing and only enlarge the proof surface.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** delete the `vow` block. A postcondition earns its place only when it pins a property of a **computed** result -- one that depends on the inputs or control flow and that a wrong implementation would violate (`ensures: result > 0` on a loop-computed `gcd`; `ensures: result == 0 || result == 1` on a branch-computed flag). Named-constant accessors and enum-tag functions returning a literal must carry no contract.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Crisp rule:** if the clause is true without reading past the signature and a constant body, it is a non-contract -- remove it. This is distinct from weakening a real contract (forbidden, see CLAUDE.md \"Contract Authoring\"): a tautology was never a contract, so deleting it loses no verification value.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Over-Specifying\n"));
     r.push_str(String::from("\n"));

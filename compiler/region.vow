@@ -19,7 +19,7 @@ use diag
 // `RSUM_INTERNAL_UNINIT() = -1` is used during iteration — never
 // serialised, never copied into `IrFunction.rsum_return_kind`.
 
-fn RSUM_INTERNAL_UNINIT() -> i64 vow { ensures: result == -1 } { -1 }
+fn RSUM_INTERNAL_UNINIT() -> i64 { -1 }
 
 // Public entry point. Mutates `m.functions[*].rsum_*` fields and
 // `m.functions[*].blocks[*].insts[*].rgn` for heap-producing insts.

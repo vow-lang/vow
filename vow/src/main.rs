@@ -2967,6 +2967,21 @@ Each `where` clause can only reference its own parameter.
 
 ## Anti-Patterns
 
+### Tautological Contracts
+
+A contract must constrain behavior the implementation could get wrong. A clause provable from the return type alone, or from a constant/literal body, verifies nothing.
+
+```vow
+fn IOP_CONST() -> i64 vow { ensures: result >= 0 } { 0 }
+fn sentinel() -> i64 vow { ensures: result == -1 } { -1 }
+```
+
+The first is trivially true of the literal `0`; the second restates the body verbatim. Both prove nothing and only enlarge the proof surface.
+
+**Fix:** delete the `vow` block. A postcondition earns its place only when it pins a property of a **computed** result — one that depends on the inputs or control flow and that a wrong implementation would violate (`ensures: result > 0` on a loop-computed `gcd`; `ensures: result == 0 || result == 1` on a branch-computed flag). Named-constant accessors and enum-tag functions returning a literal must carry no contract.
+
+**Crisp rule:** if the clause is true without reading past the signature and a constant body, it is a non-contract — remove it. This is distinct from weakening a real contract (forbidden, see CLAUDE.md "Contract Authoring"): a tautology was never a contract, so deleting it loses no verification value.
+
 ### Over-Specifying
 
 ```vow
@@ -6088,6 +6103,21 @@ fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 Each `where` clause can only reference its own parameter.
 
 ## Anti-Patterns
+
+### Tautological Contracts
+
+A contract must constrain behavior the implementation could get wrong. A clause provable from the return type alone, or from a constant/literal body, verifies nothing.
+
+```vow
+fn IOP_CONST() -> i64 vow { ensures: result >= 0 } { 0 }
+fn sentinel() -> i64 vow { ensures: result == -1 } { -1 }
+```
+
+The first is trivially true of the literal `0`; the second restates the body verbatim. Both prove nothing and only enlarge the proof surface.
+
+**Fix:** delete the `vow` block. A postcondition earns its place only when it pins a property of a **computed** result — one that depends on the inputs or control flow and that a wrong implementation would violate (`ensures: result > 0` on a loop-computed `gcd`; `ensures: result == 0 || result == 1` on a branch-computed flag). Named-constant accessors and enum-tag functions returning a literal must carry no contract.
+
+**Crisp rule:** if the clause is true without reading past the signature and a constant body, it is a non-contract — remove it. This is distinct from weakening a real contract (forbidden, see CLAUDE.md "Contract Authoring"): a tautology was never a contract, so deleting it loses no verification value.
 
 ### Over-Specifying
 
