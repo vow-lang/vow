@@ -3,8 +3,8 @@ pub mod esbmc;
 pub mod solver_strategy;
 
 pub use c_emitter::{
-    ConstantValue, UNSUPPORTED_OP_VOW_ID, VerifyLimits, detect_constant_functions,
-    non_modelable_reason,
+    CALLER_PRECONDITION_VOW_ID, ConstantValue, UNSUPPORTED_OP_VOW_ID, VerifyLimits,
+    detect_constant_functions, non_modelable_reason,
 };
 pub use esbmc::{
     Counterexample, DEFAULT_MAX_K_STEP, VerificationResult, emit_verify_c_source, find_esbmc,

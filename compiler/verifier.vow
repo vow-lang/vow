@@ -216,7 +216,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 vec_max, model_string_max, hashmap_max, btreemap_max
             );
             let empty_modelable: Vec<i64> = Vec::new();
-            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max);
+            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, 0);
             preamble.push_byte(10);
             preamble
         }

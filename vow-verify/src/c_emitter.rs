@@ -822,6 +822,7 @@ fn emit_inst(
     module: &Module,
     limits: &VerifyLimits,
     func_return_ty: Ty,
+    requires_as_assert: bool,
 ) {
     let id = inst.id.0;
     match inst.opcode {
@@ -1011,7 +1012,23 @@ fn emit_inst(
         // Vow checks → ESBMC intrinsics
         Opcode::VowRequires => {
             let pred = inst.args[0].0;
-            out.push_str(&format!("  __ESBMC_assume(v{});\n", pred));
+            if requires_as_assert {
+                // Callee precondition: the caller is responsible for satisfying
+                // it (requires → Caller blame). Asserting it here — rather than
+                // assuming it — is what makes a caller that passes a violating
+                // argument fail, instead of injecting `assume(false)` and
+                // vacuously verifying the rest of the caller's body. The label is
+                // the reserved CALLER_PRECONDITION sentinel, not the callee's
+                // function-local vow id (which would collide with the target's).
+                out.push_str(&format!(
+                    "  __ESBMC_assert(v{}, \"vow:{}\");\n",
+                    pred, CALLER_PRECONDITION_VOW_ID
+                ));
+            } else {
+                // Target function precondition: assumed for the function under
+                // verification (its caller is out of scope of this query).
+                out.push_str(&format!("  __ESBMC_assume(v{});\n", pred));
+            }
         }
         Opcode::VowEnsures | Opcode::VowInvariant => {
             let pred = inst.args[0].0;
@@ -1724,6 +1741,13 @@ fn emit_nondet_string_len(id: u32, string_max: usize, out: &mut String) {
 /// violation; never assigned to a user-authored vow.
 pub const UNSUPPORTED_OP_VOW_ID: u32 = u32::MAX;
 
+/// Sentinel `vow_id` reported when a co-emitted callee's `requires` is violated
+/// by its caller. Reserved (never a user vow id) so the diagnostic pipeline maps
+/// it to a Caller-blamed "callee precondition violated" without a per-function
+/// vow lookup. Using the callee's own (function-local) vow id here would collide
+/// with the target function's vow of the same index and mislabel the violation.
+pub const CALLER_PRECONDITION_VOW_ID: u32 = u32::MAX - 1;
+
 fn emit_unsupported_for_verification(inst: &Inst, out: &mut String) {
     let id = inst.id.0;
     // The assertion text must be exactly `vow:<id>` — `extract_vow_id` calls
@@ -1781,6 +1805,9 @@ pub fn emit_c_function(
             warnings: vec![],
         },
         limits,
+        // Standalone single-function verification: the function is the target,
+        // so its `requires` are assumed, not asserted.
+        false,
     )
 }
 
@@ -1790,6 +1817,7 @@ pub fn emit_c_function_full(
     modelable_fns: &HashSet<FuncId>,
     module: &Module,
     limits: &VerifyLimits,
+    requires_as_assert: bool,
 ) -> String {
     let mut out = String::new();
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
@@ -2041,6 +2069,7 @@ pub fn emit_c_function_full(
                 module,
                 limits,
                 func.return_ty,
+                requires_as_assert,
             );
         }
         // Emit Upsilons: read all sources first, then write all targets.
@@ -2069,6 +2098,7 @@ pub fn emit_c_function_full(
                 module,
                 limits,
                 func.return_ty,
+                requires_as_assert,
             );
         }
     }
@@ -2261,18 +2291,23 @@ pub fn emit_c_module_with_callees(
                 modelable_fns,
                 module,
                 &effective_limits,
+                // Callee: assert its `requires` at the boundary so the caller is
+                // blamed for violating it (caller blame), instead of assuming it
+                // and vacuously verifying the caller past the call.
+                true,
             ));
             out.push('\n');
         }
     }
 
-    // Target function
+    // Target function: its own `requires` are the assumptions of this query.
     out.push_str(&emit_c_function_full(
         target,
         const_fns,
         modelable_fns,
         module,
         &effective_limits,
+        false,
     ));
     out.push('\n');
     out
@@ -2496,6 +2531,7 @@ mod tests {
             &HashSet::new(),
             &module,
             &VerifyLimits::default(),
+            false,
         );
 
         assert!(
@@ -4687,6 +4723,7 @@ mod tests {
             &HashSet::new(),
             &module,
             &VerifyLimits::default(),
+            false,
         );
         assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
         assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
@@ -4787,6 +4824,7 @@ mod tests {
             &HashSet::new(),
             &module,
             &VerifyLimits::default(),
+            false,
         );
         assert!(c.contains("__vow_string_t v2;"), "clone decl: {c}");
         assert!(c.contains("v2 = v1;"), "clone preserves source model: {c}");
@@ -4824,6 +4862,7 @@ mod tests {
                 warnings: vec![],
             },
             &VerifyLimits::default(),
+            false,
         );
         assert!(c.contains("__vow_string_t v0;"), "dest param model: {c}");
         assert!(c.contains("__vow_string_t v1;"), "source param model: {c}");
@@ -6184,6 +6223,7 @@ mod tests {
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
+            false,
         );
         assert!(out.contains("v5 = 42LL;"), "inlined constant: {out}");
     }
@@ -6224,6 +6264,7 @@ mod tests {
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
+            false,
         );
         assert!(
             out.contains("__VERIFIER_nondet_long()"),

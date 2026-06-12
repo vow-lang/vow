@@ -1,0 +1,27 @@
+// TEST: counterexample-fn "f"
+// TEST: counterexample-blame caller
+// Regression for the caller-blame hole: a callee's `requires` was emitted as
+// `__ESBMC_assume` at its co-emitted call site, so calling `g(-5)` — which
+// violates `g`'s precondition `x > 0` — injected `assume(false)` and vacuously
+// verified the rest of `f`. `f`'s own postcondition here is TRUE (it returns 0),
+// so the only fault is the precondition-violating call; the verifier must now
+// blame the caller for it instead of reporting `Verified`.
+module CallerRequiresViolation
+
+fn g(x: i64) -> i64 vow {
+  requires: x > 0
+} {
+  x
+}
+
+fn f() -> i64 vow {
+  ensures: result == 0
+} {
+  let unused: i64 = g(0 - 5);
+  0
+}
+
+fn main() -> i32 [io] {
+  print_i64(f());
+  0
+}

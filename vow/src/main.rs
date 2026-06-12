@@ -17,7 +17,8 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver,
+    CALLER_PRECONDITION_VOW_ID, ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB,
+    DEFAULT_MAX_K_STEP, Encoding, Solver,
     SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
     detect_constant_functions, emit_verify_c_source, find_esbmc, non_modelable_reason,
     run_with_fallback, verify_function_with_module_and_const_fns_configured,
@@ -8289,24 +8290,35 @@ fn build_structured_counterexample(
     // diagnostic that an agent can act on instead of letting the code below
     // fall through to the generic "unmatched id" path.
     let unsupported_op = ce.vow_id == Some(UNSUPPORTED_OP_VOW_ID);
+    // A co-emitted callee's `requires` was violated by this caller. The sentinel
+    // id deliberately does not match any vow in `func`, so synthesize a
+    // Caller-blamed precondition diagnostic rather than mis-resolving it to the
+    // target function's vow of the same local index.
+    let caller_precondition = ce.vow_id == Some(CALLER_PRECONDITION_VOW_ID);
     let vow_entry = ce
         .vow_id
         .and_then(|id| func.vows.iter().find(|v| v.id.0 == id));
     let violation = if unsupported_op {
         "function uses side-effecting operations not supported for verification".to_string()
+    } else if caller_precondition {
+        "callee precondition violated by the caller".to_string()
     } else {
         vow_entry
             .map(|v| v.description.clone())
             .unwrap_or_else(|| ce.description.clone())
     };
-    let blame = vow_entry
-        .map(|v| match v.blame {
-            vow_diag::Blame::Caller => "caller",
-            vow_diag::Blame::Callee => "callee",
-            vow_diag::Blame::None => "none",
-        })
-        .unwrap_or("none")
-        .to_string();
+    let blame = if caller_precondition {
+        "caller".to_string()
+    } else {
+        vow_entry
+            .map(|v| match v.blame {
+                vow_diag::Blame::Caller => "caller",
+                vow_diag::Blame::Callee => "callee",
+                vow_diag::Blame::None => "none",
+            })
+            .unwrap_or("none")
+            .to_string()
+    };
     let source = ce
         .vow_id
         .and_then(|id| find_vow_span(func, id))

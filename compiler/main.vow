@@ -191,6 +191,13 @@ fn build_ce_from_result(f: IrFunction, vr: VerifyResult, path: String) -> Verify
         // user-authored vow has this id, so synthesize an actionable message
         // instead of leaving the violation blank.
         ce_violation = String::from("function uses side-effecting operations not supported for verification");
+    } else if vow_id == caller_precondition_vow_id() {
+        // A co-emitted callee's `requires` was violated by this caller. The
+        // sentinel id matches no vow in `f`, so synthesize a Caller-blamed
+        // precondition diagnostic rather than mis-resolving to the target's vow
+        // of the same local index.
+        ce_violation = String::from("callee precondition violated by the caller");
+        ce_blame = DIAG_BLAME_CALLER();
     } else {
         let vow_entries: Vec<IrVowEntry> = f.vows;
         let mut vi: i64 = 0;
