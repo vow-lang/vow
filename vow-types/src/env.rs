@@ -900,7 +900,19 @@ impl TypeEnv {
                 Box::new(Ty::Struct("Slice".to_string())),
                 vec![self.resolve(inner)?],
             )),
-            AstType::Refinement { base, .. } => self.resolve(base),
+            // Inline refinement types `{ r: T || pred }` carry a predicate that
+            // no later pass consumes — resolving to `base` would silently drop it,
+            // letting the function verify as if the predicate were absent (a false
+            // proof). Fail closed until the predicate is forwarded to a real
+            // obligation. Parameter `where` clauses are unaffected: they live in
+            // `Param.refinement`, not in the type, and become `requires`.
+            AstType::Refinement { .. } => Err(
+                "refinement-type predicate `{ x: T || pred }` is not supported in \
+                 type position (it would be silently unverified); express the \
+                 constraint with a `where` clause on the parameter or a \
+                 `requires`/`ensures` contract"
+                    .to_string(),
+            ),
         }
     }
 }
@@ -1010,6 +1022,27 @@ mod tests {
         let env = TypeEnv::new();
         let ast_ty = AstType::Named {
             name: "Unknown".to_string(),
+            span: dummy_span(),
+        };
+        assert!(env.resolve(&ast_ty).is_err());
+    }
+
+    #[test]
+    fn resolve_refinement_predicate_fails_closed() {
+        use vow_syntax::ast::{Expr, ExprKind, Lit};
+        let env = TypeEnv::new();
+        // { r: i64 || true } — resolving to the base i64 would silently drop the
+        // predicate and verify as if it were absent. resolve() must fail instead.
+        let ast_ty = AstType::Refinement {
+            binding: "r".to_string(),
+            base: Box::new(AstType::Named {
+                name: "i64".to_string(),
+                span: dummy_span(),
+            }),
+            predicate: Box::new(Expr {
+                kind: ExprKind::Lit(Lit::Bool(true)),
+                span: dummy_span(),
+            }),
             span: dummy_span(),
         };
         assert!(env.resolve(&ast_ty).is_err());
