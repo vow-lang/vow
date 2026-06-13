@@ -181,6 +181,15 @@ later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
 verification fails instead of miscompiling. This is the contract that converts a
 silent fallback into a caught error.
 
+The static classifier rates this clause `substantive`, but `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true`: the replacement body
+`return 0` (the `i64` default) already satisfies `0 != -1`. That divergence is
+expected — it is the probe's one-sided behaviour (see **Weakness**, below), not a
+real weakness. A `!= sentinel` dispatch-totality contract is genuinely strong against
+the real body, so read the probe's `true` here as "could not witness strength," not
+"the contract is hollow." This is a distinct case from the constant-result false
+positive noted there.
+
 > Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
 > inputs" is expressed as `requires` (pin the finite domain) + a postcondition
 > that excludes the failure value, letting ESBMC enumerate the finite branch
