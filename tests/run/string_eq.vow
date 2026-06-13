@@ -10,7 +10,7 @@ fn get_name() -> String {
 }
 
 fn build_a() -> String [io] {
-  let mut s: String = String::from("");
+  let s: String = String::from("");
   s.push_byte(65);
   s
 }

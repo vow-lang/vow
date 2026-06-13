@@ -14,7 +14,7 @@ use mutants_main
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: i64 = 1;
-    let found: bool = false;
+    let mut found: bool = false;
     while i < argv.len() {
         if argv[i] == flag {
             found = true;
@@ -184,8 +184,8 @@ fn frontend_path_from_argv(argv: Vec<String>, sub: bool) -> String [io] {
 
 fn build_ce_from_result(f: IrFunction, vr: VerifyResult, path: String) -> VerifyCE {
     let vow_id: i64 = vr.vow_id;
-    let ce_violation: String = String::from("");
-    let ce_blame: i64 = DIAG_BLAME_NONE();
+    let mut ce_violation: String = String::from("");
+    let mut ce_blame: i64 = DIAG_BLAME_NONE();
     if vow_id == unsupported_op_vow_id() {
         // Fail-closed assertion from emit_unsupported_for_verification: no
         // user-authored vow has this id, so synthesize an actionable message
@@ -932,7 +932,7 @@ fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i
 }
 
 fn run_test(argv: Vec<String>) -> i32 [io] {
-    let path: String = get_source_path_sub(argv);
+    let mut path: String = get_source_path_sub(argv);
     if path.len() == 0 {
         path = String::from(".");
     }
@@ -9925,8 +9925,8 @@ fn skill_home_dir() -> String [io] {
 }
 
 fn skill_install_root(local: bool, global: bool) -> String [io, read] {
-    let use_local: bool = local;
-    let use_global: bool = global;
+    let mut use_local: bool = local;
+    let mut use_global: bool = global;
     if use_local && use_global {
         eprintln_str("vow skill install: --local and --global are mutually exclusive");
         return String::from("");
@@ -9963,7 +9963,7 @@ fn skill_install_root(local: bool, global: bool) -> String [io, read] {
 }
 
 fn run_skill(argv: Vec<String>) -> i32 [io, read, write] {
-    let do_install: bool = false;
+    let mut do_install: bool = false;
     let do_bundle: bool = has_flag(argv, String::from("--bundle"));
     if argv.len() >= 3 {
         let action: String = argv[2];
@@ -10315,13 +10315,13 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     // Compute summary counts
-    let n_proven: i64 = 0;
-    let n_failed: i64 = 0;
-    let n_unknown: i64 = 0;
-    let n_timeout: i64 = 0;
-    let n_error: i64 = 0;
-    let n_not_verified: i64 = 0;
-    let n_skipped: i64 = 0;
+    let mut n_proven: i64 = 0;
+    let mut n_failed: i64 = 0;
+    let mut n_unknown: i64 = 0;
+    let mut n_timeout: i64 = 0;
+    let mut n_error: i64 = 0;
+    let mut n_not_verified: i64 = 0;
+    let mut n_skipped: i64 = 0;
     let mut si: i64 = 0;
     while si < total {
         let s: String = e_statuses[si];
@@ -10350,9 +10350,9 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     // Static contract-quality tallies (independent of verification status).
-    let n_weak: i64 = 0;
-    let n_taut: i64 = 0;
-    let n_subst: i64 = 0;
+    let mut n_weak: i64 = 0;
+    let mut n_taut: i64 = 0;
+    let mut n_subst: i64 = 0;
     let mut qi: i64 = 0;
     while qi < total {
         let q: String = e_qualities[qi];

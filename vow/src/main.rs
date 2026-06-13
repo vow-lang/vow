@@ -11767,7 +11767,7 @@ fn bisect(lo: i64, hi: i64) -> i64 vow {
   requires: hi >= lo
 } {
   let mut lo: i64 = lo;
-  let mut hi: i64 = hi;
+  let hi: i64 = hi;
   while lo + 1 < hi vow {
     invariant: hi - lo >= 0
   } {
@@ -12350,7 +12350,7 @@ pub fn sum(v: Vec<i64>) -> i64 {
 }
 
 pub fn main() -> i32 {
-    let mut nums: Vec<i64> = Vec::new();
+    let nums: Vec<i64> = Vec::new();
     nums.push(10);
     nums.push(20);
     nums.push(30);
@@ -12378,7 +12378,7 @@ pub fn sum_coords(p: Point) -> i64 {
 pub fn main() -> i32 {
     let p = Point { x: 3, y: 4 };
     let s = sum_coords(p);
-    let mut v: Vec<i64> = Vec::new();
+    let v: Vec<i64> = Vec::new();
     v.push(s);
     let n = v.len();
     0
@@ -12409,7 +12409,7 @@ pub fn main() -> i32 [io] {
         let src = r#"module MapTest
 
 pub fn main() -> i32 {
-    let mut m: HashMap<i64, i64> = HashMap::new();
+    let m: HashMap<i64, i64> = HashMap::new();
     m.insert(1, 10);
     m.insert(2, 20);
     m.insert(3, 30);

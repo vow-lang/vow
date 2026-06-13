@@ -53,7 +53,7 @@ fn str_find_str(haystack: String, needle: String) -> i64 {
     let mut i: i64 = 0;
     while i <= hlen - nlen {
         let mut j: i64 = 0;
-        let matched: bool = true;
+        let mut matched: bool = true;
         while j < nlen {
             if haystack.byte_at(i + j) != needle.byte_at(j) {
                 matched = false;

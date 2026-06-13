@@ -1,0 +1,13 @@
+// TEST: error-code UnusedMut
+// TEST: stderr "never reassigned"
+module UnusedMut
+
+fn compute() -> i64 {
+  let mut x: i64 = 1;
+  x
+}
+
+fn main() -> i32 {
+  let y: i64 = compute();
+  0
+}

@@ -48,6 +48,10 @@ pub enum ErrorCode {
     EffectViolation,
     LinearTypeViolation,
     NonExhaustiveMatch,
+    // Mutability errors (enforced by the type checker; `mut` is required only
+    // for whole-binding reassignment `x = e`).
+    ImmutableAssignment,
+    UnusedMut,
     // Vow errors
     VowRequiresViolated,
     VowEnsuresViolated,

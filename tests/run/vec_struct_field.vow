@@ -19,7 +19,7 @@ fn read_from_param(v: Vec<Entry>, idx: i64) -> i64 {
 }
 
 fn main() -> i32 [io] {
-    let mut entries: Vec<Entry> = Vec::new();
+    let entries: Vec<Entry> = Vec::new();
     let t1: Vec<i64> = Vec::new();
     let k1: Kind = Kind::Alpha(0);
     let e1: Entry = Entry { name: String::from("first"), x: 10, y: 20, tags: t1, kind: k1 };

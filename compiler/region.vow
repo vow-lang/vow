@@ -804,7 +804,7 @@ fn underlying_caller_via_aliases_inner(
     seen: Vec<i64>
 ) -> i64 {
     let mut current: i64 = source_arg_id;
-    let mut local_seen: Vec<i64> = clone_i64_vec(seen);
+    let local_seen: Vec<i64> = clone_i64_vec(seen);
     let mut keep_going: bool = true;
     let mut result: i64 = -1;
     while keep_going {
@@ -1309,9 +1309,9 @@ fn root_escape_span_len(inst: IrInst, id_to_inst: Vec<IrInst>) -> i64 {
 //      FieldSet for each `(target, field_idx)` pair (issue #326).
 // See spec §4.4 (visibility — field-initializer exemption).
 fn collect_returned_ids(bks: Vec<IrBlock>, live_field_set_ids: Vec<i64>) -> Vec<i64> {
-    let mut out: Vec<i64> = Vec::new();
-    let mut stack: Vec<i64> = Vec::new();
-    let mut region_alloc_ids: Vec<i64> = Vec::new();
+    let out: Vec<i64> = Vec::new();
+    let stack: Vec<i64> = Vec::new();
+    let region_alloc_ids: Vec<i64> = Vec::new();
     // Single setup pass: gather Return-arg seeds and the RegionAlloc-id
     // gate set in the same scan over `bks`.
     let mut bi: i64 = 0;
@@ -4020,7 +4020,7 @@ fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
         bi = bi + 1;
     }
     let sentinel: IrInst = ir_inst_new(-1, 0, 0, Vec::new(), 0, 0, 0, String::from(""));
-    let mut tbl: Vec<IrInst> = Vec::new();
+    let tbl: Vec<IrInst> = Vec::new();
     let mut i: i64 = 0;
     while i <= max_id {
         tbl.push(sentinel);
@@ -4067,7 +4067,7 @@ fn build_id_to_block(f: IrFunction, n_ids: i64) -> Vec<i64> {
 }
 
 fn build_phi_arms(f: IrFunction, n_ids: i64) -> Vec<Vec<i64>> {
-    let mut arms: Vec<Vec<i64>> = Vec::new();
+    let arms: Vec<Vec<i64>> = Vec::new();
     let mut i: i64 = 0;
     while i < n_ids {
         arms.push(Vec::new());
@@ -4935,7 +4935,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
             let mut block_changed: bool = opens_here;
             let moved_upsilon_ids: Vec<i64> = Vec::new();
             if opens_here {
-                let mut open_inst: IrInst = region_marker_inst(next_id, IOP_REGION_OPEN(), blk3.id);
+                let open_inst: IrInst = region_marker_inst(next_id, IOP_REGION_OPEN(), blk3.id);
                 next_id = next_id + 1;
                 new_insts.push(open_inst);
             }

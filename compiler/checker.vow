@@ -679,6 +679,7 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     e.cur_ret_tid = ret_tid;
     e.cur_effects = fn_eff(a, fid);
 
+    let mut_base: i64 = e.var_names.len();
     env_push_scope(e);
 
     let params_lid: i64 = fn_params_lid(a, fid);
@@ -715,6 +716,15 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
 
     env_pop_scope(e);
 
+    let var_total: i64 = e.var_names.len();
+    let mut vi: i64 = mut_base;
+    while vi < var_total {
+        if e.var_muts[vi] == 1 && e.var_mutated[vi] == 0 {
+            env_emit_error_code(e, EC_UNUSED_MUT(), String::from("`mut` binding is never reassigned; remove `mut`"), e.var_decl_spans[vi]);
+        }
+        vi = vi + 1;
+    }
+
     check_effects_fn(e, m, fid);
 
     e.cur_ret_tid = save_ret;
@@ -748,7 +758,7 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
                 }
                 at_tid
             };
-            bind_pattern(e, m, pat_pid, bound_tid);
+            bind_pattern(e, m, pat_pid, bound_tid, stmt_span(a, sid));
             result_tid = CTY_UNIT();
         } else {
             let eid: i64 = stmt_a(a, sid);
@@ -774,13 +784,14 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
     final_tid
 }
 
-fn bind_pattern(e: CheckEnv, m: Module, pid: i64, tid: i64) [io] {
+fn bind_pattern(e: CheckEnv, m: Module, pid: i64, tid: i64, decl_span: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
     if tag == PAT_IDENT() {
         let name_sid: i64 = pat_a(a, pid);
         let name: String = arena_str(a, name_sid);
-        env_define_var(e, name, tid);
+        let is_mut: i64 = pat_b(a, pid);
+        env_define_var_m(e, name, tid, is_mut, decl_span);
     }
 }
 
@@ -1535,6 +1546,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let rhs_eid: i64 = expr_b(a, eid);
         let _lhs_tid: i64 = check_expr(e, m, lhs_eid);
         let _rhs_tid: i64 = check_expr(e, m, rhs_eid);
+        if expr_tag(a, lhs_eid) == EXPR_IDENT() {
+            let lhs_name: String = arena_str(a, expr_a(a, lhs_eid));
+            let mut_status: i64 = env_mark_mutated(e, lhs_name);
+            if mut_status == 2 {
+                env_emit_error_code(e, EC_IMMUTABLE_ASSIGNMENT(), String::from("cannot assign to immutable binding; declare it with `let mut`"), expr_span(a, lhs_eid));
+            }
+        }
         return CTY_UNIT();
     }
 

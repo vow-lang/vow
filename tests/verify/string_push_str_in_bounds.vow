@@ -3,7 +3,7 @@ module StringPushStrInBounds
 fn cat(a: String, b: String) -> i64 vow {
   requires: a.len() + b.len() <= 256
 } {
-  let mut s: String = a;
+  let s: String = a;
   s.push_str(b);
   s.len()
 }

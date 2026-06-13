@@ -12,7 +12,7 @@ fn queue_new(capacity: i64) -> Queue {
 }
 
 fn queue_enqueue(q: Queue, val: i64) -> Queue {
-  let mut d: Vec<i64> = q.data;
+  let d: Vec<i64> = q.data;
   d.push(val);
   Queue { data: d, size: q.size + 1, capacity: q.capacity }
 }

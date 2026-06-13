@@ -11,7 +11,7 @@ module StringPushStrOverflow
 fn over(a: String, b: String) -> String vow {
   ensures: result.len() >= 0
 } {
-  let mut s: String = a;
+  let s: String = a;
   s.push_str(b);
   s
 }
