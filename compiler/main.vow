@@ -133,13 +133,13 @@ fn default_output(path: String) -> String {
     r
 }
 
-fn CMD_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
-fn CMD_BUILD() -> i64 vow { ensures: result >= 0 } { 1 }
-fn CMD_VERIFY() -> i64 vow { ensures: result >= 0 } { 2 }
-fn CMD_TEST() -> i64 vow { ensures: result >= 0 } { 3 }
-fn CMD_CONTRACTS() -> i64 vow { ensures: result >= 0 } { 4 }
-fn CMD_SKILL() -> i64 vow { ensures: result >= 0 } { 5 }
-fn CMD_MUTANTS() -> i64 vow { ensures: result >= 0 } { 6 }
+fn CMD_NONE() -> i64 { 0 }
+fn CMD_BUILD() -> i64 { 1 }
+fn CMD_VERIFY() -> i64 { 2 }
+fn CMD_TEST() -> i64 { 3 }
+fn CMD_CONTRACTS() -> i64 { 4 }
+fn CMD_SKILL() -> i64 { 5 }
+fn CMD_MUTANTS() -> i64 { 6 }
 
 fn get_subcommand(argv: Vec<String>) -> i64 {
     if argv.len() < 2 {
@@ -4693,11 +4693,24 @@ fn skill_bundle() -> String {
     r.push_str(String::from("`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count\n"));
     r.push_str(String::from("exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in\n"));
     r.push_str(String::from("unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to\n"));
-    r.push_str(String::from("ratchet down as contracts harden -- most of the current `weak` count is the\n"));
-    r.push_str(String::from("constant tag-family functions the structural refactor (#81 follow-up) dissolves.\n"));
-    r.push_str(String::from("The dispatch-totality example above (`binop_opcode`, `ensures: result != -1`) and\n"));
-    r.push_str(String::from("`binop_result_ty` (`ensures: result == ITY_BOOL() || result == ITY_U64() ||\n"));
-    r.push_str(String::from("result == ITY_I64()`) are enforced in `compiler/lower.vow` today.\n"));
+    r.push_str(String::from("ratchet down as contracts harden. The dispatch-totality example above\n"));
+    r.push_str(String::from("(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`\n"));
+    r.push_str(String::from("(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)\n"));
+    r.push_str(String::from("are enforced in `compiler/lower.vow` today.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Tag families are structural, not contracted.** The bulk of the old `weak`\n"));
+    r.push_str(String::from("count was nullary tag constants -- `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,\n"));
+    r.push_str(String::from("`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures\n"));
+    r.push_str(String::from("result >= 0` proves nothing: a constant's value is the only fact about it, and\n"));
+    r.push_str(String::from("that fact is structural (each is a distinct literal). So these carry **no**\n"));
+    r.push_str(String::from("contract. Their correctness is established where it matters -- at use sites: the\n"));
+    r.push_str(String::from("dispatch-totality contracts above prove every valid tag is handled, the IR\n"));
+    r.push_str(String::from("validator and serializer round-trips exercise every kind, and the binary\n"));
+    r.push_str(String::from("fixed-point bootstrap miscompiles if any two tags collide. Removing the\n"));
+    r.push_str(String::from("contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11\n"));
+    r.push_str(String::from("are genuine parametric functions (the region/span bit-packers and friends) whose\n"));
+    r.push_str(String::from("right contract is a round-trip or enumerated postcondition -- the next hardening\n"));
+    r.push_str(String::from("target, not noise.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## References\n"));
     r.push_str(String::from("\n"));
@@ -8451,11 +8464,24 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count\n"));
     r.push_str(String::from("exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in\n"));
     r.push_str(String::from("unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to\n"));
-    r.push_str(String::from("ratchet down as contracts harden -- most of the current `weak` count is the\n"));
-    r.push_str(String::from("constant tag-family functions the structural refactor (#81 follow-up) dissolves.\n"));
-    r.push_str(String::from("The dispatch-totality example above (`binop_opcode`, `ensures: result != -1`) and\n"));
-    r.push_str(String::from("`binop_result_ty` (`ensures: result == ITY_BOOL() || result == ITY_U64() ||\n"));
-    r.push_str(String::from("result == ITY_I64()`) are enforced in `compiler/lower.vow` today.\n"));
+    r.push_str(String::from("ratchet down as contracts harden. The dispatch-totality example above\n"));
+    r.push_str(String::from("(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`\n"));
+    r.push_str(String::from("(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)\n"));
+    r.push_str(String::from("are enforced in `compiler/lower.vow` today.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Tag families are structural, not contracted.** The bulk of the old `weak`\n"));
+    r.push_str(String::from("count was nullary tag constants -- `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,\n"));
+    r.push_str(String::from("`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures\n"));
+    r.push_str(String::from("result >= 0` proves nothing: a constant's value is the only fact about it, and\n"));
+    r.push_str(String::from("that fact is structural (each is a distinct literal). So these carry **no**\n"));
+    r.push_str(String::from("contract. Their correctness is established where it matters -- at use sites: the\n"));
+    r.push_str(String::from("dispatch-totality contracts above prove every valid tag is handled, the IR\n"));
+    r.push_str(String::from("validator and serializer round-trips exercise every kind, and the binary\n"));
+    r.push_str(String::from("fixed-point bootstrap miscompiles if any two tags collide. Removing the\n"));
+    r.push_str(String::from("contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11\n"));
+    r.push_str(String::from("are genuine parametric functions (the region/span bit-packers and friends) whose\n"));
+    r.push_str(String::from("right contract is a round-trip or enumerated postcondition -- the next hardening\n"));
+    r.push_str(String::from("target, not noise.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## References\n"));
     r.push_str(String::from("\n"));

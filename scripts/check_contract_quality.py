@@ -19,7 +19,11 @@ import json
 import sys
 
 # The count must not EXCEED these. Ratchet DOWN as contracts harden; never up.
-WEAK_MAX = 408
+# 408 -> 11 once #81 PR-E removed the meaningless `ensures result >= 0` from the
+# tag-constant families (IOP_*, ITY_*, EXPR_*, …). The remaining 11 are real
+# parametric functions (region/span bit-packers and friends) that want a proper
+# round-trip or enumerated postcondition — ratchet down as those are hardened.
+WEAK_MAX = 11
 TAUTOLOGICAL_MAX = 0
 
 try:
