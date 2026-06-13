@@ -785,10 +785,15 @@ fn body_replaceable_result(f: IrFunction) -> bool {
         let mut ii: i64 = 0;
         while ii < ni {
             let inst: IrInst = insts[ii];
+            // Match Rust's `.find()` (vow-verify/src/esbmc.rs): take the FIRST
+            // `Return`, then stop. A trailing scan keeps the LAST return's value,
+            // diverging from Rust for multi-return IR (any if/else or early return).
             if inst.op == IOP_RETURN() {
                 let rargs: Vec<i64> = inst.args;
                 if rargs.len() > 0 {
                     result_id = rargs[0];
+                    ii = ni;
+                    bi = nb;
                 }
             }
             ii = ii + 1;

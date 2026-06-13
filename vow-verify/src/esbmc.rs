@@ -2258,4 +2258,64 @@ VERIFICATION FAILED";
             other => panic!("expected Skipped (gate must run before find_esbmc), got {other:?}"),
         }
     }
+
+    // #81 PR-C parity: `body_replaceable_result` must inspect the FIRST `Return`
+    // instruction (via `.find()`), and the self-hosted compiler
+    // (compiler/verifier.vow) must match. For multi-return IR the first and last
+    // `Return` can name different values, so a last-return scan would pick a
+    // different result id, diverging between the two compilers. This pins the
+    // canonical first-return semantics with a function whose two returns yield
+    // different eligibility verdicts.
+    #[test]
+    fn body_replaceable_result_uses_first_return_for_multi_return() {
+        // first Return -> %2 (a regular WrappingAddI64, eligible)
+        // last  Return -> %0 (a bare GetArg / returned parameter, ineligible)
+        // First-return semantics => eligible (true); a last-return scan would
+        // inspect the GetArg and wrongly report ineligible (false).
+        let func = Function {
+            id: FuncId(0),
+            name: "two_returns".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result >= 0".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                        inst(
+                            2,
+                            Opcode::WrappingAddI64,
+                            Ty::I64,
+                            vec![0, 1],
+                            InstData::None,
+                        ),
+                        inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None)],
+                },
+            ],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        assert!(
+            body_replaceable_result(&func),
+            "must inspect the FIRST Return (%2, a regular inst) and report eligible; \
+             a last-return scan would pick %0 (GetArg) and wrongly report ineligible"
+        );
+    }
 }

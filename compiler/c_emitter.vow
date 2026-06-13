@@ -2215,10 +2215,15 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
             let mut rii: i64 = 0;
             while rii < rinsts.len() {
                 let rinst: IrInst = rinsts[rii];
+                // Match Rust's `.find()` (vow-verify/src/c_emitter.rs): take the
+                // FIRST `Return`, then stop. A trailing scan keeps the LAST
+                // return's value, diverging from Rust for multi-return IR.
                 if rinst.op == IOP_RETURN() {
                     let rargs: Vec<i64> = rinst.args;
                     if rargs.len() > 0 {
                         result_after = rargs[0];
+                        rii = rinsts.len();
+                        rbi = n_blocks;
                     }
                 }
                 rii = rii + 1;
