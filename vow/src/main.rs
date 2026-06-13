@@ -3455,6 +3455,21 @@ later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
 verification fails instead of miscompiling. This is the contract that converts a
 silent fallback into a caught error.
 
+The static classifier rates this clause `substantive`, and `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true` — both are correct, because
+they measure different things. The probe replaces the body with `return 0` (the `i64`
+default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*
+positive: `ensures: result != -1` does not constrain the op→opcode *mapping* — a constant
+non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*
+prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough
+(delete an arm and verification fails). Totality is the silent-fallback property #81
+targets, and — absent a quantifier to say "result is the correct opcode for `op`" — it is
+the strongest property a `!= sentinel` postcondition can express. So read the
+`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not
+as a probe artifact to dismiss. This is *not* the constant-result false positive noted in
+**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the
+type default.
+
 > Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
 > inputs" is expressed as `requires` (pin the finite domain) + a postcondition
 > that excludes the failure value, letting ESBMC enumerate the finite branch
@@ -3639,6 +3654,17 @@ ESBMC `--multi-property`), plus the three quality signals above:
 
 The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
 status and quality tallies, so an author or CI can gate on hollow proofs.
+
+**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
+quality of the self-hosted compiler's own contracts: it reads
+`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
+exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
+unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
+ratchet down as contracts harden — most of the current `weak` count is the
+constant tag-family functions the structural refactor (#81 follow-up) dissolves.
+The dispatch-totality example above (`binop_opcode`, `ensures: result != -1`) and
+`binop_result_ty` (`ensures: result == ITY_BOOL() || result == ITY_U64() ||
+result == ITY_I64()`) are enforced in `compiler/lower.vow` today.
 
 ## References
 
@@ -7170,6 +7196,21 @@ later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
 verification fails instead of miscompiling. This is the contract that converts a
 silent fallback into a caught error.
 
+The static classifier rates this clause `substantive`, and `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true` — both are correct, because
+they measure different things. The probe replaces the body with `return 0` (the `i64`
+default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*
+positive: `ensures: result != -1` does not constrain the op→opcode *mapping* — a constant
+non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*
+prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough
+(delete an arm and verification fails). Totality is the silent-fallback property #81
+targets, and — absent a quantifier to say "result is the correct opcode for `op`" — it is
+the strongest property a `!= sentinel` postcondition can express. So read the
+`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not
+as a probe artifact to dismiss. This is *not* the constant-result false positive noted in
+**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the
+type default.
+
 > Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
 > inputs" is expressed as `requires` (pin the finite domain) + a postcondition
 > that excludes the failure value, letting ESBMC enumerate the finite branch
@@ -7354,6 +7395,17 @@ ESBMC `--multi-property`), plus the three quality signals above:
 
 The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
 status and quality tallies, so an author or CI can gate on hollow proofs.
+
+**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
+quality of the self-hosted compiler's own contracts: it reads
+`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
+exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
+unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
+ratchet down as contracts harden — most of the current `weak` count is the
+constant tag-family functions the structural refactor (#81 follow-up) dissolves.
+The dispatch-totality example above (`binop_opcode`, `ensures: result != -1`) and
+`binop_result_ty` (`ensures: result == ITY_BOOL() || result == ITY_U64() ||
+result == ITY_I64()`) are enforced in `compiler/lower.vow` today.
 
 ## References
 

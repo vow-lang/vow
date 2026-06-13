@@ -774,6 +774,31 @@ if uv run python scripts/generate_help.py --check >/dev/null 2>&1; then
 else
     fail "help/skills-dir-drift" "skills/vow/ drifted from generated content; run 'uv run python scripts/generate_help.py'"
 fi
+
+# contract-quality/weak-gate: ratchet on static contract quality across the
+# self-hosted compiler — fail if the weak/tautological contract count exceeds the
+# committed baseline (#81). Static classification only (no ESBMC), so it is cheap.
+# Capture the contracts JSON in its own step so a producer failure (parse error,
+# missing binary, compiler crash) is reported as itself — with its stderr visible —
+# instead of being masked as a baseline breach by the checker's empty-stdin exit.
+contract_quality_json="$TMPDIR/contract_quality.json"
+if ! run_self contracts compiler/main.vow >"$contract_quality_json"; then
+    fail "contract-quality/weak-gate" "vow contracts compiler/main.vow failed (see stderr above); could not evaluate contract quality"
+else
+    # Distinguish the checker's exit codes: 0 = pass, 1 = baseline breach (a real
+    # contract-quality regression), 2 = structural error (malformed JSON / missing
+    # or non-integer counter — the checker's stderr above names the cause). A bare
+    # else would mislabel a schema error as a baseline breach.
+    quality_status=0
+    uv run python scripts/check_contract_quality.py <"$contract_quality_json" || quality_status=$?
+    if [ "$quality_status" -eq 0 ]; then
+        pass "contract-quality/weak-gate"
+    elif [ "$quality_status" -eq 1 ]; then
+        fail "contract-quality/weak-gate" "weak/tautological contracts exceeded baseline; strengthen the new contract or adjust scripts/check_contract_quality.py with justification"
+    else
+        fail "contract-quality/weak-gate" "contract quality check could not run (malformed 'vow contracts' output / schema mismatch; see stderr above)"
+    fi
+fi
 echo ""
 
 # ─── Section 9: Bootstrap Triple Test ──────────────────────────────
