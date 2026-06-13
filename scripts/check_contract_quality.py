@@ -33,8 +33,29 @@ if quality is None:
     print("check_contract_quality: missing summary.quality", file=sys.stderr)
     sys.exit(2)
 
-weak = quality.get("weak", 0)
-tautological = quality.get("tautological", 0)
+# Fail closed: the two counters the ratchet compares are required by the
+# contracts-result schema. Defaulting an absent counter to 0 would let a broken
+# or mis-shaped `vow contracts` output sail through the gate (0 never exceeds a
+# baseline), so demand the keys explicitly and demand they are integers.
+missing = [k for k in ("weak", "tautological") if k not in quality]
+if missing:
+    print(
+        "check_contract_quality: summary.quality missing required counter(s): "
+        f"{', '.join(missing)} — refusing to evaluate (fail closed)",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+weak = quality["weak"]
+tautological = quality["tautological"]
+if not isinstance(weak, int) or not isinstance(tautological, int):
+    print(
+        "check_contract_quality: summary.quality counters weak/tautological must "
+        "be integers — refusing to evaluate (fail closed)",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
 substantive = quality.get("substantive", 0)
 total = data.get("summary", {}).get("total", 0)
 
