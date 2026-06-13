@@ -28,42 +28,44 @@ except json.JSONDecodeError as exc:
     print(f"check_contract_quality: invalid `vow contracts` JSON: {exc}", file=sys.stderr)
     sys.exit(2)
 
-quality = data.get("summary", {}).get("quality")
-if quality is None:
+summary = data.get("summary")
+if not isinstance(summary, dict):
+    print("check_contract_quality: missing summary object", file=sys.stderr)
+    sys.exit(2)
+
+quality = summary.get("quality")
+if not isinstance(quality, dict):
     print("check_contract_quality: missing summary.quality", file=sys.stderr)
     sys.exit(2)
 
-# Fail closed: the two counters the ratchet compares are required by the
-# contracts-result schema. Defaulting an absent counter to 0 would let a broken
-# or mis-shaped `vow contracts` output sail through the gate (0 never exceeds a
-# baseline), so demand the keys explicitly and demand they are integers.
-missing = [k for k in ("weak", "tautological") if k not in quality]
-if missing:
-    print(
-        "check_contract_quality: summary.quality missing required counter(s): "
-        f"{', '.join(missing)} — refusing to evaluate (fail closed)",
-        file=sys.stderr,
-    )
-    sys.exit(2)
+# Fail closed: every counter the contracts-result schema requires must be present
+# and a real integer. Defaulting an absent counter to 0 would let a broken or
+# mis-shaped `vow contracts` output sail through the gate (0 never exceeds a
+# baseline); bool is an int subclass, so reject it too (True == 1 would slip past).
+required_int_fields = (
+    ("summary.quality.weak", quality, "weak"),
+    ("summary.quality.tautological", quality, "tautological"),
+    ("summary.quality.substantive", quality, "substantive"),
+    ("summary.total", summary, "total"),
+)
+for label, container, key in required_int_fields:
+    if key not in container:
+        print(
+            f"check_contract_quality: missing {label} — refusing to evaluate (fail closed)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if isinstance(container[key], bool) or not isinstance(container[key], int):
+        print(
+            f"check_contract_quality: {label} must be an integer — refusing to evaluate (fail closed)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 weak = quality["weak"]
 tautological = quality["tautological"]
-# bool is a subclass of int in Python, so reject it explicitly: a producer that
-# serializes a count as a JSON boolean (weak: true) must not slip through the
-# fail-closed check via True == 1.
-if (
-    isinstance(weak, bool) or isinstance(tautological, bool)
-    or not isinstance(weak, int) or not isinstance(tautological, int)
-):
-    print(
-        "check_contract_quality: summary.quality counters weak/tautological must "
-        "be integers — refusing to evaluate (fail closed)",
-        file=sys.stderr,
-    )
-    sys.exit(2)
-
-substantive = quality.get("substantive", 0)
-total = data.get("summary", {}).get("total", 0)
+substantive = quality["substantive"]
+total = summary["total"]
 
 print(
     f"contract quality: weak={weak} (max {WEAK_MAX}), "
