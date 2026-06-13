@@ -778,8 +778,13 @@ fi
 # contract-quality/weak-gate: ratchet on static contract quality across the
 # self-hosted compiler — fail if the weak/tautological contract count exceeds the
 # committed baseline (#81). Static classification only (no ESBMC), so it is cheap.
-if run_self contracts compiler/main.vow 2>/dev/null \
-     | uv run python scripts/check_contract_quality.py; then
+# Capture the contracts JSON in its own step so a producer failure (parse error,
+# missing binary, compiler crash) is reported as itself — with its stderr visible —
+# instead of being masked as a baseline breach by the checker's empty-stdin exit.
+contract_quality_json="$TMPDIR/contract_quality.json"
+if ! run_self contracts compiler/main.vow >"$contract_quality_json"; then
+    fail "contract-quality/weak-gate" "vow contracts compiler/main.vow failed (see stderr above); could not evaluate contract quality"
+elif uv run python scripts/check_contract_quality.py <"$contract_quality_json"; then
     pass "contract-quality/weak-gate"
 else
     fail "contract-quality/weak-gate" "weak/tautological contracts exceeded baseline; strengthen the new contract or adjust scripts/check_contract_quality.py with justification"
