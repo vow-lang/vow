@@ -340,6 +340,42 @@ int main(void) {
         walk = *(void**)walk;
     }
 
+    /* Directed scenario for issues #422-#426: a path-oversized chunk can have
+     * total <= normal_total() for sub-4096 allocations, and
+     * arena_try_free_oversized_chunk must classify it by the stored path flag,
+     * not by size. The 4097-byte case above is oversized by *both* path and
+     * total (4120 > 4112), so a size-based classifier (`chunk_total() >
+     * normal_total()`) would still free it and pass. Exercise the
+     * discriminating case in a fresh arena: a 3000-byte request is
+     * path-oversized (3000 > OVERSIZED_THRESHOLD) but its total
+     * (16 + 3000 = 3016) is <= normal_total() (4112). */
+    struct VowArena b;
+    __vow_arena_init_closed(&b);
+    __vow_arena_open(&b);
+    /* Warm up so the 3000-byte request cannot fit the initial normal chunk's
+     * fast path and is forced onto the oversized new-chunk path. */
+    void* warm = __vow_arena_alloc(&b, 2000, 1);
+    (void)warm;
+    void* mid = __vow_arena_alloc(&b, 3000, 1);
+    void* mid_chunk = b.current_chunk;
+    /* The discriminating invariant: oversized by path, but NOT by size. */
+    assert(chunk_is_oversized(mid_chunk));
+    assert(chunk_total(mid_chunk) <= normal_total());
+    void* mid_tail = __vow_arena_alloc(&b, 8, 8); /* forces a new chunk -> mid is non-tail */
+    (void)mid_tail;
+    assert(b.current_chunk != mid_chunk);
+    uintptr_t b_bytes_before = b.retained_bytes;
+    int mid_freed = arena_try_free_oversized_chunk(&b, mid);
+    assert(mid_freed == 1);
+    assert(b.retained_bytes < b_bytes_before);
+    void* b_walk = b.first_chunk;
+    while (b_walk != NULL) {
+        assert(b_walk != mid_chunk);
+        b_walk = *(void**)b_walk;
+    }
+    __vow_arena_close(&b);
+    assert(b.first_chunk == NULL);
+
     __vow_arena_close(&a);
     /* After close the chain is emptied. */
     assert(a.first_chunk == NULL);
