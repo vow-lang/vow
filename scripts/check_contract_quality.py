@@ -48,7 +48,13 @@ if missing:
 
 weak = quality["weak"]
 tautological = quality["tautological"]
-if not isinstance(weak, int) or not isinstance(tautological, int):
+# bool is a subclass of int in Python, so reject it explicitly: a producer that
+# serializes a count as a JSON boolean (weak: true) must not slip through the
+# fail-closed check via True == 1.
+if (
+    isinstance(weak, bool) or isinstance(tautological, bool)
+    or not isinstance(weak, int) or not isinstance(tautological, int)
+):
     print(
         "check_contract_quality: summary.quality counters weak/tautological must "
         "be integers — refusing to evaluate (fail closed)",
