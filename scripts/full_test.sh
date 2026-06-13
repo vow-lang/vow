@@ -902,8 +902,12 @@ echo ""
 # ─── Section 11: Arena Primitive ESBMC Verification ────────────────
 
 section_begin "Section 11: Arena Primitive Verification"
+# Run under the same 2 GB virtual-memory cap as run_self so this also guards
+# against a regression in the verify invocation: with the single-shot
+# --unwind 5 --boolector command (#516) the harness peaks at ~0.5 GB, but
+# --incremental-bmc / Bitwuzla blew past 2 GB and OOM-killed here (#546).
 if command -v esbmc >/dev/null 2>&1; then
-    if (cd vow-runtime/verify && make verify) >"$TMPDIR/arena_verify.log" 2>&1; then
+    if (ulimit -v 2000000; cd vow-runtime/verify && make verify) >"$TMPDIR/arena_verify.log" 2>&1; then
         pass "arena/esbmc"
     else
         fail "arena/esbmc" "$(tail -5 "$TMPDIR/arena_verify.log")"
