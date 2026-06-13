@@ -2777,7 +2777,7 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
@@ -6458,7 +6458,7 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
@@ -11064,10 +11064,6 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
 fn update_contract_statuses(
     entries: &mut [ContractEntryJson],
     ir_module: &vow_ir::Module,
-    // The per-clause `--multi-property` path runs ESBMC fresh and does not use
-    // the single-counterexample verify cache; kept in the signature for the
-    // caller's `--no-cache` plumbing (#81 PR-A).
-    _verify_cache: Option<&VerifyCache>,
     limits: &VerifyLimits,
     config: &SolverConfig,
 ) {
@@ -11194,14 +11190,12 @@ fn run_contracts_command(
             }
             exit_code = 1;
         } else {
-            let verify_cache = if no_cache { None } else { VerifyCache::new() };
-            update_contract_statuses(
-                &mut entries,
-                ir_module,
-                verify_cache.as_ref(),
-                limits,
-                config,
-            );
+            // The per-clause `--multi-property` path runs ESBMC fresh and never
+            // consults the verify cache, so don't construct it — `VerifyCache::new()`
+            // would create the on-disk cache dir on every `vow contracts --verify`.
+            // `--no-cache` is therefore already the de facto behavior on this path.
+            let _ = no_cache;
+            update_contract_statuses(&mut entries, ir_module, limits, config);
         }
     }
 
