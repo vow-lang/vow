@@ -422,6 +422,47 @@ else:
       pass "$name"
     fi
   fi
+
+  name="contracts_vacuity_detected"
+  if matches_filter "$name"; then
+    # PR-B (#81): a function whose `requires` are contradictory makes every
+    # `ensures` pass vacuously. The `--error-label vow_reach` probe finds the
+    # post-requires point unreachable and marks the whole contract `vacuous`
+    # (fail-closed, exit 1). Mirrors the Rust contracts_verify_detects_vacuous.
+    src="$TMPDIR/${name}.vow"
+    cat > "$src" <<'VOWEOF'
+module M
+fn f(x: i64) -> i64 vow {
+  requires: x > 10,
+  requires: x < 5,
+  ensures: result == x
+} { x }
+fn main() -> i32 [io] { 0 }
+VOWEOF
+    set +e
+    vac_json="$(run_vowc contracts --verify "$src" 2>/dev/null)"
+    vac_exit=$?
+    set -e
+    vac_check="$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('parse_error'); sys.exit(0)
+ss = [e.get('status', '') for e in d.get('contracts', [])]
+if ss and all(s == 'vacuous' for s in ss) and d.get('summary', {}).get('vacuous') == 3:
+    print('ok')
+else:
+    print('statuses=%s vacuous=%s' % (ss, d.get('summary', {}).get('vacuous')))
+" <<< "$vac_json")"
+    if [[ "$vac_exit" -ne 1 ]]; then
+      fail "$name" "exit $vac_exit (expected 1 — fail-closed on vacuous)"
+    elif [[ "$vac_check" != "ok" ]]; then
+      fail "$name" "vacuity not detected ($vac_check)"
+    else
+      pass "$name"
+    fi
+  fi
 fi
 
 # --- Phase 3: verify-fail/ tests ---

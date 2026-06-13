@@ -313,10 +313,56 @@ pub fn emit_verify_c_source(
     let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
 
     let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
-    let mut c_src =
-        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits);
+    let mut c_src = emit_c_module_with_callees(
+        func,
+        module,
+        const_fns,
+        &callee_ids,
+        &modelable_fns,
+        limits,
+        false,
+    );
     c_src.push_str(&emit_harness(func));
     c_src
+}
+
+/// Like [`emit_verify_c_source`] but plants a `vow_reach` label after the
+/// target's `requires` assumes, for ESBMC `--error-label vow_reach` vacuity
+/// detection (#81 PR-B). Returns `None` when the function has no `requires` —
+/// there is no antecedent that could be contradictory, so the vacuity check is
+/// not applicable and the caller skips the extra ESBMC run.
+pub fn emit_reach_c_source(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
+) -> Option<String> {
+    if !function_has_requires(func) {
+        return None;
+    }
+    let mut modelable_cache = HashMap::new();
+    let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
+    let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
+    let mut c_src = emit_c_module_with_callees(
+        func,
+        module,
+        const_fns,
+        &callee_ids,
+        &modelable_fns,
+        limits,
+        true,
+    );
+    c_src.push_str(&emit_harness(func));
+    Some(c_src)
+}
+
+/// True when the function carries at least one `requires` clause — the only
+/// contracts subject to antecedent-failure vacuity.
+pub fn function_has_requires(func: &Function) -> bool {
+    func.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .any(|i| i.opcode == vow_ir::Opcode::VowRequires)
 }
 
 pub const DEFAULT_MAX_K_STEP: u32 = 50;
@@ -637,6 +683,52 @@ pub fn run_esbmc_multi_property(
             parse_multi_property_verdicts(&combined),
         ),
         Err(r) => (r, std::collections::HashMap::new()),
+    }
+}
+
+/// Outcome of the `--error-label vow_reach` vacuity probe (#81 PR-B).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReachVerdict {
+    /// Label unreachable (ESBMC SUCCESSFUL): the `requires` are contradictory,
+    /// so every `ensures` on the function is vacuously satisfied.
+    Vacuous,
+    /// Label reachable (ESBMC FAILED): the precondition domain is non-empty.
+    Live,
+    /// ESBMC could not decide (timeout, tool error, unexpected output) — never
+    /// claim vacuity on an undecided probe.
+    Inconclusive,
+}
+
+/// Vacuity probe: run ESBMC with `--error-label vow_reach` over a C source that
+/// plants the label after the `requires` assumes (see `emit_reach_c_source`).
+/// SUCCESSFUL means the label is unreachable — the preconditions are
+/// contradictory and the contract is vacuous; FAILED means the label is
+/// reachable (live); anything else is inconclusive (#81 PR-B).
+pub fn run_esbmc_reach(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    max_k_step: u32,
+    func_name: &str,
+    config: &SolverConfig,
+) -> ReachVerdict {
+    match run_esbmc_capture(
+        esbmc,
+        c_src,
+        max_k_step,
+        func_name,
+        config,
+        &["--error-label", "vow_reach"],
+    ) {
+        Ok(combined) => {
+            if combined.contains("VERIFICATION SUCCESSFUL") {
+                ReachVerdict::Vacuous
+            } else if combined.contains("VERIFICATION FAILED") {
+                ReachVerdict::Live
+            } else {
+                ReachVerdict::Inconclusive
+            }
+        }
+        Err(_) => ReachVerdict::Inconclusive,
     }
 }
 

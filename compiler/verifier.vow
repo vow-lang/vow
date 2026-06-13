@@ -202,7 +202,7 @@ fn emit_harness(f: IrFunction) -> String {
     out
 }
 
-fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
+fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, reach_label: bool) -> String {
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let callee_fis: Vec<i64> = collect_modelable_callees(f, m, const_fn_indices);
     let model_string_max: i64 = string_max_for_literals(m, string_max);
@@ -215,7 +215,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 modelable_fi_set.push(callee_fis[ci]);
                 ci = ci + 1;
             }
-            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max)
+            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label)
         } else {
             let preamble: String = cemit_preamble_with_limits(
                 func_has_shift_op(f, IOP_SHL_I64()),
@@ -225,7 +225,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 vec_max, model_string_max, hashmap_max, btreemap_max
             );
             let empty_modelable: Vec<i64> = Vec::new();
-            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max);
+            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label);
             preamble.push_byte(10);
             preamble
         }
@@ -665,7 +665,7 @@ fn verify_function_multi_property(f: IrFunction, m: IrModule, max_k_step: String
     if vows.len() == 0 {
         return MultiPropertyResult { status: VERIFY_PROVEN(), verdict_ids: ids, verdict_proven: proven };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false);
     let fn_name: String = f.name;
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let tmp_path: String = verify_tmp_path();
@@ -681,6 +681,63 @@ fn verify_function_multi_property(f: IrFunction, m: IrModule, max_k_step: String
     };
     parse_multi_property_verdicts(combined, ids, proven);
     MultiPropertyResult { status: status, verdict_ids: ids, verdict_proven: proven }
+}
+
+// True when the function carries at least one `requires` clause — the only
+// contracts subject to antecedent-failure vacuity (#81 PR-B). Mirrors
+// function_has_requires in vow-verify/src/esbmc.rs.
+fn function_has_requires(f: IrFunction) -> bool {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_VOW_REQ() {
+                return true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// Vacuity probe (#81 PR-B): re-verify with a `vow_reach` label planted after the
+// requires assumes and ESBMC `--error-label vow_reach`. SUCCESSFUL means the
+// label is unreachable — the `requires` are contradictory and the contract is
+// vacuous; anything else (FAILED/timeout/error) is treated as not-vacuous (never
+// claim vacuity on an undecided probe). Only meaningful for functions with a
+// `requires`. Returns 1 when vacuous, 0 otherwise. Mirrors run_esbmc_reach in
+// vow-verify/src/esbmc.rs.
+fn verify_function_vacuity(f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+                           vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+    if !function_has_requires(f) {
+        return 0;
+    }
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, true);
+    let fn_name: String = f.name;
+    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let tmp_path: String = verify_tmp_path();
+    let extra: Vec<String> = Vec::new();
+    extra.push(String::from("--error-label"));
+    extra.push(String::from("vow_reach"));
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, extra);
+    if r.exit_code == -3 {
+        return 0;
+    }
+    let combined: String = r.combined;
+    let status: i64 = {
+        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
+    };
+    if status == VERIFY_PROVEN() {
+        return 1;
+    }
+    0
 }
 
 fn parse_assignments(output: String, names: Vec<String>, values: Vec<String>) {
@@ -922,7 +979,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
             raw_output: String::from(""),
         };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false);
     let fn_name: String = f.name;
     let ir_solver: String = String::from("z3");
     let ir_encoding: String = String::from("ir");
@@ -964,7 +1021,7 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     if vows.len() == 0 {
         return EsbmcStart { handle: -1, tmp_path: String::from("") };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false);
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
     // `use_cache` stays on the signature for caller-side symmetry with the
     // Rust toolchain but has no effect.

@@ -3501,7 +3501,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
+    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.\n"));
     r.push_str(String::from("\n"));
@@ -3766,7 +3766,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"vacuous\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3786,7 +3786,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"vacuous\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3800,7 +3800,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `description` | string  | Full contract text                                       |\n"));
     r.push_str(String::from("| `blame`       | string  | `\"Caller\"` (requires) or `\"Callee\"` (ensures/invariant)  |\n"));
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
-    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, or `\"skipped\"` |\n"));
+    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, `\"skipped\"`, or `\"vacuous\"` |\n"));
     r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
@@ -3815,6 +3815,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
+    r.push_str(String::from("| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously -- ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Quality Values\n"));
     r.push_str(String::from("\n"));
@@ -4560,10 +4561,20 @@ fn skill_bundle() -> String {
     r.push_str(String::from("first runs, and trivial validity *always* indicated a real defect in the design,\n"));
     r.push_str(String::from("spec, or environment.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Detection (the `false` re-check):** re-verify each obligation with its `ensures`\n"));
-    r.push_str(String::from("replaced by `ensures: false`. If `assert(false)` still passes, the path is\n"));
-    r.push_str(String::from("unreachable under the preconditions -- the original proof was vacuous. A non-vacuous\n"));
-    r.push_str(String::from("obligation must *fail* this check.\n"));
+    r.push_str(String::from("**Detection (the reachability probe).** `vow contracts --verify` ships this check\n"));
+    r.push_str(String::from("(#81). For any function carrying a `requires`, it re-runs ESBMC over the same\n"));
+    r.push_str(String::from("model with a `vow_reach` label planted immediately after the `requires` assumes,\n"));
+    r.push_str(String::from("under `--error-label vow_reach`. If ESBMC reports the label **unreachable**\n"));
+    r.push_str(String::from("(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and\n"));
+    r.push_str(String::from("every `ensures` held only vacuously -- all of the function's clauses are reported\n"));
+    r.push_str(String::from("`status: \"vacuous\"` and the command fails closed. If the label is **reachable**\n"));
+    r.push_str(String::from("(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is\n"));
+    r.push_str(String::from("live. This is operationally the dual of the classic `ensures: false` re-check --\n"));
+    r.push_str(String::from("asking \"is the post-`requires` point reachable?\" instead of \"does `assert(false)`\n"));
+    r.push_str(String::from("still pass?\" -- but it needs only one extra run per function and is unaffected by\n"));
+    r.push_str(String::from("body divergence, since the label precedes the body. The label sits after the\n"));
+    r.push_str(String::from("requires prefix rather than at the function end precisely so an unbounded loop or\n"));
+    r.push_str(String::from("an `assume(0)` deeper in the body cannot make it spuriously unreachable.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Interesting witnesses.** Beer et al. also propose the dual of a counterexample:\n"));
     r.push_str(String::from("for a proof that holds, emit a non-trivial *witness* -- concrete inputs that\n"));
@@ -7197,7 +7208,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
+    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.\n"));
     r.push_str(String::from("\n"));
@@ -7462,7 +7473,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"vacuous\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -7482,7 +7493,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"vacuous\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -7496,7 +7507,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `description` | string  | Full contract text                                       |\n"));
     r.push_str(String::from("| `blame`       | string  | `\"Caller\"` (requires) or `\"Callee\"` (ensures/invariant)  |\n"));
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
-    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, or `\"skipped\"` |\n"));
+    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, `\"skipped\"`, or `\"vacuous\"` |\n"));
     r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
@@ -7511,6 +7522,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
+    r.push_str(String::from("| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously -- ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Quality Values\n"));
     r.push_str(String::from("\n"));
@@ -8260,10 +8272,20 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("first runs, and trivial validity *always* indicated a real defect in the design,\n"));
     r.push_str(String::from("spec, or environment.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Detection (the `false` re-check):** re-verify each obligation with its `ensures`\n"));
-    r.push_str(String::from("replaced by `ensures: false`. If `assert(false)` still passes, the path is\n"));
-    r.push_str(String::from("unreachable under the preconditions -- the original proof was vacuous. A non-vacuous\n"));
-    r.push_str(String::from("obligation must *fail* this check.\n"));
+    r.push_str(String::from("**Detection (the reachability probe).** `vow contracts --verify` ships this check\n"));
+    r.push_str(String::from("(#81). For any function carrying a `requires`, it re-runs ESBMC over the same\n"));
+    r.push_str(String::from("model with a `vow_reach` label planted immediately after the `requires` assumes,\n"));
+    r.push_str(String::from("under `--error-label vow_reach`. If ESBMC reports the label **unreachable**\n"));
+    r.push_str(String::from("(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and\n"));
+    r.push_str(String::from("every `ensures` held only vacuously -- all of the function's clauses are reported\n"));
+    r.push_str(String::from("`status: \"vacuous\"` and the command fails closed. If the label is **reachable**\n"));
+    r.push_str(String::from("(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is\n"));
+    r.push_str(String::from("live. This is operationally the dual of the classic `ensures: false` re-check --\n"));
+    r.push_str(String::from("asking \"is the post-`requires` point reachable?\" instead of \"does `assert(false)`\n"));
+    r.push_str(String::from("still pass?\" -- but it needs only one extra run per function and is unaffected by\n"));
+    r.push_str(String::from("body divergence, since the label precedes the body. The label sits after the\n"));
+    r.push_str(String::from("requires prefix rather than at the function end precisely so an unbounded loop or\n"));
+    r.push_str(String::from("an `assume(0)` deeper in the body cannot make it spuriously unreachable.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Interesting witnesses.** Beer et al. also propose the dual of a counterexample:\n"));
     r.push_str(String::from("for a proof that holds, emit a non-trivial *witness* -- concrete inputs that\n"));
@@ -10291,6 +10313,23 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                             }
                             ei = ei + 1;
                         }
+
+                        // Vacuity probe (#81 PR-B): if the function's `requires`
+                        // are contradictory, the `ensures` above all passed
+                        // vacuously. Re-run with a `vow_reach` label after the
+                        // requires; if that point is unreachable, override the
+                        // whole contract's clauses with `vacuous`. Only functions
+                        // with a `requires` are eligible.
+                        let vac: i64 = verify_function_vacuity(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        if vac == 1 {
+                            let mut vi2: i64 = 0;
+                            while vi2 < e_func_ids.len() {
+                                if e_func_ids[vi2] == func.id {
+                                    e_statuses[vi2] = String::from("vacuous");
+                                }
+                                vi2 = vi2 + 1;
+                            }
+                        }
                     }
                 }
                 fi = fi + 1;
@@ -10336,6 +10375,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let n_error: i64 = 0;
     let n_not_verified: i64 = 0;
     let n_skipped: i64 = 0;
+    let n_vacuous: i64 = 0;
     let mut si: i64 = 0;
     while si < total {
         let s: String = e_statuses[si];
@@ -10351,6 +10391,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             n_error = n_error + 1;
         } else if s == String::from("skipped") {
             n_skipped = n_skipped + 1;
+        } else if s == String::from("vacuous") {
+            n_vacuous = n_vacuous + 1;
         } else {
             n_not_verified = n_not_verified + 1;
         }
@@ -10358,8 +10400,9 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     // Fail closed: `vow contracts --verify` exits non-zero when any contract is
-    // not proven, matching `vow build --verify` / `vow verify` (#479).
-    if n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 {
+    // not proven, matching `vow build --verify` / `vow verify` (#479). A vacuous
+    // contract is a hollow proof, so it fails closed too (#81 PR-B).
+    if n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 || n_vacuous > 0 {
         exit_code = 1;
     }
 
@@ -10396,6 +10439,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     json.push_str(i64_to_str(n_not_verified));
     json.push_str(String::from(",\"skipped\":"));
     json.push_str(i64_to_str(n_skipped));
+    json.push_str(String::from(",\"vacuous\":"));
+    json.push_str(i64_to_str(n_vacuous));
     json.push_str(String::from(",\"quality\":{\"weak\":"));
     json.push_str(i64_to_str(n_weak));
     json.push_str(String::from(",\"tautological\":"));

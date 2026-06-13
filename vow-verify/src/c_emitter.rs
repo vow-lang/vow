@@ -1781,6 +1781,7 @@ pub fn emit_c_function(
             warnings: vec![],
         },
         limits,
+        false,
     )
 }
 
@@ -1790,8 +1791,27 @@ pub fn emit_c_function_full(
     modelable_fns: &HashSet<FuncId>,
     module: &Module,
     limits: &VerifyLimits,
+    reach_label: bool,
 ) -> String {
     let mut out = String::new();
+
+    // Vacuity detection (#81 PR-B): when `reach_label` is set, emit a `vow_reach`
+    // label immediately after the last `requires` assume in the entry block.
+    // The label is reachable iff the preconditions are satisfiable; ESBMC
+    // `--error-label vow_reach` then maps unreachable -> contradictory requires
+    // -> vacuous contract. Placing it right after the requires prefix (not at the
+    // function end) keeps body divergence — unbounded loops, assume(0) — from
+    // making the label spuriously unreachable.
+    let reach_after: Option<u32> = if reach_label {
+        func.blocks.first().and_then(|b| {
+            b.insts
+                .iter()
+                .rfind(|i| i.opcode == Opcode::VowRequires)
+                .map(|i| i.id.0)
+        })
+    } else {
+        None
+    };
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
     let string_vars = collect_typed_vars(func, "__vow_string_new", "__vow_string_");
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
@@ -2042,6 +2062,9 @@ pub fn emit_c_function_full(
                 limits,
                 func.return_ty,
             );
+            if reach_after == Some(inst.id.0) {
+                out.push_str("vow_reach:;\n");
+            }
         }
         // Emit Upsilons: read all sources first, then write all targets.
         if !upsilons.is_empty() {
@@ -2228,6 +2251,7 @@ pub fn emit_c_module_with_callees(
     callee_ids: &[FuncId],
     modelable_fns: &HashSet<FuncId>,
     limits: &VerifyLimits,
+    target_reach_label: bool,
 ) -> String {
     let mut out = String::new();
     let effective_limits = limits_with_literal_string_capacity(module, limits);
@@ -2261,18 +2285,20 @@ pub fn emit_c_module_with_callees(
                 modelable_fns,
                 module,
                 &effective_limits,
+                false,
             ));
             out.push('\n');
         }
     }
 
-    // Target function
+    // Target function — the only one that carries the vacuity `vow_reach` label.
     out.push_str(&emit_c_function_full(
         target,
         const_fns,
         modelable_fns,
         module,
         &effective_limits,
+        target_reach_label,
     ));
     out.push('\n');
     out
@@ -2496,6 +2522,7 @@ mod tests {
             &HashSet::new(),
             &module,
             &VerifyLimits::default(),
+            false,
         );
 
         assert!(
@@ -2561,6 +2588,94 @@ mod tests {
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assume(v3)"), "requires: {c}");
         assert!(!c.contains("__ESBMC_assert"), "no assert for requires: {c}");
+    }
+
+    #[test]
+    fn emit_reach_label_after_requires() {
+        // #81 PR-B: in reach mode the `vow_reach` label is planted immediately
+        // after the last `requires` assume (so body divergence can't make it
+        // spuriously unreachable), and it is absent on the normal verify path.
+        let func = Function {
+            id: FuncId(0),
+            name: "divide".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "y != 0".to_string(),
+                blame: Blame::Caller,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::NeI64, Ty::Bool, vec![1, 2], InstData::None),
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::VowRequires,
+                        ty: Ty::Unit,
+                        args: vec![InstId(3)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(
+                        5,
+                        Opcode::WrappingDivI64,
+                        Ty::I64,
+                        vec![0, 1],
+                        InstData::None,
+                    ),
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: String::new(),
+            functions: vec![],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+            true,
+        );
+        let assume_pos = c
+            .find("__ESBMC_assume(v3)")
+            .expect("requires assume present");
+        let label_pos = c.find("vow_reach:").expect("reach label present");
+        assert!(
+            label_pos > assume_pos,
+            "label must follow the requires assume:\n{c}"
+        );
+        let c_no = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+            false,
+        );
+        assert!(
+            !c_no.contains("vow_reach"),
+            "no reach label on the normal verify path:\n{c_no}"
+        );
     }
 
     #[test]
@@ -4687,6 +4802,7 @@ mod tests {
             &HashSet::new(),
             &module,
             &VerifyLimits::default(),
+            false,
         );
         assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
         assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
@@ -4737,6 +4853,7 @@ mod tests {
             &[],
             &HashSet::new(),
             &limits,
+            false,
         );
         assert!(
             c.contains("typedef struct { int64_t len; int8_t data[5]; } __vow_string_t;"),
@@ -4787,6 +4904,7 @@ mod tests {
             &HashSet::new(),
             &module,
             &VerifyLimits::default(),
+            false,
         );
         assert!(c.contains("__vow_string_t v2;"), "clone decl: {c}");
         assert!(c.contains("v2 = v1;"), "clone preserves source model: {c}");
@@ -4824,6 +4942,7 @@ mod tests {
                 warnings: vec![],
             },
             &VerifyLimits::default(),
+            false,
         );
         assert!(c.contains("__vow_string_t v0;"), "dest param model: {c}");
         assert!(c.contains("__vow_string_t v1;"), "source param model: {c}");

@@ -255,10 +255,20 @@ years of hardware verification at IBM, ~20% of formulas were trivially valid on
 first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
-**Detection (the `false` re-check):** re-verify each obligation with its `ensures`
-replaced by `ensures: false`. If `assert(false)` still passes, the path is
-unreachable under the preconditions — the original proof was vacuous. A non-vacuous
-obligation must *fail* this check.
+**Detection (the reachability probe).** `vow contracts --verify` ships this check
+(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
+model with a `vow_reach` label planted immediately after the `requires` assumes,
+under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
+(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+every `ensures` held only vacuously — all of the function's clauses are reported
+`status: "vacuous"` and the command fails closed. If the label is **reachable**
+(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+live. This is operationally the dual of the classic `ensures: false` re-check —
+asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
+still pass?" — but it needs only one extra run per function and is unaffected by
+body divergence, since the label precedes the body. The label sits after the
+requires prefix rather than at the function end precisely so an unbounded loop or
+an `assume(0)` deeper in the body cannot make it spuriously unreachable.
 
 **Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
 for a proof that holds, emit a non-trivial *witness* — concrete inputs that
