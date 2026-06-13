@@ -3455,14 +3455,20 @@ later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
 verification fails instead of miscompiling. This is the contract that converts a
 silent fallback into a caught error.
 
-The static classifier rates this clause `substantive`, but `vow contracts --verify`'s
-body-replace probe reports it `trivially_satisfiable: true`: the replacement body
-`return 0` (the `i64` default) already satisfies `0 != -1`. That divergence is
-expected — it is the probe's one-sided behaviour (see **Weakness**, below), not a
-real weakness. A `!= sentinel` dispatch-totality contract is genuinely strong against
-the real body, so read the probe's `true` here as "could not witness strength," not
-"the contract is hollow." This is a distinct case from the constant-result false
-positive noted there.
+The static classifier rates this clause `substantive`, and `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true` — both are correct, because
+they measure different things. The probe replaces the body with `return 0` (the `i64`
+default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*
+positive: `ensures: result != -1` does not constrain the op→opcode *mapping* — a constant
+non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*
+prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough
+(delete an arm and verification fails). Totality is the silent-fallback property #81
+targets, and — absent a quantifier to say "result is the correct opcode for `op`" — it is
+the strongest property a `!= sentinel` postcondition can express. So read the
+`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not
+as a probe artifact to dismiss. This is *not* the constant-result false positive noted in
+**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the
+type default.
 
 > Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
 > inputs" is expressed as `requires` (pin the finite domain) + a postcondition
@@ -7190,14 +7196,20 @@ later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
 verification fails instead of miscompiling. This is the contract that converts a
 silent fallback into a caught error.
 
-The static classifier rates this clause `substantive`, but `vow contracts --verify`'s
-body-replace probe reports it `trivially_satisfiable: true`: the replacement body
-`return 0` (the `i64` default) already satisfies `0 != -1`. That divergence is
-expected — it is the probe's one-sided behaviour (see **Weakness**, below), not a
-real weakness. A `!= sentinel` dispatch-totality contract is genuinely strong against
-the real body, so read the probe's `true` here as "could not witness strength," not
-"the contract is hollow." This is a distinct case from the constant-result false
-positive noted there.
+The static classifier rates this clause `substantive`, and `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true` — both are correct, because
+they measure different things. The probe replaces the body with `return 0` (the `i64`
+default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*
+positive: `ensures: result != -1` does not constrain the op→opcode *mapping* — a constant
+non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*
+prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough
+(delete an arm and verification fails). Totality is the silent-fallback property #81
+targets, and — absent a quantifier to say "result is the correct opcode for `op`" — it is
+the strongest property a `!= sentinel` postcondition can express. So read the
+`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not
+as a probe artifact to dismiss. This is *not* the constant-result false positive noted in
+**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the
+type default.
 
 > Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
 > inputs" is expressed as `requires` (pin the finite domain) + a postcondition
