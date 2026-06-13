@@ -584,7 +584,7 @@ fn parse_vow_id(output: String) -> i64 {
 fn parse_digits_at(line: String, pos: i64) -> i64 {
     let n: i64 = line.len();
     let mut end: i64 = pos;
-    let scanning: bool = true;
+    let mut scanning: bool = true;
     while end < n && scanning {
         let b: i64 = line.byte_at(end);
         if b >= 48 && b <= 57 {
