@@ -202,7 +202,7 @@ fn emit_harness(f: IrFunction) -> String {
     out
 }
 
-fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, reach_label: bool) -> String {
+fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, reach_label: bool, body_replace: bool) -> String {
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let callee_fis: Vec<i64> = collect_modelable_callees(f, m, const_fn_indices);
     let model_string_max: i64 = string_max_for_literals(m, string_max);
@@ -215,7 +215,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 modelable_fi_set.push(callee_fis[ci]);
                 ci = ci + 1;
             }
-            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label)
+            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label, body_replace)
         } else {
             let preamble: String = cemit_preamble_with_limits(
                 func_has_shift_op(f, IOP_SHL_I64()),
@@ -225,7 +225,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 vec_max, model_string_max, hashmap_max, btreemap_max
             );
             let empty_modelable: Vec<i64> = Vec::new();
-            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label);
+            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label, body_replace);
             preamble.push_byte(10);
             preamble
         }
@@ -665,7 +665,7 @@ fn verify_function_multi_property(f: IrFunction, m: IrModule, max_k_step: String
     if vows.len() == 0 {
         return MultiPropertyResult { status: VERIFY_PROVEN(), verdict_ids: ids, verdict_proven: proven };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);
     let fn_name: String = f.name;
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let tmp_path: String = verify_tmp_path();
@@ -719,7 +719,7 @@ fn verify_function_vacuity(f: IrFunction, m: IrModule, max_k_step: String, solve
     if !function_has_requires(f) {
         return 0;
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, true);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, true, false);
     let fn_name: String = f.name;
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let tmp_path: String = verify_tmp_path();
@@ -735,6 +735,128 @@ fn verify_function_vacuity(f: IrFunction, m: IrModule, max_k_step: String, solve
         if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
     };
     if status == VERIFY_PROVEN() {
+        return 1;
+    }
+    0
+}
+
+// True when the function carries at least one `ensures` clause. Mirrors
+// function_has_ensures in vow-verify/src/esbmc.rs (#81 PR-C).
+fn function_has_ensures(f: IrFunction) -> bool {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_VOW_ENS() {
+                return true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// True when the return type is a scalar integer/bool/float, so the trivial
+// `return 0` body-replace is well-typed (#81 PR-C).
+fn returns_scalar(f: IrFunction) -> bool {
+    let rt: i64 = f.return_ty;
+    rt != ITY_UNIT() && rt != ITY_PTR() && rt != ITY_LPTR()
+}
+
+// True when the value the `Return` yields is produced by a regular (non-GetArg)
+// body instruction, so the body-replace rewrite has an overwrite site. Returned
+// parameters and empty returns are skipped — sound but incomplete (#81 PR-C).
+fn body_replaceable_result(f: IrFunction) -> bool {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut result_id: i64 = -1;
+    let mut n_returns: i64 = 0;
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_RETURN() {
+                n_returns = n_returns + 1;
+                let rargs: Vec<i64> = inst.args;
+                if rargs.len() > 0 {
+                    result_id = rargs[0];
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    // The body-replace rewrite zeroes exactly one return site, so the probe is
+    // only sound for single-exit functions. A function with multiple `Return`s
+    // (any early return / if-else) would leave the other paths running the real
+    // body, which can falsely "prove" a substantive `ensures` — a false weakness
+    // claim. Skip those (mirrors vow-verify/src/esbmc.rs).
+    if n_returns != 1 {
+        return false;
+    }
+    if result_id < 0 {
+        return false;
+    }
+    bi = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.id == result_id && inst.op != IOP_GET_ARG() {
+                return true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// Weakness probe (#81 PR-C): verify a body-replaced model where the returned
+// value is forced to the type-default. SUCCESSFUL means a trivial
+// `return <default>` body satisfies the `ensures` — the contract is too weak to
+// pin down the implementation. Returns 1 then, 0 otherwise. One-sided: an
+// inconclusive probe is reported as not trivially satisfiable. Mirrors
+// run_esbmc_bodyreplace in vow-verify/src/esbmc.rs.
+fn verify_function_trivial(f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+                           vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+    if !function_has_ensures(f) {
+        return 0;
+    }
+    if !returns_scalar(f) {
+        return 0;
+    }
+    if !body_replaceable_result(f) {
+        return 0;
+    }
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, true);
+    let fn_name: String = f.name;
+    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let tmp_path: String = verify_tmp_path();
+    let no_extra: Vec<String> = Vec::new();
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, no_extra);
+    if r.exit_code == -3 {
+        return 0;
+    }
+    let combined: String = r.combined;
+    let status: i64 = {
+        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
+    };
+    if status == VERIFY_PROVEN() || status == VERIFY_PROVEN_IR() {
         return 1;
     }
     0
@@ -979,7 +1101,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
             raw_output: String::from(""),
         };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);
     let fn_name: String = f.name;
     let ir_solver: String = String::from("z3");
     let ir_encoding: String = String::from("ir");
@@ -1021,7 +1143,7 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     if vows.len() == 0 {
         return EsbmcStart { handle: -1, tmp_path: String::from("") };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
     // `use_cache` stays on the signature for caller-side symmetry with the
     // Rust toolchain but has no effect.

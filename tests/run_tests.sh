@@ -463,6 +463,49 @@ else:
       pass "$name"
     fi
   fi
+
+  name="contracts_weakness_trivially_satisfiable"
+  if matches_filter "$name"; then
+    # PR-C (#81): a weak postcondition (`result >= 0`) is satisfied by a trivial
+    # `return 0` body, so the body-replace probe flags it trivially_satisfiable;
+    # a tight one (`result == x + 1`) is not. Informational (no exit-code change).
+    # Mirrors the Rust contracts_verify_flags_trivially_satisfiable_ensures test.
+    src="$TMPDIR/${name}.vow"
+    cat > "$src" <<'VOWEOF'
+module M
+fn weak(x: i64) -> i64 vow {
+  requires: x >= 0,
+  ensures: result >= 0
+} { x + 1 }
+fn tight(x: i64) -> i64 vow {
+  ensures: result == x + 1
+} { x + 1 }
+fn main() -> i32 [io] { 0 }
+VOWEOF
+    set +e
+    wk_json="$(run_vowc contracts --verify "$src" 2>/dev/null)"
+    set -e
+    wk_check="$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('parse_error'); sys.exit(0)
+t = {}
+for e in d.get('contracts', []):
+    if e.get('kind') == 'ensures':
+        t[e.get('function', '')] = e.get('trivially_satisfiable')
+if t.get('weak') is True and t.get('tight') is False and d.get('summary', {}).get('trivially_satisfiable') == 1:
+    print('ok')
+else:
+    print('weak=%s tight=%s n=%s' % (t.get('weak'), t.get('tight'), d.get('summary', {}).get('trivially_satisfiable')))
+" <<< "$wk_json")"
+    if [[ "$wk_check" != "ok" ]]; then
+      fail "$name" "weakness probe mismatch ($wk_check)"
+    else
+      pass "$name"
+    fi
+  fi
 fi
 
 # --- Phase 3: verify-fail/ tests ---

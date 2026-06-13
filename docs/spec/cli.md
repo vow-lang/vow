@@ -332,7 +332,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -352,7 +352,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -368,6 +368,7 @@ that path produces `Unverified` (exit 0).
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 ### Status Values
 

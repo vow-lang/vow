@@ -19,8 +19,9 @@ use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
     ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding,
     ReachVerdict, Solver, SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
-    detect_constant_functions, emit_reach_c_source, emit_verify_c_source, find_esbmc,
-    non_modelable_reason, run_esbmc_multi_property, run_esbmc_reach, run_with_fallback,
+    detect_constant_functions, emit_bodyreplace_c_source, emit_reach_c_source,
+    emit_verify_c_source, find_esbmc, non_modelable_reason, run_esbmc_bodyreplace,
+    run_esbmc_multi_property, run_esbmc_reach, run_with_fallback,
     verify_function_with_module_and_const_fns_configured,
 };
 
@@ -2732,7 +2733,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2752,7 +2753,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2768,6 +2769,7 @@ that path produces `Unverified` (exit 0).
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 ### Status Values
 
@@ -3499,11 +3501,25 @@ ways this happens; a contract-quality tool should distinguish them.
 
 The clause is satisfiable and true, but so loose that an incorrect
 implementation also satisfies it (`ensures: result >= 0` on a computed value).
-This is the 354-contract problem. **Detection (mutation-based):** mutate the
-implementation — flip a constant, swap an operator — and re-verify. If the
-contract still proves against the *mutated* body, it does not constrain that
-behavior and is too weak. Vow already has the machinery for this in
-`vowc mutants`; a weak contract is one whose function's mutants survive.
+This is the 354-contract problem.
+
+**Detection (the body-replace probe).** `vow contracts --verify` ships this check
+(#81). It mutates the implementation in the strongest possible way — replaces the
+whole body with a trivial `return <type-default>` — and re-verifies the
+`ensures`. If the contract still proves against that body, a constant-returning
+implementation satisfies it, so it does not constrain the real computation: each
+such `ensures` is reported `trivially_satisfiable: true`. This is exactly the
+`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.
+
+The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of
+weakness (a specific trivial body satisfies the contract), but a `false` verdict
+does not prove strength — the probe uses a single default value and skips
+non-scalar returns, returned parameters, and φ-merged/branchy results, so it can
+miss weak contracts it cannot witness this way. It is informational and never
+changes the exit code; pair it with the static `quality` field. The one known
+false positive is a function whose correct result genuinely *is* the type default
+(e.g. a constant `ensures result == 0` on a `{ 0 }` body) — an equivalent mutant,
+the standard caveat of mutation testing.
 
 ### Tautology
 
@@ -3609,14 +3625,20 @@ Contract expressions must be **pure** — they cannot call effectful functions
 blocked at the *modelable* axis, not the expressible one; classify such gaps as
 model limitations, not contract-language limitations.
 
-## Tooling (planned)
+## Tooling
 
-`vow contracts --verify` lists contracts and verifies them per function today. The
-quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**
-check that emits a quality signal per clause — flagging tautologies (cheap, no
-ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`
-harness, weak obligations whose function's mutants survive. Until that ships, the
-three detections above are checks an author can run by hand.
+`vow contracts --verify` performs the **per-obligation** quality analysis tracked
+in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
+ESBMC `--multi-property`), plus the three quality signals above:
+
+- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
+- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
+  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
+  an `ensures` a trivial `return <default>` body satisfies (informational).
+
+The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
+status and quality tallies, so an author or CI can gate on hollow proofs.
 
 ## References
 
@@ -6424,7 +6446,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -6444,7 +6466,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -6460,6 +6482,7 @@ that path produces `Unverified` (exit 0).
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
 | `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 ### Status Values
 
@@ -7193,11 +7216,25 @@ ways this happens; a contract-quality tool should distinguish them.
 
 The clause is satisfiable and true, but so loose that an incorrect
 implementation also satisfies it (`ensures: result >= 0` on a computed value).
-This is the 354-contract problem. **Detection (mutation-based):** mutate the
-implementation — flip a constant, swap an operator — and re-verify. If the
-contract still proves against the *mutated* body, it does not constrain that
-behavior and is too weak. Vow already has the machinery for this in
-`vowc mutants`; a weak contract is one whose function's mutants survive.
+This is the 354-contract problem.
+
+**Detection (the body-replace probe).** `vow contracts --verify` ships this check
+(#81). It mutates the implementation in the strongest possible way — replaces the
+whole body with a trivial `return <type-default>` — and re-verifies the
+`ensures`. If the contract still proves against that body, a constant-returning
+implementation satisfies it, so it does not constrain the real computation: each
+such `ensures` is reported `trivially_satisfiable: true`. This is exactly the
+`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.
+
+The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of
+weakness (a specific trivial body satisfies the contract), but a `false` verdict
+does not prove strength — the probe uses a single default value and skips
+non-scalar returns, returned parameters, and φ-merged/branchy results, so it can
+miss weak contracts it cannot witness this way. It is informational and never
+changes the exit code; pair it with the static `quality` field. The one known
+false positive is a function whose correct result genuinely *is* the type default
+(e.g. a constant `ensures result == 0` on a `{ 0 }` body) — an equivalent mutant,
+the standard caveat of mutation testing.
 
 ### Tautology
 
@@ -7303,14 +7340,20 @@ Contract expressions must be **pure** — they cannot call effectful functions
 blocked at the *modelable* axis, not the expressible one; classify such gaps as
 model limitations, not contract-language limitations.
 
-## Tooling (planned)
+## Tooling
 
-`vow contracts --verify` lists contracts and verifies them per function today. The
-quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**
-check that emits a quality signal per clause — flagging tautologies (cheap, no
-ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`
-harness, weak obligations whose function's mutants survive. Until that ships, the
-three detections above are checks an author can run by hand.
+`vow contracts --verify` performs the **per-obligation** quality analysis tracked
+in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
+ESBMC `--multi-property`), plus the three quality signals above:
+
+- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
+- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
+  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
+  an `ensures` a trivial `return <default>` body satisfies (informational).
+
+The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
+status and quality tallies, so an author or CI can gate on hollow proofs.
 
 ## References
 
@@ -9137,6 +9180,12 @@ pub struct ContractEntryJson {
     /// or `substantive` (equality / relational / inverse / call). See
     /// docs/spec/contracts-methodology.md.
     pub quality: String,
+    /// Verification-based weakness signal (#81 PR-C): true when a trivial
+    /// `return <default>` body still satisfies this `ensures` — the contract is
+    /// too weak to pin down the implementation. Only computed for `ensures`
+    /// clauses under `--verify`; always false for `requires`/`invariant` and
+    /// when `--verify` is off. Informational: it does not affect the exit code.
+    pub trivially_satisfiable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -9156,6 +9205,9 @@ pub struct ContractsSummaryJson {
     pub not_verified: u32,
     pub skipped: u32,
     pub vacuous: u32,
+    /// Count of `ensures` clauses a trivial `return <default>` body satisfies
+    /// (#81 PR-C). Informational, like `quality`; does not affect the exit code.
+    pub trivially_satisfiable: u32,
     pub quality: ContractsQualityJson,
 }
 
@@ -11060,6 +11112,7 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
         not_verified: 0,
         skipped: 0,
         vacuous: 0,
+        trivially_satisfiable: 0,
         quality: ContractsQualityJson {
             weak: 0,
             tautological: 0,
@@ -11067,6 +11120,9 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
         },
     };
     for e in entries {
+        if e.trivially_satisfiable {
+            summary.trivially_satisfiable += 1;
+        }
         match e.status.as_str() {
             "proven" | "proven-ir" => summary.proven += 1,
             "failed" => summary.failed += 1,
@@ -11165,6 +11221,23 @@ fn update_contract_statuses(
                 }
             }
         }
+
+        // Weakness probe (#81 PR-C): re-verify a body-replaced model where the
+        // returned value is forced to the type-default. If the `ensures` still
+        // holds, a trivial `return <default>` body satisfies the contract — it
+        // is too weak to pin down the implementation. Marks each `ensures` clause
+        // `trivially_satisfiable` (informational; never changes the exit code).
+        // Skipped for non-scalar returns / returned-parameter results, which
+        // keeps the signal one-sided — it never claims weakness it cannot show.
+        if let Some(br_src) = emit_bodyreplace_c_source(func, ir_module, &const_fns, limits)
+            && run_esbmc_bodyreplace(&esbmc, &br_src, limits.max_k_step, &func.name, config)
+        {
+            for entry in entries.iter_mut() {
+                if entry.function_id == func.id.0 && entry.kind == "ensures" {
+                    entry.trivially_satisfiable = true;
+                }
+            }
+        }
     }
 }
 
@@ -11222,6 +11295,7 @@ fn run_contracts_command(
                 },
                 status: "not_verified".to_string(),
                 quality: quality.to_string(),
+                trivially_satisfiable: false,
             });
         }
     }
@@ -14920,6 +14994,7 @@ fn main() -> i32 {
             source: source.clone(),
             status: status.to_string(),
             quality: "substantive".to_string(),
+            trivially_satisfiable: false,
         };
         let summary = build_contracts_summary(&[
             entry("proven"),
@@ -14957,6 +15032,7 @@ fn main() -> i32 {
             not_verified: 0,
             skipped: 0,
             vacuous: 0,
+            trivially_satisfiable: 0,
             quality: ContractsQualityJson {
                 weak: 0,
                 tautological: 0,

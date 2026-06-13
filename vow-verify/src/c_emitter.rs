@@ -1782,9 +1782,11 @@ pub fn emit_c_function(
         },
         limits,
         false,
+        false,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_c_function_full(
     func: &Function,
     const_fns: &HashMap<FuncId, ConstantValue>,
@@ -1792,6 +1794,7 @@ pub fn emit_c_function_full(
     module: &Module,
     limits: &VerifyLimits,
     reach_label: bool,
+    body_replace: bool,
 ) -> String {
     let mut out = String::new();
 
@@ -1809,6 +1812,24 @@ pub fn emit_c_function_full(
                 .rfind(|i| i.opcode == Opcode::VowRequires)
                 .map(|i| i.id.0)
         })
+    } else {
+        None
+    };
+
+    // Weakness detection (#81 PR-C): when `body_replace` is set, overwrite the
+    // returned value with the type-default right after it is computed, so each
+    // `ensures` is checked against a trivial `return <default>` implementation.
+    // If ESBMC still proves the ensures, a constant-returning body satisfies the
+    // contract — it is too weak to pin down the implementation. `result_after`
+    // is the id of the value the `Return` yields (which the `ensures` predicate
+    // references). Callers only set `body_replace` when this id names a regular
+    // body instruction of scalar type (see `emit_bodyreplace_c_source`).
+    let result_after: Option<u32> = if body_replace {
+        func.blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .find(|i| i.opcode == Opcode::Return)
+            .and_then(|ret| ret.args.first().map(|a| a.0))
     } else {
         None
     };
@@ -2065,6 +2086,9 @@ pub fn emit_c_function_full(
             if reach_after == Some(inst.id.0) {
                 out.push_str("vow_reach:;\n");
             }
+            if result_after == Some(inst.id.0) {
+                out.push_str(&format!("  v{} = 0;\n", inst.id.0));
+            }
         }
         // Emit Upsilons: read all sources first, then write all targets.
         if !upsilons.is_empty() {
@@ -2244,6 +2268,7 @@ pub fn emit_c_module(
 
 /// Emit C code for a target function and its modelable callees.
 /// Callee functions are emitted in topological order (callees first).
+#[allow(clippy::too_many_arguments)]
 pub fn emit_c_module_with_callees(
     target: &Function,
     module: &Module,
@@ -2252,6 +2277,7 @@ pub fn emit_c_module_with_callees(
     modelable_fns: &HashSet<FuncId>,
     limits: &VerifyLimits,
     target_reach_label: bool,
+    target_body_replace: bool,
 ) -> String {
     let mut out = String::new();
     let effective_limits = limits_with_literal_string_capacity(module, limits);
@@ -2286,12 +2312,14 @@ pub fn emit_c_module_with_callees(
                 module,
                 &effective_limits,
                 false,
+                false,
             ));
             out.push('\n');
         }
     }
 
-    // Target function — the only one that carries the vacuity `vow_reach` label.
+    // Target function — the only one that carries the vacuity `vow_reach` label
+    // or the weakness body-replace rewrite.
     out.push_str(&emit_c_function_full(
         target,
         const_fns,
@@ -2299,6 +2327,7 @@ pub fn emit_c_module_with_callees(
         module,
         &effective_limits,
         target_reach_label,
+        target_body_replace,
     ));
     out.push('\n');
     out
@@ -2523,6 +2552,7 @@ mod tests {
             &module,
             &VerifyLimits::default(),
             false,
+            false,
         );
 
         assert!(
@@ -2655,6 +2685,7 @@ mod tests {
             &module,
             &VerifyLimits::default(),
             true,
+            false,
         );
         let assume_pos = c
             .find("__ESBMC_assume(v3)")
@@ -2671,10 +2702,101 @@ mod tests {
             &module,
             &VerifyLimits::default(),
             false,
+            false,
         );
         assert!(
             !c_no.contains("vow_reach"),
             "no reach label on the normal verify path:\n{c_no}"
+        );
+    }
+
+    #[test]
+    fn emit_body_replace_overwrites_result_with_default() {
+        // #81 PR-C: in body-replace mode the returned value is overwritten with
+        // the type-default right after it is computed, so the `ensures` is
+        // checked against a trivial `return 0` body; absent on the normal path.
+        // g(x) { x + 1 }: result is %5 (WrappingAddI64), referenced by the
+        // ensures and the Return.
+        let func = Function {
+            id: FuncId(0),
+            name: "g".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(1),
+                description: "result >= 0".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    inst(
+                        5,
+                        Opcode::WrappingAddI64,
+                        Ty::I64,
+                        vec![0, 4],
+                        InstData::None,
+                    ),
+                    inst(6, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(7, Opcode::GeI64, Ty::Bool, vec![5, 6], InstData::None),
+                    Inst {
+                        id: InstId(8),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(7)],
+                        data: InstData::VowId(VowId(1)),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(9, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: String::new(),
+            functions: vec![],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+            false,
+            true,
+        );
+        let add_pos = c.find("v5 = v0 + v4").expect("body computes the result");
+        let zero_pos = c.find("v5 = 0;").expect("result overwritten with default");
+        assert!(
+            zero_pos > add_pos,
+            "default overwrite must follow the body's result computation:\n{c}"
+        );
+        let c_no = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+            false,
+            false,
+        );
+        assert!(
+            !c_no.contains("v5 = 0;"),
+            "no result overwrite on the normal verify path:\n{c_no}"
         );
     }
 
@@ -4803,6 +4925,7 @@ mod tests {
             &module,
             &VerifyLimits::default(),
             false,
+            false,
         );
         assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
         assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
@@ -4853,6 +4976,7 @@ mod tests {
             &[],
             &HashSet::new(),
             &limits,
+            false,
             false,
         );
         assert!(
@@ -4905,6 +5029,7 @@ mod tests {
             &module,
             &VerifyLimits::default(),
             false,
+            false,
         );
         assert!(c.contains("__vow_string_t v2;"), "clone decl: {c}");
         assert!(c.contains("v2 = v1;"), "clone preserves source model: {c}");
@@ -4942,6 +5067,7 @@ mod tests {
                 warnings: vec![],
             },
             &VerifyLimits::default(),
+            false,
             false,
         );
         assert!(c.contains("__vow_string_t v0;"), "dest param model: {c}");

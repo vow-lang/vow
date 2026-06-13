@@ -321,6 +321,7 @@ pub fn emit_verify_c_source(
         &modelable_fns,
         limits,
         false,
+        false,
     );
     c_src.push_str(&emit_harness(func));
     c_src
@@ -351,6 +352,40 @@ pub fn emit_reach_c_source(
         &modelable_fns,
         limits,
         true,
+        false,
+    );
+    c_src.push_str(&emit_harness(func));
+    Some(c_src)
+}
+
+/// Like [`emit_verify_c_source`] but overwrites the target's returned value with
+/// the type-default right after it is computed, so each `ensures` is checked
+/// against a trivial `return <default>` body for weakness detection (#81 PR-C).
+/// Returns `None` when the probe does not apply: no `ensures`, a non-scalar
+/// return type, or a returned value that is not a regular body instruction
+/// (a bare parameter or a φ-merged/branchy result). Skipping those is sound but
+/// incomplete — it never produces a false "weak" verdict, only misses some.
+pub fn emit_bodyreplace_c_source(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
+) -> Option<String> {
+    if !function_has_ensures(func) || !returns_scalar(func) || !body_replaceable_result(func) {
+        return None;
+    }
+    let mut modelable_cache = HashMap::new();
+    let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
+    let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
+    let mut c_src = emit_c_module_with_callees(
+        func,
+        module,
+        const_fns,
+        &callee_ids,
+        &modelable_fns,
+        limits,
+        false,
+        true,
     );
     c_src.push_str(&emit_harness(func));
     Some(c_src)
@@ -363,6 +398,54 @@ pub fn function_has_requires(func: &Function) -> bool {
         .iter()
         .flat_map(|b| &b.insts)
         .any(|i| i.opcode == vow_ir::Opcode::VowRequires)
+}
+
+/// True when the function carries at least one `ensures` clause.
+pub fn function_has_ensures(func: &Function) -> bool {
+    func.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .any(|i| i.opcode == vow_ir::Opcode::VowEnsures)
+}
+
+/// True when the return type is a scalar integer/bool/float, so the trivial
+/// `return 0` body-replace is well-typed. Pointer/struct returns are skipped.
+fn returns_scalar(func: &Function) -> bool {
+    !matches!(
+        func.return_ty,
+        vow_ir::Ty::Unit | vow_ir::Ty::Ptr | vow_ir::Ty::LinearPtr
+    )
+}
+
+/// True when the function is single-exit and the value its sole `Return` yields
+/// is produced by a regular body instruction (one that `emit_c_function_full`
+/// emits in its per-instruction loop). The body-replace rewrite overwrites that
+/// one value right after it is emitted; if the result is a bare `GetArg`
+/// (returned parameter) the overwrite site does not exist, so the probe is
+/// skipped. Multi-return functions (any early return / if-else) are also
+/// skipped: the rewrite zeroes only a single return site, so the other return
+/// paths would still run the real body and could falsely "prove" a substantive
+/// `ensures` — a false weakness claim. Requiring exactly one `Return` keeps the
+/// probe one-sided (sound). Self-hosted mirror: `compiler/verifier.vow`.
+fn body_replaceable_result(func: &Function) -> bool {
+    let mut returns = func
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.opcode == vow_ir::Opcode::Return);
+    let Some(ret) = returns.next() else {
+        return false;
+    };
+    if returns.next().is_some() {
+        return false;
+    }
+    let Some(result_id) = ret.args.first().map(|a| a.0) else {
+        return false;
+    };
+    func.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .any(|i| i.id.0 == result_id && i.opcode != vow_ir::Opcode::GetArg)
 }
 
 pub const DEFAULT_MAX_K_STEP: u32 = 50;
@@ -730,6 +813,26 @@ pub fn run_esbmc_reach(
         }
         Err(_) => ReachVerdict::Inconclusive,
     }
+}
+
+/// Weakness probe (#81 PR-C): verify a body-replaced model (see
+/// `emit_bodyreplace_c_source`) where the returned value is forced to the
+/// type-default. `true` (ESBMC SUCCESSFUL) means a trivial `return <default>`
+/// implementation satisfies the `ensures` — the contract is too weak to pin down
+/// the implementation. Any other outcome returns `false`; this is a one-sided
+/// signal, never a soundness claim, so an inconclusive probe is reported as
+/// "not trivially satisfiable".
+pub fn run_esbmc_bodyreplace(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    max_k_step: u32,
+    func_name: &str,
+    config: &SolverConfig,
+) -> bool {
+    matches!(
+        run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, config),
+        VerificationResult::Proven | VerificationResult::ProvenIr
+    )
 }
 
 pub(crate) fn memory_limit_reason() -> String {
@@ -2220,5 +2323,104 @@ VERIFICATION FAILED";
             }
             other => panic!("expected Skipped (gate must run before find_esbmc), got {other:?}"),
         }
+    }
+
+    // #81 PR-C soundness: the body-replace rewrite zeroes exactly one return
+    // site, so the probe is only sound for single-exit functions. A multi-return
+    // function (any early return / if-else) must be SKIPPED — otherwise the
+    // un-overwritten return paths run the real body and a substantive `ensures`
+    // is falsely flagged `trivially_satisfiable` (a false weakness claim). Both
+    // compilers (here + compiler/verifier.vow) must agree.
+    #[test]
+    fn body_replaceable_result_skips_multi_return_functions() {
+        // Two `Return`s: block 0 returns %2 (a regular add), block 1 returns %0.
+        // This is `if x == 0 { return 0; } x`-shaped IR. The probe could only
+        // zero one return, so eligibility must be false.
+        let multi = Function {
+            id: FuncId(0),
+            name: "two_returns".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result == x".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                        inst(
+                            2,
+                            Opcode::WrappingAddI64,
+                            Ty::I64,
+                            vec![0, 1],
+                            InstData::None,
+                        ),
+                        inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None)],
+                },
+            ],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        assert!(
+            !body_replaceable_result(&multi),
+            "multi-return functions must be skipped: the probe overwrites only one \
+             return site, so leaving others live would yield a false weakness claim"
+        );
+
+        // A single-return function whose result is a regular instruction stays
+        // eligible — the common case the probe is designed for.
+        let single = Function {
+            id: FuncId(0),
+            name: "one_return".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result >= 0".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    inst(
+                        2,
+                        Opcode::WrappingAddI64,
+                        Ty::I64,
+                        vec![0, 1],
+                        InstData::None,
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        assert!(
+            body_replaceable_result(&single),
+            "single-return function with a regular result instruction is eligible"
+        );
     }
 }
