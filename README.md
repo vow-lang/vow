@@ -1,5 +1,8 @@
 # Vow
 
+[![CI](https://github.com/vow-lang/vow/actions/workflows/ci.yml/badge.svg)](https://github.com/vow-lang/vow/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/vow-lang/vow/graph/badge.svg)](https://codecov.io/gh/vow-lang/vow)
+
 An agent-first programming language with formal verification.
 
 Vow programs carry machine-checked contracts (preconditions, postconditions, loop invariants) that are statically verified by [ESBMC](https://esbmc.org/) bounded model checking. The compiler emits structured JSON output designed for AI agents to consume, enabling a CEGIS (counterexample-guided inductive synthesis) workflow: write code → compile → verify → read counterexamples → fix → iterate.
