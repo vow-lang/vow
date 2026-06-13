@@ -7,7 +7,9 @@ use std::process::{Command, Stdio};
 
 use vow_ir::{FuncId, Function, InstData, Module, Ty};
 
-use crate::solver_strategy::{SolverConfig, run_with_fallback};
+use crate::solver_strategy::{
+    DEFAULT_AUTO_TIMEOUT_SECS, Encoding, Solver, SolverConfig, run_with_fallback,
+};
 
 use crate::c_emitter::{
     ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
@@ -585,6 +587,31 @@ pub fn run_esbmc_with_max_k_step(
     }
 }
 
+/// Resolve the timeout the multi-property contracts path runs under. Mirrors
+/// `run_with_fallback`'s auto-mode policy (and `effective_timeout_for` in
+/// compiler/verifier.vow): under `--encoding auto` with no user `--timeout`, cap
+/// each run at the 30s auto default — unless the resolved BV solver is Bitwuzla,
+/// which has no IR fallback and is left to the kernel watchdog. Without this the
+/// path would silently inherit the 300s safety timeout instead.
+fn effective_multi_property_config(config: &SolverConfig) -> SolverConfig {
+    if config.timeout_secs.is_some() {
+        return *config;
+    }
+    let bv_solver = match config.solver {
+        Solver::Auto => Solver::Boolector,
+        s => s,
+    };
+    let timeout_secs = if config.encoding == Encoding::Auto && bv_solver != Solver::Bitwuzla {
+        Some(DEFAULT_AUTO_TIMEOUT_SECS)
+    } else {
+        None
+    };
+    SolverConfig {
+        timeout_secs,
+        ..*config
+    }
+}
+
 /// Per-clause verification via ESBMC `--multi-property`: returns the overall
 /// outcome plus `vow_id -> proven` for every reported claim, so `vow contracts
 /// --verify` can give each contract clause a precise status instead of marking
@@ -596,12 +623,13 @@ pub fn run_esbmc_multi_property(
     func_name: &str,
     config: &SolverConfig,
 ) -> (VerificationResult, std::collections::HashMap<u32, bool>) {
+    let config = effective_multi_property_config(config);
     match run_esbmc_capture(
         esbmc,
         c_src,
         max_k_step,
         func_name,
-        config,
+        &config,
         &["--multi-property"],
     ) {
         Ok(combined) => (
@@ -1038,6 +1066,36 @@ VERIFICATION SUCCESSFUL";
         assert_eq!(v.get(&0), Some(&true));
         assert_eq!(v.get(&1), Some(&true));
         assert!(v.values().all(|p| *p));
+    }
+
+    #[test]
+    fn effective_multi_property_config_applies_auto_timeout() {
+        // Default (auto encoding/solver, no --timeout) gets the 30s auto cap,
+        // not the 300s safety timeout — matching the build/verify path and the
+        // self-hosted effective_timeout_for.
+        let base = SolverConfig::default_config();
+        assert_eq!(
+            effective_multi_property_config(&base).timeout_secs,
+            Some(DEFAULT_AUTO_TIMEOUT_SECS)
+        );
+        // Bitwuzla has no IR fallback, so it is left uncapped (kernel watchdog).
+        let bz = SolverConfig {
+            solver: Solver::Bitwuzla,
+            ..base
+        };
+        assert_eq!(effective_multi_property_config(&bz).timeout_secs, None);
+        // Explicit (non-auto) encoding with no --timeout gets no auto cap.
+        let bv = SolverConfig {
+            encoding: Encoding::Bv,
+            ..base
+        };
+        assert_eq!(effective_multi_property_config(&bv).timeout_secs, None);
+        // A user --timeout is honored verbatim.
+        let user = SolverConfig {
+            timeout_secs: Some(7),
+            ..base
+        };
+        assert_eq!(effective_multi_property_config(&user).timeout_secs, Some(7));
     }
 
     #[test]
