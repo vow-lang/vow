@@ -243,8 +243,11 @@ int main(void) {
 
     /* Perform up to two symbolic allocations bounded in size. With large
      * symbolic alignments each alloc may take the oversized path (own
-     * chunk), so close iterates up to 1 (first) + 2 (oversized allocs) = 3
-     * chunks — well within the single-shot `--unwind 5` bound. */
+     * chunk), so the symbolic loop builds up to 1 (first) + 2 (oversized
+     * allocs) = 3 chunks; the directed #391 scenario below adds big+tail,
+     * giving 5 chunks total before arena_try_free_oversized_chunk walks the
+     * chain to remove big. That chain walk is why `--unwind 5` (not 4) is the
+     * tight bound, matching the Makefile rationale. */
     unsigned int n = nondet_uint();
     __ESBMC_assume(n <= 2);
 
