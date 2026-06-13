@@ -1,3 +1,4 @@
+// Fixed version of negative_modulo: requires x >= 0 for non-negative remainder.
 module ModuloSafe
 
 fn mod_positive(x: i64, m: i64) -> i64 vow {
