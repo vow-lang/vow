@@ -1786,7 +1786,14 @@ across integer types at operator sites — only literals coerce, per the
 
 ```vow
 let x: i64 = 42;
+x = 43;   // error[ImmutableAssignment]: declare it with `let mut x`
 ```
+
+Bindings are immutable by default. Reassigning a binding that was not declared
+`mut` is a compile error (`ImmutableAssignment`). `mut` is required **only** for
+whole-binding reassignment `x = e`; field writes (`s.f = e`) and index writes
+(`v[i] = e`) are permitted through any binding and do not require the base to be
+`mut`.
 
 ### Mutable
 
@@ -1794,6 +1801,11 @@ let x: i64 = 42;
 let mut i: i64 = 0;
 i = i + 1;
 ```
+
+A `let mut` binding that is never reassigned is a compile error (`UnusedMut`) —
+drop the `mut`. Because only whole-binding reassignment counts as a use of `mut`,
+a binding mutated solely via `s.f = e`, `v[i] = e`, or a method call should be
+declared `let`, not `let mut`.
 
 ### Pattern Destructuring
 
@@ -3813,6 +3825,39 @@ fn f(o: Option<i64>) -> i64 {
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
 
+### ImmutableAssignment
+
+**Phase:** Type Checker
+**Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable
+by default; `mut` is required only for whole-binding reassignment `x = e`. Field
+writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.
+
+```vow
+fn f() -> i64 {
+    let x: i64 = 1;
+    x = 2;
+    x
+}
+```
+
+**Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.
+
+### UnusedMut
+
+**Phase:** Type Checker
+**Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only
+whole-binding reassignment counts as a use of `mut` — a binding mutated solely
+via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.
+
+```vow
+fn f() -> i64 {
+    let mut x: i64 = 1;
+    x
+}
+```
+
+**Fix:** Remove `mut`: `let x: i64 = 1;`.
+
 ### UnknownMethod
 
 **Phase:** Type Checker
@@ -5466,7 +5511,14 @@ across integer types at operator sites — only literals coerce, per the
 
 ```vow
 let x: i64 = 42;
+x = 43;   // error[ImmutableAssignment]: declare it with `let mut x`
 ```
+
+Bindings are immutable by default. Reassigning a binding that was not declared
+`mut` is a compile error (`ImmutableAssignment`). `mut` is required **only** for
+whole-binding reassignment `x = e`; field writes (`s.f = e`) and index writes
+(`v[i] = e`) are permitted through any binding and do not require the base to be
+`mut`.
 
 ### Mutable
 
@@ -5474,6 +5526,11 @@ let x: i64 = 42;
 let mut i: i64 = 0;
 i = i + 1;
 ```
+
+A `let mut` binding that is never reassigned is a compile error (`UnusedMut`) —
+drop the `mut`. Because only whole-binding reassignment counts as a use of `mut`,
+a binding mutated solely via `s.f = e`, `v[i] = e`, or a method call should be
+declared `let`, not `let mut`.
 
 ### Pattern Destructuring
 
@@ -7496,6 +7553,39 @@ fn f(o: Option<i64>) -> i64 {
 ```
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
+
+### ImmutableAssignment
+
+**Phase:** Type Checker
+**Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable
+by default; `mut` is required only for whole-binding reassignment `x = e`. Field
+writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.
+
+```vow
+fn f() -> i64 {
+    let x: i64 = 1;
+    x = 2;
+    x
+}
+```
+
+**Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.
+
+### UnusedMut
+
+**Phase:** Type Checker
+**Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only
+whole-binding reassignment counts as a use of `mut` — a binding mutated solely
+via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.
+
+```vow
+fn f() -> i64 {
+    let mut x: i64 = 1;
+    x
+}
+```
+
+**Fix:** Remove `mut`: `let x: i64 = 1;`.
 
 ### UnknownMethod
 
