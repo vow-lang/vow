@@ -3833,8 +3833,13 @@ mod tests {
         data_hidden.insert(100, (IDATA_ARG_INDEX, 0)); // GetArg param 0
         assert_eq!(
             inst_region_for_value(
-                100, &no_region, &data_hidden, &no_op, &no_phi,
-                RSUM_KIND_FRESH_IN_CALLER, &store_effects,
+                100,
+                &no_region,
+                &data_hidden,
+                &no_op,
+                &no_phi,
+                RSUM_KIND_FRESH_IN_CALLER,
+                &store_effects,
             ),
             region_pack(REGION_KIND_CALLER, 1),
         );
@@ -3850,8 +3855,13 @@ mod tests {
         region_proj.insert(200, region_pack(REGION_KIND_BLOCK, 7));
         assert_eq!(
             inst_region_for_value(
-                200, &region_proj, &data_proj, &op_proj, &no_phi,
-                RSUM_KIND_FRESH_IN_CALLER, &store_effects,
+                200,
+                &region_proj,
+                &data_proj,
+                &op_proj,
+                &no_phi,
+                RSUM_KIND_FRESH_IN_CALLER,
+                &store_effects,
             ),
             region_pack(REGION_KIND_BLOCK, 7),
         );
@@ -3862,8 +3872,13 @@ mod tests {
         data_nonhidden.insert(300, (IDATA_ARG_INDEX, 9)); // param 9 has no store effect
         assert_eq!(
             inst_region_for_value(
-                300, &no_region, &data_nonhidden, &no_op, &no_phi,
-                RSUM_KIND_FRESH_IN_CALLER, &store_effects,
+                300,
+                &no_region,
+                &data_nonhidden,
+                &no_op,
+                &no_phi,
+                RSUM_KIND_FRESH_IN_CALLER,
+                &store_effects,
             ),
             region_root(),
         );
