@@ -784,10 +784,20 @@ fi
 contract_quality_json="$TMPDIR/contract_quality.json"
 if ! run_self contracts compiler/main.vow >"$contract_quality_json"; then
     fail "contract-quality/weak-gate" "vow contracts compiler/main.vow failed (see stderr above); could not evaluate contract quality"
-elif uv run python scripts/check_contract_quality.py <"$contract_quality_json"; then
-    pass "contract-quality/weak-gate"
 else
-    fail "contract-quality/weak-gate" "weak/tautological contracts exceeded baseline; strengthen the new contract or adjust scripts/check_contract_quality.py with justification"
+    # Distinguish the checker's exit codes: 0 = pass, 1 = baseline breach (a real
+    # contract-quality regression), 2 = structural error (malformed JSON / missing
+    # or non-integer counter — the checker's stderr above names the cause). A bare
+    # else would mislabel a schema error as a baseline breach.
+    quality_status=0
+    uv run python scripts/check_contract_quality.py <"$contract_quality_json" || quality_status=$?
+    if [ "$quality_status" -eq 0 ]; then
+        pass "contract-quality/weak-gate"
+    elif [ "$quality_status" -eq 1 ]; then
+        fail "contract-quality/weak-gate" "weak/tautological contracts exceeded baseline; strengthen the new contract or adjust scripts/check_contract_quality.py with justification"
+    else
+        fail "contract-quality/weak-gate" "contract quality check could not run (malformed 'vow contracts' output / schema mismatch; see stderr above)"
+    fi
 fi
 echo ""
 
