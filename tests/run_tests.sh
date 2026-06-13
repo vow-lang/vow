@@ -375,6 +375,53 @@ print('ok' if any(s in ('proven', 'proven-ir') for s in ss) else 'no_proven')
       pass "$name"
     fi
   fi
+
+  name="contracts_per_clause_precise"
+  if matches_filter "$name"; then
+    # PR-A (#81): ESBMC --multi-property gives each ensures clause an individual
+    # verdict, so a passing clause stays `proven` even when a sibling clause
+    # fails. Before the fix the function-level FAILED collapsed the passing
+    # clause to `unknown`. (The requires is modeled as an assumption, not an
+    # asserted property, so it has no individual verdict and is not checked here
+    # — same as the Rust contracts_verify_per_clause_precise_status test.)
+    src="$TMPDIR/${name}.vow"
+    cat > "$src" <<'VOWEOF'
+module M
+fn f(x: i64) -> i64 vow {
+  requires: x >= 0,
+  ensures: result == x,
+  ensures: result == x + 1
+} { x }
+fn main() -> i32 [io] { 0 }
+VOWEOF
+    set +e
+    cpc_json="$(run_vowc contracts --verify "$src" 2>/dev/null)"
+    cpc_exit=$?
+    set -e
+    cpc_check="$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('parse_error'); sys.exit(0)
+st = {}
+for e in d.get('contracts', []):
+    st[e.get('description', '')] = e.get('status', '')
+passing = st.get('ensures result == x', '?')
+failing = st.get('ensures result == x + 1', '?')
+if passing == 'proven' and failing == 'failed':
+    print('ok')
+else:
+    print('pass=%s fail=%s' % (passing, failing))
+" <<< "$cpc_json")"
+    if [[ "$cpc_exit" -ne 1 ]]; then
+      fail "$name" "exit $cpc_exit (expected 1 — fail-closed on the failing clause)"
+    elif [[ "$cpc_check" != "ok" ]]; then
+      fail "$name" "per-clause status mismatch ($cpc_check)"
+    else
+      pass "$name"
+    fi
+  fi
 fi
 
 # --- Phase 3: verify-fail/ tests ---

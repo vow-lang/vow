@@ -3811,7 +3811,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
     r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
-    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
+    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
@@ -7507,7 +7507,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
     r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
-    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
+    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
@@ -10252,24 +10252,38 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                             ei = ei + 1;
                         }
                     } else {
-                        let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
-                        let st: i64 = vr.status;
+                        // Per-clause status via ESBMC `--multi-property`: every
+                        // `vow:N` claim is reported individually, so each clause
+                        // gets a precise verdict instead of the siblings of a
+                        // failed clause collapsing to `unknown` (#81 PR-A).
+                        let mpr: MultiPropertyResult = verify_function_multi_property(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        let overall: i64 = mpr.status;
+                        let v_ids: Vec<i64> = mpr.verdict_ids;
+                        let v_proven: Vec<i64> = mpr.verdict_proven;
                         let mut ei: i64 = 0;
                         while ei < e_func_ids.len() {
                             if e_func_ids[ei] == func.id {
-                                if st == VERIFY_PROVEN() {
-                                    e_statuses[ei] = String::from("proven");
-                                } else if st == VERIFY_PROVEN_IR() {
-                                    e_statuses[ei] = String::from("proven-ir");
-                                } else if st == VERIFY_FAILED() {
-                                    if vr.vow_id == e_vow_ids[ei] {
-                                        e_statuses[ei] = String::from("failed");
+                                let mut verdict: i64 = -1;
+                                let mut k: i64 = 0;
+                                while k < v_ids.len() {
+                                    if v_ids[k] == e_vow_ids[ei] {
+                                        verdict = v_proven[k];
+                                        k = v_ids.len();
                                     } else {
-                                        e_statuses[ei] = String::from("unknown");
+                                        k = k + 1;
                                     }
-                                } else if st == VERIFY_TIMEOUT() {
+                                }
+                                if verdict == 1 {
+                                    e_statuses[ei] = String::from("proven");
+                                } else if verdict == 0 {
+                                    e_statuses[ei] = String::from("failed");
+                                } else if overall == VERIFY_PROVEN() || overall == VERIFY_PROVEN_IR() {
+                                    e_statuses[ei] = String::from("proven");
+                                } else if overall == VERIFY_TIMEOUT() {
                                     e_statuses[ei] = String::from("timeout");
-                                } else if st == VERIFY_UNKNOWN() {
+                                } else if overall == VERIFY_UNKNOWN() {
+                                    e_statuses[ei] = String::from("unknown");
+                                } else if overall == VERIFY_FAILED() {
                                     e_statuses[ei] = String::from("unknown");
                                 } else {
                                     e_statuses[ei] = String::from("error");
