@@ -720,7 +720,11 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let mut vi: i64 = mut_base;
     while vi < var_total {
         if e.var_muts[vi] == 1 && e.var_mutated[vi] == 0 {
-            env_emit_error_code(e, EC_UNUSED_MUT(), String::from("`mut` binding is never reassigned; remove `mut`"), e.var_decl_spans[vi]);
+            let uname: String = e.var_names[vi];
+            let umsg: String = String::from("`mut` binding `");
+            umsg.push_str(uname);
+            umsg.push_str(String::from("` is never reassigned; remove `mut`"));
+            env_emit_error_code(e, EC_UNUSED_MUT(), umsg, e.var_decl_spans[vi]);
         }
         vi = vi + 1;
     }
@@ -1550,7 +1554,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let lhs_name: String = arena_str(a, expr_a(a, lhs_eid));
             let mut_status: i64 = env_mark_mutated(e, lhs_name);
             if mut_status == 2 {
-                env_emit_error_code(e, EC_IMMUTABLE_ASSIGNMENT(), String::from("cannot assign to immutable binding; declare it with `let mut`"), expr_span(a, lhs_eid));
+                let amsg: String = String::from("cannot assign to immutable binding `");
+                amsg.push_str(lhs_name);
+                amsg.push_str(String::from("`; declare it with `let mut "));
+                amsg.push_str(lhs_name);
+                amsg.push_str(String::from("`"));
+                env_emit_error_code(e, EC_IMMUTABLE_ASSIGNMENT(), amsg, expr_span(a, lhs_eid));
             }
         }
         return CTY_UNIT();
