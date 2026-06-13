@@ -9100,7 +9100,9 @@ pub struct CeCallSite {
 
 enum VerifyOutcome {
     /// ESBMC not invoked (`--no-verify`); maps to `BuildStatus::Unverified` (exit 0).
-    Skipped,
+    /// Named `NotRun` (not `Skipped`) to avoid colliding with `SkippedNonModelable`,
+    /// which has the opposite exit code.
+    NotRun,
     /// ESBMC ran but ≥1 vowed function non-modelable; maps to `BuildStatus::Skipped` (exit 1).
     SkippedNonModelable,
     Proven,
@@ -10235,7 +10237,7 @@ fn verify_outcome_to_output_with_skipped(
             Some("error".to_string()),
             Some(message),
         ),
-        VerifyOutcome::Skipped => (BuildStatus::Unverified, vec![], None, None),
+        VerifyOutcome::NotRun => (BuildStatus::Unverified, vec![], None, None),
         VerifyOutcome::SkippedNonModelable => (BuildStatus::Skipped, vec![], None, None),
         VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
         VerifyOutcome::ToolNotFound => {
@@ -10478,7 +10480,7 @@ fn run_pipeline_from_frontend(
     let verify_config = *config;
     let verify_handle = thread::spawn(move || -> (VerifyOutcome, Vec<SkippedFunction>) {
         if no_verify {
-            return (VerifyOutcome::Skipped, Vec::new());
+            return (VerifyOutcome::NotRun, Vec::new());
         }
         // Test-only fault injection: simulate a verifier-worker crash so the
         // fail-closed JoinError path (#413) is exercised end-to-end. Guarded by
