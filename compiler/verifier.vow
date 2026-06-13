@@ -777,6 +777,7 @@ fn body_replaceable_result(f: IrFunction) -> bool {
     let blocks: Vec<IrBlock> = f.blocks;
     let nb: i64 = blocks.len();
     let mut result_id: i64 = -1;
+    let mut n_returns: i64 = 0;
     let mut bi: i64 = 0;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
@@ -785,20 +786,24 @@ fn body_replaceable_result(f: IrFunction) -> bool {
         let mut ii: i64 = 0;
         while ii < ni {
             let inst: IrInst = insts[ii];
-            // Match Rust's `.find()` (vow-verify/src/esbmc.rs): take the FIRST
-            // `Return`, then stop. A trailing scan keeps the LAST return's value,
-            // diverging from Rust for multi-return IR (any if/else or early return).
             if inst.op == IOP_RETURN() {
+                n_returns = n_returns + 1;
                 let rargs: Vec<i64> = inst.args;
                 if rargs.len() > 0 {
                     result_id = rargs[0];
-                    ii = ni;
-                    bi = nb;
                 }
             }
             ii = ii + 1;
         }
         bi = bi + 1;
+    }
+    // The body-replace rewrite zeroes exactly one return site, so the probe is
+    // only sound for single-exit functions. A function with multiple `Return`s
+    // (any early return / if-else) would leave the other paths running the real
+    // body, which can falsely "prove" a substantive `ensures` — a false weakness
+    // claim. Skip those (mirrors vow-verify/src/esbmc.rs).
+    if n_returns != 1 {
+        return false;
     }
     if result_id < 0 {
         return false;

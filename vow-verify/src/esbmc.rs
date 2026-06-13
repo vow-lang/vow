@@ -415,20 +415,28 @@ fn returns_scalar(func: &Function) -> bool {
     )
 }
 
-/// True when the value the `Return` yields is produced by a regular body
-/// instruction (one that `emit_c_function_full` emits in its per-instruction
-/// loop). The body-replace rewrite overwrites that value right after it is
-/// emitted; if the result is a bare `GetArg` (returned parameter) the overwrite
-/// site does not exist, so the probe is skipped rather than emitted incorrectly.
+/// True when the function is single-exit and the value its sole `Return` yields
+/// is produced by a regular body instruction (one that `emit_c_function_full`
+/// emits in its per-instruction loop). The body-replace rewrite overwrites that
+/// one value right after it is emitted; if the result is a bare `GetArg`
+/// (returned parameter) the overwrite site does not exist, so the probe is
+/// skipped. Multi-return functions (any early return / if-else) are also
+/// skipped: the rewrite zeroes only a single return site, so the other return
+/// paths would still run the real body and could falsely "prove" a substantive
+/// `ensures` — a false weakness claim. Requiring exactly one `Return` keeps the
+/// probe one-sided (sound). Self-hosted mirror: `compiler/verifier.vow`.
 fn body_replaceable_result(func: &Function) -> bool {
-    let Some(ret) = func
+    let mut returns = func
         .blocks
         .iter()
         .flat_map(|b| &b.insts)
-        .find(|i| i.opcode == vow_ir::Opcode::Return)
-    else {
+        .filter(|i| i.opcode == vow_ir::Opcode::Return);
+    let Some(ret) = returns.next() else {
         return false;
     };
+    if returns.next().is_some() {
+        return false;
+    }
     let Some(result_id) = ret.args.first().map(|a| a.0) else {
         return false;
     };
@@ -2259,20 +2267,18 @@ VERIFICATION FAILED";
         }
     }
 
-    // #81 PR-C parity: `body_replaceable_result` must inspect the FIRST `Return`
-    // instruction (via `.find()`), and the self-hosted compiler
-    // (compiler/verifier.vow) must match. For multi-return IR the first and last
-    // `Return` can name different values, so a last-return scan would pick a
-    // different result id, diverging between the two compilers. This pins the
-    // canonical first-return semantics with a function whose two returns yield
-    // different eligibility verdicts.
+    // #81 PR-C soundness: the body-replace rewrite zeroes exactly one return
+    // site, so the probe is only sound for single-exit functions. A multi-return
+    // function (any early return / if-else) must be SKIPPED — otherwise the
+    // un-overwritten return paths run the real body and a substantive `ensures`
+    // is falsely flagged `trivially_satisfiable` (a false weakness claim). Both
+    // compilers (here + compiler/verifier.vow) must agree.
     #[test]
-    fn body_replaceable_result_uses_first_return_for_multi_return() {
-        // first Return -> %2 (a regular WrappingAddI64, eligible)
-        // last  Return -> %0 (a bare GetArg / returned parameter, ineligible)
-        // First-return semantics => eligible (true); a last-return scan would
-        // inspect the GetArg and wrongly report ineligible (false).
-        let func = Function {
+    fn body_replaceable_result_skips_multi_return_functions() {
+        // Two `Return`s: block 0 returns %2 (a regular add), block 1 returns %0.
+        // This is `if x == 0 { return 0; } x`-shaped IR. The probe could only
+        // zero one return, so eligibility must be false.
+        let multi = Function {
             id: FuncId(0),
             name: "two_returns".to_string(),
             params: vec![Ty::I64],
@@ -2281,7 +2287,7 @@ VERIFICATION FAILED";
             effects: vec![],
             vows: vec![VowEntry {
                 id: VowId(0),
-                description: "result >= 0".to_string(),
+                description: "result == x".to_string(),
                 blame: Blame::Callee,
                 bindings: vec![],
                 file: String::new(),
@@ -2313,9 +2319,50 @@ VERIFICATION FAILED";
             source_file: String::new(),
         };
         assert!(
-            body_replaceable_result(&func),
-            "must inspect the FIRST Return (%2, a regular inst) and report eligible; \
-             a last-return scan would pick %0 (GetArg) and wrongly report ineligible"
+            !body_replaceable_result(&multi),
+            "multi-return functions must be skipped: the probe overwrites only one \
+             return site, so leaving others live would yield a false weakness claim"
+        );
+
+        // A single-return function whose result is a regular instruction stays
+        // eligible — the common case the probe is designed for.
+        let single = Function {
+            id: FuncId(0),
+            name: "one_return".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result >= 0".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    inst(
+                        2,
+                        Opcode::WrappingAddI64,
+                        Ty::I64,
+                        vec![0, 1],
+                        InstData::None,
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        assert!(
+            body_replaceable_result(&single),
+            "single-return function with a regular result instruction is eligible"
         );
     }
 }
