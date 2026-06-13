@@ -4139,7 +4139,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    requires: hi >= lo\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    let mut lo: i64 = lo;\n"));
-    r.push_str(String::from("    let mut hi: i64 = hi;\n"));
+    r.push_str(String::from("    let hi: i64 = hi;\n"));
     r.push_str(String::from("    while lo + 1 < hi vow {\n"));
     r.push_str(String::from("        invariant: hi - lo >= 0\n"));
     r.push_str(String::from("    } {\n"));
@@ -7882,7 +7882,7 @@ fn skill_support_content_2() -> String {
     r.push_str(String::from("    requires: hi >= lo\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    let mut lo: i64 = lo;\n"));
-    r.push_str(String::from("    let mut hi: i64 = hi;\n"));
+    r.push_str(String::from("    let hi: i64 = hi;\n"));
     r.push_str(String::from("    while lo + 1 < hi vow {\n"));
     r.push_str(String::from("        invariant: hi - lo >= 0\n"));
     r.push_str(String::from("    } {\n"));
