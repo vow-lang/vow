@@ -1,0 +1,36 @@
+# Codecov configuration for vow-lang/vow.
+#
+# Scope: these numbers measure ONLY the Rust crates as exercised by
+# `cargo llvm-cov --all` (cargo unit + integration tests). The large `.vow`
+# end-to-end corpus (tests/, examples/) and the self-hosted bootstrap run the
+# release / self-hosted binaries, which are not Rust-instrumented and therefore
+# contribute nothing here. Crates dominated by that path — notably
+# `vow-clif-shim` (FFI codegen, driven by every bootstrap) and `vow-runtime`
+# (intrinsics called by compiled programs at runtime) — read low despite being
+# heavily exercised end-to-end. Statuses are therefore informational: a
+# structural under-measurement must never block a PR.
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: true
+
+# Files that are not meaningful coverage *targets*. (`.vow` sources under
+# compiler/ and the benchmark/script trees are not Rust and never appear in
+# lcov; listing them is documentation of intent and harmless.)
+ignore:
+  - "**/tests/**"
+  - "benchmarks"
+  - "bench"
+  - "compiler"
+  - "scripts"
