@@ -10,18 +10,18 @@ module ModuleIo
 
 use ir
 
-fn MODULE_MAGIC_0() -> i64 vow { ensures: result >= 0 } { 86 }   // 'V'
-fn MODULE_MAGIC_1() -> i64 vow { ensures: result >= 0 } { 77 }   // 'M'
-fn MODULE_MAGIC_2() -> i64 vow { ensures: result >= 0 } { 79 }   // 'O'
-fn MODULE_MAGIC_3() -> i64 vow { ensures: result >= 0 } { 68 }   // 'D'
+fn MODULE_MAGIC_0() -> i64 { 86 }   // 'V'
+fn MODULE_MAGIC_1() -> i64 { 77 }   // 'M'
+fn MODULE_MAGIC_2() -> i64 { 79 }   // 'O'
+fn MODULE_MAGIC_3() -> i64 { 68 }   // 'D'
 
-fn BLAME_NONE() -> i64 vow { ensures: result >= 0 } { 2 }
+fn BLAME_NONE() -> i64 { 2 }
 
-fn EFFECT_IO() -> i64 vow { ensures: result >= 0 } { 1 }
-fn EFFECT_PANIC() -> i64 vow { ensures: result >= 0 } { 2 }
-fn EFFECT_READ() -> i64 vow { ensures: result >= 0 } { 4 }
-fn EFFECT_UNSAFE() -> i64 vow { ensures: result >= 0 } { 8 }
-fn EFFECT_WRITE() -> i64 vow { ensures: result >= 0 } { 16 }
+fn EFFECT_IO() -> i64 { 1 }
+fn EFFECT_PANIC() -> i64 { 2 }
+fn EFFECT_READ() -> i64 { 4 }
+fn EFFECT_UNSAFE() -> i64 { 8 }
+fn EFFECT_WRITE() -> i64 { 16 }
 
 struct ModuleReader {
     buf: Vec<i64>,

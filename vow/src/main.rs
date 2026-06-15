@@ -17,10 +17,12 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver,
-    SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
-    detect_constant_functions, emit_verify_c_source, find_esbmc, non_modelable_reason,
-    run_with_fallback, verify_function_with_module_and_const_fns_configured,
+    ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding,
+    ReachVerdict, Solver, SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
+    detect_constant_functions, emit_bodyreplace_c_source, emit_reach_c_source,
+    emit_verify_c_source, find_esbmc, non_modelable_reason, run_esbmc_bodyreplace,
+    run_esbmc_multi_property, run_esbmc_reach, run_with_fallback,
+    verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedFailure, VerifyCache};
@@ -1305,7 +1307,7 @@ program or contract, and repeat until the result is `Verified`.
 
 ## Installed toolchain (live)
 
-!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200)`
+!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200) || echo '(vow toolchain not found on PATH; run scripts/bootstrap.sh to build build/vowc)'`
 
 ## Core workflow
 
@@ -2466,7 +2468,7 @@ vow contracts [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
-**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
@@ -2552,7 +2554,7 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 | `TestsPassed`  | All tests passed                                  |
 | `TestsFailed`  | One or more tests failed                          |
 
-Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
 
 ### `vow decl`
 
@@ -2731,7 +2733,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2751,7 +2753,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2765,8 +2767,9 @@ that path produces `Unverified` (exit 0).
 | `description` | string  | Full contract text                                       |
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
-| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 ### Status Values
 
@@ -2776,10 +2779,11 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 ### Quality Values
 
@@ -3451,6 +3455,21 @@ later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
 verification fails instead of miscompiling. This is the contract that converts a
 silent fallback into a caught error.
 
+The static classifier rates this clause `substantive`, and `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true` — both are correct, because
+they measure different things. The probe replaces the body with `return 0` (the `i64`
+default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*
+positive: `ensures: result != -1` does not constrain the op→opcode *mapping* — a constant
+non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*
+prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough
+(delete an arm and verification fails). Totality is the silent-fallback property #81
+targets, and — absent a quantifier to say "result is the correct opcode for `op`" — it is
+the strongest property a `!= sentinel` postcondition can express. So read the
+`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not
+as a probe artifact to dismiss. This is *not* the constant-result false positive noted in
+**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the
+type default.
+
 > Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
 > inputs" is expressed as `requires` (pin the finite domain) + a postcondition
 > that excludes the failure value, letting ESBMC enumerate the finite branch
@@ -3497,11 +3516,25 @@ ways this happens; a contract-quality tool should distinguish them.
 
 The clause is satisfiable and true, but so loose that an incorrect
 implementation also satisfies it (`ensures: result >= 0` on a computed value).
-This is the 354-contract problem. **Detection (mutation-based):** mutate the
-implementation — flip a constant, swap an operator — and re-verify. If the
-contract still proves against the *mutated* body, it does not constrain that
-behavior and is too weak. Vow already has the machinery for this in
-`vowc mutants`; a weak contract is one whose function's mutants survive.
+This is the 354-contract problem.
+
+**Detection (the body-replace probe).** `vow contracts --verify` ships this check
+(#81). It mutates the implementation in the strongest possible way — replaces the
+whole body with a trivial `return <type-default>` — and re-verifies the
+`ensures`. If the contract still proves against that body, a constant-returning
+implementation satisfies it, so it does not constrain the real computation: each
+such `ensures` is reported `trivially_satisfiable: true`. This is exactly the
+`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.
+
+The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of
+weakness (a specific trivial body satisfies the contract), but a `false` verdict
+does not prove strength — the probe uses a single default value and skips
+non-scalar returns, returned parameters, and φ-merged/branchy results, so it can
+miss weak contracts it cannot witness this way. It is informational and never
+changes the exit code; pair it with the static `quality` field. The one known
+false positive is a function whose correct result genuinely *is* the type default
+(e.g. a constant `ensures result == 0` on a `{ 0 }` body) — an equivalent mutant,
+the standard caveat of mutation testing.
 
 ### Tautology
 
@@ -3525,10 +3558,20 @@ years of hardware verification at IBM, ~20% of formulas were trivially valid on
 first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
-**Detection (the `false` re-check):** re-verify each obligation with its `ensures`
-replaced by `ensures: false`. If `assert(false)` still passes, the path is
-unreachable under the preconditions — the original proof was vacuous. A non-vacuous
-obligation must *fail* this check.
+**Detection (the reachability probe).** `vow contracts --verify` ships this check
+(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
+model with a `vow_reach` label planted immediately after the `requires` assumes,
+under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
+(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+every `ensures` held only vacuously — all of the function's clauses are reported
+`status: "vacuous"` and the command fails closed. If the label is **reachable**
+(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+live. This is operationally the dual of the classic `ensures: false` re-check —
+asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
+still pass?" — but it needs only one extra run per function and is unaffected by
+body divergence, since the label precedes the body. The label sits after the
+requires prefix rather than at the function end precisely so an unbounded loop or
+an `assume(0)` deeper in the body cannot make it spuriously unreachable.
 
 **Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
 for a proof that holds, emit a non-trivial *witness* — concrete inputs that
@@ -3597,14 +3640,44 @@ Contract expressions must be **pure** — they cannot call effectful functions
 blocked at the *modelable* axis, not the expressible one; classify such gaps as
 model limitations, not contract-language limitations.
 
-## Tooling (planned)
+## Tooling
 
-`vow contracts --verify` lists contracts and verifies them per function today. The
-quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**
-check that emits a quality signal per clause — flagging tautologies (cheap, no
-ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`
-harness, weak obligations whose function's mutants survive. Until that ships, the
-three detections above are checks an author can run by hand.
+`vow contracts --verify` performs the **per-obligation** quality analysis tracked
+in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
+ESBMC `--multi-property`), plus the three quality signals above:
+
+- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
+- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
+  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
+  an `ensures` a trivial `return <default>` body satisfies (informational).
+
+The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
+status and quality tallies, so an author or CI can gate on hollow proofs.
+
+**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
+quality of the self-hosted compiler's own contracts: it reads
+`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
+exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
+unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
+ratchet down as contracts harden. The dispatch-totality example above
+(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`
+(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)
+are enforced in `compiler/lower.vow` today.
+
+**Tag families are structural, not contracted.** The bulk of the old `weak`
+count was nullary tag constants — `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,
+`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures
+result >= 0` proves nothing: a constant's value is the only fact about it, and
+that fact is structural (each is a distinct literal). So these carry **no**
+contract. Their correctness is established where it matters — at use sites: the
+dispatch-totality contracts above prove every valid tag is handled, the IR
+validator and serializer round-trips exercise every kind, and the binary
+fixed-point bootstrap miscompiles if any two tags collide. Removing the
+contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11
+are genuine parametric functions (the region/span bit-packers and friends) whose
+right contract is a round-trip or enumerated postcondition — the next hardening
+target, not noise.
 
 ## References
 
@@ -4702,13 +4775,17 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "vacuous"],
             "description": "Verification status"
           },
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
             "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+          },
+          "trivially_satisfiable": {
+            "type": "boolean",
+            "description": "`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -4726,6 +4803,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
         "skipped": { "type": "integer" },
+        "vacuous": { "type": "integer" },
+        "trivially_satisfiable": { "type": "integer" },
         "quality": {
           "type": "object",
           "description": "Static contract-quality tallies independent of verification status",
@@ -4992,7 +5071,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "name": { "type": "string", "description": "Test name (file stem)" },
         "status": {
           "type": "string",
-          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
           "description": "Per-test outcome"
         },
         "exit_code": {
@@ -6147,7 +6226,7 @@ vow contracts [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
-**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
 
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
@@ -6233,7 +6312,7 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 | `TestsPassed`  | All tests passed                                  |
 | `TestsFailed`  | One or more tests failed                          |
 
-Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
 
 ### `vow decl`
 
@@ -6412,7 +6491,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -6432,7 +6511,7 @@ that path produces `Unverified` (exit 0).
       "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -6446,8 +6525,9 @@ that path produces `Unverified` (exit 0).
 | `description` | string  | Full contract text                                       |
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
-| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
 | `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 ### Status Values
 
@@ -6457,10 +6537,11 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 ### Quality Values
 
@@ -7134,6 +7215,21 @@ later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
 verification fails instead of miscompiling. This is the contract that converts a
 silent fallback into a caught error.
 
+The static classifier rates this clause `substantive`, and `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true` — both are correct, because
+they measure different things. The probe replaces the body with `return 0` (the `i64`
+default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*
+positive: `ensures: result != -1` does not constrain the op→opcode *mapping* — a constant
+non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*
+prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough
+(delete an arm and verification fails). Totality is the silent-fallback property #81
+targets, and — absent a quantifier to say "result is the correct opcode for `op`" — it is
+the strongest property a `!= sentinel` postcondition can express. So read the
+`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not
+as a probe artifact to dismiss. This is *not* the constant-result false positive noted in
+**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the
+type default.
+
 > Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
 > inputs" is expressed as `requires` (pin the finite domain) + a postcondition
 > that excludes the failure value, letting ESBMC enumerate the finite branch
@@ -7180,11 +7276,25 @@ ways this happens; a contract-quality tool should distinguish them.
 
 The clause is satisfiable and true, but so loose that an incorrect
 implementation also satisfies it (`ensures: result >= 0` on a computed value).
-This is the 354-contract problem. **Detection (mutation-based):** mutate the
-implementation — flip a constant, swap an operator — and re-verify. If the
-contract still proves against the *mutated* body, it does not constrain that
-behavior and is too weak. Vow already has the machinery for this in
-`vowc mutants`; a weak contract is one whose function's mutants survive.
+This is the 354-contract problem.
+
+**Detection (the body-replace probe).** `vow contracts --verify` ships this check
+(#81). It mutates the implementation in the strongest possible way — replaces the
+whole body with a trivial `return <type-default>` — and re-verifies the
+`ensures`. If the contract still proves against that body, a constant-returning
+implementation satisfies it, so it does not constrain the real computation: each
+such `ensures` is reported `trivially_satisfiable: true`. This is exactly the
+`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.
+
+The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of
+weakness (a specific trivial body satisfies the contract), but a `false` verdict
+does not prove strength — the probe uses a single default value and skips
+non-scalar returns, returned parameters, and φ-merged/branchy results, so it can
+miss weak contracts it cannot witness this way. It is informational and never
+changes the exit code; pair it with the static `quality` field. The one known
+false positive is a function whose correct result genuinely *is* the type default
+(e.g. a constant `ensures result == 0` on a `{ 0 }` body) — an equivalent mutant,
+the standard caveat of mutation testing.
 
 ### Tautology
 
@@ -7208,10 +7318,20 @@ years of hardware verification at IBM, ~20% of formulas were trivially valid on
 first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
-**Detection (the `false` re-check):** re-verify each obligation with its `ensures`
-replaced by `ensures: false`. If `assert(false)` still passes, the path is
-unreachable under the preconditions — the original proof was vacuous. A non-vacuous
-obligation must *fail* this check.
+**Detection (the reachability probe).** `vow contracts --verify` ships this check
+(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
+model with a `vow_reach` label planted immediately after the `requires` assumes,
+under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
+(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+every `ensures` held only vacuously — all of the function's clauses are reported
+`status: "vacuous"` and the command fails closed. If the label is **reachable**
+(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+live. This is operationally the dual of the classic `ensures: false` re-check —
+asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
+still pass?" — but it needs only one extra run per function and is unaffected by
+body divergence, since the label precedes the body. The label sits after the
+requires prefix rather than at the function end precisely so an unbounded loop or
+an `assume(0)` deeper in the body cannot make it spuriously unreachable.
 
 **Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
 for a proof that holds, emit a non-trivial *witness* — concrete inputs that
@@ -7280,14 +7400,44 @@ Contract expressions must be **pure** — they cannot call effectful functions
 blocked at the *modelable* axis, not the expressible one; classify such gaps as
 model limitations, not contract-language limitations.
 
-## Tooling (planned)
+## Tooling
 
-`vow contracts --verify` lists contracts and verifies them per function today. The
-quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**
-check that emits a quality signal per clause — flagging tautologies (cheap, no
-ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`
-harness, weak obligations whose function's mutants survive. Until that ships, the
-three detections above are checks an author can run by hand.
+`vow contracts --verify` performs the **per-obligation** quality analysis tracked
+in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
+ESBMC `--multi-property`), plus the three quality signals above:
+
+- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
+- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
+  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
+  an `ensures` a trivial `return <default>` body satisfies (informational).
+
+The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
+status and quality tallies, so an author or CI can gate on hollow proofs.
+
+**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
+quality of the self-hosted compiler's own contracts: it reads
+`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
+exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
+unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
+ratchet down as contracts harden. The dispatch-totality example above
+(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`
+(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)
+are enforced in `compiler/lower.vow` today.
+
+**Tag families are structural, not contracted.** The bulk of the old `weak`
+count was nullary tag constants — `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,
+`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures
+result >= 0` proves nothing: a constant's value is the only fact about it, and
+that fact is structural (each is a distinct literal). So these carry **no**
+contract. Their correctness is established where it matters — at use sites: the
+dispatch-totality contracts above prove every valid tag is handled, the IR
+validator and serializer round-trips exercise every kind, and the binary
+fixed-point bootstrap miscompiles if any two tags collide. Removing the
+contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11
+are genuine parametric functions (the region/span bit-packers and friends) whose
+right contract is a round-trip or enumerated postcondition — the next hardening
+target, not noise.
 
 ## References
 
@@ -8382,13 +8532,17 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "vacuous"],
             "description": "Verification status"
           },
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
             "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+          },
+          "trivially_satisfiable": {
+            "type": "boolean",
+            "description": "`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -8406,6 +8560,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
         "skipped": { "type": "integer" },
+        "vacuous": { "type": "integer" },
+        "trivially_satisfiable": { "type": "integer" },
         "quality": {
           "type": "object",
           "description": "Static contract-quality tallies independent of verification status",
@@ -8668,7 +8824,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "name": { "type": "string", "description": "Test name (file stem)" },
         "status": {
           "type": "string",
-          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
           "description": "Per-test outcome"
         },
         "exit_code": {
@@ -8956,7 +9112,9 @@ pub struct CeCallSite {
 
 enum VerifyOutcome {
     /// ESBMC not invoked (`--no-verify`); maps to `BuildStatus::Unverified` (exit 0).
-    Skipped,
+    /// Named `NotRun` (not `Skipped`) to avoid colliding with `SkippedNonModelable`,
+    /// which has the opposite exit code.
+    NotRun,
     /// ESBMC ran but ≥1 vowed function non-modelable; maps to `BuildStatus::Skipped` (exit 1).
     SkippedNonModelable,
     Proven,
@@ -9114,6 +9272,12 @@ pub struct ContractEntryJson {
     /// or `substantive` (equality / relational / inverse / call). See
     /// docs/spec/contracts-methodology.md.
     pub quality: String,
+    /// Verification-based weakness signal (#81 PR-C): true when a trivial
+    /// `return <default>` body still satisfies this `ensures` — the contract is
+    /// too weak to pin down the implementation. Only computed for `ensures`
+    /// clauses under `--verify`; always false for `requires`/`invariant` and
+    /// when `--verify` is off. Informational: it does not affect the exit code.
+    pub trivially_satisfiable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -9132,6 +9296,10 @@ pub struct ContractsSummaryJson {
     pub error: u32,
     pub not_verified: u32,
     pub skipped: u32,
+    pub vacuous: u32,
+    /// Count of `ensures` clauses a trivial `return <default>` body satisfies
+    /// (#81 PR-C). Informational, like `quality`; does not affect the exit code.
+    pub trivially_satisfiable: u32,
     pub quality: ContractsQualityJson,
 }
 
@@ -10081,7 +10249,7 @@ fn verify_outcome_to_output_with_skipped(
             Some("error".to_string()),
             Some(message),
         ),
-        VerifyOutcome::Skipped => (BuildStatus::Unverified, vec![], None, None),
+        VerifyOutcome::NotRun => (BuildStatus::Unverified, vec![], None, None),
         VerifyOutcome::SkippedNonModelable => (BuildStatus::Skipped, vec![], None, None),
         VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
         VerifyOutcome::ToolNotFound => {
@@ -10324,7 +10492,7 @@ fn run_pipeline_from_frontend(
     let verify_config = *config;
     let verify_handle = thread::spawn(move || -> (VerifyOutcome, Vec<SkippedFunction>) {
         if no_verify {
-            return (VerifyOutcome::Skipped, Vec::new());
+            return (VerifyOutcome::NotRun, Vec::new());
         }
         // Test-only fault injection: simulate a verifier-worker crash so the
         // fail-closed JoinError path (#413) is exercised end-to-end. Guarded by
@@ -10669,10 +10837,19 @@ fn run_test_command(
                 continue;
             }
             BuildStatus::VerifyFailed { .. } | BuildStatus::Skipped => {
+                // `Skipped` (≥1 vowed function non-modelable, ESBMC never run)
+                // is reported as `contract_skipped` so consumers can tell it
+                // apart from `verify_failed` (ESBMC proved a violation). Both
+                // are fail-closed — see the `failed` tally below (#386).
+                let status = if matches!(result.status, BuildStatus::Skipped) {
+                    "contract_skipped"
+                } else {
+                    "verify_failed"
+                };
                 entries.push(TestEntry {
                     file: file_str,
                     name,
-                    status: "verify_failed".to_string(),
+                    status: status.to_string(),
                     exit_code: None,
                     stdout: String::new(),
                     stderr: String::new(),
@@ -10799,7 +10976,7 @@ fn run_test_command(
         .filter(|e| {
             matches!(
                 e.status.as_str(),
-                "failed" | "compile_error" | "verify_failed"
+                "failed" | "compile_error" | "verify_failed" | "contract_skipped"
             )
         })
         .count();
@@ -11035,6 +11212,8 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
         error: 0,
         not_verified: 0,
         skipped: 0,
+        vacuous: 0,
+        trivially_satisfiable: 0,
         quality: ContractsQualityJson {
             weak: 0,
             tautological: 0,
@@ -11042,6 +11221,9 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
         },
     };
     for e in entries {
+        if e.trivially_satisfiable {
+            summary.trivially_satisfiable += 1;
+        }
         match e.status.as_str() {
             "proven" | "proven-ir" => summary.proven += 1,
             "failed" => summary.failed += 1,
@@ -11049,6 +11231,7 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
             "timeout" => summary.timeout += 1,
             "error" => summary.error += 1,
             "skipped" => summary.skipped += 1,
+            "vacuous" => summary.vacuous += 1,
             _ => summary.not_verified += 1,
         }
         match e.quality.as_str() {
@@ -11063,7 +11246,6 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
 fn update_contract_statuses(
     entries: &mut [ContractEntryJson],
     ir_module: &vow_ir::Module,
-    verify_cache: Option<&VerifyCache>,
     limits: &VerifyLimits,
     config: &SolverConfig,
 ) {
@@ -11082,96 +11264,78 @@ fn update_contract_statuses(
             continue;
         }
 
-        let result = if let Some(vc) = verify_cache {
-            let c_src = emit_verify_c_source(func, ir_module, &const_fns, limits);
-            let key = VerifyCache::cache_key(
-                &c_src,
-                limits.max_k_step,
-                config.solver_str(),
-                config.encoding_str(),
-                config.memlimit_mb,
-            );
-
-            // Security: lookup only returns FAILED (PROVEN is never trusted
-            // from disk); the Phase D IR-fallback probe consumed only cached
-            // PROVEN and is removed since that path can never hit.
-            if let Some(cached) = vc.lookup(&key) {
-                VerificationResult::Failed(cached.to_counterexample())
-            } else {
-                let esbmc = match find_esbmc() {
-                    Some(p) => p,
-                    None => {
-                        for entry in entries.iter_mut() {
-                            if entry.function_id == func.id.0 {
-                                entry.status = "error".to_string();
-                            }
-                        }
-                        continue;
-                    }
-                };
-                let (res, resolved_config) =
-                    run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, config);
-                // Security: never cache PROVEN.
-                if let VerificationResult::Failed(ce) = &res {
-                    let store_key = VerifyCache::cache_key(
-                        &c_src,
-                        limits.max_k_step,
-                        resolved_config.solver_str(),
-                        resolved_config.encoding_str(),
-                        resolved_config.memlimit_mb,
-                    );
-                    vc.store(
-                        &store_key,
-                        &CachedFailure {
-                            vow_id: ce.vow_id,
-                            description: ce.description.clone(),
-                            values: ce.values.clone(),
-                            block_visits: ce.block_visits.clone(),
-                            raw_output: ce.raw_output.clone(),
-                        },
-                    );
-                }
-                res
-            }
-        } else {
-            verify_function_with_module_and_const_fns_configured(
-                func,
-                ir_module,
-                &const_fns,
-                limits.max_k_step,
-                config,
-                limits,
-            )
-        };
-
-        for entry in entries.iter_mut() {
-            if entry.function_id == func.id.0 {
-                match &result {
-                    VerificationResult::Proven => {
-                        entry.status = "proven".to_string();
-                    }
-                    VerificationResult::ProvenIr => {
-                        entry.status = "proven-ir".to_string();
-                    }
-                    VerificationResult::Failed(ce) => {
-                        if ce.vow_id == Some(entry.vow_id) {
-                            entry.status = "failed".to_string();
-                        } else {
-                            entry.status = "unknown".to_string();
-                        }
-                    }
-                    VerificationResult::Timeout => {
-                        entry.status = "timeout".to_string();
-                    }
-                    VerificationResult::Unknown { .. } => {
-                        entry.status = "unknown".to_string();
-                    }
-                    VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => {
+        let esbmc = match find_esbmc() {
+            Some(p) => p,
+            None => {
+                for entry in entries.iter_mut() {
+                    if entry.function_id == func.id.0 {
                         entry.status = "error".to_string();
                     }
-                    VerificationResult::Skipped { .. } => {
-                        entry.status = "skipped".to_string();
-                    }
+                }
+                continue;
+            }
+        };
+        let c_src = emit_verify_c_source(func, ir_module, &const_fns, limits);
+        // Per-clause status via ESBMC `--multi-property`: every `vow:N` claim is
+        // reported individually, so each contract clause gets a precise verdict
+        // instead of the siblings of a failed clause collapsing to `unknown`
+        // (#81 PR-A). The single-counterexample verify cache is bypassed on this
+        // path; precise per-clause status, not throughput, is the goal here.
+        let (overall, verdicts) =
+            run_esbmc_multi_property(&esbmc, &c_src, limits.max_k_step, &func.name, config);
+
+        for entry in entries.iter_mut() {
+            if entry.function_id != func.id.0 {
+                continue;
+            }
+            entry.status = match verdicts.get(&entry.vow_id) {
+                Some(true) => "proven",
+                Some(false) => "failed",
+                None => match &overall {
+                    VerificationResult::Proven | VerificationResult::ProvenIr => "proven",
+                    VerificationResult::Timeout => "timeout",
+                    VerificationResult::Unknown { .. } => "unknown",
+                    VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => "error",
+                    VerificationResult::Skipped { .. } => "skipped",
+                    // Overall verification failed but ESBMC did not report this
+                    // specific clause individually — genuinely undecided.
+                    VerificationResult::Failed(_) => "unknown",
+                },
+            }
+            .to_string();
+        }
+
+        // Vacuity probe (#81 PR-B): if the function's `requires` are
+        // contradictory, the `ensures` above all passed vacuously. Re-run with a
+        // `vow_reach` label planted after the requires; if that point is
+        // unreachable (ESBMC SUCCESSFUL), the whole contract is vacuous —
+        // override the misleading `proven`s with `vacuous`. Only functions with
+        // a `requires` are eligible (emit_reach_c_source returns None otherwise),
+        // so this adds at most one extra ESBMC run per such function.
+        if let Some(reach_src) = emit_reach_c_source(func, ir_module, &const_fns, limits)
+            && run_esbmc_reach(&esbmc, &reach_src, limits.max_k_step, &func.name, config)
+                == ReachVerdict::Vacuous
+        {
+            for entry in entries.iter_mut() {
+                if entry.function_id == func.id.0 {
+                    entry.status = "vacuous".to_string();
+                }
+            }
+        }
+
+        // Weakness probe (#81 PR-C): re-verify a body-replaced model where the
+        // returned value is forced to the type-default. If the `ensures` still
+        // holds, a trivial `return <default>` body satisfies the contract — it
+        // is too weak to pin down the implementation. Marks each `ensures` clause
+        // `trivially_satisfiable` (informational; never changes the exit code).
+        // Skipped for non-scalar returns / returned-parameter results, which
+        // keeps the signal one-sided — it never claims weakness it cannot show.
+        if let Some(br_src) = emit_bodyreplace_c_source(func, ir_module, &const_fns, limits)
+            && run_esbmc_bodyreplace(&esbmc, &br_src, limits.max_k_step, &func.name, config)
+        {
+            for entry in entries.iter_mut() {
+                if entry.function_id == func.id.0 && entry.kind == "ensures" {
+                    entry.trivially_satisfiable = true;
                 }
             }
         }
@@ -11188,6 +11352,7 @@ fn contracts_summary_has_failure(summary: &ContractsSummaryJson) -> bool {
         || summary.unknown > 0
         || summary.error > 0
         || summary.skipped > 0
+        || summary.vacuous > 0
 }
 
 fn run_contracts_command(
@@ -11231,6 +11396,7 @@ fn run_contracts_command(
                 },
                 status: "not_verified".to_string(),
                 quality: quality.to_string(),
+                trivially_satisfiable: false,
             });
         }
     }
@@ -11243,14 +11409,12 @@ fn run_contracts_command(
             }
             exit_code = 1;
         } else {
-            let verify_cache = if no_cache { None } else { VerifyCache::new() };
-            update_contract_statuses(
-                &mut entries,
-                ir_module,
-                verify_cache.as_ref(),
-                limits,
-                config,
-            );
+            // The per-clause `--multi-property` path runs ESBMC fresh and never
+            // consults the verify cache, so don't construct it — `VerifyCache::new()`
+            // would create the on-disk cache dir on every `vow contracts --verify`.
+            // `--no-cache` is therefore already the de facto behavior on this path.
+            let _ = no_cache;
+            update_contract_statuses(&mut entries, ir_module, limits, config);
         }
     }
 
@@ -12084,6 +12248,34 @@ fn main() -> i32 [io] {
         let lang = &parsed["language"];
         assert!(lang["builtins"]["print_i64"].is_string());
         assert!(lang["builtins"]["print_str"].is_string());
+        for name in [
+            "parse_i8",
+            "parse_i16",
+            "parse_i32",
+            "parse_i64",
+            "parse_i128",
+            "parse_u8",
+            "parse_u16",
+            "parse_u32",
+            "parse_u64",
+            "parse_u128",
+        ] {
+            assert!(
+                lang["builtins"].get(name).is_none(),
+                "unexpected unimplemented builtin {name}"
+            );
+        }
+        let string_methods = lang["methods"]["String"].as_array().unwrap();
+        assert!(
+            string_methods
+                .iter()
+                .any(|method| method.as_str() == Some(".parse_i64()"))
+        );
+        assert!(
+            string_methods
+                .iter()
+                .any(|method| method.as_str() == Some(".parse_u64()"))
+        );
         assert!(lang["types"].to_string().contains("String"));
         assert!(lang["types"].to_string().contains("Vec<T>"));
         assert!(lang["types"].to_string().contains("Option<T>"));
@@ -14931,6 +15123,7 @@ fn main() -> i32 {
             source: source.clone(),
             status: status.to_string(),
             quality: "substantive".to_string(),
+            trivially_satisfiable: false,
         };
         let summary = build_contracts_summary(&[
             entry("proven"),
@@ -14967,6 +15160,8 @@ fn main() -> i32 {
             error: 0,
             not_verified: 0,
             skipped: 0,
+            vacuous: 0,
+            trivially_satisfiable: 0,
             quality: ContractsQualityJson {
                 weak: 0,
                 tautological: 0,
@@ -15000,6 +15195,10 @@ fn main() -> i32 {
             },
             ContractsSummaryJson {
                 skipped: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                vacuous: 1,
                 ..all_proven.clone()
             },
         ] {

@@ -10,8 +10,8 @@
  *   - try_extend modifies only cursor and (on success) last_alloc_size;
  *     last_alloc_start is never changed; new last_alloc_size == new_size.
  *
- * Run via `make verify` (uses --incremental-bmc --max-k-step 10), matching
- * the vow-verify pipeline's ESBMC invocation convention.
+ * Run via `make verify` (single-shot `--unwind 5`); the reachable chunk chain
+ * is shallow, so incremental BMC is unnecessary here and far more costly (#516).
  */
 
 #include <assert.h>
@@ -54,7 +54,7 @@ struct VowArena {
 /* `addr + align - 1` could wrap uintptr_t for adversarial inputs. Safe here
  * because the harness constrains `align` to {1, 8, 16, 4096} and bounds every
  * chunk to alloc_chunk's non-wrapping low-address model:
- * `total <= ARENA_VERIFY_ADDR_CAP` and
+ * `total < ARENA_VERIFY_ADDR_CAP` and
  * `(uintptr_t)base <= ARENA_VERIFY_ADDR_CAP - total`. Widening either bound
  * (larger symbolic alignments, or removing the chunk-base bound) requires a
  * checked-add guard or explicit __ESBMC_assume on the sum. */
@@ -77,8 +77,12 @@ static void* alloc_chunk(uintptr_t total, int oversized) {
         /* ESBMC models malloc addresses symbolically. Constrain the abstract
          * pointer to the intended non-wrapping low-address model before any
          * base + total arithmetic, matching real hosts that do not map the
-         * top of the address space. */
-        __ESBMC_assume(total <= ARENA_VERIFY_ADDR_CAP);
+         * top of the address space. The bound is strict: addresses must stay
+         * strictly below the flag bit (ARENA_VERIFY_ADDR_CAP aliases
+         * CHUNK_OVERSIZED_FLAG), or `total == CHUNK_OVERSIZED_FLAG` would set
+         * the oversized marker in the size word and `chunk_total()` would mask
+         * the real size to 0. */
+        __ESBMC_assume(total < ARENA_VERIFY_ADDR_CAP);
         __ESBMC_assume(base_addr <= ARENA_VERIFY_ADDR_CAP - total);
         /* Regression assert in derived form: implied by the two assumes above
          * but as a distinct expression, so ESBMC actually exercises it. A
@@ -243,8 +247,11 @@ int main(void) {
 
     /* Perform up to two symbolic allocations bounded in size. With large
      * symbolic alignments each alloc may take the oversized path (own
-     * chunk), so close iterates up to 1 (first) + 2 (oversized allocs) = 3
-     * chunks — fits comfortably within incremental BMC's step bound. */
+     * chunk), so the symbolic loop builds up to 1 (first) + 2 (oversized
+     * allocs) = 3 chunks; the directed #391 scenario below adds big+tail,
+     * giving 5 chunks total before arena_try_free_oversized_chunk walks the
+     * chain to remove big. That chain walk is why `--unwind 5` (not 4) is the
+     * tight bound, matching the Makefile rationale. */
     unsigned int n = nondet_uint();
     __ESBMC_assume(n <= 2);
 
@@ -279,7 +286,15 @@ int main(void) {
         size_t new_size = sz + grow;
         void* saved_start = a.last_alloc_start;
         uintptr_t saved_cursor = a.cursor;
+        uintptr_t saved_chunk_end = a.chunk_end;
+        /* try_extend must return 1 *exactly* when a valid extension fits
+         * (issue #433): p is the last allocation and new_size >= sz, so the
+         * sole deciding factor is whether the grow fits before chunk_end.
+         * Without this the failure branch below is also satisfied by an
+         * implementation that always returns 0, masking a growth regression. */
+        int should_fit = (saved_cursor + grow <= saved_chunk_end);
         int64_t r = __vow_arena_try_extend(&a, p, sz, new_size);
+        assert(r == (should_fit ? 1 : 0));
         if (r == 1) {
             /* Post-conditions per §10.4. */
             assert(a.last_alloc_size == new_size);
@@ -292,6 +307,14 @@ int main(void) {
             assert(a.last_alloc_start == saved_start);
             assert(a.cursor == saved_cursor);
         }
+
+        /* Negative cases: try_extend must reject mismatched calls (#433) —
+         * a wrong pointer, a wrong old_size, or a shrink each return 0. */
+        void* cur_start = a.last_alloc_start;
+        uintptr_t cur_size = a.last_alloc_size;
+        assert(__vow_arena_try_extend(&a, (char*)cur_start + 1, cur_size, cur_size + 1) == 0);
+        assert(__vow_arena_try_extend(&a, cur_start, cur_size + 1, cur_size + 2) == 0);
+        assert(__vow_arena_try_extend(&a, cur_start, cur_size, cur_size - 1) == 0);
     }
 
     /* Directed scenario for issue #391: drop an oversized non-tail chunk and
@@ -316,6 +339,42 @@ int main(void) {
         assert(walk != big_chunk);
         walk = *(void**)walk;
     }
+
+    /* Directed scenario for issues #422-#426: a path-oversized chunk can have
+     * total <= normal_total() for sub-4096 allocations, and
+     * arena_try_free_oversized_chunk must classify it by the stored path flag,
+     * not by size. The 4097-byte case above is oversized by *both* path and
+     * total (4120 > 4112), so a size-based classifier (`chunk_total() >
+     * normal_total()`) would still free it and pass. Exercise the
+     * discriminating case in a fresh arena: a 3000-byte request is
+     * path-oversized (3000 > OVERSIZED_THRESHOLD) but its total
+     * (16 + 3000 = 3016) is <= normal_total() (4112). */
+    struct VowArena b;
+    __vow_arena_init_closed(&b);
+    __vow_arena_open(&b);
+    /* Warm up so the 3000-byte request cannot fit the initial normal chunk's
+     * fast path and is forced onto the oversized new-chunk path. */
+    void* warm = __vow_arena_alloc(&b, 2000, 1);
+    (void)warm;
+    void* mid = __vow_arena_alloc(&b, 3000, 1);
+    void* mid_chunk = b.current_chunk;
+    /* The discriminating invariant: oversized by path, but NOT by size. */
+    assert(chunk_is_oversized(mid_chunk));
+    assert(chunk_total(mid_chunk) <= normal_total());
+    void* mid_tail = __vow_arena_alloc(&b, 8, 8); /* forces a new chunk -> mid is non-tail */
+    (void)mid_tail;
+    assert(b.current_chunk != mid_chunk);
+    uintptr_t b_bytes_before = b.retained_bytes;
+    int mid_freed = arena_try_free_oversized_chunk(&b, mid);
+    assert(mid_freed == 1);
+    assert(b.retained_bytes < b_bytes_before);
+    void* b_walk = b.first_chunk;
+    while (b_walk != NULL) {
+        assert(b_walk != mid_chunk);
+        b_walk = *(void**)b_walk;
+    }
+    __vow_arena_close(&b);
+    assert(b.first_chunk == NULL);
 
     __vow_arena_close(&a);
     /* After close the chain is emptied. */

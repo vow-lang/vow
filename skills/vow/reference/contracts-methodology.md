@@ -181,6 +181,21 @@ later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
 verification fails instead of miscompiling. This is the contract that converts a
 silent fallback into a caught error.
 
+The static classifier rates this clause `substantive`, and `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true` — both are correct, because
+they measure different things. The probe replaces the body with `return 0` (the `i64`
+default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*
+positive: `ensures: result != -1` does not constrain the op→opcode *mapping* — a constant
+non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*
+prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough
+(delete an arm and verification fails). Totality is the silent-fallback property #81
+targets, and — absent a quantifier to say "result is the correct opcode for `op`" — it is
+the strongest property a `!= sentinel` postcondition can express. So read the
+`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not
+as a probe artifact to dismiss. This is *not* the constant-result false positive noted in
+**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the
+type default.
+
 > Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
 > inputs" is expressed as `requires` (pin the finite domain) + a postcondition
 > that excludes the failure value, letting ESBMC enumerate the finite branch
@@ -227,11 +242,25 @@ ways this happens; a contract-quality tool should distinguish them.
 
 The clause is satisfiable and true, but so loose that an incorrect
 implementation also satisfies it (`ensures: result >= 0` on a computed value).
-This is the 354-contract problem. **Detection (mutation-based):** mutate the
-implementation — flip a constant, swap an operator — and re-verify. If the
-contract still proves against the *mutated* body, it does not constrain that
-behavior and is too weak. Vow already has the machinery for this in
-`vowc mutants`; a weak contract is one whose function's mutants survive.
+This is the 354-contract problem.
+
+**Detection (the body-replace probe).** `vow contracts --verify` ships this check
+(#81). It mutates the implementation in the strongest possible way — replaces the
+whole body with a trivial `return <type-default>` — and re-verifies the
+`ensures`. If the contract still proves against that body, a constant-returning
+implementation satisfies it, so it does not constrain the real computation: each
+such `ensures` is reported `trivially_satisfiable: true`. This is exactly the
+`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.
+
+The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of
+weakness (a specific trivial body satisfies the contract), but a `false` verdict
+does not prove strength — the probe uses a single default value and skips
+non-scalar returns, returned parameters, and φ-merged/branchy results, so it can
+miss weak contracts it cannot witness this way. It is informational and never
+changes the exit code; pair it with the static `quality` field. The one known
+false positive is a function whose correct result genuinely *is* the type default
+(e.g. a constant `ensures result == 0` on a `{ 0 }` body) — an equivalent mutant,
+the standard caveat of mutation testing.
 
 ### Tautology
 
@@ -255,10 +284,20 @@ years of hardware verification at IBM, ~20% of formulas were trivially valid on
 first runs, and trivial validity *always* indicated a real defect in the design,
 spec, or environment.
 
-**Detection (the `false` re-check):** re-verify each obligation with its `ensures`
-replaced by `ensures: false`. If `assert(false)` still passes, the path is
-unreachable under the preconditions — the original proof was vacuous. A non-vacuous
-obligation must *fail* this check.
+**Detection (the reachability probe).** `vow contracts --verify` ships this check
+(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
+model with a `vow_reach` label planted immediately after the `requires` assumes,
+under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
+(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+every `ensures` held only vacuously — all of the function's clauses are reported
+`status: "vacuous"` and the command fails closed. If the label is **reachable**
+(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+live. This is operationally the dual of the classic `ensures: false` re-check —
+asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
+still pass?" — but it needs only one extra run per function and is unaffected by
+body divergence, since the label precedes the body. The label sits after the
+requires prefix rather than at the function end precisely so an unbounded loop or
+an `assume(0)` deeper in the body cannot make it spuriously unreachable.
 
 **Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
 for a proof that holds, emit a non-trivial *witness* — concrete inputs that
@@ -327,14 +366,44 @@ Contract expressions must be **pure** — they cannot call effectful functions
 blocked at the *modelable* axis, not the expressible one; classify such gaps as
 model limitations, not contract-language limitations.
 
-## Tooling (planned)
+## Tooling
 
-`vow contracts --verify` lists contracts and verifies them per function today. The
-quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**
-check that emits a quality signal per clause — flagging tautologies (cheap, no
-ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`
-harness, weak obligations whose function's mutants survive. Until that ships, the
-three detections above are checks an author can run by hand.
+`vow contracts --verify` performs the **per-obligation** quality analysis tracked
+in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
+ESBMC `--multi-property`), plus the three quality signals above:
+
+- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
+- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
+  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
+  an `ensures` a trivial `return <default>` body satisfies (informational).
+
+The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
+status and quality tallies, so an author or CI can gate on hollow proofs.
+
+**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
+quality of the self-hosted compiler's own contracts: it reads
+`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
+exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
+unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
+ratchet down as contracts harden. The dispatch-totality example above
+(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`
+(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)
+are enforced in `compiler/lower.vow` today.
+
+**Tag families are structural, not contracted.** The bulk of the old `weak`
+count was nullary tag constants — `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,
+`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures
+result >= 0` proves nothing: a constant's value is the only fact about it, and
+that fact is structural (each is a distinct literal). So these carry **no**
+contract. Their correctness is established where it matters — at use sites: the
+dispatch-totality contracts above prove every valid tag is handled, the IR
+validator and serializer round-trips exercise every kind, and the binary
+fixed-point bootstrap miscompiles if any two tags collide. Removing the
+contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11
+are genuine parametric functions (the region/span bit-packers and friends) whose
+right contract is a round-trip or enumerated postcondition — the next hardening
+target, not noise.
 
 ## References
 
