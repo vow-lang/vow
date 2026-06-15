@@ -14,7 +14,7 @@ use mutants_main
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: i64 = 1;
-    let found: bool = false;
+    let mut found: bool = false;
     while i < argv.len() {
         if argv[i] == flag {
             found = true;
@@ -184,8 +184,8 @@ fn frontend_path_from_argv(argv: Vec<String>, sub: bool) -> String [io] {
 
 fn build_ce_from_result(f: IrFunction, vr: VerifyResult, path: String) -> VerifyCE {
     let vow_id: i64 = vr.vow_id;
-    let ce_violation: String = String::from("");
-    let ce_blame: i64 = DIAG_BLAME_NONE();
+    let mut ce_violation: String = String::from("");
+    let mut ce_blame: i64 = DIAG_BLAME_NONE();
     if vow_id == unsupported_op_vow_id() {
         // Fail-closed assertion from emit_unsupported_for_verification: no
         // user-authored vow has this id, so synthesize an actionable message
@@ -932,7 +932,7 @@ fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i
 }
 
 fn run_test(argv: Vec<String>) -> i32 [io] {
-    let path: String = get_source_path_sub(argv);
+    let mut path: String = get_source_path_sub(argv);
     if path.len() == 0 {
         path = String::from(".");
     }
@@ -2834,7 +2834,14 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("let x: i64 = 42;\n"));
+    r.push_str(String::from("x = 43;   // error[ImmutableAssignment]: declare it with `let mut x`\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Bindings are immutable by default. Reassigning a binding that was not declared\n"));
+    r.push_str(String::from("`mut` is a compile error (`ImmutableAssignment`). `mut` is required **only** for\n"));
+    r.push_str(String::from("whole-binding reassignment `x = e`; field writes (`s.f = e`) and index writes\n"));
+    r.push_str(String::from("(`v[i] = e`) are permitted through any binding and do not require the base to be\n"));
+    r.push_str(String::from("`mut`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Mutable\n"));
     r.push_str(String::from("\n"));
@@ -2842,6 +2849,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("let mut i: i64 = 0;\n"));
     r.push_str(String::from("i = i + 1;\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A `let mut` binding that is never reassigned is a compile error (`UnusedMut`) --\n"));
+    r.push_str(String::from("drop the `mut`. Because only whole-binding reassignment counts as a use of `mut`,\n"));
+    r.push_str(String::from("a binding mutated solely via `s.f = e`, `v[i] = e`, or a method call should be\n"));
+    r.push_str(String::from("declared `let`, not `let mut`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Pattern Destructuring\n"));
     r.push_str(String::from("\n"));
@@ -4144,7 +4156,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    requires: hi >= lo\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    let mut lo: i64 = lo;\n"));
-    r.push_str(String::from("    let mut hi: i64 = hi;\n"));
+    r.push_str(String::from("    let hi: i64 = hi;\n"));
     r.push_str(String::from("    while lo + 1 < hi vow {\n"));
     r.push_str(String::from("        invariant: hi - lo >= 0\n"));
     r.push_str(String::from("    } {\n"));
@@ -4933,6 +4945,39 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### ImmutableAssignment\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Type Checker\n"));
+    r.push_str(String::from("**Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable\n"));
+    r.push_str(String::from("by default; `mut` is required only for whole-binding reassignment `x = e`. Field\n"));
+    r.push_str(String::from("writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f() -> i64 {\n"));
+    r.push_str(String::from("    let x: i64 = 1;\n"));
+    r.push_str(String::from("    x = 2;\n"));
+    r.push_str(String::from("    x\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### UnusedMut\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Type Checker\n"));
+    r.push_str(String::from("**Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only\n"));
+    r.push_str(String::from("whole-binding reassignment counts as a use of `mut` -- a binding mutated solely\n"));
+    r.push_str(String::from("via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f() -> i64 {\n"));
+    r.push_str(String::from("    let mut x: i64 = 1;\n"));
+    r.push_str(String::from("    x\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Remove `mut`: `let x: i64 = 1;`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnknownMethod\n"));
     r.push_str(String::from("\n"));
@@ -5945,6 +5990,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"EffectViolation\",\n"));
     r.push_str(String::from("        \"LinearTypeViolation\",\n"));
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
+    r.push_str(String::from("        \"ImmutableAssignment\",\n"));
+    r.push_str(String::from("        \"UnusedMut\",\n"));
     r.push_str(String::from("        \"VowRequiresViolated\",\n"));
     r.push_str(String::from("        \"VowEnsuresViolated\",\n"));
     r.push_str(String::from("        \"VowInvariantViolated\",\n"));
@@ -6607,7 +6654,14 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("let x: i64 = 42;\n"));
+    r.push_str(String::from("x = 43;   // error[ImmutableAssignment]: declare it with `let mut x`\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Bindings are immutable by default. Reassigning a binding that was not declared\n"));
+    r.push_str(String::from("`mut` is a compile error (`ImmutableAssignment`). `mut` is required **only** for\n"));
+    r.push_str(String::from("whole-binding reassignment `x = e`; field writes (`s.f = e`) and index writes\n"));
+    r.push_str(String::from("(`v[i] = e`) are permitted through any binding and do not require the base to be\n"));
+    r.push_str(String::from("`mut`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Mutable\n"));
     r.push_str(String::from("\n"));
@@ -6615,6 +6669,11 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("let mut i: i64 = 0;\n"));
     r.push_str(String::from("i = i + 1;\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A `let mut` binding that is never reassigned is a compile error (`UnusedMut`) --\n"));
+    r.push_str(String::from("drop the `mut`. Because only whole-binding reassignment counts as a use of `mut`,\n"));
+    r.push_str(String::from("a binding mutated solely via `s.f = e`, `v[i] = e`, or a method call should be\n"));
+    r.push_str(String::from("declared `let`, not `let mut`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Pattern Destructuring\n"));
     r.push_str(String::from("\n"));
@@ -7921,7 +7980,7 @@ fn skill_support_content_2() -> String {
     r.push_str(String::from("    requires: hi >= lo\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    let mut lo: i64 = lo;\n"));
-    r.push_str(String::from("    let mut hi: i64 = hi;\n"));
+    r.push_str(String::from("    let hi: i64 = hi;\n"));
     r.push_str(String::from("    while lo + 1 < hi vow {\n"));
     r.push_str(String::from("        invariant: hi - lo >= 0\n"));
     r.push_str(String::from("    } {\n"));
@@ -8714,6 +8773,39 @@ fn skill_support_content_4() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### ImmutableAssignment\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Type Checker\n"));
+    r.push_str(String::from("**Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable\n"));
+    r.push_str(String::from("by default; `mut` is required only for whole-binding reassignment `x = e`. Field\n"));
+    r.push_str(String::from("writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f() -> i64 {\n"));
+    r.push_str(String::from("    let x: i64 = 1;\n"));
+    r.push_str(String::from("    x = 2;\n"));
+    r.push_str(String::from("    x\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### UnusedMut\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Type Checker\n"));
+    r.push_str(String::from("**Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only\n"));
+    r.push_str(String::from("whole-binding reassignment counts as a use of `mut` -- a binding mutated solely\n"));
+    r.push_str(String::from("via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f() -> i64 {\n"));
+    r.push_str(String::from("    let mut x: i64 = 1;\n"));
+    r.push_str(String::from("    x\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Remove `mut`: `let x: i64 = 1;`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnknownMethod\n"));
     r.push_str(String::from("\n"));
@@ -9725,6 +9817,8 @@ fn skill_support_content_9() -> String {
     r.push_str(String::from("        \"EffectViolation\",\n"));
     r.push_str(String::from("        \"LinearTypeViolation\",\n"));
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
+    r.push_str(String::from("        \"ImmutableAssignment\",\n"));
+    r.push_str(String::from("        \"UnusedMut\",\n"));
     r.push_str(String::from("        \"VowRequiresViolated\",\n"));
     r.push_str(String::from("        \"VowEnsuresViolated\",\n"));
     r.push_str(String::from("        \"VowInvariantViolated\",\n"));
@@ -10096,8 +10190,8 @@ fn skill_home_dir() -> String [io] {
 }
 
 fn skill_install_root(local: bool, global: bool) -> String [io, read] {
-    let use_local: bool = local;
-    let use_global: bool = global;
+    let mut use_local: bool = local;
+    let mut use_global: bool = global;
     if use_local && use_global {
         eprintln_str("vow skill install: --local and --global are mutually exclusive");
         return String::from("");
@@ -10134,7 +10228,7 @@ fn skill_install_root(local: bool, global: bool) -> String [io, read] {
 }
 
 fn run_skill(argv: Vec<String>) -> i32 [io, read, write] {
-    let do_install: bool = false;
+    let mut do_install: bool = false;
     let do_bundle: bool = has_flag(argv, String::from("--bundle"));
     if argv.len() >= 3 {
         let action: String = argv[2];
@@ -10540,15 +10634,15 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     // Compute summary counts
-    let n_proven: i64 = 0;
-    let n_failed: i64 = 0;
-    let n_unknown: i64 = 0;
-    let n_timeout: i64 = 0;
-    let n_error: i64 = 0;
-    let n_not_verified: i64 = 0;
-    let n_skipped: i64 = 0;
-    let n_vacuous: i64 = 0;
-    let n_trivial: i64 = 0;
+    let mut n_proven: i64 = 0;
+    let mut n_failed: i64 = 0;
+    let mut n_unknown: i64 = 0;
+    let mut n_timeout: i64 = 0;
+    let mut n_error: i64 = 0;
+    let mut n_not_verified: i64 = 0;
+    let mut n_skipped: i64 = 0;
+    let mut n_vacuous: i64 = 0;
+    let mut n_trivial: i64 = 0;
     let mut si: i64 = 0;
     while si < total {
         let s: String = e_statuses[si];
@@ -10583,9 +10677,9 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     // Static contract-quality tallies (independent of verification status).
-    let n_weak: i64 = 0;
-    let n_taut: i64 = 0;
-    let n_subst: i64 = 0;
+    let mut n_weak: i64 = 0;
+    let mut n_taut: i64 = 0;
+    let mut n_subst: i64 = 0;
     let mut qi: i64 = 0;
     while qi < total {
         let q: String = e_qualities[qi];

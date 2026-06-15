@@ -1788,7 +1788,14 @@ across integer types at operator sites — only literals coerce, per the
 
 ```vow
 let x: i64 = 42;
+x = 43;   // error[ImmutableAssignment]: declare it with `let mut x`
 ```
+
+Bindings are immutable by default. Reassigning a binding that was not declared
+`mut` is a compile error (`ImmutableAssignment`). `mut` is required **only** for
+whole-binding reassignment `x = e`; field writes (`s.f = e`) and index writes
+(`v[i] = e`) are permitted through any binding and do not require the base to be
+`mut`.
 
 ### Mutable
 
@@ -1796,6 +1803,11 @@ let x: i64 = 42;
 let mut i: i64 = 0;
 i = i + 1;
 ```
+
+A `let mut` binding that is never reassigned is a compile error (`UnusedMut`) —
+drop the `mut`. Because only whole-binding reassignment counts as a use of `mut`,
+a binding mutated solely via `s.f = e`, `v[i] = e`, or a method call should be
+declared `let`, not `let mut`.
 
 ### Pattern Destructuring
 
@@ -3098,7 +3110,7 @@ fn bisect(lo: i64, hi: i64) -> i64 vow {
     requires: hi >= lo
 } {
     let mut lo: i64 = lo;
-    let mut hi: i64 = hi;
+    let hi: i64 = hi;
     while lo + 1 < hi vow {
         invariant: hi - lo >= 0
     } {
@@ -3887,6 +3899,39 @@ fn f(o: Option<i64>) -> i64 {
 ```
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
+
+### ImmutableAssignment
+
+**Phase:** Type Checker
+**Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable
+by default; `mut` is required only for whole-binding reassignment `x = e`. Field
+writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.
+
+```vow
+fn f() -> i64 {
+    let x: i64 = 1;
+    x = 2;
+    x
+}
+```
+
+**Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.
+
+### UnusedMut
+
+**Phase:** Type Checker
+**Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only
+whole-binding reassignment counts as a use of `mut` — a binding mutated solely
+via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.
+
+```vow
+fn f() -> i64 {
+    let mut x: i64 = 1;
+    x
+}
+```
+
+**Fix:** Remove `mut`: `let x: i64 = 1;`.
 
 ### UnknownMethod
 
@@ -4899,6 +4944,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "EffectViolation",
         "LinearTypeViolation",
         "NonExhaustiveMatch",
+        "ImmutableAssignment",
+        "UnusedMut",
         "VowRequiresViolated",
         "VowEnsuresViolated",
         "VowInvariantViolated",
@@ -5547,7 +5594,14 @@ across integer types at operator sites — only literals coerce, per the
 
 ```vow
 let x: i64 = 42;
+x = 43;   // error[ImmutableAssignment]: declare it with `let mut x`
 ```
+
+Bindings are immutable by default. Reassigning a binding that was not declared
+`mut` is a compile error (`ImmutableAssignment`). `mut` is required **only** for
+whole-binding reassignment `x = e`; field writes (`s.f = e`) and index writes
+(`v[i] = e`) are permitted through any binding and do not require the base to be
+`mut`.
 
 ### Mutable
 
@@ -5555,6 +5609,11 @@ let x: i64 = 42;
 let mut i: i64 = 0;
 i = i + 1;
 ```
+
+A `let mut` binding that is never reassigned is a compile error (`UnusedMut`) —
+drop the `mut`. Because only whole-binding reassignment counts as a use of `mut`,
+a binding mutated solely via `s.f = e`, `v[i] = e`, or a method call should be
+declared `let`, not `let mut`.
 
 ### Pattern Destructuring
 
@@ -6859,7 +6918,7 @@ fn bisect(lo: i64, hi: i64) -> i64 vow {
     requires: hi >= lo
 } {
     let mut lo: i64 = lo;
-    let mut hi: i64 = hi;
+    let hi: i64 = hi;
     while lo + 1 < hi vow {
         invariant: hi - lo >= 0
     } {
@@ -7650,6 +7709,39 @@ fn f(o: Option<i64>) -> i64 {
 ```
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
+
+### ImmutableAssignment
+
+**Phase:** Type Checker
+**Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable
+by default; `mut` is required only for whole-binding reassignment `x = e`. Field
+writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.
+
+```vow
+fn f() -> i64 {
+    let x: i64 = 1;
+    x = 2;
+    x
+}
+```
+
+**Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.
+
+### UnusedMut
+
+**Phase:** Type Checker
+**Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only
+whole-binding reassignment counts as a use of `mut` — a binding mutated solely
+via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.
+
+```vow
+fn f() -> i64 {
+    let mut x: i64 = 1;
+    x
+}
+```
+
+**Fix:** Remove `mut`: `let x: i64 = 1;`.
 
 ### UnknownMethod
 
@@ -8656,6 +8748,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "EffectViolation",
         "LinearTypeViolation",
         "NonExhaustiveMatch",
+        "ImmutableAssignment",
+        "UnusedMut",
         "VowRequiresViolated",
         "VowEnsuresViolated",
         "VowInvariantViolated",
@@ -11935,7 +12029,7 @@ fn bisect(lo: i64, hi: i64) -> i64 vow {
   requires: hi >= lo
 } {
   let mut lo: i64 = lo;
-  let mut hi: i64 = hi;
+  let hi: i64 = hi;
   while lo + 1 < hi vow {
     invariant: hi - lo >= 0
   } {
@@ -12546,7 +12640,7 @@ pub fn sum(v: Vec<i64>) -> i64 {
 }
 
 pub fn main() -> i32 {
-    let mut nums: Vec<i64> = Vec::new();
+    let nums: Vec<i64> = Vec::new();
     nums.push(10);
     nums.push(20);
     nums.push(30);
@@ -12574,7 +12668,7 @@ pub fn sum_coords(p: Point) -> i64 {
 pub fn main() -> i32 {
     let p = Point { x: 3, y: 4 };
     let s = sum_coords(p);
-    let mut v: Vec<i64> = Vec::new();
+    let v: Vec<i64> = Vec::new();
     v.push(s);
     let n = v.len();
     0
@@ -12605,7 +12699,7 @@ pub fn main() -> i32 [io] {
         let src = r#"module MapTest
 
 pub fn main() -> i32 {
-    let mut m: HashMap<i64, i64> = HashMap::new();
+    let m: HashMap<i64, i64> = HashMap::new();
     m.insert(1, 10);
     m.insert(2, 20);
     m.insert(3, 30);

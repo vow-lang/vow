@@ -379,7 +379,14 @@ across integer types at operator sites — only literals coerce, per the
 
 ```vow
 let x: i64 = 42;
+x = 43;   // error[ImmutableAssignment]: declare it with `let mut x`
 ```
+
+Bindings are immutable by default. Reassigning a binding that was not declared
+`mut` is a compile error (`ImmutableAssignment`). `mut` is required **only** for
+whole-binding reassignment `x = e`; field writes (`s.f = e`) and index writes
+(`v[i] = e`) are permitted through any binding and do not require the base to be
+`mut`.
 
 ### Mutable
 
@@ -387,6 +394,11 @@ let x: i64 = 42;
 let mut i: i64 = 0;
 i = i + 1;
 ```
+
+A `let mut` binding that is never reassigned is a compile error (`UnusedMut`) —
+drop the `mut`. Because only whole-binding reassignment counts as a use of `mut`,
+a binding mutated solely via `s.f = e`, `v[i] = e`, or a method call should be
+declared `let`, not `let mut`.
 
 ### Pattern Destructuring
 

@@ -14,7 +14,7 @@ fn stack_new() -> Stack {
 fn stack_push(s: Stack, val: i64) -> Stack vow {
     ensures: result.size == s.size + 1
 } {
-    let mut d: Vec<i64> = s.data;
+    let d: Vec<i64> = s.data;
     d.push(val);
     Stack { data: d, size: s.size + 1 }
 }

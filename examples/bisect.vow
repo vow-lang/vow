@@ -4,7 +4,7 @@ fn bisect(lo: i64, hi: i64) -> i64 vow {
   requires: hi >= lo
 } {
   let mut lo: i64 = lo;
-  let mut hi: i64 = hi;
+  let hi: i64 = hi;
   while lo + 1 < hi vow {
     invariant: hi - lo >= 0
   } {

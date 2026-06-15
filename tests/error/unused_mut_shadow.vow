@@ -1,0 +1,19 @@
+// TEST: error-code UnusedMut
+// TEST: stderr "never reassigned"
+// Same-scope shadowing: a `let mut x` immediately re-`let` as `let x`. The first
+// binding is a `mut` that is never reassigned, so it is UnusedMut. Pins
+// Rust/self-hosted parity — the Rust checker previously dropped the first
+// declaration's record (name-keyed map) and missed this, while the self-hosted
+// per-declaration vectors caught it.
+module UnusedMutShadow
+
+fn f() -> i64 {
+  let mut x: i64 = 1;
+  let x: i64 = 2;
+  x
+}
+
+fn main() -> i32 {
+  let n: i64 = f();
+  0
+}
