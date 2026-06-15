@@ -124,7 +124,13 @@ soft_fail = rs == 'VerifyFailed' and ss == 'VerifyFailed' and rvs and svs
 if soft_fail:
     if rvs != svs:
         errors.append(f'verify_status: {rvs} vs {svs}')
-    # verify_message is not compared — ESBMC-output text varies across runs and would cause brittle parity failures.
+    # For deterministic inputs the same function should trigger the soft fail on
+    # both compilers; a divergence on which function was selected would otherwise
+    # pass silently (verify_message is still skipped — ESBMC text is non-deterministic).
+    rfn = r.get('function') or ''
+    sfn = s.get('function') or ''
+    if rfn != sfn:
+        errors.append(f'function: {rfn} vs {sfn}')
 elif rs == 'VerifyFailed' and ss == 'VerifyFailed':
     if len(rc) == 0:
         errors.append('rust has no counterexamples for VerifyFailed')
@@ -774,6 +780,31 @@ if uv run python scripts/generate_help.py --check >/dev/null 2>&1; then
 else
     fail "help/skills-dir-drift" "skills/vow/ drifted from generated content; run 'uv run python scripts/generate_help.py'"
 fi
+
+# contract-quality/weak-gate: ratchet on static contract quality across the
+# self-hosted compiler — fail if the weak/tautological contract count exceeds the
+# committed baseline (#81). Static classification only (no ESBMC), so it is cheap.
+# Capture the contracts JSON in its own step so a producer failure (parse error,
+# missing binary, compiler crash) is reported as itself — with its stderr visible —
+# instead of being masked as a baseline breach by the checker's empty-stdin exit.
+contract_quality_json="$TMPDIR/contract_quality.json"
+if ! run_self contracts compiler/main.vow >"$contract_quality_json"; then
+    fail "contract-quality/weak-gate" "vow contracts compiler/main.vow failed (see stderr above); could not evaluate contract quality"
+else
+    # Distinguish the checker's exit codes: 0 = pass, 1 = baseline breach (a real
+    # contract-quality regression), 2 = structural error (malformed JSON / missing
+    # or non-integer counter — the checker's stderr above names the cause). A bare
+    # else would mislabel a schema error as a baseline breach.
+    quality_status=0
+    uv run python scripts/check_contract_quality.py <"$contract_quality_json" || quality_status=$?
+    if [ "$quality_status" -eq 0 ]; then
+        pass "contract-quality/weak-gate"
+    elif [ "$quality_status" -eq 1 ]; then
+        fail "contract-quality/weak-gate" "weak/tautological contracts exceeded baseline; strengthen the new contract or adjust scripts/check_contract_quality.py with justification"
+    else
+        fail "contract-quality/weak-gate" "contract quality check could not run (malformed 'vow contracts' output / schema mismatch; see stderr above)"
+    fi
+fi
 echo ""
 
 # ─── Section 9: Bootstrap Triple Test ──────────────────────────────
@@ -877,8 +908,12 @@ echo ""
 # ─── Section 11: Arena Primitive ESBMC Verification ────────────────
 
 section_begin "Section 11: Arena Primitive Verification"
+# Run under the same 2 GB virtual-memory cap as run_self so this also guards
+# against a regression in the verify invocation: with the single-shot
+# --unwind 5 --boolector command (#516) the harness peaks at ~0.5 GB, but
+# --incremental-bmc / Bitwuzla blew past 2 GB and OOM-killed here (#546).
 if command -v esbmc >/dev/null 2>&1; then
-    if (cd vow-runtime/verify && make verify) >"$TMPDIR/arena_verify.log" 2>&1; then
+    if (ulimit -v 2000000; cd vow-runtime/verify && make verify) >"$TMPDIR/arena_verify.log" 2>&1; then
         pass "arena/esbmc"
     else
         fail "arena/esbmc" "$(tail -5 "$TMPDIR/arena_verify.log")"

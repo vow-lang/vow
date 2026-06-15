@@ -10,10 +10,10 @@ use ir_printer
 // the prover, not about Vow — not language properties and not user-tunable.
 // Swap in an unbounded checker and the same source verifies unchanged.
 // See docs/design/verifier-model-bounds.md.
-fn VOW_VEC_MAX() -> i64 vow { ensures: result >= 1 } { 128 }
-fn VOW_STRING_MAX() -> i64 vow { ensures: result >= 1 } { 256 }
-fn VOW_HASHMAP_MAX() -> i64 vow { ensures: result >= 1 } { 64 }
-fn VOW_BTREEMAP_MAX() -> i64 vow { ensures: result >= 1 } { 64 }
+fn VOW_VEC_MAX() -> i64 { 128 }
+fn VOW_STRING_MAX() -> i64 { 256 }
+fn VOW_HASHMAP_MAX() -> i64 { 64 }
+fn VOW_BTREEMAP_MAX() -> i64 { 64 }
 
 fn str3(a: String, b: String, c: String) -> String {
     let r: String = String::from("");
@@ -1959,7 +1959,7 @@ fn emit_btreemap_op(out: String, inst: IrInst, btreemap_max: i64) {
 }
 
 fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
-                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) {
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, reach_label: bool, body_replace: bool) {
     let vec_vars: Vec<i64> = collect_vec_vars(f);
     let string_vars: Vec<i64> = collect_string_vars(f);
     let hashmap_vars: Vec<i64> = collect_hashmap_vars(f);
@@ -2200,6 +2200,38 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         }
     };
 
+    // Weakness detection (#81 PR-C): in body-replace mode, `result_after` is the
+    // id of the value the `Return` yields (which the `ensures` predicate also
+    // references). After that instruction is emitted, the result is overwritten
+    // with the type-default, so each `ensures` is checked against a trivial
+    // `return 0` body. Callers only set `body_replace` when this value is a
+    // regular scalar instruction (see verifier.vow eligibility).
+    let mut result_after: i64 = -1;
+    if body_replace {
+        let mut rbi: i64 = 0;
+        while rbi < n_blocks {
+            let rblk: IrBlock = blocks[rbi];
+            let rinsts: Vec<IrInst> = rblk.insts;
+            let mut rii: i64 = 0;
+            while rii < rinsts.len() {
+                let rinst: IrInst = rinsts[rii];
+                // Match Rust's `.find()` (vow-verify/src/c_emitter.rs): take the
+                // FIRST `Return`, then stop. A trailing scan keeps the LAST
+                // return's value, diverging from Rust for multi-return IR.
+                if rinst.op == IOP_RETURN() {
+                    let rargs: Vec<i64> = rinst.args;
+                    if rargs.len() > 0 {
+                        result_after = rargs[0];
+                        rii = rinsts.len();
+                        rbi = n_blocks;
+                    }
+                }
+                rii = rii + 1;
+            }
+            rbi = rbi + 1;
+        }
+    }
+
     bi = 0;
     while bi < n_blocks {
         let blk: IrBlock = blocks[bi];
@@ -2236,10 +2268,34 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
             }
         }
 
+        // Vacuity detection (#81 PR-B): in reach mode, plant the `vow_reach`
+        // label right after the last `requires` assume in the entry block. The
+        // label is reachable iff the preconditions are satisfiable; ESBMC
+        // `--error-label vow_reach` maps unreachable -> contradictory requires ->
+        // vacuous. Placing it after the requires prefix (not the function end)
+        // keeps body divergence from making the label spuriously unreachable.
+        let mut reach_after_idx: i64 = -1;
+        if reach_label && blk.id == first_block_id {
+            let mut qi: i64 = 0;
+            while qi < insts.len() {
+                let qinst: IrInst = insts[qi];
+                if qinst.op == IOP_VOW_REQ() {
+                    reach_after_idx = qi;
+                }
+                qi = qi + 1;
+            }
+        }
+
         let mut ri: i64 = 0;
         while ri < regular.len() {
             let inst: IrInst = insts[regular[ri]];
             emit_inst(out, inst, f, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
+            if regular[ri] == reach_after_idx {
+                out.push_str(String::from("vow_reach:;\n"));
+            }
+            if body_replace && inst.id == result_after {
+                out.push_str(str3(String::from("  v"), i64_to_str(result_after), String::from(" = 0;\n")));
+            }
             ri = ri + 1;
         }
 
@@ -2441,7 +2497,7 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
     let mut fi: i64 = 0;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
-        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max);
+        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, false, false);
         out.push_byte(10);
         fi = fi + 1;
     }
@@ -2470,7 +2526,7 @@ fn scan_shift_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis:
 }
 
 fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>, modelable_fi_set: Vec<i64>,
-                              vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
+                              vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, target_reach_label: bool, target_body_replace: bool) -> String {
     let fns: Vec<IrFunction> = m.functions;
     let model_string_max: i64 = string_max_for_literals(m, string_max);
     let need_shl_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL_I64());
@@ -2505,7 +2561,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
         while fi < fns.len() {
             let callee: IrFunction = fns[fi];
             if callee.id == cfid {
-                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max);
+                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max, false, false);
                 out.push_byte(10);
                 fi = fns.len();
             }
@@ -2518,7 +2574,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
         if f.id == target_fi {
-            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max);
+            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max, target_reach_label, target_body_replace);
             out.push_byte(10);
             fi = fns.len();
         }

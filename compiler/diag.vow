@@ -1,44 +1,44 @@
 module Diag
 
-fn SEV_ERROR() -> i64 vow { ensures: result >= 0 } { 0 }
-fn SEV_WARNING() -> i64 vow { ensures: result >= 0 } { 1 }
-fn SEV_NOTE() -> i64 vow { ensures: result >= 0 } { 2 }
+fn SEV_ERROR() -> i64 { 0 }
+fn SEV_WARNING() -> i64 { 1 }
+fn SEV_NOTE() -> i64 { 2 }
 
-fn DIAG_BLAME_CALLER() -> i64 vow { ensures: result >= 0 } { 0 }
-fn DIAG_BLAME_CALLEE() -> i64 vow { ensures: result >= 0 } { 1 }
-fn DIAG_BLAME_NONE() -> i64 vow { ensures: result >= 0 } { 2 }
+fn DIAG_BLAME_CALLER() -> i64 { 0 }
+fn DIAG_BLAME_CALLEE() -> i64 { 1 }
+fn DIAG_BLAME_NONE() -> i64 { 2 }
 
-fn EC_UNTERMINATED_STRING() -> i64 vow { ensures: result >= 0 } { 0 }
-fn EC_INVALID_CHARACTER() -> i64 vow { ensures: result >= 0 } { 1 }
-fn EC_UNEXPECTED_TOKEN() -> i64 vow { ensures: result >= 0 } { 2 }
-fn EC_MISSING_DELIMITER() -> i64 vow { ensures: result >= 0 } { 3 }
-fn EC_TYPE_MISMATCH() -> i64 vow { ensures: result >= 0 } { 4 }
-fn EC_EFFECT_VIOLATION() -> i64 vow { ensures: result >= 0 } { 5 }
-fn EC_LINEAR_TYPE_VIOLATION() -> i64 vow { ensures: result >= 0 } { 6 }
-fn EC_NON_EXHAUSTIVE_MATCH() -> i64 vow { ensures: result >= 0 } { 7 }
-fn EC_VOW_REQUIRES_VIOLATED() -> i64 vow { ensures: result >= 0 } { 8 }
-fn EC_VOW_ENSURES_VIOLATED() -> i64 vow { ensures: result >= 0 } { 9 }
-fn EC_VOW_INVARIANT_VIOLATED() -> i64 vow { ensures: result >= 0 } { 10 }
-fn EC_UNKNOWN_METHOD() -> i64 vow { ensures: result >= 0 } { 12 }
-fn EC_UNSUPPORTED_FEATURE() -> i64 vow { ensures: result >= 0 } { 13 }
-fn EC_LOWERING_WARNING() -> i64 vow { ensures: result >= 0 } { 14 }
-fn EC_IO_ERROR() -> i64 vow { ensures: result >= 0 } { 11 }
-fn EC_MISSING_CONTRACT() -> i64 vow { ensures: result >= 0 } { 15 }
-fn EC_CONTRACT_TYPE_MISMATCH() -> i64 vow { ensures: result >= 0 } { 16 }
-fn EC_ESBMC_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 17 }
-fn EC_REGION_CONFLICT() -> i64 vow { ensures: result >= 0 } { 18 }
-fn EC_REGION_LINEAR() -> i64 vow { ensures: result >= 0 } { 19 }
+fn EC_UNTERMINATED_STRING() -> i64 { 0 }
+fn EC_INVALID_CHARACTER() -> i64 { 1 }
+fn EC_UNEXPECTED_TOKEN() -> i64 { 2 }
+fn EC_MISSING_DELIMITER() -> i64 { 3 }
+fn EC_TYPE_MISMATCH() -> i64 { 4 }
+fn EC_EFFECT_VIOLATION() -> i64 { 5 }
+fn EC_LINEAR_TYPE_VIOLATION() -> i64 { 6 }
+fn EC_NON_EXHAUSTIVE_MATCH() -> i64 { 7 }
+fn EC_VOW_REQUIRES_VIOLATED() -> i64 { 8 }
+fn EC_VOW_ENSURES_VIOLATED() -> i64 { 9 }
+fn EC_VOW_INVARIANT_VIOLATED() -> i64 { 10 }
+fn EC_UNKNOWN_METHOD() -> i64 { 12 }
+fn EC_UNSUPPORTED_FEATURE() -> i64 { 13 }
+fn EC_LOWERING_WARNING() -> i64 { 14 }
+fn EC_IO_ERROR() -> i64 { 11 }
+fn EC_MISSING_CONTRACT() -> i64 { 15 }
+fn EC_CONTRACT_TYPE_MISMATCH() -> i64 { 16 }
+fn EC_ESBMC_NOT_FOUND() -> i64 { 17 }
+fn EC_REGION_CONFLICT() -> i64 { 18 }
+fn EC_REGION_LINEAR() -> i64 { 19 }
 // Emitted as a Warning when a vowed function's body cannot be modeled by
 // the verifier. Mirrors `vow_diag::ErrorCode::VerificationSkipped`.
-fn EC_VERIFICATION_SKIPPED() -> i64 vow { ensures: result >= 0 } { 20 }
-fn EC_BTREEMAP_KEY_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 21 }
-fn EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR() -> i64 vow { ensures: result >= 0 } { 22 }
+fn EC_VERIFICATION_SKIPPED() -> i64 { 20 }
+fn EC_BTREEMAP_KEY_TYPE_MUST_BE_I64() -> i64 { 21 }
+fn EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR() -> i64 { 22 }
 // Note: program-lifetime root-arena placement. See arena_memory.md §4.4.
-fn EC_REGION_ROOT_ESCAPE() -> i64 vow { ensures: result >= 0 } { 23 }
-fn EC_STATIC_LITERAL_REQUIRED() -> i64 vow { ensures: result >= 0 } { 24 }
-fn EC_REGION_LITERAL_MUTATION() -> i64 vow { ensures: result >= 0 } { 25 }
-fn EC_IMMUTABLE_ASSIGNMENT() -> i64 vow { ensures: result >= 0 } { 26 }
-fn EC_UNUSED_MUT() -> i64 vow { ensures: result >= 0 } { 27 }
+fn EC_REGION_ROOT_ESCAPE() -> i64 { 23 }
+fn EC_STATIC_LITERAL_REQUIRED() -> i64 { 24 }
+fn EC_REGION_LITERAL_MUTATION() -> i64 { 25 }
+fn EC_IMMUTABLE_ASSIGNMENT() -> i64 { 26 }
+fn EC_UNUSED_MUT() -> i64 { 27 }
 
 struct Diagnostic {
     severity: i64,

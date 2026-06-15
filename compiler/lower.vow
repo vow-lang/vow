@@ -555,7 +555,8 @@ fn is_valid_binop(op: i64) -> bool {
 }
 
 fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
-    requires: is_valid_binop(op)
+    requires: is_valid_binop(op),
+    ensures: result != -1
 } {
     let is_u64: bool = operand_ty == ITY_U64();
     if op == BINOP_ADD() { return if is_u64 { IOP_WADD_U64() } else { IOP_WADD_I64() }; }
@@ -590,7 +591,8 @@ fn is_comparison_binop(op: i64) -> bool {
 }
 
 fn binop_result_ty(op: i64, operand_ty: i64) -> i64 vow {
-    requires: is_valid_binop(op)
+    requires: is_valid_binop(op),
+    ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()
 } {
     if is_comparison_binop(op) { return ITY_BOOL(); }
     if operand_ty == ITY_U64() { return ITY_U64(); }

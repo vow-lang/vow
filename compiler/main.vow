@@ -133,13 +133,13 @@ fn default_output(path: String) -> String {
     r
 }
 
-fn CMD_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
-fn CMD_BUILD() -> i64 vow { ensures: result >= 0 } { 1 }
-fn CMD_VERIFY() -> i64 vow { ensures: result >= 0 } { 2 }
-fn CMD_TEST() -> i64 vow { ensures: result >= 0 } { 3 }
-fn CMD_CONTRACTS() -> i64 vow { ensures: result >= 0 } { 4 }
-fn CMD_SKILL() -> i64 vow { ensures: result >= 0 } { 5 }
-fn CMD_MUTANTS() -> i64 vow { ensures: result >= 0 } { 6 }
+fn CMD_NONE() -> i64 { 0 }
+fn CMD_BUILD() -> i64 { 1 }
+fn CMD_VERIFY() -> i64 { 2 }
+fn CMD_TEST() -> i64 { 3 }
+fn CMD_CONTRACTS() -> i64 { 4 }
+fn CMD_SKILL() -> i64 { 5 }
+fn CMD_MUTANTS() -> i64 { 6 }
 
 fn get_subcommand(argv: Vec<String>) -> i64 {
     if argv.len() < 2 {
@@ -1054,6 +1054,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 let vin_flight_fi: Vec<i64> = Vec::new();
                 let vin_flight_tmp: Vec<String> = Vec::new();
                 let mut verify_failed: bool = false;
+                let mut contract_skipped: bool = false;
                 let t_dctx: DiagCtx = checked.dctx;
                 let t_const_fns: Vec<i64> = detect_const_fns(ir_mod);
                 let mut vfi: i64 = 0;
@@ -1096,8 +1097,11 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         }
                         if !verify_failed {
                             // Fail closed: a non-modelable contract was not statically proved.
+                            // Reported as contract_skipped (ESBMC never invoked) rather than
+                            // verify_failed (a proved violation); a real violation in any other
+                            // function still sets verify_failed, which takes precedence (#386).
                             if skip_if_non_modelable(vf, ir_mod, t_const_fns, t_dctx) {
-                                verify_failed = true;
+                                contract_skipped = true;
                             } else {
                                 let vstarted: EsbmcStart = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                                 vin_flight_h.push(vstarted.handle);
@@ -1143,6 +1147,15 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     let duration: i64 = time_unix_ms() - start_time;
                     let diag_vf: String = String::from("[{\"error_code\":\"VerifyFailed\",\"message\":\"contract verification failed\",\"severity\":\"error\"}]");
                     let entry: String = emit_test_entry_json(test_path, short_name, String::from("verify_failed"), -1, String::from(""), String::from(""), duration, diag_vf);
+                    entries_json.push(entry);
+                    failed = failed + 1;
+                    skip_exec = true;
+                } else if contract_skipped {
+                    // Fail closed but distinguishable: ESBMC was never invoked
+                    // because a vowed function is non-modelable (#386).
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let diag_cs: String = String::from("[{\"error_code\":\"VerificationSkipped\",\"message\":\"contract verification skipped: function not modelable\",\"severity\":\"error\"}]");
+                    let entry: String = emit_test_entry_json(test_path, short_name, String::from("contract_skipped"), -1, String::from(""), String::from(""), duration, diag_cs);
                     entries_json.push(entry);
                     failed = failed + 1;
                     skip_exec = true;
@@ -2340,7 +2353,7 @@ fn skill_entrypoint() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Installed toolchain (live)\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200)`\n"));
+    r.push_str(String::from("!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200) || echo '(vow toolchain not found on PATH; run scripts/bootstrap.sh to build build/vowc)'`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Core workflow\n"));
     r.push_str(String::from("\n"));
@@ -3513,7 +3526,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
+    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.\n"));
     r.push_str(String::from("\n"));
@@ -3599,7 +3612,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `TestsPassed`  | All tests passed                                  |\n"));
     r.push_str(String::from("| `TestsFailed`  | One or more tests failed                          |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.\n"));
+    r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed -- a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow decl`\n"));
     r.push_str(String::from("\n"));
@@ -3778,7 +3793,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"vacuous\": 0, \"trivially_satisfiable\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3798,7 +3813,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"vacuous\": 0, \"trivially_satisfiable\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3812,8 +3827,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `description` | string  | Full contract text                                       |\n"));
     r.push_str(String::from("| `blame`       | string  | `\"Caller\"` (requires) or `\"Callee\"` (ensures/invariant)  |\n"));
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
-    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, or `\"skipped\"` |\n"));
+    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, `\"skipped\"`, or `\"vacuous\"` |\n"));
     r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
+    r.push_str(String::from("| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational -- never affects the exit code. See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
     r.push_str(String::from("\n"));
@@ -3823,10 +3839,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
     r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
-    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
+    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
+    r.push_str(String::from("| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously -- ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Quality Values\n"));
     r.push_str(String::from("\n"));
@@ -4498,6 +4515,21 @@ fn skill_bundle() -> String {
     r.push_str(String::from("verification fails instead of miscompiling. This is the contract that converts a\n"));
     r.push_str(String::from("silent fallback into a caught error.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("The static classifier rates this clause `substantive`, and `vow contracts --verify`'s\n"));
+    r.push_str(String::from("body-replace probe reports it `trivially_satisfiable: true` -- both are correct, because\n"));
+    r.push_str(String::from("they measure different things. The probe replaces the body with `return 0` (the `i64`\n"));
+    r.push_str(String::from("default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*\n"));
+    r.push_str(String::from("positive: `ensures: result != -1` does not constrain the op→opcode *mapping* -- a constant\n"));
+    r.push_str(String::from("non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*\n"));
+    r.push_str(String::from("prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough\n"));
+    r.push_str(String::from("(delete an arm and verification fails). Totality is the silent-fallback property #81\n"));
+    r.push_str(String::from("targets, and -- absent a quantifier to say \"result is the correct opcode for `op`\" -- it is\n"));
+    r.push_str(String::from("the strongest property a `!= sentinel` postcondition can express. So read the\n"));
+    r.push_str(String::from("`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not\n"));
+    r.push_str(String::from("as a probe artifact to dismiss. This is *not* the constant-result false positive noted in\n"));
+    r.push_str(String::from("**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the\n"));
+    r.push_str(String::from("type default.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("> Vow has no surface quantifier (`forall i in 0..n`) today, so \"covers all valid\n"));
     r.push_str(String::from("> inputs\" is expressed as `requires` (pin the finite domain) + a postcondition\n"));
     r.push_str(String::from("> that excludes the failure value, letting ESBMC enumerate the finite branch\n"));
@@ -4544,11 +4576,25 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("The clause is satisfiable and true, but so loose that an incorrect\n"));
     r.push_str(String::from("implementation also satisfies it (`ensures: result >= 0` on a computed value).\n"));
-    r.push_str(String::from("This is the 354-contract problem. **Detection (mutation-based):** mutate the\n"));
-    r.push_str(String::from("implementation -- flip a constant, swap an operator -- and re-verify. If the\n"));
-    r.push_str(String::from("contract still proves against the *mutated* body, it does not constrain that\n"));
-    r.push_str(String::from("behavior and is too weak. Vow already has the machinery for this in\n"));
-    r.push_str(String::from("`vowc mutants`; a weak contract is one whose function's mutants survive.\n"));
+    r.push_str(String::from("This is the 354-contract problem.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Detection (the body-replace probe).** `vow contracts --verify` ships this check\n"));
+    r.push_str(String::from("(#81). It mutates the implementation in the strongest possible way -- replaces the\n"));
+    r.push_str(String::from("whole body with a trivial `return <type-default>` -- and re-verifies the\n"));
+    r.push_str(String::from("`ensures`. If the contract still proves against that body, a constant-returning\n"));
+    r.push_str(String::from("implementation satisfies it, so it does not constrain the real computation: each\n"));
+    r.push_str(String::from("such `ensures` is reported `trivially_satisfiable: true`. This is exactly the\n"));
+    r.push_str(String::from("`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of\n"));
+    r.push_str(String::from("weakness (a specific trivial body satisfies the contract), but a `false` verdict\n"));
+    r.push_str(String::from("does not prove strength -- the probe uses a single default value and skips\n"));
+    r.push_str(String::from("non-scalar returns, returned parameters, and φ-merged/branchy results, so it can\n"));
+    r.push_str(String::from("miss weak contracts it cannot witness this way. It is informational and never\n"));
+    r.push_str(String::from("changes the exit code; pair it with the static `quality` field. The one known\n"));
+    r.push_str(String::from("false positive is a function whose correct result genuinely *is* the type default\n"));
+    r.push_str(String::from("(e.g. a constant `ensures result == 0` on a `{ 0 }` body) -- an equivalent mutant,\n"));
+    r.push_str(String::from("the standard caveat of mutation testing.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Tautology\n"));
     r.push_str(String::from("\n"));
@@ -4572,10 +4618,20 @@ fn skill_bundle() -> String {
     r.push_str(String::from("first runs, and trivial validity *always* indicated a real defect in the design,\n"));
     r.push_str(String::from("spec, or environment.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Detection (the `false` re-check):** re-verify each obligation with its `ensures`\n"));
-    r.push_str(String::from("replaced by `ensures: false`. If `assert(false)` still passes, the path is\n"));
-    r.push_str(String::from("unreachable under the preconditions -- the original proof was vacuous. A non-vacuous\n"));
-    r.push_str(String::from("obligation must *fail* this check.\n"));
+    r.push_str(String::from("**Detection (the reachability probe).** `vow contracts --verify` ships this check\n"));
+    r.push_str(String::from("(#81). For any function carrying a `requires`, it re-runs ESBMC over the same\n"));
+    r.push_str(String::from("model with a `vow_reach` label planted immediately after the `requires` assumes,\n"));
+    r.push_str(String::from("under `--error-label vow_reach`. If ESBMC reports the label **unreachable**\n"));
+    r.push_str(String::from("(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and\n"));
+    r.push_str(String::from("every `ensures` held only vacuously -- all of the function's clauses are reported\n"));
+    r.push_str(String::from("`status: \"vacuous\"` and the command fails closed. If the label is **reachable**\n"));
+    r.push_str(String::from("(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is\n"));
+    r.push_str(String::from("live. This is operationally the dual of the classic `ensures: false` re-check --\n"));
+    r.push_str(String::from("asking \"is the post-`requires` point reachable?\" instead of \"does `assert(false)`\n"));
+    r.push_str(String::from("still pass?\" -- but it needs only one extra run per function and is unaffected by\n"));
+    r.push_str(String::from("body divergence, since the label precedes the body. The label sits after the\n"));
+    r.push_str(String::from("requires prefix rather than at the function end precisely so an unbounded loop or\n"));
+    r.push_str(String::from("an `assume(0)` deeper in the body cannot make it spuriously unreachable.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Interesting witnesses.** Beer et al. also propose the dual of a counterexample:\n"));
     r.push_str(String::from("for a proof that holds, emit a non-trivial *witness* -- concrete inputs that\n"));
@@ -4644,14 +4700,44 @@ fn skill_bundle() -> String {
     r.push_str(String::from("blocked at the *modelable* axis, not the expressible one; classify such gaps as\n"));
     r.push_str(String::from("model limitations, not contract-language limitations.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("## Tooling (planned)\n"));
+    r.push_str(String::from("## Tooling\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`vow contracts --verify` lists contracts and verifies them per function today. The\n"));
-    r.push_str(String::from("quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**\n"));
-    r.push_str(String::from("check that emits a quality signal per clause -- flagging tautologies (cheap, no\n"));
-    r.push_str(String::from("ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`\n"));
-    r.push_str(String::from("harness, weak obligations whose function's mutants survive. Until that ships, the\n"));
-    r.push_str(String::from("three detections above are checks an author can run by hand.\n"));
+    r.push_str(String::from("`vow contracts --verify` performs the **per-obligation** quality analysis tracked\n"));
+    r.push_str(String::from("in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via\n"));
+    r.push_str(String::from("ESBMC `--multi-property`), plus the three quality signals above:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("- **Tautology** -- the static `quality` field flags constant clauses (no ESBMC).\n"));
+    r.push_str(String::from("- **Vacuity** -- a contradictory `requires` is caught by the `--error-label`\n"));
+    r.push_str(String::from("  reachability probe and reported `status: \"vacuous\"` (fail-closed).\n"));
+    r.push_str(String::from("- **Weakness** -- the body-replace probe reports `trivially_satisfiable: true` for\n"));
+    r.push_str(String::from("  an `ensures` a trivial `return <default>` body satisfies (informational).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the\n"));
+    r.push_str(String::from("status and quality tallies, so an author or CI can gate on hollow proofs.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static\n"));
+    r.push_str(String::from("quality of the self-hosted compiler's own contracts: it reads\n"));
+    r.push_str(String::from("`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count\n"));
+    r.push_str(String::from("exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in\n"));
+    r.push_str(String::from("unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to\n"));
+    r.push_str(String::from("ratchet down as contracts harden. The dispatch-totality example above\n"));
+    r.push_str(String::from("(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`\n"));
+    r.push_str(String::from("(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)\n"));
+    r.push_str(String::from("are enforced in `compiler/lower.vow` today.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Tag families are structural, not contracted.** The bulk of the old `weak`\n"));
+    r.push_str(String::from("count was nullary tag constants -- `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,\n"));
+    r.push_str(String::from("`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures\n"));
+    r.push_str(String::from("result >= 0` proves nothing: a constant's value is the only fact about it, and\n"));
+    r.push_str(String::from("that fact is structural (each is a distinct literal). So these carry **no**\n"));
+    r.push_str(String::from("contract. Their correctness is established where it matters -- at use sites: the\n"));
+    r.push_str(String::from("dispatch-totality contracts above prove every valid tag is handled, the IR\n"));
+    r.push_str(String::from("validator and serializer round-trips exercise every kind, and the binary\n"));
+    r.push_str(String::from("fixed-point bootstrap miscompiles if any two tags collide. Removing the\n"));
+    r.push_str(String::from("contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11\n"));
+    r.push_str(String::from("are genuine parametric functions (the region/span bit-packers and friends) whose\n"));
+    r.push_str(String::from("right contract is a round-trip or enumerated postcondition -- the next hardening\n"));
+    r.push_str(String::from("target, not noise.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## References\n"));
     r.push_str(String::from("\n"));
@@ -5782,13 +5868,17 @@ fn skill_bundle() -> String {
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"status\": {\n"));
     r.push_str(String::from("            \"type\": \"string\",\n"));
-    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
+    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\", \"vacuous\"],\n"));
     r.push_str(String::from("            \"description\": \"Verification status\"\n"));
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"quality\": {\n"));
     r.push_str(String::from("            \"type\": \"string\",\n"));
     r.push_str(String::from("            \"enum\": [\"weak\", \"tautological\", \"substantive\"],\n"));
     r.push_str(String::from("            \"description\": \"Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md\"\n"));
+    r.push_str(String::from("          },\n"));
+    r.push_str(String::from("          \"trivially_satisfiable\": {\n"));
+    r.push_str(String::from("            \"type\": \"boolean\",\n"));
+    r.push_str(String::from("            \"description\": \"`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md\"\n"));
     r.push_str(String::from("          }\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"additionalProperties\": false\n"));
@@ -5806,6 +5896,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"error\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"skipped\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("        \"vacuous\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("        \"trivially_satisfiable\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"quality\": {\n"));
     r.push_str(String::from("          \"type\": \"object\",\n"));
     r.push_str(String::from("          \"description\": \"Static contract-quality tallies independent of verification status\",\n"));
@@ -6074,8 +6166,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"name\": { \"type\": \"string\", \"description\": \"Test name (file stem)\" },\n"));
     r.push_str(String::from("        \"status\": {\n"));
     r.push_str(String::from("          \"type\": \"string\",\n"));
-    r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\"],\n"));
-    r.push_str(String::from("          \"description\": \"Per-test outcome\"\n"));
+    r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\", \"contract_skipped\"],\n"));
+    r.push_str(String::from("          \"description\": \"Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"exit_code\": {\n"));
     r.push_str(String::from("          \"type\": [\"integer\", \"null\"],\n"));
@@ -7256,7 +7348,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, or `skipped` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
+    r.push_str(String::from("**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven -- i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` -- and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.\n"));
     r.push_str(String::from("\n"));
@@ -7342,7 +7434,9 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `TestsPassed`  | All tests passed                                  |\n"));
     r.push_str(String::from("| `TestsFailed`  | One or more tests failed                          |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.\n"));
+    r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed -- a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow decl`\n"));
     r.push_str(String::from("\n"));
@@ -7521,7 +7615,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0, \"vacuous\": 0, \"trivially_satisfiable\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -7541,7 +7635,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("      \"quality\": \"substantive\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0, \"vacuous\": 0, \"trivially_satisfiable\": 0, \"quality\": { \"weak\": 0, \"tautological\": 0, \"substantive\": 1 } }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -7555,8 +7649,9 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `description` | string  | Full contract text                                       |\n"));
     r.push_str(String::from("| `blame`       | string  | `\"Caller\"` (requires) or `\"Callee\"` (ensures/invariant)  |\n"));
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
-    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, or `\"skipped\"` |\n"));
+    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, `\"skipped\"`, or `\"vacuous\"` |\n"));
     r.push_str(String::from("| `quality`     | string  | Static clause-shape classification (no ESBMC): `\"weak\"`, `\"tautological\"`, or `\"substantive\"` |\n"));
+    r.push_str(String::from("| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational -- never affects the exit code. See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
     r.push_str(String::from("\n"));
@@ -7566,10 +7661,11 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
     r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
-    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
+    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
+    r.push_str(String::from("| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously -- ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Quality Values\n"));
     r.push_str(String::from("\n"));
@@ -8245,6 +8341,21 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("verification fails instead of miscompiling. This is the contract that converts a\n"));
     r.push_str(String::from("silent fallback into a caught error.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("The static classifier rates this clause `substantive`, and `vow contracts --verify`'s\n"));
+    r.push_str(String::from("body-replace probe reports it `trivially_satisfiable: true` -- both are correct, because\n"));
+    r.push_str(String::from("they measure different things. The probe replaces the body with `return 0` (the `i64`\n"));
+    r.push_str(String::from("default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*\n"));
+    r.push_str(String::from("positive: `ensures: result != -1` does not constrain the op→opcode *mapping* -- a constant\n"));
+    r.push_str(String::from("non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*\n"));
+    r.push_str(String::from("prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough\n"));
+    r.push_str(String::from("(delete an arm and verification fails). Totality is the silent-fallback property #81\n"));
+    r.push_str(String::from("targets, and -- absent a quantifier to say \"result is the correct opcode for `op`\" -- it is\n"));
+    r.push_str(String::from("the strongest property a `!= sentinel` postcondition can express. So read the\n"));
+    r.push_str(String::from("`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not\n"));
+    r.push_str(String::from("as a probe artifact to dismiss. This is *not* the constant-result false positive noted in\n"));
+    r.push_str(String::from("**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the\n"));
+    r.push_str(String::from("type default.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("> Vow has no surface quantifier (`forall i in 0..n`) today, so \"covers all valid\n"));
     r.push_str(String::from("> inputs\" is expressed as `requires` (pin the finite domain) + a postcondition\n"));
     r.push_str(String::from("> that excludes the failure value, letting ESBMC enumerate the finite branch\n"));
@@ -8291,11 +8402,25 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("The clause is satisfiable and true, but so loose that an incorrect\n"));
     r.push_str(String::from("implementation also satisfies it (`ensures: result >= 0` on a computed value).\n"));
-    r.push_str(String::from("This is the 354-contract problem. **Detection (mutation-based):** mutate the\n"));
-    r.push_str(String::from("implementation -- flip a constant, swap an operator -- and re-verify. If the\n"));
-    r.push_str(String::from("contract still proves against the *mutated* body, it does not constrain that\n"));
-    r.push_str(String::from("behavior and is too weak. Vow already has the machinery for this in\n"));
-    r.push_str(String::from("`vowc mutants`; a weak contract is one whose function's mutants survive.\n"));
+    r.push_str(String::from("This is the 354-contract problem.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Detection (the body-replace probe).** `vow contracts --verify` ships this check\n"));
+    r.push_str(String::from("(#81). It mutates the implementation in the strongest possible way -- replaces the\n"));
+    r.push_str(String::from("whole body with a trivial `return <type-default>` -- and re-verifies the\n"));
+    r.push_str(String::from("`ensures`. If the contract still proves against that body, a constant-returning\n"));
+    r.push_str(String::from("implementation satisfies it, so it does not constrain the real computation: each\n"));
+    r.push_str(String::from("such `ensures` is reported `trivially_satisfiable: true`. This is exactly the\n"));
+    r.push_str(String::from("`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of\n"));
+    r.push_str(String::from("weakness (a specific trivial body satisfies the contract), but a `false` verdict\n"));
+    r.push_str(String::from("does not prove strength -- the probe uses a single default value and skips\n"));
+    r.push_str(String::from("non-scalar returns, returned parameters, and φ-merged/branchy results, so it can\n"));
+    r.push_str(String::from("miss weak contracts it cannot witness this way. It is informational and never\n"));
+    r.push_str(String::from("changes the exit code; pair it with the static `quality` field. The one known\n"));
+    r.push_str(String::from("false positive is a function whose correct result genuinely *is* the type default\n"));
+    r.push_str(String::from("(e.g. a constant `ensures result == 0` on a `{ 0 }` body) -- an equivalent mutant,\n"));
+    r.push_str(String::from("the standard caveat of mutation testing.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Tautology\n"));
     r.push_str(String::from("\n"));
@@ -8319,10 +8444,20 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("first runs, and trivial validity *always* indicated a real defect in the design,\n"));
     r.push_str(String::from("spec, or environment.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Detection (the `false` re-check):** re-verify each obligation with its `ensures`\n"));
-    r.push_str(String::from("replaced by `ensures: false`. If `assert(false)` still passes, the path is\n"));
-    r.push_str(String::from("unreachable under the preconditions -- the original proof was vacuous. A non-vacuous\n"));
-    r.push_str(String::from("obligation must *fail* this check.\n"));
+    r.push_str(String::from("**Detection (the reachability probe).** `vow contracts --verify` ships this check\n"));
+    r.push_str(String::from("(#81). For any function carrying a `requires`, it re-runs ESBMC over the same\n"));
+    r.push_str(String::from("model with a `vow_reach` label planted immediately after the `requires` assumes,\n"));
+    r.push_str(String::from("under `--error-label vow_reach`. If ESBMC reports the label **unreachable**\n"));
+    r.push_str(String::from("(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and\n"));
+    r.push_str(String::from("every `ensures` held only vacuously -- all of the function's clauses are reported\n"));
+    r.push_str(String::from("`status: \"vacuous\"` and the command fails closed. If the label is **reachable**\n"));
+    r.push_str(String::from("(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is\n"));
+    r.push_str(String::from("live. This is operationally the dual of the classic `ensures: false` re-check --\n"));
+    r.push_str(String::from("asking \"is the post-`requires` point reachable?\" instead of \"does `assert(false)`\n"));
+    r.push_str(String::from("still pass?\" -- but it needs only one extra run per function and is unaffected by\n"));
+    r.push_str(String::from("body divergence, since the label precedes the body. The label sits after the\n"));
+    r.push_str(String::from("requires prefix rather than at the function end precisely so an unbounded loop or\n"));
+    r.push_str(String::from("an `assume(0)` deeper in the body cannot make it spuriously unreachable.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Interesting witnesses.** Beer et al. also propose the dual of a counterexample:\n"));
     r.push_str(String::from("for a proof that holds, emit a non-trivial *witness* -- concrete inputs that\n"));
@@ -8391,14 +8526,44 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("blocked at the *modelable* axis, not the expressible one; classify such gaps as\n"));
     r.push_str(String::from("model limitations, not contract-language limitations.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("## Tooling (planned)\n"));
+    r.push_str(String::from("## Tooling\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`vow contracts --verify` lists contracts and verifies them per function today. The\n"));
-    r.push_str(String::from("quality work tracked in #81 / roadmap WS-3.2 extends it to a **per-obligation**\n"));
-    r.push_str(String::from("check that emits a quality signal per clause -- flagging tautologies (cheap, no\n"));
-    r.push_str(String::from("ESBMC), vacuous obligations (the `false` re-check), and, via the `vowc mutants`\n"));
-    r.push_str(String::from("harness, weak obligations whose function's mutants survive. Until that ships, the\n"));
-    r.push_str(String::from("three detections above are checks an author can run by hand.\n"));
+    r.push_str(String::from("`vow contracts --verify` performs the **per-obligation** quality analysis tracked\n"));
+    r.push_str(String::from("in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via\n"));
+    r.push_str(String::from("ESBMC `--multi-property`), plus the three quality signals above:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("- **Tautology** -- the static `quality` field flags constant clauses (no ESBMC).\n"));
+    r.push_str(String::from("- **Vacuity** -- a contradictory `requires` is caught by the `--error-label`\n"));
+    r.push_str(String::from("  reachability probe and reported `status: \"vacuous\"` (fail-closed).\n"));
+    r.push_str(String::from("- **Weakness** -- the body-replace probe reports `trivially_satisfiable: true` for\n"));
+    r.push_str(String::from("  an `ensures` a trivial `return <default>` body satisfies (informational).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the\n"));
+    r.push_str(String::from("status and quality tallies, so an author or CI can gate on hollow proofs.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static\n"));
+    r.push_str(String::from("quality of the self-hosted compiler's own contracts: it reads\n"));
+    r.push_str(String::from("`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count\n"));
+    r.push_str(String::from("exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in\n"));
+    r.push_str(String::from("unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to\n"));
+    r.push_str(String::from("ratchet down as contracts harden. The dispatch-totality example above\n"));
+    r.push_str(String::from("(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`\n"));
+    r.push_str(String::from("(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)\n"));
+    r.push_str(String::from("are enforced in `compiler/lower.vow` today.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Tag families are structural, not contracted.** The bulk of the old `weak`\n"));
+    r.push_str(String::from("count was nullary tag constants -- `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,\n"));
+    r.push_str(String::from("`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures\n"));
+    r.push_str(String::from("result >= 0` proves nothing: a constant's value is the only fact about it, and\n"));
+    r.push_str(String::from("that fact is structural (each is a distinct literal). So these carry **no**\n"));
+    r.push_str(String::from("contract. Their correctness is established where it matters -- at use sites: the\n"));
+    r.push_str(String::from("dispatch-totality contracts above prove every valid tag is handled, the IR\n"));
+    r.push_str(String::from("validator and serializer round-trips exercise every kind, and the binary\n"));
+    r.push_str(String::from("fixed-point bootstrap miscompiles if any two tags collide. Removing the\n"));
+    r.push_str(String::from("contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11\n"));
+    r.push_str(String::from("are genuine parametric functions (the region/span bit-packers and friends) whose\n"));
+    r.push_str(String::from("right contract is a round-trip or enumerated postcondition -- the next hardening\n"));
+    r.push_str(String::from("target, not noise.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## References\n"));
     r.push_str(String::from("\n"));
@@ -9530,13 +9695,17 @@ fn skill_support_content_7() -> String {
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"status\": {\n"));
     r.push_str(String::from("            \"type\": \"string\",\n"));
-    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
+    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\", \"vacuous\"],\n"));
     r.push_str(String::from("            \"description\": \"Verification status\"\n"));
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"quality\": {\n"));
     r.push_str(String::from("            \"type\": \"string\",\n"));
     r.push_str(String::from("            \"enum\": [\"weak\", \"tautological\", \"substantive\"],\n"));
     r.push_str(String::from("            \"description\": \"Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md\"\n"));
+    r.push_str(String::from("          },\n"));
+    r.push_str(String::from("          \"trivially_satisfiable\": {\n"));
+    r.push_str(String::from("            \"type\": \"boolean\",\n"));
+    r.push_str(String::from("            \"description\": \"`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md\"\n"));
     r.push_str(String::from("          }\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"additionalProperties\": false\n"));
@@ -9554,6 +9723,8 @@ fn skill_support_content_7() -> String {
     r.push_str(String::from("        \"error\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"skipped\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("        \"vacuous\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("        \"trivially_satisfiable\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"quality\": {\n"));
     r.push_str(String::from("          \"type\": \"object\",\n"));
     r.push_str(String::from("          \"description\": \"Static contract-quality tallies independent of verification status\",\n"));
@@ -9822,8 +9993,8 @@ fn skill_support_content_11() -> String {
     r.push_str(String::from("        \"name\": { \"type\": \"string\", \"description\": \"Test name (file stem)\" },\n"));
     r.push_str(String::from("        \"status\": {\n"));
     r.push_str(String::from("          \"type\": \"string\",\n"));
-    r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\"],\n"));
-    r.push_str(String::from("          \"description\": \"Per-test outcome\"\n"));
+    r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\", \"contract_skipped\"],\n"));
+    r.push_str(String::from("          \"description\": \"Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"exit_code\": {\n"));
     r.push_str(String::from("          \"type\": [\"integer\", \"null\"],\n"));
@@ -10290,6 +10461,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let e_offsets: Vec<i64> = Vec::new();
     let e_statuses: Vec<String> = Vec::new();
     let e_qualities: Vec<String> = Vec::new();
+    // 1 when a trivial `return <default>` body satisfies this ensures (#81 PR-C).
+    let e_trivial: Vec<i64> = Vec::new();
 
     let nf: i64 = ir_mod.functions.len();
     let mut fi: i64 = 0;
@@ -10315,6 +10488,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             e_files.push(ve.file);
             e_offsets.push(ve.offset);
             e_statuses.push(String::from("not_verified"));
+            e_trivial.push(0);
             vi = vi + 1;
         }
         fi = fi + 1;
@@ -10346,30 +10520,75 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                             ei = ei + 1;
                         }
                     } else {
-                        let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
-                        let st: i64 = vr.status;
+                        // Per-clause status via ESBMC `--multi-property`: every
+                        // `vow:N` claim is reported individually, so each clause
+                        // gets a precise verdict instead of the siblings of a
+                        // failed clause collapsing to `unknown` (#81 PR-A).
+                        let mpr: MultiPropertyResult = verify_function_multi_property(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        let overall: i64 = mpr.status;
+                        let v_ids: Vec<i64> = mpr.verdict_ids;
+                        let v_proven: Vec<i64> = mpr.verdict_proven;
                         let mut ei: i64 = 0;
                         while ei < e_func_ids.len() {
                             if e_func_ids[ei] == func.id {
-                                if st == VERIFY_PROVEN() {
-                                    e_statuses[ei] = String::from("proven");
-                                } else if st == VERIFY_PROVEN_IR() {
-                                    e_statuses[ei] = String::from("proven-ir");
-                                } else if st == VERIFY_FAILED() {
-                                    if vr.vow_id == e_vow_ids[ei] {
-                                        e_statuses[ei] = String::from("failed");
+                                let mut verdict: i64 = -1;
+                                let mut k: i64 = 0;
+                                while k < v_ids.len() {
+                                    if v_ids[k] == e_vow_ids[ei] {
+                                        verdict = v_proven[k];
+                                        k = v_ids.len();
                                     } else {
-                                        e_statuses[ei] = String::from("unknown");
+                                        k = k + 1;
                                     }
-                                } else if st == VERIFY_TIMEOUT() {
+                                }
+                                if verdict == 1 {
+                                    e_statuses[ei] = String::from("proven");
+                                } else if verdict == 0 {
+                                    e_statuses[ei] = String::from("failed");
+                                } else if overall == VERIFY_PROVEN() || overall == VERIFY_PROVEN_IR() {
+                                    e_statuses[ei] = String::from("proven");
+                                } else if overall == VERIFY_TIMEOUT() {
                                     e_statuses[ei] = String::from("timeout");
-                                } else if st == VERIFY_UNKNOWN() {
+                                } else if overall == VERIFY_UNKNOWN() {
+                                    e_statuses[ei] = String::from("unknown");
+                                } else if overall == VERIFY_FAILED() {
                                     e_statuses[ei] = String::from("unknown");
                                 } else {
                                     e_statuses[ei] = String::from("error");
                                 }
                             }
                             ei = ei + 1;
+                        }
+
+                        // Vacuity probe (#81 PR-B): if the function's `requires`
+                        // are contradictory, the `ensures` above all passed
+                        // vacuously. Re-run with a `vow_reach` label after the
+                        // requires; if that point is unreachable, override the
+                        // whole contract's clauses with `vacuous`. Only functions
+                        // with a `requires` are eligible.
+                        let vac: i64 = verify_function_vacuity(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        if vac == 1 {
+                            let mut vi2: i64 = 0;
+                            while vi2 < e_func_ids.len() {
+                                if e_func_ids[vi2] == func.id {
+                                    e_statuses[vi2] = String::from("vacuous");
+                                }
+                                vi2 = vi2 + 1;
+                            }
+                        }
+
+                        // Weakness probe (#81 PR-C): if a trivial `return
+                        // <default>` body still satisfies the ensures, mark each
+                        // ensures clause trivially_satisfiable (informational).
+                        let triv: i64 = verify_function_trivial(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        if triv == 1 {
+                            let mut ti: i64 = 0;
+                            while ti < e_func_ids.len() {
+                                if e_func_ids[ti] == func.id && e_kinds[ti] == String::from("ensures") {
+                                    e_trivial[ti] = 1;
+                                }
+                                ti = ti + 1;
+                            }
                         }
                     }
                 }
@@ -10404,7 +10623,13 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         json.push_str(e_statuses[ci]);
         json.push_str(String::from("\",\"quality\":\""));
         json.push_str(e_qualities[ci]);
-        json.push_str(String::from("\"}"));
+        json.push_str(String::from("\",\"trivially_satisfiable\":"));
+        if e_trivial[ci] == 1 {
+            json.push_str(String::from("true"));
+        } else {
+            json.push_str(String::from("false"));
+        }
+        json.push_str(String::from("}"));
         ci = ci + 1;
     }
 
@@ -10416,9 +10641,14 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let mut n_error: i64 = 0;
     let mut n_not_verified: i64 = 0;
     let mut n_skipped: i64 = 0;
+    let mut n_vacuous: i64 = 0;
+    let mut n_trivial: i64 = 0;
     let mut si: i64 = 0;
     while si < total {
         let s: String = e_statuses[si];
+        if e_trivial[si] == 1 {
+            n_trivial = n_trivial + 1;
+        }
         if s == String::from("proven") || s == String::from("proven-ir") {
             n_proven = n_proven + 1;
         } else if s == String::from("failed") {
@@ -10431,6 +10661,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             n_error = n_error + 1;
         } else if s == String::from("skipped") {
             n_skipped = n_skipped + 1;
+        } else if s == String::from("vacuous") {
+            n_vacuous = n_vacuous + 1;
         } else {
             n_not_verified = n_not_verified + 1;
         }
@@ -10438,8 +10670,9 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     // Fail closed: `vow contracts --verify` exits non-zero when any contract is
-    // not proven, matching `vow build --verify` / `vow verify` (#479).
-    if n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 {
+    // not proven, matching `vow build --verify` / `vow verify` (#479). A vacuous
+    // contract is a hollow proof, so it fails closed too (#81 PR-B).
+    if n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 || n_vacuous > 0 {
         exit_code = 1;
     }
 
@@ -10476,6 +10709,10 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     json.push_str(i64_to_str(n_not_verified));
     json.push_str(String::from(",\"skipped\":"));
     json.push_str(i64_to_str(n_skipped));
+    json.push_str(String::from(",\"vacuous\":"));
+    json.push_str(i64_to_str(n_vacuous));
+    json.push_str(String::from(",\"trivially_satisfiable\":"));
+    json.push_str(i64_to_str(n_trivial));
     json.push_str(String::from(",\"quality\":{\"weak\":"));
     json.push_str(i64_to_str(n_weak));
     json.push_str(String::from(",\"tautological\":"));

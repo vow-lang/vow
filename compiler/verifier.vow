@@ -5,13 +5,13 @@ use clif
 use ir
 use ir_printer
 
-fn VERIFY_PROVEN() -> i64 vow { ensures: result >= 0 } { 0 }
-fn VERIFY_FAILED() -> i64 vow { ensures: result >= 0 } { 1 }
-fn VERIFY_TIMEOUT() -> i64 vow { ensures: result >= 0 } { 2 }
-fn VERIFY_ERROR() -> i64 vow { ensures: result >= 0 } { 3 }
-fn VERIFY_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 4 }
-fn VERIFY_PROVEN_IR() -> i64 vow { ensures: result >= 0 } { 5 }
-fn VERIFY_UNKNOWN() -> i64 vow { ensures: result >= 0 } { 6 }
+fn VERIFY_PROVEN() -> i64 { 0 }
+fn VERIFY_FAILED() -> i64 { 1 }
+fn VERIFY_TIMEOUT() -> i64 { 2 }
+fn VERIFY_ERROR() -> i64 { 3 }
+fn VERIFY_NOT_FOUND() -> i64 { 4 }
+fn VERIFY_PROVEN_IR() -> i64 { 5 }
+fn VERIFY_UNKNOWN() -> i64 { 6 }
 
 struct VerifyResult {
     status: i64,
@@ -31,6 +31,16 @@ struct EsbmcRun {
 struct EsbmcStart {
     handle: i64,
     tmp_path: String,
+}
+
+// Per-clause verdicts from an ESBMC `--multi-property` run: `status` is the
+// overall outcome, `verdict_ids[k]`/`verdict_proven[k]` pair a `vow:N` claim id
+// with 1 (PASSED) or 0 (FAILED). Mirrors run_esbmc_multi_property in
+// vow-verify/src/esbmc.rs (#81 PR-A).
+struct MultiPropertyResult {
+    status: i64,
+    verdict_ids: Vec<i64>,
+    verdict_proven: Vec<i64>,
 }
 
 fn str_contains_byte(s: String, b: i64) -> bool {
@@ -192,7 +202,7 @@ fn emit_harness(f: IrFunction) -> String {
     out
 }
 
-fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
+fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, reach_label: bool, body_replace: bool) -> String {
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let callee_fis: Vec<i64> = collect_modelable_callees(f, m, const_fn_indices);
     let model_string_max: i64 = string_max_for_literals(m, string_max);
@@ -205,7 +215,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 modelable_fi_set.push(callee_fis[ci]);
                 ci = ci + 1;
             }
-            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max)
+            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label, body_replace)
         } else {
             let preamble: String = cemit_preamble_with_limits(
                 func_has_shift_op(f, IOP_SHL_I64()),
@@ -215,7 +225,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 vec_max, model_string_max, hashmap_max, btreemap_max
             );
             let empty_modelable: Vec<i64> = Vec::new();
-            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max);
+            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label, body_replace);
             preamble.push_byte(10);
             preamble
         }
@@ -381,7 +391,7 @@ fn append_memlimit_arg(args: Vec<String>, memlimit_arg: String) {
     args.push(memlimit_arg);
 }
 
-fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> EsbmcRun [io] {
+fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String, extra_args: Vec<String>) -> EsbmcRun [io] {
     fs_write(tmp_path, c_source);
     let memlimit_arg: String = DEFAULT_ESBMC_MEMLIMIT_ARG();
     save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, memlimit_arg, false);
@@ -393,6 +403,11 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     esbmc_args.push(String::from("--max-k-step"));
     esbmc_args.push(max_k_step);
     esbmc_args.push(String::from("--64"));
+    let mut ea: i64 = 0;
+    while ea < extra_args.len() {
+        esbmc_args.push(extra_args[ea]);
+        ea = ea + 1;
+    }
     append_solver_args(esbmc_args, solver, encoding);
     append_timeout_arg(esbmc_args, timeout_secs);
     append_memlimit_arg(esbmc_args, memlimit_arg);
@@ -562,6 +577,289 @@ fn parse_vow_id(output: String) -> i64 {
         i = i + 1;
     }
     -1
+}
+
+// Read the run of ASCII digits starting at `pos`, returning the parsed value or
+// -1 when no digit is present.
+fn parse_digits_at(line: String, pos: i64) -> i64 {
+    let n: i64 = line.len();
+    let mut end: i64 = pos;
+    let mut scanning: bool = true;
+    while end < n && scanning {
+        let b: i64 = line.byte_at(end);
+        if b >= 48 && b <= 57 {
+            end = end + 1;
+        } else {
+            scanning = false;
+        }
+    }
+    if end == pos {
+        return -1;
+    }
+    str_to_i64(str_substring(line, pos, end))
+}
+
+// Parse ESBMC `--multi-property` output into per-claim verdicts. Each line that
+// reports a `'vow:N'` claim as PASSED/FAILED contributes to the parallel arrays;
+// duplicate ids are AND-combined so any FAILED line falsifies the claim. Mirrors
+// parse_multi_property_verdicts in vow-verify/src/esbmc.rs (#81 PR-A).
+fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>) {
+    let lines: Vec<String> = Vec::new();
+    split_lines(output, lines);
+    let n: i64 = lines.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        let mut has_verdict: bool = false;
+        let mut is_proven: bool = false;
+        if str_find_str(line, String::from("PASSED:")) >= 0 {
+            has_verdict = true;
+            is_proven = true;
+        } else if str_find_str(line, String::from("FAILED:")) >= 0 {
+            has_verdict = true;
+            is_proven = false;
+        }
+        if has_verdict {
+            let pos: i64 = str_find_str(line, String::from("'vow:"));
+            if pos >= 0 {
+                let id: i64 = parse_digits_at(line, pos + 5);
+                if id >= 0 {
+                    let mut found: i64 = -1;
+                    let mut k: i64 = 0;
+                    while k < ids.len() {
+                        if ids[k] == id {
+                            found = k;
+                            k = ids.len();
+                        } else {
+                            k = k + 1;
+                        }
+                    }
+                    if found >= 0 {
+                        if !is_proven {
+                            proven[found] = 0;
+                        }
+                    } else {
+                        ids.push(id);
+                        if is_proven {
+                            proven.push(1);
+                        } else {
+                            proven.push(0);
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+// Verify one function with ESBMC `--multi-property` so every `vow:N` claim gets
+// an individual PASSED/FAILED verdict. Unlike verify_function_full this does not
+// retry under integer (IR) encoding — per-clause precision, not throughput, is
+// the goal here; this mirrors run_esbmc_multi_property in vow-verify (#81 PR-A).
+fn verify_function_multi_property(f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+                                  vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> MultiPropertyResult [io] {
+    let ids: Vec<i64> = Vec::new();
+    let proven: Vec<i64> = Vec::new();
+    let vows: Vec<IrVowEntry> = f.vows;
+    if vows.len() == 0 {
+        return MultiPropertyResult { status: VERIFY_PROVEN(), verdict_ids: ids, verdict_proven: proven };
+    }
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);
+    let fn_name: String = f.name;
+    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let tmp_path: String = verify_tmp_path();
+    let extra: Vec<String> = Vec::new();
+    extra.push(String::from("--multi-property"));
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, extra);
+    if r.exit_code == -3 {
+        return MultiPropertyResult { status: VERIFY_NOT_FOUND(), verdict_ids: ids, verdict_proven: proven };
+    }
+    let combined: String = r.combined;
+    let status: i64 = {
+        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
+    };
+    parse_multi_property_verdicts(combined, ids, proven);
+    MultiPropertyResult { status: status, verdict_ids: ids, verdict_proven: proven }
+}
+
+// True when the function carries at least one `requires` clause — the only
+// contracts subject to antecedent-failure vacuity (#81 PR-B). Mirrors
+// function_has_requires in vow-verify/src/esbmc.rs.
+fn function_has_requires(f: IrFunction) -> bool {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_VOW_REQ() {
+                return true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// Vacuity probe (#81 PR-B): re-verify with a `vow_reach` label planted after the
+// requires assumes and ESBMC `--error-label vow_reach`. SUCCESSFUL means the
+// label is unreachable — the `requires` are contradictory and the contract is
+// vacuous; anything else (FAILED/timeout/error) is treated as not-vacuous (never
+// claim vacuity on an undecided probe). Only meaningful for functions with a
+// `requires`. Returns 1 when vacuous, 0 otherwise. Mirrors run_esbmc_reach in
+// vow-verify/src/esbmc.rs.
+fn verify_function_vacuity(f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+                           vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+    if !function_has_requires(f) {
+        return 0;
+    }
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, true, false);
+    let fn_name: String = f.name;
+    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let tmp_path: String = verify_tmp_path();
+    let extra: Vec<String> = Vec::new();
+    extra.push(String::from("--error-label"));
+    extra.push(String::from("vow_reach"));
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, extra);
+    if r.exit_code == -3 {
+        return 0;
+    }
+    let combined: String = r.combined;
+    let status: i64 = {
+        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
+    };
+    if status == VERIFY_PROVEN() {
+        return 1;
+    }
+    0
+}
+
+// True when the function carries at least one `ensures` clause. Mirrors
+// function_has_ensures in vow-verify/src/esbmc.rs (#81 PR-C).
+fn function_has_ensures(f: IrFunction) -> bool {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_VOW_ENS() {
+                return true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// True when the return type is a scalar integer/bool/float, so the trivial
+// `return 0` body-replace is well-typed (#81 PR-C).
+fn returns_scalar(f: IrFunction) -> bool {
+    let rt: i64 = f.return_ty;
+    rt != ITY_UNIT() && rt != ITY_PTR() && rt != ITY_LPTR()
+}
+
+// True when the value the `Return` yields is produced by a regular (non-GetArg)
+// body instruction, so the body-replace rewrite has an overwrite site. Returned
+// parameters and empty returns are skipped — sound but incomplete (#81 PR-C).
+fn body_replaceable_result(f: IrFunction) -> bool {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut result_id: i64 = -1;
+    let mut n_returns: i64 = 0;
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_RETURN() {
+                n_returns = n_returns + 1;
+                let rargs: Vec<i64> = inst.args;
+                if rargs.len() > 0 {
+                    result_id = rargs[0];
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    // The body-replace rewrite zeroes exactly one return site, so the probe is
+    // only sound for single-exit functions. A function with multiple `Return`s
+    // (any early return / if-else) would leave the other paths running the real
+    // body, which can falsely "prove" a substantive `ensures` — a false weakness
+    // claim. Skip those (mirrors vow-verify/src/esbmc.rs).
+    if n_returns != 1 {
+        return false;
+    }
+    if result_id < 0 {
+        return false;
+    }
+    bi = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.id == result_id && inst.op != IOP_GET_ARG() {
+                return true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// Weakness probe (#81 PR-C): verify a body-replaced model where the returned
+// value is forced to the type-default. SUCCESSFUL means a trivial
+// `return <default>` body satisfies the `ensures` — the contract is too weak to
+// pin down the implementation. Returns 1 then, 0 otherwise. One-sided: an
+// inconclusive probe is reported as not trivially satisfiable. Mirrors
+// run_esbmc_bodyreplace in vow-verify/src/esbmc.rs.
+fn verify_function_trivial(f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+                           vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+    if !function_has_ensures(f) {
+        return 0;
+    }
+    if !returns_scalar(f) {
+        return 0;
+    }
+    if !body_replaceable_result(f) {
+        return 0;
+    }
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, true);
+    let fn_name: String = f.name;
+    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let tmp_path: String = verify_tmp_path();
+    let no_extra: Vec<String> = Vec::new();
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, no_extra);
+    if r.exit_code == -3 {
+        return 0;
+    }
+    let combined: String = r.combined;
+    let status: i64 = {
+        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
+    };
+    if status == VERIFY_PROVEN() || status == VERIFY_PROVEN_IR() {
+        return 1;
+    }
+    0
 }
 
 fn parse_assignments(output: String, names: Vec<String>, values: Vec<String>) {
@@ -790,87 +1088,6 @@ fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyRe
     }
 }
 
-fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                        vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
-    let vows: Vec<IrVowEntry> = f.vows;
-    if vows.len() == 0 {
-        return VerifyResult {
-            status: VERIFY_PROVEN(),
-            vow_id: -1,
-            var_names: Vec::new(),
-            var_values: Vec::new(),
-            block_visits: Vec::new(),
-            raw_output: String::from(""),
-        };
-    }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
-    let fn_name: String = f.name;
-    let auto_enc: bool = is_auto_encoding(encoding);
-    let bv_solver: String = resolve_auto_bv_solver(solver);
-    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
-    let tmp_path: String = verify_tmp_path();
-    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
-    if r.exit_code == -3 {
-        return VerifyResult {
-            status: VERIFY_NOT_FOUND(),
-            vow_id: -1,
-            var_names: Vec::new(),
-            var_values: Vec::new(),
-            block_visits: Vec::new(),
-            raw_output: String::from("esbmc not found"),
-        };
-    }
-    // Spawn failures remain VERIFY_ERROR via r.combined; only the explicit
-    // not-found sentinel becomes VERIFY_NOT_FOUND.
-    let combined: String = r.combined;
-    let mut status: i64 = {
-        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
-    };
-    let mut used_combined: String = combined;
-
-    // Phase D: if BV exhausts a resource budget under Auto encoding and the
-    // BV solver is not Bitwuzla, retry once with --z3 --ir (integer encoding).
-    // Other UNKNOWN outcomes are explicit inconclusive ESBMC results; do not
-    // let an IR proof hide them.
-    let bv_memory_limit: bool = status == VERIFY_UNKNOWN() && output_has_memory_limit(combined);
-    if (status == VERIFY_TIMEOUT() || bv_memory_limit) && auto_enc && bv_solver != String::from("bitwuzla") {
-        let ir_solver: String = String::from("z3");
-        let ir_encoding: String = String::from("ir");
-        let ir_timeout: String = {
-            if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
-        };
-        let tmp_path2: String = verify_tmp_path();
-        let r2: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path2, fn_name, ir_solver, ir_encoding, ir_timeout);
-        if r2.exit_code == -3 {
-            // ESBMC disappeared between BV and IR runs; surface consistently with verify_function_ir_fallback.
-            return VerifyResult {
-                status: VERIFY_NOT_FOUND(),
-                vow_id: -1,
-                var_names: Vec::new(),
-                var_values: Vec::new(),
-                block_visits: Vec::new(),
-                raw_output: String::from("esbmc not found"),
-            };
-        }
-        let combined2: String = r2.combined;
-        let s2: i64 = {
-            if r2.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined2) }
-        };
-        let bv_status: i64 = status;
-        status = {
-            // IR-only counterexamples can be infeasible under BV (no overflow modeling),
-            // so a FAILED here is inconclusive — report the original timeout instead.
-            if s2 == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
-            else if s2 == VERIFY_FAILED() { bv_status }
-            else { s2 }
-        };
-        used_combined = combined2;
-    }
-
-    // No on-disk caching on self-hosted: see the note above resolve_auto_bv_solver.
-    build_verify_result(f, status, used_combined)
-}
-
 fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, timeout_secs: String,
                                vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
@@ -884,7 +1101,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
             raw_output: String::from(""),
         };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);
     let fn_name: String = f.name;
     let ir_solver: String = String::from("z3");
     let ir_encoding: String = String::from("ir");
@@ -895,7 +1112,8 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     // `use_cache` stays on the signature for caller-side symmetry with the
     // Rust toolchain but has no effect.
     let tmp_path: String = verify_tmp_path();
-    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, ir_solver, ir_encoding, ir_timeout);
+    let no_extra: Vec<String> = Vec::new();
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, ir_solver, ir_encoding, ir_timeout, no_extra);
     if r.exit_code == -3 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
@@ -925,7 +1143,7 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     if vows.len() == 0 {
         return EsbmcStart { handle: -1, tmp_path: String::from("") };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false);
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
     // `use_cache` stays on the signature for caller-side symmetry with the
     // Rust toolchain but has no effect.

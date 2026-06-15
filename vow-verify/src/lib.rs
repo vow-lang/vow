@@ -7,9 +7,11 @@ pub use c_emitter::{
     non_modelable_reason,
 };
 pub use esbmc::{
-    Counterexample, DEFAULT_MAX_K_STEP, VerificationResult, emit_verify_c_source, find_esbmc,
-    parse_esbmc_output, run_esbmc_k_induction, run_esbmc_with_max_k_step, verify_function,
-    verify_function_with_const_fns, verify_function_with_module,
+    Counterexample, DEFAULT_MAX_K_STEP, ReachVerdict, VerificationResult,
+    emit_bodyreplace_c_source, emit_reach_c_source, emit_verify_c_source, find_esbmc,
+    function_has_ensures, function_has_requires, parse_esbmc_output, run_esbmc_bodyreplace,
+    run_esbmc_k_induction, run_esbmc_multi_property, run_esbmc_reach, run_esbmc_with_max_k_step,
+    verify_function, verify_function_with_const_fns, verify_function_with_module,
     verify_function_with_module_and_const_fns,
     verify_function_with_module_and_const_fns_configured,
     verify_function_with_module_and_const_fns_with_max_k_step,
