@@ -3813,4 +3813,74 @@ mod tests {
     fn other_link_args_omit_dl() {
         assert_eq!(platform_link_args_for("freebsd"), ["-lpthread", "-lm"]);
     }
+
+    // Directly exercises the shim's copy of region inference (issue #367). It is
+    // otherwise only hit indirectly via vow-codegen end-to-end tests and the
+    // bootstrap binary, so divergence from the Rust/self-hosted mirrors would go
+    // unnoticed until a fixed-point break.
+    #[test]
+    fn inst_region_for_value_routes_hidden_arg_and_falls_back() {
+        let no_phi: HashMap<i64, Vec<i64>> = HashMap::new();
+        let no_op: HashMap<i64, i64> = HashMap::new();
+        let no_region: HashMap<i64, i64> = HashMap::new();
+        // A FreshInCaller return occupies hidden slot 0, so a store into param 0
+        // lands at hidden idx 1.
+        let store_effects = [0i64, RSUM_KIND_FRESH_IN_CALLER];
+
+        // (1) GetArg of a parameter that is a hidden-region store target routes
+        // to Caller(hidden_idx).
+        let mut data_hidden: HashMap<i64, (i64, i64)> = HashMap::new();
+        data_hidden.insert(100, (IDATA_ARG_INDEX, 0)); // GetArg param 0
+        assert_eq!(
+            inst_region_for_value(
+                100,
+                &no_region,
+                &data_hidden,
+                &no_op,
+                &no_phi,
+                RSUM_KIND_FRESH_IN_CALLER,
+                &store_effects,
+            ),
+            region_pack(REGION_KIND_CALLER, 1),
+        );
+
+        // (2) A projection-shaped instruction (FieldGet, not a GetArg-with-hidden
+        // -region and not a Phi) conservatively falls through to its own recorded
+        // region rather than being routed to a caller hidden slot.
+        let mut data_proj: HashMap<i64, (i64, i64)> = HashMap::new();
+        data_proj.insert(200, (IDATA_FIELD, 3)); // a field projection, not ARG_INDEX
+        let mut op_proj: HashMap<i64, i64> = HashMap::new();
+        op_proj.insert(200, IOP_FIELD_GET);
+        let mut region_proj: HashMap<i64, i64> = HashMap::new();
+        region_proj.insert(200, region_pack(REGION_KIND_BLOCK, 7));
+        assert_eq!(
+            inst_region_for_value(
+                200,
+                &region_proj,
+                &data_proj,
+                &op_proj,
+                &no_phi,
+                RSUM_KIND_FRESH_IN_CALLER,
+                &store_effects,
+            ),
+            region_pack(REGION_KIND_BLOCK, 7),
+        );
+
+        // (3) A GetArg of a parameter that is NOT a hidden-region target also
+        // falls through (to root here, since it has no recorded region).
+        let mut data_nonhidden: HashMap<i64, (i64, i64)> = HashMap::new();
+        data_nonhidden.insert(300, (IDATA_ARG_INDEX, 9)); // param 9 has no store effect
+        assert_eq!(
+            inst_region_for_value(
+                300,
+                &no_region,
+                &data_nonhidden,
+                &no_op,
+                &no_phi,
+                RSUM_KIND_FRESH_IN_CALLER,
+                &store_effects,
+            ),
+            region_root(),
+        );
+    }
 }
