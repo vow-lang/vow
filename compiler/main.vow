@@ -5898,6 +5898,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"EffectViolation\",\n"));
     r.push_str(String::from("        \"LinearTypeViolation\",\n"));
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
+    r.push_str(String::from("        \"ImmutableAssignment\",\n"));
+    r.push_str(String::from("        \"UnusedMut\",\n"));
     r.push_str(String::from("        \"VowRequiresViolated\",\n"));
     r.push_str(String::from("        \"VowEnsuresViolated\",\n"));
     r.push_str(String::from("        \"VowInvariantViolated\",\n"));
@@ -9644,6 +9646,8 @@ fn skill_support_content_9() -> String {
     r.push_str(String::from("        \"EffectViolation\",\n"));
     r.push_str(String::from("        \"LinearTypeViolation\",\n"));
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
+    r.push_str(String::from("        \"ImmutableAssignment\",\n"));
+    r.push_str(String::from("        \"UnusedMut\",\n"));
     r.push_str(String::from("        \"VowRequiresViolated\",\n"));
     r.push_str(String::from("        \"VowEnsuresViolated\",\n"));
     r.push_str(String::from("        \"VowInvariantViolated\",\n"));

@@ -18,6 +18,8 @@
         "EffectViolation",
         "LinearTypeViolation",
         "NonExhaustiveMatch",
+        "ImmutableAssignment",
+        "UnusedMut",
         "VowRequiresViolated",
         "VowEnsuresViolated",
         "VowInvariantViolated",

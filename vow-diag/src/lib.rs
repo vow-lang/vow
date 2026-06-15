@@ -345,4 +345,29 @@ mod tests {
         let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
         assert!(output.contains("hint: check the value of y"));
     }
+
+    #[test]
+    fn diagnostic_schema_lists_mutability_error_codes() {
+        // Every ErrorCode the compiler emits must be advertised by the published
+        // diagnostic schema, or a client validating compiler JSON (e.g. from
+        // tests/error/assign_immutable.vow) would reject valid output. Regression
+        // for the #735 mutability codes, emitted but omitted from the schema.
+        let schema_src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../docs/spec/schemas/diagnostic.schema.json"
+        ))
+        .expect("diagnostic schema must be readable");
+        let schema: serde_json::Value =
+            serde_json::from_str(&schema_src).expect("diagnostic schema must be valid JSON");
+        let codes = schema["properties"]["error_code"]["enum"]
+            .as_array()
+            .expect("schema error_code enum must be an array");
+        for code in [ErrorCode::ImmutableAssignment, ErrorCode::UnusedMut] {
+            let name = serde_json::to_value(code).unwrap();
+            assert!(
+                codes.contains(&name),
+                "diagnostic schema is missing emitted error code {name}"
+            );
+        }
+    }
 }
