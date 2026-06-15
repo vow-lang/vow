@@ -3602,6 +3602,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed -- a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow decl`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Emit declaration file output only.\n"));
@@ -6118,7 +6120,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"status\": {\n"));
     r.push_str(String::from("          \"type\": \"string\",\n"));
     r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\", \"contract_skipped\"],\n"));
-    r.push_str(String::from("          \"description\": \"Per-test outcome\"\n"));
+    r.push_str(String::from("          \"description\": \"Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"exit_code\": {\n"));
     r.push_str(String::from("          \"type\": [\"integer\", \"null\"],\n"));
@@ -7374,6 +7376,8 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `TestsFailed`  | One or more tests failed                          |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed -- a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow decl`\n"));
     r.push_str(String::from("\n"));
@@ -9896,7 +9900,7 @@ fn skill_support_content_11() -> String {
     r.push_str(String::from("        \"status\": {\n"));
     r.push_str(String::from("          \"type\": \"string\",\n"));
     r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\", \"contract_skipped\"],\n"));
-    r.push_str(String::from("          \"description\": \"Per-test outcome\"\n"));
+    r.push_str(String::from("          \"description\": \"Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"exit_code\": {\n"));
     r.push_str(String::from("          \"type\": [\"integer\", \"null\"],\n"));

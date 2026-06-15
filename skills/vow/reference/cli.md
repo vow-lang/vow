@@ -153,7 +153,9 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 | `TestsPassed`  | All tests passed                                  |
 | `TestsFailed`  | One or more tests failed                          |
 
-Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
+
+`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
 ### `vow decl`
 
