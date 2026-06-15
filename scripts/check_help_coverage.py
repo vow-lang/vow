@@ -12,14 +12,13 @@ import re
 import sys
 
 
-def extract_table_column(text: str, heading: str, col: int = 0) -> list[str]:
-    """Extract backtick-quoted values from column `col` of a markdown table
-    that follows a heading matching `heading`.
+def extract_table_rows(text: str, heading: str) -> list[list[str]]:
+    """Extract cells from markdown tables that follow `heading`.
     Collects rows from all sub-tables in the section."""
     in_section = False
     in_table = False
     section_level = 0
-    items = []
+    rows = []
     for line in text.splitlines():
         if re.match(r"^#{1,4}\s+" + re.escape(heading), line):
             in_section = True
@@ -41,10 +40,25 @@ def extract_table_column(text: str, heading: str, col: int = 0) -> list[str]:
                 continue
             cells = [c.strip() for c in line.split("|")]
             cells = [c for c in cells if c]
-            if col < len(cells):
-                m = re.search(r"`([^`]+)`", cells[col])
-                if m:
-                    items.append(m.group(1))
+            rows.append(cells)
+    return rows
+
+
+def extract_backtick_value(cell: str) -> str | None:
+    m = re.search(r"`([^`]+)`", cell)
+    if m:
+        return m.group(1)
+    return None
+
+
+def extract_table_column(text: str, heading: str, col: int = 0) -> list[str]:
+    """Extract backtick-quoted values from column `col` of markdown tables."""
+    items = []
+    for row in extract_table_rows(text, heading):
+        if col < len(row):
+            value = extract_backtick_value(row[col])
+            if value is not None:
+                items.append(value)
     return items
 
 
@@ -108,7 +122,13 @@ def main():
             missing.append(f"effect:{e}")
 
     # 4. Builtin functions
-    builtins = extract_table_column(grammar, "Builtin Function Signatures", 0)
+    builtin_rows = extract_table_rows(grammar, "Builtin Function Signatures")
+    builtins = []
+    for row in builtin_rows:
+        if len(row) >= 3:
+            value = extract_backtick_value(row[0])
+            if value is not None:
+                builtins.append(value)
     assert len(builtins) >= 5, f"Expected >=5 builtins, got {len(builtins)}: {builtins}"
     builtins_flat = flatten_json(lang.get("builtins", {}))
     for b in builtins:
