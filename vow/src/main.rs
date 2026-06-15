@@ -2556,6 +2556,8 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 
 Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
 
+`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
+
 ### `vow decl`
 
 Emit declaration file output only.
@@ -5072,7 +5074,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "status": {
           "type": "string",
           "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
-          "description": "Per-test outcome"
+          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],
@@ -6313,6 +6315,8 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 | `TestsFailed`  | One or more tests failed                          |
 
 Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
+
+`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
 ### `vow decl`
 
@@ -8825,7 +8829,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "status": {
           "type": "string",
           "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
-          "description": "Per-test outcome"
+          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],
