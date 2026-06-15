@@ -2554,7 +2554,7 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 | `TestsPassed`  | All tests passed                                  |
 | `TestsFailed`  | One or more tests failed                          |
 
-Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
 
 ### `vow decl`
 
@@ -5071,7 +5071,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "name": { "type": "string", "description": "Test name (file stem)" },
         "status": {
           "type": "string",
-          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
           "description": "Per-test outcome"
         },
         "exit_code": {
@@ -6312,7 +6312,7 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 | `TestsPassed`  | All tests passed                                  |
 | `TestsFailed`  | One or more tests failed                          |
 
-Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
 
 ### `vow decl`
 
@@ -8824,7 +8824,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "name": { "type": "string", "description": "Test name (file stem)" },
         "status": {
           "type": "string",
-          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
           "description": "Per-test outcome"
         },
         "exit_code": {
@@ -10837,10 +10837,19 @@ fn run_test_command(
                 continue;
             }
             BuildStatus::VerifyFailed { .. } | BuildStatus::Skipped => {
+                // `Skipped` (≥1 vowed function non-modelable, ESBMC never run)
+                // is reported as `contract_skipped` so consumers can tell it
+                // apart from `verify_failed` (ESBMC proved a violation). Both
+                // are fail-closed — see the `failed` tally below (#386).
+                let status = if matches!(result.status, BuildStatus::Skipped) {
+                    "contract_skipped"
+                } else {
+                    "verify_failed"
+                };
                 entries.push(TestEntry {
                     file: file_str,
                     name,
-                    status: "verify_failed".to_string(),
+                    status: status.to_string(),
                     exit_code: None,
                     stdout: String::new(),
                     stderr: String::new(),
@@ -10967,7 +10976,7 @@ fn run_test_command(
         .filter(|e| {
             matches!(
                 e.status.as_str(),
-                "failed" | "compile_error" | "verify_failed"
+                "failed" | "compile_error" | "verify_failed" | "contract_skipped"
             )
         })
         .count();

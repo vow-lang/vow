@@ -1054,6 +1054,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 let vin_flight_fi: Vec<i64> = Vec::new();
                 let vin_flight_tmp: Vec<String> = Vec::new();
                 let mut verify_failed: bool = false;
+                let mut contract_skipped: bool = false;
                 let t_dctx: DiagCtx = checked.dctx;
                 let t_const_fns: Vec<i64> = detect_const_fns(ir_mod);
                 let mut vfi: i64 = 0;
@@ -1096,8 +1097,11 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         }
                         if !verify_failed {
                             // Fail closed: a non-modelable contract was not statically proved.
+                            // Reported as contract_skipped (ESBMC never invoked) rather than
+                            // verify_failed (a proved violation); a real violation in any other
+                            // function still sets verify_failed, which takes precedence (#386).
                             if skip_if_non_modelable(vf, ir_mod, t_const_fns, t_dctx) {
-                                verify_failed = true;
+                                contract_skipped = true;
                             } else {
                                 let vstarted: EsbmcStart = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                                 vin_flight_h.push(vstarted.handle);
@@ -1143,6 +1147,15 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     let duration: i64 = time_unix_ms() - start_time;
                     let diag_vf: String = String::from("[{\"error_code\":\"VerifyFailed\",\"message\":\"contract verification failed\",\"severity\":\"error\"}]");
                     let entry: String = emit_test_entry_json(test_path, short_name, String::from("verify_failed"), -1, String::from(""), String::from(""), duration, diag_vf);
+                    entries_json.push(entry);
+                    failed = failed + 1;
+                    skip_exec = true;
+                } else if contract_skipped {
+                    // Fail closed but distinguishable: ESBMC was never invoked
+                    // because a vowed function is non-modelable (#386).
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let diag_cs: String = String::from("[{\"error_code\":\"VerificationSkipped\",\"message\":\"contract verification skipped: function not modelable\",\"severity\":\"error\"}]");
+                    let entry: String = emit_test_entry_json(test_path, short_name, String::from("contract_skipped"), -1, String::from(""), String::from(""), duration, diag_cs);
                     entries_json.push(entry);
                     failed = failed + 1;
                     skip_exec = true;
@@ -3587,7 +3600,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `TestsPassed`  | All tests passed                                  |\n"));
     r.push_str(String::from("| `TestsFailed`  | One or more tests failed                          |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.\n"));
+    r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow decl`\n"));
     r.push_str(String::from("\n"));
@@ -6104,7 +6117,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"name\": { \"type\": \"string\", \"description\": \"Test name (file stem)\" },\n"));
     r.push_str(String::from("        \"status\": {\n"));
     r.push_str(String::from("          \"type\": \"string\",\n"));
-    r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\"],\n"));
+    r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\", \"contract_skipped\"],\n"));
     r.push_str(String::from("          \"description\": \"Per-test outcome\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"exit_code\": {\n"));
@@ -7360,7 +7373,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `TestsPassed`  | All tests passed                                  |\n"));
     r.push_str(String::from("| `TestsFailed`  | One or more tests failed                          |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.\n"));
+    r.push_str(String::from("Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow decl`\n"));
     r.push_str(String::from("\n"));
@@ -9882,7 +9895,7 @@ fn skill_support_content_11() -> String {
     r.push_str(String::from("        \"name\": { \"type\": \"string\", \"description\": \"Test name (file stem)\" },\n"));
     r.push_str(String::from("        \"status\": {\n"));
     r.push_str(String::from("          \"type\": \"string\",\n"));
-    r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\"],\n"));
+    r.push_str(String::from("          \"enum\": [\"passed\", \"failed\", \"timeout\", \"skipped\", \"compile_error\", \"verify_failed\", \"contract_skipped\"],\n"));
     r.push_str(String::from("          \"description\": \"Per-test outcome\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        \"exit_code\": {\n"));
