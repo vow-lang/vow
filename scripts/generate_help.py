@@ -175,8 +175,9 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
     builtin_rows = extract_table(grammar, "Builtin Function Signatures")
     builtins = {}
     for row in builtin_rows:
-        if len(row) >= 3:
-            name, sig, eff = row[0], row[1], row[2]
+        if len(row) >= 2:
+            name, sig = row[0], row[1]
+            eff = row[2] if len(row) >= 3 else "[]"
             builtins[name] = f"{sig} {eff}"
 
     # --- Operators ---

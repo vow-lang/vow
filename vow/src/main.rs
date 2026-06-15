@@ -975,6 +975,16 @@ fn skill_json() -> String {
       "int_to_string": "fn(v: i64) -> String []",
       "uint_to_string": "fn(v: u64) -> String []",
       "i64_to_string": "fn(v: i64) -> String (alias of int_to_string) []",
+      "parse_i8": "fn(s: String) -> Option<i8> []",
+      "parse_i16": "fn(s: String) -> Option<i16> []",
+      "parse_i32": "fn(s: String) -> Option<i32> []",
+      "parse_i64": "fn(s: String) -> Option<i64> (also see String.parse_i64()) []",
+      "parse_i128": "fn(s: String) -> Option<i128> []",
+      "parse_u8": "fn(s: String) -> Option<u8> []",
+      "parse_u16": "fn(s: String) -> Option<u16> []",
+      "parse_u32": "fn(s: String) -> Option<u32> []",
+      "parse_u64": "fn(s: String) -> Option<u64> (also see String.parse_u64()) []",
+      "parse_u128": "fn(s: String) -> Option<u128> []",
       "vec_sort": "fn(v: Vec<i64>) -> Vec<i64> []",
       "time_unix": "fn() -> i64 [io]",
       "time_unix_ms": "fn() -> i64 [io]",
@@ -1273,7 +1283,7 @@ LANGUAGE SUMMARY
 TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]
-            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   parse_i8: fn(s: String) -> Option<i8> []   parse_i16: fn(s: String) -> Option<i16> []   parse_i32: fn(s: String) -> Option<i32> []   parse_i64: fn(s: String) -> Option<i64> (also see String.parse_i64()) []   parse_i128: fn(s: String) -> Option<i128> []   parse_u8: fn(s: String) -> Option<u8> []   parse_u16: fn(s: String) -> Option<u16> []   parse_u32: fn(s: String) -> Option<u32> []   parse_u64: fn(s: String) -> Option<u64> (also see String.parse_u64()) []   parse_u128: fn(s: String) -> Option<u128> []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
@@ -4775,13 +4785,17 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "vacuous"],
             "description": "Verification status"
           },
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
             "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+          },
+          "trivially_satisfiable": {
+            "type": "boolean",
+            "description": "`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -4799,6 +4813,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
         "skipped": { "type": "integer" },
+        "vacuous": { "type": "integer" },
+        "trivially_satisfiable": { "type": "integer" },
         "quality": {
           "type": "object",
           "description": "Static contract-quality tallies independent of verification status",
@@ -8526,13 +8542,17 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "vacuous"],
             "description": "Verification status"
           },
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
             "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+          },
+          "trivially_satisfiable": {
+            "type": "boolean",
+            "description": "`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -8550,6 +8570,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
         "skipped": { "type": "integer" },
+        "vacuous": { "type": "integer" },
+        "trivially_satisfiable": { "type": "integer" },
         "quality": {
           "type": "object",
           "description": "Static contract-quality tallies independent of verification status",
@@ -12227,6 +12249,20 @@ fn main() -> i32 [io] {
         let lang = &parsed["language"];
         assert!(lang["builtins"]["print_i64"].is_string());
         assert!(lang["builtins"]["print_str"].is_string());
+        for name in [
+            "parse_i8",
+            "parse_i16",
+            "parse_i32",
+            "parse_i64",
+            "parse_i128",
+            "parse_u8",
+            "parse_u16",
+            "parse_u32",
+            "parse_u64",
+            "parse_u128",
+        ] {
+            assert!(lang["builtins"][name].is_string(), "missing builtin {name}");
+        }
         assert!(lang["types"].to_string().contains("String"));
         assert!(lang["types"].to_string().contains("Vec<T>"));
         assert!(lang["types"].to_string().contains("Option<T>"));
