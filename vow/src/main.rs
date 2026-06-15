@@ -4775,13 +4775,17 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "vacuous"],
             "description": "Verification status"
           },
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
             "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+          },
+          "trivially_satisfiable": {
+            "type": "boolean",
+            "description": "`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -4799,6 +4803,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
         "skipped": { "type": "integer" },
+        "vacuous": { "type": "integer" },
+        "trivially_satisfiable": { "type": "integer" },
         "quality": {
           "type": "object",
           "description": "Static contract-quality tallies independent of verification status",
@@ -8526,13 +8532,17 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "vacuous"],
             "description": "Verification status"
           },
           "quality": {
             "type": "string",
             "enum": ["weak", "tautological", "substantive"],
             "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+          },
+          "trivially_satisfiable": {
+            "type": "boolean",
+            "description": "`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -8550,6 +8560,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
         "skipped": { "type": "integer" },
+        "vacuous": { "type": "integer" },
+        "trivially_satisfiable": { "type": "integer" },
         "quality": {
           "type": "object",
           "description": "Static contract-quality tallies independent of verification status",
@@ -12227,6 +12239,34 @@ fn main() -> i32 [io] {
         let lang = &parsed["language"];
         assert!(lang["builtins"]["print_i64"].is_string());
         assert!(lang["builtins"]["print_str"].is_string());
+        for name in [
+            "parse_i8",
+            "parse_i16",
+            "parse_i32",
+            "parse_i64",
+            "parse_i128",
+            "parse_u8",
+            "parse_u16",
+            "parse_u32",
+            "parse_u64",
+            "parse_u128",
+        ] {
+            assert!(
+                lang["builtins"].get(name).is_none(),
+                "unexpected unimplemented builtin {name}"
+            );
+        }
+        let string_methods = lang["methods"]["String"].as_array().unwrap();
+        assert!(
+            string_methods
+                .iter()
+                .any(|method| method.as_str() == Some(".parse_i64()"))
+        );
+        assert!(
+            string_methods
+                .iter()
+                .any(|method| method.as_str() == Some(".parse_u64()"))
+        );
         assert!(lang["types"].to_string().contains("String"));
         assert!(lang["types"].to_string().contains("Vec<T>"));
         assert!(lang["types"].to_string().contains("Option<T>"));
