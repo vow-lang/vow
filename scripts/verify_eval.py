@@ -300,7 +300,14 @@ def classify(exp, verify_json, verifier):
             return STATUS, f"expected VerifyFailed, got {actual}"
         actuals = actual_cex(verify_json)
         if not exp.cex:
-            return OK, None
+            # Fail closed: a verify-fail fixture promises an exact {blame, vow_id}
+            # set, so one with no declared counterexample (missing/typo'd
+            # directive) must not pass silently on any VerifyFailed status.
+            return HARNESS, (
+                "verify-fail fixture declares no expected counterexample — add a "
+                "counterexample-fn/blame/vow-id (or cex) directive, or `// TEST: "
+                'skip "<reason>"`'
+            )
         if not actuals:
             return STATUS, "VerifyFailed but no counterexamples emitted"
         # Enforce the EXACT counterexample set: every expected cex must match a
