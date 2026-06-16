@@ -9,6 +9,164 @@ struct CxFn {
     line: i64,
     nloc: i64,
     params: i64,
+    stmts: i64,
+    cyclomatic: i64,
+}
+
+// Recursive AST walk accumulating structural counts. `acc` is a 2-element
+// vector: acc[0] = decision points, acc[1] = statement count. The traversal
+// mirrors `collect_calls_in_expr`/`collect_calls_in_block` (checker.vow) so
+// the Rust port can mirror the same handled-kind set and stay byte-identical.
+//
+// Cyclomatic decision points (acc[0]): each if-head, while/for/loop, each
+// match arm beyond the first, each short-circuit `&&`/`||`, each `?`.
+fn cx_walk_block(a: AstArena, bid: i64, acc: Vec<i64>) {
+    if bid < 0 { return; }
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        acc[1] = acc[1] + 1;
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            cx_walk_expr(a, stmt_c(a, sid), acc);
+        } else {
+            cx_walk_expr(a, stmt_a(a, sid), acc);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 {
+        // A block's trailing expression counts as one statement, matching the
+        // Rust AST's `trailing_expr` slot. (The self-hosted parser usually folds
+        // it into blk_stmts, so this guards the case where it does not.)
+        acc[1] = acc[1] + 1;
+        cx_walk_expr(a, trail, acc);
+    }
+}
+
+fn cx_walk_expr(a: AstArena, eid: i64, acc: Vec<i64>) {
+    if eid < 0 { return; }
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_CALL() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cx_walk_expr(a, list_get(a, args_lid, i), acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_METHOD() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        let args_lid: i64 = expr_c(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cx_walk_expr(a, list_get(a, args_lid, i), acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        if op == BINOP_AND() || op == BINOP_OR() { acc[0] = acc[0] + 1; }
+        cx_walk_expr(a, expr_b(a, eid), acc);
+        cx_walk_expr(a, expr_c(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_UNOP() {
+        cx_walk_expr(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_FIELD() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_QUESTION() {
+        acc[0] = acc[0] + 1;
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_INDEX() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_expr(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_IF() {
+        acc[0] = acc[0] + 1;
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_block(a, expr_b(a, eid), acc);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 { cx_walk_expr(a, else_eid, acc); }
+        return;
+    }
+    if tag == EXPR_WHILE() {
+        acc[0] = acc[0] + 1;
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_block(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        acc[0] = acc[0] + 1;
+        cx_walk_block(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_FOR() {
+        acc[0] = acc[0] + 1;
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_block(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_arms: i64 = list_len(a, arms_lid) / 2;
+        if n_arms > 1 { acc[0] = acc[0] + (n_arms - 1); }
+        let mut i: i64 = 0;
+        while i < n_arms {
+            cx_walk_expr(a, list_get(a, arms_lid, i * 2 + 1), acc);
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == EXPR_RETURN() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { cx_walk_expr(a, v, acc); }
+        return;
+    }
+    if tag == EXPR_BLOCK() {
+        cx_walk_block(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_ASSIGN() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_expr(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let n_fields: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n_fields { cx_walk_expr(a, list_get(a, fields_lid, i * 2 + 1), acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cx_walk_expr(a, list_get(a, args_lid, i), acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_CAST() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n { cx_walk_expr(a, list_get(a, elems_lid, i), acc); i = i + 1; }
+        return;
+    }
 }
 
 // Analyze a single AST function (by arena fid) into a CxFn record.
@@ -35,5 +193,13 @@ fn cx_analyze_fn(a: AstArena, fid: i64, src: String) -> CxFn {
     let last_line: i64 = diag_compute_line(src, start + len);
     let nloc: i64 = last_line - first_line + 1;
 
-    CxFn { name: nm, line: first_line, nloc: nloc, params: pc }
+    let body_bid: i64 = fn_body_bid(a, fid);
+    let acc: Vec<i64> = Vec::new();
+    acc.push(0);
+    acc.push(0);
+    cx_walk_block(a, body_bid, acc);
+    let cyclomatic: i64 = acc[0] + 1;
+    let stmts: i64 = acc[1];
+
+    CxFn { name: nm, line: first_line, nloc: nloc, params: pc, stmts: stmts, cyclomatic: cyclomatic }
 }

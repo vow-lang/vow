@@ -60,8 +60,12 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
             out.push_str(i64_to_string(rec.line));
             out.push_str(String::from(",\"size\":{\"nloc\":"));
             out.push_str(i64_to_string(rec.nloc));
+            out.push_str(String::from(",\"stmts\":"));
+            out.push_str(i64_to_string(rec.stmts));
             out.push_str(String::from(",\"params\":"));
             out.push_str(i64_to_string(rec.params));
+            out.push_str(String::from("},\"structural\":{\"cyclomatic\":"));
+            out.push_str(i64_to_string(rec.cyclomatic));
             out.push_str(String::from("}}"));
             count = count + 1;
         }
