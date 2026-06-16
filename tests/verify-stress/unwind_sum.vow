@@ -8,9 +8,12 @@
 // which is why this lives in the non-gating stress bucket (see README.md)
 // instead of tests/verify/ or tests/verify-fail/.
 //
-// The contract is the true semantic one (`sum_to_n` is correct for all
-// `n >= 0`); the large trip count comes from the caller, NOT from an
-// ESBMC-appeasing `requires: n <= ...` bound, which would violate the
+// `ensures: result >= 0` is an intentionally weak, hard-to-verify stress
+// postcondition — NOT a claim of full semantic correctness: Vow `+` wraps, so
+// for very large `n` the accumulated sum overflows negative. The point is that
+// ESBMC cannot discharge even this weak postcondition without a loop invariant,
+// exhausting its unwind budget. The large trip count comes from the caller, NOT
+// from an ESBMC-appeasing `requires: n <= ...` bound, which would violate the
 // contract-authoring rule in CLAUDE.md.
 module UnwindSum
 
