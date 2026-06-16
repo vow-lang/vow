@@ -585,7 +585,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                     "loop_invariants": "simple invariant predicates",
                 },
                 "partial": {
-                    "refinement_type_predicates": "parsed but semantically erased; use where clauses or function vows for verification",
+                    "refinement_type_predicates": "rejected with a type error (fail-closed, never silently unverified); use a where clause on the parameter or a requires/ensures contract",
                     "effect_tracking": "user-defined effect propagation is enforced; some builtin panic/unsafe effects are not yet modeled",
                 },
                 "target": {

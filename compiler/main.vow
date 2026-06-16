@@ -2202,7 +2202,7 @@ fn skill_json() -> String {
     r.push_str(String::from("        \"loop_invariants\": \"simple invariant predicates\"\n"));
     r.push_str(String::from("      },\n"));
     r.push_str(String::from("      \"partial\": {\n"));
-    r.push_str(String::from("        \"refinement_type_predicates\": \"parsed but semantically erased; use where clauses or function vows for verification\",\n"));
+    r.push_str(String::from("        \"refinement_type_predicates\": \"rejected with a type error (fail-closed, never silently unverified); use a where clause on the parameter or a requires/ensures contract\",\n"));
     r.push_str(String::from("        \"effect_tracking\": \"user-defined effect propagation is enforced; some builtin panic/unsafe effects are not yet modeled\"\n"));
     r.push_str(String::from("      },\n"));
     r.push_str(String::from("      \"target\": {\n"));

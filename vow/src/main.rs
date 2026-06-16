@@ -1149,7 +1149,7 @@ fn skill_json() -> String {
         "loop_invariants": "simple invariant predicates"
       },
       "partial": {
-        "refinement_type_predicates": "parsed but semantically erased; use where clauses or function vows for verification",
+        "refinement_type_predicates": "rejected with a type error (fail-closed, never silently unverified); use a where clause on the parameter or a requires/ensures contract",
         "effect_tracking": "user-defined effect propagation is enforced; some builtin panic/unsafe effects are not yet modeled"
       },
       "target": {
@@ -12436,7 +12436,7 @@ fn main() -> i32 [io] {
         );
         assert_eq!(
             lang["feature_status"]["partial"]["refinement_type_predicates"],
-            "parsed but semantically erased; use where clauses or function vows for verification"
+            "rejected with a type error (fail-closed, never silently unverified); use a where clause on the parameter or a requires/ensures contract"
         );
 
         // Now verify that a program an LLM would write from this description compiles and runs.
