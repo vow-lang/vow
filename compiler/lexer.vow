@@ -138,7 +138,19 @@ fn try_suffix(src: String, pos: i64, src_len: i64) -> i64 {
 
 fn suffix_len(suffix: i64) -> i64 vow {
     requires: suffix >= -1,
-    ensures: result == 0 || result == 2 || result == 3 || result == 4 || result == 5
+    ensures: (suffix != tok_suffix_i8() || result == 2)
+        && (suffix != tok_suffix_i16() || result == 3)
+        && (suffix != tok_suffix_i32() || result == 3)
+        && (suffix != tok_suffix_i64() || result == 3)
+        && (suffix != tok_suffix_i128() || result == 4)
+        && (suffix != tok_suffix_u8() || result == 2)
+        && (suffix != tok_suffix_u16() || result == 3)
+        && (suffix != tok_suffix_u32() || result == 3)
+        && (suffix != tok_suffix_u64() || result == 3)
+        && (suffix != tok_suffix_u128() || result == 4)
+        && (suffix != tok_suffix_usize() || result == 5)
+        && (suffix != tok_suffix_isize() || result == 5)
+        && ((suffix >= tok_suffix_i8() && suffix <= tok_suffix_isize()) || result == 0)
 } {
     if suffix == tok_suffix_i8() { 2 }
     else if suffix == tok_suffix_i16() { 3 }

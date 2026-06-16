@@ -4726,9 +4726,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("region/span bit-packers and friends (`region_pack`/`region_kind`/`region_val`,\n"));
     r.push_str(String::from("`span_pack`, `item_kind`, `AMBIGUOUS_SLOT`, `marker_caller_store`,\n"));
     r.push_str(String::from("`region_caller_ambiguous`, `suffix_len`) -- were then hardened with exact functional\n"));
-    r.push_str(String::from("postconditions (`item_kind`: `result == v / 4294967296`) or enumerated value sets\n"));
-    r.push_str(String::from("(`suffix_len`: `result == 0 || result == 2 || result == 3 || result == 4 || result == 5`),\n"));
-    r.push_str(String::from("bringing `weak` to **0** (#81). The CI weak-gate now holds that baseline: no weak\n"));
+    r.push_str(String::from("postconditions: `item_kind` with `result == v / 4294967296`, and `suffix_len` with a\n"));
+    r.push_str(String::from("per-suffix conditional mapping (`(suffix != tok_suffix_i64() || result == 3) && …`, one\n"));
+    r.push_str(String::from("conjunct per suffix plus an unknown-suffix → `0` clause), bringing `weak` to **0** (#81).\n"));
+    r.push_str(String::from("The CI weak-gate now holds that baseline: no weak\n"));
     r.push_str(String::from("contract may enter the self-hosted compiler.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## References\n"));
@@ -8509,9 +8510,10 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("region/span bit-packers and friends (`region_pack`/`region_kind`/`region_val`,\n"));
     r.push_str(String::from("`span_pack`, `item_kind`, `AMBIGUOUS_SLOT`, `marker_caller_store`,\n"));
     r.push_str(String::from("`region_caller_ambiguous`, `suffix_len`) -- were then hardened with exact functional\n"));
-    r.push_str(String::from("postconditions (`item_kind`: `result == v / 4294967296`) or enumerated value sets\n"));
-    r.push_str(String::from("(`suffix_len`: `result == 0 || result == 2 || result == 3 || result == 4 || result == 5`),\n"));
-    r.push_str(String::from("bringing `weak` to **0** (#81). The CI weak-gate now holds that baseline: no weak\n"));
+    r.push_str(String::from("postconditions: `item_kind` with `result == v / 4294967296`, and `suffix_len` with a\n"));
+    r.push_str(String::from("per-suffix conditional mapping (`(suffix != tok_suffix_i64() || result == 3) && …`, one\n"));
+    r.push_str(String::from("conjunct per suffix plus an unknown-suffix → `0` clause), bringing `weak` to **0** (#81).\n"));
+    r.push_str(String::from("The CI weak-gate now holds that baseline: no weak\n"));
     r.push_str(String::from("contract may enter the self-hosted compiler.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## References\n"));
