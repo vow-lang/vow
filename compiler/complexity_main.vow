@@ -1,0 +1,75 @@
+module ComplexityMain
+
+use complexity
+use ast
+use frontend
+use diag
+
+// Minimal JSON string escaper (function names/paths rarely need it, but be
+// safe). Kept local to avoid cross-module coupling with mutants_main.
+fn cx_json_escape(s: String) -> String {
+    let r: String = String::from("");
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b == 34 { r.push_byte(92); r.push_byte(34); }
+        else if b == 92 { r.push_byte(92); r.push_byte(92); }
+        else if b == 10 { r.push_byte(92); r.push_byte(110); }
+        else if b == 13 { r.push_byte(92); r.push_byte(114); }
+        else if b == 9  { r.push_byte(92); r.push_byte(116); }
+        else if b < 32  { r.push_byte(63); }
+        else { r.push_byte(b); }
+        i = i + 1;
+    }
+    r
+}
+
+fn run_complexity(argv: Vec<String>) -> i32 [io] {
+    let path: String = frontend_path_from_argv(argv, true);
+    let prep: FrontendPrep = frontend_prepare_path(path);
+    let checked: CheckedFrontend = prep.checked;
+    let dctx: DiagCtx = checked.dctx;
+    diag_ctx_print_all(dctx);
+    let n_errors: i64 = checked.n_errors;
+    if n_errors > 0 {
+        eprintln_str(String::from("vow complexity: compile errors"));
+        return 1;
+    }
+    let src: String = fs_read(path);
+    let m: Module = prep.merged;
+    let a: AstArena = m.arena;
+    let items: Vec<i64> = m.items;
+    let n: i64 = items.len();
+
+    let out: String = String::from("{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"");
+    out.push_str(cx_json_escape(path));
+    out.push_str(String::from("\",\"functions\":["));
+    let mut count: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        let it: i64 = items[i];
+        if item_kind(it) == ITEM_FN() {
+            let fid: i64 = item_id(it);
+            let rec: CxFn = cx_analyze_fn(a, fid, src);
+            if count > 0 { out.push_str(String::from(",")); }
+            out.push_str(String::from("{\"name\":\""));
+            let rn: String = rec.name;
+            out.push_str(cx_json_escape(rn));
+            out.push_str(String::from("\",\"line\":"));
+            out.push_str(i64_to_string(rec.line));
+            out.push_str(String::from(",\"size\":{\"nloc\":"));
+            out.push_str(i64_to_string(rec.nloc));
+            out.push_str(String::from(",\"params\":"));
+            out.push_str(i64_to_string(rec.params));
+            out.push_str(String::from("}}"));
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    out.push_str(String::from("]}],\"summary\":{\"functions\":"));
+    out.push_str(i64_to_string(count));
+    out.push_str(String::from("}}\n"));
+    print_str(out);
+    0
+}

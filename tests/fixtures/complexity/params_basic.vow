@@ -1,0 +1,13 @@
+module ParamsBasic
+
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn zero() -> i64 {
+    0
+}
+
+fn three(x: i64, y: i64, z: i64) -> i64 {
+    x + y + z
+}

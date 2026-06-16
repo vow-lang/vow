@@ -1,4 +1,5 @@
 mod cache;
+mod complexity;
 mod frontend;
 mod module_loader;
 
@@ -149,6 +150,8 @@ enum Command {
     Skill(SkillArgs),
     /// Run mutation testing on a Vow source tree (self-hosted only)
     Mutants(MutantsArgs),
+    /// Report per-function complexity metrics as JSON
+    Complexity(ComplexityArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -244,6 +247,16 @@ struct DeclArgs {
     source: Option<PathBuf>,
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
+    #[arg(long)]
+    help: bool,
+    #[arg(long)]
+    human: bool,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(disable_help_flag = true)]
+struct ComplexityArgs {
+    source: Option<PathBuf>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -11626,6 +11639,24 @@ fn main() {
                  Use `build/vowc mutants <subcommand>` after running `scripts/bootstrap.sh`."
             );
             std::process::exit(2);
+        }
+        Some(Command::Complexity(c)) => {
+            if c.help {
+                if c.human {
+                    println!("{}", skill_human());
+                } else {
+                    println!("{}", skill_json());
+                }
+                return;
+            }
+            let source = match c.source {
+                Some(s) => s,
+                None => {
+                    eprintln!("vow complexity: source file required (try --help)");
+                    std::process::exit(1);
+                }
+            };
+            complexity::run_complexity_command(&source);
         }
         None => {
             if args.help {

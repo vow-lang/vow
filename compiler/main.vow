@@ -11,6 +11,8 @@ use mutants_sites
 use mutants_patch
 use mutants_oracle
 use mutants_main
+use complexity
+use complexity_main
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: i64 = 1;
@@ -140,6 +142,7 @@ fn CMD_TEST() -> i64 { 3 }
 fn CMD_CONTRACTS() -> i64 { 4 }
 fn CMD_SKILL() -> i64 { 5 }
 fn CMD_MUTANTS() -> i64 { 6 }
+fn CMD_COMPLEXITY() -> i64 { 7 }
 
 fn get_subcommand(argv: Vec<String>) -> i64 {
     if argv.len() < 2 {
@@ -163,6 +166,9 @@ fn get_subcommand(argv: Vec<String>) -> i64 {
     }
     if sub == "mutants" {
         return CMD_MUTANTS();
+    }
+    if sub == "complexity" {
+        return CMD_COMPLEXITY();
     }
     CMD_NONE()
 }
@@ -10663,6 +10669,9 @@ fn main() -> i32 [io, read, write] {
     }
     if cmd == CMD_MUTANTS() {
         return run_mutants(argv);
+    }
+    if cmd == CMD_COMPLEXITY() {
+        return run_complexity(argv);
     }
     maybe_auto_install_skill();
     run_legacy(argv)

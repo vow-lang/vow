@@ -1,0 +1,39 @@
+module Complexity
+
+use ast
+use diag
+
+// Per-function complexity record. Grows one field per metric slice.
+struct CxFn {
+    name: String,
+    line: i64,
+    nloc: i64,
+    params: i64,
+}
+
+// Analyze a single AST function (by arena fid) into a CxFn record.
+// `src` is the raw source text, used for span -> line-number mapping.
+fn cx_analyze_fn(a: AstArena, fid: i64, src: String) -> CxFn {
+    let name_sid: i64 = fn_name_sid(a, fid);
+    let nm: String = arena_str(a, name_sid);
+
+    let plid: i64 = fn_params_lid(a, fid);
+    let mut pc: i64 = 0;
+    if plid >= 0 {
+        // Each parameter occupies 3 list slots (name_sid, type_tid, mutable).
+        pc = list_len(a, plid) / 3;
+    }
+
+    // nloc: source lines spanned by the function. The packed span's length is
+    // clamped to 16 bits at parse time, so this is exact for any function body
+    // under 64KB (every real function); larger bodies under-count, which is
+    // documented and surfaced by the cross-compiler parity check.
+    let sp: i64 = fn_span(a, fid);
+    let start: i64 = span_unpack_start(sp);
+    let len: i64 = span_unpack_len(sp);
+    let first_line: i64 = diag_compute_line(src, start);
+    let last_line: i64 = diag_compute_line(src, start + len);
+    let nloc: i64 = last_line - first_line + 1;
+
+    CxFn { name: nm, line: first_line, nloc: nloc, params: pc }
+}
