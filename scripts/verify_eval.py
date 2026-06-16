@@ -177,7 +177,12 @@ def actual_cex(verify_json):
 
 
 def match_cex(want, actuals):
-    """Return ('ok'|'blame'|'vow_id'|'missing', detail) for one expected cex."""
+    """Return (kind, detail, matched) for one expected cex.
+
+    kind is 'ok' (with the matched actual cex as the third element so the
+    caller can consume it and detect surplus), or 'blame'/'vow_id'/'missing'
+    (with detail and a None matched).
+    """
     # An exact match on every specified field is success.
     for got in actuals:
         if "fn" in want and want["fn"] != got["fn"]:
@@ -186,16 +191,16 @@ def match_cex(want, actuals):
             continue
         if "vow_id" in want and want["vow_id"] != got["vow_id"]:
             continue
-        return "ok", None
+        return "ok", None, got
     # No exact match: diagnose the closest cause for the same function.
     same_fn = [g for g in actuals if g["fn"] == want.get("fn")] or actuals
     if "blame" in want and all(want["blame"] != g["blame"] for g in same_fn):
         got = ", ".join(sorted({g["blame"] for g in same_fn}))
-        return "blame", f"blame want={want['blame']} got={got or 'none'}"
+        return "blame", f"blame want={want['blame']} got={got or 'none'}", None
     if "vow_id" in want and all(want["vow_id"] != g["vow_id"] for g in same_fn):
         got = ", ".join(sorted({str(g["vow_id"]) for g in same_fn}))
-        return "vow_id", f"vow_id want={want['vow_id']} got={got or 'none'}"
-    return "missing", f"no counterexample matched {want}"
+        return "vow_id", f"vow_id want={want['vow_id']} got={got or 'none'}", None
+    return "missing", f"no counterexample matched {want}", None
 
 
 def vacuity_problem(verifier, path):
@@ -246,14 +251,24 @@ def classify(exp, verify_json, verifier):
             return OK, None
         if not actuals:
             return STATUS, "VerifyFailed but no counterexamples emitted"
+        # Enforce the EXACT counterexample set: every expected cex must match a
+        # distinct actual, and no surplus actual may remain. Consuming matches
+        # lets a verifier regression that emits an extra bogus counterexample
+        # (on top of the expected one) surface instead of passing silently.
+        remaining = list(actuals)
         for want in exp.cex:
-            kind, detail = match_cex(want, actuals)
-            if kind == "blame":
+            kind, detail, matched = match_cex(want, remaining)
+            if kind != "ok":
                 return BLAME, detail
-            if kind == "vow_id":
-                return BLAME, detail
-            if kind == "missing":
-                return BLAME, detail
+            remaining.remove(matched)
+        if remaining:
+            extra = remaining[0]
+            return BLAME, (
+                f"unexpected counterexample fn={extra['fn']} "
+                f"blame={extra['blame']} vow_id={extra['vow_id']} "
+                f"(actual cex set exceeds the {len(exp.cex)} declared — declare "
+                f"every expected counterexample, or this is a verifier regression)"
+            )
         return OK, None
 
     if exp.expected_status == "Skipped":
