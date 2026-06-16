@@ -244,15 +244,26 @@ def match_cex(want, actuals):
     return "missing", f"no counterexample matched {want}", None
 
 
-def vacuity_problem(verifier, path):
-    """Return a soundness detail string if a should-pass proof is vacuous."""
+def vacuity_check(verifier, path):
+    """Classify the vacuity guard for a should-pass program -> (verdict, detail).
+
+    OK       — the guard ran and found no vacuous proof.
+    SOUNDNESS — a contract was proven only vacuously.
+    HARNESS  — the guard itself could not run (timeout/crash/non-JSON). This
+               fails CLOSED: a broken `contracts --verify` must not silently
+               pass as "not vacuous", which would disable the soundness guard in
+               exactly the scenario it exists to catch.
+    """
     res = run_json(verifier, ["contracts", "--verify", path])
     if res is None:
-        return None
+        return HARNESS, (
+            "vacuity guard could not run: `contracts --verify` produced no "
+            "parseable output"
+        )
     summary = res.get("summary", {}) or {}
     if summary.get("vacuous", 0):
-        return f"{summary['vacuous']} contract(s) proven vacuously"
-    return None
+        return SOUNDNESS, f"vacuous proof: {summary['vacuous']} contract(s) proven vacuously"
+    return OK, None
 
 
 def classify(exp, verify_json, verifier):
@@ -277,9 +288,9 @@ def classify(exp, verify_json, verifier):
         if actual != "Verified":
             kind = PRECISION if actual in ("VerifyFailed", "Skipped") else STATUS
             return kind, f"expected Verified, got {actual}"
-        vac = vacuity_problem(verifier, exp.path)
-        if vac:
-            return SOUNDNESS, f"vacuous proof: {vac}"
+        vstatus, vdetail = vacuity_check(verifier, exp.path)
+        if vstatus != OK:
+            return vstatus, vdetail
         return OK, None
 
     if exp.expected_status == "VerifyFailed":
