@@ -126,10 +126,18 @@ def parse_directives(path, default_status):
                 exp.expected_status = body.split(None, 1)[1].strip()
             elif body.startswith("skip"):
                 sm = re.match(r'skip\s+"(.+)"', body)
-                if sm:
-                    exp.skip_reason = sm.group(1)
+                if not sm:
+                    # Fail closed: a malformed skip must not leave skip_reason
+                    # None and silently evaluate a fixture meant to be skipped.
+                    raise ValueError(
+                        f"{path}: malformed skip directive "
+                        f'(expected: skip "<reason>"): {body!r}'
+                    )
+                exp.skip_reason = sm.group(1)
             elif body.startswith("known-soundness-gap"):
-                gm = re.match(r'known-soundness-gap\s+"(.+?)"(?:\s+#(\d+))?', body)
+                # The `#<issue>` is mandatory: a documented false-accept must be
+                # tracked, and the anchored match rejects a stray `#abc`.
+                gm = re.match(r'^known-soundness-gap\s+"(.+?)"\s+#(\d+)$', body)
                 if not gm:
                     # Fail closed: a malformed gap directive must not silently
                     # leave known_gap=None, which would turn a documented
@@ -154,11 +162,21 @@ def parse_directives(path, default_status):
                     )
                 legacy["fn"] = fm.group(1)
             elif body.startswith("counterexample-blame"):
-                legacy["blame"] = validate_blame(
-                    path, body.split(None, 1)[1].strip().lower()
-                )
+                parts = body.split(None, 1)
+                if len(parts) < 2:
+                    raise ValueError(
+                        f"{path}: malformed counterexample-blame directive "
+                        f"(expected: counterexample-blame <caller|callee|none>): {body!r}"
+                    )
+                legacy["blame"] = validate_blame(path, parts[1].strip().lower())
             elif body.startswith("counterexample-vow-id"):
-                legacy["vow_id"] = int(body.split(None, 1)[1].strip())
+                parts = body.split(None, 1)
+                if len(parts) < 2:
+                    raise ValueError(
+                        f"{path}: malformed counterexample-vow-id directive "
+                        f"(expected: counterexample-vow-id <N>): {body!r}"
+                    )
+                legacy["vow_id"] = int(parts[1].strip())
             elif body.startswith("cex"):
                 cex = {}
                 for key, q, bare in CEX_KV.findall(body[len("cex"):]):
@@ -169,8 +187,15 @@ def parse_directives(path, default_status):
                         cex["blame"] = validate_blame(path, val.lower())
                     elif key == "vow_id":
                         cex["vow_id"] = int(val)
-                if cex:
-                    exp.cex.append(cex)
+                missing = {"fn", "blame", "vow_id"} - set(cex)
+                if missing:
+                    # No wildcard matching: a cex must pin all three fields so a
+                    # typo'd key can't silently widen the exact-set match.
+                    raise ValueError(
+                        f"{path}: cex directive must declare fn, blame, and vow_id "
+                        f"(missing {sorted(missing)}): {body!r}"
+                    )
+                exp.cex.append(cex)
     if legacy and not exp.cex:
         exp.cex.append(legacy)
     return exp
