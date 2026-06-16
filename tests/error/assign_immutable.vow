@@ -1,0 +1,9 @@
+// TEST: error-code ImmutableAssignment
+// TEST: stderr "immutable binding"
+module AssignImmutable
+
+fn main() -> i32 {
+  let x: i64 = 1;
+  x = 2;
+  0
+}

@@ -607,6 +607,37 @@ fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
     env_update_enum(e, name, vnames, vpayloads);
 }
 
+// Contract clauses must be pure: a requires/ensures/invariant predicate may not
+// call an effectful function (mirrors the Rust frontend's check_vow_purity in
+// vow-types/src/effects.rs). Without this the production self-hosted compiler
+// admits e.g. `requires: read_file(p).len() > 0` into a contract — an effectful,
+// possibly-failing predicate the verifier model cannot faithfully represent
+// (issue #586). `__unwrap__` panic sites are out of scope here (issue #601),
+// matching the Rust check which also does not flag them.
+fn check_clause_purity(e: CheckEnv, m: Module, clause_eid: i64) [io] {
+    let a: AstArena = m.arena;
+    let calls: Vec<String> = Vec::new();
+    collect_calls_in_expr(e, m, clause_eid, calls);
+    let n: i64 = calls.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let cname: String = calls[i];
+        if cname != String::from("__unwrap__") {
+            let fidx: i64 = env_lookup_fn(e, cname);
+            if fidx != -1 {
+                let callee_eff: i64 = e.fn_effects[fidx];
+                if callee_eff != 0 {
+                    let msg: String = String::from("vow predicate must be pure but calls effectful function `");
+                    msg.push_str(cname);
+                    msg.push_str(String::from("`"));
+                    env_emit_error_code(e, EC_EFFECT_VIOLATION(), msg, expr_span(a, clause_eid));
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
 fn check_vow_clause(e: CheckEnv, m: Module, vow_lid: i64, kind: i64, context: String) [io] {
     let a: AstArena = m.arena;
     let n: i64 = list_len(a, vow_lid);
@@ -629,6 +660,7 @@ fn check_vow_clause(e: CheckEnv, m: Module, vow_lid: i64, kind: i64, context: St
                 msg.push_str(String::from("` clause must be `bool`"));
                 env_emit_error_code(e, EC_CONTRACT_TYPE_MISMATCH(), msg, expr_span(a, clause_eid));
             }
+            check_clause_purity(e, m, clause_eid);
         }
         i = i + 1;
     }
@@ -647,6 +679,7 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     e.cur_ret_tid = ret_tid;
     e.cur_effects = fn_eff(a, fid);
 
+    let mut_base: i64 = e.var_names.len();
     env_push_scope(e);
 
     let params_lid: i64 = fn_params_lid(a, fid);
@@ -683,6 +716,19 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
 
     env_pop_scope(e);
 
+    let var_total: i64 = e.var_names.len();
+    let mut vi: i64 = mut_base;
+    while vi < var_total {
+        if e.var_muts[vi] == 1 && e.var_mutated[vi] == 0 {
+            let uname: String = e.var_names[vi];
+            let umsg: String = String::from("`mut` binding `");
+            umsg.push_str(uname);
+            umsg.push_str(String::from("` is never reassigned; remove `mut`"));
+            env_emit_error_code(e, EC_UNUSED_MUT(), umsg, e.var_decl_spans[vi]);
+        }
+        vi = vi + 1;
+    }
+
     check_effects_fn(e, m, fid);
 
     e.cur_ret_tid = save_ret;
@@ -716,7 +762,7 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
                 }
                 at_tid
             };
-            bind_pattern(e, m, pat_pid, bound_tid);
+            bind_pattern(e, m, pat_pid, bound_tid, stmt_span(a, sid));
             result_tid = CTY_UNIT();
         } else {
             let eid: i64 = stmt_a(a, sid);
@@ -742,13 +788,14 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
     final_tid
 }
 
-fn bind_pattern(e: CheckEnv, m: Module, pid: i64, tid: i64) [io] {
+fn bind_pattern(e: CheckEnv, m: Module, pid: i64, tid: i64, decl_span: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
     if tag == PAT_IDENT() {
         let name_sid: i64 = pat_a(a, pid);
         let name: String = arena_str(a, name_sid);
-        env_define_var(e, name, tid);
+        let is_mut: i64 = pat_b(a, pid);
+        env_define_var_m(e, name, tid, is_mut, decl_span);
     }
 }
 
@@ -787,6 +834,28 @@ fn lookup_variant_payload(e: CheckEnv, enum_idx: i64, variant_name: String, fiel
     CTY_UNIT()
 }
 
+// Built-in Option/Result are not registered in `env`; derive their tuple
+// payload types from the scrutinee's applied type arguments instead, so a
+// `match Option::Some(x)` arm binds `x` to the right type (mirrors the Rust
+// checker's bind_arm_pattern builtin special-case).
+fn builtin_variant_payload(ts: TyStore, scrutinee_tid: i64, enum_name: String, variant_name: String, field_idx: i64) -> i64 {
+    if ty_tag(ts, scrutinee_tid) != CTY_APPLIED() {
+        return CTY_UNIT();
+    }
+    let args_lid: i64 = ty_b(ts, scrutinee_tid);
+    let n: i64 = ts_arg_len(ts, args_lid);
+    if enum_name == String::from("Option") && variant_name == String::from("Some") && field_idx == 0 && n >= 1 {
+        return ts_arg_get(ts, args_lid, 0);
+    }
+    if enum_name == String::from("Result") && variant_name == String::from("Ok") && field_idx == 0 && n >= 1 {
+        return ts_arg_get(ts, args_lid, 0);
+    }
+    if enum_name == String::from("Result") && variant_name == String::from("Err") && field_idx == 0 && n >= 2 {
+        return ts_arg_get(ts, args_lid, 1);
+    }
+    CTY_UNIT()
+}
+
 fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
@@ -817,11 +886,17 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
         let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
         let enum_idx: i64 = env_lookup_enum(e, enum_name);
         let variant_name: String = if variant_sid != -1 { arena_str(a, variant_sid) } else { String::from("") };
+        // Built-in Option/Result aren't in `env`; a registered (user) enum wins,
+        // else take payload types from the scrutinee's applied args.
+        let is_builtin_enum: bool =
+            enum_name == String::from("Option") || enum_name == String::from("Result");
         let mut i: i64 = 0;
         while i < n_inner {
             let ipid: i64 = list_get(a, inner_lid, i);
             let field_tid: i64 = if enum_idx != -1 && variant_sid != -1 {
                 lookup_variant_payload(e, enum_idx, variant_name, i)
+            } else if is_builtin_enum && variant_sid != -1 {
+                builtin_variant_payload(e.ts, scrutinee_tid, enum_name, variant_name, i)
             } else {
                 CTY_UNIT()
             };
@@ -1399,7 +1474,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             env_pop_scope(e);
             if is_opaque(result_tid) {
                 result_tid = arm_tid;
-            } else if arm_tid != result_tid && !is_opaque(arm_tid) {
+            } else if !tids_equal(ts, arm_tid, result_tid) && !is_opaque(arm_tid) {
                 let arm_tag: i64 = ty_tag(ts, arm_tid);
                 let res_tag: i64 = ty_tag(ts, result_tid);
                 let coercible: bool = (arm_tag == CTY_I32() && ty_is_integer(ts, result_tid))
@@ -1475,6 +1550,18 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let rhs_eid: i64 = expr_b(a, eid);
         let _lhs_tid: i64 = check_expr(e, m, lhs_eid);
         let _rhs_tid: i64 = check_expr(e, m, rhs_eid);
+        if expr_tag(a, lhs_eid) == EXPR_IDENT() {
+            let lhs_name: String = arena_str(a, expr_a(a, lhs_eid));
+            let mut_status: i64 = env_mark_mutated(e, lhs_name);
+            if mut_status == 2 {
+                let amsg: String = String::from("cannot assign to immutable binding `");
+                amsg.push_str(lhs_name);
+                amsg.push_str(String::from("`; declare it with `let mut "));
+                amsg.push_str(lhs_name);
+                amsg.push_str(String::from("`"));
+                env_emit_error_code(e, EC_IMMUTABLE_ASSIGNMENT(), amsg, expr_span(a, lhs_eid));
+            }
+        }
         return CTY_UNIT();
     }
 

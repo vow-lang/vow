@@ -23,6 +23,7 @@ SPEC_DIR = REPO / "docs" / "spec"
 GRAMMAR = SPEC_DIR / "grammar.md"
 CLI = SPEC_DIR / "cli.md"
 CONTRACTS = SPEC_DIR / "contracts.md"
+METHODOLOGY = SPEC_DIR / "contracts-methodology.md"
 INDEX = SPEC_DIR / "index.md"
 ERRORS = SPEC_DIR / "errors.md"
 EXAMPLES = SPEC_DIR / "examples.md"
@@ -865,7 +866,7 @@ def build_skill_entrypoint() -> str:
             "",
             "## Installed toolchain (live)",
             "",
-            "!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200)`",
+            "!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200) || echo '(vow toolchain not found on PATH; run scripts/bootstrap.sh to build build/vowc)'`",
             "",
             "## Core workflow",
             "",
@@ -890,6 +891,7 @@ def build_skill_entrypoint() -> str:
             "- Grammar, types, effects, builtins: [reference/grammar.md](reference/grammar.md)",
             "- CLI commands, flags, JSON output: [reference/cli.md](reference/cli.md)",
             "- Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)",
+            "- Which contracts to write (taxonomy & strength): [reference/contracts-methodology.md](reference/contracts-methodology.md)",
             "- Diagnostics and fixes: [reference/errors.md](reference/errors.md)",
             "- Worked examples: [examples/examples.md](examples/examples.md)",
             "- JSON schemas: [schemas/](schemas/)",
@@ -909,7 +911,7 @@ def build_skill_bundle() -> str:
     parts.append("")
 
     # Append each spec file
-    for spec_file in [GRAMMAR, CLI, CONTRACTS, ERRORS, EXAMPLES]:
+    for spec_file in [GRAMMAR, CLI, CONTRACTS, METHODOLOGY, ERRORS, EXAMPLES]:
         parts.append("---")
         parts.append("")
         parts.append(spec_file.read_text().rstrip())
@@ -939,6 +941,7 @@ def build_skill_support_files() -> dict[str, str]:
         "reference/grammar.md": GRAMMAR.read_text().rstrip() + "\n",
         "reference/cli.md": CLI.read_text().rstrip() + "\n",
         "reference/contracts.md": CONTRACTS.read_text().rstrip() + "\n",
+        "reference/contracts-methodology.md": METHODOLOGY.read_text().rstrip() + "\n",
         "reference/errors.md": ERRORS.read_text().rstrip() + "\n",
         "examples/examples.md": EXAMPLES.read_text().rstrip() + "\n",
     }

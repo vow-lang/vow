@@ -1279,16 +1279,34 @@ unsafe fn vec_reserve_in_arena_no_null_check(
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::reserve");
     }
-    let required = v.len + additional;
+    // Checked growth arithmetic (issue #435): an oversized `additional` or
+    // `elem_size` must trap through the OutOfMemory envelope before the
+    // descriptor is touched. Unchecked, `v.len + additional` and the
+    // capacity/byte-size products could wrap (under-allocating backing that
+    // later writes would overrun), and doubling `new_cap` past usize::MAX
+    // wraps it to 0 so the `< required` loop never terminates.
+    let required = match v.len.checked_add(additional) {
+        Some(r) => r,
+        None => oom_trap("Vec::reserve"),
+    };
     if required <= v.cap {
         return;
     }
     let mut new_cap = if v.cap == 0 { VEC_INITIAL_CAP } else { v.cap };
     while new_cap < required {
-        new_cap *= 2;
+        new_cap = match new_cap.checked_mul(2) {
+            Some(c) => c,
+            None => oom_trap("Vec::reserve"),
+        };
     }
-    let old_size = v.cap * elem_size;
-    let new_size = new_cap * elem_size;
+    let old_size = match v.cap.checked_mul(elem_size) {
+        Some(s) => s,
+        None => oom_trap("Vec::reserve"),
+    };
+    let new_size = match new_cap.checked_mul(elem_size) {
+        Some(s) => s,
+        None => oom_trap("Vec::reserve"),
+    };
     let new_ptr = unsafe { arena_grow_backing(arena, v.ptr, old_size, new_size, elem_align) };
     v.ptr = new_ptr;
     v.cap = new_cap;
@@ -4572,6 +4590,29 @@ mod tests {
             eprintln!("rodata_trap_worker: arena overflow did NOT trap");
             std::process::exit(42);
         }
+        // Vec::reserve growth-overflow branch: reserving usize::MAX elements
+        // must trap OutOfMemory via the checked growth arithmetic rather than
+        // wrap new_cap to 0 and spin forever (issue #435).
+        if op == "vec_reserve_overflow" {
+            let mut arena = empty_arena_header();
+            unsafe { __vow_arena_open(&mut arena) };
+            let mut v = VowVec {
+                ptr: 8 as *mut u8,
+                len: 0,
+                cap: 0,
+            };
+            unsafe {
+                __vow_vec_reserve_in_arena(
+                    &mut arena,
+                    &mut v as *mut _ as *mut u8,
+                    usize::MAX,
+                    8,
+                    8,
+                )
+            };
+            eprintln!("rodata_trap_worker: vec reserve overflow did NOT trap");
+            std::process::exit(42);
+        }
         if op == "Vec::new_in_arena_null" {
             let _ = unsafe { __vow_vec_new_in_arena(std::ptr::null_mut(), 8, 8) };
             eprintln!("rodata_trap_worker: null arena constructor did NOT trap");
@@ -4785,14 +4826,70 @@ mod tests {
     }
 
     fn spawn_trap_worker(op: &str) -> (std::process::Output, String) {
+        use std::io::Read;
         let exe = std::env::current_exe().expect("current_exe");
-        let output = std::process::Command::new(exe)
+        let mut child = std::process::Command::new(exe)
             .args(["tests::rodata_trap_worker", "--exact", "--nocapture"])
             .env("VOW_RODATA_TRAP_OP", op)
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .expect("spawn worker");
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        (output, stderr)
+
+        // Drain stdout/stderr on threads so a wedged worker can't deadlock on
+        // a full pipe buffer while we poll for its exit.
+        let stdout_handle = child.stdout.take();
+        let stderr_handle = child.stderr.take();
+        let stdout_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut r) = stdout_handle {
+                let _ = r.read_to_end(&mut buf);
+            }
+            buf
+        });
+        let stderr_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut r) = stderr_handle {
+                let _ = r.read_to_end(&mut buf);
+            }
+            buf
+        });
+
+        // Every trap worker exits within milliseconds. A worker still alive
+        // after this bound means the failure being guarded against (e.g. the
+        // issue #435 Vec::reserve infinite loop) has regressed: kill it and
+        // fail the test, rather than block on output() until the CI job-level
+        // timeout hangs the whole suite.
+        let timeout = std::time::Duration::from_secs(60);
+        let start = std::time::Instant::now();
+        let status = loop {
+            match child.try_wait().expect("try_wait on worker") {
+                Some(status) => break status,
+                None => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        panic!(
+                            "trap worker for {op} did not exit within {timeout:?}; \
+                             likely reintroduced an infinite loop (issue #435)"
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        };
+
+        let stdout = stdout_thread.join().unwrap_or_default();
+        let stderr_bytes = stderr_thread.join().unwrap_or_default();
+        let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+        (
+            std::process::Output {
+                status,
+                stdout,
+                stderr: stderr_bytes,
+            },
+            stderr,
+        )
     }
 
     fn assert_rodata_trap(op: &str, expected_op_in_json: &str) {
@@ -4860,6 +4957,29 @@ mod tests {
         assert!(
             stderr.contains(r#""error":"OutOfMemory""#),
             "stderr missing OutOfMemory trap:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn vec_reserve_rejects_overflow() {
+        // Verifies the checked growth arithmetic in vec_reserve_in_arena
+        // (issue #435): reserving usize::MAX elements must trap OutOfMemory
+        // within a bounded time rather than wrap new_cap to 0 and spin
+        // forever. The worker runs in a subprocess so a regression that
+        // reintroduced the infinite loop surfaces as a timeout, not a hang
+        // of the whole suite.
+        let (out, stderr) = spawn_trap_worker("vec_reserve_overflow");
+        assert!(
+            !out.status.success(),
+            "worker should have exited non-zero; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""error":"OutOfMemory""#),
+            "stderr missing OutOfMemory trap:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""operation":"Vec::reserve""#),
+            "stderr missing operation=Vec::reserve:\n{stderr}"
         );
     }
 

@@ -7,7 +7,9 @@ use std::process::{Command, Stdio};
 
 use vow_ir::{FuncId, Function, InstData, Module, Ty};
 
-use crate::solver_strategy::{SolverConfig, run_with_fallback};
+use crate::solver_strategy::{
+    DEFAULT_AUTO_TIMEOUT_SECS, Encoding, Solver, SolverConfig, run_with_fallback,
+};
 
 use crate::c_emitter::{
     ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
@@ -155,6 +157,40 @@ fn extract_vow_id(output: &str) -> Option<u32> {
     None
 }
 
+/// Parse per-claim verdicts from ESBMC `--multi-property` output. Each vowed
+/// assertion is labelled `vow:N`; ESBMC reports one line per claim, e.g.
+/// `✓ PASSED: 'vow:0' at file ...` or `✗ FAILED: 'vow:2 at file ...'`. Returns
+/// `vow_id → proven` (true = PASSED). A claim is proven only if no line reports
+/// it FAILED (ESBMC prints PASSED claims twice — during solving and in the final
+/// summary — so verdicts are AND-combined). Claims ESBMC could not decide do not
+/// appear and are treated as `unknown` by the caller. This gives precise
+/// per-clause status from one run, instead of marking siblings of a failed
+/// clause `unknown` (#81 / per-obligation verification).
+fn parse_multi_property_verdicts(output: &str) -> std::collections::HashMap<u32, bool> {
+    let mut verdicts = std::collections::HashMap::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let proven = if trimmed.contains("PASSED:") {
+            true
+        } else if trimmed.contains("FAILED:") {
+            false
+        } else {
+            continue;
+        };
+        if let Some(pos) = trimmed.find("'vow:") {
+            let rest = &trimmed[pos + "'vow:".len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(id) = digits.parse::<u32>() {
+                verdicts
+                    .entry(id)
+                    .and_modify(|v| *v &= proven)
+                    .or_insert(proven);
+            }
+        }
+    }
+    verdicts
+}
+
 fn extract_variable_assignments(output: &str) -> Vec<(String, String)> {
     let mut assignments = Vec::new();
     let mut in_counterexample = false;
@@ -277,10 +313,139 @@ pub fn emit_verify_c_source(
     let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
 
     let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
-    let mut c_src =
-        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits);
+    let mut c_src = emit_c_module_with_callees(
+        func,
+        module,
+        const_fns,
+        &callee_ids,
+        &modelable_fns,
+        limits,
+        false,
+        false,
+    );
     c_src.push_str(&emit_harness(func));
     c_src
+}
+
+/// Like [`emit_verify_c_source`] but plants a `vow_reach` label after the
+/// target's `requires` assumes, for ESBMC `--error-label vow_reach` vacuity
+/// detection (#81 PR-B). Returns `None` when the function has no `requires` —
+/// there is no antecedent that could be contradictory, so the vacuity check is
+/// not applicable and the caller skips the extra ESBMC run.
+pub fn emit_reach_c_source(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
+) -> Option<String> {
+    if !function_has_requires(func) {
+        return None;
+    }
+    let mut modelable_cache = HashMap::new();
+    let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
+    let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
+    let mut c_src = emit_c_module_with_callees(
+        func,
+        module,
+        const_fns,
+        &callee_ids,
+        &modelable_fns,
+        limits,
+        true,
+        false,
+    );
+    c_src.push_str(&emit_harness(func));
+    Some(c_src)
+}
+
+/// Like [`emit_verify_c_source`] but overwrites the target's returned value with
+/// the type-default right after it is computed, so each `ensures` is checked
+/// against a trivial `return <default>` body for weakness detection (#81 PR-C).
+/// Returns `None` when the probe does not apply: no `ensures`, a non-scalar
+/// return type, or a returned value that is not a regular body instruction
+/// (a bare parameter or a φ-merged/branchy result). Skipping those is sound but
+/// incomplete — it never produces a false "weak" verdict, only misses some.
+pub fn emit_bodyreplace_c_source(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
+) -> Option<String> {
+    if !function_has_ensures(func) || !returns_scalar(func) || !body_replaceable_result(func) {
+        return None;
+    }
+    let mut modelable_cache = HashMap::new();
+    let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
+    let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
+    let mut c_src = emit_c_module_with_callees(
+        func,
+        module,
+        const_fns,
+        &callee_ids,
+        &modelable_fns,
+        limits,
+        false,
+        true,
+    );
+    c_src.push_str(&emit_harness(func));
+    Some(c_src)
+}
+
+/// True when the function carries at least one `requires` clause — the only
+/// contracts subject to antecedent-failure vacuity.
+pub fn function_has_requires(func: &Function) -> bool {
+    func.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .any(|i| i.opcode == vow_ir::Opcode::VowRequires)
+}
+
+/// True when the function carries at least one `ensures` clause.
+pub fn function_has_ensures(func: &Function) -> bool {
+    func.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .any(|i| i.opcode == vow_ir::Opcode::VowEnsures)
+}
+
+/// True when the return type is a scalar integer/bool/float, so the trivial
+/// `return 0` body-replace is well-typed. Pointer/struct returns are skipped.
+fn returns_scalar(func: &Function) -> bool {
+    !matches!(
+        func.return_ty,
+        vow_ir::Ty::Unit | vow_ir::Ty::Ptr | vow_ir::Ty::LinearPtr
+    )
+}
+
+/// True when the function is single-exit and the value its sole `Return` yields
+/// is produced by a regular body instruction (one that `emit_c_function_full`
+/// emits in its per-instruction loop). The body-replace rewrite overwrites that
+/// one value right after it is emitted; if the result is a bare `GetArg`
+/// (returned parameter) the overwrite site does not exist, so the probe is
+/// skipped. Multi-return functions (any early return / if-else) are also
+/// skipped: the rewrite zeroes only a single return site, so the other return
+/// paths would still run the real body and could falsely "prove" a substantive
+/// `ensures` — a false weakness claim. Requiring exactly one `Return` keeps the
+/// probe one-sided (sound). Self-hosted mirror: `compiler/verifier.vow`.
+fn body_replaceable_result(func: &Function) -> bool {
+    let mut returns = func
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.opcode == vow_ir::Opcode::Return);
+    let Some(ret) = returns.next() else {
+        return false;
+    };
+    if returns.next().is_some() {
+        return false;
+    }
+    let Some(result_id) = ret.args.first().map(|a| a.0) else {
+        return false;
+    };
+    func.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .any(|i| i.id.0 == result_id && i.opcode != vow_ir::Opcode::GetArg)
 }
 
 pub const DEFAULT_MAX_K_STEP: u32 = 50;
@@ -396,22 +561,23 @@ pub fn run_esbmc_k_induction(
     )
 }
 
-pub fn run_esbmc_with_max_k_step(
+fn run_esbmc_capture(
     esbmc: &std::path::Path,
     c_src: &str,
     max_k_step: u32,
     func_name: &str,
     config: &SolverConfig,
-) -> VerificationResult {
+    extra_args: &[&str],
+) -> Result<String, VerificationResult> {
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
         Ok(f) => f,
-        Err(e) => return VerificationResult::ToolError(e.to_string()),
+        Err(e) => return Err(VerificationResult::ToolError(e.to_string())),
     };
     if let Err(e) = tmp.write_all(c_src.as_bytes()) {
-        return VerificationResult::ToolError(e.to_string());
+        return Err(VerificationResult::ToolError(e.to_string()));
     }
     if let Err(e) = tmp.flush() {
-        return VerificationResult::ToolError(e.to_string());
+        return Err(VerificationResult::ToolError(e.to_string()));
     }
 
     save_esbmc_debug(esbmc, c_src, func_name, max_k_step, config);
@@ -425,6 +591,9 @@ pub fn run_esbmc_with_max_k_step(
         .arg(max_k_step.to_string())
         .arg("--64");
 
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
     for arg in config.esbmc_args() {
         cmd.arg(arg);
     }
@@ -456,7 +625,7 @@ pub fn run_esbmc_with_max_k_step(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return VerificationResult::ToolError(e.to_string()),
+        Err(e) => return Err(VerificationResult::ToolError(e.to_string())),
     };
 
     // Drain stdout/stderr on background threads to prevent pipe buffer deadlock.
@@ -497,37 +666,173 @@ pub fn run_esbmc_with_max_k_step(
                 let _ = child.wait();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
-                return VerificationResult::ToolError(format!("wait error: {e}"));
+                return Err(VerificationResult::ToolError(format!("wait error: {e}")));
             }
         }
     };
     if timed_out {
         let _ = stdout_thread.join();
         let _ = stderr_thread.join();
-        return VerificationResult::Timeout;
+        return Err(VerificationResult::Timeout);
     }
 
     let stdout = stdout_thread.join().unwrap_or_default();
     let stderr = stderr_thread.join().unwrap_or_default();
     let combined = format!("{stdout}{stderr}");
+    Ok(combined)
+}
 
+/// Classify ESBMC's combined stdout+stderr into a terminal verification result.
+fn classify_esbmc_output(combined: &str) -> VerificationResult {
     if combined.contains("VERIFICATION SUCCESSFUL") {
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
-        VerificationResult::Failed(parse_esbmc_output(&combined))
-    } else if is_memory_limit_output(&combined) {
+        VerificationResult::Failed(parse_esbmc_output(combined))
+    } else if is_memory_limit_output(combined) {
         VerificationResult::Unknown {
             reason: memory_limit_reason(),
         }
     } else if combined.contains("VERIFICATION UNKNOWN") {
         VerificationResult::Unknown {
-            reason: parse_unknown_reason(&combined),
+            reason: parse_unknown_reason(combined),
         }
     } else if combined.to_lowercase().contains("timeout") {
         VerificationResult::Timeout
     } else {
         VerificationResult::ToolError(format!("unexpected esbmc output:\n{combined}"))
     }
+}
+
+pub fn run_esbmc_with_max_k_step(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    max_k_step: u32,
+    func_name: &str,
+    config: &SolverConfig,
+) -> VerificationResult {
+    match run_esbmc_capture(esbmc, c_src, max_k_step, func_name, config, &[]) {
+        Ok(combined) => classify_esbmc_output(&combined),
+        Err(r) => r,
+    }
+}
+
+/// Resolve the timeout the multi-property contracts path runs under. Mirrors
+/// `run_with_fallback`'s auto-mode policy (and `effective_timeout_for` in
+/// compiler/verifier.vow): under `--encoding auto` with no user `--timeout`, cap
+/// each run at the 30s auto default — unless the resolved BV solver is Bitwuzla,
+/// which has no IR fallback and is left to the kernel watchdog. Without this the
+/// path would silently inherit the 300s safety timeout instead.
+fn effective_multi_property_config(config: &SolverConfig) -> SolverConfig {
+    if config.timeout_secs.is_some() {
+        return *config;
+    }
+    let bv_solver = match config.solver {
+        Solver::Auto => Solver::Boolector,
+        s => s,
+    };
+    let timeout_secs = if config.encoding == Encoding::Auto && bv_solver != Solver::Bitwuzla {
+        Some(DEFAULT_AUTO_TIMEOUT_SECS)
+    } else {
+        None
+    };
+    SolverConfig {
+        timeout_secs,
+        ..*config
+    }
+}
+
+/// Per-clause verification via ESBMC `--multi-property`: returns the overall
+/// outcome plus `vow_id -> proven` for every reported claim, so `vow contracts
+/// --verify` can give each contract clause a precise status instead of marking
+/// the siblings of a failed clause `unknown`.
+pub fn run_esbmc_multi_property(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    max_k_step: u32,
+    func_name: &str,
+    config: &SolverConfig,
+) -> (VerificationResult, std::collections::HashMap<u32, bool>) {
+    let config = effective_multi_property_config(config);
+    match run_esbmc_capture(
+        esbmc,
+        c_src,
+        max_k_step,
+        func_name,
+        &config,
+        &["--multi-property"],
+    ) {
+        Ok(combined) => (
+            classify_esbmc_output(&combined),
+            parse_multi_property_verdicts(&combined),
+        ),
+        Err(r) => (r, std::collections::HashMap::new()),
+    }
+}
+
+/// Outcome of the `--error-label vow_reach` vacuity probe (#81 PR-B).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReachVerdict {
+    /// Label unreachable (ESBMC SUCCESSFUL): the `requires` are contradictory,
+    /// so every `ensures` on the function is vacuously satisfied.
+    Vacuous,
+    /// Label reachable (ESBMC FAILED): the precondition domain is non-empty.
+    Live,
+    /// ESBMC could not decide (timeout, tool error, unexpected output) — never
+    /// claim vacuity on an undecided probe.
+    Inconclusive,
+}
+
+/// Vacuity probe: run ESBMC with `--error-label vow_reach` over a C source that
+/// plants the label after the `requires` assumes (see `emit_reach_c_source`).
+/// SUCCESSFUL means the label is unreachable — the preconditions are
+/// contradictory and the contract is vacuous; FAILED means the label is
+/// reachable (live); anything else is inconclusive (#81 PR-B).
+pub fn run_esbmc_reach(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    max_k_step: u32,
+    func_name: &str,
+    config: &SolverConfig,
+) -> ReachVerdict {
+    match run_esbmc_capture(
+        esbmc,
+        c_src,
+        max_k_step,
+        func_name,
+        config,
+        &["--error-label", "vow_reach"],
+    ) {
+        Ok(combined) => {
+            if combined.contains("VERIFICATION SUCCESSFUL") {
+                ReachVerdict::Vacuous
+            } else if combined.contains("VERIFICATION FAILED") {
+                ReachVerdict::Live
+            } else {
+                ReachVerdict::Inconclusive
+            }
+        }
+        Err(_) => ReachVerdict::Inconclusive,
+    }
+}
+
+/// Weakness probe (#81 PR-C): verify a body-replaced model (see
+/// `emit_bodyreplace_c_source`) where the returned value is forced to the
+/// type-default. `true` (ESBMC SUCCESSFUL) means a trivial `return <default>`
+/// implementation satisfies the `ensures` — the contract is too weak to pin down
+/// the implementation. Any other outcome returns `false`; this is a one-sided
+/// signal, never a soundness claim, so an inconclusive probe is reported as
+/// "not trivially satisfiable".
+pub fn run_esbmc_bodyreplace(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    max_k_step: u32,
+    func_name: &str,
+    config: &SolverConfig,
+) -> bool {
+    matches!(
+        run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, config),
+        VerificationResult::Proven | VerificationResult::ProvenIr
+    )
 }
 
 pub(crate) fn memory_limit_reason() -> String {
@@ -921,6 +1226,71 @@ VERIFICATION FAILED";
         assert_eq!(ce.vow_id, Some(2));
         assert_eq!(ce.values.len(), 1);
         assert_eq!(ce.values[0], ("v0".to_string(), "42".to_string()));
+    }
+
+    #[test]
+    fn parse_multi_property_verdicts_per_claim() {
+        // Real ESBMC --multi-property output shape: PASSED claims quote only the
+        // id; FAILED claims quote id + location; PASSED is also echoed in the
+        // final summary (so vow:0 appears twice).
+        let output = "\
+✓ PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main
+Solving claim 'vow:2 at file /tmp/m.c line 6 column 5 function main' with solver
+✗ FAILED: 'vow:2 at file /tmp/m.c line 6 column 5 function main'
+Violated property:
+  vow:2
+✗ FAILED: 'vow:1 at file /tmp/m.c line 5 column 5 function main'
+Properties: 3 verified ✓ 1 passed, ✗ 2 failed
+VERIFICATION FAILED
+✓ PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main";
+        let v = parse_multi_property_verdicts(output);
+        assert_eq!(v.get(&0), Some(&true), "vow:0 proven");
+        assert_eq!(v.get(&1), Some(&false), "vow:1 failed");
+        assert_eq!(v.get(&2), Some(&false), "vow:2 failed");
+        assert_eq!(v.len(), 3);
+    }
+
+    #[test]
+    fn parse_multi_property_all_proven() {
+        let output = "\
+✓ PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main
+✓ PASSED: 'vow:1' at file /tmp/m.c line 5 column 5 function main
+Properties: 2 verified ✓ 2 passed, ✗ 0 failed
+VERIFICATION SUCCESSFUL";
+        let v = parse_multi_property_verdicts(output);
+        assert_eq!(v.get(&0), Some(&true));
+        assert_eq!(v.get(&1), Some(&true));
+        assert!(v.values().all(|p| *p));
+    }
+
+    #[test]
+    fn effective_multi_property_config_applies_auto_timeout() {
+        // Default (auto encoding/solver, no --timeout) gets the 30s auto cap,
+        // not the 300s safety timeout — matching the build/verify path and the
+        // self-hosted effective_timeout_for.
+        let base = SolverConfig::default_config();
+        assert_eq!(
+            effective_multi_property_config(&base).timeout_secs,
+            Some(DEFAULT_AUTO_TIMEOUT_SECS)
+        );
+        // Bitwuzla has no IR fallback, so it is left uncapped (kernel watchdog).
+        let bz = SolverConfig {
+            solver: Solver::Bitwuzla,
+            ..base
+        };
+        assert_eq!(effective_multi_property_config(&bz).timeout_secs, None);
+        // Explicit (non-auto) encoding with no --timeout gets no auto cap.
+        let bv = SolverConfig {
+            encoding: Encoding::Bv,
+            ..base
+        };
+        assert_eq!(effective_multi_property_config(&bv).timeout_secs, None);
+        // A user --timeout is honored verbatim.
+        let user = SolverConfig {
+            timeout_secs: Some(7),
+            ..base
+        };
+        assert_eq!(effective_multi_property_config(&user).timeout_secs, Some(7));
     }
 
     #[test]
@@ -1953,5 +2323,104 @@ VERIFICATION FAILED";
             }
             other => panic!("expected Skipped (gate must run before find_esbmc), got {other:?}"),
         }
+    }
+
+    // #81 PR-C soundness: the body-replace rewrite zeroes exactly one return
+    // site, so the probe is only sound for single-exit functions. A multi-return
+    // function (any early return / if-else) must be SKIPPED — otherwise the
+    // un-overwritten return paths run the real body and a substantive `ensures`
+    // is falsely flagged `trivially_satisfiable` (a false weakness claim). Both
+    // compilers (here + compiler/verifier.vow) must agree.
+    #[test]
+    fn body_replaceable_result_skips_multi_return_functions() {
+        // Two `Return`s: block 0 returns %2 (a regular add), block 1 returns %0.
+        // This is `if x == 0 { return 0; } x`-shaped IR. The probe could only
+        // zero one return, so eligibility must be false.
+        let multi = Function {
+            id: FuncId(0),
+            name: "two_returns".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result == x".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                        inst(
+                            2,
+                            Opcode::WrappingAddI64,
+                            Ty::I64,
+                            vec![0, 1],
+                            InstData::None,
+                        ),
+                        inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None)],
+                },
+            ],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        assert!(
+            !body_replaceable_result(&multi),
+            "multi-return functions must be skipped: the probe overwrites only one \
+             return site, so leaving others live would yield a false weakness claim"
+        );
+
+        // A single-return function whose result is a regular instruction stays
+        // eligible — the common case the probe is designed for.
+        let single = Function {
+            id: FuncId(0),
+            name: "one_return".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result >= 0".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    inst(
+                        2,
+                        Opcode::WrappingAddI64,
+                        Ty::I64,
+                        vec![0, 1],
+                        InstData::None,
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        assert!(
+            body_replaceable_result(&single),
+            "single-return function with a regular result instruction is eligible"
+        );
     }
 }

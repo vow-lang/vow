@@ -101,8 +101,10 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // iterations and §4.3-step-5 resolution). The IR doesn't mutate during
     // inference, so caching is safe. Without this, the original O(n) helpers
     // multiplied by the three-component deep walk made bootstrap >180s; with
-    // this cache it drops to ~2s. See #252 for the BTreeMap stdlib that
-    // would replace this Vec<IrInst>-indexed-by-id workaround.
+    // this cache it drops to ~2s. A `BTreeMap<i64, _>` could express these
+    // lookups, but the dense Vec is kept deliberately — its O(1) indexing is
+    // load-bearing in the hot deep walk; BTreeMap's O(log n) regressed the
+    // region pass ~50x (see #351).
     let id_to_inst_per_fn: Vec<Vec<IrInst>> = Vec::new();
     let id_to_block_per_fn: Vec<Vec<i64>> = Vec::new();
     let phi_arms_per_fn: Vec<Vec<Vec<i64>>> = Vec::new();
@@ -802,7 +804,7 @@ fn underlying_caller_via_aliases_inner(
     seen: Vec<i64>
 ) -> i64 {
     let mut current: i64 = source_arg_id;
-    let mut local_seen: Vec<i64> = clone_i64_vec(seen);
+    let local_seen: Vec<i64> = clone_i64_vec(seen);
     let mut keep_going: bool = true;
     let mut result: i64 = -1;
     while keep_going {
@@ -1307,9 +1309,9 @@ fn root_escape_span_len(inst: IrInst, id_to_inst: Vec<IrInst>) -> i64 {
 //      FieldSet for each `(target, field_idx)` pair (issue #326).
 // See spec §4.4 (visibility — field-initializer exemption).
 fn collect_returned_ids(bks: Vec<IrBlock>, live_field_set_ids: Vec<i64>) -> Vec<i64> {
-    let mut out: Vec<i64> = Vec::new();
-    let mut stack: Vec<i64> = Vec::new();
-    let mut region_alloc_ids: Vec<i64> = Vec::new();
+    let out: Vec<i64> = Vec::new();
+    let stack: Vec<i64> = Vec::new();
+    let region_alloc_ids: Vec<i64> = Vec::new();
     // Single setup pass: gather Return-arg seeds and the RegionAlloc-id
     // gate set in the same scan over `bks`.
     let mut bi: i64 = 0;
@@ -3150,9 +3152,9 @@ fn is_scalar_ity(ty: i64) -> bool {
 // the constant factor enough to make a self-hosted bootstrap of the
 // compiler take >180 s vs. 1.8 s on the Rust frontend.
 //
-// These helpers build O(1)-lookup tables once per function. See #252
-// for the BTreeMap stdlib that would let this collapse into a single
-// declaration.
+// These helpers build O(1)-lookup tables once per function. A BTreeMap
+// would be terser but O(log n); the dense Vec is retained for the hot-path
+// perf this cache exists to protect (see #351).
 //
 // `id_to_inst[id]` is the inst with `inst.id == id`, or a sentinel
 // (`inst.id < 0`) when no such inst exists in the function.
@@ -4018,7 +4020,7 @@ fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
         bi = bi + 1;
     }
     let sentinel: IrInst = ir_inst_new(-1, 0, 0, Vec::new(), 0, 0, 0, String::from(""));
-    let mut tbl: Vec<IrInst> = Vec::new();
+    let tbl: Vec<IrInst> = Vec::new();
     let mut i: i64 = 0;
     while i <= max_id {
         tbl.push(sentinel);
@@ -4065,7 +4067,7 @@ fn build_id_to_block(f: IrFunction, n_ids: i64) -> Vec<i64> {
 }
 
 fn build_phi_arms(f: IrFunction, n_ids: i64) -> Vec<Vec<i64>> {
-    let mut arms: Vec<Vec<i64>> = Vec::new();
+    let arms: Vec<Vec<i64>> = Vec::new();
     let mut i: i64 = 0;
     while i < n_ids {
         arms.push(Vec::new());
@@ -4098,8 +4100,8 @@ fn build_phi_arms(f: IrFunction, n_ids: i64) -> Vec<Vec<i64>> {
 // components into separate walks (which an earlier draft did) re-traversed
 // the IR three times per call; on phi-heavy code the overhead compounds
 // exponentially in arena allocations and blows past the bootstrap memory
-// cap. See #252 for the BTreeMap that would let us drop this struct in
-// favour of borrowed-arg style.
+// cap. The DeepRet struct bundles the 3-tuple return; a borrowed-arg style
+// would let us drop it, but that is orthogonal to the lookup-table choice.
 
 struct DeepRet {
     kind: i64,
@@ -4933,7 +4935,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
             let mut block_changed: bool = opens_here;
             let moved_upsilon_ids: Vec<i64> = Vec::new();
             if opens_here {
-                let mut open_inst: IrInst = region_marker_inst(next_id, IOP_REGION_OPEN(), blk3.id);
+                let open_inst: IrInst = region_marker_inst(next_id, IOP_REGION_OPEN(), blk3.id);
                 next_id = next_id + 1;
                 new_insts.push(open_inst);
             }

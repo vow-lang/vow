@@ -1,12 +1,9 @@
 // Fixed version of negative_modulo: requires x >= 0 for non-negative remainder.
-// Bounded inputs keep verification tractable for SMT.
 module ModuloSafe
 
 fn mod_positive(x: i64, m: i64) -> i64 vow {
   requires: x >= 0,
-  requires: x <= 1000,
   requires: m > 0,
-  requires: m <= 100,
   ensures: result >= 0
 } {
   x - (x / m) * m

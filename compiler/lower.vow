@@ -555,7 +555,8 @@ fn is_valid_binop(op: i64) -> bool {
 }
 
 fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
-    requires: is_valid_binop(op)
+    requires: is_valid_binop(op),
+    ensures: result != -1
 } {
     let is_u64: bool = operand_ty == ITY_U64();
     if op == BINOP_ADD() { return if is_u64 { IOP_WADD_U64() } else { IOP_WADD_I64() }; }
@@ -590,7 +591,8 @@ fn is_comparison_binop(op: i64) -> bool {
 }
 
 fn binop_result_ty(op: i64, operand_ty: i64) -> i64 vow {
-    requires: is_valid_binop(op)
+    requires: is_valid_binop(op),
+    ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()
 } {
     if is_comparison_binop(op) { return ITY_BOOL(); }
     if operand_ty == ITY_U64() { return ITY_U64(); }
@@ -1017,7 +1019,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let callee_eid: i64 = expr_a(a, eid);
         let args_lid: i64 = expr_b(a, eid);
         let callee_tag: i64 = expr_tag(a, callee_eid);
-        let fn_name: String = String::from("");
+        let mut fn_name: String = String::from("");
         if callee_tag == EXPR_IDENT() {
             let name_sid: i64 = expr_a(a, callee_eid);
             fn_name = arena_str(a, name_sid);
@@ -2957,7 +2959,7 @@ fn lower_block_inner(ctx: LowerCtx, bid: i64) -> i64 {
     let stmts_lid: i64 = blk_stmts(a, bid);
     let trail_eid: i64 = blk_trail(a, bid);
     let n: i64 = list_len(a, stmts_lid);
-    let last_is_trail: bool = false;
+    let mut last_is_trail: bool = false;
     if n > 0 {
         let last_sid: i64 = list_get(a, stmts_lid, n - 1);
         let last_tag: i64 = stmt_tag(a, last_sid);

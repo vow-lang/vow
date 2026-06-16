@@ -1,0 +1,27 @@
+// TEST: stdout "42"
+module MutEnforcement
+
+struct Box { v: i64 }
+
+fn make() -> i64 {
+  let mut acc: i64 = 40;
+  acc = acc + 2;
+  acc
+}
+
+fn via_field(b: Box) -> i64 {
+  b.v = 42;
+  b.v
+}
+
+fn main() -> i32 [io] {
+  let b: Box = Box { v: 0 };
+  let x: i64 = via_field(b);
+  let y: i64 = make();
+  if x == y {
+    print_i64(x)
+  } else {
+    print_i64(0)
+  };
+  0
+}

@@ -1,6 +1,28 @@
 use crate::types::Ty;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
 use vow_syntax::ast::{Effect, Type as AstType};
+use vow_syntax::span::Span;
+
+/// Per-binding mutability metadata, tracked in parallel with the type scopes.
+/// `mutated` records whether the binding was the target of a whole-binding
+/// assignment `x = e` (the only thing `mut` governs under Scope A).
+#[derive(Debug, Clone, Copy)]
+struct MutInfo {
+    is_mut: bool,
+    mutated: bool,
+    span: Span,
+}
+
+/// Result of attempting to mark a binding as mutated via `mark_mutated`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MutStatus {
+    /// No binding with that name is in scope (leave to undefined-var handling).
+    NotFound,
+    /// Found and declared `mut` — the assignment is allowed.
+    Mutable,
+    /// Found but not declared `mut` — the assignment is an error.
+    Immutable,
+}
 
 /// Signature of a function or method known to the type checker.
 #[derive(Debug, Clone)]
@@ -74,6 +96,13 @@ fn sorted_capped_keys<V>(
 /// (functions, structs, enums) are stored separately and are always visible.
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, Ty>>,
+    /// Mutability metadata, maintained in lockstep with `scopes` (same scope
+    /// depth). A per-scope `Vec` rather than a map so same-scope shadows
+    /// (`let mut x = 1; let x = 2;`) keep one record per declaration — matching
+    /// the self-hosted checker's flat per-declaration vectors — so the first
+    /// declaration's unused `mut` is still reported. `lookup`/`all_var_names`
+    /// stay on `scopes` and are untouched.
+    mut_info: Vec<Vec<(String, MutInfo)>>,
     fn_sigs: HashMap<String, FnSig>,
     struct_defs: HashMap<String, StructInfo>,
     enum_defs: HashMap<String, EnumInfo>,
@@ -90,6 +119,7 @@ impl TypeEnv {
     pub fn new() -> Self {
         let mut env = Self {
             scopes: vec![HashMap::new()],
+            mut_info: vec![Vec::new()],
             fn_sigs: HashMap::new(),
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
@@ -700,18 +730,68 @@ impl TypeEnv {
 
     pub fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.mut_info.push(Vec::new());
     }
 
-    pub fn pop_scope(&mut self) {
+    /// Pop the innermost scope, returning any `mut` bindings in it that were
+    /// never reassigned (unused `mut`), sorted by source position so the caller
+    /// emits `UnusedMut` deterministically.
+    pub fn pop_scope(&mut self) -> Vec<(String, Span)> {
         assert!(self.scopes.len() > 1, "cannot pop the last scope");
         self.scopes.pop();
+        let info = self.mut_info.pop().expect("mut_info parallels scopes");
+        let mut unused: Vec<(String, Span)> = info
+            .into_iter()
+            .filter(|(_, m)| m.is_mut && !m.mutated)
+            .map(|(name, m)| (name, m.span))
+            .collect();
+        unused.sort_by_key(|(_, span)| span.start);
+        unused
     }
 
+    /// Define an immutable binding (parameters, `result`, loop/match binders,
+    /// and tests). Equivalent to `define_mut(name, ty, false, _)`.
     pub fn define(&mut self, name: &str, ty: Ty) {
+        self.define_mut(name, ty, false, Span::new(0, 0));
+    }
+
+    /// Define a binding carrying its declared mutability and declaration span.
+    /// Only the `let`-binding path passes `is_mut = true`.
+    pub fn define_mut(&mut self, name: &str, ty: Ty, is_mut: bool, span: Span) {
         self.scopes
             .last_mut()
             .expect("at least one scope must exist")
             .insert(name.to_string(), ty);
+        self.mut_info
+            .last_mut()
+            .expect("mut_info parallels scopes")
+            .push((
+                name.to_string(),
+                MutInfo {
+                    is_mut,
+                    mutated: false,
+                    span,
+                },
+            ));
+    }
+
+    /// Record a whole-binding assignment `name = e` against the nearest binding
+    /// in scope, returning whether that binding exists and is mutable. Marks the
+    /// binding as mutated so it is not later flagged as unused `mut`.
+    pub fn mark_mutated(&mut self, name: &str) -> MutStatus {
+        for scope in self.mut_info.iter_mut().rev() {
+            // The most-recent matching declaration is the visible binding
+            // (handles same-scope shadowing); reassignment marks that one used.
+            if let Some((_, info)) = scope.iter_mut().rev().find(|(n, _)| n == name) {
+                info.mutated = true;
+                return if info.is_mut {
+                    MutStatus::Mutable
+                } else {
+                    MutStatus::Immutable
+                };
+            }
+        }
+        MutStatus::NotFound
     }
 
     pub fn lookup(&self, name: &str) -> Option<&Ty> {
@@ -954,6 +1034,21 @@ mod tests {
 
         env.pop_scope();
         assert_eq!(env.lookup("x"), Some(&Ty::I32));
+    }
+
+    #[test]
+    fn same_scope_shadow_preserves_first_unused_mut() {
+        // `let mut x = 1; let x = 2;` — the first binding is a `mut` that is
+        // never reassigned, so it must still be reported as unused even though
+        // a same-scope shadow reuses the name. Regression: a name-keyed map
+        // dropped the first record and diverged from the self-hosted checker's
+        // flat per-declaration vectors.
+        let mut env = TypeEnv::new();
+        env.push_scope();
+        env.define_mut("x", Ty::I32, true, Span::new(0, 1));
+        env.define_mut("x", Ty::I32, false, Span::new(10, 1));
+        let unused = env.pop_scope();
+        assert_eq!(unused, vec![("x".to_string(), Span::new(0, 1))]);
     }
 
     #[test]

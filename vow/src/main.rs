@@ -18,10 +18,11 @@ use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
     CALLER_PRECONDITION_VOW_ID, ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB,
-    DEFAULT_MAX_K_STEP, Encoding, Solver,
-    SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
-    detect_constant_functions, emit_verify_c_source, find_esbmc, non_modelable_reason,
-    run_with_fallback, verify_function_with_module_and_const_fns_configured,
+    DEFAULT_MAX_K_STEP, Encoding, ReachVerdict, Solver, SolverConfig, UNSUPPORTED_OP_VOW_ID,
+    VerificationResult, VerifyLimits, detect_constant_functions, emit_bodyreplace_c_source,
+    emit_reach_c_source, emit_verify_c_source, find_esbmc, non_modelable_reason,
+    run_esbmc_bodyreplace, run_esbmc_multi_property, run_esbmc_reach, run_with_fallback,
+    verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedFailure, VerifyCache};
@@ -909,10 +910,16 @@ fn skill_json() -> String {
     },
     "casts": "x as u64 or y as i64",
     "types": [
+      "i8",
+      "i16",
       "i32",
       "i64",
+      "i128",
       "u8",
+      "u16",
+      "u32",
       "u64",
+      "u128",
       "f32",
       "f64",
       "bool",
@@ -965,8 +972,9 @@ fn skill_json() -> String {
       "string_to_lower": "fn(s: String) -> String []",
       "string_replace": "fn(s: String, from: String, to: String) -> String []",
       "string_join": "fn(parts: Vec<String>, sep: String) -> String []",
-      "parse_i64": "fn(s: String) -> i64 []",
-      "i64_to_string": "fn(v: i64) -> String []",
+      "int_to_string": "fn(v: i64) -> String []",
+      "uint_to_string": "fn(v: u64) -> String []",
+      "i64_to_string": "fn(v: i64) -> String (alias of int_to_string) []",
       "vec_sort": "fn(v: Vec<i64>) -> Vec<i64> []",
       "time_unix": "fn() -> i64 [io]",
       "time_unix_ms": "fn() -> i64 [io]",
@@ -1262,10 +1270,10 @@ LANGUAGE SUMMARY
     0
   }
 
-TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
+TYPES     : i8  i16  i32  i64  i128  u8  u16  u32  u64  u128  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]
-            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   int_to_string: fn(v: i64) -> String []   uint_to_string: fn(v: u64) -> String []   i64_to_string: fn(v: i64) -> String (alias of int_to_string) []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
@@ -1299,7 +1307,7 @@ program or contract, and repeat until the result is `Verified`.
 
 ## Installed toolchain (live)
 
-!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200)`
+!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200) || echo '(vow toolchain not found on PATH; run scripts/bootstrap.sh to build build/vowc)'`
 
 ## Core workflow
 
@@ -1324,6 +1332,7 @@ fn main() -> i32 [io] {
 - Grammar, types, effects, builtins: [reference/grammar.md](reference/grammar.md)
 - CLI commands, flags, JSON output: [reference/cli.md](reference/cli.md)
 - Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)
+- Which contracts to write (taxonomy & strength): [reference/contracts-methodology.md](reference/contracts-methodology.md)
 - Diagnostics and fixes: [reference/errors.md](reference/errors.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
 - JSON schemas: [schemas/](schemas/)
@@ -1434,7 +1443,7 @@ const NEG_ONE: i64 = -1;
 const DEBUG: bool = true;
 ```
 
-Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be `i64`, `i32`, or `bool`. Constants are referenced by name in expressions like any other identifier.
+Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be any of the 10 integer types (`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`) or `bool`. Integer constants are subject to the same compile-time range check as integer literals. Constants are referenced by name in expressions like any other identifier.
 
 ## Functions
 
@@ -1511,15 +1520,37 @@ pub fn api_function(x: i64) -> i64 {
 
 | Type   | Description              |
 |--------|--------------------------|
+| `i8`   | 8-bit signed integer     |
+| `i16`  | 16-bit signed integer    |
 | `i32`  | 32-bit signed integer    |
 | `i64`  | 64-bit signed integer    |
+| `i128` | 128-bit signed integer (verifier may time out; see below) |
 | `u8`   | 8-bit unsigned integer   |
+| `u16`  | 16-bit unsigned integer  |
+| `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
+| `u128` | 128-bit unsigned integer (verifier may time out; see below) |
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
 | `()`   | Unit type                |
 | `!`    | Never type (diverges)    |
+
+There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`,
+indices are `i64`. This is deliberate — it preserves binary fixed point
+reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
+
+**128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
+`I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
+exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
+verification for functions whose contracts mention 128-bit values while still
+generating native code for them.
+
+**Struct field layout:** every struct field up to 64 bits wide occupies one
+8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
+fields occupy two consecutive 8-byte slots (16 bytes). There is no packing or
+natural-alignment layout today; FFI structs that need a specific C layout must
+shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -1546,9 +1577,29 @@ Structs and enums (see below).
 0
 ```
 
-All unsuffixed integer literals are `i64`. Integer literals coerce to `u64` in annotation context (e.g. `let x: u64 = 42;`).
+Unsuffixed integer literals default to `i64` in expression position, and
+**context-coerce** to any of the 10 integer types when the
+surrounding context fixes one — `let` bindings, function arguments, struct
+fields, and the typed operand of an arithmetic, bitwise, or comparison
+operator. The same coercion applies to constant expressions composed entirely
+of unsuffixed integer literals (e.g. `1 + 2`, `1 << 3`, `-5`).
 
-Suffixed integer literals: `42u64` produces a `u64` value directly.
+Out-of-range literals in a typed context are a compile-time error:
+
+```vow
+let x: u8 = 300;   // error: LiteralOutOfRange — 300 does not fit in u8
+let y: i8 = 200;   // error: LiteralOutOfRange — i8 range is -128..=127
+```
+
+**Suffixed integer literals** force the type at the literal:
+
+```vow
+42u8     42u16     42u32     42u64     42u128
+42i8     42i16     42i32     42i64     42i128
+```
+
+Suffixed forms are supported for all 10 integer widths. They override context
+coercion and are still subject to the same compile-time range check.
 
 ### Float Literals
 
@@ -1628,9 +1679,26 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 | `<<`     | Left shift   |
 | `>>`     | Right shift  |
 
-Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
+Bitwise `& | ^` require integer operands of the same type and work on all 10
+integer widths. `>>` is **arithmetic** (sign-extending) for signed types
+(`i8`..`i128`) and **logical** (zero-extending) for unsigned types
+(`u8`..`u128`).
 
-Unsuffixed integer literals are `i64` by default but coerce to the other operand's integer type when used with a bitwise or shift operator. The same coercion applies to constant expressions composed entirely of unsuffixed integer literals — including arithmetic (`1 + 1`), bitwise (`1 << 3`), and unary negation (`-5`). For example, given `let x: u64 = ...`, the expressions `x << 3`, `3 & x`, and `x << (1 + 1)` all type-check (the literal-constant side coerces to `u64`). This matches the coercion rule already used by arithmetic operators and comparisons. Use a `u64` suffix (`3u64`) to force the `u64` type explicitly.
+**Shift count type.** The right operand of `<<` and `>>` is `u32`. Unsuffixed
+integer literals on the right side context-coerce to `u32`: given
+`let x: u8 = ...`, `x << 3` is well-typed (`3` coerces to `u32`). The left
+operand keeps its own integer type; the shift result has the left operand's
+type.
+
+**Shift count range.** A const-expression shift count `>= bit-width(LHS)` is a
+compile-time error (`ShiftCountOutOfRange`). For example, `(x: u8) << 8` does
+not compile. Dynamic shift counts (`x << n` where `n` is not a const
+expression) get a contract on the operation that ESBMC checks: the count must
+be less than the LHS width at the point of the shift.
+
+Unsuffixed literal coercion still applies for `&`, `|`, `^` operands: with
+`let x: u64 = ...`, `3 & x` and `x | 0xff` type-check because the literal
+side coerces to `u64`. Use a suffix to force a different type explicitly.
 
 ### Logical Operators
 
@@ -1663,14 +1731,56 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 
 ### Type Cast
 
+`as` is **widening-only** across integer types. Any narrower integer can be
+cast to any wider integer; signed sources sign-extend, unsigned sources
+zero-extend:
+
 ```vow
-x as u64    // i64 -> u64
-y as i64    // u64 -> i64
+let a: i32 = -1;
+let b: i64 = a as i64;     // sign-extend: -1_i64
+let c: u8  = 200;
+let d: u64 = c as u64;     // zero-extend: 200_u64
+let e: u32 = 1;
+let f: i64 = e as i64;     // unsigned-to-signed widening, value preserved
 ```
 
-The `as` operator converts between `i64` and `u64`. No implicit conversions: `i64 + u64` is a type error.
+`as` between signed and unsigned of **the same width** is also allowed
+(machine-level bit reinterpretation): `i64 as u64`, `u64 as i64`, `i32 as u32`,
+etc.
 
-In debug mode, out-of-range casts (negative i64 to u64, or u64 > i64::MAX to i64) are no-ops at the machine level (bit reinterpretation). In release mode, the same applies.
+**Narrowing via `as` is a compile-time error** (`NarrowingCastNotAllowed`):
+
+```vow
+let big: i64 = 300;
+let small: u8 = big as u8;     // error — narrowing not allowed via `as`
+```
+
+To narrow, use a named intrinsic that makes the intent explicit. For every
+narrowing pair `(src, tgt)` the compiler exposes three free functions:
+
+| Intrinsic                         | Behavior on out-of-range input          |
+|-----------------------------------|-----------------------------------------|
+| `<src>_to_<tgt>_try(x) -> Option<tgt>` | returns `Option::None`             |
+| `<src>_to_<tgt>_wrap(x) -> tgt`   | truncates (low bits, two's-complement)  |
+| `<src>_to_<tgt>_sat(x) -> tgt`    | clamps to the target type's range       |
+
+Example:
+
+```vow
+let big: i64 = 300;
+match i64_to_u8_try(big) {
+    Option::Some(b) => use_byte(b),
+    Option::None    => fallback(),
+}
+```
+
+These intrinsics are emitted by the compiler so ESBMC sees their semantics
+directly in the verification C model.
+
+No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
+operands must already have the same type. The compiler does not coerce
+across integer types at operator sites — only literals coerce, per the
+[Integer Literals](#integer-literals) rules.
 
 ## Let Bindings
 
@@ -1678,7 +1788,14 @@ In debug mode, out-of-range casts (negative i64 to u64, or u64 > i64::MAX to i64
 
 ```vow
 let x: i64 = 42;
+x = 43;   // error[ImmutableAssignment]: declare it with `let mut x`
 ```
+
+Bindings are immutable by default. Reassigning a binding that was not declared
+`mut` is a compile error (`ImmutableAssignment`). `mut` is required **only** for
+whole-binding reassignment `x = e`; field writes (`s.f = e`) and index writes
+(`v[i] = e`) are permitted through any binding and do not require the base to be
+`mut`.
 
 ### Mutable
 
@@ -1686,6 +1803,11 @@ let x: i64 = 42;
 let mut i: i64 = 0;
 i = i + 1;
 ```
+
+A `let mut` binding that is never reassigned is a compile error (`UnusedMut`) —
+drop the `mut`. Because only whole-binding reassignment counts as a use of `mut`,
+a binding mutated solely via `s.f = e`, `v[i] = e`, or a method call should be
+declared `let`, not `let mut`.
 
 ### Pattern Destructuring
 
@@ -2139,10 +2261,41 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 #### Conversion
 
+**Formatting** uses two baselines; widen via `as` for narrower types:
+
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
-| `parse_i64`      | `fn(s: String) -> i64`                     | `[]`       |
-| `i64_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+| `int_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+| `uint_to_string` | `fn(v: u64) -> String`                     | `[]`       |
+| `i64_to_string`  | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+
+```vow
+let small: u8 = 42;
+print_str(uint_to_string(small as u64));  // widen then format
+```
+
+**Parsing** exposes a try-form for every integer width:
+
+| Function       | Signature                                |
+|----------------|------------------------------------------|
+| `parse_i8`     | `fn(s: String) -> Option<i8>`            |
+| `parse_i16`    | `fn(s: String) -> Option<i16>`           |
+| `parse_i32`    | `fn(s: String) -> Option<i32>`           |
+| `parse_i64`    | `fn(s: String) -> Option<i64>` (also see `String.parse_i64()`) |
+| `parse_i128`   | `fn(s: String) -> Option<i128>`          |
+| `parse_u8`     | `fn(s: String) -> Option<u8>`            |
+| `parse_u16`    | `fn(s: String) -> Option<u16>`           |
+| `parse_u32`    | `fn(s: String) -> Option<u32>`           |
+| `parse_u64`    | `fn(s: String) -> Option<u64>` (also see `String.parse_u64()`) |
+| `parse_u128`   | `fn(s: String) -> Option<u128>`          |
+
+Each `parse_X` returns `Option::None` for malformed input, empty strings, or
+values outside the target type's range.
+
+**Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
+pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
+`<src>_to_<tgt>_sat` free functions with the semantics described in that
+section.
 
 #### Collections
 
@@ -2327,6 +2480,8 @@ vow contracts [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
 ### `vow skill`
@@ -2411,7 +2566,9 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 | `TestsPassed`  | All tests passed                                  |
 | `TestsFailed`  | One or more tests failed                          |
 
-Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
+
+`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
 ### `vow decl`
 
@@ -2495,7 +2652,7 @@ that path produces `Unverified` (exit 0).
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
-| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
+| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
 
@@ -2567,7 +2724,7 @@ that path produces `Unverified` (exit 0).
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
-| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, or `"tool_not_found"` |
+| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
 ## Contracts Output JSON
@@ -2586,10 +2743,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "not_verified"
+      "status": "not_verified",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0 }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2605,10 +2763,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "proven"
+      "status": "proven",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0 }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -2622,7 +2781,9 @@ that path produces `Unverified` (exit 0).
 | `description` | string  | Full contract text                                       |
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
-| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
+| `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 ### Status Values
 
@@ -2632,10 +2793,21 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
+
+### Quality Values
+
+`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
+
+| Quality        | Meaning                                                                                      |
+|----------------|----------------------------------------------------------------------------------------------|
+| `weak`         | An `ensures` that only bounds `result` by an integer literal (e.g. `result >= 0`). Satisfied by almost any implementation. |
+| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
+| `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
 ## Trace Output (stderr, --debug-trace)
 
@@ -2938,7 +3110,7 @@ fn bisect(lo: i64, hi: i64) -> i64 vow {
     requires: hi >= lo
 } {
     let mut lo: i64 = lo;
-    let mut hi: i64 = hi;
+    let hi: i64 = hi;
     while lo + 1 < hi vow {
         invariant: hi - lo >= 0
     } {
@@ -3129,6 +3301,425 @@ The contract applies to all functions declared in the block. ESBMC uses `require
 
 ---
 
+# Contract Methodology: What to Verify
+
+This document answers a question that `contracts.md` does not: given a function,
+**which** properties are worth proving, how do you tell a strong contract from a
+hollow one, and how do you express the strong shapes within ESBMC's reach.
+
+`contracts.md` is the *reference* (syntax, blame, the verification pipeline,
+anti-patterns). This is the *methodology* (judgement). Read that first.
+
+## The core principle: strength, not volume
+
+A proven contract is worth nothing if it would also hold for an incorrect
+implementation. The number of contracts a codebase proves is not a quality
+signal — the *discriminating power* of each contract is.
+
+This is measurable. Polikarpova, Furia, Pei, Wei, and Meyer (the originator of
+Design by Contract), *"What Good Are Strong Specifications?"* (ICSE 2013), found
+that testing implementations against **strong** specifications — comprehensive
+functional pre/post/invariants — detected roughly **twice as many bugs** as
+testing against standard/weak contracts. Their conclusion: *"the quality of
+specifications limits the value of verification."*
+
+A concrete Vow example of the trap. Many tag constants in the self-hosted
+compiler carry this contract:
+
+```vow
+fn EFF_IO() -> i64 vow { ensures: result > 0 } { 1 }
+```
+
+ESBMC proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
+`{ 2 }`, `{ 99 }`, and every other positive constant — it does not pin the value
+this function is *supposed* to return. It is a real postcondition, but a **weak**
+one: it constrains the output to a half-line, not to a point. Proving 354 of
+these does not make the compiler more correct; it makes the verification report
+longer.
+
+The fix is not "delete contracts" — it is "make each contract say something only
+the correct implementation satisfies."
+
+## A taxonomy of contract shapes
+
+Each shape below lists its *intent*, *when it applies*, a *real Vow example*, and
+*strength notes*. The expressibility/verifiability status of every shape is
+collected in the matrix at the end.
+
+### 1. Domain precondition (range / validity bound)
+
+**Intent:** restrict the inputs the function promises to handle correctly. Blame
+falls on the caller (`requires`).
+
+**When:** the function is only correct on a subset of its parameter types — a byte
+in `0..=255`, a non-zero divisor, an in-bounds index.
+
+```vow
+fn write_u8(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0,
+    requires: v <= 255
+} { out.push(v); }
+```
+
+**Strength:** a precondition is strong when it is the *true* domain of the
+function — no wider (which would admit miscompilation) and no narrower (a
+verifier-driven bound like `requires: n <= 8`, forbidden by `contracts.md`).
+A bounds-check precondition such as `requires: i >= 0, requires: i < v.len()` is
+the standard guard for every indexing operation.
+
+### 2. Output-range postcondition (the weak default — use sparingly)
+
+**Intent:** constrain the result to a range.
+
+**When:** the range *is* the full functional spec — e.g. a function whose only
+guarantee is non-negativity. This is rare. Most uses are the weak trap above.
+
+```vow
+fn item_kind(v: i64) -> i64 vow {
+    requires: v >= 0,
+    ensures: result >= 0          // weak: any non-negative value satisfies this
+} { v / 4294967296 }
+```
+
+**Strength:** weak by default. Reach for shape 3, 4, or 5 instead whenever the
+function actually computes a *specific* value. If you find yourself writing
+`ensures: result >= 0` on a function that returns a computed quantity, ask what
+the result *equals* or *inverts*, and assert that.
+
+### 3. Exact functional postcondition (equality)
+
+**Intent:** pin the result to the value the function is defined to produce.
+
+**When:** the output is a closed-form function of the inputs (arithmetic,
+bit-packing, encodings).
+
+```vow
+fn region_pack(kind: i64, val: i64) -> i64 vow {
+    requires: kind >= 0,
+    requires: kind <= 3,
+    requires: val >= 0,
+    requires: val <= 4294967295,
+    ensures: result == val * 4 + kind     // exact: only the right answer passes
+} { val * 4 + kind }
+```
+
+**Strength:** strong — a wrong shift or offset is caught immediately. Note the
+preconditions are not verifier appeasement: they bound `val` and `kind` so the
+packed result cannot overflow `i64` (a genuine semantic constraint). Contrast
+`region_pack` (exact) with `item_pack`/`item_kind` (shape 2, only `>= 0`): the
+same bit-packing pattern, one specified strongly and one weakly.
+
+### 4. Round-trip / inverse
+
+**Intent:** prove that an encode/decode (or pack/unpack, serialize/deserialize)
+pair compose to the identity on the valid domain.
+
+**When:** two functions are defined as inverses — `pack`/`unpack`,
+`encode`/`decode`, `to_bytes`/`from_bytes`.
+
+Specify each direction with an exact closed-form postcondition — shape 3 applied
+to the extractor as well as the encoder, so the decoder is pinned to the exact
+arithmetic that inverts the pack:
+
+```vow
+fn region_kind(r: i64) -> i64 vow {
+    requires: r >= 0,
+    ensures: result == r - (r / 4) * 4,   // exact extractor
+    ensures: result <= 3
+} { r - (r / 4) * 4 }
+```
+
+Because both directions are pinned to closed forms — `region_pack`'s exact
+`ensures: result == val * 4 + kind` (shape 3 above) and the matching
+`region_kind`/`region_val` extractors — a `region_pack` then
+`region_kind`/`region_val` round-trip recovers `(kind, val)` exactly, and ESBMC
+discharges that composition with no separate assertion. The inverse can also be
+asserted directly: Vow allows pure-function calls in postconditions, so an
+`ensures: region_kind(result) == kind` on `region_pack` is expressible and
+modelable when the partner is pure (matrix shape 4). **Strength:** very strong —
+round-trip is the property a serialization layer must have, and it catches the
+entire class of "encoder and decoder drifted apart" bugs that output-range
+contracts miss completely.
+
+### 5. Dispatch totality (fail-closed decoders)
+
+**Intent:** prove that a decoder/dispatcher maps **every** valid input to a
+defined output and **never** silently falls through to a default.
+
+**When:** a function switches over a tag/opcode/discriminator. This is the
+single highest-value shape for Vow, because silent-fallback normalization
+(mapping an unknown tag to a valid-looking default) is the bug class issue #81
+was filed over.
+
+The pattern has two halves — a validity precondition and an explicit error
+sentinel for the unreachable tail:
+
+```vow
+fn is_valid_binop(op: i64) -> bool { op >= 0 && op <= 22 }
+
+fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
+    requires: is_valid_binop(op)
+} {
+    if op == BINOP_ADD() { return ...; }
+    // ... one arm per valid op ...
+    -1                                    // unreachable under the precondition
+}
+```
+
+**Strength — and a live hardening gap.** The precondition pins the domain, but
+this contract does **not yet prove totality**: nothing asserts the function never
+returns the `-1` sentinel. The strong form adds a postcondition that rules out
+the fallthrough:
+
+```vow
+fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
+    requires: is_valid_binop(op),
+    ensures: result != -1                 // proves every valid op is handled
+} { ... }
+```
+
+With `ensures: result != -1`, ESBMC must show that on every `op` in `0..=22` some
+arm returns before the sentinel — i.e. the dispatch is exhaustive. If an agent
+later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
+verification fails instead of miscompiling. This is the contract that converts a
+silent fallback into a caught error.
+
+The static classifier rates this clause `substantive`, and `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true` — both are correct, because
+they measure different things. The probe replaces the body with `return 0` (the `i64`
+default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*
+positive: `ensures: result != -1` does not constrain the op→opcode *mapping* — a constant
+non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*
+prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough
+(delete an arm and verification fails). Totality is the silent-fallback property #81
+targets, and — absent a quantifier to say "result is the correct opcode for `op`" — it is
+the strongest property a `!= sentinel` postcondition can express. So read the
+`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not
+as a probe artifact to dismiss. This is *not* the constant-result false positive noted in
+**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the
+type default.
+
+> Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
+> inputs" is expressed as `requires` (pin the finite domain) + a postcondition
+> that excludes the failure value, letting ESBMC enumerate the finite branch
+> structure. Bounded quantifiers are tracked as a roadmap item (#467/#470).
+
+### 6. Relational / cross-function (uniqueness, agreement)
+
+**Intent:** state a property that spans more than one function or more than one
+argument.
+
+**When:** tags in a family must be distinct; two collections must have equal
+length; a result must relate two inputs.
+
+The argument-relational form is directly expressible:
+
+```vow
+fn build_pairs(ids: Vec<i64>, names: Vec<i64>) -> Vec<Pair> vow {
+    requires: ids.len() == names.len()
+} { ... }
+```
+
+The *cross-function uniqueness* form — "`tok_kw_fn() != tok_kw_let()` for every
+pair in the family" — is expressible only as O(n²) pairwise inequalities, which
+does not scale to dozens of tag constants. **The better fix is structural, not
+contractual:** encode each family as a base+offset range or a generated table so
+uniqueness is a property of the *encoding* rather than something every function
+must restate. Treat a wall of zero-argument tag constants as an API smell that
+shape-6 contracts cannot economically repair.
+
+### 7. Loop invariant / frame
+
+Covered in `contracts.md` (counter bounds, search-range invariants, the
+inductiveness requirement). The methodology point: an invariant is strong when it
+is the property the loop *maintains toward its postcondition*, not merely
+`i >= 0`. See `contracts.md` §Loop Invariants and the worked CEGIS cycle in
+`examples.md`.
+
+## Hollow contracts: three failure modes to detect
+
+A contract can pass verification while proving nothing. There are three distinct
+ways this happens; a contract-quality tool should distinguish them.
+
+### Weakness
+
+The clause is satisfiable and true, but so loose that an incorrect
+implementation also satisfies it (`ensures: result >= 0` on a computed value).
+This is the 354-contract problem.
+
+**Detection (the body-replace probe).** `vow contracts --verify` ships this check
+(#81). It mutates the implementation in the strongest possible way — replaces the
+whole body with a trivial `return <type-default>` — and re-verifies the
+`ensures`. If the contract still proves against that body, a constant-returning
+implementation satisfies it, so it does not constrain the real computation: each
+such `ensures` is reported `trivially_satisfiable: true`. This is exactly the
+`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.
+
+The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of
+weakness (a specific trivial body satisfies the contract), but a `false` verdict
+does not prove strength — the probe uses a single default value and skips
+non-scalar returns, returned parameters, and φ-merged/branchy results, so it can
+miss weak contracts it cannot witness this way. It is informational and never
+changes the exit code; pair it with the static `quality` field. The one known
+false positive is a function whose correct result genuinely *is* the type default
+(e.g. a constant `ensures result == 0` on a `{ 0 }` body) — an equivalent mutant,
+the standard caveat of mutation testing.
+
+### Tautology
+
+The clause is true independent of the program — `ensures: true`,
+`ensures: result == result`, `ensures: x >= 0 || x < 0`. **Detection:** the clause
+is valid (provable) with the function body removed; a cheap check folds constant
+clauses and flags any clause with no dependence on parameters or `result`.
+
+### Vacuity (antecedent failure)
+
+The clause is proved only because its **preconditions are unsatisfiable**, so the
+path it guards is dead and the postcondition never has to hold. Because Vow
+lowers `requires` to `__ESBMC_assume`, a contradictory or over-strong precondition
+makes *any* `ensures` provable — an assume-false / dead-path proof.
+
+This is the classic vacuity of Beer, Ben-David, Eisner, and Rodeh, *"Efficient
+Detection of Vacuity in Temporal Model Checking"* (Formal Methods in System
+Design, 2001): a subformula is vacuous when replacing it changes nothing about
+the result. Their industrial data is the reason to take it seriously — across
+years of hardware verification at IBM, ~20% of formulas were trivially valid on
+first runs, and trivial validity *always* indicated a real defect in the design,
+spec, or environment.
+
+**Detection (the reachability probe).** `vow contracts --verify` ships this check
+(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
+model with a `vow_reach` label planted immediately after the `requires` assumes,
+under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
+(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+every `ensures` held only vacuously — all of the function's clauses are reported
+`status: "vacuous"` and the command fails closed. If the label is **reachable**
+(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+live. This is operationally the dual of the classic `ensures: false` re-check —
+asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
+still pass?" — but it needs only one extra run per function and is unaffected by
+body divergence, since the label precedes the body. The label sits after the
+requires prefix rather than at the function end precisely so an unbounded loop or
+an `assume(0)` deeper in the body cannot make it spuriously unreachable.
+
+**Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
+for a proof that holds, emit a non-trivial *witness* — concrete inputs that
+exercise the property for a substantive reason — so the author can confirm the
+proof is not hollow. Vow's structured output is well-suited to carrying a witness
+alongside each `Verified` result.
+
+## When to write contracts
+
+### Builtins and `extern` blocks
+
+Runtime functions (`Vec.push`, `String.from`, `HashMap.insert`) are implemented in
+Rust/C and cannot be verified by ESBMC. Their behavior enters verification through
+the `vow` contract on the `extern "C"` block, which becomes an **assumed**
+(`__ESBMC_assume`) surface for callers. Because these contracts are *assumed, not
+checked*, they are the most dangerous place for an error: a wrong `ensures` on an
+extern block silently weakens every proof that depends on it. Extern contracts
+must be reviewed as assumptions, audited against the runtime implementation, and
+kept minimal. (Omitting the block is a `MissingContract` error — see `errors.md`.)
+
+### Library functions (written in Vow)
+
+Public Vow functions are fully within verification reach. Give each one its true
+domain precondition and the strongest postcondition shape that applies (3–6, not
+2). Add contracts when the function's contract is *known*, which is usually at
+definition time for pure utilities and after the signature stabilizes for APIs.
+
+### Application code (including agent-generated)
+
+Vow's target author is an AI agent, and the failure mode to design against is
+*volume over substance* — an agent emitting many `ensures: result >= 0` clauses
+because the prompt said "add contracts." Skill guidance should push the opposite:
+for each function, identify which shape applies (equality, round-trip, dispatch
+totality, relational) and write that one; prefer one discriminating contract to
+five weak ones. The Specification Pattern System of Dwyer, Avrunin, and Corbett
+(ICSE 1999) — a survey-validated catalog built specifically to turn imprecise
+intent into precise specifications — is the model for guiding an author from "this
+should be valid" to a postcondition that says what *valid* means.
+
+## Expressibility and verifiability matrix
+
+Whether a shape is usable depends on five independent axes, not just "can the
+syntax say it":
+
+- **expressible** — surface Vow has the syntax
+- **typechecked** — the checker validates the clause to `bool` (added in #81 Phase 0)
+- **lowerable** — the lowerer emits IR for the clause
+- **modelable** — the C emitter / ESBMC model supports the operations used
+  (pure, non-effectful helpers only; see `is_modelable` in the C emitter)
+- **backend** — ESBMC actually discharges it within bounds
+
+| Shape | expressible | typechecked | lowerable | modelable | backend |
+|-------|:-----------:|:-----------:|:---------:|:---------:|:-------:|
+| 1. Domain precondition | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 2. Output-range postcond. | ✓ | ✓ | ✓ | ✓ | ✓ (but weak) |
+| 3. Exact equality | ✓ | ✓ | ✓ | ✓ | ✓ within overflow bounds |
+| 4. Round-trip / inverse | ✓ | ✓ | ✓ | ✓ if partner is pure & modelable | ✓ for arithmetic |
+| 5. Dispatch totality | ✓ | ✓ | ✓ | ✓ (pure dispatch) | ✓ over finite domain |
+| 6a. Argument-relational | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 6b. Cross-fn uniqueness | ✓ (O(n²)) | ✓ | ✓ | ✓ | ✓ but unscalable → prefer structural encoding |
+| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded / k-induction) |
+| Bounded quantifier (`forall i in 0..n`) | ✗ (no surface syntax) | — | — | — | — (roadmap #467/#470) |
+
+Contract expressions must be **pure** — they cannot call effectful functions
+(`grammar.md` §Contract Purity). A property that needs an effectful helper is
+blocked at the *modelable* axis, not the expressible one; classify such gaps as
+model limitations, not contract-language limitations.
+
+## Tooling
+
+`vow contracts --verify` performs the **per-obligation** quality analysis tracked
+in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
+ESBMC `--multi-property`), plus the three quality signals above:
+
+- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
+- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
+  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
+  an `ensures` a trivial `return <default>` body satisfies (informational).
+
+The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
+status and quality tallies, so an author or CI can gate on hollow proofs.
+
+**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
+quality of the self-hosted compiler's own contracts: it reads
+`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
+exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
+unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
+ratchet down as contracts harden. The dispatch-totality example above
+(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`
+(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)
+are enforced in `compiler/lower.vow` today.
+
+**Tag families are structural, not contracted.** The bulk of the old `weak`
+count was nullary tag constants — `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,
+`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures
+result >= 0` proves nothing: a constant's value is the only fact about it, and
+that fact is structural (each is a distinct literal). So these carry **no**
+contract. Their correctness is established where it matters — at use sites: the
+dispatch-totality contracts above prove every valid tag is handled, the IR
+validator and serializer round-trips exercise every kind, and the binary
+fixed-point bootstrap miscompiles if any two tags collide. Removing the
+contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11
+are genuine parametric functions (the region/span bit-packers and friends) whose
+right contract is a round-trip or enumerated postcondition — the next hardening
+target, not noise.
+
+## References
+
+- N. Polikarpova, C. A. Furia, Y. Pei, Y. Wei, B. Meyer. *What Good Are Strong
+  Specifications?* ICSE 2013. https://arxiv.org/abs/1208.3337
+- I. Beer, S. Ben-David, C. Eisner, Y. Rodeh. *Efficient Detection of Vacuity in
+  Temporal Model Checking.* Formal Methods in System Design 18:141–163, 2001.
+- M. Dwyer, G. Avrunin, J. Corbett. *Property Specification Patterns for
+  Finite-State Verification.* ICSE 1999.
+- B. Meyer. *Object-Oriented Software Construction* (Design by Contract).
+
+---
+
 # Vow Error Catalog
 
 Every Vow error has a machine-readable `error_code` in the JSON output. This document lists all error codes, their phase, meaning, an example trigger, and how to fix them.
@@ -3200,6 +3791,53 @@ fn f() -> i32 {
 **Output:** `function body has type 'bool' but declared return type is 'i32'`
 
 **Fix:** Change the expression or the declared type to match.
+
+### LiteralOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** An integer literal appears in a typed context (annotated `let`, function argument, struct field, or const declaration) whose target type cannot hold the literal's value. The check runs after context coercion, so the offending literal is the one written in the source, not a widened intermediate.
+
+```vow
+let x: u8 = 300;
+const NEG: u16 = -1;
+```
+
+**Output:** `literal 300 does not fit in u8 (range 0..=255)`
+
+**Fix:** Use a value within the target type's range, change the target type, or write an explicit narrowing intrinsic (`i64_to_u8_try`, `i64_to_u8_wrap`, `i64_to_u8_sat`) if you intend to convert a wider value at runtime.
+
+### NarrowingCastNotAllowed
+
+**Phase:** Type Checker
+**Meaning:** The `as` operator was used to convert a wider integer type to a narrower one. `as` is widening-only; narrowing must use a named intrinsic so the agent chooses an explicit semantics (range-checked vs. truncating vs. saturating). See `grammar.md` §Type Cast.
+
+```vow
+fn f(big: i64) -> u8 {
+    big as u8
+}
+```
+
+**Output:** `cannot cast 'i64' to 'u8' via 'as'; use 'i64_to_u8_try', 'i64_to_u8_wrap', or 'i64_to_u8_sat' to choose the narrowing semantics`
+
+**Fix:** Replace the cast with the narrowing intrinsic that matches your intent:
+- `i64_to_u8_try(big) -> Option<u8>` — reject out-of-range with `None`
+- `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
+- `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
+
+### ShiftCountOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** A constant-expression shift count is greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) get a Vow contract on the operation and are checked by ESBMC and at runtime in debug mode.
+
+```vow
+fn f(x: u8) -> u8 {
+    x << 8
+}
+```
+
+**Output:** `shift count 8 is out of range for u8 (max 7)`
+
+**Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
 ### StaticLiteralRequired
 
@@ -3276,6 +3914,39 @@ fn f(o: Option<i64>) -> i64 {
 ```
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
+
+### ImmutableAssignment
+
+**Phase:** Type Checker
+**Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable
+by default; `mut` is required only for whole-binding reassignment `x = e`. Field
+writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.
+
+```vow
+fn f() -> i64 {
+    let x: i64 = 1;
+    x = 2;
+    x
+}
+```
+
+**Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.
+
+### UnusedMut
+
+**Phase:** Type Checker
+**Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only
+whole-binding reassignment counts as a use of `mut` — a binding mutated solely
+via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.
+
+```vow
+fn f() -> i64 {
+    let mut x: i64 = 1;
+    x
+}
+```
+
+**Fix:** Remove `mut`: `let x: i64 = 1;`.
 
 ### UnknownMethod
 
@@ -4088,8 +4759,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "verify_status": {
       "type": "string",
-      "enum": ["timeout", "unknown", "error", "tool_not_found"],
-      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
+      "enum": ["timeout", "unknown", "error", "tool_not_found", "panicked"],
+      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample; \"panicked\" signals the verifier worker thread crashed and the build fails closed)"
     },
     "verify_message": {
       "type": "string",
@@ -4125,7 +4796,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status"],
+        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status", "quality"],
         "properties": {
           "vow_id": {
             "type": "integer",
@@ -4166,8 +4837,17 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "vacuous"],
             "description": "Verification status"
+          },
+          "quality": {
+            "type": "string",
+            "enum": ["weak", "tautological", "substantive"],
+            "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+          },
+          "trivially_satisfiable": {
+            "type": "boolean",
+            "description": "`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -4175,7 +4855,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "quality"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -4184,7 +4864,20 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
-        "skipped": { "type": "integer" }
+        "skipped": { "type": "integer" },
+        "vacuous": { "type": "integer" },
+        "trivially_satisfiable": { "type": "integer" },
+        "quality": {
+          "type": "object",
+          "description": "Static contract-quality tallies independent of verification status",
+          "required": ["weak", "tautological", "substantive"],
+          "properties": {
+            "weak": { "type": "integer" },
+            "tautological": { "type": "integer" },
+            "substantive": { "type": "integer" }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     }
@@ -4266,6 +4959,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "EffectViolation",
         "LinearTypeViolation",
         "NonExhaustiveMatch",
+        "ImmutableAssignment",
+        "UnusedMut",
         "VowRequiresViolated",
         "VowEnsuresViolated",
         "VowInvariantViolated",
@@ -4440,8 +5135,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "name": { "type": "string", "description": "Test name (file stem)" },
         "status": {
           "type": "string",
-          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
-          "description": "Per-test outcome"
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
+          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],
@@ -4569,7 +5264,7 @@ const NEG_ONE: i64 = -1;
 const DEBUG: bool = true;
 ```
 
-Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be `i64`, `i32`, or `bool`. Constants are referenced by name in expressions like any other identifier.
+Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be any of the 10 integer types (`i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64`, `u128`) or `bool`. Integer constants are subject to the same compile-time range check as integer literals. Constants are referenced by name in expressions like any other identifier.
 
 ## Functions
 
@@ -4646,15 +5341,37 @@ pub fn api_function(x: i64) -> i64 {
 
 | Type   | Description              |
 |--------|--------------------------|
+| `i8`   | 8-bit signed integer     |
+| `i16`  | 16-bit signed integer    |
 | `i32`  | 32-bit signed integer    |
 | `i64`  | 64-bit signed integer    |
+| `i128` | 128-bit signed integer (verifier may time out; see below) |
 | `u8`   | 8-bit unsigned integer   |
+| `u16`  | 16-bit unsigned integer  |
+| `u32`  | 32-bit unsigned integer  |
 | `u64`  | 64-bit unsigned integer  |
+| `u128` | 128-bit unsigned integer (verifier may time out; see below) |
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
 | `()`   | Unit type                |
 | `!`    | Never type (diverges)    |
+
+There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`,
+indices are `i64`. This is deliberate — it preserves binary fixed point
+reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
+
+**128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
+`I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
+exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
+verification for functions whose contracts mention 128-bit values while still
+generating native code for them.
+
+**Struct field layout:** every struct field up to 64 bits wide occupies one
+8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
+fields occupy two consecutive 8-byte slots (16 bytes). There is no packing or
+natural-alignment layout today; FFI structs that need a specific C layout must
+shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -4681,9 +5398,29 @@ Structs and enums (see below).
 0
 ```
 
-All unsuffixed integer literals are `i64`. Integer literals coerce to `u64` in annotation context (e.g. `let x: u64 = 42;`).
+Unsuffixed integer literals default to `i64` in expression position, and
+**context-coerce** to any of the 10 integer types when the
+surrounding context fixes one — `let` bindings, function arguments, struct
+fields, and the typed operand of an arithmetic, bitwise, or comparison
+operator. The same coercion applies to constant expressions composed entirely
+of unsuffixed integer literals (e.g. `1 + 2`, `1 << 3`, `-5`).
 
-Suffixed integer literals: `42u64` produces a `u64` value directly.
+Out-of-range literals in a typed context are a compile-time error:
+
+```vow
+let x: u8 = 300;   // error: LiteralOutOfRange — 300 does not fit in u8
+let y: i8 = 200;   // error: LiteralOutOfRange — i8 range is -128..=127
+```
+
+**Suffixed integer literals** force the type at the literal:
+
+```vow
+42u8     42u16     42u32     42u64     42u128
+42i8     42i16     42i32     42i64     42i128
+```
+
+Suffixed forms are supported for all 10 integer widths. They override context
+coercion and are still subject to the same compile-time range check.
 
 ### Float Literals
 
@@ -4763,9 +5500,26 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 | `<<`     | Left shift   |
 | `>>`     | Right shift  |
 
-Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
+Bitwise `& | ^` require integer operands of the same type and work on all 10
+integer widths. `>>` is **arithmetic** (sign-extending) for signed types
+(`i8`..`i128`) and **logical** (zero-extending) for unsigned types
+(`u8`..`u128`).
 
-Unsuffixed integer literals are `i64` by default but coerce to the other operand's integer type when used with a bitwise or shift operator. The same coercion applies to constant expressions composed entirely of unsuffixed integer literals — including arithmetic (`1 + 1`), bitwise (`1 << 3`), and unary negation (`-5`). For example, given `let x: u64 = ...`, the expressions `x << 3`, `3 & x`, and `x << (1 + 1)` all type-check (the literal-constant side coerces to `u64`). This matches the coercion rule already used by arithmetic operators and comparisons. Use a `u64` suffix (`3u64`) to force the `u64` type explicitly.
+**Shift count type.** The right operand of `<<` and `>>` is `u32`. Unsuffixed
+integer literals on the right side context-coerce to `u32`: given
+`let x: u8 = ...`, `x << 3` is well-typed (`3` coerces to `u32`). The left
+operand keeps its own integer type; the shift result has the left operand's
+type.
+
+**Shift count range.** A const-expression shift count `>= bit-width(LHS)` is a
+compile-time error (`ShiftCountOutOfRange`). For example, `(x: u8) << 8` does
+not compile. Dynamic shift counts (`x << n` where `n` is not a const
+expression) get a contract on the operation that ESBMC checks: the count must
+be less than the LHS width at the point of the shift.
+
+Unsuffixed literal coercion still applies for `&`, `|`, `^` operands: with
+`let x: u64 = ...`, `3 & x` and `x | 0xff` type-check because the literal
+side coerces to `u64`. Use a suffix to force a different type explicitly.
 
 ### Logical Operators
 
@@ -4798,14 +5552,56 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 
 ### Type Cast
 
+`as` is **widening-only** across integer types. Any narrower integer can be
+cast to any wider integer; signed sources sign-extend, unsigned sources
+zero-extend:
+
 ```vow
-x as u64    // i64 -> u64
-y as i64    // u64 -> i64
+let a: i32 = -1;
+let b: i64 = a as i64;     // sign-extend: -1_i64
+let c: u8  = 200;
+let d: u64 = c as u64;     // zero-extend: 200_u64
+let e: u32 = 1;
+let f: i64 = e as i64;     // unsigned-to-signed widening, value preserved
 ```
 
-The `as` operator converts between `i64` and `u64`. No implicit conversions: `i64 + u64` is a type error.
+`as` between signed and unsigned of **the same width** is also allowed
+(machine-level bit reinterpretation): `i64 as u64`, `u64 as i64`, `i32 as u32`,
+etc.
 
-In debug mode, out-of-range casts (negative i64 to u64, or u64 > i64::MAX to i64) are no-ops at the machine level (bit reinterpretation). In release mode, the same applies.
+**Narrowing via `as` is a compile-time error** (`NarrowingCastNotAllowed`):
+
+```vow
+let big: i64 = 300;
+let small: u8 = big as u8;     // error — narrowing not allowed via `as`
+```
+
+To narrow, use a named intrinsic that makes the intent explicit. For every
+narrowing pair `(src, tgt)` the compiler exposes three free functions:
+
+| Intrinsic                         | Behavior on out-of-range input          |
+|-----------------------------------|-----------------------------------------|
+| `<src>_to_<tgt>_try(x) -> Option<tgt>` | returns `Option::None`             |
+| `<src>_to_<tgt>_wrap(x) -> tgt`   | truncates (low bits, two's-complement)  |
+| `<src>_to_<tgt>_sat(x) -> tgt`    | clamps to the target type's range       |
+
+Example:
+
+```vow
+let big: i64 = 300;
+match i64_to_u8_try(big) {
+    Option::Some(b) => use_byte(b),
+    Option::None    => fallback(),
+}
+```
+
+These intrinsics are emitted by the compiler so ESBMC sees their semantics
+directly in the verification C model.
+
+No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
+operands must already have the same type. The compiler does not coerce
+across integer types at operator sites — only literals coerce, per the
+[Integer Literals](#integer-literals) rules.
 
 ## Let Bindings
 
@@ -4813,7 +5609,14 @@ In debug mode, out-of-range casts (negative i64 to u64, or u64 > i64::MAX to i64
 
 ```vow
 let x: i64 = 42;
+x = 43;   // error[ImmutableAssignment]: declare it with `let mut x`
 ```
+
+Bindings are immutable by default. Reassigning a binding that was not declared
+`mut` is a compile error (`ImmutableAssignment`). `mut` is required **only** for
+whole-binding reassignment `x = e`; field writes (`s.f = e`) and index writes
+(`v[i] = e`) are permitted through any binding and do not require the base to be
+`mut`.
 
 ### Mutable
 
@@ -4821,6 +5624,11 @@ let x: i64 = 42;
 let mut i: i64 = 0;
 i = i + 1;
 ```
+
+A `let mut` binding that is never reassigned is a compile error (`UnusedMut`) —
+drop the `mut`. Because only whole-binding reassignment counts as a use of `mut`,
+a binding mutated solely via `s.f = e`, `v[i] = e`, or a method call should be
+declared `let`, not `let mut`.
 
 ### Pattern Destructuring
 
@@ -5274,10 +6082,41 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 #### Conversion
 
+**Formatting** uses two baselines; widen via `as` for narrower types:
+
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
-| `parse_i64`      | `fn(s: String) -> i64`                     | `[]`       |
-| `i64_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+| `int_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+| `uint_to_string` | `fn(v: u64) -> String`                     | `[]`       |
+| `i64_to_string`  | `fn(v: i64) -> String` (alias of `int_to_string`) | `[]` |
+
+```vow
+let small: u8 = 42;
+print_str(uint_to_string(small as u64));  // widen then format
+```
+
+**Parsing** exposes a try-form for every integer width:
+
+| Function       | Signature                                |
+|----------------|------------------------------------------|
+| `parse_i8`     | `fn(s: String) -> Option<i8>`            |
+| `parse_i16`    | `fn(s: String) -> Option<i16>`           |
+| `parse_i32`    | `fn(s: String) -> Option<i32>`           |
+| `parse_i64`    | `fn(s: String) -> Option<i64>` (also see `String.parse_i64()`) |
+| `parse_i128`   | `fn(s: String) -> Option<i128>`          |
+| `parse_u8`     | `fn(s: String) -> Option<u8>`            |
+| `parse_u16`    | `fn(s: String) -> Option<u16>`           |
+| `parse_u32`    | `fn(s: String) -> Option<u32>`           |
+| `parse_u64`    | `fn(s: String) -> Option<u64>` (also see `String.parse_u64()`) |
+| `parse_u128`   | `fn(s: String) -> Option<u128>`          |
+
+Each `parse_X` returns `Option::None` for malformed input, empty strings, or
+values outside the target type's range.
+
+**Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
+pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
+`<src>_to_<tgt>_sat` free functions with the semantics described in that
+section.
 
 #### Collections
 
@@ -5463,6 +6302,8 @@ vow contracts [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
+**Exit code.** With `--verify`, `vow contracts` fails closed exactly like `vow build --verify` and `vow verify`: it exits **1** if any contract's `status` is not proven — i.e. any `failed`, `timeout`, `unknown`, `error`, `skipped`, or `vacuous` — and **0** only when every contract is `proven`/`proven-ir`. Without `--verify` every contract is `not_verified` and the command exits 0. (This is independent of the static `quality` classification, which never affects the exit code.)
+
 When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
 ### `vow skill`
@@ -5547,7 +6388,9 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` under the given dire
 | `TestsPassed`  | All tests passed                                  |
 | `TestsFailed`  | One or more tests failed                          |
 
-Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `contract_skipped`, `skipped`.
+
+`contract_skipped` means ESBMC was never invoked because a vowed function is non-modelable (distinct from `verify_failed`, where ESBMC proved a violation). Both are fail-closed — a `contract_skipped` test counts toward `failed` and yields a `TestsFailed` overall status.
 
 ### `vow decl`
 
@@ -5631,7 +6474,7 @@ that path produces `Unverified` (exit 0).
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
-| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
+| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
 
@@ -5703,7 +6546,7 @@ that path produces `Unverified` (exit 0).
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
-| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, or `"tool_not_found"` |
+| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
 ## Contracts Output JSON
@@ -5722,10 +6565,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "not_verified"
+      "status": "not_verified",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0 }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -5741,10 +6585,11 @@ that path produces `Unverified` (exit 0).
       "description": "requires y != 0",
       "blame": "Caller",
       "source": { "file": "divide.vow", "offset": 42 },
-      "status": "proven"
+      "status": "proven",
+      "quality": "substantive"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0 }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0, "vacuous": 0, "trivially_satisfiable": 0, "quality": { "weak": 0, "tautological": 0, "substantive": 1 } }
 }
 ```
 
@@ -5758,7 +6603,9 @@ that path produces `Unverified` (exit 0).
 | `description` | string  | Full contract text                                       |
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
-| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, `"skipped"`, or `"vacuous"` |
+| `quality`     | string  | Static clause-shape classification (no ESBMC): `"weak"`, `"tautological"`, or `"substantive"` |
+| `trivially_satisfiable` | bool | `--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational — never affects the exit code. See `docs/spec/contracts-methodology.md`. |
 
 ### Status Values
 
@@ -5768,10 +6615,21 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
+
+### Quality Values
+
+`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the "proven but trivial" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.
+
+| Quality        | Meaning                                                                                      |
+|----------------|----------------------------------------------------------------------------------------------|
+| `weak`         | An `ensures` that only bounds `result` by an integer literal (e.g. `result >= 0`). Satisfied by almost any implementation. |
+| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
+| `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
 ## Trace Output (stderr, --debug-trace)
 
@@ -6075,7 +6933,7 @@ fn bisect(lo: i64, hi: i64) -> i64 vow {
     requires: hi >= lo
 } {
     let mut lo: i64 = lo;
-    let mut hi: i64 = hi;
+    let hi: i64 = hi;
     while lo + 1 < hi vow {
         invariant: hi - lo >= 0
     } {
@@ -6266,6 +7124,426 @@ The contract applies to all functions declared in the block. ESBMC uses `require
 "#,
         ),
         (
+            r#"reference/contracts-methodology.md"#,
+            r#"# Contract Methodology: What to Verify
+
+This document answers a question that `contracts.md` does not: given a function,
+**which** properties are worth proving, how do you tell a strong contract from a
+hollow one, and how do you express the strong shapes within ESBMC's reach.
+
+`contracts.md` is the *reference* (syntax, blame, the verification pipeline,
+anti-patterns). This is the *methodology* (judgement). Read that first.
+
+## The core principle: strength, not volume
+
+A proven contract is worth nothing if it would also hold for an incorrect
+implementation. The number of contracts a codebase proves is not a quality
+signal — the *discriminating power* of each contract is.
+
+This is measurable. Polikarpova, Furia, Pei, Wei, and Meyer (the originator of
+Design by Contract), *"What Good Are Strong Specifications?"* (ICSE 2013), found
+that testing implementations against **strong** specifications — comprehensive
+functional pre/post/invariants — detected roughly **twice as many bugs** as
+testing against standard/weak contracts. Their conclusion: *"the quality of
+specifications limits the value of verification."*
+
+A concrete Vow example of the trap. Many tag constants in the self-hosted
+compiler carry this contract:
+
+```vow
+fn EFF_IO() -> i64 vow { ensures: result > 0 } { 1 }
+```
+
+ESBMC proves `1 > 0` in milliseconds. But `ensures: result > 0` also holds for
+`{ 2 }`, `{ 99 }`, and every other positive constant — it does not pin the value
+this function is *supposed* to return. It is a real postcondition, but a **weak**
+one: it constrains the output to a half-line, not to a point. Proving 354 of
+these does not make the compiler more correct; it makes the verification report
+longer.
+
+The fix is not "delete contracts" — it is "make each contract say something only
+the correct implementation satisfies."
+
+## A taxonomy of contract shapes
+
+Each shape below lists its *intent*, *when it applies*, a *real Vow example*, and
+*strength notes*. The expressibility/verifiability status of every shape is
+collected in the matrix at the end.
+
+### 1. Domain precondition (range / validity bound)
+
+**Intent:** restrict the inputs the function promises to handle correctly. Blame
+falls on the caller (`requires`).
+
+**When:** the function is only correct on a subset of its parameter types — a byte
+in `0..=255`, a non-zero divisor, an in-bounds index.
+
+```vow
+fn write_u8(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0,
+    requires: v <= 255
+} { out.push(v); }
+```
+
+**Strength:** a precondition is strong when it is the *true* domain of the
+function — no wider (which would admit miscompilation) and no narrower (a
+verifier-driven bound like `requires: n <= 8`, forbidden by `contracts.md`).
+A bounds-check precondition such as `requires: i >= 0, requires: i < v.len()` is
+the standard guard for every indexing operation.
+
+### 2. Output-range postcondition (the weak default — use sparingly)
+
+**Intent:** constrain the result to a range.
+
+**When:** the range *is* the full functional spec — e.g. a function whose only
+guarantee is non-negativity. This is rare. Most uses are the weak trap above.
+
+```vow
+fn item_kind(v: i64) -> i64 vow {
+    requires: v >= 0,
+    ensures: result >= 0          // weak: any non-negative value satisfies this
+} { v / 4294967296 }
+```
+
+**Strength:** weak by default. Reach for shape 3, 4, or 5 instead whenever the
+function actually computes a *specific* value. If you find yourself writing
+`ensures: result >= 0` on a function that returns a computed quantity, ask what
+the result *equals* or *inverts*, and assert that.
+
+### 3. Exact functional postcondition (equality)
+
+**Intent:** pin the result to the value the function is defined to produce.
+
+**When:** the output is a closed-form function of the inputs (arithmetic,
+bit-packing, encodings).
+
+```vow
+fn region_pack(kind: i64, val: i64) -> i64 vow {
+    requires: kind >= 0,
+    requires: kind <= 3,
+    requires: val >= 0,
+    requires: val <= 4294967295,
+    ensures: result == val * 4 + kind     // exact: only the right answer passes
+} { val * 4 + kind }
+```
+
+**Strength:** strong — a wrong shift or offset is caught immediately. Note the
+preconditions are not verifier appeasement: they bound `val` and `kind` so the
+packed result cannot overflow `i64` (a genuine semantic constraint). Contrast
+`region_pack` (exact) with `item_pack`/`item_kind` (shape 2, only `>= 0`): the
+same bit-packing pattern, one specified strongly and one weakly.
+
+### 4. Round-trip / inverse
+
+**Intent:** prove that an encode/decode (or pack/unpack, serialize/deserialize)
+pair compose to the identity on the valid domain.
+
+**When:** two functions are defined as inverses — `pack`/`unpack`,
+`encode`/`decode`, `to_bytes`/`from_bytes`.
+
+Specify each direction with an exact closed-form postcondition — shape 3 applied
+to the extractor as well as the encoder, so the decoder is pinned to the exact
+arithmetic that inverts the pack:
+
+```vow
+fn region_kind(r: i64) -> i64 vow {
+    requires: r >= 0,
+    ensures: result == r - (r / 4) * 4,   // exact extractor
+    ensures: result <= 3
+} { r - (r / 4) * 4 }
+```
+
+Because both directions are pinned to closed forms — `region_pack`'s exact
+`ensures: result == val * 4 + kind` (shape 3 above) and the matching
+`region_kind`/`region_val` extractors — a `region_pack` then
+`region_kind`/`region_val` round-trip recovers `(kind, val)` exactly, and ESBMC
+discharges that composition with no separate assertion. The inverse can also be
+asserted directly: Vow allows pure-function calls in postconditions, so an
+`ensures: region_kind(result) == kind` on `region_pack` is expressible and
+modelable when the partner is pure (matrix shape 4). **Strength:** very strong —
+round-trip is the property a serialization layer must have, and it catches the
+entire class of "encoder and decoder drifted apart" bugs that output-range
+contracts miss completely.
+
+### 5. Dispatch totality (fail-closed decoders)
+
+**Intent:** prove that a decoder/dispatcher maps **every** valid input to a
+defined output and **never** silently falls through to a default.
+
+**When:** a function switches over a tag/opcode/discriminator. This is the
+single highest-value shape for Vow, because silent-fallback normalization
+(mapping an unknown tag to a valid-looking default) is the bug class issue #81
+was filed over.
+
+The pattern has two halves — a validity precondition and an explicit error
+sentinel for the unreachable tail:
+
+```vow
+fn is_valid_binop(op: i64) -> bool { op >= 0 && op <= 22 }
+
+fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
+    requires: is_valid_binop(op)
+} {
+    if op == BINOP_ADD() { return ...; }
+    // ... one arm per valid op ...
+    -1                                    // unreachable under the precondition
+}
+```
+
+**Strength — and a live hardening gap.** The precondition pins the domain, but
+this contract does **not yet prove totality**: nothing asserts the function never
+returns the `-1` sentinel. The strong form adds a postcondition that rules out
+the fallthrough:
+
+```vow
+fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
+    requires: is_valid_binop(op),
+    ensures: result != -1                 // proves every valid op is handled
+} { ... }
+```
+
+With `ensures: result != -1`, ESBMC must show that on every `op` in `0..=22` some
+arm returns before the sentinel — i.e. the dispatch is exhaustive. If an agent
+later adds opcode 23 to `is_valid_binop` but forgets the matching arm,
+verification fails instead of miscompiling. This is the contract that converts a
+silent fallback into a caught error.
+
+The static classifier rates this clause `substantive`, and `vow contracts --verify`'s
+body-replace probe reports it `trivially_satisfiable: true` — both are correct, because
+they measure different things. The probe replaces the body with `return 0` (the `i64`
+default); `0 != -1` holds, so by the definition in **Weakness** (below) this is a *true*
+positive: `ensures: result != -1` does not constrain the op→opcode *mapping* — a constant
+non-sentinel body (`return 5`) satisfies it for every valid `op`. What the clause *does*
+prove is dispatch **totality**: every valid `op` reaches an arm before the `-1` fallthrough
+(delete an arm and verification fails). Totality is the silent-fallback property #81
+targets, and — absent a quantifier to say "result is the correct opcode for `op`" — it is
+the strongest property a `!= sentinel` postcondition can express. So read the
+`trivially_satisfiable: true` as accurate (the clause pins totality, not the mapping), not
+as a probe artifact to dismiss. This is *not* the constant-result false positive noted in
+**Weakness**: `binop_opcode`'s correct result varies per `op`, so it is not genuinely the
+type default.
+
+> Vow has no surface quantifier (`forall i in 0..n`) today, so "covers all valid
+> inputs" is expressed as `requires` (pin the finite domain) + a postcondition
+> that excludes the failure value, letting ESBMC enumerate the finite branch
+> structure. Bounded quantifiers are tracked as a roadmap item (#467/#470).
+
+### 6. Relational / cross-function (uniqueness, agreement)
+
+**Intent:** state a property that spans more than one function or more than one
+argument.
+
+**When:** tags in a family must be distinct; two collections must have equal
+length; a result must relate two inputs.
+
+The argument-relational form is directly expressible:
+
+```vow
+fn build_pairs(ids: Vec<i64>, names: Vec<i64>) -> Vec<Pair> vow {
+    requires: ids.len() == names.len()
+} { ... }
+```
+
+The *cross-function uniqueness* form — "`tok_kw_fn() != tok_kw_let()` for every
+pair in the family" — is expressible only as O(n²) pairwise inequalities, which
+does not scale to dozens of tag constants. **The better fix is structural, not
+contractual:** encode each family as a base+offset range or a generated table so
+uniqueness is a property of the *encoding* rather than something every function
+must restate. Treat a wall of zero-argument tag constants as an API smell that
+shape-6 contracts cannot economically repair.
+
+### 7. Loop invariant / frame
+
+Covered in `contracts.md` (counter bounds, search-range invariants, the
+inductiveness requirement). The methodology point: an invariant is strong when it
+is the property the loop *maintains toward its postcondition*, not merely
+`i >= 0`. See `contracts.md` §Loop Invariants and the worked CEGIS cycle in
+`examples.md`.
+
+## Hollow contracts: three failure modes to detect
+
+A contract can pass verification while proving nothing. There are three distinct
+ways this happens; a contract-quality tool should distinguish them.
+
+### Weakness
+
+The clause is satisfiable and true, but so loose that an incorrect
+implementation also satisfies it (`ensures: result >= 0` on a computed value).
+This is the 354-contract problem.
+
+**Detection (the body-replace probe).** `vow contracts --verify` ships this check
+(#81). It mutates the implementation in the strongest possible way — replaces the
+whole body with a trivial `return <type-default>` — and re-verifies the
+`ensures`. If the contract still proves against that body, a constant-returning
+implementation satisfies it, so it does not constrain the real computation: each
+such `ensures` is reported `trivially_satisfiable: true`. This is exactly the
+`body-replace` mutation of `vowc mutants` with ESBMC as the oracle.
+
+The signal is **one-sided (sound, not complete)**: a `true` verdict is a proof of
+weakness (a specific trivial body satisfies the contract), but a `false` verdict
+does not prove strength — the probe uses a single default value and skips
+non-scalar returns, returned parameters, and φ-merged/branchy results, so it can
+miss weak contracts it cannot witness this way. It is informational and never
+changes the exit code; pair it with the static `quality` field. The one known
+false positive is a function whose correct result genuinely *is* the type default
+(e.g. a constant `ensures result == 0` on a `{ 0 }` body) — an equivalent mutant,
+the standard caveat of mutation testing.
+
+### Tautology
+
+The clause is true independent of the program — `ensures: true`,
+`ensures: result == result`, `ensures: x >= 0 || x < 0`. **Detection:** the clause
+is valid (provable) with the function body removed; a cheap check folds constant
+clauses and flags any clause with no dependence on parameters or `result`.
+
+### Vacuity (antecedent failure)
+
+The clause is proved only because its **preconditions are unsatisfiable**, so the
+path it guards is dead and the postcondition never has to hold. Because Vow
+lowers `requires` to `__ESBMC_assume`, a contradictory or over-strong precondition
+makes *any* `ensures` provable — an assume-false / dead-path proof.
+
+This is the classic vacuity of Beer, Ben-David, Eisner, and Rodeh, *"Efficient
+Detection of Vacuity in Temporal Model Checking"* (Formal Methods in System
+Design, 2001): a subformula is vacuous when replacing it changes nothing about
+the result. Their industrial data is the reason to take it seriously — across
+years of hardware verification at IBM, ~20% of formulas were trivially valid on
+first runs, and trivial validity *always* indicated a real defect in the design,
+spec, or environment.
+
+**Detection (the reachability probe).** `vow contracts --verify` ships this check
+(#81). For any function carrying a `requires`, it re-runs ESBMC over the same
+model with a `vow_reach` label planted immediately after the `requires` assumes,
+under `--error-label vow_reach`. If ESBMC reports the label **unreachable**
+(`VERIFICATION SUCCESSFUL`), the conjoined preconditions are contradictory and
+every `ensures` held only vacuously — all of the function's clauses are reported
+`status: "vacuous"` and the command fails closed. If the label is **reachable**
+(`VERIFICATION FAILED`), the precondition domain is non-empty and the proof is
+live. This is operationally the dual of the classic `ensures: false` re-check —
+asking "is the post-`requires` point reachable?" instead of "does `assert(false)`
+still pass?" — but it needs only one extra run per function and is unaffected by
+body divergence, since the label precedes the body. The label sits after the
+requires prefix rather than at the function end precisely so an unbounded loop or
+an `assume(0)` deeper in the body cannot make it spuriously unreachable.
+
+**Interesting witnesses.** Beer et al. also propose the dual of a counterexample:
+for a proof that holds, emit a non-trivial *witness* — concrete inputs that
+exercise the property for a substantive reason — so the author can confirm the
+proof is not hollow. Vow's structured output is well-suited to carrying a witness
+alongside each `Verified` result.
+
+## When to write contracts
+
+### Builtins and `extern` blocks
+
+Runtime functions (`Vec.push`, `String.from`, `HashMap.insert`) are implemented in
+Rust/C and cannot be verified by ESBMC. Their behavior enters verification through
+the `vow` contract on the `extern "C"` block, which becomes an **assumed**
+(`__ESBMC_assume`) surface for callers. Because these contracts are *assumed, not
+checked*, they are the most dangerous place for an error: a wrong `ensures` on an
+extern block silently weakens every proof that depends on it. Extern contracts
+must be reviewed as assumptions, audited against the runtime implementation, and
+kept minimal. (Omitting the block is a `MissingContract` error — see `errors.md`.)
+
+### Library functions (written in Vow)
+
+Public Vow functions are fully within verification reach. Give each one its true
+domain precondition and the strongest postcondition shape that applies (3–6, not
+2). Add contracts when the function's contract is *known*, which is usually at
+definition time for pure utilities and after the signature stabilizes for APIs.
+
+### Application code (including agent-generated)
+
+Vow's target author is an AI agent, and the failure mode to design against is
+*volume over substance* — an agent emitting many `ensures: result >= 0` clauses
+because the prompt said "add contracts." Skill guidance should push the opposite:
+for each function, identify which shape applies (equality, round-trip, dispatch
+totality, relational) and write that one; prefer one discriminating contract to
+five weak ones. The Specification Pattern System of Dwyer, Avrunin, and Corbett
+(ICSE 1999) — a survey-validated catalog built specifically to turn imprecise
+intent into precise specifications — is the model for guiding an author from "this
+should be valid" to a postcondition that says what *valid* means.
+
+## Expressibility and verifiability matrix
+
+Whether a shape is usable depends on five independent axes, not just "can the
+syntax say it":
+
+- **expressible** — surface Vow has the syntax
+- **typechecked** — the checker validates the clause to `bool` (added in #81 Phase 0)
+- **lowerable** — the lowerer emits IR for the clause
+- **modelable** — the C emitter / ESBMC model supports the operations used
+  (pure, non-effectful helpers only; see `is_modelable` in the C emitter)
+- **backend** — ESBMC actually discharges it within bounds
+
+| Shape | expressible | typechecked | lowerable | modelable | backend |
+|-------|:-----------:|:-----------:|:---------:|:---------:|:-------:|
+| 1. Domain precondition | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 2. Output-range postcond. | ✓ | ✓ | ✓ | ✓ | ✓ (but weak) |
+| 3. Exact equality | ✓ | ✓ | ✓ | ✓ | ✓ within overflow bounds |
+| 4. Round-trip / inverse | ✓ | ✓ | ✓ | ✓ if partner is pure & modelable | ✓ for arithmetic |
+| 5. Dispatch totality | ✓ | ✓ | ✓ | ✓ (pure dispatch) | ✓ over finite domain |
+| 6a. Argument-relational | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 6b. Cross-fn uniqueness | ✓ (O(n²)) | ✓ | ✓ | ✓ | ✓ but unscalable → prefer structural encoding |
+| 7. Loop invariant | ✓ | ✓ | ✓ | ✓ | partial (bounded / k-induction) |
+| Bounded quantifier (`forall i in 0..n`) | ✗ (no surface syntax) | — | — | — | — (roadmap #467/#470) |
+
+Contract expressions must be **pure** — they cannot call effectful functions
+(`grammar.md` §Contract Purity). A property that needs an effectful helper is
+blocked at the *modelable* axis, not the expressible one; classify such gaps as
+model limitations, not contract-language limitations.
+
+## Tooling
+
+`vow contracts --verify` performs the **per-obligation** quality analysis tracked
+in #81 / roadmap WS-3.2. Each clause gets an individual verification verdict (via
+ESBMC `--multi-property`), plus the three quality signals above:
+
+- **Tautology** — the static `quality` field flags constant clauses (no ESBMC).
+- **Vacuity** — a contradictory `requires` is caught by the `--error-label`
+  reachability probe and reported `status: "vacuous"` (fail-closed).
+- **Weakness** — the body-replace probe reports `trivially_satisfiable: true` for
+  an `ensures` a trivial `return <default>` body satisfies (informational).
+
+The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
+status and quality tallies, so an author or CI can gate on hollow proofs.
+
+**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
+quality of the self-hosted compiler's own contracts: it reads
+`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
+exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
+unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
+ratchet down as contracts harden. The dispatch-totality example above
+(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`
+(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)
+are enforced in `compiler/lower.vow` today.
+
+**Tag families are structural, not contracted.** The bulk of the old `weak`
+count was nullary tag constants — `fn IOP_VOW_REQ() -> i64 { 73 }`, the `ITY_*`,
+`EXPR_*`, `BINOP_*`, `RSUM_KIND_*`, … enum families. A per-constant `ensures
+result >= 0` proves nothing: a constant's value is the only fact about it, and
+that fact is structural (each is a distinct literal). So these carry **no**
+contract. Their correctness is established where it matters — at use sites: the
+dispatch-totality contracts above prove every valid tag is handled, the IR
+validator and serializer round-trips exercise every kind, and the binary
+fixed-point bootstrap miscompiles if any two tags collide. Removing the
+contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11
+are genuine parametric functions (the region/span bit-packers and friends) whose
+right contract is a round-trip or enumerated postcondition — the next hardening
+target, not noise.
+
+## References
+
+- N. Polikarpova, C. A. Furia, Y. Pei, Y. Wei, B. Meyer. *What Good Are Strong
+  Specifications?* ICSE 2013. https://arxiv.org/abs/1208.3337
+- I. Beer, S. Ben-David, C. Eisner, Y. Rodeh. *Efficient Detection of Vacuity in
+  Temporal Model Checking.* Formal Methods in System Design 18:141–163, 2001.
+- M. Dwyer, G. Avrunin, J. Corbett. *Property Specification Patterns for
+  Finite-State Verification.* ICSE 1999.
+- B. Meyer. *Object-Oriented Software Construction* (Design by Contract).
+"#,
+        ),
+        (
             r#"reference/errors.md"#,
             r#"# Vow Error Catalog
 
@@ -6338,6 +7616,53 @@ fn f() -> i32 {
 **Output:** `function body has type 'bool' but declared return type is 'i32'`
 
 **Fix:** Change the expression or the declared type to match.
+
+### LiteralOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** An integer literal appears in a typed context (annotated `let`, function argument, struct field, or const declaration) whose target type cannot hold the literal's value. The check runs after context coercion, so the offending literal is the one written in the source, not a widened intermediate.
+
+```vow
+let x: u8 = 300;
+const NEG: u16 = -1;
+```
+
+**Output:** `literal 300 does not fit in u8 (range 0..=255)`
+
+**Fix:** Use a value within the target type's range, change the target type, or write an explicit narrowing intrinsic (`i64_to_u8_try`, `i64_to_u8_wrap`, `i64_to_u8_sat`) if you intend to convert a wider value at runtime.
+
+### NarrowingCastNotAllowed
+
+**Phase:** Type Checker
+**Meaning:** The `as` operator was used to convert a wider integer type to a narrower one. `as` is widening-only; narrowing must use a named intrinsic so the agent chooses an explicit semantics (range-checked vs. truncating vs. saturating). See `grammar.md` §Type Cast.
+
+```vow
+fn f(big: i64) -> u8 {
+    big as u8
+}
+```
+
+**Output:** `cannot cast 'i64' to 'u8' via 'as'; use 'i64_to_u8_try', 'i64_to_u8_wrap', or 'i64_to_u8_sat' to choose the narrowing semantics`
+
+**Fix:** Replace the cast with the narrowing intrinsic that matches your intent:
+- `i64_to_u8_try(big) -> Option<u8>` — reject out-of-range with `None`
+- `i64_to_u8_wrap(big) -> u8` — truncate (keep low bits)
+- `i64_to_u8_sat(big) -> u8` — clamp to `0..=255`
+
+### ShiftCountOutOfRange
+
+**Phase:** Type Checker
+**Meaning:** A constant-expression shift count is greater than or equal to the bit-width of the left operand. Shifting an `N`-bit value by `>= N` bits is undefined in the underlying C model and is rejected at compile time when the count is statically known. Dynamic shift counts (non-const expressions) get a Vow contract on the operation and are checked by ESBMC and at runtime in debug mode.
+
+```vow
+fn f(x: u8) -> u8 {
+    x << 8
+}
+```
+
+**Output:** `shift count 8 is out of range for u8 (max 7)`
+
+**Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
 ### StaticLiteralRequired
 
@@ -6414,6 +7739,39 @@ fn f(o: Option<i64>) -> i64 {
 ```
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
+
+### ImmutableAssignment
+
+**Phase:** Type Checker
+**Meaning:** A binding not declared `mut` was reassigned. Bindings are immutable
+by default; `mut` is required only for whole-binding reassignment `x = e`. Field
+writes (`s.f = e`) and index writes (`v[i] = e`) are allowed through any binding.
+
+```vow
+fn f() -> i64 {
+    let x: i64 = 1;
+    x = 2;
+    x
+}
+```
+
+**Fix:** Declare the binding `mut`: `let mut x: i64 = 1;`.
+
+### UnusedMut
+
+**Phase:** Type Checker
+**Meaning:** A `let mut` binding is never reassigned, so the `mut` is dead. Only
+whole-binding reassignment counts as a use of `mut` — a binding mutated solely
+via `s.f = e`, `v[i] = e`, or a method call does not need `mut`.
+
+```vow
+fn f() -> i64 {
+    let mut x: i64 = 1;
+    x
+}
+```
+
+**Fix:** Remove `mut`: `let x: i64 = 1;`.
 
 ### UnknownMethod
 
@@ -7223,8 +8581,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "verify_status": {
       "type": "string",
-      "enum": ["timeout", "unknown", "error", "tool_not_found"],
-      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
+      "enum": ["timeout", "unknown", "error", "tool_not_found", "panicked"],
+      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample; \"panicked\" signals the verifier worker thread crashed and the build fails closed)"
     },
     "verify_message": {
       "type": "string",
@@ -7259,7 +8617,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status"],
+        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status", "quality"],
         "properties": {
           "vow_id": {
             "type": "integer",
@@ -7300,8 +8658,17 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "vacuous"],
             "description": "Verification status"
+          },
+          "quality": {
+            "type": "string",
+            "enum": ["weak", "tautological", "substantive"],
+            "description": "Static, no-ESBMC classification of the clause shape: weak (an ensures that only bounds result by a constant), tautological (constant clause that says nothing), or substantive (equality/relational/inverse/call). See contracts-methodology.md"
+          },
+          "trivially_satisfiable": {
+            "type": "boolean",
+            "description": "`--verify` only: true when a trivial `return <default>` body still satisfies this `ensures` (verification-confirmed weakness). Always false for `requires`/`invariant` and without `--verify`. Informational; never affects the exit code. See contracts-methodology.md"
           }
         },
         "additionalProperties": false
@@ -7309,7 +8676,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped", "quality"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -7318,7 +8685,20 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
         "not_verified": { "type": "integer" },
-        "skipped": { "type": "integer" }
+        "skipped": { "type": "integer" },
+        "vacuous": { "type": "integer" },
+        "trivially_satisfiable": { "type": "integer" },
+        "quality": {
+          "type": "object",
+          "description": "Static contract-quality tallies independent of verification status",
+          "required": ["weak", "tautological", "substantive"],
+          "properties": {
+            "weak": { "type": "integer" },
+            "tautological": { "type": "integer" },
+            "substantive": { "type": "integer" }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     }
@@ -7398,6 +8778,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "EffectViolation",
         "LinearTypeViolation",
         "NonExhaustiveMatch",
+        "ImmutableAssignment",
+        "UnusedMut",
         "VowRequiresViolated",
         "VowEnsuresViolated",
         "VowInvariantViolated",
@@ -7570,8 +8952,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "name": { "type": "string", "description": "Test name (file stem)" },
         "status": {
           "type": "string",
-          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
-          "description": "Per-test outcome"
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
+          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],
@@ -7858,7 +9240,9 @@ pub struct CeCallSite {
 
 enum VerifyOutcome {
     /// ESBMC not invoked (`--no-verify`); maps to `BuildStatus::Unverified` (exit 0).
-    Skipped,
+    /// Named `NotRun` (not `Skipped`) to avoid colliding with `SkippedNonModelable`,
+    /// which has the opposite exit code.
+    NotRun,
     /// ESBMC ran but ≥1 vowed function non-modelable; maps to `BuildStatus::Skipped` (exit 1).
     SkippedNonModelable,
     Proven,
@@ -8010,6 +9394,18 @@ pub struct ContractEntryJson {
     pub blame: String,
     pub source: ContractSourceJson,
     pub status: String,
+    /// Static quality classification of the clause shape (no ESBMC): one of
+    /// `weak` (an `ensures` that only bounds `result` by a constant),
+    /// `tautological` (constant clause that says nothing about the program),
+    /// or `substantive` (equality / relational / inverse / call). See
+    /// docs/spec/contracts-methodology.md.
+    pub quality: String,
+    /// Verification-based weakness signal (#81 PR-C): true when a trivial
+    /// `return <default>` body still satisfies this `ensures` — the contract is
+    /// too weak to pin down the implementation. Only computed for `ensures`
+    /// clauses under `--verify`; always false for `requires`/`invariant` and
+    /// when `--verify` is off. Informational: it does not affect the exit code.
+    pub trivially_satisfiable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -8028,6 +9424,19 @@ pub struct ContractsSummaryJson {
     pub error: u32,
     pub not_verified: u32,
     pub skipped: u32,
+    pub vacuous: u32,
+    /// Count of `ensures` clauses a trivial `return <default>` body satisfies
+    /// (#81 PR-C). Informational, like `quality`; does not affect the exit code.
+    pub trivially_satisfiable: u32,
+    pub quality: ContractsQualityJson,
+}
+
+/// Static contract-quality tallies (independent of verification status).
+#[derive(Debug, Clone, Serialize)]
+pub struct ContractsQualityJson {
+    pub weak: u32,
+    pub tautological: u32,
+    pub substantive: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -8979,7 +10388,7 @@ fn verify_outcome_to_output_with_skipped(
             Some("error".to_string()),
             Some(message),
         ),
-        VerifyOutcome::Skipped => (BuildStatus::Unverified, vec![], None, None),
+        VerifyOutcome::NotRun => (BuildStatus::Unverified, vec![], None, None),
         VerifyOutcome::SkippedNonModelable => (BuildStatus::Skipped, vec![], None, None),
         VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
         VerifyOutcome::ToolNotFound => {
@@ -9138,6 +10547,31 @@ fn run_pipeline_inner(
     )
 }
 
+/// Fail-closed result for a panicked verifier worker (`join()` → `Err`). A
+/// verifier crash leaves verification in an unknown state, so the build must
+/// report `VerifyFailed` (exit 1) and withhold the executable — never the silent
+/// `Unverified`/exit-0 of the old `.unwrap_or((Skipped, _))` fallback (#413).
+/// The linked binary is removed so no executable masquerades as built.
+fn verifier_panicked_output(
+    diagnostics: Vec<Diagnostic>,
+    executable: Option<PathBuf>,
+) -> BuildOutput {
+    if let Some(path) = &executable {
+        let _ = std::fs::remove_file(path);
+    }
+    BuildOutput {
+        status: BuildStatus::VerifyFailed {
+            function: String::new(),
+            description: "verification thread panicked".to_string(),
+        },
+        executable: None,
+        diagnostics,
+        counterexamples: vec![],
+        verify_status: Some("panicked".to_string()),
+        verify_message: Some("verification thread panicked".to_string()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_pipeline_from_frontend(
     frontend: FrontendBundle,
@@ -9172,8 +10606,15 @@ fn run_pipeline_from_frontend(
         };
     }
 
-    // Upfront ESBMC check: abort before codegen if verification is requested but ESBMC is missing
-    if !no_verify && find_esbmc().is_none() {
+    // Upfront ESBMC check: abort before codegen if verification is requested but ESBMC is missing.
+    // The test-only VOW_TEST_VERIFIER_PANIC hook lives in the verify worker thread below, so on a
+    // machine without ESBMC this early return would short-circuit before the worker is ever spawned
+    // — making the panic regression test (#413) depend on an installed verifier. When the hook is
+    // armed, skip the early return so the worker runs and panics, exercising the real JoinError
+    // path. The env var is never set in production, and `var_os` is only reached once ESBMC is
+    // already known to be absent, so the happy path is unchanged.
+    if !no_verify && find_esbmc().is_none() && std::env::var_os("VOW_TEST_VERIFIER_PANIC").is_none()
+    {
         return verify_outcome_to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
     }
 
@@ -9190,7 +10631,13 @@ fn run_pipeline_from_frontend(
     let verify_config = *config;
     let verify_handle = thread::spawn(move || -> (VerifyOutcome, Vec<SkippedFunction>) {
         if no_verify {
-            return (VerifyOutcome::Skipped, Vec::new());
+            return (VerifyOutcome::NotRun, Vec::new());
+        }
+        // Test-only fault injection: simulate a verifier-worker crash so the
+        // fail-closed JoinError path (#413) is exercised end-to-end. Guarded by
+        // an env var that is never set in production; one lookup per build.
+        if std::env::var_os("VOW_TEST_VERIFIER_PANIC").is_some() {
+            panic!("injected verifier panic (VOW_TEST_VERIFIER_PANIC)");
         }
         run_verification_sync(
             &module_for_verify,
@@ -9245,9 +10692,10 @@ fn run_pipeline_from_frontend(
                 };
             }
         };
-        let (verify_outcome, skipped) = verify_handle
-            .join()
-            .unwrap_or((VerifyOutcome::Skipped, Vec::new()));
+        let (verify_outcome, skipped) = match verify_handle.join() {
+            Ok(result) => result,
+            Err(_) => return verifier_panicked_output(all_diagnostics, exe_path),
+        };
         return verify_outcome_to_output_with_skipped(
             verify_outcome,
             all_diagnostics,
@@ -9315,9 +10763,10 @@ fn run_pipeline_from_frontend(
         }
     };
 
-    let (verify_outcome, skipped) = verify_handle
-        .join()
-        .unwrap_or((VerifyOutcome::Skipped, Vec::new()));
+    let (verify_outcome, skipped) = match verify_handle.join() {
+        Ok(result) => result,
+        Err(_) => return verifier_panicked_output(all_diagnostics, exe_path),
+    };
     verify_outcome_to_output_with_skipped(verify_outcome, all_diagnostics, &skipped, exe_path)
 }
 
@@ -9527,10 +10976,19 @@ fn run_test_command(
                 continue;
             }
             BuildStatus::VerifyFailed { .. } | BuildStatus::Skipped => {
+                // `Skipped` (≥1 vowed function non-modelable, ESBMC never run)
+                // is reported as `contract_skipped` so consumers can tell it
+                // apart from `verify_failed` (ESBMC proved a violation). Both
+                // are fail-closed — see the `failed` tally below (#386).
+                let status = if matches!(result.status, BuildStatus::Skipped) {
+                    "contract_skipped"
+                } else {
+                    "verify_failed"
+                };
                 entries.push(TestEntry {
                     file: file_str,
                     name,
-                    status: "verify_failed".to_string(),
+                    status: status.to_string(),
                     exit_code: None,
                     stdout: String::new(),
                     stderr: String::new(),
@@ -9657,7 +11115,7 @@ fn run_test_command(
         .filter(|e| {
             matches!(
                 e.status.as_str(),
-                "failed" | "compile_error" | "verify_failed"
+                "failed" | "compile_error" | "verify_failed" | "contract_skipped"
             )
         })
         .count();
@@ -9803,6 +11261,86 @@ fn vow_kind_from_description(desc: &str) -> &'static str {
     }
 }
 
+/// Strip the leading `requires`/`ensures`/`invariant` keyword from a clause
+/// description, leaving the predicate text. `clause_description` formats every
+/// vow as `"{kind} {printed_expr}"`, so the predicate is everything after the
+/// first space.
+fn contract_predicate_text(description: &str) -> &str {
+    match description.split_once(' ') {
+        Some((_, rest)) => rest.trim(),
+        None => "",
+    }
+}
+
+/// Static, no-ESBMC quality classification of a contract clause by shape.
+/// See docs/spec/contracts-methodology.md for the methodology this implements.
+///
+/// - `tautological`: the predicate is the constant `true` or references no
+///   program value at all (e.g. `0 >= 0`) — it constrains nothing. A `false`
+///   predicate is a contradiction, not a tautology, so it is left `substantive`
+///   here; flagging it as vacuous is the deferred `false` re-check.
+/// - `weak`: an `ensures` that only bounds `result` by an integer literal on
+///   one side (e.g. `result >= 0`, `result > 0`, `result <= 3`). Satisfiable by
+///   almost any implementation — the 354-contract trap #81 was filed over.
+/// - `substantive`: everything else (equality, relational, inverse, calls).
+///
+/// The classifier is deliberately conservative: anything it cannot prove weak
+/// is reported `substantive`, so it never over-flags a meaningful contract.
+fn classify_contract_quality(kind: &str, description: &str) -> &'static str {
+    let p = contract_predicate_text(description);
+    if p.is_empty() || p == "true" || !p.chars().any(|c| c.is_ascii_alphabetic()) {
+        return "tautological";
+    }
+    if kind == "ensures" && is_weak_result_bound(p) {
+        return "weak";
+    }
+    "substantive"
+}
+
+/// True when `pred` is a single ordering comparison between `result` and an
+/// integer literal — the weak postcondition shape. Compound predicates,
+/// equalities, and calls are excluded (they are potentially substantive).
+fn is_weak_result_bound(pred: &str) -> bool {
+    if pred.contains("&&")
+        || pred.contains("||")
+        || pred.contains("==")
+        || pred.contains("!=")
+        || pred.contains('(')
+    {
+        return false;
+    }
+    for op in ["<=", ">="] {
+        if let Some((lhs, rhs)) = pred.split_once(op) {
+            return is_weak_result_comparison(lhs, rhs);
+        }
+    }
+    for op in ['<', '>'] {
+        if let Some((lhs, rhs)) = pred.split_once(op) {
+            return is_weak_result_comparison(lhs, rhs);
+        }
+    }
+    false
+}
+
+fn is_weak_result_comparison(lhs: &str, rhs: &str) -> bool {
+    let lhs = lhs.trim();
+    let rhs = rhs.trim();
+    // Reject anything with a second comparison operator on either side.
+    if has_ordering_op(lhs) || has_ordering_op(rhs) {
+        return false;
+    }
+    (lhs == "result" && is_int_literal(rhs)) || (rhs == "result" && is_int_literal(lhs))
+}
+
+fn has_ordering_op(s: &str) -> bool {
+    s.contains('<') || s.contains('>')
+}
+
+fn is_int_literal(s: &str) -> bool {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJson {
     let mut summary = ContractsSummaryJson {
         total: entries.len() as u32,
@@ -9813,8 +11351,18 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
         error: 0,
         not_verified: 0,
         skipped: 0,
+        vacuous: 0,
+        trivially_satisfiable: 0,
+        quality: ContractsQualityJson {
+            weak: 0,
+            tautological: 0,
+            substantive: 0,
+        },
     };
     for e in entries {
+        if e.trivially_satisfiable {
+            summary.trivially_satisfiable += 1;
+        }
         match e.status.as_str() {
             "proven" | "proven-ir" => summary.proven += 1,
             "failed" => summary.failed += 1,
@@ -9822,7 +11370,13 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
             "timeout" => summary.timeout += 1,
             "error" => summary.error += 1,
             "skipped" => summary.skipped += 1,
+            "vacuous" => summary.vacuous += 1,
             _ => summary.not_verified += 1,
+        }
+        match e.quality.as_str() {
+            "weak" => summary.quality.weak += 1,
+            "tautological" => summary.quality.tautological += 1,
+            _ => summary.quality.substantive += 1,
         }
     }
     summary
@@ -9831,7 +11385,6 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
 fn update_contract_statuses(
     entries: &mut [ContractEntryJson],
     ir_module: &vow_ir::Module,
-    verify_cache: Option<&VerifyCache>,
     limits: &VerifyLimits,
     config: &SolverConfig,
 ) {
@@ -9850,100 +11403,95 @@ fn update_contract_statuses(
             continue;
         }
 
-        let result = if let Some(vc) = verify_cache {
-            let c_src = emit_verify_c_source(func, ir_module, &const_fns, limits);
-            let key = VerifyCache::cache_key(
-                &c_src,
-                limits.max_k_step,
-                config.solver_str(),
-                config.encoding_str(),
-                config.memlimit_mb,
-            );
-
-            // Security: lookup only returns FAILED (PROVEN is never trusted
-            // from disk); the Phase D IR-fallback probe consumed only cached
-            // PROVEN and is removed since that path can never hit.
-            if let Some(cached) = vc.lookup(&key) {
-                VerificationResult::Failed(cached.to_counterexample())
-            } else {
-                let esbmc = match find_esbmc() {
-                    Some(p) => p,
-                    None => {
-                        for entry in entries.iter_mut() {
-                            if entry.function_id == func.id.0 {
-                                entry.status = "error".to_string();
-                            }
-                        }
-                        continue;
-                    }
-                };
-                let (res, resolved_config) =
-                    run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, config);
-                // Security: never cache PROVEN.
-                if let VerificationResult::Failed(ce) = &res {
-                    let store_key = VerifyCache::cache_key(
-                        &c_src,
-                        limits.max_k_step,
-                        resolved_config.solver_str(),
-                        resolved_config.encoding_str(),
-                        resolved_config.memlimit_mb,
-                    );
-                    vc.store(
-                        &store_key,
-                        &CachedFailure {
-                            vow_id: ce.vow_id,
-                            description: ce.description.clone(),
-                            values: ce.values.clone(),
-                            block_visits: ce.block_visits.clone(),
-                            raw_output: ce.raw_output.clone(),
-                        },
-                    );
-                }
-                res
-            }
-        } else {
-            verify_function_with_module_and_const_fns_configured(
-                func,
-                ir_module,
-                &const_fns,
-                limits.max_k_step,
-                config,
-                limits,
-            )
-        };
-
-        for entry in entries.iter_mut() {
-            if entry.function_id == func.id.0 {
-                match &result {
-                    VerificationResult::Proven => {
-                        entry.status = "proven".to_string();
-                    }
-                    VerificationResult::ProvenIr => {
-                        entry.status = "proven-ir".to_string();
-                    }
-                    VerificationResult::Failed(ce) => {
-                        if ce.vow_id == Some(entry.vow_id) {
-                            entry.status = "failed".to_string();
-                        } else {
-                            entry.status = "unknown".to_string();
-                        }
-                    }
-                    VerificationResult::Timeout => {
-                        entry.status = "timeout".to_string();
-                    }
-                    VerificationResult::Unknown { .. } => {
-                        entry.status = "unknown".to_string();
-                    }
-                    VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => {
+        let esbmc = match find_esbmc() {
+            Some(p) => p,
+            None => {
+                for entry in entries.iter_mut() {
+                    if entry.function_id == func.id.0 {
                         entry.status = "error".to_string();
                     }
-                    VerificationResult::Skipped { .. } => {
-                        entry.status = "skipped".to_string();
-                    }
+                }
+                continue;
+            }
+        };
+        let c_src = emit_verify_c_source(func, ir_module, &const_fns, limits);
+        // Per-clause status via ESBMC `--multi-property`: every `vow:N` claim is
+        // reported individually, so each contract clause gets a precise verdict
+        // instead of the siblings of a failed clause collapsing to `unknown`
+        // (#81 PR-A). The single-counterexample verify cache is bypassed on this
+        // path; precise per-clause status, not throughput, is the goal here.
+        let (overall, verdicts) =
+            run_esbmc_multi_property(&esbmc, &c_src, limits.max_k_step, &func.name, config);
+
+        for entry in entries.iter_mut() {
+            if entry.function_id != func.id.0 {
+                continue;
+            }
+            entry.status = match verdicts.get(&entry.vow_id) {
+                Some(true) => "proven",
+                Some(false) => "failed",
+                None => match &overall {
+                    VerificationResult::Proven | VerificationResult::ProvenIr => "proven",
+                    VerificationResult::Timeout => "timeout",
+                    VerificationResult::Unknown { .. } => "unknown",
+                    VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => "error",
+                    VerificationResult::Skipped { .. } => "skipped",
+                    // Overall verification failed but ESBMC did not report this
+                    // specific clause individually — genuinely undecided.
+                    VerificationResult::Failed(_) => "unknown",
+                },
+            }
+            .to_string();
+        }
+
+        // Vacuity probe (#81 PR-B): if the function's `requires` are
+        // contradictory, the `ensures` above all passed vacuously. Re-run with a
+        // `vow_reach` label planted after the requires; if that point is
+        // unreachable (ESBMC SUCCESSFUL), the whole contract is vacuous —
+        // override the misleading `proven`s with `vacuous`. Only functions with
+        // a `requires` are eligible (emit_reach_c_source returns None otherwise),
+        // so this adds at most one extra ESBMC run per such function.
+        if let Some(reach_src) = emit_reach_c_source(func, ir_module, &const_fns, limits)
+            && run_esbmc_reach(&esbmc, &reach_src, limits.max_k_step, &func.name, config)
+                == ReachVerdict::Vacuous
+        {
+            for entry in entries.iter_mut() {
+                if entry.function_id == func.id.0 {
+                    entry.status = "vacuous".to_string();
+                }
+            }
+        }
+
+        // Weakness probe (#81 PR-C): re-verify a body-replaced model where the
+        // returned value is forced to the type-default. If the `ensures` still
+        // holds, a trivial `return <default>` body satisfies the contract — it
+        // is too weak to pin down the implementation. Marks each `ensures` clause
+        // `trivially_satisfiable` (informational; never changes the exit code).
+        // Skipped for non-scalar returns / returned-parameter results, which
+        // keeps the signal one-sided — it never claims weakness it cannot show.
+        if let Some(br_src) = emit_bodyreplace_c_source(func, ir_module, &const_fns, limits)
+            && run_esbmc_bodyreplace(&esbmc, &br_src, limits.max_k_step, &func.name, config)
+        {
+            for entry in entries.iter_mut() {
+                if entry.function_id == func.id.0 && entry.kind == "ensures" {
+                    entry.trivially_satisfiable = true;
                 }
             }
         }
     }
+}
+
+/// `vow contracts --verify` fails closed when any contract is not proven —
+/// the same fail-closed set as `vow build --verify` / `vow verify` (#479).
+/// `proven` / `proven-ir` / `not_verified` pass; failed/timeout/unknown/error/
+/// skipped fail.
+fn contracts_summary_has_failure(summary: &ContractsSummaryJson) -> bool {
+    summary.failed > 0
+        || summary.timeout > 0
+        || summary.unknown > 0
+        || summary.error > 0
+        || summary.skipped > 0
+        || summary.vacuous > 0
 }
 
 fn run_contracts_command(
@@ -9973,6 +11521,7 @@ fn run_contracts_command(
                 vow_diag::Blame::Callee => "Callee",
                 vow_diag::Blame::None => "None",
             };
+            let quality = classify_contract_quality(kind, &vow.description);
             entries.push(ContractEntryJson {
                 vow_id: vow.id.0,
                 function: func.name.clone(),
@@ -9985,6 +11534,8 @@ fn run_contracts_command(
                     offset: vow.offset,
                 },
                 status: "not_verified".to_string(),
+                quality: quality.to_string(),
+                trivially_satisfiable: false,
             });
         }
     }
@@ -9997,18 +11548,21 @@ fn run_contracts_command(
             }
             exit_code = 1;
         } else {
-            let verify_cache = if no_cache { None } else { VerifyCache::new() };
-            update_contract_statuses(
-                &mut entries,
-                ir_module,
-                verify_cache.as_ref(),
-                limits,
-                config,
-            );
+            // The per-clause `--multi-property` path runs ESBMC fresh and never
+            // consults the verify cache, so don't construct it — `VerifyCache::new()`
+            // would create the on-disk cache dir on every `vow contracts --verify`.
+            // `--no-cache` is therefore already the de facto behavior on this path.
+            let _ = no_cache;
+            update_contract_statuses(&mut entries, ir_module, limits, config);
         }
     }
 
     let summary = build_contracts_summary(&entries);
+    // Fail closed: `vow contracts --verify` exits non-zero when any contract is
+    // not proven, matching `vow build --verify` / `vow verify` (#479).
+    if contracts_summary_has_failure(&summary) {
+        exit_code = 1;
+    }
     let result = ContractsResultJson {
         contracts: entries,
         summary,
@@ -10516,7 +12070,7 @@ fn bisect(lo: i64, hi: i64) -> i64 vow {
   requires: hi >= lo
 } {
   let mut lo: i64 = lo;
-  let mut hi: i64 = hi;
+  let hi: i64 = hi;
   while lo + 1 < hi vow {
     invariant: hi - lo >= 0
   } {
@@ -10833,6 +12387,34 @@ fn main() -> i32 [io] {
         let lang = &parsed["language"];
         assert!(lang["builtins"]["print_i64"].is_string());
         assert!(lang["builtins"]["print_str"].is_string());
+        for name in [
+            "parse_i8",
+            "parse_i16",
+            "parse_i32",
+            "parse_i64",
+            "parse_i128",
+            "parse_u8",
+            "parse_u16",
+            "parse_u32",
+            "parse_u64",
+            "parse_u128",
+        ] {
+            assert!(
+                lang["builtins"].get(name).is_none(),
+                "unexpected unimplemented builtin {name}"
+            );
+        }
+        let string_methods = lang["methods"]["String"].as_array().unwrap();
+        assert!(
+            string_methods
+                .iter()
+                .any(|method| method.as_str() == Some(".parse_i64()"))
+        );
+        assert!(
+            string_methods
+                .iter()
+                .any(|method| method.as_str() == Some(".parse_u64()"))
+        );
         assert!(lang["types"].to_string().contains("String"));
         assert!(lang["types"].to_string().contains("Vec<T>"));
         assert!(lang["types"].to_string().contains("Option<T>"));
@@ -11099,7 +12681,7 @@ pub fn sum(v: Vec<i64>) -> i64 {
 }
 
 pub fn main() -> i32 {
-    let mut nums: Vec<i64> = Vec::new();
+    let nums: Vec<i64> = Vec::new();
     nums.push(10);
     nums.push(20);
     nums.push(30);
@@ -11127,7 +12709,7 @@ pub fn sum_coords(p: Point) -> i64 {
 pub fn main() -> i32 {
     let p = Point { x: 3, y: 4 };
     let s = sum_coords(p);
-    let mut v: Vec<i64> = Vec::new();
+    let v: Vec<i64> = Vec::new();
     v.push(s);
     let n = v.len();
     0
@@ -11158,7 +12740,7 @@ pub fn main() -> i32 [io] {
         let src = r#"module MapTest
 
 pub fn main() -> i32 {
-    let mut m: HashMap<i64, i64> = HashMap::new();
+    let m: HashMap<i64, i64> = HashMap::new();
     m.insert(1, 10);
     m.insert(2, 20);
     m.insert(3, 30);
@@ -13674,10 +15256,13 @@ fn main() -> i32 {
             function: "f".to_string(),
             function_id: 0,
             kind: "ensures".to_string(),
-            description: "ensures: true".to_string(),
+            // Description must agree with the hard-coded `quality` below.
+            description: "ensures: result == x".to_string(),
             blame: "callee".to_string(),
             source: source.clone(),
             status: status.to_string(),
+            quality: "substantive".to_string(),
+            trivially_satisfiable: false,
         };
         let summary = build_contracts_summary(&[
             entry("proven"),
@@ -13698,6 +15283,138 @@ fn main() -> i32 {
         assert_eq!(summary.error, 1);
         assert_eq!(summary.skipped, 1);
         assert_eq!(summary.not_verified, 1);
+        assert_eq!(summary.quality.substantive, 8);
+        assert_eq!(summary.quality.weak, 0);
+        assert_eq!(summary.quality.tautological, 0);
+    }
+
+    #[test]
+    fn contracts_fail_closed_on_unproven_statuses() {
+        let all_proven = ContractsSummaryJson {
+            total: 1,
+            proven: 1,
+            failed: 0,
+            unknown: 0,
+            timeout: 0,
+            error: 0,
+            not_verified: 0,
+            skipped: 0,
+            vacuous: 0,
+            trivially_satisfiable: 0,
+            quality: ContractsQualityJson {
+                weak: 0,
+                tautological: 0,
+                substantive: 1,
+            },
+        };
+        // All proven, or unverified (no --verify) → pass (exit 0).
+        assert!(!contracts_summary_has_failure(&all_proven));
+        assert!(!contracts_summary_has_failure(&ContractsSummaryJson {
+            proven: 0,
+            not_verified: 1,
+            ..all_proven.clone()
+        }));
+        // Every not-proven status fails closed (matches `vow build --verify`).
+        for failing in [
+            ContractsSummaryJson {
+                failed: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                timeout: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                unknown: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                error: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                skipped: 1,
+                ..all_proven.clone()
+            },
+            ContractsSummaryJson {
+                vacuous: 1,
+                ..all_proven.clone()
+            },
+        ] {
+            assert!(contracts_summary_has_failure(&failing));
+        }
+    }
+
+    #[test]
+    fn classify_contract_quality_flags_weak_result_bounds() {
+        // The 354-contract trap: an ensures that only bounds result by a constant.
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result >= 0"),
+            "weak"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result > 0"),
+            "weak"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result <= 3"),
+            "weak"
+        );
+        // result vs negative literal is still a constant bound.
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result >= -1"),
+            "weak"
+        );
+        // Strict single-char operator path (`<`, not `<=`).
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result < 3"),
+            "weak"
+        );
+    }
+
+    #[test]
+    fn classify_contract_quality_keeps_substantive_clauses() {
+        // Equality, relational, inverse, totality, and call shapes are not weak.
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result == val * 4 + kind"),
+            "substantive"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result != -1"),
+            "substantive"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures result >= a"),
+            "substantive"
+        );
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures item_kind(result) == kind"),
+            "substantive"
+        );
+        // A one-sided bound is a legitimate precondition, not a weak postcondition.
+        assert_eq!(
+            classify_contract_quality("requires", "requires v <= 255"),
+            "substantive"
+        );
+        // A `false` predicate is a contradiction, not a tautology; the static
+        // classifier leaves it substantive (vacuity detection is a follow-up).
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures false"),
+            "substantive"
+        );
+    }
+
+    #[test]
+    fn classify_contract_quality_flags_tautologies() {
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures true"),
+            "tautological"
+        );
+        // No reference to any program value — constant comparison.
+        assert_eq!(
+            classify_contract_quality("ensures", "ensures 0 >= 0"),
+            "tautological"
+        );
     }
 
     #[test]

@@ -75,8 +75,9 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: pmatos/vow-lang
+          slug: vow-lang/vow
           files: lcov.info
+          fail_ci_if_error: true
 
   bootstrap:
     # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression

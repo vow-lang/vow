@@ -18,7 +18,7 @@ program or contract, and repeat until the result is `Verified`.
 
 ## Installed toolchain (live)
 
-!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200)`
+!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200) || echo '(vow toolchain not found on PATH; run scripts/bootstrap.sh to build build/vowc)'`
 
 ## Core workflow
 
@@ -43,6 +43,7 @@ fn main() -> i32 [io] {
 - Grammar, types, effects, builtins: [reference/grammar.md](reference/grammar.md)
 - CLI commands, flags, JSON output: [reference/cli.md](reference/cli.md)
 - Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)
+- Which contracts to write (taxonomy & strength): [reference/contracts-methodology.md](reference/contracts-methodology.md)
 - Diagnostics and fixes: [reference/errors.md](reference/errors.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
 - JSON schemas: [schemas/](schemas/)

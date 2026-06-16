@@ -1,0 +1,17 @@
+// TEST: error-code UnusedMut
+// TEST: stderr "never reassigned"
+// Scope A: a method call (`v.push`) is not a whole-binding reassignment, so a
+// `let mut` used only that way is UnusedMut. Pins the exact rule that broke
+// examples/stack/stack.vow under #735.
+module UnusedMutMethod
+
+fn build() -> i64 {
+  let mut v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.len()
+}
+
+fn main() -> i32 {
+  let n: i64 = build();
+  0
+}

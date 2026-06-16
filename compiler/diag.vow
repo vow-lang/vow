@@ -37,6 +37,8 @@ fn EC_BTREEMAP_VALUE_MUST_BE_NON_LINEAR() -> i64 { 22 }
 fn EC_REGION_ROOT_ESCAPE() -> i64 { 23 }
 fn EC_STATIC_LITERAL_REQUIRED() -> i64 { 24 }
 fn EC_REGION_LITERAL_MUTATION() -> i64 { 25 }
+fn EC_IMMUTABLE_ASSIGNMENT() -> i64 { 26 }
+fn EC_UNUSED_MUT() -> i64 { 27 }
 
 struct Diagnostic {
     severity: i64,
@@ -243,8 +245,14 @@ fn ec_name(code: i64) -> String {
     if code == EC_REGION_ROOT_ESCAPE() {
         String::from("RegionRootEscape")
     } else {
+    if code == EC_IMMUTABLE_ASSIGNMENT() {
+        String::from("ImmutableAssignment")
+    } else {
+    if code == EC_UNUSED_MUT() {
+        String::from("UnusedMut")
+    } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {

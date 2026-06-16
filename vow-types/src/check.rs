@@ -7,7 +7,7 @@ use vow_syntax::ast::{
 };
 use vow_syntax::span::Span;
 
-use crate::env::{EnumInfo, FnSig, StructInfo, TypeEnv, VariantInfo, VariantKind};
+use crate::env::{EnumInfo, FnSig, MutStatus, StructInfo, TypeEnv, VariantInfo, VariantKind};
 use crate::types::Ty;
 
 /// Set of expression addresses (`*const Expr as usize`) whose resolved type is `Ty::Str`.
@@ -115,6 +115,32 @@ pub struct Checker<'e> {
     break_types_stack: Vec<Option<Vec<Ty>>>,
     pub const_values: HashMap<String, i64>,
     pub const_types: HashMap<String, Ty>,
+}
+
+/// Wraps an emitter and tallies error-severity diagnostics. The effect and
+/// linear-usage passes (`effects::check_fn_effects`, `linear::check_linear_usage`)
+/// emit directly to the emitter and never touch the checker's `error_count`, so
+/// without this their errors are reported yet the build still exits 0 — an
+/// effectful call from a pure context, an impure contract clause, or a linear
+/// value consumed twice would compile to a binary. Routing those passes through
+/// this counter folds their errors into `error_count` so `has_errors()` (the
+/// build gate) sees them.
+struct ErrorCounter<'a> {
+    inner: &'a mut dyn DiagnosticEmitter,
+    errors: usize,
+}
+
+impl DiagnosticEmitter for ErrorCounter<'_> {
+    fn try_emit(&mut self, diagnostic: &Diagnostic) -> std::io::Result<()> {
+        if diagnostic.severity == Severity::Error {
+            self.errors += 1;
+        }
+        self.inner.try_emit(diagnostic)
+    }
+
+    fn try_finish(&mut self) -> std::io::Result<()> {
+        self.inner.try_finish()
+    }
 }
 
 impl<'e> Checker<'e> {
@@ -635,13 +661,21 @@ impl<'e> Checker<'e> {
                     }
                 }
             }
-            self.env.pop_scope();
+            self.exit_scope();
         }
 
-        self.env.pop_scope();
+        self.exit_scope();
 
-        crate::effects::check_fn_effects(fn_def, &self.env, &self.file, self.emitter);
-        crate::linear::check_linear_usage(fn_def, &self.env, &self.file, self.emitter);
+        let pass_errors = {
+            let mut counter = ErrorCounter {
+                inner: &mut *self.emitter,
+                errors: 0,
+            };
+            crate::effects::check_fn_effects(fn_def, &self.env, &self.file, &mut counter);
+            crate::linear::check_linear_usage(fn_def, &self.env, &self.file, &mut counter);
+            counter.errors
+        };
+        self.error_count += pass_errors;
 
         self.current_fn_effects = outer_effects;
         self.current_return_ty = outer_return_ty;
@@ -656,8 +690,21 @@ impl<'e> Checker<'e> {
             Some(expr) => self.check_expr(expr),
             None => Ty::Unit,
         };
-        self.env.pop_scope();
+        self.exit_scope();
         ty
+    }
+
+    /// Pop the innermost scope and report any `mut` binding in it that was never
+    /// reassigned (unused `mut` is a hard error under Scope A). The list is
+    /// already ordered by source position for deterministic diagnostics.
+    fn exit_scope(&mut self) {
+        for (name, span) in self.env.pop_scope() {
+            self.emit_error(
+                ErrorCode::UnusedMut,
+                format!("`mut` binding `{name}` is never reassigned; remove `mut`"),
+                span,
+            );
+        }
     }
 
     fn check_stmt(&mut self, stmt: &Stmt) {
@@ -717,8 +764,8 @@ impl<'e> Checker<'e> {
 
     fn bind_pattern(&mut self, pat: &Pat, ty: &Ty) {
         match &pat.kind {
-            PatKind::Ident { name, .. } => {
-                self.env.define(name, ty.clone());
+            PatKind::Ident { name, is_mut } => {
+                self.env.define_mut(name, ty.clone(), *is_mut, pat.span);
             }
             PatKind::Wildcard => {}
             PatKind::Tuple(pats) => {
@@ -1270,7 +1317,7 @@ impl<'e> Checker<'e> {
                     self.env.push_scope();
                     self.bind_arm_pattern(&arm.pattern, &scrutinee_ty);
                     let arm_ty = self.check_expr(&arm.body);
-                    self.env.pop_scope();
+                    self.exit_scope();
                     if i == 0 {
                         result_ty = arm_ty.clone();
                     } else if arm_ty != result_ty && arm_ty != Ty::Never && result_ty != Ty::Never {
@@ -1391,7 +1438,7 @@ impl<'e> Checker<'e> {
                 self.in_loop += 1;
                 self.check_block(body);
                 self.in_loop -= 1;
-                self.env.pop_scope();
+                self.exit_scope();
                 Ty::Unit
             }
             ExprKind::Loop { vow, body } => {
@@ -1539,6 +1586,20 @@ impl<'e> Checker<'e> {
                             "assignment type mismatch: left is `{lhs_ty}` but right is `{rhs_ty}`"
                         ),
                         expr.span,
+                    );
+                }
+                // Mutability (Scope A): only whole-binding reassignment `x = e`
+                // requires `mut`. Field/index writes (`s.f = e`, `v[i] = e`) are
+                // legal through any binding and do not count as using the base's `mut`.
+                if let ExprKind::Ident(name) = &lhs.kind
+                    && self.env.mark_mutated(name) == MutStatus::Immutable
+                {
+                    self.emit_error(
+                        ErrorCode::ImmutableAssignment,
+                        format!(
+                            "cannot assign to immutable binding `{name}`; declare it with `let mut {name}`"
+                        ),
+                        lhs.span,
                     );
                 }
                 Ty::Unit
@@ -1936,6 +1997,8 @@ impl<'e> Checker<'e> {
                     },
                     _ => return,
                 };
+                // Built-in Option/Result aren't in `env`; a registered (user) enum
+                // wins, else take payload types from the scrutinee's type args.
                 let variant_tys: Vec<Ty> = self
                     .env
                     .lookup_enum(&enum_name)
@@ -1947,6 +2010,17 @@ impl<'e> Checker<'e> {
                                 VariantKind::Tuple(tys) => tys.clone(),
                                 _ => vec![],
                             })
+                    })
+                    .or_else(|| match (enum_name.as_str(), variant_name) {
+                        ("Option", "Some") | ("Result", "Ok") => Some(match scrutinee_ty {
+                            Ty::Applied(_, args) => args.iter().take(1).cloned().collect(),
+                            _ => vec![],
+                        }),
+                        ("Result", "Err") => Some(match scrutinee_ty {
+                            Ty::Applied(_, args) => args.iter().skip(1).take(1).cloned().collect(),
+                            _ => vec![],
+                        }),
+                        _ => None,
                     })
                     .unwrap_or_default();
                 for (p, t) in inner.iter().zip(variant_tys.iter()) {
@@ -2684,7 +2758,7 @@ mod tests {
     fn assign_same_type_ok() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
-        checker.env.define("x", Ty::I32);
+        checker.env.define_mut("x", Ty::I32, true, dummy_span());
         let ty = checker.check_expr(&make_expr(ExprKind::Assign {
             lhs: Box::new(ident("x")),
             rhs: Box::new(int_lit()),
@@ -2697,13 +2771,106 @@ mod tests {
     fn assign_type_mismatch_error() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
-        checker.env.define("x", Ty::I32);
+        checker.env.define_mut("x", Ty::I32, true, dummy_span());
         checker.check_expr(&make_expr(ExprKind::Assign {
             lhs: Box::new(ident("x")),
             rhs: Box::new(bool_lit()),
         }));
         assert!(checker.has_errors());
         assert!(emitter.0[0].message.contains("assignment type mismatch"));
+    }
+
+    #[test]
+    fn assign_to_immutable_binding_errors() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.env.define("x", Ty::I32);
+        checker.check_expr(&make_expr(ExprKind::Assign {
+            lhs: Box::new(ident("x")),
+            rhs: Box::new(int_lit()),
+        }));
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::ImmutableAssignment);
+    }
+
+    fn let_stmt(name: &str, is_mut: bool, init: Expr) -> Stmt {
+        Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: name.to_string(),
+                    is_mut,
+                },
+                span: dummy_span(),
+            },
+            ty: None,
+            init: Box::new(init),
+            span: dummy_span(),
+        }
+    }
+
+    fn block_expr(stmts: Vec<Stmt>, trailing: Option<Expr>) -> Expr {
+        make_expr(ExprKind::Block(Box::new(Block {
+            stmts,
+            trailing_expr: trailing.map(Box::new),
+            span: dummy_span(),
+        })))
+    }
+
+    #[test]
+    fn unused_mut_binding_errors() {
+        // { let mut x = 0; }  -- x declared mut but never reassigned.
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&block_expr(vec![let_stmt("x", true, int_lit())], None));
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::UnusedMut);
+    }
+
+    #[test]
+    fn mut_binding_reassigned_ok() {
+        // { let mut x = 0; x = 1; }  -- mut binding is reassigned: no error.
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let assign = make_expr(ExprKind::Assign {
+            lhs: Box::new(ident("x")),
+            rhs: Box::new(int_lit()),
+        });
+        checker.check_expr(&block_expr(
+            vec![
+                let_stmt("x", true, int_lit()),
+                Stmt::Expr {
+                    expr: assign,
+                    has_semicolon: true,
+                    span: dummy_span(),
+                },
+            ],
+            None,
+        ));
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn field_write_through_immutable_base_ok() {
+        // Scope A: `p.x = e` does NOT require `let mut p`.
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        use crate::env::StructInfo;
+        checker.env.define_struct(
+            "Point",
+            StructInfo {
+                fields: vec![("x".to_string(), Ty::I32)],
+                is_linear: false,
+            },
+        );
+        checker.env.define("p", Ty::Struct("Point".to_string()));
+        checker.check_expr(&make_expr(ExprKind::Assign {
+            lhs: Box::new(make_expr(ExprKind::FieldAccess {
+                base: Box::new(ident("p")),
+                field: "x".to_string(),
+            })),
+            rhs: Box::new(int_lit()),
+        }));
+        assert!(!checker.has_errors());
     }
 
     // --- Tuple ---

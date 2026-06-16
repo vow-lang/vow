@@ -46,8 +46,8 @@
         "name": { "type": "string", "description": "Test name (file stem)" },
         "status": {
           "type": "string",
-          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
-          "description": "Per-test outcome"
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed", "contract_skipped"],
+          "description": "Per-test outcome (`contract_skipped`: ESBMC never invoked because a vowed function is non-modelable; fail-closed, counts toward `failed`)"
         },
         "exit_code": {
           "type": ["integer", "null"],

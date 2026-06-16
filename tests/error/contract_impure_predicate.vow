@@ -1,0 +1,17 @@
+// TEST: error-code EffectViolation
+module ContractImpurePredicate
+
+fn side_effect() -> i64 [io] {
+    print_i64(0);
+    0
+}
+
+fn f(x: i64) -> i64 vow {
+    requires: side_effect() == 0
+} {
+    x
+}
+
+fn main() -> () [io] {
+    print_i64(f(1));
+}
