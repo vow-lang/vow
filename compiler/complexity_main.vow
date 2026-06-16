@@ -45,8 +45,24 @@ fn cx_ir_val_for(name: String, ir_names: Vec<String>, ir_vals: Vec<i64>) -> i64 
     -1
 }
 
+fn cx_has_eff(eff: i64, bit: i64) -> bool {
+    (eff / bit) % 2 != 0
+}
+
+// Emit the effects JSON array in canonical bit order (io,panic,read,unsafe,write).
+fn cx_emit_effects(out: String, eff: i64) {
+    out.push_str(String::from("["));
+    let mut ne: i64 = 0;
+    if cx_has_eff(eff, EFF_IO())     { out.push_str(String::from("\"io\"")); ne = ne + 1; }
+    if cx_has_eff(eff, EFF_PANIC())  { if ne > 0 { out.push_str(String::from(",")); } out.push_str(String::from("\"panic\"")); ne = ne + 1; }
+    if cx_has_eff(eff, EFF_READ())   { if ne > 0 { out.push_str(String::from(",")); } out.push_str(String::from("\"read\"")); ne = ne + 1; }
+    if cx_has_eff(eff, EFF_UNSAFE()) { if ne > 0 { out.push_str(String::from(",")); } out.push_str(String::from("\"unsafe\"")); ne = ne + 1; }
+    if cx_has_eff(eff, EFF_WRITE())  { if ne > 0 { out.push_str(String::from(",")); } out.push_str(String::from("\"write\"")); ne = ne + 1; }
+    out.push_str(String::from("]"));
+}
+
 // Append one function object (with score + score_factors) to `out`.
-fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, cir: i64, lcons: i64, lbor: i64) {
+fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, ex: CxExtra) {
     out.push_str(String::from("{\"name\":\""));
     let rn: String = rec.name;
     out.push_str(cx_json_escape(rn));
@@ -73,7 +89,7 @@ fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, cir: i64, lcons: i6
     out.push_str(String::from("},\"structural\":{\"cyclomatic\":"));
     out.push_str(i64_to_string(rec.cyclomatic));
     out.push_str(String::from(",\"cyclomatic_ir\":"));
-    out.push_str(i64_to_string(cir));
+    out.push_str(i64_to_string(ex.cir));
     out.push_str(String::from(",\"cognitive\":"));
     out.push_str(i64_to_string(rec.cognitive));
     out.push_str(String::from(",\"max_nesting\":"));
@@ -96,10 +112,18 @@ fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, cir: i64, lcons: i6
     out.push_str(cx_fmt_fixed(rec.h_difficulty_s));
     out.push_str(String::from(",\"effort\":"));
     out.push_str(cx_fmt_fixed(rec.h_effort_s));
-    out.push_str(String::from("}},\"vow\":{\"tier\":\"experimental\",\"linear_consumes\":"));
-    out.push_str(i64_to_string(lcons));
+    out.push_str(String::from("}},\"vow\":{\"tier\":\"experimental\",\"effects\":"));
+    cx_emit_effects(out, rec.eff);
+    out.push_str(String::from(",\"effect_breadth\":"));
+    out.push_str(i64_to_string(cx_popcount(rec.eff)));
+    out.push_str(String::from(",\"effect_fanout\":"));
+    out.push_str(i64_to_string(ex.effect_fanout));
+    out.push_str(String::from(",\"linear_values\":"));
+    out.push_str(i64_to_string(rec.linear_values));
+    out.push_str(String::from(",\"linear_consumes\":"));
+    out.push_str(i64_to_string(ex.linear_consumes));
     out.push_str(String::from(",\"linear_borrows\":"));
-    out.push_str(i64_to_string(lbor));
+    out.push_str(i64_to_string(ex.linear_borrows));
     out.push_str(String::from("}}"));
 }
 
@@ -129,8 +153,23 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let items: Vec<i64> = m.items;
     let n: i64 = items.len();
 
+    // Struct definitions (name -> is_linear) for linear-value counting.
+    let struct_names: Vec<String> = Vec::new();
+    let struct_linear: Vec<i64> = Vec::new();
+    let mut si: i64 = 0;
+    while si < n {
+        let it2: i64 = items[si];
+        if item_kind(it2) == ITEM_STRUCT() {
+            let sd: i64 = item_id(it2);
+            struct_names.push(arena_str(a, sdef_name_sid(a, sd)));
+            struct_linear.push(sdef_is_linear(a, sd));
+        }
+        si = si + 1;
+    }
+
     // IR-derived per-function metrics, indexed by IR function (matched to AST
-    // functions by name): cyclomatic, linear consume/borrow counts, callee sets.
+    // functions by name): cyclomatic, linear consume/borrow counts, callee sets,
+    // effect bitsets.
     let ir_mod: IrModule = fr.ir_mod;
     let ir_funcs: Vec<IrFunction> = ir_mod.functions;
     let nirf: i64 = ir_funcs.len();
@@ -139,6 +178,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let ir_consumes: Vec<i64> = Vec::new();
     let ir_borrows: Vec<i64> = Vec::new();
     let ir_callees: Vec<Vec<i64>> = Vec::new();
+    let ir_effects: Vec<i64> = Vec::new();
     let mut x: i64 = 0;
     while x < nirf {
         let irf: IrFunction = ir_funcs[x];
@@ -148,11 +188,14 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
         ir_consumes.push(cx_fn_count_op(irf, IOP_LINEAR_CONSUME()));
         ir_borrows.push(cx_fn_count_op(irf, IOP_LINEAR_BORROW()));
         ir_callees.push(cx_fn_callees(irf));
+        ir_effects.push(irf.effects);
         x = x + 1;
     }
-    // fan-out = distinct callees; fan-in = callers (call-graph inversion).
+    // fan-out = distinct callees; fan-in = callers (call-graph inversion);
+    // effect_fanout = distinct callees that are themselves effectful.
     let ir_fanout: Vec<i64> = Vec::new();
     let ir_fanin: Vec<i64> = Vec::new();
+    let ir_effect_fanout: Vec<i64> = Vec::new();
     let mut z: i64 = 0;
     while z < nirf {
         let cs: Vec<i64> = ir_callees[z];
@@ -165,26 +208,40 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
             w = w + 1;
         }
         ir_fanin.push(fin);
+        let mut efo: i64 = 0;
+        let mut ci: i64 = 0;
+        let ncs: i64 = cs.len();
+        while ci < ncs {
+            let callee: i64 = cs[ci];
+            if callee >= 0 && callee < nirf {
+                if ir_effects[callee] != 0 { efo = efo + 1; }
+            }
+            ci = ci + 1;
+        }
+        ir_effect_fanout.push(efo);
         z = z + 1;
     }
 
     // Pass 1: analyze + score every function; match IR metrics by name.
     let recs: Vec<CxFn> = Vec::new();
     let scs: Vec<CxScore> = Vec::new();
-    let cirs: Vec<i64> = Vec::new();
-    let lcons_v: Vec<i64> = Vec::new();
-    let lbor_v: Vec<i64> = Vec::new();
+    let exs: Vec<CxExtra> = Vec::new();
     let mut i: i64 = 0;
     while i < n {
         let it: i64 = items[i];
         if item_kind(it) == ITEM_FN() {
             let fid: i64 = item_id(it);
-            let rec: CxFn = cx_analyze_fn(a, fid, src);
+            let rec: CxFn = cx_analyze_fn(a, fid, src, struct_names, struct_linear);
             let sc: CxScore = cx_score(rec.cognitive, rec.nloc, cog_anchor, nloc_anchor);
             let rn: String = rec.name;
-            cirs.push(cx_ir_val_for(rn, ir_names, ir_cyclo));
-            lcons_v.push(cx_ir_val_for(rn, ir_names, ir_consumes));
-            lbor_v.push(cx_ir_val_for(rn, ir_names, ir_borrows));
+            let cir: i64 = cx_ir_val_for(rn, ir_names, ir_cyclo);
+            let mut efo: i64 = cx_ir_val_for(rn, ir_names, ir_effect_fanout);
+            let mut lc: i64 = cx_ir_val_for(rn, ir_names, ir_consumes);
+            let mut lb: i64 = cx_ir_val_for(rn, ir_names, ir_borrows);
+            if efo < 0 { efo = 0; }
+            if lc < 0 { lc = 0; }
+            if lb < 0 { lb = 0; }
+            exs.push(CxExtra { cir: cir, effect_fanout: efo, linear_consumes: lc, linear_borrows: lb });
             recs.push(rec);
             scs.push(sc);
         }
@@ -244,7 +301,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut k: i64 = 0;
     while k < nf {
         if k > 0 { out.push_str(String::from(",")); }
-        cx_emit_fn(out, recs[k], scs[k], thr, cirs[k], lcons_v[k], lbor_v[k]);
+        cx_emit_fn(out, recs[k], scs[k], thr, exs[k]);
         k = k + 1;
     }
     out.push_str(String::from("],\"module\":{\"tier\":\"experimental\",\"functions\":"));

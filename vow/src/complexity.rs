@@ -8,8 +8,164 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use std::collections::HashSet;
+
 use vow_ir::{InstData, Opcode};
-use vow_syntax::ast::{BinOp, Block, Expr, ExprKind, Item, Lit, Stmt, UnOp};
+use vow_syntax::ast::{BinOp, Block, Effect, Expr, ExprKind, Item, Lit, Stmt, UnOp};
+
+// Effect -> bit, matching the self-hosted EFF_* constants (io=1,panic=2,
+// read=4,unsafe=8,write=16), so effect_breadth (popcount) and the canonical
+// effects list are byte-identical with the self-hosted compiler.
+fn effect_bit(e: &Effect) -> i64 {
+    match e {
+        Effect::IO => 1,
+        Effect::Panic => 2,
+        Effect::Read => 4,
+        Effect::Unsafe => 8,
+        Effect::Write => 16,
+    }
+}
+
+fn cx_popcount_bits(mut mask: i64) -> i64 {
+    let mut c = 0;
+    while mask > 0 {
+        c += mask % 2;
+        mask /= 2;
+    }
+    c
+}
+
+fn cx_emit_effects(out: &mut String, eff: i64) {
+    out.push('[');
+    let mut ne = 0;
+    for (bit, name) in [
+        (1, "io"),
+        (2, "panic"),
+        (4, "read"),
+        (8, "unsafe"),
+        (16, "write"),
+    ] {
+        if (eff / bit) % 2 != 0 {
+            if ne > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(name);
+            out.push('"');
+            ne += 1;
+        }
+    }
+    out.push(']');
+}
+
+// Count linear-struct literals (StructLiteral whose name is a linear struct) in
+// an expression subtree. Mirrors compiler/complexity.vow cx_lv_expr's recursion.
+fn lv_block(b: &Block, linear: &HashSet<String>) -> i64 {
+    let mut c = 0;
+    for s in &b.stmts {
+        match s {
+            Stmt::Let { init, .. } => c += lv_expr(init, linear),
+            Stmt::Expr { expr, .. } => c += lv_expr(expr, linear),
+        }
+    }
+    if let Some(t) = &b.trailing_expr {
+        c += lv_expr(t, linear);
+    }
+    c
+}
+
+fn lv_expr(e: &Expr, linear: &HashSet<String>) -> i64 {
+    let mut c = 0;
+    match &e.kind {
+        ExprKind::StructLiteral { name, fields } => {
+            if linear.contains(name) {
+                c += 1;
+            }
+            for (_, v) in fields {
+                c += lv_expr(v, linear);
+            }
+        }
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            c += lv_expr(lhs, linear);
+            c += lv_expr(rhs, linear);
+        }
+        ExprKind::Index { base, index } => {
+            c += lv_expr(base, linear);
+            c += lv_expr(index, linear);
+        }
+        ExprKind::Assign { lhs, rhs } => {
+            c += lv_expr(lhs, linear);
+            c += lv_expr(rhs, linear);
+        }
+        ExprKind::UnaryOp { operand, .. } => c += lv_expr(operand, linear),
+        ExprKind::FieldAccess { base, .. } => c += lv_expr(base, linear),
+        ExprKind::Question { expr } => c += lv_expr(expr, linear),
+        ExprKind::Cast { expr, .. } => c += lv_expr(expr, linear),
+        ExprKind::Borrow { expr } => c += lv_expr(expr, linear),
+        ExprKind::Call { callee, args } => {
+            c += lv_expr(callee, linear);
+            for a in args {
+                c += lv_expr(a, linear);
+            }
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            c += lv_expr(receiver, linear);
+            for a in args {
+                c += lv_expr(a, linear);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            c += lv_expr(condition, linear);
+            c += lv_block(then_branch, linear);
+            if let Some(e2) = else_branch {
+                c += lv_expr(e2, linear);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            c += lv_expr(condition, linear);
+            c += lv_block(body, linear);
+        }
+        ExprKind::ForEach { iterable, body, .. } => {
+            c += lv_expr(iterable, linear);
+            c += lv_block(body, linear);
+        }
+        ExprKind::Loop { body, .. } => c += lv_block(body, linear),
+        ExprKind::Match { scrutinee, arms } => {
+            c += lv_expr(scrutinee, linear);
+            for arm in arms {
+                c += lv_expr(&arm.body, linear);
+            }
+        }
+        ExprKind::Return { value } => {
+            if let Some(v) = value {
+                c += lv_expr(v, linear);
+            }
+        }
+        ExprKind::Block(b) => c += lv_block(b, linear),
+        ExprKind::EnumConstruct { fields, .. } => {
+            for v in fields {
+                c += lv_expr(v, linear);
+            }
+        }
+        ExprKind::Tuple(elems) => {
+            for v in elems {
+                c += lv_expr(v, linear);
+            }
+        }
+        ExprKind::Lit(_)
+        | ExprKind::Ident(_)
+        | ExprKind::Break { .. }
+        | ExprKind::Continue
+        | ExprKind::Result => {}
+    }
+    c
+}
 
 // Cyclomatic complexity from the IR CFG, decision-count form:
 // (number of conditional branches) + 1. Mirrors compiler/complexity.vow
@@ -33,6 +189,7 @@ struct IrInfo {
     borrows: i64,
     fan_in: i64,
     fan_out: i64,
+    effect_fanout: i64,
 }
 
 // Distinct user-function callee ids (IOP_CALL with CallTarget; externs excluded).
@@ -358,6 +515,9 @@ struct CxEmit {
     h_volume_s: i64,
     h_difficulty_s: i64,
     h_effort_s: i64,
+    eff: i64,
+    effect_fanout: i64,
+    linear_values: i64,
     linear_consumes: i64,
     linear_borrows: i64,
     score: i64,
@@ -415,7 +575,15 @@ fn cx_emit_fn(out: &mut String, r: &CxEmit, thr: i64) {
     out.push_str(&cx_fmt_fixed(r.h_difficulty_s));
     out.push_str(",\"effort\":");
     out.push_str(&cx_fmt_fixed(r.h_effort_s));
-    out.push_str("}},\"vow\":{\"tier\":\"experimental\",\"linear_consumes\":");
+    out.push_str("}},\"vow\":{\"tier\":\"experimental\",\"effects\":");
+    cx_emit_effects(out, r.eff);
+    out.push_str(",\"effect_breadth\":");
+    out.push_str(&cx_popcount_bits(r.eff).to_string());
+    out.push_str(",\"effect_fanout\":");
+    out.push_str(&r.effect_fanout.to_string());
+    out.push_str(",\"linear_values\":");
+    out.push_str(&r.linear_values.to_string());
+    out.push_str(",\"linear_consumes\":");
     out.push_str(&r.linear_consumes.to_string());
     out.push_str(",\"linear_borrows\":");
     out.push_str(&r.linear_borrows.to_string());
@@ -453,11 +621,20 @@ pub(crate) fn run_complexity_command(
     let mut fan_out_max: i64 = 0;
     if let Some(m) = frontend.ir() {
         let funcs = &m.functions;
-        let callees: Vec<std::collections::HashSet<u32>> = funcs.iter().map(ir_callees).collect();
+        let callees: Vec<HashSet<u32>> = funcs.iter().map(ir_callees).collect();
+        let effectful: HashSet<u32> = funcs
+            .iter()
+            .filter(|f| !f.effects.is_empty())
+            .map(|f| f.id.0)
+            .collect();
         for (idx, f) in funcs.iter().enumerate() {
             let fan_out = callees[idx].len() as i64;
             let fid = f.id.0;
             let fan_in = callees.iter().filter(|s| s.contains(&fid)).count() as i64;
+            let effect_fanout = callees[idx]
+                .iter()
+                .filter(|c| effectful.contains(c))
+                .count() as i64;
             let consumes = f
                 .blocks
                 .iter()
@@ -480,10 +657,21 @@ pub(crate) fn run_complexity_command(
                     borrows,
                     fan_in,
                     fan_out,
+                    effect_fanout,
                 },
             );
         }
     }
+
+    // Linear struct names, for counting linear-struct literals.
+    let linear_structs: HashSet<String> = module
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::Struct(s) if s.is_linear => Some(s.name.clone()),
+            _ => None,
+        })
+        .collect();
 
     // Pass 1: analyze + score every function.
     let mut recs: Vec<CxEmit> = Vec::new();
@@ -498,8 +686,11 @@ pub(crate) fn run_complexity_command(
             let cyclomatic = acc.decisions + 1;
             let info = ir_info.get(&f.name);
             let cyclomatic_ir = info.map(|x| x.cyclomatic).unwrap_or(-1);
+            let effect_fanout = info.map(|x| x.effect_fanout).unwrap_or(0);
             let linear_consumes = info.map(|x| x.consumes).unwrap_or(0);
             let linear_borrows = info.map(|x| x.borrows).unwrap_or(0);
+            let eff = f.effects.iter().fold(0i64, |acc, e| acc | effect_bit(e));
+            let linear_values = lv_block(&f.body, &linear_structs);
             let mut cacc = CogAcc::default();
             cog_block(&f.body, 0, &f.name, &mut cacc);
             let cognitive = cacc.cog + if cacc.self_calls > 0 { 1 } else { 0 };
@@ -537,6 +728,9 @@ pub(crate) fn run_complexity_command(
                 h_volume_s,
                 h_difficulty_s,
                 h_effort_s,
+                eff,
+                effect_fanout,
+                linear_values,
                 linear_consumes,
                 linear_borrows,
                 score: sc.score,

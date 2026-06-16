@@ -109,6 +109,139 @@ fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
     cx_sat(nloc * fl * fl)
 }
 
+// IR-derived extras carried alongside the AST CxFn record (experimental tier).
+struct CxExtra {
+    cir: i64,
+    effect_fanout: i64,
+    linear_consumes: i64,
+    linear_borrows: i64,
+}
+
+// Is `name` a linear struct? Lookup over parallel name/is-linear Vecs built
+// from the module's struct definitions.
+fn cx_struct_is_linear(name: String, names: Vec<String>, slin: Vec<i64>) -> bool {
+    let n: i64 = names.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let nm: String = names[i];
+        if nm == name {
+            return slin[i] != 0;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// Count linear-struct literals (EXPR_SLIT whose named struct is linear) in an
+// expression subtree. Recurses every sub-expression, mirroring cx_walk_expr.
+fn cx_lv_expr(a: AstArena, eid: i64, names: Vec<String>, slin: Vec<i64>) -> i64 {
+    if eid < 0 { return 0; }
+    let tag: i64 = expr_tag(a, eid);
+    let mut c: i64 = 0;
+    if tag == EXPR_SLIT() {
+        let path_lid: i64 = expr_a(a, eid);
+        let pn: i64 = list_len(a, path_lid);
+        if pn > 0 {
+            let sname: String = arena_str(a, list_get(a, path_lid, pn - 1));
+            if cx_struct_is_linear(sname, names, slin) { c = c + 1; }
+        }
+        let fields_lid: i64 = expr_b(a, eid);
+        let nf: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nf { c = c + cx_lv_expr(a, list_get(a, fields_lid, i * 2 + 1), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_BINOP() || tag == EXPR_INDEX() || tag == EXPR_ASSIGN() {
+        c = c + cx_lv_expr(a, expr_b(a, eid), names, slin);
+        c = c + cx_lv_expr(a, expr_c(a, eid), names, slin);
+        if tag == EXPR_INDEX() || tag == EXPR_ASSIGN() { c = c + cx_lv_expr(a, expr_a(a, eid), names, slin); }
+        return c;
+    }
+    if tag == EXPR_UNOP() { return cx_lv_expr(a, expr_b(a, eid), names, slin); }
+    if tag == EXPR_FIELD() || tag == EXPR_QUESTION() || tag == EXPR_CAST() {
+        return cx_lv_expr(a, expr_a(a, eid), names, slin);
+    }
+    if tag == EXPR_CALL() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        let args_lid: i64 = expr_b(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { c = c + cx_lv_expr(a, list_get(a, args_lid, i), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_METHOD() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        let args_lid: i64 = expr_c(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { c = c + cx_lv_expr(a, list_get(a, args_lid, i), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_IF() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        c = c + cx_lv_block(a, expr_b(a, eid), names, slin);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 { c = c + cx_lv_expr(a, else_eid, names, slin); }
+        return c;
+    }
+    if tag == EXPR_WHILE() || tag == EXPR_FOR() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        c = c + cx_lv_block(a, expr_b(a, eid), names, slin);
+        return c;
+    }
+    if tag == EXPR_LOOP() { return cx_lv_block(a, expr_a(a, eid), names, slin); }
+    if tag == EXPR_MATCH() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        let arms_lid: i64 = expr_b(a, eid);
+        let nar: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nar { c = c + cx_lv_expr(a, list_get(a, arms_lid, i * 2 + 1), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_RETURN() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { c = c + cx_lv_expr(a, v, names, slin); }
+        return c;
+    }
+    if tag == EXPR_BLOCK() { return cx_lv_block(a, expr_a(a, eid), names, slin); }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { c = c + cx_lv_expr(a, list_get(a, args_lid, i), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let ne: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < ne { c = c + cx_lv_expr(a, list_get(a, elems_lid, i), names, slin); i = i + 1; }
+        return c;
+    }
+    c
+}
+
+fn cx_lv_block(a: AstArena, bid: i64, names: Vec<String>, slin: Vec<i64>) -> i64 {
+    if bid < 0 { return 0; }
+    let slid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, slid);
+    let mut c: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, slid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            c = c + cx_lv_expr(a, stmt_c(a, sid), names, slin);
+        } else {
+            c = c + cx_lv_expr(a, stmt_a(a, sid), names, slin);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 { c = c + cx_lv_expr(a, trail, names, slin); }
+    c
+}
+
 // Per-function complexity record. Grows one field per metric slice.
 struct CxFn {
     name: String,
@@ -120,6 +253,8 @@ struct CxFn {
     cyclomatic: i64,
     cognitive: i64,
     max_nesting: i64,
+    eff: i64,
+    linear_values: i64,
     h_n1: i64,
     h_n2: i64,
     h_bign1: i64,
@@ -761,9 +896,12 @@ fn hal_expr(a: AstArena, eid: i64, acc: Vec<i64>, seen: Vec<String>) {
 
 // Analyze a single AST function (by arena fid) into a CxFn record.
 // `src` is the raw source text, used for span -> line-number mapping.
-fn cx_analyze_fn(a: AstArena, fid: i64, src: String) -> CxFn {
+// `struct_names`/`struct_linear` are the module's struct definitions, for
+// counting linear-struct literals.
+fn cx_analyze_fn(a: AstArena, fid: i64, src: String, struct_names: Vec<String>, struct_linear: Vec<i64>) -> CxFn {
     let name_sid: i64 = fn_name_sid(a, fid);
     let nm: String = arena_str(a, name_sid);
+    let eff: i64 = fn_eff(a, fid);
 
     let plid: i64 = fn_params_lid(a, fid);
     let mut pc: i64 = 0;
@@ -819,5 +957,7 @@ fn cx_analyze_fn(a: AstArena, fid: i64, src: String) -> CxFn {
     }
     let h_effort_s: i64 = h_difficulty_s * h_volume_s / 1000;
 
-    CxFn { name: nm, line: first_line, nloc: nloc, params: pc, stmts: stmts, tokens: h_length, cyclomatic: cyclomatic, cognitive: cognitive, max_nesting: max_nesting, h_n1: h_n1, h_n2: h_n2, h_bign1: h_bign1, h_bign2: h_bign2, h_vocab: h_vocab, h_length: h_length, h_volume_s: h_volume_s, h_difficulty_s: h_difficulty_s, h_effort_s: h_effort_s }
+    let linear_values: i64 = cx_lv_block(a, body_bid, struct_names, struct_linear);
+
+    CxFn { name: nm, line: first_line, nloc: nloc, params: pc, stmts: stmts, tokens: h_length, cyclomatic: cyclomatic, cognitive: cognitive, max_nesting: max_nesting, eff: eff, linear_values: linear_values, h_n1: h_n1, h_n2: h_n2, h_bign1: h_bign1, h_bign2: h_bign2, h_vocab: h_vocab, h_length: h_length, h_volume_s: h_volume_s, h_difficulty_s: h_difficulty_s, h_effort_s: h_effort_s }
 }

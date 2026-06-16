@@ -44,11 +44,15 @@
       "additionalProperties": false
     },
     "Vow": {
-      "description": "Vow-surface metrics (experimental tier). Grows in Phase 3 (effects, linear_values, contract).",
+      "description": "Vow-surface metrics (experimental tier).",
       "type": "object",
-      "required": ["tier", "linear_consumes", "linear_borrows"],
+      "required": ["tier", "effects", "effect_breadth", "effect_fanout", "linear_values", "linear_consumes", "linear_borrows"],
       "properties": {
         "tier": { "const": "experimental" },
+        "effects": { "type": "array", "items": { "enum": ["io", "panic", "read", "unsafe", "write"] }, "description": "Declared effects, canonical order." },
+        "effect_breadth": { "type": "integer", "minimum": 0, "maximum": 5, "description": "popcount of the effect bitset." },
+        "effect_fanout": { "type": "integer", "minimum": 0, "description": "Distinct in-module callees that are themselves effectful." },
+        "linear_values": { "type": "integer", "minimum": 0, "description": "Count of linear-struct literals constructed in the function." },
         "linear_consumes": { "type": "integer", "minimum": 0, "description": "IOP_LINEAR_CONSUME count (linear resource moves)." },
         "linear_borrows": { "type": "integer", "minimum": 0, "description": "IOP_LINEAR_BORROW count." }
       },
