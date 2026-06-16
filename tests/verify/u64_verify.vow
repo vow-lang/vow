@@ -1,3 +1,4 @@
+// TEST: category overflow
 module U64Verify
 
 fn safe_add(a: u64, b: u64) -> u64

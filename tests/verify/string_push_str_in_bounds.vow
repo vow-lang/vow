@@ -1,3 +1,4 @@
+// TEST: category bounds
 module StringPushStrInBounds
 
 fn cat(a: String, b: String) -> i64 vow {

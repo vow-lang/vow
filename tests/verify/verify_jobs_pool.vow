@@ -1,3 +1,4 @@
+// TEST: category callee-blame
 module VerifyJobsPool
 
 fn abs_safe(x: i64) -> i64 vow {

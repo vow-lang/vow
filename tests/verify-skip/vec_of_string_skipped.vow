@@ -1,3 +1,4 @@
+// TEST: category unverifiable
 module VecOfStringSkipped
 
 // Regression test for issue #505 (get_val side). `first_word_len` reads a

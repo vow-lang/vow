@@ -1,3 +1,4 @@
+// TEST: category bounds
 module StringMatchesLiteralAtVerify
 
 fn matched_literal_implies_bytes(s: String, pos: i64) -> bool vow {

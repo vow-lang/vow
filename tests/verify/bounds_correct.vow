@@ -1,3 +1,4 @@
+// TEST: category bounds
 // Fixed version of off_by_one_bounds: access v[len-1] instead of v[len].
 // Concrete loop bound (8), not a `requires n <= 8` clause: ESBMC unwind limits
 // must never be encoded as contract bounds (see the contract-authoring rules).

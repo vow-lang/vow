@@ -62,6 +62,7 @@ Vow is written by agents under a finite context window. These principles apply t
 | [contracts-methodology.md](contracts-methodology.md) | Which properties to prove: contract taxonomy & strength |
 | [examples.md](examples.md)                        | 3 worked CEGIS cycles with full JSON output         |
 | [../dev/benchmarks.md](../dev/benchmarks.md)      | Developer benchmark harnesses outside the CLI spec  |
+| [../verifier-eval.md](../verifier-eval.md)        | Verifier acceptance harness: false-accept / false-reject / blame |
 | [schemas/build-result.schema.json](schemas/build-result.schema.json)     | Build output JSON schema            |
 | [schemas/diagnostic.schema.json](schemas/diagnostic.schema.json)         | Diagnostic JSON schema              |
 | [schemas/counterexample.schema.json](schemas/counterexample.schema.json) | Counterexample JSON schema          |

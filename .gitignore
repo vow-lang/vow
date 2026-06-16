@@ -26,3 +26,6 @@ __pycache__/
 mutants.out
 mutants-shard-*/
 .clawpatch/
+
+# verifier-evaluation harness output (issue #334)
+verify-eval.out/

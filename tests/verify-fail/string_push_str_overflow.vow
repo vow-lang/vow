@@ -1,3 +1,5 @@
+// TEST: category overflow
+// TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "over"
 // TEST: counterexample-blame none
 // String capacity assertion: a.len + b.len can exceed string_max (both

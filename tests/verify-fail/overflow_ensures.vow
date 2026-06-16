@@ -1,3 +1,5 @@
+// TEST: category overflow
+// TEST: counterexample-vow-id 1
 // TEST: counterexample-fn "twice"
 // TEST: counterexample-blame callee
 // Looks correct: doubling should give a bigger number, right?

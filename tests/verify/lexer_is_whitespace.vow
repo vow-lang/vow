@@ -1,3 +1,4 @@
+// TEST: category model-drift
 module LexerIsWhitespaceVerify
 
 fn is_whitespace(b: i64) -> bool vow {

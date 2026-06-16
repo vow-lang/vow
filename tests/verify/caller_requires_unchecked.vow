@@ -1,0 +1,35 @@
+// TEST: category caller-blame
+// TEST: known-soundness-gap "static verify does not assert callee requires at in-module call sites" #764
+//
+// KNOWN SOUNDNESS GAP (#764). `bad` calls `need_pos` with `0 - n - 1`, which
+// for `n >= 0` is always <= -1 and therefore violates `need_pos`'s
+// `requires: x >= 0`. A sound modular verifier would report a Caller-blame
+// counterexample on `bad`. Vow currently treats a callee's `requires` purely
+// as an assumption and never asserts it at in-module call sites, so this
+// genuinely-incorrect program is (wrongly) reported `Verified`.
+//
+// `need_pos` returns a constant 0 so that the *only* defect is the unchecked
+// caller obligation: `bad`'s own `ensures: result >= 0` holds, and `need_pos`'s
+// own `ensures` holds under its assumed precondition. When #764 is fixed this
+// program must flip to a tests/verify-fail/ entry asserting blame=Caller, and
+// the harness will fail loudly until the label is promoted.
+module CallerRequiresUnchecked
+
+fn need_pos(x: i64) -> i64 vow {
+  requires: x >= 0,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn bad(n: i64) -> i64 vow {
+  requires: n >= 0,
+  ensures: result >= 0
+} {
+  need_pos(0 - n - 1)
+}
+
+fn main() -> i32 [io] {
+  print_i64(bad(2));
+  0
+}

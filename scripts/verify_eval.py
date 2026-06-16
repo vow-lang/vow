@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+"""Verifier-evaluation harness (issue #334).
+
+Ground-truth acceptance suite for the Vow *verifier*, distinct from the
+synthesis suite under benchmarks/. Where benchmarks/ asks "can an agent
+synthesise a verifying program from a spec?", this harness asks the
+orthogonal question: "is the verifier itself accepting correct programs,
+rejecting incorrect ones, and attributing blame correctly?"
+
+It runs `vow verify` over the labelled corpus in tests/verify*, asserts each
+program's expected outcome plus the exact counterexample {blame, vow_id} set,
+and runs a `vow contracts --verify` vacuity guard over the should-pass set.
+Mismatches are classified and surfaced under separate, loud banners so a
+silent soundness regression can never hide in an aggregate pass/fail count:
+
+  * SOUNDNESS  (false-accept) — an expected-fail program was Verified, or a
+                 should-pass program was proven only vacuously. Hard failure.
+  * PRECISION  (false-reject) — a should-pass program was rejected.
+  * BLAME      — wrong Caller/Callee attribution, or wrong violated vow_id.
+  * STATUS     — any other expected/actual status mismatch (e.g. Skipped).
+
+Ground truth lives next to each program as `// TEST:` directives (the same
+comment convention tests/run_tests.sh already uses), extended here with
+`category` and `counterexample-vow-id`. The directory carries the coarse
+expected status (verify/ -> Verified, verify-fail/ -> VerifyFailed,
+verify-skip/ -> Skipped); the directives carry the fine-grained ground truth.
+
+Usage:
+    scripts/verify_eval.py [--verifier ./target/release/vow] [--filter NAME]
+    scripts/verify_eval.py --discover        # print actual outcomes (authoring aid)
+
+Exit code is 0 only when every program matches its ground truth; non-zero on
+any soundness, precision, blame, or status regression.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Directory -> coarse expected top-level `vow verify` status.
+DIR_EXPECT = {
+    "verify": "Verified",
+    "verify-fail": "VerifyFailed",
+    "verify-skip": "Skipped",
+}
+
+CATEGORIES = {
+    "overflow",
+    "bounds",
+    "invariant",
+    "caller-blame",
+    "callee-blame",
+    "model-drift",
+    "unverifiable",
+}
+
+VALID_BLAME = {"caller", "callee", "none"}
+
+# Verdict kinds, ordered by severity for reporting.
+SOUNDNESS = "soundness"
+PRECISION = "precision"
+BLAME = "blame"
+STATUS = "status"
+HARNESS = "harness"
+# A documented, tracked verifier soundness gap: the program is genuinely
+# incorrect and *should* fail, but the verifier currently accepts it. Reported
+# loudly but non-fatally until the underlying issue is fixed.
+KNOWN_GAP = "known_gap"
+# The verifier started catching a known gap — a (welcome) change that must flip
+# the program from a known-gap xfail to a real verify-fail. Fatal: forces the
+# label to be promoted rather than silently drifting.
+GAP_FIXED = "gap_fixed"
+OK = "ok"
+
+
+class Expect:
+    """Ground truth for one program, parsed from its `// TEST:` directives."""
+
+    def __init__(self, path, expected_status):
+        self.path = path
+        self.name = os.path.splitext(os.path.basename(path))[0]
+        self.expected_status = expected_status
+        self.category = None
+        self.skip_reason = None
+        # When set, this program documents a current verifier soundness gap: it
+        # is genuinely incorrect but the verifier accepts it today. (reason, issue)
+        self.known_gap = None
+        self.known_gap_issue = None
+        # Each cex is a dict with optional keys: fn, blame, vow_id.
+        self.cex = []
+
+
+CEX_KV = re.compile(r'(\w+)\s*=\s*(?:"([^"]*)"|(\S+))')
+
+
+def parse_directives(path, default_status):
+    """Read `// TEST:` directives from a program into an Expect."""
+    exp = Expect(path, default_status)
+    legacy = {}
+    with open(path, "r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            m = re.match(r"^//\s*TEST:\s*(.+)$", line)
+            if not m:
+                continue
+            body = m.group(1).strip()
+            if body.startswith("category"):
+                exp.category = body.split(None, 1)[1].strip() if " " in body else None
+            elif body.startswith("status"):
+                exp.expected_status = body.split(None, 1)[1].strip()
+            elif body.startswith("skip"):
+                sm = re.match(r'skip\s+"(.+)"', body)
+                if sm:
+                    exp.skip_reason = sm.group(1)
+            elif body.startswith("known-soundness-gap"):
+                gm = re.match(r'known-soundness-gap\s+"(.+?)"(?:\s+#(\d+))?', body)
+                if gm:
+                    exp.known_gap = gm.group(1)
+                    exp.known_gap_issue = gm.group(2)
+            elif body.startswith("counterexample-fn"):
+                fm = re.match(r'counterexample-fn\s+"(.+)"', body)
+                if fm:
+                    legacy["fn"] = fm.group(1)
+            elif body.startswith("counterexample-blame"):
+                legacy["blame"] = body.split(None, 1)[1].strip().lower()
+            elif body.startswith("counterexample-vow-id"):
+                legacy["vow_id"] = int(body.split(None, 1)[1].strip())
+            elif body.startswith("cex"):
+                cex = {}
+                for key, q, bare in CEX_KV.findall(body[len("cex"):]):
+                    val = q if q != "" or bare == "" else bare
+                    if key == "fn":
+                        cex["fn"] = val
+                    elif key == "blame":
+                        cex["blame"] = val.lower()
+                    elif key == "vow_id":
+                        cex["vow_id"] = int(val)
+                if cex:
+                    exp.cex.append(cex)
+    if legacy and not exp.cex:
+        exp.cex.append(legacy)
+    return exp
+
+
+def run_json(verifier, args):
+    """Invoke the verifier and parse its JSON stdout (None on parse failure)."""
+    proc = subprocess.run(
+        [verifier] + args, capture_output=True, text=True, cwd=REPO_ROOT
+    )
+    out = proc.stdout.strip()
+    if not out:
+        return None
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        return None
+
+
+def actual_cex(verify_json):
+    """Normalize a verify result's counterexamples into comparable dicts."""
+    result = []
+    for ce in verify_json.get("counterexamples", []) or []:
+        blame = ce.get("blame")
+        result.append(
+            {
+                "fn": ce.get("function"),
+                "blame": (blame or "none").lower(),
+                "vow_id": ce.get("vow_id"),
+            }
+        )
+    return result
+
+
+def match_cex(want, actuals):
+    """Return ('ok'|'blame'|'vow_id'|'missing', detail) for one expected cex."""
+    # An exact match on every specified field is success.
+    for got in actuals:
+        if "fn" in want and want["fn"] != got["fn"]:
+            continue
+        if "blame" in want and want["blame"] != got["blame"]:
+            continue
+        if "vow_id" in want and want["vow_id"] != got["vow_id"]:
+            continue
+        return "ok", None
+    # No exact match: diagnose the closest cause for the same function.
+    same_fn = [g for g in actuals if g["fn"] == want.get("fn")] or actuals
+    if "blame" in want and all(want["blame"] != g["blame"] for g in same_fn):
+        got = ", ".join(sorted({g["blame"] for g in same_fn}))
+        return "blame", f"blame want={want['blame']} got={got or 'none'}"
+    if "vow_id" in want and all(want["vow_id"] != g["vow_id"] for g in same_fn):
+        got = ", ".join(sorted({str(g["vow_id"]) for g in same_fn}))
+        return "vow_id", f"vow_id want={want['vow_id']} got={got or 'none'}"
+    return "missing", f"no counterexample matched {want}"
+
+
+def vacuity_problem(verifier, path):
+    """Return a soundness detail string if a should-pass proof is vacuous."""
+    res = run_json(verifier, ["contracts", "--verify", path])
+    if res is None:
+        return None
+    summary = res.get("summary", {}) or {}
+    if summary.get("vacuous", 0):
+        return f"{summary['vacuous']} contract(s) proven vacuously"
+    return None
+
+
+def classify(exp, verify_json, verifier):
+    """Compare actual verifier output against ground truth -> (verdict, detail)."""
+    if verify_json is None:
+        return HARNESS, "verifier produced no parseable JSON"
+    actual = verify_json.get("status")
+
+    # A documented soundness gap: the program is genuinely incorrect and should
+    # fail, but the verifier accepts it today. Tolerated (non-fatal) while the
+    # status stays Verified; promoted to a hard failure the moment it changes.
+    if exp.known_gap:
+        ref = f" (#{exp.known_gap_issue})" if exp.known_gap_issue else ""
+        if actual == "Verified":
+            return KNOWN_GAP, f"{exp.known_gap}{ref}"
+        return GAP_FIXED, (
+            f"verifier now reports {actual} — known gap{ref} may be fixed; "
+            f"promote to a verify-fail program"
+        )
+
+    if exp.expected_status == "Verified":
+        if actual != "Verified":
+            kind = PRECISION if actual in ("VerifyFailed", "Skipped") else STATUS
+            return kind, f"expected Verified, got {actual}"
+        vac = vacuity_problem(verifier, exp.path)
+        if vac:
+            return SOUNDNESS, f"vacuous proof: {vac}"
+        return OK, None
+
+    if exp.expected_status == "VerifyFailed":
+        if actual == "Verified":
+            return SOUNDNESS, "expected a counterexample, verifier proved it"
+        if actual != "VerifyFailed":
+            return STATUS, f"expected VerifyFailed, got {actual}"
+        actuals = actual_cex(verify_json)
+        if not exp.cex:
+            return OK, None
+        if not actuals:
+            return STATUS, "VerifyFailed but no counterexamples emitted"
+        for want in exp.cex:
+            kind, detail = match_cex(want, actuals)
+            if kind == "blame":
+                return BLAME, detail
+            if kind == "vow_id":
+                return BLAME, detail
+            if kind == "missing":
+                return BLAME, detail
+        return OK, None
+
+    if exp.expected_status == "Skipped":
+        if actual == "Skipped":
+            return OK, None
+        return STATUS, f"expected Skipped, got {actual}"
+
+    return STATUS, f"unknown expected status {exp.expected_status!r}"
+
+
+def collect(filter_name):
+    """Yield (Expect) for every corpus program, ordered by dir then name."""
+    for sub, status in DIR_EXPECT.items():
+        d = os.path.join(REPO_ROOT, "tests", sub)
+        if not os.path.isdir(d):
+            continue
+        for fname in sorted(os.listdir(d)):
+            if not fname.endswith(".vow"):
+                continue
+            path = os.path.join(d, fname)
+            exp = parse_directives(path, status)
+            if filter_name and filter_name not in exp.name:
+                continue
+            yield sub, exp
+
+
+def discover(verifier, filter_name):
+    """Print actual verifier outcomes to aid directive authoring."""
+    for sub, exp in collect(filter_name):
+        vj = run_json(verifier, ["verify", exp.path])
+        status = vj.get("status") if vj else "<no-json>"
+        cex = actual_cex(vj) if vj else []
+        line = f"{sub}/{exp.name}: status={status}"
+        for ce in cex:
+            line += f"  [fn={ce['fn']} blame={ce['blame']} vow_id={ce['vow_id']}]"
+        print(line)
+    return 0
+
+
+def banner(title, rows):
+    print(f"\n{'=' * 4} {title} ({len(rows)}) {'=' * 4}")
+    for name, detail in rows:
+        print(f"  {name}: {detail}")
+
+
+def evaluate(verifier, filter_name, output_dir):
+    buckets = {
+        SOUNDNESS: [],
+        PRECISION: [],
+        BLAME: [],
+        STATUS: [],
+        HARNESS: [],
+        GAP_FIXED: [],
+    }
+    known_gaps = []
+    report = []
+    passed = 0
+    cat_counts = {}
+    missing_category = []
+    bad_category = []
+
+    for sub, exp in collect(filter_name):
+        if exp.skip_reason:
+            continue
+        if exp.category is None:
+            missing_category.append(f"{sub}/{exp.name}")
+        elif exp.category not in CATEGORIES:
+            bad_category.append(f"{sub}/{exp.name}={exp.category}")
+        else:
+            cat_counts[exp.category] = cat_counts.get(exp.category, 0) + 1
+
+        vj = run_json(verifier, ["verify", exp.path])
+        verdict, detail = classify(exp, vj, verifier)
+        report.append(
+            {
+                "name": exp.name,
+                "dir": sub,
+                "category": exp.category,
+                "expected_status": exp.expected_status,
+                "actual_status": (vj or {}).get("status"),
+                "verdict": verdict,
+                "detail": detail,
+            }
+        )
+        if verdict == OK:
+            passed += 1
+        elif verdict == KNOWN_GAP:
+            known_gaps.append((f"{sub}/{exp.name}", detail))
+        else:
+            buckets[verdict].append((f"{sub}/{exp.name}", detail))
+
+    total = passed + len(known_gaps) + sum(len(v) for v in buckets.values())
+    print(f"Verifier-evaluation harness: {passed}/{total} programs match ground truth")
+
+    print("\nCategory coverage:")
+    for cat in sorted(CATEGORIES):
+        print(f"  {cat:<14} {cat_counts.get(cat, 0)}")
+    if missing_category:
+        print(f"  (!) {len(missing_category)} program(s) missing a category directive")
+    if bad_category:
+        print(f"  (!) unknown category: {', '.join(bad_category)}")
+
+    if buckets[SOUNDNESS]:
+        banner("SOUNDNESS REGRESSIONS — false-accepts (verifier trusted a bad program)",
+               buckets[SOUNDNESS])
+    if buckets[PRECISION]:
+        banner("PRECISION REGRESSIONS — false-rejects (verifier rejected a good program)",
+               buckets[PRECISION])
+    if buckets[BLAME]:
+        banner("BLAME / VOW_ID REGRESSIONS", buckets[BLAME])
+    if buckets[STATUS]:
+        banner("STATUS MISMATCHES", buckets[STATUS])
+    if buckets[GAP_FIXED]:
+        banner("KNOWN GAP APPEARS FIXED — promote to a verify-fail program",
+               buckets[GAP_FIXED])
+    if buckets[HARNESS]:
+        banner("HARNESS ERRORS", buckets[HARNESS])
+    if known_gaps:
+        banner("KNOWN SOUNDNESS GAPS — tracked false-accepts, non-fatal", known_gaps)
+
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        with open(os.path.join(output_dir, "report.json"), "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "passed": passed,
+                    "total": total,
+                    "known_gaps": len(known_gaps),
+                    "category_counts": cat_counts,
+                    "results": report,
+                },
+                fh,
+                indent=2,
+            )
+
+    failures = sum(len(v) for v in buckets.values())
+    if failures == 0 and not missing_category and not bad_category:
+        tail = f" ({len(known_gaps)} tracked known-gap(s))" if known_gaps else ""
+        print(f"\nAll programs match their ground-truth labels{tail}.")
+        return 0
+    print(f"\n{failures} regression(s); see banners above.")
+    return 1
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Vow verifier-evaluation harness (#334)")
+    ap.add_argument(
+        "--verifier",
+        default=os.path.join(REPO_ROOT, "target", "release", "vow"),
+        help="path to the verifier binary (default: target/release/vow)",
+    )
+    ap.add_argument("--filter", default=None, help="only programs whose name contains this")
+    ap.add_argument(
+        "--discover",
+        action="store_true",
+        help="print actual verifier outcomes instead of asserting ground truth",
+    )
+    ap.add_argument(
+        "--output-dir",
+        default=os.path.join(REPO_ROOT, "verify-eval.out"),
+        help="directory for the machine-readable report.json",
+    )
+    args = ap.parse_args()
+
+    if not os.path.exists(args.verifier):
+        print(f"verifier not found: {args.verifier}", file=sys.stderr)
+        return 2
+
+    if args.discover:
+        return discover(args.verifier, args.filter)
+    return evaluate(args.verifier, args.filter, args.output_dir)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -243,6 +243,14 @@ Two halves: performance, and contract quality.
    per-function inference or literal-derived bounds (#278) — spec-and-plan in
    0.3.0, implement may slip.
 
+5. **Verifier-evaluation suite** (#334) — a labelled acceptance corpus for the
+   verifier itself (false-accept / false-reject / blame correctness), distinct
+   from the synthesis benchmarks. Shipped: `scripts/verify_eval.py` over the
+   `tests/verify*` corpus, gating in CI with a SOUNDNESS banner; documented in
+   [`docs/verifier-eval.md`](verifier-eval.md). Foundational for #335 (replay
+   counterexamples vs runtime) and #337 (status discipline). Surfaced #764 — a
+   static caller-obligation false-accept — carried as a tracked known-gap.
+
 **Exit:** the fixture corpus + arena verify under a fixed memory budget
 (target: < 2 GB peak, no single function > the timeout); a published
 contract methodology; bounded quantifiers shipped; no contract in the repo

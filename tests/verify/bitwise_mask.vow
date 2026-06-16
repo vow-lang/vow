@@ -1,3 +1,4 @@
+// TEST: category overflow
 module BitwiseMask
 
 fn mask_low_byte(x: i64) -> i64 vow {

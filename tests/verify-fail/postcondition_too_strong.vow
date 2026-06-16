@@ -1,3 +1,5 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 1
 // TEST: counterexample-fn "positive_or_zero"
 // TEST: counterexample-blame callee
 // Postcondition is too strong: claims result > 0 but function

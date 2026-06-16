@@ -1,3 +1,4 @@
+// TEST: category overflow
 module U64Cast
 
 fn to_unsigned(x: i64) -> u64

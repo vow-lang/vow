@@ -1,0 +1,26 @@
+// CATEGORY: unverifiable (stress; non-gating)
+//
+// A loop with no invariant and a large iteration bound. ESBMC must unwind the
+// loop to discharge `ensures: result >= 0`; at the configured unwind budget it
+// cannot complete and returns `status: VerifyFailed, verify_status: "unknown"`
+// — the verifier fails closed (distinct from `Verified`) rather than falsely
+// accepting. The exact outcome depends on the unwind budget and host, which is
+// why this lives in the non-gating stress bucket (see README.md) instead of
+// tests/verify/ or tests/verify-fail/.
+module UnwindSum
+
+fn sum_to_n(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 100000,
+  ensures: result >= 0
+} {
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n {
+    s = s + i;
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] { print_i64(sum_to_n(10)); 0 }
