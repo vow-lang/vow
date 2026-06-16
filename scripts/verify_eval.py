@@ -254,7 +254,7 @@ def vacuity_check(verifier, path):
                pass as "not vacuous", which would disable the soundness guard in
                exactly the scenario it exists to catch.
     """
-    res = run_json(verifier, ["contracts", "--verify", path])
+    res = run_json(verifier, ["contracts", "--verify", "--no-cache", path])
     if res is None:
         return HARNESS, (
             "vacuity guard could not run: `contracts --verify` produced no "
@@ -350,7 +350,7 @@ def collect(filter_name):
 def discover(verifier, filter_name):
     """Print actual verifier outcomes to aid directive authoring."""
     for sub, exp in collect(filter_name):
-        vj = run_json(verifier, ["verify", exp.path])
+        vj = run_json(verifier, ["verify", "--no-cache", exp.path])
         status = vj.get("status") if vj else "<no-json>"
         cex = actual_cex(vj) if vj else []
         line = f"{sub}/{exp.name}: status={status}"
@@ -392,7 +392,7 @@ def evaluate(verifier, filter_name, output_dir):
         else:
             cat_counts[exp.category] = cat_counts.get(exp.category, 0) + 1
 
-        vj = run_json(verifier, ["verify", exp.path])
+        vj = run_json(verifier, ["verify", "--no-cache", exp.path])
         verdict, detail = classify(exp, vj, verifier)
         report.append(
             {
