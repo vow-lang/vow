@@ -245,14 +245,23 @@ def match_cex(want, actuals):
 
 
 def vacuity_check(verifier, path):
-    """Classify the vacuity guard for a should-pass program -> (verdict, detail).
+    """Classify the secondary contracts guard for a should-pass program.
 
-    OK       — the guard ran and found no vacuous proof.
-    SOUNDNESS — a contract was proven only vacuously.
-    HARNESS  — the guard itself could not run (timeout/crash/non-JSON). This
-               fails CLOSED: a broken `contracts --verify` must not silently
-               pass as "not vacuous", which would disable the soundness guard in
-               exactly the scenario it exists to catch.
+    Returns (verdict, detail):
+      OK        — the guard ran and confirmed no vacuous/disproved contract.
+      SOUNDNESS — a contract was proven only vacuously, OR `contracts --verify`
+                  *disproved* a contract while `vow verify` reported Verified
+                  (a verify/contracts divergence on a should-pass program).
+      HARNESS   — the guard itself could not run at all (timeout/crash/non-JSON);
+                  fail CLOSED so a broken `contracts --verify` cannot silently
+                  pass as "not vacuous".
+
+    Per-contract incompleteness counters (`unknown`/`timeout`/`error`/`skipped`)
+    are tolerated: the primary `vow verify` is authoritative for the should-pass
+    verdict, and the per-clause `contracts --verify` path legitimately returns
+    `unknown` for contracts ESBMC cannot decide there (e.g. modulo reasoning in
+    tests/verify/modulo_safe.vow) even when the program is genuinely Verified.
+    Failing those would be a false reject, not a soundness signal.
     """
     res = run_json(verifier, ["contracts", "--verify", "--no-cache", path])
     if res is None:
@@ -263,6 +272,11 @@ def vacuity_check(verifier, path):
     summary = res.get("summary", {}) or {}
     if summary.get("vacuous", 0):
         return SOUNDNESS, f"vacuous proof: {summary['vacuous']} contract(s) proven vacuously"
+    if summary.get("failed", 0):
+        return SOUNDNESS, (
+            f"verify/contracts divergence: `contracts --verify` disproved "
+            f"{summary['failed']} contract(s) on a Verified program"
+        )
     return OK, None
 
 
