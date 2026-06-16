@@ -1,0 +1,35 @@
+// TEST: category caller-blame
+// TEST: counterexample-fn "bad"
+// TEST: counterexample-blame caller
+//
+// Promoted from tests/verify/ (a #764 known-soundness-gap xfail) when the G7
+// call-boundary assert closed that gap (PR #736). `bad` calls `need_pos` with
+// `0 - n - 1`, which for `n >= 0` is always <= -1 and therefore violates
+// `need_pos`'s `requires: x >= 0`. The verifier now asserts a callee's
+// `requires` at its in-module call site (Caller blame) instead of assuming it,
+// so this genuinely-incorrect program is correctly reported `VerifyFailed`,
+// blaming the caller `bad`.
+//
+// `need_pos` returns a constant 0 so that the *only* defect is the caller
+// obligation: `bad`'s own `ensures: result >= 0` holds, and `need_pos`'s own
+// `ensures` holds under its assumed precondition.
+module CallerRequiresUnchecked
+
+fn need_pos(x: i64) -> i64 vow {
+  requires: x >= 0,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn bad(n: i64) -> i64 vow {
+  requires: n >= 0,
+  ensures: result >= 0
+} {
+  need_pos(0 - n - 1)
+}
+
+fn main() -> i32 [io] {
+  print_i64(bad(2));
+  0
+}

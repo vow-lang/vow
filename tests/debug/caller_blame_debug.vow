@@ -3,10 +3,10 @@
 //
 // Runtime caller-blame anchor for the verifier-evaluation suite (#334). A
 // `requires` violation is blamed on the Caller at runtime under --mode debug.
-// This is the runtime half of caller-blame coverage; the static half is the
-// known-soundness-gap entry tests/verify/caller_requires_unchecked.vow,
-// because static verify does not currently assert a callee's `requires` at
-// in-module call sites (tracked in #764).
+// This is the runtime half of caller-blame coverage; the static half is now
+// tests/verify-fail/caller_requires_unchecked.vow, since static verify asserts
+// a callee's `requires` at in-module call sites (the G7 call-boundary assert,
+// #764 resolved by PR #736).
 module CallerBlameDebug
 
 fn checked_div(x: i64, y: i64) -> i64 vow {

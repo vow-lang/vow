@@ -1,3 +1,4 @@
+// TEST: category overflow
 // TEST: counterexample-fn "double_u64"
 // TEST: counterexample-blame callee
 // Regression for the self-hosted verifier pinning every u64 parameter to 0

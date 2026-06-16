@@ -1,3 +1,4 @@
+// TEST: category caller-blame
 // TEST: counterexample-fn "f"
 // TEST: counterexample-blame caller
 // Regression for the caller-blame hole: a callee's `requires` was emitted as
