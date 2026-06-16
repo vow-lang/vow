@@ -143,20 +143,16 @@ fn region_pack(kind: i64, val: i64) -> i64 vow {
     requires: kind <= 3,
     requires: val >= 0,
     requires: val <= 4294967295,
-    ensures: result == val * 4 + kind,
-    ensures: result >= 0
+    ensures: result == val * 4 + kind
 } { val * 4 + kind }
 
 fn region_kind(r: i64) -> i64 vow {
     requires: r >= 0,
-    ensures: result == r - (r / 4) * 4,
-    ensures: result >= 0,
-    ensures: result <= 3
+    ensures: result == r - (r / 4) * 4
 } { r - (r / 4) * 4 }
 fn region_val(r: i64)  -> i64 vow {
     requires: r >= 0,
-    ensures: result == r / 4,
-    ensures: result >= 0
+    ensures: result == r / 4
 } { r / 4 }
 fn region_root()   -> i64 { region_pack(REGION_KIND_ROOT(),   0) }
 fn region_rodata() -> i64 { region_pack(REGION_KIND_RODATA(), 0) }

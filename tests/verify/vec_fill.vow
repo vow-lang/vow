@@ -1,3 +1,4 @@
+// TEST: category invariant
 // Concrete loop bound (8), not a `requires n <= 8` clause: ESBMC unwind limits
 // must never be encoded as contract bounds (see the contract-authoring rules).
 module VecFill

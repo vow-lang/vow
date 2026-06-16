@@ -1,3 +1,4 @@
+// TEST: category invariant
 // Regression for issue #506: a void function whose body ends with a
 // vow-annotated while loop must produce a well-formed C model. Before
 // the fix, the C emitter inserted `return v{N};` inside the C function

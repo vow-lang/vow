@@ -1,3 +1,4 @@
+// TEST: category callee-blame
 module CalleeBlame
 
 fn twice(x: i64) -> i64 vow {

@@ -1,3 +1,4 @@
+// TEST: category overflow
 module OverflowSafe
 
 fn twice(x: i64) -> i64 vow {

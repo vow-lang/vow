@@ -320,7 +320,7 @@ fn item_pack(kind: i64, id: i64) -> i64 vow {
 
 fn item_kind(v: i64) -> i64 vow {
     requires: v >= 0,
-    ensures: result >= 0
+    ensures: result == v / 4294967296
 } {
     v / 4294967296
 }

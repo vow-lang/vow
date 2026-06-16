@@ -1,3 +1,4 @@
+// TEST: category unverifiable
 module VecOfVecSkipped
 
 // Regression test for issue #505 (push side). `store_grid` pushes a freshly

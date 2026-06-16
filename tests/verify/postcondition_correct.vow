@@ -1,3 +1,4 @@
+// TEST: category callee-blame
 // Fixed version of postcondition_too_strong: uses >= instead of >.
 module PostconditionCorrect
 

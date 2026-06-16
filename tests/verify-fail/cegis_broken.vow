@@ -1,3 +1,5 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 1
 // TEST: counterexample-fn "safe_sub"
 // TEST: counterexample-blame callee
 module CegisBroken

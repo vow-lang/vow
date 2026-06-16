@@ -1,3 +1,5 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 1
 // TEST: counterexample-fn "mod_positive"
 // TEST: counterexample-blame callee
 // Signed remainder: when x is negative, x - (x/m)*m can be negative.

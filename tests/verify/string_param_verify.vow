@@ -1,3 +1,4 @@
+// TEST: category model-drift
 module StringParamVerify
 
 fn str_len_nonneg(s: String) -> i64 vow {

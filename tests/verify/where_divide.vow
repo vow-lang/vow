@@ -1,3 +1,4 @@
+// TEST: category caller-blame
 module WhereDivide
 
 fn safe_div(x: i64, y: i64 where y != 0) -> i64 {

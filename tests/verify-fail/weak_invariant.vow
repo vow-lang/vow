@@ -1,3 +1,5 @@
+// TEST: category invariant
+// TEST: counterexample-vow-id 4
 // TEST: counterexample-fn "fill_and_sum"
 // TEST: counterexample-blame callee
 // The loop invariant claims sum == i but the loop

@@ -1,3 +1,5 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "push_one"
 // TEST: counterexample-blame callee
 module StringEmpty
