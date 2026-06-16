@@ -36,9 +36,9 @@ failure (move it to `tests/verify-fail/`).
 
 ## Contents
 
-- `unwind_sum.vow` — a large no-invariant loop whose `ensures` ESBMC cannot
-  discharge without exhausting its unwind budget; expected `verify_status:
-  "unknown"`.
+- `unwind_loop.vow` — a large no-invariant loop with a true, tight postcondition
+  (`ensures: result == n`) that ESBMC cannot discharge without a loop invariant,
+  so it exhausts its unwind budget; expected `verify_status: "unknown"`.
 
 ## Relationship to the gating suite
 
