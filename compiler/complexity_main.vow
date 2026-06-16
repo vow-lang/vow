@@ -32,21 +32,21 @@ fn cx_int_flag(argv: Vec<String>, name: String, dflt: i64) -> i64 {
     parse_i64_default(v, dflt)
 }
 
-// Find a function's IR cyclomatic complexity by name (-1 if it has no IR
-// function, e.g. a body-less declaration).
-fn cx_ir_cyclo_for(name: String, ir_names: Vec<String>, ir_cyclo: Vec<i64>) -> i64 {
+// Look up an IR-derived per-function value by name (parallel name/value Vecs).
+// Returns -1 if the function has no IR (e.g. a body-less declaration).
+fn cx_ir_val_for(name: String, ir_names: Vec<String>, ir_vals: Vec<i64>) -> i64 {
     let n: i64 = ir_names.len();
     let mut i: i64 = 0;
     while i < n {
         let nm: String = ir_names[i];
-        if nm == name { return ir_cyclo[i]; }
+        if nm == name { return ir_vals[i]; }
         i = i + 1;
     }
     -1
 }
 
 // Append one function object (with score + score_factors) to `out`.
-fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, cir: i64) {
+fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, cir: i64, lcons: i64, lbor: i64) {
     out.push_str(String::from("{\"name\":\""));
     let rn: String = rec.name;
     out.push_str(cx_json_escape(rn));
@@ -96,7 +96,11 @@ fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, cir: i64) {
     out.push_str(cx_fmt_fixed(rec.h_difficulty_s));
     out.push_str(String::from(",\"effort\":"));
     out.push_str(cx_fmt_fixed(rec.h_effort_s));
-    out.push_str(String::from("}}}"));
+    out.push_str(String::from("}},\"vow\":{\"tier\":\"experimental\",\"linear_consumes\":"));
+    out.push_str(i64_to_string(lcons));
+    out.push_str(String::from(",\"linear_borrows\":"));
+    out.push_str(i64_to_string(lbor));
+    out.push_str(String::from("}}"));
 }
 
 fn run_complexity(argv: Vec<String>) -> i32 [io] {
@@ -125,25 +129,51 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let items: Vec<i64> = m.items;
     let n: i64 = items.len();
 
-    // IR cyclomatic lookup (matched to AST functions by name).
+    // IR-derived per-function metrics, indexed by IR function (matched to AST
+    // functions by name): cyclomatic, linear consume/borrow counts, callee sets.
     let ir_mod: IrModule = fr.ir_mod;
     let ir_funcs: Vec<IrFunction> = ir_mod.functions;
     let nirf: i64 = ir_funcs.len();
     let ir_names: Vec<String> = Vec::new();
     let ir_cyclo: Vec<i64> = Vec::new();
+    let ir_consumes: Vec<i64> = Vec::new();
+    let ir_borrows: Vec<i64> = Vec::new();
+    let ir_callees: Vec<Vec<i64>> = Vec::new();
     let mut x: i64 = 0;
     while x < nirf {
         let irf: IrFunction = ir_funcs[x];
         let irn: String = irf.name;
         ir_names.push(irn);
         ir_cyclo.push(cx_cyclomatic_ir(irf));
+        ir_consumes.push(cx_fn_count_op(irf, IOP_LINEAR_CONSUME()));
+        ir_borrows.push(cx_fn_count_op(irf, IOP_LINEAR_BORROW()));
+        ir_callees.push(cx_fn_callees(irf));
         x = x + 1;
     }
+    // fan-out = distinct callees; fan-in = callers (call-graph inversion).
+    let ir_fanout: Vec<i64> = Vec::new();
+    let ir_fanin: Vec<i64> = Vec::new();
+    let mut z: i64 = 0;
+    while z < nirf {
+        let cs: Vec<i64> = ir_callees[z];
+        ir_fanout.push(cs.len());
+        let mut fin: i64 = 0;
+        let mut w: i64 = 0;
+        while w < nirf {
+            let csw: Vec<i64> = ir_callees[w];
+            if cx_vec_has(csw, z) { fin = fin + 1; }
+            w = w + 1;
+        }
+        ir_fanin.push(fin);
+        z = z + 1;
+    }
 
-    // Pass 1: analyze + score every function; match IR cyclomatic by name.
+    // Pass 1: analyze + score every function; match IR metrics by name.
     let recs: Vec<CxFn> = Vec::new();
     let scs: Vec<CxScore> = Vec::new();
     let cirs: Vec<i64> = Vec::new();
+    let lcons_v: Vec<i64> = Vec::new();
+    let lbor_v: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
     while i < n {
         let it: i64 = items[i];
@@ -152,7 +182,9 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
             let rec: CxFn = cx_analyze_fn(a, fid, src);
             let sc: CxScore = cx_score(rec.cognitive, rec.nloc, cog_anchor, nloc_anchor);
             let rn: String = rec.name;
-            cirs.push(cx_ir_cyclo_for(rn, ir_names, ir_cyclo));
+            cirs.push(cx_ir_val_for(rn, ir_names, ir_cyclo));
+            lcons_v.push(cx_ir_val_for(rn, ir_names, ir_consumes));
+            lbor_v.push(cx_ir_val_for(rn, ir_names, ir_borrows));
             recs.push(rec);
             scs.push(sc);
         }
@@ -176,6 +208,29 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
         j = j + 1;
     }
 
+    // Module-level coupling aggregates.
+    let mut fan_in_max: i64 = 0;
+    let mut fan_out_max: i64 = 0;
+    let mut hk_max: i64 = 0;
+    let mut zz: i64 = 0;
+    while zz < nirf {
+        if ir_fanin[zz] > fan_in_max { fan_in_max = ir_fanin[zz]; }
+        if ir_fanout[zz] > fan_out_max { fan_out_max = ir_fanout[zz]; }
+        zz = zz + 1;
+    }
+    let mut hi: i64 = 0;
+    while hi < nf {
+        let hr: CxFn = recs[hi];
+        let hrn: String = hr.name;
+        let mut fi: i64 = cx_ir_val_for(hrn, ir_names, ir_fanin);
+        let mut fo: i64 = cx_ir_val_for(hrn, ir_names, ir_fanout);
+        if fi < 0 { fi = 0; }
+        if fo < 0 { fo = 0; }
+        let hk: i64 = cx_henry_kafura(hr.nloc, fi, fo);
+        if hk > hk_max { hk_max = hk; }
+        hi = hi + 1;
+    }
+
     // Pass 2: emit.
     let out: String = String::from("{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"");
     out.push_str(cx_json_escape(path));
@@ -189,10 +244,18 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut k: i64 = 0;
     while k < nf {
         if k > 0 { out.push_str(String::from(",")); }
-        cx_emit_fn(out, recs[k], scs[k], thr, cirs[k]);
+        cx_emit_fn(out, recs[k], scs[k], thr, cirs[k], lcons_v[k], lbor_v[k]);
         k = k + 1;
     }
-    out.push_str(String::from("]}],\"summary\":{\"functions\":"));
+    out.push_str(String::from("],\"module\":{\"tier\":\"experimental\",\"functions\":"));
+    out.push_str(i64_to_string(nf));
+    out.push_str(String::from(",\"fan_in_max\":"));
+    out.push_str(i64_to_string(fan_in_max));
+    out.push_str(String::from(",\"fan_out_max\":"));
+    out.push_str(i64_to_string(fan_out_max));
+    out.push_str(String::from(",\"henry_kafura_max\":"));
+    out.push_str(i64_to_string(hk_max));
+    out.push_str(String::from("}}],\"summary\":{\"functions\":"));
     out.push_str(i64_to_string(nf));
     out.push_str(String::from(",\"nloc_total\":"));
     out.push_str(i64_to_string(file_nloc));

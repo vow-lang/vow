@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use vow_ir::Opcode;
+use vow_ir::{InstData, Opcode};
 use vow_syntax::ast::{BinOp, Block, Expr, ExprKind, Item, Lit, Stmt, UnOp};
 
 // Cyclomatic complexity from the IR CFG, decision-count form:
@@ -24,6 +24,33 @@ fn ir_cyclomatic(f: &vow_ir::Function) -> i64 {
         }
     }
     branches + 1
+}
+
+// IR-derived per-function coupling/linear info (experimental tier).
+struct IrInfo {
+    cyclomatic: i64,
+    consumes: i64,
+    borrows: i64,
+    fan_in: i64,
+    fan_out: i64,
+}
+
+// Distinct user-function callee ids (IOP_CALL with CallTarget; externs excluded).
+fn ir_callees(f: &vow_ir::Function) -> std::collections::HashSet<u32> {
+    let mut s = std::collections::HashSet::new();
+    for b in &f.blocks {
+        for inst in &b.insts {
+            if let InstData::CallTarget(fid) = &inst.data {
+                s.insert(fid.0);
+            }
+        }
+    }
+    s
+}
+
+fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
+    let fl = fan_in.wrapping_mul(fan_out);
+    cx_sat(nloc.wrapping_mul(fl).wrapping_mul(fl))
 }
 
 use crate::emit_frontend_diagnostics;
@@ -331,6 +358,8 @@ struct CxEmit {
     h_volume_s: i64,
     h_difficulty_s: i64,
     h_effort_s: i64,
+    linear_consumes: i64,
+    linear_borrows: i64,
     score: i64,
     cog_sub_s: i64,
     size_sub_s: i64,
@@ -386,7 +415,11 @@ fn cx_emit_fn(out: &mut String, r: &CxEmit, thr: i64) {
     out.push_str(&cx_fmt_fixed(r.h_difficulty_s));
     out.push_str(",\"effort\":");
     out.push_str(&cx_fmt_fixed(r.h_effort_s));
-    out.push_str("}}}");
+    out.push_str("}},\"vow\":{\"tier\":\"experimental\",\"linear_consumes\":");
+    out.push_str(&r.linear_consumes.to_string());
+    out.push_str(",\"linear_borrows\":");
+    out.push_str(&r.linear_borrows.to_string());
+    out.push_str("}}");
 }
 
 pub(crate) fn run_complexity_command(
@@ -414,15 +447,43 @@ pub(crate) fn run_complexity_command(
     let module = frontend.module();
     let thr = if max_score >= 0 { max_score } else { 80 };
 
-    // IR cyclomatic lookup, matched to AST functions by name.
-    let ir_cyclo: HashMap<String, i64> = match frontend.ir() {
-        Some(m) => m
-            .functions
-            .iter()
-            .map(|f| (f.name.clone(), ir_cyclomatic(f)))
-            .collect(),
-        None => HashMap::new(),
-    };
+    // IR-derived per-function info, matched to AST functions by name.
+    let mut ir_info: HashMap<String, IrInfo> = HashMap::new();
+    let mut fan_in_max: i64 = 0;
+    let mut fan_out_max: i64 = 0;
+    if let Some(m) = frontend.ir() {
+        let funcs = &m.functions;
+        let callees: Vec<std::collections::HashSet<u32>> = funcs.iter().map(ir_callees).collect();
+        for (idx, f) in funcs.iter().enumerate() {
+            let fan_out = callees[idx].len() as i64;
+            let fid = f.id.0;
+            let fan_in = callees.iter().filter(|s| s.contains(&fid)).count() as i64;
+            let consumes = f
+                .blocks
+                .iter()
+                .flat_map(|b| &b.insts)
+                .filter(|x| matches!(x.opcode, Opcode::LinearConsume))
+                .count() as i64;
+            let borrows = f
+                .blocks
+                .iter()
+                .flat_map(|b| &b.insts)
+                .filter(|x| matches!(x.opcode, Opcode::LinearBorrow))
+                .count() as i64;
+            fan_in_max = fan_in_max.max(fan_in);
+            fan_out_max = fan_out_max.max(fan_out);
+            ir_info.insert(
+                f.name.clone(),
+                IrInfo {
+                    cyclomatic: ir_cyclomatic(f),
+                    consumes,
+                    borrows,
+                    fan_in,
+                    fan_out,
+                },
+            );
+        }
+    }
 
     // Pass 1: analyze + score every function.
     let mut recs: Vec<CxEmit> = Vec::new();
@@ -435,7 +496,10 @@ pub(crate) fn run_complexity_command(
             let mut acc = Acc::default();
             walk_block(&f.body, &mut acc);
             let cyclomatic = acc.decisions + 1;
-            let cyclomatic_ir = ir_cyclo.get(&f.name).copied().unwrap_or(-1);
+            let info = ir_info.get(&f.name);
+            let cyclomatic_ir = info.map(|x| x.cyclomatic).unwrap_or(-1);
+            let linear_consumes = info.map(|x| x.consumes).unwrap_or(0);
+            let linear_borrows = info.map(|x| x.borrows).unwrap_or(0);
             let mut cacc = CogAcc::default();
             cog_block(&f.body, 0, &f.name, &mut cacc);
             let cognitive = cacc.cog + if cacc.self_calls > 0 { 1 } else { 0 };
@@ -473,6 +537,8 @@ pub(crate) fn run_complexity_command(
                 h_volume_s,
                 h_difficulty_s,
                 h_effort_s,
+                linear_consumes,
+                linear_borrows,
                 score: sc.score,
                 cog_sub_s: sc.cog_sub_s,
                 size_sub_s: sc.size_sub_s,
@@ -503,6 +569,14 @@ pub(crate) fn run_complexity_command(
         }
     }
 
+    // Module-level Henry-Kafura max (needs AST nloc + IR fan-in/out by name).
+    let mut hk_max: i64 = 0;
+    for r in &recs {
+        if let Some(info) = ir_info.get(&r.name) {
+            hk_max = hk_max.max(cx_henry_kafura(r.nloc, info.fan_in, info.fan_out));
+        }
+    }
+
     // Pass 2: emit.
     let mut out = String::from(
         "{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"",
@@ -521,7 +595,15 @@ pub(crate) fn run_complexity_command(
         }
         cx_emit_fn(&mut out, r, thr);
     }
-    out.push_str("]}],\"summary\":{\"functions\":");
+    out.push_str("],\"module\":{\"tier\":\"experimental\",\"functions\":");
+    out.push_str(&(recs.len() as i64).to_string());
+    out.push_str(",\"fan_in_max\":");
+    out.push_str(&fan_in_max.to_string());
+    out.push_str(",\"fan_out_max\":");
+    out.push_str(&fan_out_max.to_string());
+    out.push_str(",\"henry_kafura_max\":");
+    out.push_str(&hk_max.to_string());
+    out.push_str("}}],\"summary\":{\"functions\":");
     out.push_str(&(recs.len() as i64).to_string());
     out.push_str(",\"nloc_total\":");
     out.push_str(&file_nloc.to_string());

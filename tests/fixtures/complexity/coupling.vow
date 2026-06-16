@@ -1,0 +1,13 @@
+module Coupling
+
+fn leaf(x: i64) -> i64 {
+    x + 1
+}
+
+fn mid(x: i64) -> i64 {
+    leaf(x) + leaf(x + 1)
+}
+
+fn top(x: i64) -> i64 {
+    mid(x) + leaf(x)
+}

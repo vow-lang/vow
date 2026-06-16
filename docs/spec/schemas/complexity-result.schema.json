@@ -19,26 +19,52 @@
   "$defs": {
     "File": {
       "type": "object",
-      "required": ["file", "complexity_score", "functions_over_threshold", "nloc", "functions"],
+      "required": ["file", "complexity_score", "functions_over_threshold", "nloc", "functions", "module"],
       "properties": {
         "file": { "type": "string", "description": "Source path as passed on the command line." },
         "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Max complexity_score across the file's functions." },
         "functions_over_threshold": { "type": "integer", "minimum": 0, "description": "Count of functions whose score exceeds the threshold (--max-score if passed, else the recommended 80)." },
         "nloc": { "type": "integer", "minimum": 0, "description": "Source line count of the file." },
-        "functions": { "type": "array", "items": { "$ref": "#/$defs/Function" } }
+        "functions": { "type": "array", "items": { "$ref": "#/$defs/Function" } },
+        "module": { "$ref": "#/$defs/Module" }
+      },
+      "additionalProperties": false
+    },
+    "Module": {
+      "description": "Module-level coupling aggregates (experimental tier). fan_in counts in-file callers only.",
+      "type": "object",
+      "required": ["tier", "functions", "fan_in_max", "fan_out_max", "henry_kafura_max"],
+      "properties": {
+        "tier": { "const": "experimental" },
+        "functions": { "type": "integer", "minimum": 0 },
+        "fan_in_max": { "type": "integer", "minimum": 0, "description": "Max in-file callers of any function." },
+        "fan_out_max": { "type": "integer", "minimum": 0, "description": "Max distinct callees of any function." },
+        "henry_kafura_max": { "type": "integer", "minimum": 0, "description": "Max nloc*(fan_in*fan_out)^2, saturated. Unvalidated." }
+      },
+      "additionalProperties": false
+    },
+    "Vow": {
+      "description": "Vow-surface metrics (experimental tier). Grows in Phase 3 (effects, linear_values, contract).",
+      "type": "object",
+      "required": ["tier", "linear_consumes", "linear_borrows"],
+      "properties": {
+        "tier": { "const": "experimental" },
+        "linear_consumes": { "type": "integer", "minimum": 0, "description": "IOP_LINEAR_CONSUME count (linear resource moves)." },
+        "linear_borrows": { "type": "integer", "minimum": 0, "description": "IOP_LINEAR_BORROW count." }
       },
       "additionalProperties": false
     },
     "Function": {
       "type": "object",
-      "required": ["name", "line", "complexity_score", "score_factors", "size", "structural"],
+      "required": ["name", "line", "complexity_score", "score_factors", "size", "structural", "vow"],
       "properties": {
         "name": { "type": "string" },
         "line": { "type": "integer", "minimum": 1, "description": "1-based source line of the function." },
         "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Readability / refactor-priority gate. NOT a defect predictor." },
         "score_factors": { "$ref": "#/$defs/ScoreFactors" },
         "size": { "$ref": "#/$defs/Size" },
-        "structural": { "$ref": "#/$defs/Structural" }
+        "structural": { "$ref": "#/$defs/Structural" },
+        "vow": { "$ref": "#/$defs/Vow" }
       },
       "additionalProperties": false
     },

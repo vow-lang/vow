@@ -43,6 +43,72 @@ fn cx_analyze_ir(f: IrFunction) -> CxIr {
     CxIr { cyclomatic_ir: cx_cyclomatic_ir(f) }
 }
 
+fn cx_vec_has(v: Vec<i64>, x: i64) -> bool {
+    let n: i64 = v.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if v[i] == x { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Count IR instructions with a given opcode in a function (e.g. linear
+// consume/borrow ops).
+fn cx_fn_count_op(f: IrFunction, want: i64) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut c: i64 = 0;
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == want { c = c + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    c
+}
+
+// Distinct user-function callee indices of a function (IOP_CALL with an
+// IDATA_CALL_TARGET payload; extern calls are excluded). Drives fan-out, and
+// fan-in via inversion across the module.
+fn cx_fn_callees(f: IrFunction) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_CALL() {
+                if inst.dk == IDATA_CALL_TARGET() {
+                    let tgt: i64 = inst.dv;
+                    if !cx_vec_has(out, tgt) { out.push(tgt); }
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
+// Henry-Kafura information-flow proxy: nloc * (fan_in * fan_out)^2, saturated.
+fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
+    let fl: i64 = fan_in * fan_out;
+    cx_sat(nloc * fl * fl)
+}
+
 // Per-function complexity record. Grows one field per metric slice.
 struct CxFn {
     name: String,
