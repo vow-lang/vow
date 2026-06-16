@@ -4,6 +4,7 @@ use complexity
 use ast
 use frontend
 use diag
+use ir
 
 // Minimal JSON string escaper (function names/paths rarely need it, but be
 // safe). Kept local to avoid cross-module coupling with mutants_main.
@@ -31,8 +32,21 @@ fn cx_int_flag(argv: Vec<String>, name: String, dflt: i64) -> i64 {
     parse_i64_default(v, dflt)
 }
 
+// Find a function's IR cyclomatic complexity by name (-1 if it has no IR
+// function, e.g. a body-less declaration).
+fn cx_ir_cyclo_for(name: String, ir_names: Vec<String>, ir_cyclo: Vec<i64>) -> i64 {
+    let n: i64 = ir_names.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let nm: String = ir_names[i];
+        if nm == name { return ir_cyclo[i]; }
+        i = i + 1;
+    }
+    -1
+}
+
 // Append one function object (with score + score_factors) to `out`.
-fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64) {
+fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, cir: i64) {
     out.push_str(String::from("{\"name\":\""));
     let rn: String = rec.name;
     out.push_str(cx_json_escape(rn));
@@ -58,6 +72,8 @@ fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64) {
     out.push_str(i64_to_string(rec.params));
     out.push_str(String::from("},\"structural\":{\"cyclomatic\":"));
     out.push_str(i64_to_string(rec.cyclomatic));
+    out.push_str(String::from(",\"cyclomatic_ir\":"));
+    out.push_str(i64_to_string(cir));
     out.push_str(String::from(",\"cognitive\":"));
     out.push_str(i64_to_string(rec.cognitive));
     out.push_str(String::from(",\"max_nesting\":"));
@@ -93,8 +109,8 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     if max_score >= 0 { thr = max_score; }
 
     let path: String = frontend_path_from_argv(argv, true);
-    let prep: FrontendPrep = frontend_prepare_path(path);
-    let checked: CheckedFrontend = prep.checked;
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
     diag_ctx_print_all(dctx);
     let n_errors: i64 = checked.n_errors;
@@ -104,14 +120,30 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     }
     let src: String = fs_read(path);
     let file_nloc: i64 = diag_compute_line(src, src.len());
-    let m: Module = prep.merged;
+    let m: Module = fr.merged;
     let a: AstArena = m.arena;
     let items: Vec<i64> = m.items;
     let n: i64 = items.len();
 
-    // Pass 1: analyze + score every function.
+    // IR cyclomatic lookup (matched to AST functions by name).
+    let ir_mod: IrModule = fr.ir_mod;
+    let ir_funcs: Vec<IrFunction> = ir_mod.functions;
+    let nirf: i64 = ir_funcs.len();
+    let ir_names: Vec<String> = Vec::new();
+    let ir_cyclo: Vec<i64> = Vec::new();
+    let mut x: i64 = 0;
+    while x < nirf {
+        let irf: IrFunction = ir_funcs[x];
+        let irn: String = irf.name;
+        ir_names.push(irn);
+        ir_cyclo.push(cx_cyclomatic_ir(irf));
+        x = x + 1;
+    }
+
+    // Pass 1: analyze + score every function; match IR cyclomatic by name.
     let recs: Vec<CxFn> = Vec::new();
     let scs: Vec<CxScore> = Vec::new();
+    let cirs: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
     while i < n {
         let it: i64 = items[i];
@@ -119,6 +151,8 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
             let fid: i64 = item_id(it);
             let rec: CxFn = cx_analyze_fn(a, fid, src);
             let sc: CxScore = cx_score(rec.cognitive, rec.nloc, cog_anchor, nloc_anchor);
+            let rn: String = rec.name;
+            cirs.push(cx_ir_cyclo_for(rn, ir_names, ir_cyclo));
             recs.push(rec);
             scs.push(sc);
         }
@@ -155,7 +189,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut k: i64 = 0;
     while k < nf {
         if k > 0 { out.push_str(String::from(",")); }
-        cx_emit_fn(out, recs[k], scs[k], thr);
+        cx_emit_fn(out, recs[k], scs[k], thr, cirs[k]);
         k = k + 1;
     }
     out.push_str(String::from("]}],\"summary\":{\"functions\":"));

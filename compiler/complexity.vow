@@ -2,6 +2,46 @@ module Complexity
 
 use ast
 use diag
+use ir
+
+// IR-derived (experimental tier) per-function metrics. Grows in Phase 2/3.
+struct CxIr {
+    cyclomatic_ir: i64,
+}
+
+// Cyclomatic complexity from the IR CFG, decision-count form:
+// (number of conditional branches) + 1. Each AST decision (if / while / for /
+// loop / &&/|| / ? / match arm) lowers to exactly one IOP_BRANCH, so this
+// cross-checks the AST decision-count form.
+//
+// NOTE: this intentionally uses the branch-count form rather than the design's
+// literal `edges - nodes + 2`. The latter assumes a single exit; this codebase
+// uses early `return` pervasively (each a 0-successor sink), so `e - n + 2`
+// undercounts badly (e.g. a 20-way `if ... return` chain scores ~1). The
+// branch-count form is the one comparable to the AST decision count.
+fn cx_cyclomatic_ir(f: IrFunction) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut branches: i64 = 0;
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_BRANCH() { branches = branches + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    branches + 1
+}
+
+fn cx_analyze_ir(f: IrFunction) -> CxIr {
+    CxIr { cyclomatic_ir: cx_cyclomatic_ir(f) }
+}
 
 // Per-function complexity record. Grows one field per metric slice.
 struct CxFn {

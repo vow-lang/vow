@@ -4842,9 +4842,10 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "Structural": {
       "type": "object",
-      "required": ["cyclomatic", "cognitive", "max_nesting", "halstead"],
+      "required": ["cyclomatic", "cyclomatic_ir", "cognitive", "max_nesting", "halstead"],
       "properties": {
-        "cyclomatic": { "type": "integer", "minimum": 1, "description": "Decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?." },
+        "cyclomatic": { "type": "integer", "minimum": 1, "description": "AST decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?." },
+        "cyclomatic_ir": { "type": "integer", "description": "IR branch-count cross-check: (number of IOP_BRANCH) + 1, or -1 if the function has no IR (e.g. a body-less declaration). Agrees with `cyclomatic` modulo &&/||/? lowering. Experimental tier." },
         "cognitive": { "type": "integer", "minimum": 0, "description": "Vow-adapted Cognitive Complexity (nesting-aware). Headline structural metric." },
         "max_nesting": { "type": "integer", "minimum": 0, "description": "Deepest structural nesting depth." },
         "halstead": { "$ref": "#/$defs/Halstead" }
@@ -8740,9 +8741,10 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "Structural": {
       "type": "object",
-      "required": ["cyclomatic", "cognitive", "max_nesting", "halstead"],
+      "required": ["cyclomatic", "cyclomatic_ir", "cognitive", "max_nesting", "halstead"],
       "properties": {
-        "cyclomatic": { "type": "integer", "minimum": 1, "description": "Decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?." },
+        "cyclomatic": { "type": "integer", "minimum": 1, "description": "AST decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?." },
+        "cyclomatic_ir": { "type": "integer", "description": "IR branch-count cross-check: (number of IOP_BRANCH) + 1, or -1 if the function has no IR (e.g. a body-less declaration). Agrees with `cyclomatic` modulo &&/||/? lowering. Experimental tier." },
         "cognitive": { "type": "integer", "minimum": 0, "description": "Vow-adapted Cognitive Complexity (nesting-aware). Headline structural metric." },
         "max_nesting": { "type": "integer", "minimum": 0, "description": "Deepest structural nesting depth." },
         "halstead": { "$ref": "#/$defs/Halstead" }

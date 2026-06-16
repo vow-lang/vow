@@ -5,9 +5,26 @@
 //! that, this module hand-builds the JSON string with integer-only arithmetic
 //! and never uses `serde_json` or native float formatting.
 
+use std::collections::HashMap;
 use std::path::Path;
 
+use vow_ir::Opcode;
 use vow_syntax::ast::{BinOp, Block, Expr, ExprKind, Item, Lit, Stmt, UnOp};
+
+// Cyclomatic complexity from the IR CFG, decision-count form:
+// (number of conditional branches) + 1. Mirrors compiler/complexity.vow
+// cx_cyclomatic_ir (see the note there on why this is not `e - n + 2`).
+fn ir_cyclomatic(f: &vow_ir::Function) -> i64 {
+    let mut branches: i64 = 0;
+    for b in &f.blocks {
+        for inst in &b.insts {
+            if matches!(inst.opcode, Opcode::Branch) {
+                branches += 1;
+            }
+        }
+    }
+    branches + 1
+}
 
 use crate::emit_frontend_diagnostics;
 use crate::frontend::{prepare_frontend, FrontendGoal};
@@ -302,6 +319,7 @@ struct CxEmit {
     stmts: i64,
     params: i64,
     cyclomatic: i64,
+    cyclomatic_ir: i64,
     cognitive: i64,
     max_nesting: i64,
     h_n1: i64,
@@ -344,6 +362,8 @@ fn cx_emit_fn(out: &mut String, r: &CxEmit, thr: i64) {
     out.push_str(&r.params.to_string());
     out.push_str("},\"structural\":{\"cyclomatic\":");
     out.push_str(&r.cyclomatic.to_string());
+    out.push_str(",\"cyclomatic_ir\":");
+    out.push_str(&r.cyclomatic_ir.to_string());
     out.push_str(",\"cognitive\":");
     out.push_str(&r.cognitive.to_string());
     out.push_str(",\"max_nesting\":");
@@ -377,7 +397,7 @@ pub(crate) fn run_complexity_command(
     max_cognitive: i64,
     max_cyclomatic: i64,
 ) {
-    let frontend = match prepare_frontend(source, FrontendGoal::MergedAst) {
+    let frontend = match prepare_frontend(source, FrontendGoal::LoweredIr) {
         Ok(bundle) => {
             emit_frontend_diagnostics(bundle.diagnostics());
             bundle
@@ -394,6 +414,16 @@ pub(crate) fn run_complexity_command(
     let module = frontend.module();
     let thr = if max_score >= 0 { max_score } else { 80 };
 
+    // IR cyclomatic lookup, matched to AST functions by name.
+    let ir_cyclo: HashMap<String, i64> = match frontend.ir() {
+        Some(m) => m
+            .functions
+            .iter()
+            .map(|f| (f.name.clone(), ir_cyclomatic(f)))
+            .collect(),
+        None => HashMap::new(),
+    };
+
     // Pass 1: analyze + score every function.
     let mut recs: Vec<CxEmit> = Vec::new();
     for item in &module.items {
@@ -405,6 +435,7 @@ pub(crate) fn run_complexity_command(
             let mut acc = Acc::default();
             walk_block(&f.body, &mut acc);
             let cyclomatic = acc.decisions + 1;
+            let cyclomatic_ir = ir_cyclo.get(&f.name).copied().unwrap_or(-1);
             let mut cacc = CogAcc::default();
             cog_block(&f.body, 0, &f.name, &mut cacc);
             let cognitive = cacc.cog + if cacc.self_calls > 0 { 1 } else { 0 };
@@ -430,6 +461,7 @@ pub(crate) fn run_complexity_command(
                 stmts: acc.stmts,
                 params: f.params.len() as i64,
                 cyclomatic,
+                cyclomatic_ir,
                 cognitive,
                 max_nesting: cacc.max_nesting,
                 h_n1,
