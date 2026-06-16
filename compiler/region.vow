@@ -3046,20 +3046,19 @@ fn region_caller0() -> i64 {
 // concrete slots (small numbers), or val=AMBIGUOUS_SLOT for the sentinel.
 
 fn AMBIGUOUS_SLOT() -> i64 vow {
-    ensures: result == 4294967295,
-    ensures: result >= 0
+    ensures: result == 4294967295
 } { 4294967295 }
 
 fn marker_caller_store(p: i64) -> i64 vow {
     requires: p >= 0,
     requires: p < 4294967294,
-    ensures: result >= 0
+    ensures: result == (p + 1) * 4 + REGION_KIND_CALLER()
 } {
     region_pack(REGION_KIND_CALLER(), p + 1)
 }
 
 fn region_caller_ambiguous() -> i64 vow {
-    ensures: result >= 0
+    ensures: result == AMBIGUOUS_SLOT() * 4 + REGION_KIND_CALLER()
 } {
     region_pack(REGION_KIND_CALLER(), AMBIGUOUS_SLOT())
 }

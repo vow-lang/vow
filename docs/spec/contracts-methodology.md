@@ -400,10 +400,15 @@ contract. Their correctness is established where it matters — at use sites: th
 dispatch-totality contracts above prove every valid tag is handled, the IR
 validator and serializer round-trips exercise every kind, and the binary
 fixed-point bootstrap miscompiles if any two tags collide. Removing the
-contracts cut the compiler's `weak` count from 408 to 11 (#81). The remaining 11
-are genuine parametric functions (the region/span bit-packers and friends) whose
-right contract is a round-trip or enumerated postcondition — the next hardening
-target, not noise.
+contracts cut the compiler's `weak` count from 408 to 11; the remaining 11 — the
+region/span bit-packers and friends (`region_pack`/`region_kind`/`region_val`,
+`span_pack`, `item_kind`, `AMBIGUOUS_SLOT`, `marker_caller_store`,
+`region_caller_ambiguous`, `suffix_len`) — were then hardened with exact functional
+postconditions: `item_kind` with `result == v / 4294967296`, and `suffix_len` with a
+per-suffix conditional mapping (`(suffix != tok_suffix_i64() || result == 3) && …`, one
+conjunct per suffix plus an unknown-suffix → `0` clause), bringing `weak` to **0** (#81).
+The CI weak-gate now holds that baseline: no weak
+contract may enter the self-hosted compiler.
 
 ## References
 

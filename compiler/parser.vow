@@ -103,7 +103,7 @@ fn span_pack(start: i64, len: i64) -> i64 vow {
     requires: len >= 0,
     requires: start < 65536,
     requires: len < 65536,
-    ensures: result >= 0
+    ensures: result == start * 65536 + len
 } {
     start * 65536 + len
 }
