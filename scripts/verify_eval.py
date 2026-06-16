@@ -98,6 +98,17 @@ class Expect:
 CEX_KV = re.compile(r'(\w+)\s*=\s*(?:"([^"]*)"|(\S+))')
 
 
+def validate_blame(path, blame):
+    """Reject a typo'd blame directive at load time rather than letting it
+    masquerade as a BLAME regression after every match_cex fails."""
+    if blame not in VALID_BLAME:
+        raise ValueError(
+            f"{path}: unknown counterexample blame {blame!r} "
+            f"(expected one of {sorted(VALID_BLAME)})"
+        )
+    return blame
+
+
 def parse_directives(path, default_status):
     """Read `// TEST:` directives from a program into an Expect."""
     exp = Expect(path, default_status)
@@ -127,7 +138,9 @@ def parse_directives(path, default_status):
                 if fm:
                     legacy["fn"] = fm.group(1)
             elif body.startswith("counterexample-blame"):
-                legacy["blame"] = body.split(None, 1)[1].strip().lower()
+                legacy["blame"] = validate_blame(
+                    path, body.split(None, 1)[1].strip().lower()
+                )
             elif body.startswith("counterexample-vow-id"):
                 legacy["vow_id"] = int(body.split(None, 1)[1].strip())
             elif body.startswith("cex"):
@@ -137,7 +150,7 @@ def parse_directives(path, default_status):
                     if key == "fn":
                         cex["fn"] = val
                     elif key == "blame":
-                        cex["blame"] = val.lower()
+                        cex["blame"] = validate_blame(path, val.lower())
                     elif key == "vow_id":
                         cex["vow_id"] = int(val)
                 if cex:
