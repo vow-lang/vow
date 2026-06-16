@@ -557,6 +557,25 @@ for vow_file in tests/verify-skip/*.vow; do
 done
 echo ""
 
+# ─── Section 4e: Verifier-Evaluation Suite (issue #334) ───────────
+#
+# The verifier's *acceptance* harness, distinct from the Rust/self parity
+# checks above: it asserts each labelled program in tests/verify* against its
+# ground-truth `// TEST:` directives (status + Caller/Callee blame + violated
+# vow_id), runs a vacuity guard over the should-pass set, and surfaces
+# false-accepts (SOUNDNESS) and false-rejects (PRECISION) under dedicated loud
+# banners. Runs against the Rust verifier; Rust/self parity is covered by 4b-4d.
+
+section_begin "Section 4e: Verifier-Evaluation Suite (#334)"
+ve_out="$TMPDIR/verify_eval.out"
+if python3 scripts/verify_eval.py --verifier "$RUST" --output-dir "$TMPDIR/verify-eval" >"$ve_out" 2>&1; then
+    pass "verifier-eval/ground-truth"
+else
+    fail "verifier-eval/ground-truth" "ground-truth mismatch — see banners below"
+fi
+sed 's/^/    /' "$ve_out"
+echo ""
+
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
 
 section_begin "Section 5: Debug Mode"

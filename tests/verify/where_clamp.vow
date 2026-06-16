@@ -1,3 +1,4 @@
+// TEST: category overflow
 module WhereClamp
 
 fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {

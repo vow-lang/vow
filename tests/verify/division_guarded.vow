@@ -1,3 +1,4 @@
+// TEST: category caller-blame
 // Fixed version of missing_precondition: requires x >= 0 AND y > 0.
 module DivisionGuarded
 

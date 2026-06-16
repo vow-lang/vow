@@ -1,0 +1,31 @@
+// CATEGORY: unverifiable (stress; non-gating)
+//
+// A loop with no invariant whose trip count (100000, passed from `main`) ESBMC
+// must unwind to discharge its postcondition; at the configured unwind budget
+// it cannot complete and returns `status: VerifyFailed, verify_status:
+// "unknown"` — the verifier fails closed (distinct from `Verified`) rather than
+// falsely accepting. The exact outcome depends on the unwind budget and host,
+// which is why this lives in the non-gating stress bucket (see README.md)
+// instead of tests/verify/ or tests/verify-fail/.
+//
+// `ensures: result == n` is the TRUE, TIGHT postcondition (`count_up` returns
+// exactly `n` for every `n >= 0`, with no overflow), so the contract obeys the
+// contract-authoring rule in CLAUDE.md — it is not a known-false/weak vow. It
+// is nonetheless hard to verify: ESBMC needs a loop invariant (`i <= n`) to
+// discharge it, and without one it exhausts its unwind budget. The large trip
+// count comes from the caller, NOT from an ESBMC-appeasing `requires: n <= ...`
+// bound.
+module UnwindLoop
+
+fn count_up(n: i64) -> i64 vow {
+  requires: n >= 0,
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] { print_i64(count_up(100000)); 0 }

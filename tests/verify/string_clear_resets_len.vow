@@ -1,3 +1,4 @@
+// TEST: category model-drift
 // __vow_string_clear must be modeled as `len = 0`. Without the model
 // the call is elided and `s.len()` after a clear is symbolic, so any
 // contract reasoning about the post-clear length silently weakens.

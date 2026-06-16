@@ -1,3 +1,4 @@
+// TEST: category model-drift
 // `collect_typed_vars` only detects args[0] of `__vow_string_eq` as a
 // string operand, so this test uses locally-constructed strings (which
 // are detected via the `__vow_string_from_cstr` creator path) instead of

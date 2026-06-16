@@ -1,3 +1,4 @@
+// TEST: category model-drift
 module BTreeMapBasic
 
 fn store_entry(k: i64, v: i64) -> BTreeMap<i64, i64> vow {

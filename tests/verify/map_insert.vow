@@ -1,3 +1,4 @@
+// TEST: category model-drift
 module MapInsert
 
 fn store_entry(k: i64, v: i64) -> HashMap<i64, i64> vow {

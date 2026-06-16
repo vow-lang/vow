@@ -1,3 +1,5 @@
+// TEST: category bounds
+// TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "last_element"
 // TEST: counterexample-blame none
 // Off-by-one: creates a vec of length n then accesses index n,

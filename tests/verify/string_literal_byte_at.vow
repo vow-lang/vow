@@ -1,3 +1,4 @@
+// TEST: category bounds
 module StringLiteralByteAt
 
 fn literal_first_byte() -> i64 vow {
