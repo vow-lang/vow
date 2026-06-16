@@ -161,16 +161,44 @@ def parse_directives(path, default_status):
 
 
 def run_json(verifier, args):
-    """Invoke the verifier and parse its JSON stdout (None on parse failure)."""
-    proc = subprocess.run(
-        [verifier] + args, capture_output=True, text=True, cwd=REPO_ROOT
-    )
+    """Invoke the verifier and parse its JSON stdout.
+
+    Returns None on timeout, empty output, or non-JSON output. On every failure
+    path the verifier's stderr is forwarded to our own stderr so a CI failure is
+    debuggable instead of collapsing to a bare "no parseable JSON". A bounded
+    timeout keeps a hung verifier (e.g. ESBMC stuck in a solver) from hanging
+    the whole harness — the gating corpus programs are small, so 120s is ample.
+    """
+    def _forward_stderr(proc):
+        if proc.stderr.strip():
+            print(
+                f"[verify_eval] verifier stderr ({' '.join(args)}): "
+                f"{proc.stderr.rstrip()}",
+                file=sys.stderr,
+            )
+
+    try:
+        proc = subprocess.run(
+            [verifier] + args,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"[verify_eval] verifier timed out after 120s: {' '.join(args)}",
+            file=sys.stderr,
+        )
+        return None
     out = proc.stdout.strip()
     if not out:
+        _forward_stderr(proc)
         return None
     try:
         return json.loads(out)
     except json.JSONDecodeError:
+        _forward_stderr(proc)
         return None
 
 
