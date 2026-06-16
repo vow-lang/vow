@@ -269,7 +269,15 @@ def vacuity_check(verifier, path):
             "vacuity guard could not run: `contracts --verify` produced no "
             "parseable output"
         )
-    summary = res.get("summary", {}) or {}
+    summary = res.get("summary")
+    if not isinstance(summary, dict):
+        # The contracts-result schema requires a `summary` object; its absence
+        # means the guard's counters are unavailable, so fail closed rather than
+        # reading every counter as zero and passing the program as non-vacuous.
+        return HARNESS, (
+            "vacuity guard could not run: `contracts --verify` result has no "
+            "`summary` object (schema regression?)"
+        )
     if summary.get("vacuous", 0):
         return SOUNDNESS, f"vacuous proof: {summary['vacuous']} contract(s) proven vacuously"
     if summary.get("failed", 0):
@@ -295,7 +303,7 @@ def classify(exp, verify_json, verifier):
             return KNOWN_GAP, f"{exp.known_gap}{ref}"
         return GAP_FIXED, (
             f"verifier now reports {actual} — known gap{ref} may be fixed; "
-            f"promote to a verify-fail program"
+            f"promote to a verify-fail or verify-skip program as appropriate"
         )
 
     if exp.expected_status == "Verified":
@@ -440,7 +448,10 @@ def evaluate(verifier, filter_name, output_dir):
     for cat in sorted(CATEGORIES):
         print(f"  {cat:<14} {cat_counts.get(cat, 0)}")
     if missing_category:
-        print(f"  (!) {len(missing_category)} program(s) missing a category directive")
+        print(
+            f"  (!) {len(missing_category)} program(s) missing a category "
+            f"directive: {', '.join(missing_category)}"
+        )
     if bad_category:
         print(f"  (!) unknown category: {', '.join(bad_category)}")
 
