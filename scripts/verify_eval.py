@@ -130,9 +130,18 @@ def parse_directives(path, default_status):
                     exp.skip_reason = sm.group(1)
             elif body.startswith("known-soundness-gap"):
                 gm = re.match(r'known-soundness-gap\s+"(.+?)"(?:\s+#(\d+))?', body)
-                if gm:
-                    exp.known_gap = gm.group(1)
-                    exp.known_gap_issue = gm.group(2)
+                if not gm:
+                    # Fail closed: a malformed gap directive must not silently
+                    # leave known_gap=None, which would turn a documented
+                    # false-accept fixture back into a regular Verified one and
+                    # disable the only non-fatal escape hatch (mirrors
+                    # validate_blame, the other safety-critical directive).
+                    raise ValueError(
+                        f"{path}: malformed known-soundness-gap directive "
+                        f'(expected: known-soundness-gap "<reason>" #<issue>): {body!r}'
+                    )
+                exp.known_gap = gm.group(1)
+                exp.known_gap_issue = gm.group(2)
             elif body.startswith("counterexample-fn"):
                 fm = re.match(r'counterexample-fn\s+"(.+)"', body)
                 if fm:
