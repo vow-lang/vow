@@ -200,6 +200,30 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 
 Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
 
+### `vow complexity`
+
+Report per-function complexity metrics as deterministic, **byte-identical** JSON (the Rust and self-hosted compilers produce identical output). Every structural metric sits next to its size; the single 0–100 `complexity_score` is a readability / refactor-priority gate — explicitly **not** a defect predictor. The component vector, not the scalar, is the source of truth; gating on the scalar alone is opt-in and discouraged as the sole signal.
+
+```
+vow complexity <source.vow>
+               [--cog-anchor N] [--nloc-anchor N]
+               [--max-score N] [--max-cognitive N] [--max-cyclomatic N]
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--cog-anchor` | `15` | Cognitive-complexity value mapped to sub-score `0.800` (SonarQube's default flag line). |
+| `--nloc-anchor` | `60` | NLOC value mapped to sub-score `0.800` (~50–60 line guidance). |
+| `--max-score` | (unset) | CI gate: exit nonzero if any function's `complexity_score` exceeds N. The recommended line is 80, but gating is opt-in only. |
+| `--max-cognitive` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
+| `--max-cyclomatic` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
+
+**Exit code.** `0` always, unless a `--max-*` threshold is passed and exceeded, in which case nonzero. With no `--max-*` flag the command is pure reporting — no threshold gates by default (per the decouple-language-from-prover principle).
+
+**Numeric convention.** The non-integer metrics (`halstead.volume`/`difficulty`/`effort` and `score_factors.*`) are emitted as fixed-3-decimal JSON numbers computed in **integer fixed-point** (scale 1000) — never native floats — so both compilers stay byte-identical. `complexity_score` is an integer in `[0, 100]`. The score's saturating anchor map uses a rational curve (`0.800` at the anchor, asymptoting to `1.000`), not an exponential, because the self-hosted compiler has no floating point.
+
+Output schema: see `docs/spec/schemas/complexity-result.schema.json`.
+
 ### `vow --help`
 
 `vow --help` is agent-first. It emits versioned JSON capability data for the tool, command set,

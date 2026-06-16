@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.org/schemas/complexity-result.schema.json",
+  "title": "ComplexityReport",
+  "description": "Output of `vow complexity <file>` on stdout. Byte-identical across the Rust and self-hosted compilers. Non-integer metrics are fixed-3-decimal numbers computed in integer fixed-point (scale 1000), never native floats.",
+  "type": "object",
+  "required": ["schema_version", "kind", "tool", "files", "summary"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "kind": { "const": "complexity_report" },
+    "tool": { "const": "vow" },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/File" }
+    },
+    "summary": { "$ref": "#/$defs/Summary" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "File": {
+      "type": "object",
+      "required": ["file", "complexity_score", "functions_over_threshold", "nloc", "functions"],
+      "properties": {
+        "file": { "type": "string", "description": "Source path as passed on the command line." },
+        "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Max complexity_score across the file's functions." },
+        "functions_over_threshold": { "type": "integer", "minimum": 0, "description": "Count of functions whose score exceeds the threshold (--max-score if passed, else the recommended 80)." },
+        "nloc": { "type": "integer", "minimum": 0, "description": "Source line count of the file." },
+        "functions": { "type": "array", "items": { "$ref": "#/$defs/Function" } }
+      },
+      "additionalProperties": false
+    },
+    "Function": {
+      "type": "object",
+      "required": ["name", "line", "complexity_score", "score_factors", "size", "structural"],
+      "properties": {
+        "name": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1, "description": "1-based source line of the function." },
+        "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Readability / refactor-priority gate. NOT a defect predictor." },
+        "score_factors": { "$ref": "#/$defs/ScoreFactors" },
+        "size": { "$ref": "#/$defs/Size" },
+        "structural": { "$ref": "#/$defs/Structural" }
+      },
+      "additionalProperties": false
+    },
+    "ScoreFactors": {
+      "description": "Sub-scores the gate is built from. cognitive_sub/size_sub/base are in [0,1] (fixed 3 decimals).",
+      "type": "object",
+      "required": ["cognitive_sub", "size_sub", "vow_bump", "base", "over_threshold"],
+      "properties": {
+        "cognitive_sub": { "type": "number", "description": "anchor_map(cognitive, --cog-anchor)." },
+        "size_sub": { "type": "number", "description": "anchor_map(nloc, --nloc-anchor)." },
+        "vow_bump": { "type": "number", "description": "Experimental Vow-surface bump. 0.0 in Phase 1." },
+        "base": { "type": "number", "description": "soft-OR of cognitive_sub and size_sub." },
+        "over_threshold": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "Size": {
+      "description": "Stable baseline metrics. Co-reported with every structural metric.",
+      "type": "object",
+      "required": ["nloc", "tokens", "stmts", "params"],
+      "properties": {
+        "nloc": { "type": "integer", "minimum": 0, "description": "Source lines spanned by the function." },
+        "tokens": { "type": "integer", "minimum": 0, "description": "Halstead length N (total operators + operands)." },
+        "stmts": { "type": "integer", "minimum": 0, "description": "Statement count (recursive; trailing expression counts as one)." },
+        "params": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "Structural": {
+      "type": "object",
+      "required": ["cyclomatic", "cognitive", "max_nesting", "halstead"],
+      "properties": {
+        "cyclomatic": { "type": "integer", "minimum": 1, "description": "Decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?." },
+        "cognitive": { "type": "integer", "minimum": 0, "description": "Vow-adapted Cognitive Complexity (nesting-aware). Headline structural metric." },
+        "max_nesting": { "type": "integer", "minimum": 0, "description": "Deepest structural nesting depth." },
+        "halstead": { "$ref": "#/$defs/Halstead" }
+      },
+      "additionalProperties": false
+    },
+    "Halstead": {
+      "type": "object",
+      "required": ["n1", "n2", "N1", "N2", "vocabulary", "length", "volume", "difficulty", "effort"],
+      "properties": {
+        "n1": { "type": "integer", "minimum": 0, "description": "Distinct operators." },
+        "n2": { "type": "integer", "minimum": 0, "description": "Distinct operands." },
+        "N1": { "type": "integer", "minimum": 0, "description": "Total operators." },
+        "N2": { "type": "integer", "minimum": 0, "description": "Total operands." },
+        "vocabulary": { "type": "integer", "minimum": 0, "description": "n1 + n2." },
+        "length": { "type": "integer", "minimum": 0, "description": "N1 + N2." },
+        "volume": { "type": "number", "description": "length * log2(vocabulary). Fixed 3 decimals, saturated." },
+        "difficulty": { "type": "number", "description": "(n1/2) * (N2/n2). Fixed 3 decimals." },
+        "effort": { "type": "number", "description": "difficulty * volume. Fixed 3 decimals, saturated." }
+      },
+      "additionalProperties": false
+    },
+    "Summary": {
+      "type": "object",
+      "required": ["functions", "nloc_total", "threshold", "functions_over_threshold", "thresholds_exceeded"],
+      "properties": {
+        "functions": { "type": "integer", "minimum": 0 },
+        "nloc_total": { "type": "integer", "minimum": 0 },
+        "threshold": { "type": "integer", "description": "--max-score if passed, else the recommended 80." },
+        "functions_over_threshold": { "type": "integer", "minimum": 0 },
+        "thresholds_exceeded": { "type": "array", "items": { "type": "string" }, "description": "Names of functions whose score exceeds the threshold." }
+      },
+      "additionalProperties": false
+    }
+  }
+}
