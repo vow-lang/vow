@@ -144,8 +144,15 @@ def parse_directives(path, default_status):
                 exp.known_gap_issue = gm.group(2)
             elif body.startswith("counterexample-fn"):
                 fm = re.match(r'counterexample-fn\s+"(.+)"', body)
-                if fm:
-                    legacy["fn"] = fm.group(1)
+                if not fm:
+                    # Fail closed like the blame/gap directives: a malformed
+                    # counterexample-fn (e.g. missing quotes) must not silently
+                    # drop the function filter and widen the cex match.
+                    raise ValueError(
+                        f"{path}: malformed counterexample-fn directive "
+                        f'(expected: counterexample-fn "<fn>"): {body!r}'
+                    )
+                legacy["fn"] = fm.group(1)
             elif body.startswith("counterexample-blame"):
                 legacy["blame"] = validate_blame(
                     path, body.split(None, 1)[1].strip().lower()
@@ -302,6 +309,11 @@ def classify(exp, verify_json, verifier):
     if verify_json is None:
         return HARNESS, "verifier produced no parseable JSON"
     actual = verify_json.get("status")
+    if actual is None:
+        # Fail closed: a result with no `status` field (schema regression) must
+        # not fall through to a status comparison that reads it as "not
+        # Verified" and mislabels it (e.g. a spurious GAP_FIXED on a known gap).
+        return HARNESS, "verifier result has no `status` field (schema regression?)"
 
     # A documented soundness gap: the program is genuinely incorrect and should
     # fail, but the verifier accepts it today. Tolerated (non-fatal) while the
