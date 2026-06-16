@@ -47,13 +47,20 @@ ground truth.
 | `tests/verify-fail/` | `VerifyFailed` (+ expected counterexamples) | yes |
 | `tests/verify-skip/` | `Skipped` (non-modelable, fail-closed, deterministic) | yes |
 | `tests/verify-stress/` | `unverifiable-by-design` (timeout/`unknown`) | **no** — see below |
-| `tests/debug/` | runtime `VowViolation` blame (debug mode) | yes (via `full_test.sh`) |
+| `tests/debug/` | runtime `VowViolation` blame (debug mode) | local only — `tests/run_tests.sh` Phase 4 (**not** CI) |
 
 `tests/verify-stress/` is **not** wired into CI or `full_test.sh`: its outcomes
 depend on the ESBMC unwind budget and host, so asserting a fixed result would be
 flaky. It documents that the verifier degrades *safely* (fails closed, never
 falsely accepts) on intractable inputs. See
 [`tests/verify-stress/README.md`](../tests/verify-stress/README.md).
+
+`tests/debug/` runtime checks (including the caller-blame anchor
+`caller_blame_debug.vow`) are exercised by `tests/run_tests.sh` Phase 4, a
+local developer harness. Neither it nor `full_test.sh` runs in CI; only the
+static `scripts/verify_eval.py` gate does. So runtime blame is regression-checked
+locally, not in CI — keep that in mind when relying on the runtime half of
+caller-blame coverage.
 
 ## Ground-truth directives
 
