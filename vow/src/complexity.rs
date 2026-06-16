@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use vow_syntax::ast::{BinOp, Block, Expr, ExprKind, Item, Stmt};
+use vow_syntax::ast::{BinOp, Block, Expr, ExprKind, Item, Lit, Stmt, UnOp};
 
 use crate::emit_frontend_diagnostics;
 use crate::frontend::{prepare_frontend, FrontendGoal};
@@ -330,12 +330,27 @@ pub(crate) fn run_complexity_command(source: &Path) {
             let mut cacc = CogAcc::default();
             cog_block(&f.body, 0, &f.name, &mut cacc);
             let cognitive = cacc.cog + if cacc.self_calls > 0 { 1 } else { 0 };
+            let mut hacc = HalAcc::default();
+            hal_block(&f.body, &mut hacc);
+            let h_n1 = cx_popcount(hacc.mask);
+            let h_n2 = hacc.seen.len() as i64;
+            let h_vocab = h_n1 + h_n2;
+            let h_length = hacc.bign1 + hacc.bign2;
+            let h_volume_s = cx_sat(h_length.wrapping_mul(cx_log2_milli(h_vocab)));
+            let h_difficulty_s = if h_n2 > 0 {
+                cx_sat(h_n1.wrapping_mul(hacc.bign2).wrapping_mul(500) / h_n2)
+            } else {
+                0
+            };
+            let h_effort_s = h_difficulty_s.wrapping_mul(h_volume_s) / 1000;
             out.push_str("{\"name\":\"");
             out.push_str(&cx_json_escape(&f.name));
             out.push_str("\",\"line\":");
             out.push_str(&first_line.to_string());
             out.push_str(",\"size\":{\"nloc\":");
             out.push_str(&nloc.to_string());
+            out.push_str(",\"tokens\":");
+            out.push_str(&h_length.to_string());
             out.push_str(",\"stmts\":");
             out.push_str(&acc.stmts.to_string());
             out.push_str(",\"params\":");
@@ -346,7 +361,25 @@ pub(crate) fn run_complexity_command(source: &Path) {
             out.push_str(&cognitive.to_string());
             out.push_str(",\"max_nesting\":");
             out.push_str(&cacc.max_nesting.to_string());
-            out.push_str("}}");
+            out.push_str(",\"halstead\":{\"n1\":");
+            out.push_str(&h_n1.to_string());
+            out.push_str(",\"n2\":");
+            out.push_str(&h_n2.to_string());
+            out.push_str(",\"N1\":");
+            out.push_str(&hacc.bign1.to_string());
+            out.push_str(",\"N2\":");
+            out.push_str(&hacc.bign2.to_string());
+            out.push_str(",\"vocabulary\":");
+            out.push_str(&h_vocab.to_string());
+            out.push_str(",\"length\":");
+            out.push_str(&h_length.to_string());
+            out.push_str(",\"volume\":");
+            out.push_str(&cx_fmt_fixed(h_volume_s));
+            out.push_str(",\"difficulty\":");
+            out.push_str(&cx_fmt_fixed(h_difficulty_s));
+            out.push_str(",\"effort\":");
+            out.push_str(&cx_fmt_fixed(h_effort_s));
+            out.push_str("}}}");
             count += 1;
         }
     }
@@ -354,6 +387,264 @@ pub(crate) fn run_complexity_command(source: &Path) {
     out.push_str(&count.to_string());
     out.push_str("}}");
     println!("{out}");
+}
+
+// ---- Fixed-point integer math (byte-identical with compiler/complexity.vow) ----
+const CX_SAT: i64 = 2_000_000_000;
+
+fn cx_sat(x: i64) -> i64 {
+    if x > CX_SAT {
+        CX_SAT
+    } else {
+        x
+    }
+}
+
+fn cx_log2_milli(n: i64) -> i64 {
+    if n <= 1 {
+        return 0;
+    }
+    let mut intpart: i64 = 0;
+    let mut v: i64 = n;
+    while v > 1 {
+        v /= 2;
+        intpart += 1;
+    }
+    let mut p2: i64 = 1;
+    let mut k: i64 = 0;
+    while k < intpart {
+        p2 *= 2;
+        k += 1;
+    }
+    let scale: i64 = 1000;
+    let mut m: i64 = n.wrapping_mul(scale) / p2;
+    let mut frac: i64 = 0;
+    let mut b: i64 = scale / 2;
+    let mut iter = 0;
+    while iter < 10 {
+        m = m.wrapping_mul(m) / scale;
+        if m >= 2 * scale {
+            m /= 2;
+            frac += b;
+        }
+        b /= 2;
+        iter += 1;
+    }
+    intpart * scale + frac
+}
+
+fn cx_fmt_fixed(scaled: i64) -> String {
+    let mut s = String::new();
+    let mut x = scaled;
+    if x < 0 {
+        s.push('-');
+        x = -x;
+    }
+    let whole = x / 1000;
+    let frac = x - whole * 1000;
+    s.push_str(&whole.to_string());
+    s.push('.');
+    if frac < 100 {
+        s.push('0');
+    }
+    if frac < 10 {
+        s.push('0');
+    }
+    s.push_str(&frac.to_string());
+    s
+}
+
+fn cx_popcount(mask: i64) -> i64 {
+    let mut c: i64 = 0;
+    let mut m = mask;
+    while m > 0 {
+        c += m % 2;
+        m /= 2;
+    }
+    c
+}
+
+// ---- Halstead operator/operand counting (mirrors compiler/complexity.vow) ----
+#[derive(Default)]
+struct HalAcc {
+    mask: i64,
+    bign1: i64,
+    bign2: i64,
+    seen: Vec<String>,
+}
+
+fn hal_op(acc: &mut HalAcc, id: i64) {
+    acc.mask |= 1i64 << id;
+    acc.bign1 += 1;
+}
+
+fn hal_operand(acc: &mut HalAcc, canon: String) {
+    acc.bign2 += 1;
+    if !acc.seen.iter().any(|e| e == &canon) {
+        acc.seen.push(canon);
+    }
+}
+
+// Binop id matches the self-hosted BINOP_* constants exactly.
+fn rust_binop_id(op: BinOp) -> i64 {
+    match op {
+        BinOp::Add => 0,
+        BinOp::Sub => 1,
+        BinOp::Mul => 2,
+        BinOp::Div => 3,
+        BinOp::Rem => 4,
+        BinOp::AddChecked => 5,
+        BinOp::SubChecked => 6,
+        BinOp::MulChecked => 7,
+        BinOp::DivChecked => 8,
+        BinOp::RemChecked => 9,
+        BinOp::Eq => 10,
+        BinOp::Ne => 11,
+        BinOp::Lt => 12,
+        BinOp::Le => 13,
+        BinOp::Gt => 14,
+        BinOp::Ge => 15,
+        BinOp::And => 16,
+        BinOp::Or => 17,
+        BinOp::BitXor => 18,
+        BinOp::BitAnd => 19,
+        BinOp::BitOr => 20,
+        BinOp::Shl => 21,
+        BinOp::Shr => 22,
+    }
+}
+
+fn hal_block(b: &Block, acc: &mut HalAcc) {
+    for s in &b.stmts {
+        match s {
+            Stmt::Let { init, .. } => hal_expr(init, acc),
+            Stmt::Expr { expr, .. } => hal_expr(expr, acc),
+        }
+    }
+    if let Some(t) = &b.trailing_expr {
+        hal_expr(t, acc);
+    }
+}
+
+fn hal_expr(e: &Expr, acc: &mut HalAcc) {
+    match &e.kind {
+        ExprKind::Ident(name) => hal_operand(acc, format!("v:{name}")),
+        ExprKind::Lit(Lit::Int(n)) => hal_operand(acc, format!("n:{n}")),
+        ExprKind::Lit(Lit::Bool(b)) => hal_operand(acc, format!("b:{}", if *b { 1 } else { 0 })),
+        ExprKind::Lit(Lit::String(s)) => hal_operand(acc, format!("s:{s}")),
+        ExprKind::Lit(Lit::Float(_)) => {}
+        ExprKind::BinaryOp { op, lhs, rhs } => {
+            hal_op(acc, rust_binop_id(*op));
+            hal_expr(lhs, acc);
+            hal_expr(rhs, acc);
+        }
+        ExprKind::UnaryOp { op, operand } => {
+            let id = match op {
+                UnOp::Neg => 23,
+                UnOp::Not => 24,
+            };
+            hal_op(acc, id);
+            hal_expr(operand, acc);
+        }
+        ExprKind::Call { callee, args } => {
+            hal_op(acc, 25);
+            hal_expr(callee, acc);
+            for a in args {
+                hal_expr(a, acc);
+            }
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            hal_op(acc, 28);
+            hal_expr(receiver, acc);
+            for a in args {
+                hal_expr(a, acc);
+            }
+        }
+        ExprKind::Index { base, index } => {
+            hal_op(acc, 26);
+            hal_expr(base, acc);
+            hal_expr(index, acc);
+        }
+        ExprKind::FieldAccess { base, .. } => {
+            hal_op(acc, 27);
+            hal_expr(base, acc);
+        }
+        ExprKind::Cast { expr, .. } => {
+            hal_op(acc, 29);
+            hal_expr(expr, acc);
+        }
+        ExprKind::Assign { lhs, rhs } => {
+            hal_op(acc, 30);
+            hal_expr(lhs, acc);
+            hal_expr(rhs, acc);
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            hal_op(acc, 31);
+            hal_expr(condition, acc);
+            hal_block(then_branch, acc);
+            if let Some(e2) = else_branch {
+                hal_expr(e2, acc);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            hal_op(acc, 32);
+            hal_expr(condition, acc);
+            hal_block(body, acc);
+        }
+        ExprKind::ForEach { iterable, body, .. } => {
+            hal_op(acc, 33);
+            hal_expr(iterable, acc);
+            hal_block(body, acc);
+        }
+        ExprKind::Loop { body, .. } => {
+            hal_op(acc, 34);
+            hal_block(body, acc);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            hal_op(acc, 35);
+            hal_expr(scrutinee, acc);
+            for arm in arms {
+                hal_expr(&arm.body, acc);
+            }
+        }
+        ExprKind::Return { value } => {
+            hal_op(acc, 36);
+            if let Some(v) = value {
+                hal_expr(v, acc);
+            }
+        }
+        ExprKind::Question { expr } => {
+            hal_op(acc, 37);
+            hal_expr(expr, acc);
+        }
+        ExprKind::Break { .. } => hal_op(acc, 38),
+        ExprKind::Continue => hal_op(acc, 39),
+        ExprKind::Block(b) => hal_block(b, acc),
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, v) in fields {
+                hal_expr(v, acc);
+            }
+        }
+        ExprKind::EnumConstruct { fields, .. } => {
+            for v in fields {
+                hal_expr(v, acc);
+            }
+        }
+        ExprKind::Tuple(elems) => {
+            for v in elems {
+                hal_expr(v, acc);
+            }
+        }
+        // `&x` is transparent in the self-hosted AST: recurse, count nothing.
+        ExprKind::Borrow { expr } => hal_expr(expr, acc),
+        ExprKind::Result => {}
+    }
 }
 
 // 1-based line number of a byte offset. Must match the self-hosted

@@ -10,9 +10,19 @@ struct CxFn {
     nloc: i64,
     params: i64,
     stmts: i64,
+    tokens: i64,
     cyclomatic: i64,
     cognitive: i64,
     max_nesting: i64,
+    h_n1: i64,
+    h_n2: i64,
+    h_bign1: i64,
+    h_bign2: i64,
+    h_vocab: i64,
+    h_length: i64,
+    h_volume_s: i64,
+    h_difficulty_s: i64,
+    h_effort_s: i64,
 }
 
 // Recursive AST walk accumulating structural counts. `acc` is a 2-element
@@ -333,6 +343,276 @@ fn cog_expr(a: AstArena, eid: i64, nesting: i64, logctx: i64, selfn: String, acc
     }
 }
 
+// ---- Fixed-point integer math (shared, byte-identical with Rust) ----
+//
+// The self-hosted compiler has no floats, and native float formatting could
+// never be byte-identical across the two compilers. So all "float" metrics are
+// computed in integer fixed-point (scale = 1000, i.e. 3 decimal places) and
+// serialized by cx_fmt_fixed. CX_SAT caps values so the effort product cannot
+// overflow i64 (2e9 * 2e9 = 4e18 < i64::MAX).
+fn CX_SCALE() -> i64 { 1000 }
+fn CX_SAT() -> i64 { 2000000000 }
+
+fn cx_sat(x: i64) -> i64 {
+    if x > CX_SAT() { CX_SAT() } else { x }
+}
+
+// Integer log2 scaled by 1000. log2(0)=log2(1)=0. Integer part is the index of
+// the high bit; the fractional part is found by 10 mantissa-squaring steps.
+fn cx_log2_milli(n: i64) -> i64 {
+    if n <= 1 { return 0; }
+    let mut intpart: i64 = 0;
+    let mut v: i64 = n;
+    while v > 1 { v = v / 2; intpart = intpart + 1; }
+    let mut p2: i64 = 1;
+    let mut k: i64 = 0;
+    while k < intpart { p2 = p2 * 2; k = k + 1; }
+    let scale: i64 = 1000;
+    let mut m: i64 = n * scale / p2;
+    let mut frac: i64 = 0;
+    let mut b: i64 = scale / 2;
+    let mut iter: i64 = 0;
+    while iter < 10 {
+        m = m * m / scale;
+        if m >= 2 * scale {
+            m = m / 2;
+            frac = frac + b;
+        }
+        b = b / 2;
+        iter = iter + 1;
+    }
+    intpart * scale + frac
+}
+
+// Format a scale-1000 fixed-point integer as a JSON number "whole.fff".
+fn cx_fmt_fixed(scaled: i64) -> String {
+    let s: String = String::from("");
+    let mut x: i64 = scaled;
+    if x < 0 { s.push_byte(45); x = 0 - x; }
+    let whole: i64 = x / 1000;
+    let frac: i64 = x - whole * 1000;
+    s.push_str(i64_to_string(whole));
+    s.push_byte(46);
+    if frac < 100 { s.push_byte(48); }
+    if frac < 10 { s.push_byte(48); }
+    s.push_str(i64_to_string(frac));
+    s
+}
+
+fn cx_popcount(mask: i64) -> i64 {
+    let mut c: i64 = 0;
+    let mut m: i64 = mask;
+    while m > 0 {
+        c = c + (m % 2);
+        m = m / 2;
+    }
+    c
+}
+
+fn cx_seen_contains(seen: Vec<String>, s: String) -> bool {
+    let n: i64 = seen.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let e: String = seen[i];
+        if e == s { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// ---- Halstead operator/operand counting ----
+//
+// acc = [operator_seen_bitmask, N1 (total operators), N2 (total operands)].
+// `seen` accumulates canonical operand strings for the distinct count (n2).
+// Operator distinctness (n1) = popcount(acc[0]). Operator id assignment:
+//   binop kind 0..22 -> bit 0..22; unop 23+kind; call 25; index 26; field 27;
+//   method 28; cast 29; assign 30; if 31; while 32; for 33; loop 34; match 35;
+//   return 36; ? 37; break 38; continue 39.
+fn hal_op(acc: Vec<i64>, id: i64) {
+    acc[0] = acc[0] | (1 << id);
+    acc[1] = acc[1] + 1;
+}
+
+fn hal_operand(acc: Vec<i64>, seen: Vec<String>, canon: String) {
+    acc[2] = acc[2] + 1;
+    if !cx_seen_contains(seen, canon) {
+        seen.push(canon);
+    }
+}
+
+fn hal_block(a: AstArena, bid: i64, acc: Vec<i64>, seen: Vec<String>) {
+    if bid < 0 { return; }
+    let slid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, slid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, slid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            hal_expr(a, stmt_c(a, sid), acc, seen);
+        } else {
+            hal_expr(a, stmt_a(a, sid), acc, seen);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 { hal_expr(a, trail, acc, seen); }
+}
+
+fn hal_expr(a: AstArena, eid: i64, acc: Vec<i64>, seen: Vec<String>) {
+    if eid < 0 { return; }
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_IDENT() {
+        let nm: String = arena_str(a, expr_a(a, eid));
+        let c: String = String::from("v:");
+        c.push_str(nm);
+        hal_operand(acc, seen, c);
+        return;
+    }
+    if tag == EXPR_LIT_INT() {
+        let c: String = String::from("n:");
+        c.push_str(i64_to_string(expr_a(a, eid)));
+        hal_operand(acc, seen, c);
+        return;
+    }
+    if tag == EXPR_LIT_BOOL() {
+        let c: String = String::from("b:");
+        c.push_str(i64_to_string(expr_a(a, eid)));
+        hal_operand(acc, seen, c);
+        return;
+    }
+    if tag == EXPR_LIT_STR() {
+        let c: String = String::from("s:");
+        c.push_str(arena_str(a, expr_a(a, eid)));
+        hal_operand(acc, seen, c);
+        return;
+    }
+    if tag == EXPR_BINOP() {
+        hal_op(acc, expr_a(a, eid));
+        hal_expr(a, expr_b(a, eid), acc, seen);
+        hal_expr(a, expr_c(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_UNOP() {
+        hal_op(acc, 23 + expr_a(a, eid));
+        hal_expr(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_CALL() {
+        hal_op(acc, 25);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { hal_expr(a, list_get(a, args_lid, i), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_METHOD() {
+        hal_op(acc, 28);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        let args_lid: i64 = expr_c(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { hal_expr(a, list_get(a, args_lid, i), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_INDEX() {
+        hal_op(acc, 26);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_expr(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_FIELD() {
+        hal_op(acc, 27);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_CAST() {
+        hal_op(acc, 29);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_ASSIGN() {
+        hal_op(acc, 30);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_expr(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_IF() {
+        hal_op(acc, 31);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_block(a, expr_b(a, eid), acc, seen);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 { hal_expr(a, else_eid, acc, seen); }
+        return;
+    }
+    if tag == EXPR_WHILE() {
+        hal_op(acc, 32);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_block(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_FOR() {
+        hal_op(acc, 33);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_block(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        hal_op(acc, 34);
+        hal_block(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        hal_op(acc, 35);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_arms: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n_arms { hal_expr(a, list_get(a, arms_lid, i * 2 + 1), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_RETURN() {
+        hal_op(acc, 36);
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { hal_expr(a, v, acc, seen); }
+        return;
+    }
+    if tag == EXPR_QUESTION() {
+        hal_op(acc, 37);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_BREAK() { hal_op(acc, 38); return; }
+    if tag == EXPR_CONTINUE() { hal_op(acc, 39); return; }
+    if tag == EXPR_BLOCK() {
+        hal_block(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let nf: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nf { hal_expr(a, list_get(a, fields_lid, i * 2 + 1), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { hal_expr(a, list_get(a, args_lid, i), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n { hal_expr(a, list_get(a, elems_lid, i), acc, seen); i = i + 1; }
+        return;
+    }
+}
+
 // Analyze a single AST function (by arena fid) into a CxFn record.
 // `src` is the raw source text, used for span -> line-number mapping.
 fn cx_analyze_fn(a: AstArena, fid: i64, src: String) -> CxFn {
@@ -374,5 +654,24 @@ fn cx_analyze_fn(a: AstArena, fid: i64, src: String) -> CxFn {
     if cacc[2] > 0 { cognitive = cognitive + 1; }
     let max_nesting: i64 = cacc[1];
 
-    CxFn { name: nm, line: first_line, nloc: nloc, params: pc, stmts: stmts, cyclomatic: cyclomatic, cognitive: cognitive, max_nesting: max_nesting }
+    let hacc: Vec<i64> = Vec::new();
+    hacc.push(0);
+    hacc.push(0);
+    hacc.push(0);
+    let seen: Vec<String> = Vec::new();
+    hal_block(a, body_bid, hacc, seen);
+    let h_n1: i64 = cx_popcount(hacc[0]);
+    let h_bign1: i64 = hacc[1];
+    let h_bign2: i64 = hacc[2];
+    let h_n2: i64 = seen.len();
+    let h_vocab: i64 = h_n1 + h_n2;
+    let h_length: i64 = h_bign1 + h_bign2;
+    let h_volume_s: i64 = cx_sat(h_length * cx_log2_milli(h_vocab));
+    let mut h_difficulty_s: i64 = 0;
+    if h_n2 > 0 {
+        h_difficulty_s = cx_sat(h_n1 * h_bign2 * 500 / h_n2);
+    }
+    let h_effort_s: i64 = h_difficulty_s * h_volume_s / 1000;
+
+    CxFn { name: nm, line: first_line, nloc: nloc, params: pc, stmts: stmts, tokens: h_length, cyclomatic: cyclomatic, cognitive: cognitive, max_nesting: max_nesting, h_n1: h_n1, h_n2: h_n2, h_bign1: h_bign1, h_bign2: h_bign2, h_vocab: h_vocab, h_length: h_length, h_volume_s: h_volume_s, h_difficulty_s: h_difficulty_s, h_effort_s: h_effort_s }
 }

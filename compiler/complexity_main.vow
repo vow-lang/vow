@@ -60,6 +60,8 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
             out.push_str(i64_to_string(rec.line));
             out.push_str(String::from(",\"size\":{\"nloc\":"));
             out.push_str(i64_to_string(rec.nloc));
+            out.push_str(String::from(",\"tokens\":"));
+            out.push_str(i64_to_string(rec.tokens));
             out.push_str(String::from(",\"stmts\":"));
             out.push_str(i64_to_string(rec.stmts));
             out.push_str(String::from(",\"params\":"));
@@ -70,7 +72,25 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
             out.push_str(i64_to_string(rec.cognitive));
             out.push_str(String::from(",\"max_nesting\":"));
             out.push_str(i64_to_string(rec.max_nesting));
-            out.push_str(String::from("}}"));
+            out.push_str(String::from(",\"halstead\":{\"n1\":"));
+            out.push_str(i64_to_string(rec.h_n1));
+            out.push_str(String::from(",\"n2\":"));
+            out.push_str(i64_to_string(rec.h_n2));
+            out.push_str(String::from(",\"N1\":"));
+            out.push_str(i64_to_string(rec.h_bign1));
+            out.push_str(String::from(",\"N2\":"));
+            out.push_str(i64_to_string(rec.h_bign2));
+            out.push_str(String::from(",\"vocabulary\":"));
+            out.push_str(i64_to_string(rec.h_vocab));
+            out.push_str(String::from(",\"length\":"));
+            out.push_str(i64_to_string(rec.h_length));
+            out.push_str(String::from(",\"volume\":"));
+            out.push_str(cx_fmt_fixed(rec.h_volume_s));
+            out.push_str(String::from(",\"difficulty\":"));
+            out.push_str(cx_fmt_fixed(rec.h_difficulty_s));
+            out.push_str(String::from(",\"effort\":"));
+            out.push_str(cx_fmt_fixed(rec.h_effort_s));
+            out.push_str(String::from("}}}"));
             count = count + 1;
         }
         i = i + 1;
