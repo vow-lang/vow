@@ -2624,6 +2624,30 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 
 Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
 
+### `vow complexity`
+
+Report per-function complexity metrics as deterministic, **byte-identical** JSON (the Rust and self-hosted compilers produce identical output). Every structural metric sits next to its size; the single 0–100 `complexity_score` is a readability / refactor-priority gate — explicitly **not** a defect predictor. The component vector, not the scalar, is the source of truth; gating on the scalar alone is opt-in and discouraged as the sole signal.
+
+```
+vow complexity <source.vow>
+               [--cog-anchor N] [--nloc-anchor N]
+               [--max-score N] [--max-cognitive N] [--max-cyclomatic N]
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--cog-anchor` | `15` | Cognitive-complexity value mapped to sub-score `0.800` (SonarQube's default flag line). |
+| `--nloc-anchor` | `60` | NLOC value mapped to sub-score `0.800` (~50–60 line guidance). |
+| `--max-score` | (unset) | CI gate: exit nonzero if any function's `complexity_score` exceeds N. The recommended line is 80, but gating is opt-in only. |
+| `--max-cognitive` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
+| `--max-cyclomatic` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
+
+**Exit code.** `0` always, unless a `--max-*` threshold is passed and exceeded, in which case nonzero. With no `--max-*` flag the command is pure reporting — no threshold gates by default (per the decouple-language-from-prover principle).
+
+**Numeric convention.** The non-integer metrics (`halstead.volume`/`difficulty`/`effort` and `score_factors.*`) are emitted as fixed-3-decimal JSON numbers computed in **integer fixed-point** (scale 1000) — never native floats — so both compilers stay byte-identical. `complexity_score` is an integer in `[0, 100]`. The score's saturating anchor map uses a rational curve (`0.800` at the anchor, asymptoting to `1.000`), not an exponential, because the self-hosted compiler has no floating point.
+
+Output schema: see `docs/spec/schemas/complexity-result.schema.json`.
+
 ### `vow --help`
 
 `vow --help` is agent-first. It emits versioned JSON capability data for the tool, command set,
@@ -4744,6 +4768,121 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
 }
 ```
 
+## complexity-result
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.org/schemas/complexity-result.schema.json",
+  "title": "ComplexityReport",
+  "description": "Output of `vow complexity <file>` on stdout. Byte-identical across the Rust and self-hosted compilers. Non-integer metrics are fixed-3-decimal numbers computed in integer fixed-point (scale 1000), never native floats.",
+  "type": "object",
+  "required": ["schema_version", "kind", "tool", "files", "summary"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "kind": { "const": "complexity_report" },
+    "tool": { "const": "vow" },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/File" }
+    },
+    "summary": { "$ref": "#/$defs/Summary" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "File": {
+      "type": "object",
+      "required": ["file", "complexity_score", "functions_over_threshold", "nloc", "functions"],
+      "properties": {
+        "file": { "type": "string", "description": "Source path as passed on the command line." },
+        "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Max complexity_score across the file's functions." },
+        "functions_over_threshold": { "type": "integer", "minimum": 0, "description": "Count of functions whose score exceeds the threshold (--max-score if passed, else the recommended 80)." },
+        "nloc": { "type": "integer", "minimum": 0, "description": "Source line count of the file." },
+        "functions": { "type": "array", "items": { "$ref": "#/$defs/Function" } }
+      },
+      "additionalProperties": false
+    },
+    "Function": {
+      "type": "object",
+      "required": ["name", "line", "complexity_score", "score_factors", "size", "structural"],
+      "properties": {
+        "name": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1, "description": "1-based source line of the function." },
+        "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Readability / refactor-priority gate. NOT a defect predictor." },
+        "score_factors": { "$ref": "#/$defs/ScoreFactors" },
+        "size": { "$ref": "#/$defs/Size" },
+        "structural": { "$ref": "#/$defs/Structural" }
+      },
+      "additionalProperties": false
+    },
+    "ScoreFactors": {
+      "description": "Sub-scores the gate is built from. cognitive_sub/size_sub/base are in [0,1] (fixed 3 decimals).",
+      "type": "object",
+      "required": ["cognitive_sub", "size_sub", "vow_bump", "base", "over_threshold"],
+      "properties": {
+        "cognitive_sub": { "type": "number", "description": "anchor_map(cognitive, --cog-anchor)." },
+        "size_sub": { "type": "number", "description": "anchor_map(nloc, --nloc-anchor)." },
+        "vow_bump": { "type": "number", "description": "Experimental Vow-surface bump. 0.0 in Phase 1." },
+        "base": { "type": "number", "description": "soft-OR of cognitive_sub and size_sub." },
+        "over_threshold": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "Size": {
+      "description": "Stable baseline metrics. Co-reported with every structural metric.",
+      "type": "object",
+      "required": ["nloc", "tokens", "stmts", "params"],
+      "properties": {
+        "nloc": { "type": "integer", "minimum": 0, "description": "Source lines spanned by the function." },
+        "tokens": { "type": "integer", "minimum": 0, "description": "Halstead length N (total operators + operands)." },
+        "stmts": { "type": "integer", "minimum": 0, "description": "Statement count (recursive; trailing expression counts as one)." },
+        "params": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "Structural": {
+      "type": "object",
+      "required": ["cyclomatic", "cognitive", "max_nesting", "halstead"],
+      "properties": {
+        "cyclomatic": { "type": "integer", "minimum": 1, "description": "Decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?." },
+        "cognitive": { "type": "integer", "minimum": 0, "description": "Vow-adapted Cognitive Complexity (nesting-aware). Headline structural metric." },
+        "max_nesting": { "type": "integer", "minimum": 0, "description": "Deepest structural nesting depth." },
+        "halstead": { "$ref": "#/$defs/Halstead" }
+      },
+      "additionalProperties": false
+    },
+    "Halstead": {
+      "type": "object",
+      "required": ["n1", "n2", "N1", "N2", "vocabulary", "length", "volume", "difficulty", "effort"],
+      "properties": {
+        "n1": { "type": "integer", "minimum": 0, "description": "Distinct operators." },
+        "n2": { "type": "integer", "minimum": 0, "description": "Distinct operands." },
+        "N1": { "type": "integer", "minimum": 0, "description": "Total operators." },
+        "N2": { "type": "integer", "minimum": 0, "description": "Total operands." },
+        "vocabulary": { "type": "integer", "minimum": 0, "description": "n1 + n2." },
+        "length": { "type": "integer", "minimum": 0, "description": "N1 + N2." },
+        "volume": { "type": "number", "description": "length * log2(vocabulary). Fixed 3 decimals, saturated." },
+        "difficulty": { "type": "number", "description": "(n1/2) * (N2/n2). Fixed 3 decimals." },
+        "effort": { "type": "number", "description": "difficulty * volume. Fixed 3 decimals, saturated." }
+      },
+      "additionalProperties": false
+    },
+    "Summary": {
+      "type": "object",
+      "required": ["functions", "nloc_total", "threshold", "functions_over_threshold", "thresholds_exceeded"],
+      "properties": {
+        "functions": { "type": "integer", "minimum": 0 },
+        "nloc_total": { "type": "integer", "minimum": 0 },
+        "threshold": { "type": "integer", "description": "--max-score if passed, else the recommended 80." },
+        "functions_over_threshold": { "type": "integer", "minimum": 0 },
+        "thresholds_exceeded": { "type": "array", "items": { "type": "string" }, "description": "Names of functions whose score exceeds the threshold." }
+      },
+      "additionalProperties": false
+    }
+  }
+}
+```
+
 ## contracts-result
 
 ```json
@@ -6383,6 +6522,30 @@ vowc mutants run   [--root DIR] [--shard X/Y]
 | `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |
 
 Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
+
+### `vow complexity`
+
+Report per-function complexity metrics as deterministic, **byte-identical** JSON (the Rust and self-hosted compilers produce identical output). Every structural metric sits next to its size; the single 0–100 `complexity_score` is a readability / refactor-priority gate — explicitly **not** a defect predictor. The component vector, not the scalar, is the source of truth; gating on the scalar alone is opt-in and discouraged as the sole signal.
+
+```
+vow complexity <source.vow>
+               [--cog-anchor N] [--nloc-anchor N]
+               [--max-score N] [--max-cognitive N] [--max-cyclomatic N]
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--cog-anchor` | `15` | Cognitive-complexity value mapped to sub-score `0.800` (SonarQube's default flag line). |
+| `--nloc-anchor` | `60` | NLOC value mapped to sub-score `0.800` (~50–60 line guidance). |
+| `--max-score` | (unset) | CI gate: exit nonzero if any function's `complexity_score` exceeds N. The recommended line is 80, but gating is opt-in only. |
+| `--max-cognitive` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
+| `--max-cyclomatic` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
+
+**Exit code.** `0` always, unless a `--max-*` threshold is passed and exceeded, in which case nonzero. With no `--max-*` flag the command is pure reporting — no threshold gates by default (per the decouple-language-from-prover principle).
+
+**Numeric convention.** The non-integer metrics (`halstead.volume`/`difficulty`/`effort` and `score_factors.*`) are emitted as fixed-3-decimal JSON numbers computed in **integer fixed-point** (scale 1000) — never native floats — so both compilers stay byte-identical. `complexity_score` is an integer in `[0, 100]`. The score's saturating anchor map uses a rational curve (`0.800` at the anchor, asymptoting to `1.000`), not an exponential, because the self-hosted compiler has no floating point.
+
+Output schema: see `docs/spec/schemas/complexity-result.schema.json`.
 
 ### `vow --help`
 
@@ -8503,6 +8666,120 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "additionalProperties": false
 }
 "#,
+        ),
+        (
+            r#"schemas/complexity-result.schema.json"#,
+            r##"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.org/schemas/complexity-result.schema.json",
+  "title": "ComplexityReport",
+  "description": "Output of `vow complexity <file>` on stdout. Byte-identical across the Rust and self-hosted compilers. Non-integer metrics are fixed-3-decimal numbers computed in integer fixed-point (scale 1000), never native floats.",
+  "type": "object",
+  "required": ["schema_version", "kind", "tool", "files", "summary"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "kind": { "const": "complexity_report" },
+    "tool": { "const": "vow" },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/File" }
+    },
+    "summary": { "$ref": "#/$defs/Summary" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "File": {
+      "type": "object",
+      "required": ["file", "complexity_score", "functions_over_threshold", "nloc", "functions"],
+      "properties": {
+        "file": { "type": "string", "description": "Source path as passed on the command line." },
+        "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Max complexity_score across the file's functions." },
+        "functions_over_threshold": { "type": "integer", "minimum": 0, "description": "Count of functions whose score exceeds the threshold (--max-score if passed, else the recommended 80)." },
+        "nloc": { "type": "integer", "minimum": 0, "description": "Source line count of the file." },
+        "functions": { "type": "array", "items": { "$ref": "#/$defs/Function" } }
+      },
+      "additionalProperties": false
+    },
+    "Function": {
+      "type": "object",
+      "required": ["name", "line", "complexity_score", "score_factors", "size", "structural"],
+      "properties": {
+        "name": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1, "description": "1-based source line of the function." },
+        "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Readability / refactor-priority gate. NOT a defect predictor." },
+        "score_factors": { "$ref": "#/$defs/ScoreFactors" },
+        "size": { "$ref": "#/$defs/Size" },
+        "structural": { "$ref": "#/$defs/Structural" }
+      },
+      "additionalProperties": false
+    },
+    "ScoreFactors": {
+      "description": "Sub-scores the gate is built from. cognitive_sub/size_sub/base are in [0,1] (fixed 3 decimals).",
+      "type": "object",
+      "required": ["cognitive_sub", "size_sub", "vow_bump", "base", "over_threshold"],
+      "properties": {
+        "cognitive_sub": { "type": "number", "description": "anchor_map(cognitive, --cog-anchor)." },
+        "size_sub": { "type": "number", "description": "anchor_map(nloc, --nloc-anchor)." },
+        "vow_bump": { "type": "number", "description": "Experimental Vow-surface bump. 0.0 in Phase 1." },
+        "base": { "type": "number", "description": "soft-OR of cognitive_sub and size_sub." },
+        "over_threshold": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "Size": {
+      "description": "Stable baseline metrics. Co-reported with every structural metric.",
+      "type": "object",
+      "required": ["nloc", "tokens", "stmts", "params"],
+      "properties": {
+        "nloc": { "type": "integer", "minimum": 0, "description": "Source lines spanned by the function." },
+        "tokens": { "type": "integer", "minimum": 0, "description": "Halstead length N (total operators + operands)." },
+        "stmts": { "type": "integer", "minimum": 0, "description": "Statement count (recursive; trailing expression counts as one)." },
+        "params": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "Structural": {
+      "type": "object",
+      "required": ["cyclomatic", "cognitive", "max_nesting", "halstead"],
+      "properties": {
+        "cyclomatic": { "type": "integer", "minimum": 1, "description": "Decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?." },
+        "cognitive": { "type": "integer", "minimum": 0, "description": "Vow-adapted Cognitive Complexity (nesting-aware). Headline structural metric." },
+        "max_nesting": { "type": "integer", "minimum": 0, "description": "Deepest structural nesting depth." },
+        "halstead": { "$ref": "#/$defs/Halstead" }
+      },
+      "additionalProperties": false
+    },
+    "Halstead": {
+      "type": "object",
+      "required": ["n1", "n2", "N1", "N2", "vocabulary", "length", "volume", "difficulty", "effort"],
+      "properties": {
+        "n1": { "type": "integer", "minimum": 0, "description": "Distinct operators." },
+        "n2": { "type": "integer", "minimum": 0, "description": "Distinct operands." },
+        "N1": { "type": "integer", "minimum": 0, "description": "Total operators." },
+        "N2": { "type": "integer", "minimum": 0, "description": "Total operands." },
+        "vocabulary": { "type": "integer", "minimum": 0, "description": "n1 + n2." },
+        "length": { "type": "integer", "minimum": 0, "description": "N1 + N2." },
+        "volume": { "type": "number", "description": "length * log2(vocabulary). Fixed 3 decimals, saturated." },
+        "difficulty": { "type": "number", "description": "(n1/2) * (N2/n2). Fixed 3 decimals." },
+        "effort": { "type": "number", "description": "difficulty * volume. Fixed 3 decimals, saturated." }
+      },
+      "additionalProperties": false
+    },
+    "Summary": {
+      "type": "object",
+      "required": ["functions", "nloc_total", "threshold", "functions_over_threshold", "thresholds_exceeded"],
+      "properties": {
+        "functions": { "type": "integer", "minimum": 0 },
+        "nloc_total": { "type": "integer", "minimum": 0 },
+        "threshold": { "type": "integer", "description": "--max-score if passed, else the recommended 80." },
+        "functions_over_threshold": { "type": "integer", "minimum": 0 },
+        "thresholds_exceeded": { "type": "array", "items": { "type": "string" }, "description": "Names of functions whose score exceeds the threshold." }
+      },
+      "additionalProperties": false
+    }
+  }
+}
+"##,
         ),
         (
             r#"schemas/contracts-result.schema.json"#,
