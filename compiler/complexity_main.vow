@@ -66,6 +66,10 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
             out.push_str(i64_to_string(rec.params));
             out.push_str(String::from("},\"structural\":{\"cyclomatic\":"));
             out.push_str(i64_to_string(rec.cyclomatic));
+            out.push_str(String::from(",\"cognitive\":"));
+            out.push_str(i64_to_string(rec.cognitive));
+            out.push_str(String::from(",\"max_nesting\":"));
+            out.push_str(i64_to_string(rec.max_nesting));
             out.push_str(String::from("}}"));
             count = count + 1;
         }

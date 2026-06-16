@@ -11,6 +11,8 @@ struct CxFn {
     params: i64,
     stmts: i64,
     cyclomatic: i64,
+    cognitive: i64,
+    max_nesting: i64,
 }
 
 // Recursive AST walk accumulating structural counts. `acc` is a 2-element
@@ -169,6 +171,168 @@ fn cx_walk_expr(a: AstArena, eid: i64, acc: Vec<i64>) {
     }
 }
 
+// Cognitive Complexity (Vow-adapted, plan §3.2). `acc` is a 3-element vector:
+// acc[0] = cognitive total, acc[1] = max structural nesting depth,
+// acc[2] = direct self-call count. `nesting` is the number of enclosing
+// structural constructs; `logctx` is the enclosing logical operator
+// (BINOP_AND/OR or -1) used to count contiguous &&/|| runs once each.
+fn cog_track_max(acc: Vec<i64>, depth: i64) {
+    if depth > acc[1] { acc[1] = depth; }
+}
+
+fn cog_block(a: AstArena, bid: i64, nesting: i64, selfn: String, acc: Vec<i64>) {
+    if bid < 0 { return; }
+    let slid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, slid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, slid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            cog_expr(a, stmt_c(a, sid), nesting, -1, selfn, acc);
+        } else {
+            cog_expr(a, stmt_a(a, sid), nesting, -1, selfn, acc);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 { cog_expr(a, trail, nesting, -1, selfn, acc); }
+}
+
+fn cog_expr(a: AstArena, eid: i64, nesting: i64, logctx: i64, selfn: String, acc: Vec<i64>) {
+    if eid < 0 { return; }
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_IF() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_block(a, expr_b(a, eid), nesting + 1, selfn, acc);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 {
+            if expr_tag(a, else_eid) == EXPR_IF() {
+                cog_expr(a, else_eid, nesting, -1, selfn, acc);
+            } else {
+                acc[0] = acc[0] + 1;
+                cog_expr(a, else_eid, nesting + 1, -1, selfn, acc);
+            }
+        }
+        return;
+    }
+    if tag == EXPR_WHILE() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_block(a, expr_b(a, eid), nesting + 1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_FOR() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_block(a, expr_b(a, eid), nesting + 1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_block(a, expr_a(a, eid), nesting + 1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_arms: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n_arms {
+            cog_expr(a, list_get(a, arms_lid, i * 2 + 1), nesting + 1, -1, selfn, acc);
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        if op == BINOP_AND() || op == BINOP_OR() {
+            if op != logctx { acc[0] = acc[0] + 1; }
+            cog_expr(a, expr_b(a, eid), nesting, op, selfn, acc);
+            cog_expr(a, expr_c(a, eid), nesting, op, selfn, acc);
+        } else {
+            cog_expr(a, expr_b(a, eid), nesting, -1, selfn, acc);
+            cog_expr(a, expr_c(a, eid), nesting, -1, selfn, acc);
+        }
+        return;
+    }
+    if tag == EXPR_QUESTION() {
+        acc[0] = acc[0] + 1;
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_CALL() {
+        let callee_eid: i64 = expr_a(a, eid);
+        if expr_tag(a, callee_eid) == EXPR_IDENT() {
+            let nm_sid: i64 = expr_a(a, callee_eid);
+            let nm: String = arena_str(a, nm_sid);
+            if nm == selfn { acc[2] = acc[2] + 1; }
+        }
+        cog_expr(a, callee_eid, nesting, -1, selfn, acc);
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cog_expr(a, list_get(a, args_lid, i), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_METHOD() {
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        let args_lid: i64 = expr_c(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cog_expr(a, list_get(a, args_lid, i), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_UNOP() { cog_expr(a, expr_b(a, eid), nesting, -1, selfn, acc); return; }
+    if tag == EXPR_FIELD() { cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc); return; }
+    if tag == EXPR_INDEX() {
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_expr(a, expr_b(a, eid), nesting, -1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_RETURN() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { cog_expr(a, v, nesting, -1, selfn, acc); }
+        return;
+    }
+    if tag == EXPR_BLOCK() { cog_block(a, expr_a(a, eid), nesting, selfn, acc); return; }
+    if tag == EXPR_ASSIGN() {
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_expr(a, expr_b(a, eid), nesting, -1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let nf: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nf { cog_expr(a, list_get(a, fields_lid, i * 2 + 1), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cog_expr(a, list_get(a, args_lid, i), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_CAST() { cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc); return; }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n { cog_expr(a, list_get(a, elems_lid, i), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+}
+
 // Analyze a single AST function (by arena fid) into a CxFn record.
 // `src` is the raw source text, used for span -> line-number mapping.
 fn cx_analyze_fn(a: AstArena, fid: i64, src: String) -> CxFn {
@@ -201,5 +365,14 @@ fn cx_analyze_fn(a: AstArena, fid: i64, src: String) -> CxFn {
     let cyclomatic: i64 = acc[0] + 1;
     let stmts: i64 = acc[1];
 
-    CxFn { name: nm, line: first_line, nloc: nloc, params: pc, stmts: stmts, cyclomatic: cyclomatic }
+    let cacc: Vec<i64> = Vec::new();
+    cacc.push(0);
+    cacc.push(0);
+    cacc.push(0);
+    cog_block(a, body_bid, 0, nm, cacc);
+    let mut cognitive: i64 = cacc[0];
+    if cacc[2] > 0 { cognitive = cognitive + 1; }
+    let max_nesting: i64 = cacc[1];
+
+    CxFn { name: nm, line: first_line, nloc: nloc, params: pc, stmts: stmts, cyclomatic: cyclomatic, cognitive: cognitive, max_nesting: max_nesting }
 }

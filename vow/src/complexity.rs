@@ -37,6 +37,156 @@ fn walk_block(b: &Block, acc: &mut Acc) {
     }
 }
 
+// Cognitive Complexity (Vow-adapted). Mirrors compiler/complexity.vow's
+// `cog_*` exactly. `logctx` is the enclosing logical operator (for counting
+// contiguous &&/|| runs once each); `selfn` is the function's own name (for
+// direct-recursion detection).
+#[derive(Default)]
+struct CogAcc {
+    cog: i64,
+    max_nesting: i64,
+    self_calls: i64,
+}
+
+fn cog_track_max(acc: &mut CogAcc, depth: i64) {
+    if depth > acc.max_nesting {
+        acc.max_nesting = depth;
+    }
+}
+
+fn cog_block(b: &Block, nesting: i64, selfn: &str, acc: &mut CogAcc) {
+    for s in &b.stmts {
+        match s {
+            Stmt::Let { init, .. } => cog_expr(init, nesting, None, selfn, acc),
+            Stmt::Expr { expr, .. } => cog_expr(expr, nesting, None, selfn, acc),
+        }
+    }
+    if let Some(t) = &b.trailing_expr {
+        cog_expr(t, nesting, None, selfn, acc);
+    }
+}
+
+fn cog_expr(e: &Expr, nesting: i64, logctx: Option<BinOp>, selfn: &str, acc: &mut CogAcc) {
+    match &e.kind {
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            acc.cog += 1 + nesting;
+            cog_track_max(acc, nesting + 1);
+            cog_expr(condition, nesting, None, selfn, acc);
+            cog_block(then_branch, nesting + 1, selfn, acc);
+            if let Some(e2) = else_branch {
+                if matches!(e2.kind, ExprKind::If { .. }) {
+                    cog_expr(e2, nesting, None, selfn, acc);
+                } else {
+                    acc.cog += 1;
+                    cog_expr(e2, nesting + 1, None, selfn, acc);
+                }
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            acc.cog += 1 + nesting;
+            cog_track_max(acc, nesting + 1);
+            cog_expr(condition, nesting, None, selfn, acc);
+            cog_block(body, nesting + 1, selfn, acc);
+        }
+        ExprKind::ForEach { iterable, body, .. } => {
+            acc.cog += 1 + nesting;
+            cog_track_max(acc, nesting + 1);
+            cog_expr(iterable, nesting, None, selfn, acc);
+            cog_block(body, nesting + 1, selfn, acc);
+        }
+        ExprKind::Loop { body, .. } => {
+            acc.cog += 1 + nesting;
+            cog_track_max(acc, nesting + 1);
+            cog_block(body, nesting + 1, selfn, acc);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            acc.cog += 1 + nesting;
+            cog_track_max(acc, nesting + 1);
+            cog_expr(scrutinee, nesting, None, selfn, acc);
+            for arm in arms {
+                cog_expr(&arm.body, nesting + 1, None, selfn, acc);
+            }
+        }
+        ExprKind::BinaryOp { op, lhs, rhs } => {
+            if matches!(op, BinOp::And | BinOp::Or) {
+                if Some(*op) != logctx {
+                    acc.cog += 1;
+                }
+                cog_expr(lhs, nesting, Some(*op), selfn, acc);
+                cog_expr(rhs, nesting, Some(*op), selfn, acc);
+            } else {
+                cog_expr(lhs, nesting, None, selfn, acc);
+                cog_expr(rhs, nesting, None, selfn, acc);
+            }
+        }
+        ExprKind::Question { expr } => {
+            acc.cog += 1;
+            cog_expr(expr, nesting, None, selfn, acc);
+        }
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Ident(name) = &callee.kind {
+                if name == selfn {
+                    acc.self_calls += 1;
+                }
+            }
+            cog_expr(callee, nesting, None, selfn, acc);
+            for a in args {
+                cog_expr(a, nesting, None, selfn, acc);
+            }
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            cog_expr(receiver, nesting, None, selfn, acc);
+            for a in args {
+                cog_expr(a, nesting, None, selfn, acc);
+            }
+        }
+        ExprKind::UnaryOp { operand, .. } => cog_expr(operand, nesting, None, selfn, acc),
+        ExprKind::FieldAccess { base, .. } => cog_expr(base, nesting, None, selfn, acc),
+        ExprKind::Index { base, index } => {
+            cog_expr(base, nesting, None, selfn, acc);
+            cog_expr(index, nesting, None, selfn, acc);
+        }
+        ExprKind::Return { value } => {
+            if let Some(v) = value {
+                cog_expr(v, nesting, None, selfn, acc);
+            }
+        }
+        ExprKind::Block(b) => cog_block(b, nesting, selfn, acc),
+        ExprKind::Assign { lhs, rhs } => {
+            cog_expr(lhs, nesting, None, selfn, acc);
+            cog_expr(rhs, nesting, None, selfn, acc);
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, v) in fields {
+                cog_expr(v, nesting, None, selfn, acc);
+            }
+        }
+        ExprKind::EnumConstruct { fields, .. } => {
+            for v in fields {
+                cog_expr(v, nesting, None, selfn, acc);
+            }
+        }
+        ExprKind::Cast { expr, .. } => cog_expr(expr, nesting, None, selfn, acc),
+        ExprKind::Tuple(elems) => {
+            for v in elems {
+                cog_expr(v, nesting, None, selfn, acc);
+            }
+        }
+        ExprKind::Borrow { expr } => cog_expr(expr, nesting, None, selfn, acc),
+        ExprKind::Lit(_)
+        | ExprKind::Ident(_)
+        | ExprKind::Break { .. }
+        | ExprKind::Continue
+        | ExprKind::Result => {}
+    }
+}
+
 fn walk_expr(e: &Expr, acc: &mut Acc) {
     match &e.kind {
         ExprKind::Call { callee, args } => {
@@ -177,6 +327,9 @@ pub(crate) fn run_complexity_command(source: &Path) {
             let mut acc = Acc::default();
             walk_block(&f.body, &mut acc);
             let cyclomatic = acc.decisions + 1;
+            let mut cacc = CogAcc::default();
+            cog_block(&f.body, 0, &f.name, &mut cacc);
+            let cognitive = cacc.cog + if cacc.self_calls > 0 { 1 } else { 0 };
             out.push_str("{\"name\":\"");
             out.push_str(&cx_json_escape(&f.name));
             out.push_str("\",\"line\":");
@@ -189,6 +342,10 @@ pub(crate) fn run_complexity_command(source: &Path) {
             out.push_str(&(f.params.len() as i64).to_string());
             out.push_str("},\"structural\":{\"cyclomatic\":");
             out.push_str(&cyclomatic.to_string());
+            out.push_str(",\"cognitive\":");
+            out.push_str(&cognitive.to_string());
+            out.push_str(",\"max_nesting\":");
+            out.push_str(&cacc.max_nesting.to_string());
             out.push_str("}}");
             count += 1;
         }
