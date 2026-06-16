@@ -130,10 +130,8 @@ fn cog_expr(e: &Expr, nesting: i64, logctx: Option<BinOp>, selfn: &str, acc: &mu
             cog_expr(expr, nesting, None, selfn, acc);
         }
         ExprKind::Call { callee, args } => {
-            if let ExprKind::Ident(name) = &callee.kind {
-                if name == selfn {
-                    acc.self_calls += 1;
-                }
+            if matches!(&callee.kind, ExprKind::Ident(name) if name == selfn) {
+                acc.self_calls += 1;
             }
             cog_expr(callee, nesting, None, selfn, acc);
             for a in args {

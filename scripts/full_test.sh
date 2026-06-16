@@ -937,6 +937,33 @@ else
 fi
 echo ""
 
+# ─── Section 13: vow complexity Parity ──────────────────────────────
+
+section_begin "Section 13: vow complexity Parity"
+for vow_file in tests/fixtures/complexity/*.vow; do
+    [ -f "$vow_file" ] || continue
+    name=$(basename "$vow_file" .vow)
+    rust_json=$("$RUST" complexity "$vow_file" 2>/dev/null)
+    self_json=$(run_self complexity "$vow_file" 2>/dev/null)
+    golden="tests/fixtures/complexity/${name}.expected.json"
+    if [ "$rust_json" != "$self_json" ]; then
+        fail "complexity/${name}" "JSON differs between compilers"
+    elif [ -f "$golden" ] && [ "$rust_json" != "$(cat "$golden")" ]; then
+        fail "complexity/${name}" "output differs from golden ${name}.expected.json"
+    else
+        pass "complexity/${name} (byte-identical + golden)"
+    fi
+done
+# Exit-code gating must agree across compilers (deep has cyclomatic 4).
+"$RUST" complexity tests/fixtures/complexity/nested.vow --max-cyclomatic 1 >/dev/null 2>&1; r_gate=$?
+run_self complexity tests/fixtures/complexity/nested.vow --max-cyclomatic 1 >/dev/null 2>&1; s_gate=$?
+if [ "$r_gate" = "$s_gate" ] && [ "$r_gate" != "0" ]; then
+    pass "complexity/exit-gating (--max-cyclomatic 1 -> $r_gate, both)"
+else
+    fail "complexity/exit-gating" "rust=$r_gate self=$s_gate (expected equal, nonzero)"
+fi
+echo ""
+
 # ─── Summary ────────────────────────────────────────────────────────
 
 section_finalize
