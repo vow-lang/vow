@@ -258,6 +258,16 @@ struct DeclArgs {
 struct ComplexityArgs {
     source: Option<PathBuf>,
     #[arg(long)]
+    cog_anchor: Option<i64>,
+    #[arg(long)]
+    nloc_anchor: Option<i64>,
+    #[arg(long)]
+    max_score: Option<i64>,
+    #[arg(long)]
+    max_cognitive: Option<i64>,
+    #[arg(long)]
+    max_cyclomatic: Option<i64>,
+    #[arg(long)]
     help: bool,
     #[arg(long)]
     human: bool,
@@ -11656,7 +11666,14 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            complexity::run_complexity_command(&source);
+            complexity::run_complexity_command(
+                &source,
+                c.cog_anchor.unwrap_or(15),
+                c.nloc_anchor.unwrap_or(60),
+                c.max_score.unwrap_or(-1),
+                c.max_cognitive.unwrap_or(-1),
+                c.max_cyclomatic.unwrap_or(-1),
+            );
         }
         None => {
             if args.help {

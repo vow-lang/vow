@@ -293,7 +293,92 @@ fn walk_expr(e: &Expr, acc: &mut Acc) {
     }
 }
 
-pub(crate) fn run_complexity_command(source: &Path) {
+// Per-function computed metrics, collected before emission so file-level
+// aggregates (max score, over-threshold count) can be written ahead of the
+// functions array.
+struct CxEmit {
+    name: String,
+    line: i64,
+    nloc: i64,
+    tokens: i64,
+    stmts: i64,
+    params: i64,
+    cyclomatic: i64,
+    cognitive: i64,
+    max_nesting: i64,
+    h_n1: i64,
+    h_n2: i64,
+    h_bign1: i64,
+    h_bign2: i64,
+    h_vocab: i64,
+    h_length: i64,
+    h_volume_s: i64,
+    h_difficulty_s: i64,
+    h_effort_s: i64,
+    score: i64,
+    cog_sub_s: i64,
+    size_sub_s: i64,
+    base_s: i64,
+}
+
+fn cx_emit_fn(out: &mut String, r: &CxEmit, thr: i64) {
+    out.push_str("{\"name\":\"");
+    out.push_str(&cx_json_escape(&r.name));
+    out.push_str("\",\"line\":");
+    out.push_str(&r.line.to_string());
+    out.push_str(",\"complexity_score\":");
+    out.push_str(&r.score.to_string());
+    out.push_str(",\"score_factors\":{\"cognitive_sub\":");
+    out.push_str(&cx_fmt_fixed(r.cog_sub_s));
+    out.push_str(",\"size_sub\":");
+    out.push_str(&cx_fmt_fixed(r.size_sub_s));
+    out.push_str(",\"vow_bump\":0.000,\"base\":");
+    out.push_str(&cx_fmt_fixed(r.base_s));
+    out.push_str(",\"over_threshold\":");
+    out.push_str(if r.score > thr { "true" } else { "false" });
+    out.push_str("},\"size\":{\"nloc\":");
+    out.push_str(&r.nloc.to_string());
+    out.push_str(",\"tokens\":");
+    out.push_str(&r.tokens.to_string());
+    out.push_str(",\"stmts\":");
+    out.push_str(&r.stmts.to_string());
+    out.push_str(",\"params\":");
+    out.push_str(&r.params.to_string());
+    out.push_str("},\"structural\":{\"cyclomatic\":");
+    out.push_str(&r.cyclomatic.to_string());
+    out.push_str(",\"cognitive\":");
+    out.push_str(&r.cognitive.to_string());
+    out.push_str(",\"max_nesting\":");
+    out.push_str(&r.max_nesting.to_string());
+    out.push_str(",\"halstead\":{\"n1\":");
+    out.push_str(&r.h_n1.to_string());
+    out.push_str(",\"n2\":");
+    out.push_str(&r.h_n2.to_string());
+    out.push_str(",\"N1\":");
+    out.push_str(&r.h_bign1.to_string());
+    out.push_str(",\"N2\":");
+    out.push_str(&r.h_bign2.to_string());
+    out.push_str(",\"vocabulary\":");
+    out.push_str(&r.h_vocab.to_string());
+    out.push_str(",\"length\":");
+    out.push_str(&r.h_length.to_string());
+    out.push_str(",\"volume\":");
+    out.push_str(&cx_fmt_fixed(r.h_volume_s));
+    out.push_str(",\"difficulty\":");
+    out.push_str(&cx_fmt_fixed(r.h_difficulty_s));
+    out.push_str(",\"effort\":");
+    out.push_str(&cx_fmt_fixed(r.h_effort_s));
+    out.push_str("}}}");
+}
+
+pub(crate) fn run_complexity_command(
+    source: &Path,
+    cog_anchor: i64,
+    nloc_anchor: i64,
+    max_score: i64,
+    max_cognitive: i64,
+    max_cyclomatic: i64,
+) {
     let frontend = match prepare_frontend(source, FrontendGoal::MergedAst) {
         Ok(bundle) => {
             emit_frontend_diagnostics(bundle.diagnostics());
@@ -307,23 +392,18 @@ pub(crate) fn run_complexity_command(source: &Path) {
     };
 
     let src = std::fs::read_to_string(source).unwrap_or_default();
+    let file_nloc = line_at(&src, src.len());
     let module = frontend.module();
-    let mut out = String::from(
-        "{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"",
-    );
-    out.push_str(&cx_json_escape(&source.to_string_lossy()));
-    out.push_str("\",\"functions\":[");
-    let mut count: i64 = 0;
+    let thr = if max_score >= 0 { max_score } else { 80 };
+
+    // Pass 1: analyze + score every function.
+    let mut recs: Vec<CxEmit> = Vec::new();
     for item in &module.items {
         if let Item::Fn(f) = item {
-            if count > 0 {
-                out.push(',');
-            }
             let start = f.span.start as usize;
             let end = (f.span.start + f.span.len) as usize;
             let first_line = line_at(&src, start);
-            let last_line = line_at(&src, end);
-            let nloc = last_line - first_line + 1;
+            let nloc = line_at(&src, end) - first_line + 1;
             let mut acc = Acc::default();
             walk_block(&f.body, &mut acc);
             let cyclomatic = acc.decisions + 1;
@@ -343,50 +423,140 @@ pub(crate) fn run_complexity_command(source: &Path) {
                 0
             };
             let h_effort_s = h_difficulty_s.wrapping_mul(h_volume_s) / 1000;
-            out.push_str("{\"name\":\"");
-            out.push_str(&cx_json_escape(&f.name));
-            out.push_str("\",\"line\":");
-            out.push_str(&first_line.to_string());
-            out.push_str(",\"size\":{\"nloc\":");
-            out.push_str(&nloc.to_string());
-            out.push_str(",\"tokens\":");
-            out.push_str(&h_length.to_string());
-            out.push_str(",\"stmts\":");
-            out.push_str(&acc.stmts.to_string());
-            out.push_str(",\"params\":");
-            out.push_str(&(f.params.len() as i64).to_string());
-            out.push_str("},\"structural\":{\"cyclomatic\":");
-            out.push_str(&cyclomatic.to_string());
-            out.push_str(",\"cognitive\":");
-            out.push_str(&cognitive.to_string());
-            out.push_str(",\"max_nesting\":");
-            out.push_str(&cacc.max_nesting.to_string());
-            out.push_str(",\"halstead\":{\"n1\":");
-            out.push_str(&h_n1.to_string());
-            out.push_str(",\"n2\":");
-            out.push_str(&h_n2.to_string());
-            out.push_str(",\"N1\":");
-            out.push_str(&hacc.bign1.to_string());
-            out.push_str(",\"N2\":");
-            out.push_str(&hacc.bign2.to_string());
-            out.push_str(",\"vocabulary\":");
-            out.push_str(&h_vocab.to_string());
-            out.push_str(",\"length\":");
-            out.push_str(&h_length.to_string());
-            out.push_str(",\"volume\":");
-            out.push_str(&cx_fmt_fixed(h_volume_s));
-            out.push_str(",\"difficulty\":");
-            out.push_str(&cx_fmt_fixed(h_difficulty_s));
-            out.push_str(",\"effort\":");
-            out.push_str(&cx_fmt_fixed(h_effort_s));
-            out.push_str("}}}");
-            count += 1;
+            let sc = cx_score(cognitive, nloc, cog_anchor, nloc_anchor);
+            recs.push(CxEmit {
+                name: f.name.clone(),
+                line: first_line,
+                nloc,
+                tokens: h_length,
+                stmts: acc.stmts,
+                params: f.params.len() as i64,
+                cyclomatic,
+                cognitive,
+                max_nesting: cacc.max_nesting,
+                h_n1,
+                h_n2,
+                h_bign1: hacc.bign1,
+                h_bign2: hacc.bign2,
+                h_vocab,
+                h_length,
+                h_volume_s,
+                h_difficulty_s,
+                h_effort_s,
+                score: sc.score,
+                cog_sub_s: sc.cog_sub_s,
+                size_sub_s: sc.size_sub_s,
+                base_s: sc.base_s,
+            });
         }
     }
+
+    // File-level aggregates + exit-gating.
+    let mut file_max = 0i64;
+    let mut over_count = 0i64;
+    let mut exit_code = 0i32;
+    for r in &recs {
+        if r.score > file_max {
+            file_max = r.score;
+        }
+        if r.score > thr {
+            over_count += 1;
+        }
+        if max_score >= 0 && r.score > max_score {
+            exit_code = 1;
+        }
+        if max_cognitive >= 0 && r.cognitive > max_cognitive {
+            exit_code = 1;
+        }
+        if max_cyclomatic >= 0 && r.cyclomatic > max_cyclomatic {
+            exit_code = 1;
+        }
+    }
+
+    // Pass 2: emit.
+    let mut out = String::from(
+        "{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"",
+    );
+    out.push_str(&cx_json_escape(&source.to_string_lossy()));
+    out.push_str("\",\"complexity_score\":");
+    out.push_str(&file_max.to_string());
+    out.push_str(",\"functions_over_threshold\":");
+    out.push_str(&over_count.to_string());
+    out.push_str(",\"nloc\":");
+    out.push_str(&file_nloc.to_string());
+    out.push_str(",\"functions\":[");
+    for (k, r) in recs.iter().enumerate() {
+        if k > 0 {
+            out.push(',');
+        }
+        cx_emit_fn(&mut out, r, thr);
+    }
     out.push_str("]}],\"summary\":{\"functions\":");
-    out.push_str(&count.to_string());
-    out.push_str("}}");
+    out.push_str(&(recs.len() as i64).to_string());
+    out.push_str(",\"nloc_total\":");
+    out.push_str(&file_nloc.to_string());
+    out.push_str(",\"threshold\":");
+    out.push_str(&thr.to_string());
+    out.push_str(",\"functions_over_threshold\":");
+    out.push_str(&over_count.to_string());
+    out.push_str(",\"thresholds_exceeded\":[");
+    let mut emitted = 0;
+    for r in &recs {
+        if r.score > thr {
+            if emitted > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(&cx_json_escape(&r.name));
+            out.push('"');
+            emitted += 1;
+        }
+    }
+    out.push_str("]}}");
     println!("{out}");
+    std::process::exit(exit_code);
+}
+
+// ---- 0-100 gate score (mirrors compiler/complexity.vow cx_score) ----
+struct CxScore {
+    score: i64,
+    cog_sub_s: i64,
+    size_sub_s: i64,
+    base_s: i64,
+}
+
+fn cx_anchor_map(x: i64, t_in: i64) -> i64 {
+    let t = if t_in <= 0 { 1 } else { t_in };
+    if x <= t {
+        return 800i64.wrapping_mul(x) / t;
+    }
+    800 + 200i64.wrapping_mul(x - t) / x
+}
+
+fn cx_soft_or(c: i64, s: i64) -> i64 {
+    1000 - (1000 - c).wrapping_mul(1000 - s) / 1000
+}
+
+fn cx_round_0_100(val_scaled: i64) -> i64 {
+    let r = (val_scaled * 100 + 500) / 1000;
+    if r > 100 {
+        100
+    } else {
+        r
+    }
+}
+
+fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64) -> CxScore {
+    let c = cx_anchor_map(cognitive, cog_anchor);
+    let s = cx_anchor_map(nloc, nloc_anchor);
+    let base = cx_soft_or(c, s);
+    let score = cx_round_0_100(base);
+    CxScore {
+        score,
+        cog_sub_s: c,
+        size_sub_s: s,
+        base_s: base,
+    }
 }
 
 // ---- Fixed-point integer math (byte-identical with compiler/complexity.vow) ----

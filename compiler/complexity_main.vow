@@ -25,7 +25,73 @@ fn cx_json_escape(s: String) -> String {
     r
 }
 
+fn cx_int_flag(argv: Vec<String>, name: String, dflt: i64) -> i64 {
+    let v: String = get_flag_arg(argv, name);
+    if v.len() == 0 { return dflt; }
+    parse_i64_default(v, dflt)
+}
+
+// Append one function object (with score + score_factors) to `out`.
+fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64) {
+    out.push_str(String::from("{\"name\":\""));
+    let rn: String = rec.name;
+    out.push_str(cx_json_escape(rn));
+    out.push_str(String::from("\",\"line\":"));
+    out.push_str(i64_to_string(rec.line));
+    out.push_str(String::from(",\"complexity_score\":"));
+    out.push_str(i64_to_string(sc.score));
+    out.push_str(String::from(",\"score_factors\":{\"cognitive_sub\":"));
+    out.push_str(cx_fmt_fixed(sc.cog_sub_s));
+    out.push_str(String::from(",\"size_sub\":"));
+    out.push_str(cx_fmt_fixed(sc.size_sub_s));
+    out.push_str(String::from(",\"vow_bump\":0.000,\"base\":"));
+    out.push_str(cx_fmt_fixed(sc.base_s));
+    out.push_str(String::from(",\"over_threshold\":"));
+    if sc.score > thr { out.push_str(String::from("true")); } else { out.push_str(String::from("false")); }
+    out.push_str(String::from("},\"size\":{\"nloc\":"));
+    out.push_str(i64_to_string(rec.nloc));
+    out.push_str(String::from(",\"tokens\":"));
+    out.push_str(i64_to_string(rec.tokens));
+    out.push_str(String::from(",\"stmts\":"));
+    out.push_str(i64_to_string(rec.stmts));
+    out.push_str(String::from(",\"params\":"));
+    out.push_str(i64_to_string(rec.params));
+    out.push_str(String::from("},\"structural\":{\"cyclomatic\":"));
+    out.push_str(i64_to_string(rec.cyclomatic));
+    out.push_str(String::from(",\"cognitive\":"));
+    out.push_str(i64_to_string(rec.cognitive));
+    out.push_str(String::from(",\"max_nesting\":"));
+    out.push_str(i64_to_string(rec.max_nesting));
+    out.push_str(String::from(",\"halstead\":{\"n1\":"));
+    out.push_str(i64_to_string(rec.h_n1));
+    out.push_str(String::from(",\"n2\":"));
+    out.push_str(i64_to_string(rec.h_n2));
+    out.push_str(String::from(",\"N1\":"));
+    out.push_str(i64_to_string(rec.h_bign1));
+    out.push_str(String::from(",\"N2\":"));
+    out.push_str(i64_to_string(rec.h_bign2));
+    out.push_str(String::from(",\"vocabulary\":"));
+    out.push_str(i64_to_string(rec.h_vocab));
+    out.push_str(String::from(",\"length\":"));
+    out.push_str(i64_to_string(rec.h_length));
+    out.push_str(String::from(",\"volume\":"));
+    out.push_str(cx_fmt_fixed(rec.h_volume_s));
+    out.push_str(String::from(",\"difficulty\":"));
+    out.push_str(cx_fmt_fixed(rec.h_difficulty_s));
+    out.push_str(String::from(",\"effort\":"));
+    out.push_str(cx_fmt_fixed(rec.h_effort_s));
+    out.push_str(String::from("}}}"));
+}
+
 fn run_complexity(argv: Vec<String>) -> i32 [io] {
+    let cog_anchor: i64 = cx_int_flag(argv, String::from("--cog-anchor"), 15);
+    let nloc_anchor: i64 = cx_int_flag(argv, String::from("--nloc-anchor"), 60);
+    let max_score: i64 = cx_int_flag(argv, String::from("--max-score"), -1);
+    let max_cognitive: i64 = cx_int_flag(argv, String::from("--max-cognitive"), -1);
+    let max_cyclomatic: i64 = cx_int_flag(argv, String::from("--max-cyclomatic"), -1);
+    let mut thr: i64 = 80;
+    if max_score >= 0 { thr = max_score; }
+
     let path: String = frontend_path_from_argv(argv, true);
     let prep: FrontendPrep = frontend_prepare_path(path);
     let checked: CheckedFrontend = prep.checked;
@@ -37,67 +103,85 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
         return 1;
     }
     let src: String = fs_read(path);
+    let file_nloc: i64 = diag_compute_line(src, src.len());
     let m: Module = prep.merged;
     let a: AstArena = m.arena;
     let items: Vec<i64> = m.items;
     let n: i64 = items.len();
 
-    let out: String = String::from("{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"");
-    out.push_str(cx_json_escape(path));
-    out.push_str(String::from("\",\"functions\":["));
-    let mut count: i64 = 0;
+    // Pass 1: analyze + score every function.
+    let recs: Vec<CxFn> = Vec::new();
+    let scs: Vec<CxScore> = Vec::new();
     let mut i: i64 = 0;
     while i < n {
         let it: i64 = items[i];
         if item_kind(it) == ITEM_FN() {
             let fid: i64 = item_id(it);
             let rec: CxFn = cx_analyze_fn(a, fid, src);
-            if count > 0 { out.push_str(String::from(",")); }
-            out.push_str(String::from("{\"name\":\""));
-            let rn: String = rec.name;
-            out.push_str(cx_json_escape(rn));
-            out.push_str(String::from("\",\"line\":"));
-            out.push_str(i64_to_string(rec.line));
-            out.push_str(String::from(",\"size\":{\"nloc\":"));
-            out.push_str(i64_to_string(rec.nloc));
-            out.push_str(String::from(",\"tokens\":"));
-            out.push_str(i64_to_string(rec.tokens));
-            out.push_str(String::from(",\"stmts\":"));
-            out.push_str(i64_to_string(rec.stmts));
-            out.push_str(String::from(",\"params\":"));
-            out.push_str(i64_to_string(rec.params));
-            out.push_str(String::from("},\"structural\":{\"cyclomatic\":"));
-            out.push_str(i64_to_string(rec.cyclomatic));
-            out.push_str(String::from(",\"cognitive\":"));
-            out.push_str(i64_to_string(rec.cognitive));
-            out.push_str(String::from(",\"max_nesting\":"));
-            out.push_str(i64_to_string(rec.max_nesting));
-            out.push_str(String::from(",\"halstead\":{\"n1\":"));
-            out.push_str(i64_to_string(rec.h_n1));
-            out.push_str(String::from(",\"n2\":"));
-            out.push_str(i64_to_string(rec.h_n2));
-            out.push_str(String::from(",\"N1\":"));
-            out.push_str(i64_to_string(rec.h_bign1));
-            out.push_str(String::from(",\"N2\":"));
-            out.push_str(i64_to_string(rec.h_bign2));
-            out.push_str(String::from(",\"vocabulary\":"));
-            out.push_str(i64_to_string(rec.h_vocab));
-            out.push_str(String::from(",\"length\":"));
-            out.push_str(i64_to_string(rec.h_length));
-            out.push_str(String::from(",\"volume\":"));
-            out.push_str(cx_fmt_fixed(rec.h_volume_s));
-            out.push_str(String::from(",\"difficulty\":"));
-            out.push_str(cx_fmt_fixed(rec.h_difficulty_s));
-            out.push_str(String::from(",\"effort\":"));
-            out.push_str(cx_fmt_fixed(rec.h_effort_s));
-            out.push_str(String::from("}}}"));
-            count = count + 1;
+            let sc: CxScore = cx_score(rec.cognitive, rec.nloc, cog_anchor, nloc_anchor);
+            recs.push(rec);
+            scs.push(sc);
         }
         i = i + 1;
     }
+
+    // File-level aggregates + exit-gating.
+    let nf: i64 = recs.len();
+    let mut file_max: i64 = 0;
+    let mut over_count: i64 = 0;
+    let mut exit_code: i32 = 0;
+    let mut j: i64 = 0;
+    while j < nf {
+        let r: CxFn = recs[j];
+        let sc: CxScore = scs[j];
+        if sc.score > file_max { file_max = sc.score; }
+        if sc.score > thr { over_count = over_count + 1; }
+        if max_score >= 0 && sc.score > max_score { exit_code = 1; }
+        if max_cognitive >= 0 && r.cognitive > max_cognitive { exit_code = 1; }
+        if max_cyclomatic >= 0 && r.cyclomatic > max_cyclomatic { exit_code = 1; }
+        j = j + 1;
+    }
+
+    // Pass 2: emit.
+    let out: String = String::from("{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"");
+    out.push_str(cx_json_escape(path));
+    out.push_str(String::from("\",\"complexity_score\":"));
+    out.push_str(i64_to_string(file_max));
+    out.push_str(String::from(",\"functions_over_threshold\":"));
+    out.push_str(i64_to_string(over_count));
+    out.push_str(String::from(",\"nloc\":"));
+    out.push_str(i64_to_string(file_nloc));
+    out.push_str(String::from(",\"functions\":["));
+    let mut k: i64 = 0;
+    while k < nf {
+        if k > 0 { out.push_str(String::from(",")); }
+        cx_emit_fn(out, recs[k], scs[k], thr);
+        k = k + 1;
+    }
     out.push_str(String::from("]}],\"summary\":{\"functions\":"));
-    out.push_str(i64_to_string(count));
-    out.push_str(String::from("}}\n"));
+    out.push_str(i64_to_string(nf));
+    out.push_str(String::from(",\"nloc_total\":"));
+    out.push_str(i64_to_string(file_nloc));
+    out.push_str(String::from(",\"threshold\":"));
+    out.push_str(i64_to_string(thr));
+    out.push_str(String::from(",\"functions_over_threshold\":"));
+    out.push_str(i64_to_string(over_count));
+    out.push_str(String::from(",\"thresholds_exceeded\":["));
+    let mut e: i64 = 0;
+    let mut emitted: i64 = 0;
+    while e < nf {
+        let sc: CxScore = scs[e];
+        if sc.score > thr {
+            if emitted > 0 { out.push_str(String::from(",")); }
+            out.push_str(String::from("\""));
+            let r: CxFn = recs[e];
+            out.push_str(cx_json_escape(r.name));
+            out.push_str(String::from("\""));
+            emitted = emitted + 1;
+        }
+        e = e + 1;
+    }
+    out.push_str(String::from("]}}\n"));
     print_str(out);
-    0
+    exit_code
 }

@@ -420,6 +420,46 @@ fn cx_seen_contains(seen: Vec<String>, s: String) -> bool {
     false
 }
 
+// ---- 0-100 gate score (§3.2a, fixed-point; rational curve, no exp) ----
+//
+// Sub-scores are scale-1000 (0..1000 == 0.000..1.000). The anchor map is
+// linear up to the anchor T (=0.800 at T) then a rational curve asymptoting to
+// 1.000 -- replacing the design's exp() form, which is unimplementable without
+// floats. soft_or compounds the two sub-scores; round_0_100 collapses to 0-100.
+fn cx_anchor_map(x: i64, t_in: i64) -> i64 {
+    let mut t: i64 = t_in;
+    if t <= 0 { t = 1; }
+    if x <= t {
+        return 800 * x / t;
+    }
+    800 + 200 * (x - t) / x
+}
+
+fn cx_soft_or(c: i64, s: i64) -> i64 {
+    1000 - (1000 - c) * (1000 - s) / 1000
+}
+
+fn cx_round_0_100(val_scaled: i64) -> i64 {
+    let r: i64 = (val_scaled * 100 + 500) / 1000;
+    if r > 100 { 100 } else { r }
+}
+
+struct CxScore {
+    score: i64,
+    cog_sub_s: i64,
+    size_sub_s: i64,
+    base_s: i64,
+}
+
+// Phase 1: v (Vow-surface bump) = 0; the score is pure cognitive+size.
+fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64) -> CxScore {
+    let c: i64 = cx_anchor_map(cognitive, cog_anchor);
+    let s: i64 = cx_anchor_map(nloc, nloc_anchor);
+    let base: i64 = cx_soft_or(c, s);
+    let score: i64 = cx_round_0_100(base);
+    CxScore { score: score, cog_sub_s: c, size_sub_s: s, base_s: base }
+}
+
 // ---- Halstead operator/operand counting ----
 //
 // acc = [operator_seen_bitmask, N1 (total operators), N2 (total operands)].
