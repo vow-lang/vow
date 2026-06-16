@@ -409,7 +409,16 @@ def evaluate(verifier, filter_name, output_dir):
         tail = f" ({len(known_gaps)} tracked known-gap(s))" if known_gaps else ""
         print(f"\nAll programs match their ground-truth labels{tail}.")
         return 0
-    print(f"\n{failures} regression(s); see banners above.")
+    # Name every reason for the non-zero exit so a label/category problem is not
+    # masked by a "0 regression(s)" line that reads like a green run.
+    problems = []
+    if failures:
+        problems.append(f"{failures} regression(s) — see banners above")
+    if missing_category:
+        problems.append(f"{len(missing_category)} program(s) missing a category directive")
+    if bad_category:
+        problems.append(f"{len(bad_category)} program(s) with an unknown category")
+    print(f"\nFAILED: {'; '.join(problems)}.")
     return 1
 
 
