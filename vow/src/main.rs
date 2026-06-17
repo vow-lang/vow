@@ -17,11 +17,11 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding,
-    ReachVerdict, Solver, SolverConfig, UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits,
-    detect_constant_functions, emit_bodyreplace_c_source, emit_reach_c_source,
-    emit_verify_c_source, find_esbmc, non_modelable_reason, run_esbmc_bodyreplace,
-    run_esbmc_multi_property, run_esbmc_reach, run_with_fallback,
+    CALLER_PRECONDITION_VOW_ID, ConstantValue, Counterexample, DEFAULT_ESBMC_MEMLIMIT_MB,
+    DEFAULT_MAX_K_STEP, Encoding, ReachVerdict, Solver, SolverConfig, UNSUPPORTED_OP_VOW_ID,
+    VerificationResult, VerifyLimits, detect_constant_functions, emit_bodyreplace_c_source,
+    emit_reach_c_source, emit_verify_c_source, find_esbmc, non_modelable_reason,
+    run_esbmc_bodyreplace, run_esbmc_multi_property, run_esbmc_reach, run_with_fallback,
     verify_function_with_module_and_const_fns_configured,
 };
 
@@ -1149,7 +1149,7 @@ fn skill_json() -> String {
         "loop_invariants": "simple invariant predicates"
       },
       "partial": {
-        "refinement_type_predicates": "parsed but semantically erased; use where clauses or function vows for verification",
+        "refinement_type_predicates": "rejected with a type error (fail-closed, never silently unverified); use a where clause on the parameter or a requires/ensures contract",
         "effect_tracking": "user-defined effect propagation is enforced; some builtin panic/unsafe effects are not yet modeled"
       },
       "target": {
@@ -1167,7 +1167,7 @@ fn skill_json() -> String {
     }
   },
   "verification_defaults": {
-    "strategy": "k-induction-parallel",
+    "strategy": "incremental-bmc",
     "max_k_step": 50
   }
 }"##
@@ -1279,7 +1279,7 @@ METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
 
 VERIFICATION DEFAULTS (--max-k-step)
-  Strategy        : k-induction-parallel (incremental BMC + k-induction)
+  Strategy        : incremental-bmc (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)
   Incremental BMC : 50 max iterations (--max-k-step)"##
         .to_string()
 }
@@ -2793,7 +2793,7 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
@@ -2943,7 +2943,7 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
+- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
@@ -3139,6 +3139,21 @@ fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 Each `where` clause can only reference its own parameter.
 
 ## Anti-Patterns
+
+### Tautological Contracts
+
+A contract must constrain behavior the implementation could get wrong. A clause provable from the return type alone, or from a constant/literal body, verifies nothing.
+
+```vow
+fn IOP_CONST() -> i64 vow { ensures: result >= 0 } { 0 }
+fn sentinel() -> i64 vow { ensures: result == -1 } { -1 }
+```
+
+The first is trivially true of the literal `0`; the second restates the body verbatim. Both prove nothing and only enlarge the proof surface.
+
+**Fix:** delete the `vow` block. A postcondition earns its place only when it pins a property of a **computed** result — one that depends on the inputs or control flow and that a wrong implementation would violate (`ensures: result > 0` on a loop-computed `gcd`; `ensures: result == 0 || result == 1` on a branch-computed flag). Named-constant accessors and enum-tag functions returning a literal must carry no contract.
+
+**Crisp rule:** if the clause is true without reading past the signature and a constant body, it is a non-contract — remove it. This is distinct from weakening a real contract (forbidden, see CLAUDE.md "Contract Authoring"): a tautology was never a contract, so deleting it loses no verification value.
 
 ### Over-Specifying
 
@@ -6605,7 +6620,7 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
@@ -6756,7 +6771,7 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
+- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
@@ -6952,6 +6967,21 @@ fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
 Each `where` clause can only reference its own parameter.
 
 ## Anti-Patterns
+
+### Tautological Contracts
+
+A contract must constrain behavior the implementation could get wrong. A clause provable from the return type alone, or from a constant/literal body, verifies nothing.
+
+```vow
+fn IOP_CONST() -> i64 vow { ensures: result >= 0 } { 0 }
+fn sentinel() -> i64 vow { ensures: result == -1 } { -1 }
+```
+
+The first is trivially true of the literal `0`; the second restates the body verbatim. Both prove nothing and only enlarge the proof surface.
+
+**Fix:** delete the `vow` block. A postcondition earns its place only when it pins a property of a **computed** result — one that depends on the inputs or control flow and that a wrong implementation would violate (`ensures: result > 0` on a loop-computed `gcd`; `ensures: result == 0 || result == 1` on a branch-computed flag). Named-constant accessors and enum-tag functions returning a literal must carry no contract.
+
+**Crisp rule:** if the clause is true without reading past the signature and a constant body, it is a non-contract — remove it. This is distinct from weakening a real contract (forbidden, see CLAUDE.md "Contract Authoring"): a tautology was never a contract, so deleting it loses no verification value.
 
 ### Over-Specifying
 
@@ -9679,24 +9709,35 @@ fn build_structured_counterexample(
     // diagnostic that an agent can act on instead of letting the code below
     // fall through to the generic "unmatched id" path.
     let unsupported_op = ce.vow_id == Some(UNSUPPORTED_OP_VOW_ID);
+    // A co-emitted callee's `requires` was violated by this caller. The sentinel
+    // id deliberately does not match any vow in `func`, so synthesize a
+    // Caller-blamed precondition diagnostic rather than mis-resolving it to the
+    // target function's vow of the same local index.
+    let caller_precondition = ce.vow_id == Some(CALLER_PRECONDITION_VOW_ID);
     let vow_entry = ce
         .vow_id
         .and_then(|id| func.vows.iter().find(|v| v.id.0 == id));
     let violation = if unsupported_op {
         "function uses side-effecting operations not supported for verification".to_string()
+    } else if caller_precondition {
+        "callee precondition violated by the caller".to_string()
     } else {
         vow_entry
             .map(|v| v.description.clone())
             .unwrap_or_else(|| ce.description.clone())
     };
-    let blame = vow_entry
-        .map(|v| match v.blame {
-            vow_diag::Blame::Caller => "caller",
-            vow_diag::Blame::Callee => "callee",
-            vow_diag::Blame::None => "none",
-        })
-        .unwrap_or("none")
-        .to_string();
+    let blame = if caller_precondition {
+        "caller".to_string()
+    } else {
+        vow_entry
+            .map(|v| match v.blame {
+                vow_diag::Blame::Caller => "caller",
+                vow_diag::Blame::Callee => "callee",
+                vow_diag::Blame::None => "none",
+            })
+            .unwrap_or("none")
+            .to_string()
+    };
     let source = ce
         .vow_id
         .and_then(|id| find_vow_span(func, id))
@@ -12405,7 +12446,7 @@ fn main() -> i32 [io] {
         );
         assert_eq!(
             lang["feature_status"]["partial"]["refinement_type_predicates"],
-            "parsed but semantically erased; use where clauses or function vows for verification"
+            "rejected with a type error (fail-closed, never silently unverified); use a where clause on the parameter or a requires/ensures contract"
         );
 
         // Now verify that a program an LLM would write from this description compiles and runs.

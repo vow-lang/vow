@@ -97,29 +97,30 @@ Exit code is non-zero on any bucket except known-gaps. A machine-readable
 
 ## Category coverage
 
-All seven categories are represented (41 programs):
+All seven categories are represented (43 programs):
 
 | Category | Count |
 | --- | --- |
-| overflow | 7 |
+| overflow | 8 |
 | callee-blame | 13 |
 | bounds | 5 |
 | model-drift | 6 |
 | invariant | 4 |
-| caller-blame | 4 |
+| caller-blame | 5 |
 | unverifiable | 2 |
 
 ## Known soundness gaps
 
-- **Caller obligations are not checked statically (#764).** `vow verify` treats
-  a callee's `requires` purely as an assumption and never asserts it at
-  in-module call sites, so a caller passing a provably-out-of-contract argument
-  is silently `Verified`. Static `blame=Caller` is therefore not producible for
-  ordinary in-module code; caller blame is observable only at runtime
-  (`tests/debug/caller_blame_debug.vow`). The static side is carried as a
-  `known-soundness-gap` entry (`tests/verify/caller_requires_unchecked.vow`).
-  When #764 is fixed, that entry must become a `tests/verify-fail/` program
-  asserting `blame=Caller`.
+None currently open.
+
+- **Caller obligations are now checked statically (#764 — resolved by PR #736).**
+  `vow verify` asserts a callee's `requires` at its in-module call sites (the G7
+  call-boundary assert) instead of assuming it, so a caller passing a
+  provably-out-of-contract argument is reported `VerifyFailed` with
+  `blame=Caller`. The former `known-soundness-gap` xfail was promoted to
+  `tests/verify-fail/caller_requires_unchecked.vow`; the runtime anchor
+  `tests/debug/caller_blame_debug.vow` still covers the runtime half of
+  caller-blame coverage.
 
 ## Running
 

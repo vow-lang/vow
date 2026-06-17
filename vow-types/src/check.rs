@@ -514,14 +514,27 @@ impl<'e> Checker<'e> {
                         let params: Vec<Ty> = f
                             .params
                             .iter()
-                            .map(|p| {
-                                let ty = self.env.resolve(&p.ty).unwrap_or(Ty::Unit);
-                                self.check_btreemap_key_in_ty(&ty, p.span);
-                                ty
+                            .map(|p| match self.env.resolve(&p.ty) {
+                                Ok(ty) => {
+                                    self.check_btreemap_key_in_ty(&ty, p.span);
+                                    ty
+                                }
+                                Err(msg) => {
+                                    self.emit_error(ErrorCode::TypeMismatch, msg, p.span);
+                                    Ty::Unit
+                                }
                             })
                             .collect();
-                        let return_ty = self.env.resolve(&f.return_ty).unwrap_or(Ty::Unit);
-                        self.check_btreemap_key_in_ty(&return_ty, f.return_ty.span());
+                        let return_ty = match self.env.resolve(&f.return_ty) {
+                            Ok(ty) => {
+                                self.check_btreemap_key_in_ty(&ty, f.return_ty.span());
+                                ty
+                            }
+                            Err(msg) => {
+                                self.emit_error(ErrorCode::TypeMismatch, msg, f.return_ty.span());
+                                Ty::Unit
+                            }
+                        };
                         let effects: BTreeSet<Effect> = f.effects.iter().cloned().collect();
                         self.env.define_fn(
                             &f.name,
@@ -2187,6 +2200,53 @@ mod tests {
             kind,
             span: dummy_span(),
         }
+    }
+
+    #[test]
+    fn extern_signature_refinement_predicate_fails_closed() {
+        // G1 parity on the extern path: an inline refinement `{ r: i64 || true }`
+        // in an `extern "C"` signature must fail closed (a type error) rather than
+        // be silently dropped to `Ty::Unit` via `unwrap_or`. Mirrors the
+        // normal-function fail-closed path where `env.resolve` returns `Err`.
+        use vow_syntax::ast::{ExternBlock, ExternFn, VowBlock, VowClause};
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let module = Module {
+            name: "ExternRefine".to_string(),
+            uses: vec![],
+            items: vec![Item::Extern(ExternBlock {
+                vow: Some(VowBlock {
+                    clauses: vec![VowClause::Ensures {
+                        expr: make_expr(ExprKind::Lit(Lit::Bool(true))),
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                fns: vec![ExternFn {
+                    name: "ext_pos".to_string(),
+                    params: vec![],
+                    return_ty: Type::Refinement {
+                        binding: "r".to_string(),
+                        base: Box::new(Type::Named {
+                            name: "i64".to_string(),
+                            span: dummy_span(),
+                        }),
+                        predicate: Box::new(make_expr(ExprKind::Lit(Lit::Bool(true)))),
+                        span: dummy_span(),
+                    },
+                    effects: vec![],
+                    span: dummy_span(),
+                }],
+                span: dummy_span(),
+            })],
+            span: dummy_span(),
+        };
+        check_single_file(&mut checker, &module);
+        assert!(
+            checker.has_errors(),
+            "extern inline-refinement return must fail closed, not silently \
+             resolve to the base type"
+        );
     }
 
     #[test]

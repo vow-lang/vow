@@ -1308,6 +1308,20 @@ VERIFICATION SUCCESSFUL";
     }
 
     #[test]
+    fn parse_caller_precondition_sentinel_round_trips() {
+        use crate::c_emitter::CALLER_PRECONDITION_VOW_ID;
+        let output = format!(
+            "[Counterexample]\n\nViolated property:\n  file /tmp/test.c line 1 column 1 function f\n  vow:{CALLER_PRECONDITION_VOW_ID}\n\nVERIFICATION FAILED"
+        );
+        let ce = parse_esbmc_output(&output);
+        assert_eq!(
+            ce.vow_id,
+            Some(CALLER_PRECONDITION_VOW_ID),
+            "caller-precondition sentinel must round-trip through extract_vow_id"
+        );
+    }
+
+    #[test]
     fn parse_esbmc_no_counterexample_section() {
         let output = "VERIFICATION FAILED\nsome other error";
         let ce = parse_esbmc_output(output);

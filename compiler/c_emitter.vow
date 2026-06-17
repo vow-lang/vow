@@ -877,6 +877,18 @@ fn unsupported_op_vow_id_str() -> String {
     i64_to_str(unsupported_op_vow_id())
 }
 
+// Sentinel vow_id reported when a co-emitted callee's `requires` is violated by
+// its caller. Mirrors `vow_verify::c_emitter::CALLER_PRECONDITION_VOW_ID =
+// u32::MAX - 1`. Reserved (never a real vow id) so the diagnostic maps it to a
+// Caller-blamed "callee precondition violated" without a per-function lookup.
+fn caller_precondition_vow_id() -> i64 {
+    4294967294
+}
+
+fn caller_precondition_vow_id_str() -> String {
+    i64_to_str(caller_precondition_vow_id())
+}
+
 // Fail-closed marker for opcodes that have side effects but no verifier model.
 // The assertion text must be exactly `vow:<id>` — `parse_vow_id` (and the Rust
 // `extract_vow_id`) accept only pure digits after `vow:`, so any trailing text
@@ -924,7 +936,8 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
              const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
              const_str_ids: Vec<i64>, const_str_idxs: Vec<i64>,
              eq_lo: Vec<i64>, eq_hi: Vec<i64>,
-             vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) {
+             vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64,
+             requires_as_assert: i64) {
     let id: i64 = inst.id;
     let op: i64 = inst.op;
     let ty: i64 = inst.ty;
@@ -1109,7 +1122,17 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
     }
 
     if op == IOP_VOW_REQ() {
-        out.push_str(str3(String::from("  __ESBMC_assume(v"), i64_to_str(iargs[0]), String::from(");\n")));
+        if requires_as_assert == 1 {
+            // Callee precondition: assert it (Caller blame) so a caller passing a
+            // violating argument fails, instead of injecting `assume(false)` and
+            // vacuously verifying the caller's body. The label is the reserved
+            // CALLER_PRECONDITION sentinel, not the callee's function-local vow id
+            // (which would collide with the target's).
+            out.push_str(str5(String::from("  __ESBMC_assert(v"), i64_to_str(iargs[0]),
+                String::from(", \"vow:"), caller_precondition_vow_id_str(), String::from("\");\n")));
+        } else {
+            out.push_str(str3(String::from("  __ESBMC_assume(v"), i64_to_str(iargs[0]), String::from(");\n")));
+        }
         return;
     }
     if op == IOP_VOW_ENS() || op == IOP_VOW_INV() {
@@ -1959,7 +1982,8 @@ fn emit_btreemap_op(out: String, inst: IrInst, btreemap_max: i64) {
 }
 
 fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
-                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, reach_label: bool, body_replace: bool) {
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64,
+                   reach_label: bool, body_replace: bool, requires_as_assert: i64) {
     let vec_vars: Vec<i64> = collect_vec_vars(f);
     let string_vars: Vec<i64> = collect_string_vars(f);
     let hashmap_vars: Vec<i64> = collect_hashmap_vars(f);
@@ -2289,7 +2313,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let mut ri: i64 = 0;
         while ri < regular.len() {
             let inst: IrInst = insts[regular[ri]];
-            emit_inst(out, inst, f, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
+            emit_inst(out, inst, f, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max, requires_as_assert);
             if regular[ri] == reach_after_idx {
                 out.push_str(String::from("vow_reach:;\n"));
             }
@@ -2319,7 +2343,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
         if terminal_idx >= 0 {
             let term: IrInst = insts[terminal_idx];
-            emit_inst(out, term, f, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
+            emit_inst(out, term, f, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max, requires_as_assert);
         }
 
         bi = bi + 1;
@@ -2497,7 +2521,7 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
     let mut fi: i64 = 0;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
-        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, false, false);
+        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, false, false, 0);
         out.push_byte(10);
         fi = fi + 1;
     }
@@ -2561,7 +2585,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
         while fi < fns.len() {
             let callee: IrFunction = fns[fi];
             if callee.id == cfid {
-                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max, false, false);
+                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max, false, false, 1);
                 out.push_byte(10);
                 fi = fns.len();
             }
@@ -2574,7 +2598,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
         if f.id == target_fi {
-            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max, target_reach_label, target_body_replace);
+            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max, target_reach_label, target_body_replace, 0);
             out.push_byte(10);
             fi = fns.len();
         }
