@@ -45,6 +45,33 @@ fn cx_ir_val_for(name: String, ir_names: Vec<String>, ir_vals: Vec<i64>) -> i64 
     -1
 }
 
+// One fully-analyzed function: AST record + score + IR/contract extras.
+struct CxRow {
+    rec: CxFn,
+    sc: CxScore,
+    ex: CxExtra,
+}
+
+// Analyze a single function end to end. Extracted from run_complexity so the
+// driver stays small (and free of block-region allocations whose SSA placement
+// would otherwise diverge between the two compilers on this large function).
+fn cx_analyze_row(a: AstArena, fid: i64, src: String, struct_names: Vec<String>, struct_linear: Vec<i64>, cog_anchor: i64, nloc_anchor: i64, ir_names: Vec<String>, ir_cyclo: Vec<i64>, ir_effect_fanout: Vec<i64>, ir_consumes: Vec<i64>, ir_borrows: Vec<i64>) -> CxRow {
+    let rec: CxFn = cx_analyze_fn(a, fid, src, struct_names, struct_linear);
+    let rn: String = rec.name;
+    let cir: i64 = cx_ir_val_for(rn, ir_names, ir_cyclo);
+    let efo: i64 = cx_clamp0(cx_ir_val_for(rn, ir_names, ir_effect_fanout));
+    let lc: i64 = cx_clamp0(cx_ir_val_for(rn, ir_names, ir_consumes));
+    let lb: i64 = cx_clamp0(cx_ir_val_for(rn, ir_names, ir_borrows));
+    let ct: CxContract = cx_analyze_contract(a, fid);
+    let pcost: i64 = cx_contract_predicate_cost(ct);
+    let vf: CxVerif = cx_analyze_verif(a, fid, pcost);
+    let efb: i64 = cx_popcount(rec.eff);
+    let v: i64 = cx_vow_bump(efb, lc, pcost);
+    let sc: CxScore = cx_score(rec.cognitive, rec.nloc, cog_anchor, nloc_anchor, v);
+    let ex: CxExtra = CxExtra { cir: cir, effect_fanout: efo, linear_consumes: lc, linear_borrows: lb, ct: ct, vf: vf };
+    CxRow { rec: rec, sc: sc, ex: ex }
+}
+
 fn cx_has_eff(eff: i64, bit: i64) -> bool {
     (eff / bit) % 2 != 0
 }
@@ -249,45 +276,26 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     }
 
     // Pass 1: analyze + score every function; match IR metrics by name.
-    let recs: Vec<CxFn> = Vec::new();
-    let scs: Vec<CxScore> = Vec::new();
-    let exs: Vec<CxExtra> = Vec::new();
+    let rows: Vec<CxRow> = Vec::new();
     let mut i: i64 = 0;
     while i < n {
         let it: i64 = items[i];
         if item_kind(it) == ITEM_FN() {
-            let fid: i64 = item_id(it);
-            let rec: CxFn = cx_analyze_fn(a, fid, src, struct_names, struct_linear);
-            let rn: String = rec.name;
-            let cir: i64 = cx_ir_val_for(rn, ir_names, ir_cyclo);
-            let mut efo: i64 = cx_ir_val_for(rn, ir_names, ir_effect_fanout);
-            let mut lc: i64 = cx_ir_val_for(rn, ir_names, ir_consumes);
-            let mut lb: i64 = cx_ir_val_for(rn, ir_names, ir_borrows);
-            if efo < 0 { efo = 0; }
-            if lc < 0 { lc = 0; }
-            if lb < 0 { lb = 0; }
-            let ct: CxContract = cx_analyze_contract(a, fid);
-            let pcost: i64 = cx_contract_predicate_cost(ct);
-            let vf: CxVerif = cx_analyze_verif(a, fid, pcost);
-            let efb: i64 = cx_popcount(rec.eff);
-            let v: i64 = cx_vow_bump(efb, lc, pcost);
-            let sc: CxScore = cx_score(rec.cognitive, rec.nloc, cog_anchor, nloc_anchor, v);
-            exs.push(CxExtra { cir: cir, effect_fanout: efo, linear_consumes: lc, linear_borrows: lb, ct: ct, vf: vf });
-            recs.push(rec);
-            scs.push(sc);
+            rows.push(cx_analyze_row(a, item_id(it), src, struct_names, struct_linear, cog_anchor, nloc_anchor, ir_names, ir_cyclo, ir_effect_fanout, ir_consumes, ir_borrows));
         }
         i = i + 1;
     }
 
     // File-level aggregates + exit-gating.
-    let nf: i64 = recs.len();
+    let nf: i64 = rows.len();
     let mut file_max: i64 = 0;
     let mut over_count: i64 = 0;
     let mut exit_code: i32 = 0;
     let mut j: i64 = 0;
     while j < nf {
-        let r: CxFn = recs[j];
-        let sc: CxScore = scs[j];
+        let rowj: CxRow = rows[j];
+        let r: CxFn = rowj.rec;
+        let sc: CxScore = rowj.sc;
         if sc.score > file_max { file_max = sc.score; }
         if sc.score > thr { over_count = over_count + 1; }
         if max_score >= 0 && sc.score > max_score { exit_code = 1; }
@@ -308,12 +316,11 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     }
     let mut hi: i64 = 0;
     while hi < nf {
-        let hr: CxFn = recs[hi];
+        let rowh: CxRow = rows[hi];
+        let hr: CxFn = rowh.rec;
         let hrn: String = hr.name;
-        let mut fi: i64 = cx_ir_val_for(hrn, ir_names, ir_fanin);
-        let mut fo: i64 = cx_ir_val_for(hrn, ir_names, ir_fanout);
-        if fi < 0 { fi = 0; }
-        if fo < 0 { fo = 0; }
+        let fi: i64 = cx_clamp0(cx_ir_val_for(hrn, ir_names, ir_fanin));
+        let fo: i64 = cx_clamp0(cx_ir_val_for(hrn, ir_names, ir_fanout));
         let hk: i64 = cx_henry_kafura(hr.nloc, fi, fo);
         if hk > hk_max { hk_max = hk; }
         hi = hi + 1;
@@ -332,7 +339,8 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut k: i64 = 0;
     while k < nf {
         if k > 0 { out.push_str(String::from(",")); }
-        cx_emit_fn(out, recs[k], scs[k], thr, exs[k]);
+        let rowk: CxRow = rows[k];
+        cx_emit_fn(out, rowk.rec, rowk.sc, thr, rowk.ex);
         k = k + 1;
     }
     out.push_str(String::from("],\"module\":{\"tier\":\"experimental\",\"functions\":"));
@@ -355,11 +363,12 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut e: i64 = 0;
     let mut emitted: i64 = 0;
     while e < nf {
-        let sc: CxScore = scs[e];
+        let rowe: CxRow = rows[e];
+        let sc: CxScore = rowe.sc;
         if sc.score > thr {
             if emitted > 0 { out.push_str(String::from(",")); }
             out.push_str(String::from("\""));
-            let r: CxFn = recs[e];
+            let r: CxFn = rowe.rec;
             out.push_str(cx_json_escape(r.name));
             out.push_str(String::from("\""));
             emitted = emitted + 1;

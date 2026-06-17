@@ -594,6 +594,12 @@ fn cx_sat(x: i64) -> i64 {
     if x > CX_SAT() { CX_SAT() } else { x }
 }
 
+// Clamp a possibly-(-1) IR lookup result to 0. Pure (no let-mut + if-reassign)
+// so both compilers lower call sites to identical SSA.
+fn cx_clamp0(x: i64) -> i64 {
+    if x < 0 { 0 } else { x }
+}
+
 // Integer log2 scaled by 1000. log2(0)=log2(1)=0. Integer part is the index of
 // the high bit; the fractional part is found by 10 mantissa-squaring steps.
 fn cx_log2_milli(n: i64) -> i64 {
