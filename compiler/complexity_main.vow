@@ -74,7 +74,9 @@ fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, ex: CxExtra) {
     out.push_str(cx_fmt_fixed(sc.cog_sub_s));
     out.push_str(String::from(",\"size_sub\":"));
     out.push_str(cx_fmt_fixed(sc.size_sub_s));
-    out.push_str(String::from(",\"vow_bump\":0.000,\"base\":"));
+    out.push_str(String::from(",\"vow_bump\":"));
+    out.push_str(cx_fmt_fixed(sc.vow_bump_s));
+    out.push_str(String::from(",\"base\":"));
     out.push_str(cx_fmt_fixed(sc.base_s));
     out.push_str(String::from(",\"over_threshold\":"));
     if sc.score > thr { out.push_str(String::from("true")); } else { out.push_str(String::from("false")); }
@@ -124,6 +126,30 @@ fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, ex: CxExtra) {
     out.push_str(i64_to_string(ex.linear_consumes));
     out.push_str(String::from(",\"linear_borrows\":"));
     out.push_str(i64_to_string(ex.linear_borrows));
+    let ct: CxContract = ex.ct;
+    out.push_str(String::from(",\"contract\":{\"requires\":"));
+    out.push_str(i64_to_string(ct.n_req));
+    out.push_str(String::from(",\"ensures\":"));
+    out.push_str(i64_to_string(ct.n_ens));
+    out.push_str(String::from(",\"invariants\":"));
+    out.push_str(i64_to_string(ct.n_inv));
+    out.push_str(String::from(",\"predicate_nodes\":"));
+    out.push_str(i64_to_string(ct.predicate_nodes));
+    out.push_str(String::from(",\"predicate_depth\":"));
+    out.push_str(i64_to_string(ct.predicate_depth));
+    out.push_str(String::from(",\"free_vars\":"));
+    out.push_str(i64_to_string(ct.free_vars));
+    out.push_str(String::from(",\"has_vec_quantification\":"));
+    if ct.has_vec_quant != 0 { out.push_str(String::from("true")); } else { out.push_str(String::from("false")); }
+    let vf: CxVerif = ex.vf;
+    out.push_str(String::from("}},\"verification\":{\"tier\":\"experimental\",\"loops_total\":"));
+    out.push_str(i64_to_string(vf.loops_total));
+    out.push_str(String::from(",\"loops_without_invariant\":"));
+    out.push_str(i64_to_string(vf.loops_without_invariant));
+    out.push_str(String::from(",\"max_loop_nesting\":"));
+    out.push_str(i64_to_string(vf.max_loop_nesting));
+    out.push_str(String::from(",\"contract_predicate_cost\":"));
+    out.push_str(i64_to_string(vf.contract_predicate_cost));
     out.push_str(String::from("}}"));
 }
 
@@ -232,7 +258,6 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
         if item_kind(it) == ITEM_FN() {
             let fid: i64 = item_id(it);
             let rec: CxFn = cx_analyze_fn(a, fid, src, struct_names, struct_linear);
-            let sc: CxScore = cx_score(rec.cognitive, rec.nloc, cog_anchor, nloc_anchor);
             let rn: String = rec.name;
             let cir: i64 = cx_ir_val_for(rn, ir_names, ir_cyclo);
             let mut efo: i64 = cx_ir_val_for(rn, ir_names, ir_effect_fanout);
@@ -241,7 +266,13 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
             if efo < 0 { efo = 0; }
             if lc < 0 { lc = 0; }
             if lb < 0 { lb = 0; }
-            exs.push(CxExtra { cir: cir, effect_fanout: efo, linear_consumes: lc, linear_borrows: lb });
+            let ct: CxContract = cx_analyze_contract(a, fid);
+            let pcost: i64 = cx_contract_predicate_cost(ct);
+            let vf: CxVerif = cx_analyze_verif(a, fid, pcost);
+            let efb: i64 = cx_popcount(rec.eff);
+            let v: i64 = cx_vow_bump(efb, lc, pcost);
+            let sc: CxScore = cx_score(rec.cognitive, rec.nloc, cog_anchor, nloc_anchor, v);
+            exs.push(CxExtra { cir: cir, effect_fanout: efo, linear_consumes: lc, linear_borrows: lb, ct: ct, vf: vf });
             recs.push(rec);
             scs.push(sc);
         }

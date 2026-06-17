@@ -11,7 +11,9 @@ use std::path::Path;
 use std::collections::HashSet;
 
 use vow_ir::{InstData, Opcode};
-use vow_syntax::ast::{BinOp, Block, Effect, Expr, ExprKind, Item, Lit, Stmt, UnOp};
+use vow_syntax::ast::{
+    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Stmt, UnOp, VowBlock, VowClause,
+};
 
 // Effect -> bit, matching the self-hosted EFF_* constants (io=1,panic=2,
 // read=4,unsafe=8,write=16), so effect_breadth (popcount) and the canonical
@@ -524,6 +526,9 @@ struct CxEmit {
     cog_sub_s: i64,
     size_sub_s: i64,
     base_s: i64,
+    vow_bump_s: i64,
+    contract: Contract,
+    verif: Verif,
 }
 
 fn cx_emit_fn(out: &mut String, r: &CxEmit, thr: i64) {
@@ -537,7 +542,9 @@ fn cx_emit_fn(out: &mut String, r: &CxEmit, thr: i64) {
     out.push_str(&cx_fmt_fixed(r.cog_sub_s));
     out.push_str(",\"size_sub\":");
     out.push_str(&cx_fmt_fixed(r.size_sub_s));
-    out.push_str(",\"vow_bump\":0.000,\"base\":");
+    out.push_str(",\"vow_bump\":");
+    out.push_str(&cx_fmt_fixed(r.vow_bump_s));
+    out.push_str(",\"base\":");
     out.push_str(&cx_fmt_fixed(r.base_s));
     out.push_str(",\"over_threshold\":");
     out.push_str(if r.score > thr { "true" } else { "false" });
@@ -587,6 +594,32 @@ fn cx_emit_fn(out: &mut String, r: &CxEmit, thr: i64) {
     out.push_str(&r.linear_consumes.to_string());
     out.push_str(",\"linear_borrows\":");
     out.push_str(&r.linear_borrows.to_string());
+    out.push_str(",\"contract\":{\"requires\":");
+    out.push_str(&r.contract.requires.to_string());
+    out.push_str(",\"ensures\":");
+    out.push_str(&r.contract.ensures.to_string());
+    out.push_str(",\"invariants\":");
+    out.push_str(&r.contract.invariants.to_string());
+    out.push_str(",\"predicate_nodes\":");
+    out.push_str(&r.contract.predicate_nodes.to_string());
+    out.push_str(",\"predicate_depth\":");
+    out.push_str(&r.contract.predicate_depth.to_string());
+    out.push_str(",\"free_vars\":");
+    out.push_str(&r.contract.free_vars.to_string());
+    out.push_str(",\"has_vec_quantification\":");
+    out.push_str(if r.contract.has_vec_quant {
+        "true"
+    } else {
+        "false"
+    });
+    out.push_str("}},\"verification\":{\"tier\":\"experimental\",\"loops_total\":");
+    out.push_str(&r.verif.loops_total.to_string());
+    out.push_str(",\"loops_without_invariant\":");
+    out.push_str(&r.verif.loops_without_invariant.to_string());
+    out.push_str(",\"max_loop_nesting\":");
+    out.push_str(&r.verif.max_loop_nesting.to_string());
+    out.push_str(",\"contract_predicate_cost\":");
+    out.push_str(&r.verif.contract_predicate_cost.to_string());
     out.push_str("}}");
 }
 
@@ -707,7 +740,12 @@ pub(crate) fn run_complexity_command(
                 0
             };
             let h_effort_s = h_difficulty_s.wrapping_mul(h_volume_s) / 1000;
-            let sc = cx_score(cognitive, nloc, cog_anchor, nloc_anchor);
+            let contract = analyze_contract(f);
+            let pcost = contract_predicate_cost(&contract);
+            let verif = analyze_verif(f, pcost);
+            let effect_breadth = cx_popcount_bits(eff);
+            let v = cx_vow_bump(effect_breadth, linear_consumes, pcost);
+            let sc = cx_score(cognitive, nloc, cog_anchor, nloc_anchor, v);
             recs.push(CxEmit {
                 name: f.name.clone(),
                 line: first_line,
@@ -737,6 +775,9 @@ pub(crate) fn run_complexity_command(
                 cog_sub_s: sc.cog_sub_s,
                 size_sub_s: sc.size_sub_s,
                 base_s: sc.base_s,
+                vow_bump_s: sc.vow_bump_s,
+                contract,
+                verif,
             });
         }
     }
@@ -829,6 +870,7 @@ struct CxScore {
     cog_sub_s: i64,
     size_sub_s: i64,
     base_s: i64,
+    vow_bump_s: i64,
 }
 
 fn cx_anchor_map(x: i64, t_in: i64) -> i64 {
@@ -852,16 +894,17 @@ fn cx_round_0_100(val_scaled: i64) -> i64 {
     }
 }
 
-fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64) -> CxScore {
+fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64) -> CxScore {
     let c = cx_anchor_map(cognitive, cog_anchor);
     let s = cx_anchor_map(nloc, nloc_anchor);
     let base = cx_soft_or(c, s);
-    let score = cx_round_0_100(base);
+    let score = cx_round_0_100(base + v);
     CxScore {
         score,
         cog_sub_s: c,
         size_sub_s: s,
         base_s: base,
+        vow_bump_s: v,
     }
 }
 
@@ -1121,6 +1164,297 @@ fn hal_expr(e: &Expr, acc: &mut HalAcc) {
         ExprKind::Borrow { expr } => hal_expr(expr, acc),
         ExprKind::Result => {}
     }
+}
+
+// ---- Contract + verification-difficulty metrics (mirror complexity.vow) ----
+struct Contract {
+    requires: i64,
+    ensures: i64,
+    invariants: i64,
+    predicate_nodes: i64,
+    predicate_depth: i64,
+    free_vars: i64,
+    has_vec_quant: bool,
+}
+
+fn pred_walk(
+    e: &Expr,
+    depth: i64,
+    nodes: &mut i64,
+    maxdepth: &mut i64,
+    has_index: &mut bool,
+    seen: &mut HashSet<String>,
+) {
+    // Borrow has no node in the self-hosted AST: walk through it transparently.
+    if let ExprKind::Borrow { expr } = &e.kind {
+        pred_walk(expr, depth, nodes, maxdepth, has_index, seen);
+        return;
+    }
+    *nodes += 1;
+    if depth > *maxdepth {
+        *maxdepth = depth;
+    }
+    match &e.kind {
+        ExprKind::Ident(name) => {
+            // `result` is the ensures-result binding; the self-hosted parser
+            // models it as EXPR_RESULT (not an identifier), so it is not a free
+            // var. It is reserved, so excluding it here is always correct.
+            if name != "result" {
+                seen.insert(name.clone());
+            }
+        }
+        ExprKind::Index { base, index } => {
+            *has_index = true;
+            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(index, depth + 1, nodes, maxdepth, has_index, seen);
+        }
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen);
+        }
+        ExprKind::Assign { lhs, rhs } => {
+            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen);
+        }
+        ExprKind::UnaryOp { operand, .. } => {
+            pred_walk(operand, depth + 1, nodes, maxdepth, has_index, seen)
+        }
+        ExprKind::FieldAccess { base, .. } => {
+            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen)
+        }
+        ExprKind::Question { expr } => pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen),
+        ExprKind::Cast { expr, .. } => pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen),
+        ExprKind::Call { callee, args } => {
+            pred_walk(callee, depth + 1, nodes, maxdepth, has_index, seen);
+            for a in args {
+                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen);
+            }
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            pred_walk(receiver, depth + 1, nodes, maxdepth, has_index, seen);
+            for a in args {
+                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen);
+            }
+        }
+        ExprKind::Tuple(elems) => {
+            for e2 in elems {
+                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn analyze_contract(f: &FnDef) -> Contract {
+    let (mut requires, mut ensures, mut invariants) = (0i64, 0i64, 0i64);
+    let mut nodes = 0i64;
+    let mut maxdepth = 0i64;
+    let mut has_index = false;
+    let mut seen: HashSet<String> = HashSet::new();
+    if let Some(vb) = &f.vow {
+        for clause in &vb.clauses {
+            let expr = match clause {
+                VowClause::Requires { expr, .. } => {
+                    requires += 1;
+                    expr
+                }
+                VowClause::Ensures { expr, .. } => {
+                    ensures += 1;
+                    expr
+                }
+                VowClause::Invariant { expr, .. } => {
+                    invariants += 1;
+                    expr
+                }
+            };
+            pred_walk(
+                expr,
+                1,
+                &mut nodes,
+                &mut maxdepth,
+                &mut has_index,
+                &mut seen,
+            );
+        }
+    }
+    Contract {
+        requires,
+        ensures,
+        invariants,
+        predicate_nodes: nodes,
+        predicate_depth: maxdepth,
+        free_vars: seen.len() as i64,
+        has_vec_quant: has_index,
+    }
+}
+
+fn contract_predicate_cost(ct: &Contract) -> i64 {
+    ct.predicate_nodes + ct.free_vars + if ct.has_vec_quant { 1 } else { 0 }
+}
+
+struct Verif {
+    loops_total: i64,
+    loops_without_invariant: i64,
+    max_loop_nesting: i64,
+    contract_predicate_cost: i64,
+}
+
+fn loop_no_inv(vow: &Option<VowBlock>) -> bool {
+    match vow {
+        None => true,
+        Some(vb) => vb.clauses.is_empty(),
+    }
+}
+
+fn loops_block(b: &Block, nesting: i64, total: &mut i64, without: &mut i64, maxnest: &mut i64) {
+    for s in &b.stmts {
+        match s {
+            Stmt::Let { init, .. } => loops_expr(init, nesting, total, without, maxnest),
+            Stmt::Expr { expr, .. } => loops_expr(expr, nesting, total, without, maxnest),
+        }
+    }
+    if let Some(t) = &b.trailing_expr {
+        loops_expr(t, nesting, total, without, maxnest);
+    }
+}
+
+fn loops_expr(e: &Expr, nesting: i64, total: &mut i64, without: &mut i64, maxnest: &mut i64) {
+    match &e.kind {
+        ExprKind::While {
+            condition,
+            vow,
+            body,
+        } => {
+            *total += 1;
+            if nesting + 1 > *maxnest {
+                *maxnest = nesting + 1;
+            }
+            if loop_no_inv(vow) {
+                *without += 1;
+            }
+            loops_expr(condition, nesting, total, without, maxnest);
+            loops_block(body, nesting + 1, total, without, maxnest);
+        }
+        ExprKind::ForEach {
+            iterable,
+            vow,
+            body,
+            ..
+        } => {
+            *total += 1;
+            if nesting + 1 > *maxnest {
+                *maxnest = nesting + 1;
+            }
+            if loop_no_inv(vow) {
+                *without += 1;
+            }
+            loops_expr(iterable, nesting, total, without, maxnest);
+            loops_block(body, nesting + 1, total, without, maxnest);
+        }
+        ExprKind::Loop { vow, body } => {
+            *total += 1;
+            if nesting + 1 > *maxnest {
+                *maxnest = nesting + 1;
+            }
+            if loop_no_inv(vow) {
+                *without += 1;
+            }
+            loops_block(body, nesting + 1, total, without, maxnest);
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            loops_expr(condition, nesting, total, without, maxnest);
+            loops_block(then_branch, nesting, total, without, maxnest);
+            if let Some(e2) = else_branch {
+                loops_expr(e2, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            loops_expr(scrutinee, nesting, total, without, maxnest);
+            for arm in arms {
+                loops_expr(&arm.body, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Block(b) => loops_block(b, nesting, total, without, maxnest),
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            loops_expr(lhs, nesting, total, without, maxnest);
+            loops_expr(rhs, nesting, total, without, maxnest);
+        }
+        ExprKind::Assign { lhs, rhs } => {
+            loops_expr(lhs, nesting, total, without, maxnest);
+            loops_expr(rhs, nesting, total, without, maxnest);
+        }
+        ExprKind::Index { base, index } => {
+            loops_expr(base, nesting, total, without, maxnest);
+            loops_expr(index, nesting, total, without, maxnest);
+        }
+        ExprKind::UnaryOp { operand, .. } => loops_expr(operand, nesting, total, without, maxnest),
+        ExprKind::FieldAccess { base, .. } => loops_expr(base, nesting, total, without, maxnest),
+        ExprKind::Question { expr } => loops_expr(expr, nesting, total, without, maxnest),
+        ExprKind::Cast { expr, .. } => loops_expr(expr, nesting, total, without, maxnest),
+        ExprKind::Borrow { expr } => loops_expr(expr, nesting, total, without, maxnest),
+        ExprKind::Return { value } => {
+            if let Some(v) = value {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            loops_expr(callee, nesting, total, without, maxnest);
+            for a in args {
+                loops_expr(a, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            loops_expr(receiver, nesting, total, without, maxnest);
+            for a in args {
+                loops_expr(a, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, v) in fields {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::EnumConstruct { fields, .. } => {
+            for v in fields {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Tuple(elems) => {
+            for v in elems {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
+        ExprKind::Lit(_)
+        | ExprKind::Ident(_)
+        | ExprKind::Break { .. }
+        | ExprKind::Continue
+        | ExprKind::Result => {}
+    }
+}
+
+fn analyze_verif(f: &FnDef, predicate_cost: i64) -> Verif {
+    let mut total = 0i64;
+    let mut without = 0i64;
+    let mut maxnest = 0i64;
+    loops_block(&f.body, 0, &mut total, &mut without, &mut maxnest);
+    Verif {
+        loops_total: total,
+        loops_without_invariant: without,
+        max_loop_nesting: maxnest,
+        contract_predicate_cost: predicate_cost,
+    }
+}
+
+// Experimental Vow-surface score bump (§3.2a Step 3), fixed-point, capped 150.
+fn cx_vow_bump(effect_breadth: i64, linear_consumes: i64, contract_predicate_cost: i64) -> i64 {
+    let excess_eff = (effect_breadth - 2).max(0);
+    let over_budget = (contract_predicate_cost - 20).max(0);
+    let v = 50 * excess_eff + 30 * linear_consumes + 20 * over_budget;
+    v.min(150)
 }
 
 // 1-based line number of a byte offset. Must match the self-hosted

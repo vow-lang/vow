@@ -46,7 +46,7 @@
     "Vow": {
       "description": "Vow-surface metrics (experimental tier).",
       "type": "object",
-      "required": ["tier", "effects", "effect_breadth", "effect_fanout", "linear_values", "linear_consumes", "linear_borrows"],
+      "required": ["tier", "effects", "effect_breadth", "effect_fanout", "linear_values", "linear_consumes", "linear_borrows", "contract"],
       "properties": {
         "tier": { "const": "experimental" },
         "effects": { "type": "array", "items": { "enum": ["io", "panic", "read", "unsafe", "write"] }, "description": "Declared effects, canonical order." },
@@ -54,13 +54,14 @@
         "effect_fanout": { "type": "integer", "minimum": 0, "description": "Distinct in-module callees that are themselves effectful." },
         "linear_values": { "type": "integer", "minimum": 0, "description": "Count of linear-struct literals constructed in the function." },
         "linear_consumes": { "type": "integer", "minimum": 0, "description": "IOP_LINEAR_CONSUME count (linear resource moves)." },
-        "linear_borrows": { "type": "integer", "minimum": 0, "description": "IOP_LINEAR_BORROW count." }
+        "linear_borrows": { "type": "integer", "minimum": 0, "description": "IOP_LINEAR_BORROW count." },
+        "contract": { "$ref": "#/$defs/Contract" }
       },
       "additionalProperties": false
     },
     "Function": {
       "type": "object",
-      "required": ["name", "line", "complexity_score", "score_factors", "size", "structural", "vow"],
+      "required": ["name", "line", "complexity_score", "score_factors", "size", "structural", "vow", "verification"],
       "properties": {
         "name": { "type": "string" },
         "line": { "type": "integer", "minimum": 1, "description": "1-based source line of the function." },
@@ -68,7 +69,36 @@
         "score_factors": { "$ref": "#/$defs/ScoreFactors" },
         "size": { "$ref": "#/$defs/Size" },
         "structural": { "$ref": "#/$defs/Structural" },
-        "vow": { "$ref": "#/$defs/Vow" }
+        "vow": { "$ref": "#/$defs/Vow" },
+        "verification": { "$ref": "#/$defs/Verification" }
+      },
+      "additionalProperties": false
+    },
+    "Verification": {
+      "description": "Verification-difficulty metrics (experimental tier, Vow-unique).",
+      "type": "object",
+      "required": ["tier", "loops_total", "loops_without_invariant", "max_loop_nesting", "contract_predicate_cost"],
+      "properties": {
+        "tier": { "const": "experimental" },
+        "loops_total": { "type": "integer", "minimum": 0 },
+        "loops_without_invariant": { "type": "integer", "minimum": 0, "description": "Loops the BMC must unwind without an invariant." },
+        "max_loop_nesting": { "type": "integer", "minimum": 0 },
+        "contract_predicate_cost": { "type": "integer", "minimum": 0, "description": "predicate_nodes + free_vars + quantifier flag, summed across clauses." }
+      },
+      "additionalProperties": false
+    },
+    "Contract": {
+      "description": "Contract surface (experimental tier).",
+      "type": "object",
+      "required": ["requires", "ensures", "invariants", "predicate_nodes", "predicate_depth", "free_vars", "has_vec_quantification"],
+      "properties": {
+        "requires": { "type": "integer", "minimum": 0 },
+        "ensures": { "type": "integer", "minimum": 0 },
+        "invariants": { "type": "integer", "minimum": 0, "description": "Function-level invariant clauses (loop invariants are counted under verification)." },
+        "predicate_nodes": { "type": "integer", "minimum": 0, "description": "Total AST nodes across all clause predicates." },
+        "predicate_depth": { "type": "integer", "minimum": 0 },
+        "free_vars": { "type": "integer", "minimum": 0, "description": "Distinct free identifiers across clauses (excludes the result binding)." },
+        "has_vec_quantification": { "type": "boolean", "description": "A predicate indexes a Vec (no quantifier syntax exists; this is the proxy)." }
       },
       "additionalProperties": false
     },
