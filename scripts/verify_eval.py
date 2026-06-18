@@ -75,7 +75,12 @@ KNOWN_GAP = "known_gap"
 # the program from a known-gap xfail to a real verify-fail. Fatal: forces the
 # label to be promoted rather than silently drifting.
 GAP_FIXED = "gap_fixed"
+# `--replay-cex` differential-test mismatch (issue #335): a counterexample's
+# observed replay outcome did not match the fixture's `replay` directive. Fatal.
+REPLAY = "replay"
 OK = "ok"
+
+VALID_REPLAY = {"confirmed", "diverged", "skipped"}
 
 
 class Expect:
@@ -93,6 +98,9 @@ class Expect:
         self.known_gap_issue = None
         # Each cex is a dict with optional keys: fn, blame, vow_id.
         self.cex = []
+        # When set ("confirmed"/"diverged"/"skipped"), re-run with --replay-cex
+        # and assert every counterexample carries this replay outcome (#335).
+        self.replay_expect = None
 
 
 CEX_KV = re.compile(r'(\w+)\s*=\s*(?:"([^"]*)"|(\S+))')
@@ -177,6 +185,14 @@ def parse_directives(path, default_status):
                         f"(expected: counterexample-vow-id <N>): {body!r}"
                     )
                 legacy["vow_id"] = int(parts[1].strip())
+            elif body.startswith("replay"):
+                rm = re.match(r"replay\s+(\w+)$", body)
+                if not rm or rm.group(1) not in VALID_REPLAY:
+                    raise ValueError(
+                        f"{path}: malformed replay directive "
+                        f"(expected: replay <confirmed|diverged|skipped>): {body!r}"
+                    )
+                exp.replay_expect = rm.group(1)
             elif body.startswith("cex"):
                 cex = {}
                 for key, q, bare in CEX_KV.findall(body[len("cex"):]):
@@ -441,6 +457,21 @@ def banner(title, rows):
         print(f"  {name}: {detail}")
 
 
+def check_replay(verifier, exp):
+    """Re-run with `--replay-cex` and assert every counterexample carries the
+    expected replay outcome (#335). Returns (verdict, detail): OK or REPLAY."""
+    vj = run_json(verifier, ["verify", "--replay-cex", "--no-cache", exp.path])
+    if vj is None:
+        return REPLAY, "replay run produced no parseable JSON"
+    ces = vj.get("counterexamples", []) or []
+    if not ces:
+        return REPLAY, "replay expected counterexamples but none were produced"
+    got = sorted({ce.get("replay") for ce in ces})
+    if any(ce.get("replay") != exp.replay_expect for ce in ces):
+        return REPLAY, f"replay want={exp.replay_expect} got={got}"
+    return OK, None
+
+
 def evaluate(verifier, filter_name, output_dir):
     buckets = {
         SOUNDNESS: [],
@@ -449,6 +480,7 @@ def evaluate(verifier, filter_name, output_dir):
         STATUS: [],
         HARNESS: [],
         GAP_FIXED: [],
+        REPLAY: [],
     }
     known_gaps = []
     report = []
@@ -469,6 +501,11 @@ def evaluate(verifier, filter_name, output_dir):
 
         vj = run_json(verifier, ["verify", "--no-cache", exp.path])
         verdict, detail = classify(exp, vj, verifier)
+        # Replay is a secondary, opt-in differential test (#335): only check it
+        # when the fixture declares a `replay` directive and the primary verdict
+        # is otherwise OK (a status/blame regression is the more important news).
+        if verdict == OK and exp.replay_expect:
+            verdict, detail = check_replay(verifier, exp)
         report.append(
             {
                 "name": exp.name,
@@ -511,6 +548,9 @@ def evaluate(verifier, filter_name, output_dir):
         banner("BLAME / VOW_ID REGRESSIONS", buckets[BLAME])
     if buckets[STATUS]:
         banner("STATUS MISMATCHES", buckets[STATUS])
+    if buckets[REPLAY]:
+        banner("REPLAY MISMATCHES — --replay-cex outcome differs from ground truth",
+               buckets[REPLAY])
     if buckets[GAP_FIXED]:
         banner("KNOWN GAP APPEARS FIXED — promote to a verify-fail program",
                buckets[GAP_FIXED])

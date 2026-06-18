@@ -1,0 +1,19 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "want_big"
+// TEST: counterexample-blame callee
+// TEST: counterexample-vow-id 0
+// TEST: replay skipped
+//
+// Counterexample-replay skip fixture (#335). `want_big` takes a `String`, which
+// is outside the v1 reconstruction scope (scalars + bounded Vec), so harness
+// generation cannot build a concrete input. `s.len()` is bounded by the string
+// model and can never equal 999, violating `ensures: result == 999` (Callee
+// blame). With `--replay-cex` both compilers report replay "skipped" with a
+// reason naming the unsupported parameter type.
+module ReplaySkipString
+
+fn want_big(s: String) -> i64 vow {
+  ensures: result == 999
+} {
+  s.len()
+}
