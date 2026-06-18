@@ -254,11 +254,19 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     while z < nirf {
         let cs: Vec<i64> = ir_callees[z];
         ir_fanout.push(cs.len());
+        // fan-in = in-file callers of function z. Callee ids equal IR-function
+        // array indices (the lowerer assigns FuncId(i) to the i-th function), so
+        // cx_vec_has(callees[w], z) means w calls z. Count only entry-file callers,
+        // matching the schema's in-file coupling semantics (a dependency calling an
+        // entry function must not inflate that function's fan_in).
         let mut fin: i64 = 0;
         let mut w: i64 = 0;
         while w < nirf {
+            let wf: IrFunction = ir_funcs[w];
             let csw: Vec<i64> = ir_callees[w];
-            if cx_vec_has(csw, z) { fin = fin + 1; }
+            if wf.source_file == path {
+                if cx_vec_has(csw, z) { fin = fin + 1; }
+            }
             w = w + 1;
         }
         ir_fanin.push(fin);

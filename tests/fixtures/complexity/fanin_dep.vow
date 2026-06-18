@@ -1,0 +1,7 @@
+module FaninDep
+
+use fanin_entry
+
+pub fn dep_caller(x: i64) -> i64 {
+    entry_target(x)
+}

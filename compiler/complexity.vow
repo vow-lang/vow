@@ -602,7 +602,6 @@ fn cog_expr(a: AstArena, eid: i64, nesting: i64, logctx: i64, selfn: String, acc
 // computed in integer fixed-point (scale = 1000, i.e. 3 decimal places) and
 // serialized by cx_fmt_fixed. CX_SAT caps values so the effort product cannot
 // overflow i64 (2e9 * 2e9 = 4e18 < i64::MAX).
-fn CX_SCALE() -> i64 { 1000 }
 fn CX_SAT() -> i64 { 2000000000 }
 
 fn cx_sat(x: i64) -> i64 {

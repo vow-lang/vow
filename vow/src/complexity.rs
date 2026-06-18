@@ -664,7 +664,14 @@ pub(crate) fn run_complexity_command(
         for (idx, f) in funcs.iter().enumerate() {
             let fan_out = callees[idx].len() as i64;
             let fid = f.id.0;
-            let fan_in = callees.iter().filter(|s| s.contains(&fid)).count() as i64;
+            // fan_in counts in-file callers only (schema), so restrict the caller
+            // scan to entry-file functions — a dependency that calls an entry
+            // function must not inflate the entry function's fan_in.
+            let fan_in = funcs
+                .iter()
+                .zip(callees.iter())
+                .filter(|(cf, s)| cf.source_file == entry_file && s.contains(&fid))
+                .count() as i64;
             let effect_fanout = callees[idx]
                 .iter()
                 .filter(|c| effectful.contains(c))
