@@ -10079,8 +10079,7 @@ fn expand_aggregate_values(
         let line = line.trim();
         let Some(eq) = line.find('=') else { continue };
         let lvalue = line[..eq].trim();
-        if lvalue.is_empty()
-            || !lvalue.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        if lvalue.is_empty() || !lvalue.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
         {
             continue;
         }
@@ -12514,8 +12513,14 @@ mod tests {
 
     #[test]
     fn normalize_replay_scalar_handles_bool_and_ints() {
-        assert_eq!(normalize_replay_scalar("bool", "1").as_deref(), Some("true"));
-        assert_eq!(normalize_replay_scalar("bool", "0").as_deref(), Some("false"));
+        assert_eq!(
+            normalize_replay_scalar("bool", "1").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            normalize_replay_scalar("bool", "0").as_deref(),
+            Some("false")
+        );
         assert_eq!(
             normalize_replay_scalar("bool", "TRUE").as_deref(),
             Some("true")
@@ -12678,7 +12683,10 @@ mod tests {
     #[test]
     fn parse_vow_violation_line_extracts_id_and_blame() {
         let line = r#"{"error":"VowViolation","vow_id":2,"blame":"Caller","description":"x","file":"a.vow","offset":3}"#;
-        assert_eq!(parse_vow_violation_line(line), Some((2, "Caller".to_string())));
+        assert_eq!(
+            parse_vow_violation_line(line),
+            Some((2, "Caller".to_string()))
+        );
         assert_eq!(parse_vow_violation_line("not json"), None);
         assert_eq!(parse_vow_violation_line(r#"{"error":"Other"}"#), None);
     }
