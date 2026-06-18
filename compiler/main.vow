@@ -5978,7 +5978,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"properties\": {\n"));
     r.push_str(String::from("        \"cognitive_sub\": { \"type\": \"number\", \"description\": \"anchor_map(cognitive, --cog-anchor).\" },\n"));
     r.push_str(String::from("        \"size_sub\": { \"type\": \"number\", \"description\": \"anchor_map(nloc, --nloc-anchor).\" },\n"));
-    r.push_str(String::from("        \"vow_bump\": { \"type\": \"number\", \"description\": \"Experimental Vow-surface bump. 0.0 in Phase 1.\" },\n"));
+    r.push_str(String::from("        \"vow_bump\": { \"type\": \"number\", \"description\": \"Experimental Vow-surface bump (scale 1000). Sum of effect-breadth, linear-consume, and contract-predicate penalties; capped at 150.\" },\n"));
     r.push_str(String::from("        \"base\": { \"type\": \"number\", \"description\": \"soft-OR of cognitive_sub and size_sub.\" },\n"));
     r.push_str(String::from("        \"over_threshold\": { \"type\": \"boolean\" }\n"));
     r.push_str(String::from("      },\n"));
@@ -9959,7 +9959,7 @@ fn skill_support_content_7() -> String {
     r.push_str(String::from("      \"properties\": {\n"));
     r.push_str(String::from("        \"cognitive_sub\": { \"type\": \"number\", \"description\": \"anchor_map(cognitive, --cog-anchor).\" },\n"));
     r.push_str(String::from("        \"size_sub\": { \"type\": \"number\", \"description\": \"anchor_map(nloc, --nloc-anchor).\" },\n"));
-    r.push_str(String::from("        \"vow_bump\": { \"type\": \"number\", \"description\": \"Experimental Vow-surface bump. 0.0 in Phase 1.\" },\n"));
+    r.push_str(String::from("        \"vow_bump\": { \"type\": \"number\", \"description\": \"Experimental Vow-surface bump (scale 1000). Sum of effect-breadth, linear-consume, and contract-predicate penalties; capped at 150.\" },\n"));
     r.push_str(String::from("        \"base\": { \"type\": \"number\", \"description\": \"soft-OR of cognitive_sub and size_sub.\" },\n"));
     r.push_str(String::from("        \"over_threshold\": { \"type\": \"boolean\" }\n"));
     r.push_str(String::from("      },\n"));

@@ -109,7 +109,7 @@
       "properties": {
         "cognitive_sub": { "type": "number", "description": "anchor_map(cognitive, --cog-anchor)." },
         "size_sub": { "type": "number", "description": "anchor_map(nloc, --nloc-anchor)." },
-        "vow_bump": { "type": "number", "description": "Experimental Vow-surface bump. 0.0 in Phase 1." },
+        "vow_bump": { "type": "number", "description": "Experimental Vow-surface bump (scale 1000). Sum of effect-breadth, linear-consume, and contract-predicate penalties; capped at 150." },
         "base": { "type": "number", "description": "soft-OR of cognitive_sub and size_sub." },
         "over_threshold": { "type": "boolean" }
       },
