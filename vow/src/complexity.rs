@@ -142,6 +142,11 @@ fn lv_expr(e: &Expr, linear: &HashSet<String>) -> i64 {
                 c += lv_expr(v, linear);
             }
         }
+        ExprKind::Break { value } => {
+            if let Some(v) = value {
+                c += lv_expr(v, linear);
+            }
+        }
         ExprKind::Block(b) => c += lv_block(b, linear),
         ExprKind::EnumConstruct { fields, .. } => {
             for v in fields {
@@ -153,11 +158,7 @@ fn lv_expr(e: &Expr, linear: &HashSet<String>) -> i64 {
                 c += lv_expr(v, linear);
             }
         }
-        ExprKind::Lit(_)
-        | ExprKind::Ident(_)
-        | ExprKind::Break { .. }
-        | ExprKind::Continue
-        | ExprKind::Result => {}
+        ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
     }
     c
 }
@@ -351,6 +352,11 @@ fn cog_expr(e: &Expr, nesting: i64, logctx: Option<BinOp>, selfn: &str, acc: &mu
                 cog_expr(v, nesting, None, selfn, acc);
             }
         }
+        ExprKind::Break { value } => {
+            if let Some(v) = value {
+                cog_expr(v, nesting, None, selfn, acc);
+            }
+        }
         ExprKind::Block(b) => cog_block(b, nesting, selfn, acc),
         ExprKind::Assign { lhs, rhs } => {
             cog_expr(lhs, nesting, None, selfn, acc);
@@ -373,11 +379,7 @@ fn cog_expr(e: &Expr, nesting: i64, logctx: Option<BinOp>, selfn: &str, acc: &mu
             }
         }
         ExprKind::Borrow { expr } => cog_expr(expr, nesting, None, selfn, acc),
-        ExprKind::Lit(_)
-        | ExprKind::Ident(_)
-        | ExprKind::Break { .. }
-        | ExprKind::Continue
-        | ExprKind::Result => {}
+        ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
     }
 }
 
@@ -454,6 +456,11 @@ fn walk_expr(e: &Expr, acc: &mut Acc) {
                 walk_expr(v, acc);
             }
         }
+        ExprKind::Break { value } => {
+            if let Some(v) = value {
+                walk_expr(v, acc);
+            }
+        }
         ExprKind::Block(b) => walk_block(b, acc),
         ExprKind::Assign { lhs, rhs } => {
             walk_expr(lhs, acc);
@@ -479,11 +486,7 @@ fn walk_expr(e: &Expr, acc: &mut Acc) {
         // recurse through it here without counting it, to stay byte-identical.
         ExprKind::Borrow { expr } => walk_expr(expr, acc),
         // Leaves (mirror the self-hosted walk, which does not recurse these).
-        ExprKind::Lit(_)
-        | ExprKind::Ident(_)
-        | ExprKind::Break { .. }
-        | ExprKind::Continue
-        | ExprKind::Result => {}
+        ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
     }
 }
 
@@ -740,7 +743,7 @@ pub(crate) fn run_complexity_command(
             } else {
                 0
             };
-            let h_effort_s = h_difficulty_s.wrapping_mul(h_volume_s) / 1000;
+            let h_effort_s = cx_sat(h_difficulty_s.wrapping_mul(h_volume_s) / 1000);
             let contract = analyze_contract(f);
             let pcost = contract_predicate_cost(&contract);
             let verif = analyze_verif(f, pcost);
@@ -1135,7 +1138,12 @@ fn hal_expr(e: &Expr, acc: &mut HalAcc) {
             hal_op(acc, 37);
             hal_expr(expr, acc);
         }
-        ExprKind::Break { .. } => hal_op(acc, 38),
+        ExprKind::Break { value } => {
+            hal_op(acc, 38);
+            if let Some(v) = value {
+                hal_expr(v, acc);
+            }
+        }
         ExprKind::Continue => hal_op(acc, 39),
         ExprKind::Block(b) => hal_block(b, acc),
         ExprKind::StructLiteral { fields, .. } => {
@@ -1394,6 +1402,11 @@ fn loops_expr(e: &Expr, nesting: i64, total: &mut i64, without: &mut i64, maxnes
                 loops_expr(v, nesting, total, without, maxnest);
             }
         }
+        ExprKind::Break { value } => {
+            if let Some(v) = value {
+                loops_expr(v, nesting, total, without, maxnest);
+            }
+        }
         ExprKind::Call { callee, args } => {
             loops_expr(callee, nesting, total, without, maxnest);
             for a in args {
@@ -1421,11 +1434,7 @@ fn loops_expr(e: &Expr, nesting: i64, total: &mut i64, without: &mut i64, maxnes
                 loops_expr(v, nesting, total, without, maxnest);
             }
         }
-        ExprKind::Lit(_)
-        | ExprKind::Ident(_)
-        | ExprKind::Break { .. }
-        | ExprKind::Continue
-        | ExprKind::Result => {}
+        ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
     }
 }
 
