@@ -1,6 +1,7 @@
 mod cache;
 mod frontend;
 mod module_loader;
+mod perfetto;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
