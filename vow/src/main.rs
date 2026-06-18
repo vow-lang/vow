@@ -127,6 +127,9 @@ struct Args {
     timeout: Option<u32>,
     #[arg(long)]
     verify_jobs: Option<u32>,
+    /// Differential-test counterexamples against runtime semantics (issue #335).
+    #[arg(long)]
+    replay_cex: bool,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -177,6 +180,9 @@ struct BuildArgs {
     timeout: Option<u32>,
     #[arg(long)]
     verify_jobs: Option<u32>,
+    /// Differential-test counterexamples against runtime semantics (issue #335).
+    #[arg(long)]
+    replay_cex: bool,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -203,6 +209,9 @@ struct VerifyArgs {
     timeout: Option<u32>,
     #[arg(long)]
     verify_jobs: Option<u32>,
+    /// Differential-test counterexamples against runtime semantics (issue #335).
+    #[arg(long)]
+    replay_cex: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -492,6 +501,12 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": "num_cpus/2"
+        },
+        {
+          "form": "--replay-cex",
+          "description": "Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)",
+          "long": "--replay-cex",
+          "value_kind": "flag"
         }
       ],
       "stdout": {
@@ -581,6 +596,12 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": "num_cpus/2"
+        },
+        {
+          "form": "--replay-cex",
+          "description": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
+          "long": "--replay-cex",
+          "value_kind": "flag"
         }
       ],
       "stdout": {
@@ -796,7 +817,8 @@ fn skill_json() -> String {
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
-    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)"
+    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
+    "--replay-cex": "Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)"
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
@@ -804,7 +826,8 @@ fn skill_json() -> String {
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
-    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)"
+    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
+    "--replay-cex": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build."
   },
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
@@ -1201,6 +1224,7 @@ BUILD OPTIONS
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
   --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
   --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
+  --replay-cex            Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
@@ -1209,6 +1233,7 @@ VERIFY OPTIONS
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
   --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
   --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
+  --replay-cex            Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by vow build.
 
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
@@ -2439,6 +2464,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+| `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
@@ -2460,6 +2486,7 @@ vow verify [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
 
 ### `vow contracts`
 
@@ -2727,6 +2754,22 @@ that path produces `Unverified` (exit 0).
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
+### Counterexample replay
+
+With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's IR-to-C model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
+
+For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
+
+| `replay` value | Meaning |
+|----------------|---------|
+| `"confirmed"`  | The harness fired `VowViolation` with the **same `vow_id` and the same blame** the counterexample predicted. High-confidence: the model agrees with runtime. |
+| `"diverged"`   | The harness exited cleanly, or fired a *different* `vow_id`/blame. Either the verifier C model is wrong (a model false-positive) or the counterexample values do not reach the violation in real execution. `replay_reason` explains which. |
+| `"skipped"`    | Replay was not attempted (e.g. an input type outside v1 scope, a Unit/aggregate parameter, the function is not defined in the entry file, or harness compilation failed). `replay_reason` gives the cause. |
+
+**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `"skipped"` by the self-hosted compiler.
+
+`replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
+
 ## Contracts Output JSON
 
 `vow contracts` emits a single JSON object to stdout. Schema: [`schemas/contracts-result.schema.json`](schemas/contracts-result.schema.json).
@@ -2989,6 +3032,12 @@ literal so the verifier never has to infer static text from a dynamic `String`.
 | `requires`  | Caller | The caller passed invalid arguments                |
 | `ensures`   | Callee | The function body doesn't satisfy the postcondition|
 | `invariant` | Callee | The loop body breaks the invariant                 |
+
+## Counterexample Replay (Differential Test)
+
+`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
+
+This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope.
 
 ## Integer Contracts
 
@@ -4935,6 +4984,15 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         { "type": "null" }
       ],
       "description": "Source location of the violated vow clause, or null"
+    },
+    "replay": {
+      "type": "string",
+      "enum": ["confirmed", "diverged", "skipped"],
+      "description": "Differential-test outcome (present only with --replay-cex): whether a debug-mode harness replaying the counterexample's concrete inputs fired the same VowViolation (vow_id + blame). Not part of the soundness proof."
+    },
+    "replay_reason": {
+      "type": "string",
+      "description": "Human-readable explanation for a diverged or skipped replay (present only with --replay-cex when replay is not confirmed)"
     }
   },
   "additionalProperties": false
@@ -6266,6 +6324,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+| `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
@@ -6287,6 +6346,7 @@ vow verify [OPTIONS] <source.vow>
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
 
 ### `vow contracts`
 
@@ -6554,6 +6614,22 @@ that path produces `Unverified` (exit 0).
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
+### Counterexample replay
+
+With `--replay-cex`, each object in `counterexamples[]` gains a `replay` field — a **differential test** of the verifier's IR-to-C model against the executable's debug-mode runtime semantics. It is **not part of the soundness proof**: it neither strengthens nor weakens the static verdict, and the exit code is unchanged. It exists to catch *drift* between the two independent lowerings — `vow-verify`'s C emitter (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug runtime checks.
+
+For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inputs, synthesizes a `--mode debug` harness that calls the failing function with those inputs, runs it, and compares the observed `VowViolation`.
+
+| `replay` value | Meaning |
+|----------------|---------|
+| `"confirmed"`  | The harness fired `VowViolation` with the **same `vow_id` and the same blame** the counterexample predicted. High-confidence: the model agrees with runtime. |
+| `"diverged"`   | The harness exited cleanly, or fired a *different* `vow_id`/blame. Either the verifier C model is wrong (a model false-positive) or the counterexample values do not reach the violation in real execution. `replay_reason` explains which. |
+| `"skipped"`    | Replay was not attempted (e.g. an input type outside v1 scope, a Unit/aggregate parameter, the function is not defined in the entry file, or harness compilation failed). `replay_reason` gives the cause. |
+
+**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `"skipped"` by the self-hosted compiler.
+
+`replay`/`replay_reason` are present on a counterexample only when `--replay-cex` was passed.
+
 ## Contracts Output JSON
 
 `vow contracts` emits a single JSON object to stdout. Schema: [`schemas/contracts-result.schema.json`](schemas/contracts-result.schema.json).
@@ -6817,6 +6893,12 @@ literal so the verifier never has to infer static text from a dynamic `String`.
 | `requires`  | Caller | The caller passed invalid arguments                |
 | `ensures`   | Callee | The function body doesn't satisfy the postcondition|
 | `invariant` | Callee | The loop body breaks the invariant                 |
+
+## Counterexample Replay (Differential Test)
+
+`vow verify --replay-cex` (also `vow build --replay-cex`) cross-checks a counterexample against the executable's runtime semantics. After ESBMC reports a violation, Vow maps the symbolic assignment to concrete Vow inputs, builds a `--mode debug` harness that calls the failing function with them, and checks whether the runtime `VowViolation` matches — **same `vow_id` and same blame**.
+
+This is a *differential test*, **not part of the proof**. The static verdict and exit code are unchanged whether or not replay is requested. Its purpose is to detect drift between the two independent lowerings of a contract: the verifier's C model (`requires` → `__ESBMC_assume`, `ensures`/`invariant` → `__ESBMC_assert`) and `vow-codegen`'s debug-mode runtime checks. A `confirmed` replay grounds the counterexample in real execution; a `diverged` replay flags either a model false-positive or values that do not reach the violation at runtime. See `docs/spec/cli.md` → "Counterexample replay" for the JSON shape and v1 input scope.
 
 ## Integer Contracts
 
@@ -8760,6 +8842,15 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         { "type": "null" }
       ],
       "description": "Source location of the violated vow clause, or null"
+    },
+    "replay": {
+      "type": "string",
+      "enum": ["confirmed", "diverged", "skipped"],
+      "description": "Differential-test outcome (present only with --replay-cex): whether a debug-mode harness replaying the counterexample's concrete inputs fired the same VowViolation (vow_id + blame). Not part of the soundness proof."
+    },
+    "replay_reason": {
+      "type": "string",
+      "description": "Human-readable explanation for a diverged or skipped replay (present only with --replay-cex when replay is not confirmed)"
     }
   },
   "additionalProperties": false
@@ -9238,6 +9329,19 @@ pub struct StructuredCounterexample {
     pub violating_args: Vec<CeViolatingArg>,
     pub execution_path: Vec<CePathStep>,
     pub branch_decisions: Vec<CeBranchDecision>,
+    /// `--replay-cex` outcome: `"confirmed"`, `"diverged"`, or `"skipped"`.
+    /// `None` unless replay was requested. See `replay` (issue #335).
+    pub replay: Option<String>,
+    /// Reason string for a `diverged` or `skipped` replay; `None` otherwise.
+    pub replay_reason: Option<String>,
+    /// Raw ESBMC counterexample assignments (`p0`, `v3`, …), before
+    /// name-mapping. Consumed by replay harness generation; never serialized.
+    pub replay_raw_values: Vec<(String, String)>,
+    /// Full raw ESBMC counterexample text. ESBMC reports aggregate (Vec/struct)
+    /// values as composite literals `{ .len=N, .data={...} }` that the scalar
+    /// assignment parser truncates, so vec reconstruction re-parses this.
+    /// Never serialized.
+    pub replay_raw_output: String,
 }
 
 #[derive(Debug, Clone)]
@@ -9373,6 +9477,12 @@ pub struct CounterexampleJson {
     pub execution_path: Vec<CePathStepJson>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub branch_decisions: Vec<CeBranchDecisionJson>,
+    /// `--replay-cex` differential-test outcome (issue #335): `"confirmed"`,
+    /// `"diverged"`, or `"skipped"`. Absent unless `--replay-cex` was passed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -9577,6 +9687,8 @@ impl CounterexampleJson {
                     taken: bd.taken.clone(),
                 })
                 .collect(),
+            replay: ce.replay.clone(),
+            replay_reason: ce.replay_reason.clone(),
         }
     }
 }
@@ -9857,6 +9969,10 @@ fn build_structured_counterexample(
         violating_args,
         execution_path,
         branch_decisions,
+        replay: None,
+        replay_reason: None,
+        replay_raw_values: ce.values.clone(),
+        replay_raw_output: ce.raw_output.clone(),
     }
 }
 
@@ -9875,6 +9991,598 @@ fn find_vow_span(func: &vow_ir::Function, vow_id: u32) -> Option<vow_syntax::spa
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Counterexample replay (--replay-cex, issue #335)
+//
+// Differential test of the verifier's IR-to-C model against vow-codegen's
+// debug-mode runtime checks. After ESBMC returns a counterexample, we map the
+// symbolic assignment to concrete Vow inputs, synthesize a `--mode debug`
+// harness that calls the failing function with them, run it, and check the
+// runtime VowViolation agrees (same vow_id + blame). NOT part of the proof:
+// the static verdict and exit code are unchanged.
+// ---------------------------------------------------------------------------
+
+/// One reconstructed argument for the replay call.
+#[derive(Debug, Clone, PartialEq)]
+enum ReplayArg {
+    /// Scalar literal: `ty` is the surface type text, `value` the literal.
+    Scalar { ty: String, value: String },
+    /// Bounded vec of scalars: `ty` is e.g. `Vec<i64>`, `elems` the elements.
+    VecScalar { ty: String, elems: Vec<String> },
+}
+
+/// Per-parameter info the mapper needs, decoupled from AST/IR so the mapping
+/// logic ([`plan_replay_args`]) is pure and unit-testable.
+#[derive(Debug, Clone, PartialEq)]
+struct ReplayParam {
+    /// Position among non-Unit params (ESBMC scalar name `p{cl_index}`).
+    cl_index: u32,
+    /// GetArg instruction id (ESBMC vec names `v{getarg_id}.len` / `.data[k]`;
+    /// scalar fallback name `v{getarg_id}`). `None` if no GetArg was found.
+    getarg_id: Option<u32>,
+    kind: ReplayParamKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ReplayParamKind {
+    Scalar { ty: String },
+    VecScalar { ty: String },
+    Unsupported { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ReplayPlan {
+    Ready(Vec<ReplayArg>),
+    Skipped(String),
+}
+
+/// Extract the element type text from a `Vec<T>` surface type string.
+fn replay_vec_elem_ty(ty: &str) -> Option<&str> {
+    Some(ty.trim().strip_prefix("Vec<")?.strip_suffix('>')?.trim())
+}
+
+/// Parse an ESBMC composite vec value `{ .len=N, .data={ e0, e1, ... } }` into
+/// `(len, data_elements)`. ESBMC renders aggregate counterexample values this
+/// way (and even shows the whole struct for a `.len` member assignment).
+fn parse_esbmc_vec_struct(s: &str) -> Option<(i64, Vec<String>)> {
+    let s = s.trim();
+    let len_pos = s.find(".len=")? + ".len=".len();
+    let len_str: String = s[len_pos..]
+        .chars()
+        .take_while(|c| *c == '-' || c.is_ascii_digit())
+        .collect();
+    let len: i64 = len_str.trim().parse().ok()?;
+    let data_pos = s.find(".data=")? + ".data=".len();
+    let after = s[data_pos..].trim_start();
+    let inner = after.strip_prefix('{')?;
+    let close = inner.find('}')?;
+    let elems = inner[..close]
+        .split(',')
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty())
+        .collect();
+    Some((len, elems))
+}
+
+/// Flatten ESBMC composite vec assignments from the raw counterexample text into
+/// `{base}.len` / `{base}.data[k]` entries that [`plan_replay_args`] consumes.
+/// Later states overwrite earlier ones (the final assigned value wins), so the
+/// flattened entries are appended after `raw_values`.
+fn expand_aggregate_values(
+    raw_values: &[(String, String)],
+    raw_output: &str,
+) -> Vec<(String, String)> {
+    let mut out = raw_values.to_vec();
+    for line in raw_output.lines() {
+        let line = line.trim();
+        let Some(eq) = line.find('=') else { continue };
+        let lvalue = line[..eq].trim();
+        if lvalue.is_empty() || !lvalue.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        let value = line[eq + 1..].trim();
+        if !value.starts_with("{ .len=") && !value.starts_with("{.len=") {
+            continue;
+        }
+        // The struct may belong to `v0` or be shown for a member like `v0.len`;
+        // the base variable is the part before the first `.`.
+        let base = lvalue.split('.').next().unwrap_or(lvalue);
+        if let Some((len, elems)) = parse_esbmc_vec_struct(value) {
+            out.push((format!("{base}.len"), len.to_string()));
+            for (k, e) in elems.iter().enumerate() {
+                out.push((format!("{base}.data[{k}]"), e.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// Normalize an ESBMC scalar value to a Vow literal for the given surface type.
+fn normalize_replay_scalar(ty: &str, raw: &str) -> Option<String> {
+    let v = raw.trim();
+    if ty == "bool" {
+        let truthy = matches!(v, "true" | "TRUE" | "True")
+            || v.parse::<i64>().map(|n| n != 0).unwrap_or(false);
+        return Some(if truthy { "true" } else { "false" }.to_string());
+    }
+    // i64 / u64: accept a decimal integer (ESBMC prints these); reject anything
+    // we cannot render as a Vow integer literal.
+    if v.parse::<i64>().is_ok() || v.parse::<u64>().is_ok() {
+        return Some(v.to_string());
+    }
+    None
+}
+
+/// Pure mapping: counterexample assignments + parameter classification →
+/// concrete replay args, or a skip reason. Unit-tested.
+fn plan_replay_args(params: &[ReplayParam], raw_values: &[(String, String)]) -> ReplayPlan {
+    use std::collections::HashMap;
+    let map: HashMap<&str, &str> = raw_values
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let mut args = Vec::with_capacity(params.len());
+    for (i, p) in params.iter().enumerate() {
+        match &p.kind {
+            ReplayParamKind::Unsupported { reason } => {
+                return ReplayPlan::Skipped(format!("parameter {i}: {reason}"));
+            }
+            ReplayParamKind::Scalar { ty } => {
+                let raw = map
+                    .get(format!("p{}", p.cl_index).as_str())
+                    .copied()
+                    .or_else(|| {
+                        p.getarg_id
+                            .and_then(|id| map.get(format!("v{id}").as_str()).copied())
+                    });
+                let Some(raw) = raw else {
+                    return ReplayPlan::Skipped(format!(
+                        "parameter {i}: no counterexample value for scalar"
+                    ));
+                };
+                match normalize_replay_scalar(ty, raw) {
+                    Some(value) => args.push(ReplayArg::Scalar {
+                        ty: ty.clone(),
+                        value,
+                    }),
+                    None => {
+                        return ReplayPlan::Skipped(format!(
+                            "parameter {i}: cannot render value {raw:?} as {ty}"
+                        ));
+                    }
+                }
+            }
+            ReplayParamKind::VecScalar { ty } => {
+                let Some(gid) = p.getarg_id else {
+                    return ReplayPlan::Skipped(format!(
+                        "parameter {i}: no GetArg for vec parameter"
+                    ));
+                };
+                let Some(len_raw) = map.get(format!("v{gid}.len").as_str()).copied() else {
+                    return ReplayPlan::Skipped(format!(
+                        "parameter {i}: no counterexample length for vec"
+                    ));
+                };
+                let len: usize = match len_raw.trim().parse::<i64>() {
+                    Ok(n) if n >= 0 => n as usize,
+                    _ => {
+                        return ReplayPlan::Skipped(format!(
+                            "parameter {i}: bad vec length {len_raw:?}"
+                        ));
+                    }
+                };
+                let elem_ty = replay_vec_elem_ty(ty).unwrap_or("i64");
+                let mut elems = Vec::with_capacity(len);
+                for k in 0..len {
+                    // Unconstrained elements may be absent from the CEX; any
+                    // value reaches the violation, so default to 0.
+                    let raw = map
+                        .get(format!("v{gid}.data[{k}]").as_str())
+                        .copied()
+                        .unwrap_or("0");
+                    match normalize_replay_scalar(elem_ty, raw) {
+                        Some(val) => elems.push(val),
+                        None => {
+                            return ReplayPlan::Skipped(format!(
+                                "parameter {i}: cannot render vec element {raw:?} as {elem_ty}"
+                            ));
+                        }
+                    }
+                }
+                args.push(ReplayArg::VecScalar {
+                    ty: ty.clone(),
+                    elems,
+                });
+            }
+        }
+    }
+    ReplayPlan::Ready(args)
+}
+
+/// Classify a parameter's surface type into a replay kind.
+fn classify_replay_param_type(ty: &vow_syntax::ast::Type) -> ReplayParamKind {
+    use vow_syntax::ast::Type;
+    match ty {
+        Type::Named { name, .. } if matches!(name.as_str(), "i64" | "u64" | "bool") => {
+            ReplayParamKind::Scalar { ty: name.clone() }
+        }
+        Type::Generic { name, args, .. } if name == "Vec" && args.len() == 1 => {
+            if let Type::Named { name: e, .. } = &args[0]
+                && matches!(e.as_str(), "i64" | "u64" | "bool")
+            {
+                return ReplayParamKind::VecScalar {
+                    ty: vow_syntax::printer::print_type(ty),
+                };
+            }
+            ReplayParamKind::Unsupported {
+                reason: format!(
+                    "unsupported Vec element type in {}",
+                    vow_syntax::printer::print_type(ty)
+                ),
+            }
+        }
+        other => ReplayParamKind::Unsupported {
+            reason: format!(
+                "unsupported parameter type {}",
+                vow_syntax::printer::print_type(other)
+            ),
+        },
+    }
+}
+
+/// Classify a function's parameters using its AST signature (surface types) and
+/// IR (Unit detection, GetArg ids). `Err` is a whole-function skip reason.
+fn classify_replay_params(
+    ast_fn: &vow_syntax::ast::FnDef,
+    ir_fn: &vow_ir::Function,
+) -> Result<Vec<ReplayParam>, String> {
+    use vow_ir::{InstData, Opcode, Ty};
+    if ast_fn.params.len() != ir_fn.params.len() {
+        return Err("AST/IR parameter count mismatch".to_string());
+    }
+    let mut getarg: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for block in &ir_fn.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::GetArg
+                && let InstData::ArgIndex(idx) = inst.data
+            {
+                getarg.entry(idx).or_insert(inst.id.0);
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(ast_fn.params.len());
+    for (i, param) in ast_fn.params.iter().enumerate() {
+        if ir_fn.params[i] == Ty::Unit {
+            // Unit params would shift the `p{cl_index}` numbering; rather than
+            // model that, skip the whole function. (cl_index == i here.)
+            return Err("function has a Unit parameter".to_string());
+        }
+        out.push(ReplayParam {
+            cl_index: i as u32,
+            getarg_id: getarg.get(&(i as u32)).copied(),
+            kind: classify_replay_param_type(&param.ty),
+        });
+    }
+    Ok(out)
+}
+
+/// Render the effect annotation suffix, e.g. ` [io, read]`, empty if pure.
+fn render_replay_effects(effects: &[vow_syntax::ast::Effect]) -> String {
+    use vow_syntax::ast::Effect;
+    if effects.is_empty() {
+        return String::new();
+    }
+    let names: Vec<&str> = effects
+        .iter()
+        .map(|e| match e {
+            Effect::IO => "io",
+            Effect::Read => "read",
+            Effect::Write => "write",
+            Effect::Panic => "panic",
+            Effect::Unsafe => "unsafe",
+        })
+        .collect();
+    format!(" [{}]", names.join(", "))
+}
+
+/// Build replay harness source: the original source with any top-level `fn main`
+/// removed, plus a synthesized `main` that calls `target` with concrete args.
+/// Removing `main` is safe — vow ids are per-function-local, so the target's
+/// vow numbering is unchanged.
+fn generate_replay_harness(
+    original_source: &str,
+    ast_module: &vow_syntax::ast::Module,
+    target: &vow_syntax::ast::FnDef,
+    args: &[ReplayArg],
+) -> String {
+    use vow_syntax::ast::{Item, Type};
+    let mut src = original_source.to_string();
+    if let Some(main_span) = ast_module.items.iter().find_map(|it| match it {
+        Item::Fn(f) if f.name == "main" => Some(f.span),
+        _ => None,
+    }) {
+        let start = main_span.start as usize;
+        let end = start + main_span.len as usize;
+        if end <= src.len() {
+            src.replace_range(start..end, "");
+        }
+    }
+
+    let mut body = String::new();
+    let mut call_args = Vec::with_capacity(args.len());
+    for (i, arg) in args.iter().enumerate() {
+        let name = format!("__replay_a{i}");
+        match arg {
+            ReplayArg::Scalar { ty, value } => {
+                body.push_str(&format!("    let {name}: {ty} = {value};\n"));
+            }
+            ReplayArg::VecScalar { ty, elems } => {
+                body.push_str(&format!("    let {name}: {ty} = Vec::new();\n"));
+                for e in elems {
+                    body.push_str(&format!("    {name}.push({e});\n"));
+                }
+            }
+        }
+        call_args.push(name);
+    }
+    let call = call_args.join(", ");
+    let call_line = match &target.return_ty {
+        Type::Unit { .. } => format!("    {}({});\n", target.name, call),
+        ret => format!(
+            "    let __replay_ret: {} = {}({});\n",
+            vow_syntax::printer::print_type(ret),
+            target.name,
+            call
+        ),
+    };
+    body.push_str(&call_line);
+
+    format!(
+        "{src}\n\nfn main(){effects} {{\n{body}}}\n",
+        effects = render_replay_effects(&target.effects),
+    )
+}
+
+/// Verdict of replaying one counterexample.
+struct ReplayOutcome {
+    status: &'static str, // "confirmed" | "diverged" | "skipped"
+    reason: Option<String>,
+}
+
+fn replay_skip(reason: String) -> ReplayOutcome {
+    ReplayOutcome {
+        status: "skipped",
+        reason: Some(reason),
+    }
+}
+
+fn replay_diverge(reason: String) -> ReplayOutcome {
+    ReplayOutcome {
+        status: "diverged",
+        reason: Some(reason),
+    }
+}
+
+/// Parse a `{"error":"VowViolation","vow_id":N,"blame":"Caller",...}` stderr
+/// line into `(vow_id, blame)`.
+fn parse_vow_violation_line(line: &str) -> Option<(u32, String)> {
+    let l = line.trim();
+    if !l.starts_with('{') || !l.contains("\"error\":\"VowViolation\"") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(l).ok()?;
+    let vid = v.get("vow_id")?.as_u64()? as u32;
+    let blame = v.get("blame")?.as_str()?.to_string();
+    Some((vid, blame))
+}
+
+/// Classify a finished harness run against the counterexample's prediction.
+fn classify_replay_run(
+    success: bool,
+    code: Option<i32>,
+    stderr: &str,
+    ce: &StructuredCounterexample,
+) -> ReplayOutcome {
+    match stderr.lines().find_map(parse_vow_violation_line) {
+        Some((vid, blame)) => {
+            if vid == ce.vow_id && blame.eq_ignore_ascii_case(&ce.blame) {
+                ReplayOutcome {
+                    status: "confirmed",
+                    reason: None,
+                }
+            } else {
+                replay_diverge(format!(
+                    "runtime VowViolation vow_id={vid} blame={blame}, but counterexample predicted vow_id={} blame={}",
+                    ce.vow_id, ce.blame
+                ))
+            }
+        }
+        None if success => {
+            replay_diverge("harness exited cleanly; no VowViolation fired at runtime".to_string())
+        }
+        None => replay_diverge(format!(
+            "harness exited with status {code:?} but emitted no VowViolation"
+        )),
+    }
+}
+
+/// Compile the harness in debug mode (no verify), run it, and classify.
+fn compile_and_run_replay(
+    source: &Path,
+    harness: &str,
+    ce: &StructuredCounterexample,
+) -> ReplayOutcome {
+    let dir = source.parent().unwrap_or_else(|| Path::new("."));
+    let stem = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "src".to_string());
+    let tag = format!("__vow_replay_{stem}_{}_{}", ce.vow_id, std::process::id());
+    let harness_path = dir.join(format!("{tag}.vow"));
+    let bin_path = dir.join(&tag);
+
+    let cleanup = || {
+        let _ = std::fs::remove_file(&harness_path);
+        let _ = std::fs::remove_file(&bin_path);
+        let _ = std::fs::remove_file(bin_path.with_extension("o"));
+    };
+
+    if let Err(e) = std::fs::write(&harness_path, harness) {
+        return replay_skip(format!("replay: could not write harness: {e}"));
+    }
+
+    let build = run_pipeline(
+        &harness_path,
+        Some(&bin_path),
+        BuildMode::Debug,
+        true, // no_verify: harness is for execution, not re-proof
+        false,
+        TraceMode::Off,
+    );
+    let built_ok = matches!(
+        build.status,
+        BuildStatus::Unverified | BuildStatus::Verified
+    ) && build.executable.is_some();
+    if !built_ok {
+        let msg = match &build.status {
+            BuildStatus::CompileFailed { message } => message.clone(),
+            other => format!("{other:?}"),
+        };
+        cleanup();
+        return replay_skip(format!("replay: harness did not compile ({msg})"));
+    }
+
+    // Run the harness with a bounded timeout: a replayed function could loop
+    // forever (the very drift being tested), and an unbounded wait would hang
+    // `verify --replay-cex` instead of returning the original VerifyFailed JSON.
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let mut child = match std::process::Command::new(&bin_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            cleanup();
+            return replay_skip(format!("replay: harness failed to execute: {e}"));
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                cleanup();
+                return replay_skip(format!("replay: error waiting on harness: {e}"));
+            }
+        }
+    };
+    let mut stderr = String::new();
+    if let Some(mut es) = child.stderr.take() {
+        let _ = es.read_to_string(&mut stderr);
+    }
+    cleanup();
+    match status {
+        None => replay_skip("replay: harness timed out".to_string()),
+        Some(s) => classify_replay_run(s.success(), s.code(), &stderr, ce),
+    }
+}
+
+/// Replay a single counterexample end to end.
+fn replay_one(
+    source: &Path,
+    original_source: &str,
+    ast_module: &vow_syntax::ast::Module,
+    ir_module: &vow_ir::Module,
+    ce: &StructuredCounterexample,
+) -> ReplayOutcome {
+    use vow_syntax::ast::Item;
+    if ce.function == "main" {
+        return replay_skip("cannot replay the entry function `main`".to_string());
+    }
+    // Synthetic verifier-only ids (caller-precondition / unsupported-op
+    // sentinels) never match a runtime-emitted vow_id, so an exact id comparison
+    // would always diverge — skip them.
+    if ce.vow_id == CALLER_PRECONDITION_VOW_ID || ce.vow_id == UNSUPPORTED_OP_VOW_ID {
+        return replay_skip(
+            "replay: synthetic counterexample id (caller-precondition / unsupported-op sentinel)"
+                .to_string(),
+        );
+    }
+    let Some(ast_fn) = ast_module.items.iter().find_map(|it| match it {
+        Item::Fn(f) if f.name == ce.function => Some(f),
+        _ => None,
+    }) else {
+        return replay_skip(format!(
+            "function `{}` is not defined in the entry file",
+            ce.function
+        ));
+    };
+    let Some(ir_fn) = ir_module.functions.iter().find(|f| f.name == ce.function) else {
+        return replay_skip(format!("no IR for function `{}`", ce.function));
+    };
+    let params = match classify_replay_params(ast_fn, ir_fn) {
+        Ok(p) => p,
+        Err(e) => return replay_skip(e),
+    };
+    let values = expand_aggregate_values(&ce.replay_raw_values, &ce.replay_raw_output);
+    let args = match plan_replay_args(&params, &values) {
+        ReplayPlan::Ready(a) => a,
+        ReplayPlan::Skipped(r) => return replay_skip(r),
+    };
+    let harness = generate_replay_harness(original_source, ast_module, ast_fn, &args);
+    compile_and_run_replay(source, &harness, ce)
+}
+
+/// Annotate each counterexample in a finished build/verify output with its
+/// `--replay-cex` verdict. Best-effort: never changes status or exit code.
+fn run_replay_cex(source: &Path, output: &mut BuildOutput) {
+    if output.counterexamples.is_empty() {
+        return;
+    }
+    let mark_all = |output: &mut BuildOutput, reason: &str| {
+        for ce in &mut output.counterexamples {
+            ce.replay = Some("skipped".to_string());
+            ce.replay_reason = Some(reason.to_string());
+        }
+    };
+    // Re-run the frontend to recover AST + IR together (failure path only).
+    let bundle = match prepare_frontend(source, FrontendGoal::LoweredIr) {
+        Ok(b) => b,
+        Err(_) => return mark_all(output, "replay: could not re-parse source"),
+    };
+    if bundle.ir().is_none() {
+        return mark_all(output, "replay: no IR available");
+    }
+    let original_source = match std::fs::read_to_string(source) {
+        Ok(s) => s,
+        Err(e) => return mark_all(output, &format!("replay: could not read source: {e}")),
+    };
+    let ast_module = bundle.module();
+    let ir_module = bundle.ir().expect("ir presence checked above");
+    for ce in &mut output.counterexamples {
+        let outcome = replay_one(source, &original_source, ast_module, ir_module, ce);
+        ce.replay = Some(outcome.status.to_string());
+        ce.replay_reason = if outcome.status == "confirmed" {
+            None
+        } else {
+            outcome.reason
+        };
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -11188,10 +11896,14 @@ fn run_build_command(
     limits: &VerifyLimits,
     jobs: usize,
     config: &SolverConfig,
+    replay_cex: bool,
 ) {
-    let result = run_pipeline_inner(
+    let mut result = run_pipeline_inner(
         source, output, mode, no_verify, dump_ir, trace, no_cache, limits, jobs, config,
     );
+    if replay_cex && !no_verify && !dump_ir {
+        run_replay_cex(source, &mut result);
+    }
     if !dump_ir {
         result.emit_json();
     }
@@ -11244,8 +11956,12 @@ fn run_verify_command(
     limits: &VerifyLimits,
     jobs: usize,
     config: &SolverConfig,
+    replay_cex: bool,
 ) {
-    let result = run_verify_only_inner(source, no_cache, limits, jobs, config);
+    let mut result = run_verify_only_inner(source, no_cache, limits, jobs, config);
+    if replay_cex {
+        run_replay_cex(source, &mut result);
+    }
     result.emit_json();
     if matches!(
         &result.status,
@@ -11635,6 +12351,7 @@ fn main() {
                 &limits,
                 jobs,
                 &bconfig,
+                b.replay_cex,
             );
         }
         Some(Command::Verify(v)) => {
@@ -11659,7 +12376,7 @@ fn main() {
             };
             let jobs = resolve_verify_jobs(v.verify_jobs);
             let config = make_solver_config(v.solver, v.encoding, v.timeout);
-            run_verify_command(&source, v.no_cache, &limits, jobs, &config);
+            run_verify_command(&source, v.no_cache, &limits, jobs, &config, v.replay_cex);
         }
         Some(Command::Test(t)) => {
             if t.help {
@@ -11822,6 +12539,7 @@ fn main() {
                 &limits,
                 jobs,
                 &config,
+                args.replay_cex,
             );
         }
     }
@@ -11840,6 +12558,260 @@ mod tests {
         let path = dir.path().join(name);
         std::fs::write(&path, src).unwrap();
         path
+    }
+
+    // ---- Counterexample replay (--replay-cex, issue #335) ----
+
+    #[test]
+    fn normalize_replay_scalar_handles_bool_and_ints() {
+        assert_eq!(
+            normalize_replay_scalar("bool", "1").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            normalize_replay_scalar("bool", "0").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            normalize_replay_scalar("bool", "TRUE").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            normalize_replay_scalar("i64", "-9223372036854775808").as_deref(),
+            Some("-9223372036854775808")
+        );
+        assert_eq!(
+            normalize_replay_scalar("u64", "18446744073709551615").as_deref(),
+            Some("18446744073709551615")
+        );
+        assert_eq!(normalize_replay_scalar("i64", "0xdead"), None);
+    }
+
+    #[test]
+    fn replay_vec_elem_ty_extracts_inner() {
+        assert_eq!(replay_vec_elem_ty("Vec<i64>"), Some("i64"));
+        assert_eq!(replay_vec_elem_ty("Vec<u64>"), Some("u64"));
+        assert_eq!(replay_vec_elem_ty("i64"), None);
+    }
+
+    #[test]
+    fn plan_replay_args_maps_scalars() {
+        let params = vec![
+            ReplayParam {
+                cl_index: 0,
+                getarg_id: Some(10),
+                kind: ReplayParamKind::Scalar { ty: "i64".into() },
+            },
+            ReplayParam {
+                cl_index: 1,
+                getarg_id: Some(11),
+                kind: ReplayParamKind::Scalar { ty: "i64".into() },
+            },
+        ];
+        let vals = vec![
+            ("p0".to_string(), "5".to_string()),
+            ("p1".to_string(), "0".to_string()),
+        ];
+        assert_eq!(
+            plan_replay_args(&params, &vals),
+            ReplayPlan::Ready(vec![
+                ReplayArg::Scalar {
+                    ty: "i64".into(),
+                    value: "5".into()
+                },
+                ReplayArg::Scalar {
+                    ty: "i64".into(),
+                    value: "0".into()
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn plan_replay_args_scalar_falls_back_to_getarg_name() {
+        let params = vec![ReplayParam {
+            cl_index: 0,
+            getarg_id: Some(7),
+            kind: ReplayParamKind::Scalar { ty: "i64".into() },
+        }];
+        // Only the GetArg-aliased name is present, not p0.
+        let vals = vec![("v7".to_string(), "42".to_string())];
+        assert_eq!(
+            plan_replay_args(&params, &vals),
+            ReplayPlan::Ready(vec![ReplayArg::Scalar {
+                ty: "i64".into(),
+                value: "42".into()
+            }])
+        );
+    }
+
+    #[test]
+    fn plan_replay_args_skips_when_value_missing() {
+        let params = vec![ReplayParam {
+            cl_index: 0,
+            getarg_id: None,
+            kind: ReplayParamKind::Scalar { ty: "i64".into() },
+        }];
+        assert!(matches!(
+            plan_replay_args(&params, &[]),
+            ReplayPlan::Skipped(_)
+        ));
+    }
+
+    #[test]
+    fn plan_replay_args_reconstructs_bounded_vec() {
+        let params = vec![ReplayParam {
+            cl_index: 0,
+            getarg_id: Some(3),
+            kind: ReplayParamKind::VecScalar {
+                ty: "Vec<i64>".into(),
+            },
+        }];
+        let vals = vec![
+            ("v3.len".to_string(), "3".to_string()),
+            ("v3.data[0]".to_string(), "10".to_string()),
+            ("v3.data[2]".to_string(), "30".to_string()),
+            // data[1] absent -> defaults to 0
+        ];
+        assert_eq!(
+            plan_replay_args(&params, &vals),
+            ReplayPlan::Ready(vec![ReplayArg::VecScalar {
+                ty: "Vec<i64>".into(),
+                elems: vec!["10".into(), "0".into(), "30".into()],
+            }])
+        );
+    }
+
+    #[test]
+    fn plan_replay_args_skips_unsupported_param() {
+        let params = vec![ReplayParam {
+            cl_index: 0,
+            getarg_id: Some(1),
+            kind: ReplayParamKind::Unsupported {
+                reason: "String".into(),
+            },
+        }];
+        assert!(matches!(
+            plan_replay_args(&params, &[]),
+            ReplayPlan::Skipped(_)
+        ));
+    }
+
+    #[test]
+    fn parse_esbmc_vec_struct_extracts_len_and_data() {
+        let s = "{ .len=2, .data={ 7, 9, 0, 0 } }";
+        assert_eq!(
+            parse_esbmc_vec_struct(s),
+            Some((2, vec!["7".into(), "9".into(), "0".into(), "0".into()]))
+        );
+        assert_eq!(parse_esbmc_vec_struct("123"), None);
+    }
+
+    #[test]
+    fn expand_aggregate_values_flattens_vec_struct() {
+        let raw_output = "State 1\n  v0 = { .len=0, .data={ 0, 0 } }\nState 2\n  v0.len = { .len=2, .data={ 7, 9 } }\n";
+        let expanded = expand_aggregate_values(&[], raw_output);
+        // The final (State 2) values win when collected into a map.
+        let plan = plan_replay_args(
+            &[ReplayParam {
+                cl_index: 0,
+                getarg_id: Some(0),
+                kind: ReplayParamKind::VecScalar {
+                    ty: "Vec<i64>".into(),
+                },
+            }],
+            &expanded,
+        );
+        assert_eq!(
+            plan,
+            ReplayPlan::Ready(vec![ReplayArg::VecScalar {
+                ty: "Vec<i64>".into(),
+                elems: vec!["7".into(), "9".into()],
+            }])
+        );
+    }
+
+    #[test]
+    fn parse_vow_violation_line_extracts_id_and_blame() {
+        let line = r#"{"error":"VowViolation","vow_id":2,"blame":"Caller","description":"x","file":"a.vow","offset":3}"#;
+        assert_eq!(
+            parse_vow_violation_line(line),
+            Some((2, "Caller".to_string()))
+        );
+        assert_eq!(parse_vow_violation_line("not json"), None);
+        assert_eq!(parse_vow_violation_line(r#"{"error":"Other"}"#), None);
+    }
+
+    #[test]
+    fn replay_harness_generation_end_to_end() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M\n\nfn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\nfn main() [io] {\n    let __orig_marker: i64 = 99;\n}\n";
+        let path = write_source(&dir, "m.vow", src);
+        let bundle = prepare_frontend(&path, FrontendGoal::LoweredIr).unwrap();
+        let ast = bundle.module();
+        let ir = bundle.ir().unwrap();
+        let ast_fn = ast
+            .items
+            .iter()
+            .find_map(|it| match it {
+                vow_syntax::ast::Item::Fn(f) if f.name == "add" => Some(f),
+                _ => None,
+            })
+            .unwrap();
+        let ir_fn = ir.functions.iter().find(|f| f.name == "add").unwrap();
+
+        let params = classify_replay_params(ast_fn, ir_fn).unwrap();
+        assert_eq!(params.len(), 2);
+        assert!(matches!(params[0].kind, ReplayParamKind::Scalar { .. }));
+
+        let args = match plan_replay_args(
+            &params,
+            &[
+                ("p0".to_string(), "5".to_string()),
+                ("p1".to_string(), "7".to_string()),
+            ],
+        ) {
+            ReplayPlan::Ready(a) => a,
+            ReplayPlan::Skipped(r) => panic!("unexpected skip: {r}"),
+        };
+        let harness = generate_replay_harness(src, ast, ast_fn, &args);
+
+        // Synthesized main calls the target with the concrete args.
+        assert!(harness.contains("let __replay_a0: i64 = 5;"));
+        assert!(harness.contains("let __replay_a1: i64 = 7;"));
+        assert!(harness.contains("add(__replay_a0, __replay_a1)"));
+        // The original `main` (and its body marker) was removed.
+        assert!(!harness.contains("__orig_marker"));
+        // Exactly one `fn main` remains.
+        assert_eq!(harness.matches("fn main(").count(), 1);
+    }
+
+    #[test]
+    fn classify_replay_params_marks_aggregates_unsupported() {
+        let dir = TempDir::new().unwrap();
+        let src = "module S\n\nfn takes_str(s: String) -> i64 {\n    0\n}\n";
+        let path = write_source(&dir, "s.vow", src);
+        let bundle = prepare_frontend(&path, FrontendGoal::LoweredIr).unwrap();
+        let ast = bundle.module();
+        let ir = bundle.ir().unwrap();
+        let ast_fn = ast
+            .items
+            .iter()
+            .find_map(|it| match it {
+                vow_syntax::ast::Item::Fn(f) if f.name == "takes_str" => Some(f),
+                _ => None,
+            })
+            .unwrap();
+        let ir_fn = ir.functions.iter().find(|f| f.name == "takes_str").unwrap();
+        let params = classify_replay_params(ast_fn, ir_fn).unwrap();
+        assert!(matches!(
+            params[0].kind,
+            ReplayParamKind::Unsupported { .. }
+        ));
+        assert!(matches!(
+            plan_replay_args(&params, &[]),
+            ReplayPlan::Skipped(_)
+        ));
     }
 
     fn esbmc_not_found(status: &BuildStatus) -> bool {
@@ -12906,6 +13878,10 @@ pub fn main() -> i32 [io] {
                 violating_args: vec![],
                 execution_path: vec![],
                 branch_decisions: vec![],
+                replay: None,
+                replay_reason: None,
+                replay_raw_values: vec![],
+                replay_raw_output: String::new(),
             }],
             verify_status: None,
             verify_message: None,
@@ -13361,6 +14337,10 @@ fn main() -> i32 {
                 violating_args: vec![],
                 execution_path: vec![],
                 branch_decisions: vec![],
+                replay: None,
+                replay_reason: None,
+                replay_raw_values: vec![],
+                replay_raw_output: String::new(),
             }],
             verify_status: None,
             verify_message: None,
@@ -13433,6 +14413,10 @@ fn main() -> i32 {
             violating_args: vec![],
             execution_path: vec![],
             branch_decisions: vec![],
+            replay: None,
+            replay_reason: None,
+            replay_raw_values: vec![],
+            replay_raw_output: String::new(),
         });
         let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"function\":\"f\""), "function: {json}");
@@ -13462,6 +14446,10 @@ fn main() -> i32 {
             violating_args: vec![],
             execution_path: vec![],
             branch_decisions: vec![],
+            replay: None,
+            replay_reason: None,
+            replay_raw_values: vec![],
+            replay_raw_output: String::new(),
         });
         let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"file\":\"test.vow\""), "file: {json}");
@@ -13613,6 +14601,10 @@ fn main() -> i32 {
                 violating_args: vec![],
                 execution_path: vec![],
                 branch_decisions: vec![],
+                replay: None,
+                replay_reason: None,
+                replay_raw_values: vec![],
+                replay_raw_output: String::new(),
             }],
             verify_status: None,
             verify_message: None,
@@ -14792,6 +15784,10 @@ fn main() -> i32 {
             violating_args: vec![],
             execution_path: vec![],
             branch_decisions: vec![],
+            replay: None,
+            replay_reason: None,
+            replay_raw_values: vec![],
+            replay_raw_output: String::new(),
         };
         let json_ce = CounterexampleJson::from_structured(&sce);
         let serialized = serde_json::to_string(&json_ce).unwrap();
@@ -14811,6 +15807,10 @@ fn main() -> i32 {
             violating_args: vec![],
             execution_path: vec![],
             branch_decisions: vec![],
+            replay: None,
+            replay_reason: None,
+            replay_raw_values: vec![],
+            replay_raw_output: String::new(),
         };
         let json_callee = CounterexampleJson::from_structured(&sce_callee);
         let serialized_callee = serde_json::to_string(&json_callee).unwrap();
@@ -15475,6 +16475,10 @@ fn main() -> i32 {
             violating_args: vec![],
             execution_path: vec![],
             branch_decisions: vec![],
+            replay: None,
+            replay_reason: None,
+            replay_raw_values: vec![],
+            replay_raw_output: String::new(),
         };
         let json_obj = CounterexampleJson::from_structured(&sce);
         let json = serde_json::to_string(&json_obj).unwrap();
