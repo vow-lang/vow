@@ -375,6 +375,7 @@ fn skill_json() -> String {
       "counterexample": "schemas/counterexample.schema.json",
       "mutants_result": "schemas/mutants-result.schema.json",
       "test_result": "schemas/test-result.schema.json",
+      "complexity_result": "schemas/complexity-result.schema.json",
       "vow_violation": "schemas/vow-violation.schema.json"
     }
   },
@@ -395,7 +396,8 @@ fn skill_json() -> String {
     "test": "Run tests: discover, compile, execute test_*.vow files with JSON results",
     "decl": "Emit declaration file (.vow.d) with type signatures only",
     "contracts": "List all contracts with optional verification status",
-    "skill": "Generate or install the Claude Code skill document for this compiler version"
+    "skill": "Generate or install the Claude Code skill document for this compiler version",
+    "complexity": "Report per-function complexity metrics as deterministic, byte-identical JSON"
   },
   "command_details": {
     "build": {
@@ -806,6 +808,64 @@ fn skill_json() -> String {
         "runs frontend only by default",
         "use --verify for per-contract ESBMC status"
       ]
+    },
+    "complexity": {
+      "status": "implemented",
+      "usage": "vow complexity [OPTIONS] <source.vow>",
+      "arguments": [
+        {
+          "name": "source",
+          "kind": "path",
+          "required": true,
+          "suffix": ".vow"
+        }
+      ],
+      "options": [
+        {
+          "form": "--cog-anchor",
+          "description": "Cognitive-complexity value mapped to sub-score 0.800 (SonarQube's default flag line). (default: 15)",
+          "long": "--cog-anchor",
+          "value_kind": "flag",
+          "default": "15"
+        },
+        {
+          "form": "--nloc-anchor",
+          "description": "NLOC value mapped to sub-score 0.800 (~50\u201360 line guidance). (default: 60)",
+          "long": "--nloc-anchor",
+          "value_kind": "flag",
+          "default": "60"
+        },
+        {
+          "form": "--max-score",
+          "description": "CI gate: exit nonzero if any function's complexity_score exceeds N. The recommended line is 80, but gating is opt-in only. (default: (unset))",
+          "long": "--max-score",
+          "value_kind": "flag",
+          "default": "(unset)"
+        },
+        {
+          "form": "--max-cognitive",
+          "description": "CI gate: exit nonzero if any function's cognitive exceeds N. (default: (unset))",
+          "long": "--max-cognitive",
+          "value_kind": "flag",
+          "default": "(unset)"
+        },
+        {
+          "form": "--max-cyclomatic",
+          "description": "CI gate: exit nonzero if any function's cyclomatic exceeds N. (default: (unset))",
+          "long": "--max-cyclomatic",
+          "value_kind": "flag",
+          "default": "(unset)"
+        }
+      ],
+      "stdout": {
+        "format": "json",
+        "schema_ref": "schemas/complexity-result.schema.json"
+      },
+      "notes": [
+        "reports only functions defined in the queried entry file",
+        "complexity_score is a readability / refactor-priority gate, not a defect predictor",
+        "--max-score / --max-cognitive / --max-cyclomatic gates are opt-in; exit nonzero only when set"
+      ]
     }
   },
   "build_options": {
@@ -848,6 +908,13 @@ fn skill_json() -> String {
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver (with --verify)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
     "--verify-jobs <N>": "Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)"
+  },
+  "complexity_options": {
+    "--cog-anchor": "Cognitive-complexity value mapped to sub-score 0.800 (SonarQube's default flag line). (default: 15)",
+    "--nloc-anchor": "NLOC value mapped to sub-score 0.800 (~50\u201360 line guidance). (default: 60)",
+    "--max-score": "CI gate: exit nonzero if any function's complexity_score exceeds N. The recommended line is 80, but gating is opt-in only. (default: (unset))",
+    "--max-cognitive": "CI gate: exit nonzero if any function's cognitive exceeds N. (default: (unset))",
+    "--max-cyclomatic": "CI gate: exit nonzero if any function's cyclomatic exceeds N. (default: (unset))"
   },
   "global_options": {
     "--help": "Emit versioned JSON tool-help data",
