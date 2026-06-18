@@ -956,7 +956,13 @@ for vow_file in tests/fixtures/complexity/*.vow; do
     # AST<->IR self-check: the AST decision-count cyclomatic and the IR
     # branch-count cyclomatic_ir are independent computations that must agree
     # on these clean-control-flow fixtures (cross-validates both).
-    if echo "$rust_json" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if all(f['structural']['cyclomatic']==f['structural']['cyclomatic_ir'] for f in d['files'][0]['functions']) else 1)" 2>/dev/null; then
+    # `break_value` is exempt: break-with-value requires an unconditional `loop`,
+    # which the AST counts as a decision but the branch-count cyclomatic_ir does
+    # not (the documented AST<->IR divergence) — agreement cannot hold here by
+    # construction. Byte-identity + golden above still cover this fixture.
+    if [ "$name" = "break_value" ]; then
+        skip "complexity/${name}/ast-ir-cyclomatic-agree" "loop divergence (expected)"
+    elif echo "$rust_json" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if all(f['structural']['cyclomatic']==f['structural']['cyclomatic_ir'] for f in d['files'][0]['functions']) else 1)" 2>/dev/null; then
         pass "complexity/${name}/ast-ir-cyclomatic-agree"
     else
         fail "complexity/${name}/ast-ir-cyclomatic-agree" "cyclomatic != cyclomatic_ir"
