@@ -969,8 +969,10 @@ for vow_file in tests/fixtures/complexity/*.vow; do
     fi
 done
 # Exit-code gating must agree across compilers (deep has cyclomatic 4).
-"$RUST" complexity tests/fixtures/complexity/nested.vow --max-cyclomatic 1 >/dev/null 2>&1; r_gate=$?
-run_self complexity tests/fixtures/complexity/nested.vow --max-cyclomatic 1 >/dev/null 2>&1; s_gate=$?
+# These commands exit nonzero by design, so capture the code with `|| code=$?`
+# (a bare `cmd; code=$?` would trip `set -e` and abort the script here).
+r_gate=0; "$RUST" complexity tests/fixtures/complexity/nested.vow --max-cyclomatic 1 >/dev/null 2>&1 || r_gate=$?
+s_gate=0; run_self complexity tests/fixtures/complexity/nested.vow --max-cyclomatic 1 >/dev/null 2>&1 || s_gate=$?
 if [ "$r_gate" = "$s_gate" ] && [ "$r_gate" != "0" ]; then
     pass "complexity/exit-gating (--max-cyclomatic 1 -> $r_gate, both)"
 else
@@ -978,8 +980,8 @@ else
 fi
 # A malformed --max-* value must fail closed (nonzero) in BOTH compilers, never
 # silently disable the opt-in gate. Exact codes differ (clap=2, self-hosted=1).
-"$RUST" complexity tests/fixtures/complexity/params_basic.vow --max-score notanint >/dev/null 2>&1; r_bad=$?
-run_self complexity tests/fixtures/complexity/params_basic.vow --max-score notanint >/dev/null 2>&1; s_bad=$?
+r_bad=0; "$RUST" complexity tests/fixtures/complexity/params_basic.vow --max-score notanint >/dev/null 2>&1 || r_bad=$?
+s_bad=0; run_self complexity tests/fixtures/complexity/params_basic.vow --max-score notanint >/dev/null 2>&1 || s_bad=$?
 if [ "$r_bad" != "0" ] && [ "$s_bad" != "0" ]; then
     pass "complexity/gate-fail-closed (--max-score notanint -> rust=$r_bad self=$s_bad, both nonzero)"
 else
