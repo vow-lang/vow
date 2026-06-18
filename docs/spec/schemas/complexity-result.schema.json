@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.org/schemas/complexity-result.schema.json",
+  "title": "ComplexityReport",
+  "description": "Output of `vow complexity <file>` on stdout. Byte-identical across the Rust and self-hosted compilers. Non-integer metrics are fixed-3-decimal numbers computed in integer fixed-point (scale 1000), never native floats.",
+  "type": "object",
+  "required": ["schema_version", "kind", "tool", "files", "summary"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "kind": { "const": "complexity_report" },
+    "tool": { "const": "vow" },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/File" }
+    },
+    "summary": { "$ref": "#/$defs/Summary" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "File": {
+      "type": "object",
+      "required": ["file", "complexity_score", "functions_over_threshold", "nloc", "functions", "module"],
+      "properties": {
+        "file": { "type": "string", "description": "Source path as passed on the command line." },
+        "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Max complexity_score across the file's functions." },
+        "functions_over_threshold": { "type": "integer", "minimum": 0, "description": "Count of functions whose score exceeds the threshold (--max-score if passed, else the recommended 80)." },
+        "nloc": { "type": "integer", "minimum": 0, "description": "Source line count of the file." },
+        "functions": { "type": "array", "items": { "$ref": "#/$defs/Function" } },
+        "module": { "$ref": "#/$defs/Module" }
+      },
+      "additionalProperties": false
+    },
+    "Module": {
+      "description": "Module-level coupling aggregates (experimental tier). fan_in counts in-file callers only.",
+      "type": "object",
+      "required": ["tier", "functions", "fan_in_max", "fan_out_max", "henry_kafura_max"],
+      "properties": {
+        "tier": { "const": "experimental" },
+        "functions": { "type": "integer", "minimum": 0 },
+        "fan_in_max": { "type": "integer", "minimum": 0, "description": "Max in-file callers of any function." },
+        "fan_out_max": { "type": "integer", "minimum": 0, "description": "Max distinct callees of any function." },
+        "henry_kafura_max": { "type": "integer", "minimum": 0, "description": "Max nloc*(fan_in*fan_out)^2, saturated. Unvalidated." }
+      },
+      "additionalProperties": false
+    },
+    "Vow": {
+      "description": "Vow-surface metrics (experimental tier).",
+      "type": "object",
+      "required": ["tier", "effects", "effect_breadth", "effect_fanout", "linear_values", "linear_consumes", "linear_borrows", "contract"],
+      "properties": {
+        "tier": { "const": "experimental" },
+        "effects": { "type": "array", "items": { "enum": ["io", "panic", "read", "unsafe", "write"] }, "description": "Declared effects, canonical order." },
+        "effect_breadth": { "type": "integer", "minimum": 0, "maximum": 5, "description": "popcount of the effect bitset." },
+        "effect_fanout": { "type": "integer", "minimum": 0, "description": "Distinct in-module callees that are themselves effectful." },
+        "linear_values": { "type": "integer", "minimum": 0, "description": "Count of linear-struct literals constructed in the function." },
+        "linear_consumes": { "type": "integer", "minimum": 0, "description": "IOP_LINEAR_CONSUME count (linear resource moves)." },
+        "linear_borrows": { "type": "integer", "minimum": 0, "description": "IOP_LINEAR_BORROW count." },
+        "contract": { "$ref": "#/$defs/Contract" }
+      },
+      "additionalProperties": false
+    },
+    "Function": {
+      "type": "object",
+      "required": ["name", "line", "complexity_score", "score_factors", "size", "structural", "vow", "verification"],
+      "properties": {
+        "name": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1, "description": "1-based source line of the function." },
+        "complexity_score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Readability / refactor-priority gate. NOT a defect predictor." },
+        "score_factors": { "$ref": "#/$defs/ScoreFactors" },
+        "size": { "$ref": "#/$defs/Size" },
+        "structural": { "$ref": "#/$defs/Structural" },
+        "vow": { "$ref": "#/$defs/Vow" },
+        "verification": { "$ref": "#/$defs/Verification" }
+      },
+      "additionalProperties": false
+    },
+    "Verification": {
+      "description": "Verification-difficulty metrics (experimental tier, Vow-unique).",
+      "type": "object",
+      "required": ["tier", "loops_total", "loops_without_invariant", "max_loop_nesting", "contract_predicate_cost"],
+      "properties": {
+        "tier": { "const": "experimental" },
+        "loops_total": { "type": "integer", "minimum": 0 },
+        "loops_without_invariant": { "type": "integer", "minimum": 0, "description": "Loops the BMC must unwind without an invariant." },
+        "max_loop_nesting": { "type": "integer", "minimum": 0 },
+        "contract_predicate_cost": { "type": "integer", "minimum": 0, "description": "predicate_nodes + free_vars + quantifier flag, summed across clauses." }
+      },
+      "additionalProperties": false
+    },
+    "Contract": {
+      "description": "Contract surface (experimental tier).",
+      "type": "object",
+      "required": ["requires", "ensures", "invariants", "predicate_nodes", "predicate_depth", "free_vars", "has_vec_quantification"],
+      "properties": {
+        "requires": { "type": "integer", "minimum": 0 },
+        "ensures": { "type": "integer", "minimum": 0 },
+        "invariants": { "type": "integer", "minimum": 0, "description": "Function-level invariant clauses (loop invariants are counted under verification)." },
+        "predicate_nodes": { "type": "integer", "minimum": 0, "description": "Total AST nodes across all clause predicates." },
+        "predicate_depth": { "type": "integer", "minimum": 0 },
+        "free_vars": { "type": "integer", "minimum": 0, "description": "Distinct free identifiers across clauses (excludes the result binding)." },
+        "has_vec_quantification": { "type": "boolean", "description": "A predicate indexes a Vec (no quantifier syntax exists; this is the proxy)." }
+      },
+      "additionalProperties": false
+    },
+    "ScoreFactors": {
+      "description": "Sub-scores the gate is built from. cognitive_sub/size_sub/base are in [0,1] (fixed 3 decimals).",
+      "type": "object",
+      "required": ["cognitive_sub", "size_sub", "vow_bump", "base", "over_threshold"],
+      "properties": {
+        "cognitive_sub": { "type": "number", "description": "anchor_map(cognitive, --cog-anchor)." },
+        "size_sub": { "type": "number", "description": "anchor_map(nloc, --nloc-anchor)." },
+        "vow_bump": { "type": "number", "description": "Experimental Vow-surface bump (scale 1000). Sum of effect-breadth, linear-consume, and contract-predicate penalties; capped at 150." },
+        "base": { "type": "number", "description": "soft-OR of cognitive_sub and size_sub." },
+        "over_threshold": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "Size": {
+      "description": "Stable baseline metrics. Co-reported with every structural metric.",
+      "type": "object",
+      "required": ["nloc", "tokens", "stmts", "params"],
+      "properties": {
+        "nloc": { "type": "integer", "minimum": 0, "description": "Source lines spanned by the function." },
+        "tokens": { "type": "integer", "minimum": 0, "description": "Halstead length N (total operators + operands)." },
+        "stmts": { "type": "integer", "minimum": 0, "description": "Statement count (recursive; trailing expression counts as one)." },
+        "params": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "Structural": {
+      "type": "object",
+      "required": ["cyclomatic", "cyclomatic_ir", "cognitive", "max_nesting", "halstead"],
+      "properties": {
+        "cyclomatic": { "type": "integer", "minimum": 1, "description": "AST decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?." },
+        "cyclomatic_ir": { "type": "integer", "minimum": -1, "description": "IR branch-count cross-check: (number of IOP_BRANCH) + 1, or -1 if the function has no IR (e.g. a body-less declaration). Agrees with `cyclomatic` modulo &&/||/? lowering. Experimental tier." },
+        "cognitive": { "type": "integer", "minimum": 0, "description": "Vow-adapted Cognitive Complexity (nesting-aware). Headline structural metric." },
+        "max_nesting": { "type": "integer", "minimum": 0, "description": "Deepest structural nesting depth." },
+        "halstead": { "$ref": "#/$defs/Halstead" }
+      },
+      "additionalProperties": false
+    },
+    "Halstead": {
+      "type": "object",
+      "required": ["n1", "n2", "N1", "N2", "vocabulary", "length", "volume", "difficulty", "effort"],
+      "properties": {
+        "n1": { "type": "integer", "minimum": 0, "description": "Distinct operators." },
+        "n2": { "type": "integer", "minimum": 0, "description": "Distinct operands." },
+        "N1": { "type": "integer", "minimum": 0, "description": "Total operators." },
+        "N2": { "type": "integer", "minimum": 0, "description": "Total operands." },
+        "vocabulary": { "type": "integer", "minimum": 0, "description": "n1 + n2." },
+        "length": { "type": "integer", "minimum": 0, "description": "N1 + N2." },
+        "volume": { "type": "number", "description": "length * log2(vocabulary). Fixed 3 decimals, saturated." },
+        "difficulty": { "type": "number", "description": "(n1/2) * (N2/n2). Fixed 3 decimals." },
+        "effort": { "type": "number", "description": "difficulty * volume. Fixed 3 decimals, saturated." }
+      },
+      "additionalProperties": false
+    },
+    "Summary": {
+      "type": "object",
+      "required": ["functions", "nloc_total", "threshold", "functions_over_threshold", "thresholds_exceeded"],
+      "properties": {
+        "functions": { "type": "integer", "minimum": 0 },
+        "nloc_total": { "type": "integer", "minimum": 0 },
+        "threshold": { "type": "integer", "description": "--max-score if passed, else the recommended 80." },
+        "functions_over_threshold": { "type": "integer", "minimum": 0 },
+        "thresholds_exceeded": { "type": "array", "items": { "type": "string" }, "description": "Names of functions whose score exceeds the threshold." }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1011,6 +1011,68 @@ else
 fi
 echo ""
 
+# ─── Section 13: vow complexity Parity ──────────────────────────────
+
+section_begin "Section 13: vow complexity Parity"
+for vow_file in tests/fixtures/complexity/*.vow; do
+    [ -f "$vow_file" ] || continue
+    name=$(basename "$vow_file" .vow)
+    rust_json=$("$RUST" complexity "$vow_file" 2>/dev/null)
+    self_json=$(run_self complexity "$vow_file" 2>/dev/null)
+    golden="tests/fixtures/complexity/${name}.expected.json"
+    if [ "$rust_json" != "$self_json" ]; then
+        fail "complexity/${name}" "JSON differs between compilers"
+    elif [ -f "$golden" ] && [ "$rust_json" != "$(cat "$golden")" ]; then
+        fail "complexity/${name}" "output differs from golden ${name}.expected.json"
+    else
+        pass "complexity/${name} (byte-identical + golden)"
+    fi
+    # AST<->IR self-check: the AST decision-count cyclomatic and the IR
+    # branch-count cyclomatic_ir are independent computations that must agree
+    # on these clean-control-flow fixtures (cross-validates both).
+    # `break_value` is exempt: break-with-value requires an unconditional `loop`,
+    # which the AST counts as a decision but the branch-count cyclomatic_ir does
+    # not (the documented AST<->IR divergence) — agreement cannot hold here by
+    # construction. Byte-identity + golden above still cover this fixture.
+    if [ "$name" = "break_value" ]; then
+        skip "complexity/${name}/ast-ir-cyclomatic-agree" "loop divergence (expected)"
+    elif echo "$rust_json" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if all(f['structural']['cyclomatic']==f['structural']['cyclomatic_ir'] for f in d['files'][0]['functions']) else 1)" 2>/dev/null; then
+        pass "complexity/${name}/ast-ir-cyclomatic-agree"
+    else
+        fail "complexity/${name}/ast-ir-cyclomatic-agree" "cyclomatic != cyclomatic_ir"
+    fi
+done
+# Exit-code gating must agree across compilers (deep has cyclomatic 4).
+# These commands exit nonzero by design, so capture the code with `|| code=$?`
+# (a bare `cmd; code=$?` would trip `set -e` and abort the script here).
+r_gate=0; "$RUST" complexity tests/fixtures/complexity/nested.vow --max-cyclomatic 1 >/dev/null 2>&1 || r_gate=$?
+s_gate=0; run_self complexity tests/fixtures/complexity/nested.vow --max-cyclomatic 1 >/dev/null 2>&1 || s_gate=$?
+if [ "$r_gate" = "$s_gate" ] && [ "$r_gate" != "0" ]; then
+    pass "complexity/exit-gating (--max-cyclomatic 1 -> $r_gate, both)"
+else
+    fail "complexity/exit-gating" "rust=$r_gate self=$s_gate (expected equal, nonzero)"
+fi
+# A malformed --max-* value must fail closed (nonzero) in BOTH compilers, never
+# silently disable the opt-in gate. Exact codes differ (clap=2, self-hosted=1).
+r_bad=0; "$RUST" complexity tests/fixtures/complexity/params_basic.vow --max-score notanint >/dev/null 2>&1 || r_bad=$?
+s_bad=0; run_self complexity tests/fixtures/complexity/params_basic.vow --max-score notanint >/dev/null 2>&1 || s_bad=$?
+if [ "$r_bad" != "0" ] && [ "$s_bad" != "0" ]; then
+    pass "complexity/gate-fail-closed (--max-score notanint -> rust=$r_bad self=$s_bad, both nonzero)"
+else
+    fail "complexity/gate-fail-closed" "rust=$r_bad self=$s_bad (expected both nonzero)"
+fi
+# A non-ASCII (UTF-8) source path must stay byte-identical across compilers: the
+# JSON escaper must emit raw UTF-8 bytes, not mojibake (Rust byte-as-char bug).
+utf8dir=$(mktemp -d)
+cp tests/fixtures/complexity/params_basic.vow "$utf8dir/café.vow"
+if diff -q <("$RUST" complexity "$utf8dir/café.vow" 2>/dev/null) <(run_self complexity "$utf8dir/café.vow" 2>/dev/null) >/dev/null; then
+    pass "complexity/utf8-path-parity (café.vow byte-identical)"
+else
+    fail "complexity/utf8-path-parity" "non-ASCII path JSON diverges between compilers"
+fi
+rm -rf "$utf8dir"
+echo ""
+
 # ─── Summary ────────────────────────────────────────────────────────
 
 section_finalize

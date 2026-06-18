@@ -1,0 +1,23 @@
+module Effects
+
+linear struct Tok {
+    v: i64,
+}
+
+fn mk(x: i64) -> Tok {
+    Tok { v: x }
+}
+
+fn pure_add(x: i64) -> i64 {
+    x + 1
+}
+
+fn shout(x: i64) -> i64 [io] {
+    print_i64(x);
+    x
+}
+
+fn driver(x: i64) -> i64 [io] {
+    let a: i64 = pure_add(x);
+    shout(a)
+}

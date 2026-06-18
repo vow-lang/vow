@@ -1,0 +1,1260 @@
+module Complexity
+
+use ast
+use diag
+use ir
+
+// IR-derived (experimental tier) per-function metrics. Grows in Phase 2/3.
+struct CxIr {
+    cyclomatic_ir: i64,
+}
+
+// Cyclomatic complexity from the IR CFG, decision-count form:
+// (number of conditional branches) + 1. Each AST decision (if / while / for /
+// loop / &&/|| / ? / match arm) lowers to exactly one IOP_BRANCH, so this
+// cross-checks the AST decision-count form.
+//
+// NOTE: this intentionally uses the branch-count form rather than the design's
+// literal `edges - nodes + 2`. The latter assumes a single exit; this codebase
+// uses early `return` pervasively (each a 0-successor sink), so `e - n + 2`
+// undercounts badly (e.g. a 20-way `if ... return` chain scores ~1). The
+// branch-count form is the one comparable to the AST decision count.
+fn cx_cyclomatic_ir(f: IrFunction) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut branches: i64 = 0;
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_BRANCH() { branches = branches + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    branches + 1
+}
+
+fn cx_analyze_ir(f: IrFunction) -> CxIr {
+    CxIr { cyclomatic_ir: cx_cyclomatic_ir(f) }
+}
+
+fn cx_vec_has(v: Vec<i64>, x: i64) -> bool {
+    let n: i64 = v.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if v[i] == x { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Count IR instructions with a given opcode in a function (e.g. linear
+// consume/borrow ops).
+fn cx_fn_count_op(f: IrFunction, want: i64) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut c: i64 = 0;
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == want { c = c + 1; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    c
+}
+
+// Distinct user-function callee indices of a function (IOP_CALL with an
+// IDATA_CALL_TARGET payload; extern calls are excluded). Drives fan-out, and
+// fan-in via inversion across the module.
+fn cx_fn_callees(f: IrFunction) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_CALL() {
+                if inst.dk == IDATA_CALL_TARGET() {
+                    let tgt: i64 = inst.dv;
+                    if !cx_vec_has(out, tgt) { out.push(tgt); }
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    out
+}
+
+// Henry-Kafura information-flow proxy: nloc * (fan_in * fan_out)^2, saturated.
+fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
+    let fl: i64 = fan_in * fan_out;
+    cx_sat(nloc * fl * fl)
+}
+
+// Is `name` a linear struct? Lookup over parallel name/is-linear Vecs built
+// from the module's struct definitions.
+fn cx_struct_is_linear(name: String, names: Vec<String>, slin: Vec<i64>) -> bool {
+    let n: i64 = names.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let nm: String = names[i];
+        if nm == name {
+            return slin[i] != 0;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// Count linear-struct literals (EXPR_SLIT whose named struct is linear) in an
+// expression subtree. Recurses every sub-expression, mirroring cx_walk_expr.
+fn cx_lv_expr(a: AstArena, eid: i64, names: Vec<String>, slin: Vec<i64>) -> i64 {
+    if eid < 0 { return 0; }
+    let tag: i64 = expr_tag(a, eid);
+    let mut c: i64 = 0;
+    if tag == EXPR_SLIT() {
+        let path_lid: i64 = expr_a(a, eid);
+        let pn: i64 = list_len(a, path_lid);
+        if pn > 0 {
+            let sname: String = arena_str(a, list_get(a, path_lid, pn - 1));
+            if cx_struct_is_linear(sname, names, slin) { c = c + 1; }
+        }
+        let fields_lid: i64 = expr_b(a, eid);
+        let nf: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nf { c = c + cx_lv_expr(a, list_get(a, fields_lid, i * 2 + 1), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_BINOP() {
+        c = c + cx_lv_expr(a, expr_b(a, eid), names, slin);
+        c = c + cx_lv_expr(a, expr_c(a, eid), names, slin);
+        return c;
+    }
+    if tag == EXPR_INDEX() || tag == EXPR_ASSIGN() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        c = c + cx_lv_expr(a, expr_b(a, eid), names, slin);
+        return c;
+    }
+    if tag == EXPR_UNOP() { return cx_lv_expr(a, expr_b(a, eid), names, slin); }
+    if tag == EXPR_FIELD() || tag == EXPR_QUESTION() || tag == EXPR_CAST() {
+        return cx_lv_expr(a, expr_a(a, eid), names, slin);
+    }
+    if tag == EXPR_CALL() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        let args_lid: i64 = expr_b(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { c = c + cx_lv_expr(a, list_get(a, args_lid, i), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_METHOD() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        let args_lid: i64 = expr_c(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { c = c + cx_lv_expr(a, list_get(a, args_lid, i), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_IF() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        c = c + cx_lv_block(a, expr_b(a, eid), names, slin);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 { c = c + cx_lv_expr(a, else_eid, names, slin); }
+        return c;
+    }
+    if tag == EXPR_WHILE() || tag == EXPR_FOR() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        c = c + cx_lv_block(a, expr_b(a, eid), names, slin);
+        return c;
+    }
+    if tag == EXPR_LOOP() { return cx_lv_block(a, expr_a(a, eid), names, slin); }
+    if tag == EXPR_MATCH() {
+        c = c + cx_lv_expr(a, expr_a(a, eid), names, slin);
+        let arms_lid: i64 = expr_b(a, eid);
+        let nar: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nar { c = c + cx_lv_expr(a, list_get(a, arms_lid, i * 2 + 1), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_RETURN() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { c = c + cx_lv_expr(a, v, names, slin); }
+        return c;
+    }
+    if tag == EXPR_BREAK() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { c = c + cx_lv_expr(a, v, names, slin); }
+        return c;
+    }
+    if tag == EXPR_BLOCK() { return cx_lv_block(a, expr_a(a, eid), names, slin); }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { c = c + cx_lv_expr(a, list_get(a, args_lid, i), names, slin); i = i + 1; }
+        return c;
+    }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let ne: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < ne { c = c + cx_lv_expr(a, list_get(a, elems_lid, i), names, slin); i = i + 1; }
+        return c;
+    }
+    c
+}
+
+fn cx_lv_block(a: AstArena, bid: i64, names: Vec<String>, slin: Vec<i64>) -> i64 {
+    if bid < 0 { return 0; }
+    let slid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, slid);
+    let mut c: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, slid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            c = c + cx_lv_expr(a, stmt_c(a, sid), names, slin);
+        } else {
+            c = c + cx_lv_expr(a, stmt_a(a, sid), names, slin);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 { c = c + cx_lv_expr(a, trail, names, slin); }
+    c
+}
+
+// Per-function complexity record. Grows one field per metric slice.
+struct CxFn {
+    name: String,
+    line: i64,
+    nloc: i64,
+    params: i64,
+    stmts: i64,
+    tokens: i64,
+    cyclomatic: i64,
+    cognitive: i64,
+    max_nesting: i64,
+    eff: i64,
+    linear_values: i64,
+    h_n1: i64,
+    h_n2: i64,
+    h_bign1: i64,
+    h_bign2: i64,
+    h_vocab: i64,
+    h_length: i64,
+    h_volume_s: i64,
+    h_difficulty_s: i64,
+    h_effort_s: i64,
+}
+
+// Recursive AST walk accumulating structural counts. `acc` is a 2-element
+// vector: acc[0] = decision points, acc[1] = statement count. The traversal
+// mirrors `collect_calls_in_expr`/`collect_calls_in_block` (checker.vow) so
+// the Rust port can mirror the same handled-kind set and stay byte-identical.
+//
+// Cyclomatic decision points (acc[0]): each if-head, while/for/loop, each
+// match arm beyond the first, each short-circuit `&&`/`||`, each `?`.
+fn cx_walk_block(a: AstArena, bid: i64, acc: Vec<i64>) {
+    if bid < 0 { return; }
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        acc[1] = acc[1] + 1;
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            cx_walk_expr(a, stmt_c(a, sid), acc);
+        } else {
+            cx_walk_expr(a, stmt_a(a, sid), acc);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 {
+        // A block's trailing expression counts as one statement, matching the
+        // Rust AST's `trailing_expr` slot. (The self-hosted parser usually folds
+        // it into blk_stmts, so this guards the case where it does not.)
+        acc[1] = acc[1] + 1;
+        cx_walk_expr(a, trail, acc);
+    }
+}
+
+fn cx_walk_expr(a: AstArena, eid: i64, acc: Vec<i64>) {
+    if eid < 0 { return; }
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_CALL() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cx_walk_expr(a, list_get(a, args_lid, i), acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_METHOD() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        let args_lid: i64 = expr_c(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cx_walk_expr(a, list_get(a, args_lid, i), acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        if op == BINOP_AND() || op == BINOP_OR() { acc[0] = acc[0] + 1; }
+        cx_walk_expr(a, expr_b(a, eid), acc);
+        cx_walk_expr(a, expr_c(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_UNOP() {
+        cx_walk_expr(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_FIELD() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_QUESTION() {
+        acc[0] = acc[0] + 1;
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_INDEX() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_expr(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_IF() {
+        acc[0] = acc[0] + 1;
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_block(a, expr_b(a, eid), acc);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 { cx_walk_expr(a, else_eid, acc); }
+        return;
+    }
+    if tag == EXPR_WHILE() {
+        acc[0] = acc[0] + 1;
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_block(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        acc[0] = acc[0] + 1;
+        cx_walk_block(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_FOR() {
+        acc[0] = acc[0] + 1;
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_block(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_arms: i64 = list_len(a, arms_lid) / 2;
+        if n_arms > 1 { acc[0] = acc[0] + (n_arms - 1); }
+        let mut i: i64 = 0;
+        while i < n_arms {
+            cx_walk_expr(a, list_get(a, arms_lid, i * 2 + 1), acc);
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == EXPR_RETURN() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { cx_walk_expr(a, v, acc); }
+        return;
+    }
+    if tag == EXPR_BREAK() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { cx_walk_expr(a, v, acc); }
+        return;
+    }
+    if tag == EXPR_BLOCK() {
+        cx_walk_block(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_ASSIGN() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        cx_walk_expr(a, expr_b(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let n_fields: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n_fields { cx_walk_expr(a, list_get(a, fields_lid, i * 2 + 1), acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cx_walk_expr(a, list_get(a, args_lid, i), acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_CAST() {
+        cx_walk_expr(a, expr_a(a, eid), acc);
+        return;
+    }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n { cx_walk_expr(a, list_get(a, elems_lid, i), acc); i = i + 1; }
+        return;
+    }
+}
+
+// Cognitive Complexity (Vow-adapted, plan §3.2). `acc` is a 3-element vector:
+// acc[0] = cognitive total, acc[1] = max structural nesting depth,
+// acc[2] = direct self-call count. `nesting` is the number of enclosing
+// structural constructs; `logctx` is the enclosing logical operator
+// (BINOP_AND/OR or -1) used to count contiguous &&/|| runs once each.
+fn cog_track_max(acc: Vec<i64>, depth: i64) {
+    if depth > acc[1] { acc[1] = depth; }
+}
+
+fn cog_block(a: AstArena, bid: i64, nesting: i64, selfn: String, acc: Vec<i64>) {
+    if bid < 0 { return; }
+    let slid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, slid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, slid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            cog_expr(a, stmt_c(a, sid), nesting, -1, selfn, acc);
+        } else {
+            cog_expr(a, stmt_a(a, sid), nesting, -1, selfn, acc);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 { cog_expr(a, trail, nesting, -1, selfn, acc); }
+}
+
+fn cog_expr(a: AstArena, eid: i64, nesting: i64, logctx: i64, selfn: String, acc: Vec<i64>) {
+    if eid < 0 { return; }
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_IF() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_block(a, expr_b(a, eid), nesting + 1, selfn, acc);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 {
+            if expr_tag(a, else_eid) == EXPR_IF() {
+                cog_expr(a, else_eid, nesting, -1, selfn, acc);
+            } else {
+                acc[0] = acc[0] + 1;
+                cog_expr(a, else_eid, nesting + 1, -1, selfn, acc);
+            }
+        }
+        return;
+    }
+    if tag == EXPR_WHILE() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_block(a, expr_b(a, eid), nesting + 1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_FOR() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_block(a, expr_b(a, eid), nesting + 1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_block(a, expr_a(a, eid), nesting + 1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        acc[0] = acc[0] + 1 + nesting;
+        cog_track_max(acc, nesting + 1);
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_arms: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n_arms {
+            cog_expr(a, list_get(a, arms_lid, i * 2 + 1), nesting + 1, -1, selfn, acc);
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        if op == BINOP_AND() || op == BINOP_OR() {
+            if op != logctx { acc[0] = acc[0] + 1; }
+            cog_expr(a, expr_b(a, eid), nesting, op, selfn, acc);
+            cog_expr(a, expr_c(a, eid), nesting, op, selfn, acc);
+        } else {
+            cog_expr(a, expr_b(a, eid), nesting, -1, selfn, acc);
+            cog_expr(a, expr_c(a, eid), nesting, -1, selfn, acc);
+        }
+        return;
+    }
+    if tag == EXPR_QUESTION() {
+        acc[0] = acc[0] + 1;
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_CALL() {
+        let callee_eid: i64 = expr_a(a, eid);
+        if expr_tag(a, callee_eid) == EXPR_IDENT() {
+            let nm_sid: i64 = expr_a(a, callee_eid);
+            let nm: String = arena_str(a, nm_sid);
+            if nm == selfn { acc[2] = acc[2] + 1; }
+        }
+        cog_expr(a, callee_eid, nesting, -1, selfn, acc);
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cog_expr(a, list_get(a, args_lid, i), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_METHOD() {
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        let args_lid: i64 = expr_c(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cog_expr(a, list_get(a, args_lid, i), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_UNOP() { cog_expr(a, expr_b(a, eid), nesting, -1, selfn, acc); return; }
+    if tag == EXPR_FIELD() { cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc); return; }
+    if tag == EXPR_INDEX() {
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_expr(a, expr_b(a, eid), nesting, -1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_RETURN() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { cog_expr(a, v, nesting, -1, selfn, acc); }
+        return;
+    }
+    if tag == EXPR_BREAK() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { cog_expr(a, v, nesting, -1, selfn, acc); }
+        return;
+    }
+    if tag == EXPR_BLOCK() { cog_block(a, expr_a(a, eid), nesting, selfn, acc); return; }
+    if tag == EXPR_ASSIGN() {
+        cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc);
+        cog_expr(a, expr_b(a, eid), nesting, -1, selfn, acc);
+        return;
+    }
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let nf: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nf { cog_expr(a, list_get(a, fields_lid, i * 2 + 1), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { cog_expr(a, list_get(a, args_lid, i), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_CAST() { cog_expr(a, expr_a(a, eid), nesting, -1, selfn, acc); return; }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n { cog_expr(a, list_get(a, elems_lid, i), nesting, -1, selfn, acc); i = i + 1; }
+        return;
+    }
+}
+
+// ---- Fixed-point integer math (shared, byte-identical with Rust) ----
+//
+// The self-hosted compiler has no floats, and native float formatting could
+// never be byte-identical across the two compilers. So all "float" metrics are
+// computed in integer fixed-point (scale = 1000, i.e. 3 decimal places) and
+// serialized by cx_fmt_fixed. CX_SAT caps values so the effort product cannot
+// overflow i64 (2e9 * 2e9 = 4e18 < i64::MAX).
+fn CX_SAT() -> i64 { 2000000000 }
+
+fn cx_sat(x: i64) -> i64 {
+    if x > CX_SAT() { CX_SAT() } else { x }
+}
+
+// Clamp a possibly-(-1) IR lookup result to 0. Pure (no let-mut + if-reassign)
+// so both compilers lower call sites to identical SSA.
+fn cx_clamp0(x: i64) -> i64 {
+    if x < 0 { 0 } else { x }
+}
+
+// Integer log2 scaled by 1000. log2(0)=log2(1)=0. Integer part is the index of
+// the high bit; the fractional part is found by 10 mantissa-squaring steps.
+fn cx_log2_milli(n: i64) -> i64 {
+    if n <= 1 { return 0; }
+    let mut intpart: i64 = 0;
+    let mut v: i64 = n;
+    while v > 1 { v = v / 2; intpart = intpart + 1; }
+    let mut p2: i64 = 1;
+    let mut k: i64 = 0;
+    while k < intpart { p2 = p2 * 2; k = k + 1; }
+    let scale: i64 = 1000;
+    let mut m: i64 = n * scale / p2;
+    let mut frac: i64 = 0;
+    let mut b: i64 = scale / 2;
+    let mut iter: i64 = 0;
+    while iter < 10 {
+        m = m * m / scale;
+        if m >= 2 * scale {
+            m = m / 2;
+            frac = frac + b;
+        }
+        b = b / 2;
+        iter = iter + 1;
+    }
+    intpart * scale + frac
+}
+
+// Format a scale-1000 fixed-point integer as a JSON number "whole.fff".
+fn cx_fmt_fixed(scaled: i64) -> String {
+    let s: String = String::from("");
+    let mut x: i64 = scaled;
+    if x < 0 { s.push_byte(45); x = 0 - x; }
+    let whole: i64 = x / 1000;
+    let frac: i64 = x - whole * 1000;
+    s.push_str(i64_to_string(whole));
+    s.push_byte(46);
+    if frac < 100 { s.push_byte(48); }
+    if frac < 10 { s.push_byte(48); }
+    s.push_str(i64_to_string(frac));
+    s
+}
+
+fn cx_popcount(mask: i64) -> i64 {
+    let mut c: i64 = 0;
+    let mut m: i64 = mask;
+    while m > 0 {
+        c = c + (m % 2);
+        m = m / 2;
+    }
+    c
+}
+
+fn cx_seen_contains(seen: Vec<String>, s: String) -> bool {
+    let n: i64 = seen.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let e: String = seen[i];
+        if e == s { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// ---- Contract + verification-difficulty metrics (experimental tier) ----
+
+struct CxContract {
+    n_req: i64,
+    n_ens: i64,
+    n_inv: i64,
+    predicate_nodes: i64,
+    predicate_depth: i64,
+    free_vars: i64,
+    has_vec_quant: i64,
+}
+
+// Walk a contract predicate expr. acc[0]=node count, acc[1]=max depth,
+// acc[2]=has-Vec-index flag (proxy for Vec quantification, no quantifier
+// syntax exists). `seen` collects distinct free identifiers.
+fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<String>) {
+    if eid < 0 { return; }
+    acc[0] = acc[0] + 1;
+    if depth > acc[1] { acc[1] = depth; }
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_IDENT() {
+        let nm: String = arena_str(a, expr_a(a, eid));
+        if !cx_seen_contains(seen, nm) { seen.push(nm); }
+        return;
+    }
+    if tag == EXPR_INDEX() {
+        acc[2] = 1;
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen);
+        return;
+    }
+    if tag == EXPR_BINOP() {
+        cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen);
+        cx_pred_walk(a, expr_c(a, eid), depth + 1, acc, seen);
+        return;
+    }
+    if tag == EXPR_ASSIGN() {
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen);
+        return;
+    }
+    if tag == EXPR_UNOP() { cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen); return; }
+    if tag == EXPR_FIELD() || tag == EXPR_QUESTION() || tag == EXPR_CAST() {
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        return;
+    }
+    if tag == EXPR_CALL() {
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        let args_lid: i64 = expr_b(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { cx_pred_walk(a, list_get(a, args_lid, i), depth + 1, acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_METHOD() {
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        let args_lid: i64 = expr_c(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { cx_pred_walk(a, list_get(a, args_lid, i), depth + 1, acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let ne: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < ne { cx_pred_walk(a, list_get(a, elems_lid, i), depth + 1, acc, seen); i = i + 1; }
+        return;
+    }
+}
+
+fn cx_analyze_contract(a: AstArena, fid: i64) -> CxContract {
+    let vow_lid: i64 = fn_vow_lid(a, fid);
+    let mut n_req: i64 = 0;
+    let mut n_ens: i64 = 0;
+    let mut n_inv: i64 = 0;
+    let acc: Vec<i64> = Vec::new();
+    acc.push(0);
+    acc.push(0);
+    acc.push(0);
+    let seen: Vec<String> = Vec::new();
+    if vow_lid >= 0 {
+        let n: i64 = list_len(a, vow_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            let cid: i64 = list_get(a, vow_lid, i);
+            let kind: i64 = vow_clause_kind(a, cid);
+            if kind == CLAUSE_REQUIRES() { n_req = n_req + 1; }
+            else if kind == CLAUSE_ENSURES() { n_ens = n_ens + 1; }
+            else if kind == CLAUSE_INVARIANT() { n_inv = n_inv + 1; }
+            cx_pred_walk(a, vow_clause_expr(a, cid), 1, acc, seen);
+            i = i + 1;
+        }
+    }
+    CxContract { n_req: n_req, n_ens: n_ens, n_inv: n_inv, predicate_nodes: acc[0], predicate_depth: acc[1], free_vars: seen.len(), has_vec_quant: acc[2] }
+}
+
+fn cx_contract_predicate_cost(ct: CxContract) -> i64 {
+    ct.predicate_nodes + ct.free_vars + ct.has_vec_quant
+}
+
+struct CxVerif {
+    loops_total: i64,
+    loops_without_invariant: i64,
+    max_loop_nesting: i64,
+    contract_predicate_cost: i64,
+}
+
+// IR-derived + contract extras carried alongside the AST CxFn record.
+struct CxExtra {
+    cir: i64,
+    effect_fanout: i64,
+    linear_consumes: i64,
+    linear_borrows: i64,
+    ct: CxContract,
+    vf: CxVerif,
+}
+
+// A loop's invariant list is empty (BMC must unwind it blind).
+// A loop lacks an invariant unless its vow clause list carries an actual
+// invariant clause (a loop vow block with only requires/ensures still forces a
+// blind unwind). `lid` is the vow clause list (while/loop/for all pass one).
+fn cx_loop_has_no_inv(a: AstArena, lid: i64) -> bool {
+    if lid < 0 { return true; }
+    let n: i64 = list_len(a, lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let cid: i64 = list_get(a, lid, i);
+        if vow_clause_kind(a, cid) == CLAUSE_INVARIANT() { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn cx_loops_block(a: AstArena, bid: i64, nesting: i64, acc: Vec<i64>) {
+    if bid < 0 { return; }
+    let slid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, slid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, slid, i);
+        if stmt_tag(a, sid) == STMT_LET() {
+            cx_loops_expr(a, stmt_c(a, sid), nesting, acc);
+        } else {
+            cx_loops_expr(a, stmt_a(a, sid), nesting, acc);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 { cx_loops_expr(a, trail, nesting, acc); }
+}
+
+// acc[0]=loops_total, acc[1]=loops_without_invariant, acc[2]=max_loop_nesting.
+fn cx_loops_expr(a: AstArena, eid: i64, nesting: i64, acc: Vec<i64>) {
+    if eid < 0 { return; }
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_WHILE() {
+        acc[0] = acc[0] + 1;
+        if nesting + 1 > acc[2] { acc[2] = nesting + 1; }
+        if cx_loop_has_no_inv(a, expr_c(a, eid)) { acc[1] = acc[1] + 1; }
+        cx_loops_expr(a, expr_a(a, eid), nesting, acc);
+        cx_loops_block(a, expr_b(a, eid), nesting + 1, acc);
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        acc[0] = acc[0] + 1;
+        if nesting + 1 > acc[2] { acc[2] = nesting + 1; }
+        if cx_loop_has_no_inv(a, expr_b(a, eid)) { acc[1] = acc[1] + 1; }
+        cx_loops_block(a, expr_a(a, eid), nesting + 1, acc);
+        return;
+    }
+    if tag == EXPR_FOR() {
+        acc[0] = acc[0] + 1;
+        if nesting + 1 > acc[2] { acc[2] = nesting + 1; }
+        let info_lid: i64 = expr_c(a, eid);
+        let mut inv: i64 = -1;
+        if list_len(a, info_lid) > 1 { inv = list_get(a, info_lid, 1); }
+        if cx_loop_has_no_inv(a, inv) { acc[1] = acc[1] + 1; }
+        cx_loops_expr(a, expr_a(a, eid), nesting, acc);
+        cx_loops_block(a, expr_b(a, eid), nesting + 1, acc);
+        return;
+    }
+    if tag == EXPR_IF() {
+        cx_loops_expr(a, expr_a(a, eid), nesting, acc);
+        cx_loops_block(a, expr_b(a, eid), nesting, acc);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 { cx_loops_expr(a, else_eid, nesting, acc); }
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        cx_loops_expr(a, expr_a(a, eid), nesting, acc);
+        let arms_lid: i64 = expr_b(a, eid);
+        let nar: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nar { cx_loops_expr(a, list_get(a, arms_lid, i * 2 + 1), nesting, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_BLOCK() { cx_loops_block(a, expr_a(a, eid), nesting, acc); return; }
+    if tag == EXPR_BINOP() {
+        cx_loops_expr(a, expr_b(a, eid), nesting, acc);
+        cx_loops_expr(a, expr_c(a, eid), nesting, acc);
+        return;
+    }
+    if tag == EXPR_ASSIGN() || tag == EXPR_INDEX() {
+        cx_loops_expr(a, expr_a(a, eid), nesting, acc);
+        cx_loops_expr(a, expr_b(a, eid), nesting, acc);
+        return;
+    }
+    if tag == EXPR_UNOP() { cx_loops_expr(a, expr_b(a, eid), nesting, acc); return; }
+    if tag == EXPR_FIELD() || tag == EXPR_QUESTION() || tag == EXPR_CAST() || tag == EXPR_RETURN() || tag == EXPR_BREAK() {
+        cx_loops_expr(a, expr_a(a, eid), nesting, acc);
+        return;
+    }
+    if tag == EXPR_CALL() {
+        cx_loops_expr(a, expr_a(a, eid), nesting, acc);
+        let args_lid: i64 = expr_b(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { cx_loops_expr(a, list_get(a, args_lid, i), nesting, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_METHOD() {
+        cx_loops_expr(a, expr_a(a, eid), nesting, acc);
+        let args_lid: i64 = expr_c(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { cx_loops_expr(a, list_get(a, args_lid, i), nesting, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let nf: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nf { cx_loops_expr(a, list_get(a, fields_lid, i * 2 + 1), nesting, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let na: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < na { cx_loops_expr(a, list_get(a, args_lid, i), nesting, acc); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let ne: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < ne { cx_loops_expr(a, list_get(a, elems_lid, i), nesting, acc); i = i + 1; }
+        return;
+    }
+}
+
+fn cx_analyze_verif(a: AstArena, fid: i64, predicate_cost: i64) -> CxVerif {
+    let body_bid: i64 = fn_body_bid(a, fid);
+    let acc: Vec<i64> = Vec::new();
+    acc.push(0);
+    acc.push(0);
+    acc.push(0);
+    cx_loops_block(a, body_bid, 0, acc);
+    CxVerif { loops_total: acc[0], loops_without_invariant: acc[1], max_loop_nesting: acc[2], contract_predicate_cost: predicate_cost }
+}
+
+// Experimental Vow-surface score bump (§3.2a Step 3), fixed-point, capped at
+// 150 (0.15). excess effect breadth over 2 "free" effects; full linear_consumes;
+// contract predicate cost over a 20-node budget.
+fn cx_vow_bump(effect_breadth: i64, linear_consumes: i64, contract_predicate_cost: i64) -> i64 {
+    let mut excess_eff: i64 = effect_breadth - 2;
+    if excess_eff < 0 { excess_eff = 0; }
+    let mut over_budget: i64 = contract_predicate_cost - 20;
+    if over_budget < 0 { over_budget = 0; }
+    let v: i64 = 50 * excess_eff + 30 * linear_consumes + 20 * over_budget;
+    if v > 150 { 150 } else { v }
+}
+
+// ---- 0-100 gate score (§3.2a, fixed-point; rational curve, no exp) ----
+//
+// Sub-scores are scale-1000 (0..1000 == 0.000..1.000). The anchor map is
+// linear up to the anchor T (=0.800 at T) then a rational curve asymptoting to
+// 1.000 -- replacing the design's exp() form, which is unimplementable without
+// floats. soft_or compounds the two sub-scores; round_0_100 collapses to 0-100.
+fn cx_anchor_map(x: i64, t_in: i64) -> i64 {
+    let mut t: i64 = t_in;
+    if t <= 0 { t = 1; }
+    if x <= t {
+        return 800 * x / t;
+    }
+    800 + 200 * (x - t) / x
+}
+
+fn cx_soft_or(c: i64, s: i64) -> i64 {
+    1000 - (1000 - c) * (1000 - s) / 1000
+}
+
+fn cx_round_0_100(val_scaled: i64) -> i64 {
+    let r: i64 = (val_scaled * 100 + 500) / 1000;
+    if r > 100 { 100 } else { r }
+}
+
+struct CxScore {
+    score: i64,
+    cog_sub_s: i64,
+    size_sub_s: i64,
+    base_s: i64,
+    vow_bump_s: i64,
+}
+
+// `v` is the experimental Vow-surface bump (scale 1000, <=150); score is
+// round(100 * min(1.0, base + v)).
+fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64) -> CxScore {
+    let c: i64 = cx_anchor_map(cognitive, cog_anchor);
+    let s: i64 = cx_anchor_map(nloc, nloc_anchor);
+    let base: i64 = cx_soft_or(c, s);
+    let score: i64 = cx_round_0_100(base + v);
+    CxScore { score: score, cog_sub_s: c, size_sub_s: s, base_s: base, vow_bump_s: v }
+}
+
+// ---- Halstead operator/operand counting ----
+//
+// acc = [operator_seen_bitmask, N1 (total operators), N2 (total operands)].
+// `seen` accumulates canonical operand strings for the distinct count (n2).
+// Operator distinctness (n1) = popcount(acc[0]). Operator id assignment:
+//   binop kind 0..22 -> bit 0..22; unop 23+kind; call 25; index 26; field 27;
+//   method 28; cast 29; assign 30; if 31; while 32; for 33; loop 34; match 35;
+//   return 36; ? 37; break 38; continue 39.
+fn hal_op(acc: Vec<i64>, id: i64) {
+    acc[0] = acc[0] | (1 << id);
+    acc[1] = acc[1] + 1;
+}
+
+fn hal_operand(acc: Vec<i64>, seen: Vec<String>, canon: String) {
+    acc[2] = acc[2] + 1;
+    if !cx_seen_contains(seen, canon) {
+        seen.push(canon);
+    }
+}
+
+fn hal_block(a: AstArena, bid: i64, acc: Vec<i64>, seen: Vec<String>) {
+    if bid < 0 { return; }
+    let slid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, slid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, slid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            hal_expr(a, stmt_c(a, sid), acc, seen);
+        } else {
+            hal_expr(a, stmt_a(a, sid), acc, seen);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 { hal_expr(a, trail, acc, seen); }
+}
+
+fn hal_expr(a: AstArena, eid: i64, acc: Vec<i64>, seen: Vec<String>) {
+    if eid < 0 { return; }
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_IDENT() {
+        let nm: String = arena_str(a, expr_a(a, eid));
+        let c: String = String::from("v:");
+        c.push_str(nm);
+        hal_operand(acc, seen, c);
+        return;
+    }
+    if tag == EXPR_LIT_INT() {
+        let c: String = String::from("n:");
+        c.push_str(i64_to_string(expr_a(a, eid)));
+        hal_operand(acc, seen, c);
+        return;
+    }
+    if tag == EXPR_LIT_BOOL() {
+        let c: String = String::from("b:");
+        c.push_str(i64_to_string(expr_a(a, eid)));
+        hal_operand(acc, seen, c);
+        return;
+    }
+    if tag == EXPR_LIT_STR() {
+        let c: String = String::from("s:");
+        c.push_str(arena_str(a, expr_a(a, eid)));
+        hal_operand(acc, seen, c);
+        return;
+    }
+    if tag == EXPR_BINOP() {
+        hal_op(acc, expr_a(a, eid));
+        hal_expr(a, expr_b(a, eid), acc, seen);
+        hal_expr(a, expr_c(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_UNOP() {
+        hal_op(acc, 23 + expr_a(a, eid));
+        hal_expr(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_CALL() {
+        hal_op(acc, 25);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { hal_expr(a, list_get(a, args_lid, i), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_METHOD() {
+        hal_op(acc, 28);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        let args_lid: i64 = expr_c(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { hal_expr(a, list_get(a, args_lid, i), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_INDEX() {
+        hal_op(acc, 26);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_expr(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_FIELD() {
+        hal_op(acc, 27);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_CAST() {
+        hal_op(acc, 29);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_ASSIGN() {
+        hal_op(acc, 30);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_expr(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_IF() {
+        hal_op(acc, 31);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_block(a, expr_b(a, eid), acc, seen);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 { hal_expr(a, else_eid, acc, seen); }
+        return;
+    }
+    if tag == EXPR_WHILE() {
+        hal_op(acc, 32);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_block(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_FOR() {
+        hal_op(acc, 33);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        hal_block(a, expr_b(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        hal_op(acc, 34);
+        hal_block(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        hal_op(acc, 35);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_arms: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n_arms { hal_expr(a, list_get(a, arms_lid, i * 2 + 1), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_RETURN() {
+        hal_op(acc, 36);
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { hal_expr(a, v, acc, seen); }
+        return;
+    }
+    if tag == EXPR_QUESTION() {
+        hal_op(acc, 37);
+        hal_expr(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_BREAK() {
+        hal_op(acc, 38);
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { hal_expr(a, v, acc, seen); }
+        return;
+    }
+    if tag == EXPR_CONTINUE() { hal_op(acc, 39); return; }
+    if tag == EXPR_BLOCK() {
+        hal_block(a, expr_a(a, eid), acc, seen);
+        return;
+    }
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let nf: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < nf { hal_expr(a, list_get(a, fields_lid, i * 2 + 1), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n { hal_expr(a, list_get(a, args_lid, i), acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n { hal_expr(a, list_get(a, elems_lid, i), acc, seen); i = i + 1; }
+        return;
+    }
+}
+
+// Analyze a single AST function (by arena fid) into a CxFn record.
+// `src` is the raw source text, used for span -> line-number mapping.
+// `struct_names`/`struct_linear` are the module's struct definitions, for
+// counting linear-struct literals.
+fn cx_analyze_fn(a: AstArena, fid: i64, src: String, struct_names: Vec<String>, struct_linear: Vec<i64>) -> CxFn {
+    let name_sid: i64 = fn_name_sid(a, fid);
+    let nm: String = arena_str(a, name_sid);
+    let eff: i64 = fn_eff(a, fid);
+
+    let plid: i64 = fn_params_lid(a, fid);
+    let mut pc: i64 = 0;
+    if plid >= 0 {
+        // Each parameter occupies 3 list slots (name_sid, type_tid, mutable).
+        pc = list_len(a, plid) / 3;
+    }
+
+    // nloc: source lines spanned by the function. The packed span's length is
+    // clamped to 16 bits at parse time, so this is exact for any function body
+    // under 64KB (every real function); larger bodies under-count, which is
+    // documented and surfaced by the cross-compiler parity check.
+    let sp: i64 = fn_span(a, fid);
+    let start: i64 = span_unpack_start(sp);
+    let len: i64 = span_unpack_len(sp);
+    let first_line: i64 = diag_compute_line(src, start);
+    let last_line: i64 = diag_compute_line(src, start + len);
+    let nloc: i64 = last_line - first_line + 1;
+
+    let body_bid: i64 = fn_body_bid(a, fid);
+    let acc: Vec<i64> = Vec::new();
+    acc.push(0);
+    acc.push(0);
+    cx_walk_block(a, body_bid, acc);
+    let cyclomatic: i64 = acc[0] + 1;
+    let stmts: i64 = acc[1];
+
+    let cacc: Vec<i64> = Vec::new();
+    cacc.push(0);
+    cacc.push(0);
+    cacc.push(0);
+    cog_block(a, body_bid, 0, nm, cacc);
+    let mut cognitive: i64 = cacc[0];
+    if cacc[2] > 0 { cognitive = cognitive + 1; }
+    let max_nesting: i64 = cacc[1];
+
+    let hacc: Vec<i64> = Vec::new();
+    hacc.push(0);
+    hacc.push(0);
+    hacc.push(0);
+    let seen: Vec<String> = Vec::new();
+    hal_block(a, body_bid, hacc, seen);
+    let h_n1: i64 = cx_popcount(hacc[0]);
+    let h_bign1: i64 = hacc[1];
+    let h_bign2: i64 = hacc[2];
+    let h_n2: i64 = seen.len();
+    let h_vocab: i64 = h_n1 + h_n2;
+    let h_length: i64 = h_bign1 + h_bign2;
+    let h_volume_s: i64 = cx_sat(h_length * cx_log2_milli(h_vocab));
+    let mut h_difficulty_s: i64 = 0;
+    if h_n2 > 0 {
+        h_difficulty_s = cx_sat(h_n1 * h_bign2 * 500 / h_n2);
+    }
+    let h_effort_s: i64 = cx_sat(h_difficulty_s * h_volume_s / 1000);
+
+    let linear_values: i64 = cx_lv_block(a, body_bid, struct_names, struct_linear);
+
+    CxFn { name: nm, line: first_line, nloc: nloc, params: pc, stmts: stmts, tokens: h_length, cyclomatic: cyclomatic, cognitive: cognitive, max_nesting: max_nesting, eff: eff, linear_values: linear_values, h_n1: h_n1, h_n2: h_n2, h_bign1: h_bign1, h_bign2: h_bign2, h_vocab: h_vocab, h_length: h_length, h_volume_s: h_volume_s, h_difficulty_s: h_difficulty_s, h_effort_s: h_effort_s }
+}

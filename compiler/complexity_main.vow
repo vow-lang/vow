@@ -1,0 +1,426 @@
+module ComplexityMain
+
+use complexity
+use ast
+use frontend
+use diag
+use ir
+
+// Minimal JSON string escaper (function names/paths rarely need it, but be
+// safe). Kept local to avoid cross-module coupling with mutants_main.
+fn cx_json_escape(s: String) -> String {
+    let r: String = String::from("");
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b == 34 { r.push_byte(92); r.push_byte(34); }
+        else if b == 92 { r.push_byte(92); r.push_byte(92); }
+        else if b == 10 { r.push_byte(92); r.push_byte(110); }
+        else if b == 13 { r.push_byte(92); r.push_byte(114); }
+        else if b == 9  { r.push_byte(92); r.push_byte(116); }
+        else if b < 32  { r.push_byte(63); }
+        else { r.push_byte(b); }
+        i = i + 1;
+    }
+    r
+}
+
+fn cx_int_flag(argv: Vec<String>, name: String, dflt: i64) -> i64 {
+    let v: String = get_flag_arg(argv, name);
+    if v.len() == 0 { return dflt; }
+    parse_i64_default(v, dflt)
+}
+
+fn cx_flag_present(argv: Vec<String>, name: String) -> bool {
+    let n: i64 = argv.len();
+    let mut i: i64 = 1;
+    while i < n {
+        if argv[i] == name { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Fail closed on a malformed value for a value-taking flag: if the flag is
+// present but its value is missing or not a decimal integer, the gate would
+// otherwise silently fall back to its default (disabling an opt-in CI gate).
+// Returns true if OK (flag absent, or present with a valid integer value).
+fn cx_int_flag_ok(argv: Vec<String>, name: String) -> bool {
+    if !cx_flag_present(argv, name) { return true; }
+    let v: String = get_flag_arg(argv, name);
+    if v.len() == 0 { return false; }
+    is_decimal_int_literal(v)
+}
+
+// Look up an IR-derived per-function value by name (parallel name/value Vecs).
+// Returns -1 if the function has no IR (e.g. a body-less declaration).
+fn cx_ir_val_for(name: String, ir_names: Vec<String>, ir_vals: Vec<i64>) -> i64 {
+    let n: i64 = ir_names.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let nm: String = ir_names[i];
+        if nm == name { return ir_vals[i]; }
+        i = i + 1;
+    }
+    -1
+}
+
+// One fully-analyzed function: AST record + score + IR/contract extras.
+struct CxRow {
+    rec: CxFn,
+    sc: CxScore,
+    ex: CxExtra,
+}
+
+// Analyze a single function end to end. Extracted from run_complexity so the
+// driver stays small (and free of block-region allocations whose SSA placement
+// would otherwise diverge between the two compilers on this large function).
+fn cx_analyze_row(a: AstArena, fid: i64, src: String, struct_names: Vec<String>, struct_linear: Vec<i64>, cog_anchor: i64, nloc_anchor: i64, ir_names: Vec<String>, ir_cyclo: Vec<i64>, ir_effect_fanout: Vec<i64>, ir_consumes: Vec<i64>, ir_borrows: Vec<i64>) -> CxRow {
+    let rec: CxFn = cx_analyze_fn(a, fid, src, struct_names, struct_linear);
+    let rn: String = rec.name;
+    let cir: i64 = cx_ir_val_for(rn, ir_names, ir_cyclo);
+    let efo: i64 = cx_clamp0(cx_ir_val_for(rn, ir_names, ir_effect_fanout));
+    let lc: i64 = cx_clamp0(cx_ir_val_for(rn, ir_names, ir_consumes));
+    let lb: i64 = cx_clamp0(cx_ir_val_for(rn, ir_names, ir_borrows));
+    let ct: CxContract = cx_analyze_contract(a, fid);
+    let pcost: i64 = cx_contract_predicate_cost(ct);
+    let vf: CxVerif = cx_analyze_verif(a, fid, pcost);
+    let efb: i64 = cx_popcount(rec.eff);
+    let v: i64 = cx_vow_bump(efb, lc, pcost);
+    let sc: CxScore = cx_score(rec.cognitive, rec.nloc, cog_anchor, nloc_anchor, v);
+    let ex: CxExtra = CxExtra { cir: cir, effect_fanout: efo, linear_consumes: lc, linear_borrows: lb, ct: ct, vf: vf };
+    CxRow { rec: rec, sc: sc, ex: ex }
+}
+
+fn cx_has_eff(eff: i64, bit: i64) -> bool {
+    (eff / bit) % 2 != 0
+}
+
+// Emit the effects JSON array in canonical bit order (io,panic,read,unsafe,write).
+fn cx_emit_effects(out: String, eff: i64) {
+    out.push_str(String::from("["));
+    let mut ne: i64 = 0;
+    if cx_has_eff(eff, EFF_IO())     { out.push_str(String::from("\"io\"")); ne = ne + 1; }
+    if cx_has_eff(eff, EFF_PANIC())  { if ne > 0 { out.push_str(String::from(",")); } out.push_str(String::from("\"panic\"")); ne = ne + 1; }
+    if cx_has_eff(eff, EFF_READ())   { if ne > 0 { out.push_str(String::from(",")); } out.push_str(String::from("\"read\"")); ne = ne + 1; }
+    if cx_has_eff(eff, EFF_UNSAFE()) { if ne > 0 { out.push_str(String::from(",")); } out.push_str(String::from("\"unsafe\"")); ne = ne + 1; }
+    if cx_has_eff(eff, EFF_WRITE())  { if ne > 0 { out.push_str(String::from(",")); } out.push_str(String::from("\"write\"")); ne = ne + 1; }
+    out.push_str(String::from("]"));
+}
+
+// Append one function object (with score + score_factors) to `out`.
+fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, ex: CxExtra) {
+    out.push_str(String::from("{\"name\":\""));
+    let rn: String = rec.name;
+    out.push_str(cx_json_escape(rn));
+    out.push_str(String::from("\",\"line\":"));
+    out.push_str(i64_to_string(rec.line));
+    out.push_str(String::from(",\"complexity_score\":"));
+    out.push_str(i64_to_string(sc.score));
+    out.push_str(String::from(",\"score_factors\":{\"cognitive_sub\":"));
+    out.push_str(cx_fmt_fixed(sc.cog_sub_s));
+    out.push_str(String::from(",\"size_sub\":"));
+    out.push_str(cx_fmt_fixed(sc.size_sub_s));
+    out.push_str(String::from(",\"vow_bump\":"));
+    out.push_str(cx_fmt_fixed(sc.vow_bump_s));
+    out.push_str(String::from(",\"base\":"));
+    out.push_str(cx_fmt_fixed(sc.base_s));
+    out.push_str(String::from(",\"over_threshold\":"));
+    if sc.score > thr { out.push_str(String::from("true")); } else { out.push_str(String::from("false")); }
+    out.push_str(String::from("},\"size\":{\"nloc\":"));
+    out.push_str(i64_to_string(rec.nloc));
+    out.push_str(String::from(",\"tokens\":"));
+    out.push_str(i64_to_string(rec.tokens));
+    out.push_str(String::from(",\"stmts\":"));
+    out.push_str(i64_to_string(rec.stmts));
+    out.push_str(String::from(",\"params\":"));
+    out.push_str(i64_to_string(rec.params));
+    out.push_str(String::from("},\"structural\":{\"cyclomatic\":"));
+    out.push_str(i64_to_string(rec.cyclomatic));
+    out.push_str(String::from(",\"cyclomatic_ir\":"));
+    out.push_str(i64_to_string(ex.cir));
+    out.push_str(String::from(",\"cognitive\":"));
+    out.push_str(i64_to_string(rec.cognitive));
+    out.push_str(String::from(",\"max_nesting\":"));
+    out.push_str(i64_to_string(rec.max_nesting));
+    out.push_str(String::from(",\"halstead\":{\"n1\":"));
+    out.push_str(i64_to_string(rec.h_n1));
+    out.push_str(String::from(",\"n2\":"));
+    out.push_str(i64_to_string(rec.h_n2));
+    out.push_str(String::from(",\"N1\":"));
+    out.push_str(i64_to_string(rec.h_bign1));
+    out.push_str(String::from(",\"N2\":"));
+    out.push_str(i64_to_string(rec.h_bign2));
+    out.push_str(String::from(",\"vocabulary\":"));
+    out.push_str(i64_to_string(rec.h_vocab));
+    out.push_str(String::from(",\"length\":"));
+    out.push_str(i64_to_string(rec.h_length));
+    out.push_str(String::from(",\"volume\":"));
+    out.push_str(cx_fmt_fixed(rec.h_volume_s));
+    out.push_str(String::from(",\"difficulty\":"));
+    out.push_str(cx_fmt_fixed(rec.h_difficulty_s));
+    out.push_str(String::from(",\"effort\":"));
+    out.push_str(cx_fmt_fixed(rec.h_effort_s));
+    out.push_str(String::from("}},\"vow\":{\"tier\":\"experimental\",\"effects\":"));
+    cx_emit_effects(out, rec.eff);
+    out.push_str(String::from(",\"effect_breadth\":"));
+    out.push_str(i64_to_string(cx_popcount(rec.eff)));
+    out.push_str(String::from(",\"effect_fanout\":"));
+    out.push_str(i64_to_string(ex.effect_fanout));
+    out.push_str(String::from(",\"linear_values\":"));
+    out.push_str(i64_to_string(rec.linear_values));
+    out.push_str(String::from(",\"linear_consumes\":"));
+    out.push_str(i64_to_string(ex.linear_consumes));
+    out.push_str(String::from(",\"linear_borrows\":"));
+    out.push_str(i64_to_string(ex.linear_borrows));
+    let ct: CxContract = ex.ct;
+    out.push_str(String::from(",\"contract\":{\"requires\":"));
+    out.push_str(i64_to_string(ct.n_req));
+    out.push_str(String::from(",\"ensures\":"));
+    out.push_str(i64_to_string(ct.n_ens));
+    out.push_str(String::from(",\"invariants\":"));
+    out.push_str(i64_to_string(ct.n_inv));
+    out.push_str(String::from(",\"predicate_nodes\":"));
+    out.push_str(i64_to_string(ct.predicate_nodes));
+    out.push_str(String::from(",\"predicate_depth\":"));
+    out.push_str(i64_to_string(ct.predicate_depth));
+    out.push_str(String::from(",\"free_vars\":"));
+    out.push_str(i64_to_string(ct.free_vars));
+    out.push_str(String::from(",\"has_vec_quantification\":"));
+    if ct.has_vec_quant != 0 { out.push_str(String::from("true")); } else { out.push_str(String::from("false")); }
+    let vf: CxVerif = ex.vf;
+    out.push_str(String::from("}},\"verification\":{\"tier\":\"experimental\",\"loops_total\":"));
+    out.push_str(i64_to_string(vf.loops_total));
+    out.push_str(String::from(",\"loops_without_invariant\":"));
+    out.push_str(i64_to_string(vf.loops_without_invariant));
+    out.push_str(String::from(",\"max_loop_nesting\":"));
+    out.push_str(i64_to_string(vf.max_loop_nesting));
+    out.push_str(String::from(",\"contract_predicate_cost\":"));
+    out.push_str(i64_to_string(vf.contract_predicate_cost));
+    out.push_str(String::from("}}"));
+}
+
+fn run_complexity(argv: Vec<String>) -> i32 [io] {
+    // Fail closed on a malformed value-taking flag (mirrors the Rust CLI, which
+    // rejects non-integer values): a typo'd `--max-*` must not silently disable
+    // the opt-in CI gate.
+    if !cx_int_flag_ok(argv, String::from("--cog-anchor"))
+        || !cx_int_flag_ok(argv, String::from("--nloc-anchor"))
+        || !cx_int_flag_ok(argv, String::from("--max-score"))
+        || !cx_int_flag_ok(argv, String::from("--max-cognitive"))
+        || !cx_int_flag_ok(argv, String::from("--max-cyclomatic")) {
+        eprintln_str(String::from("vow complexity: invalid integer value for a --cog-anchor/--nloc-anchor/--max-* flag"));
+        return 1;
+    }
+    let cog_anchor: i64 = cx_int_flag(argv, String::from("--cog-anchor"), 15);
+    let nloc_anchor: i64 = cx_int_flag(argv, String::from("--nloc-anchor"), 60);
+    let max_score: i64 = cx_int_flag(argv, String::from("--max-score"), -1);
+    let max_cognitive: i64 = cx_int_flag(argv, String::from("--max-cognitive"), -1);
+    let max_cyclomatic: i64 = cx_int_flag(argv, String::from("--max-cyclomatic"), -1);
+    let mut thr: i64 = 80;
+    if max_score >= 0 { thr = max_score; }
+
+    let path: String = frontend_path_from_argv(argv, true);
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    diag_ctx_print_all(dctx);
+    let n_errors: i64 = checked.n_errors;
+    if n_errors > 0 {
+        eprintln_str(String::from("vow complexity: compile errors"));
+        return 1;
+    }
+    let src: String = fs_read(path);
+    let file_nloc: i64 = diag_compute_line(src, src.len());
+    let m: Module = fr.merged;
+    let a: AstArena = m.arena;
+    let items: Vec<i64> = m.items;
+    let item_files: Vec<String> = fr.item_files;
+    let n: i64 = items.len();
+
+    // Struct definitions (name -> is_linear) for linear-value counting.
+    let struct_names: Vec<String> = Vec::new();
+    let struct_linear: Vec<i64> = Vec::new();
+    let mut si: i64 = 0;
+    while si < n {
+        let it2: i64 = items[si];
+        if item_kind(it2) == ITEM_STRUCT() {
+            let sd: i64 = item_id(it2);
+            struct_names.push(arena_str(a, sdef_name_sid(a, sd)));
+            struct_linear.push(sdef_is_linear(a, sd));
+        }
+        si = si + 1;
+    }
+
+    // IR-derived per-function metrics, indexed by IR function (matched to AST
+    // functions by name): cyclomatic, linear consume/borrow counts, callee sets,
+    // effect bitsets.
+    let ir_mod: IrModule = fr.ir_mod;
+    let ir_funcs: Vec<IrFunction> = ir_mod.functions;
+    let nirf: i64 = ir_funcs.len();
+    let ir_names: Vec<String> = Vec::new();
+    let ir_cyclo: Vec<i64> = Vec::new();
+    let ir_consumes: Vec<i64> = Vec::new();
+    let ir_borrows: Vec<i64> = Vec::new();
+    let ir_callees: Vec<Vec<i64>> = Vec::new();
+    let ir_effects: Vec<i64> = Vec::new();
+    let mut x: i64 = 0;
+    while x < nirf {
+        let irf: IrFunction = ir_funcs[x];
+        let irn: String = irf.name;
+        ir_names.push(irn);
+        ir_cyclo.push(cx_cyclomatic_ir(irf));
+        ir_consumes.push(cx_fn_count_op(irf, IOP_LINEAR_CONSUME()));
+        ir_borrows.push(cx_fn_count_op(irf, IOP_LINEAR_BORROW()));
+        ir_callees.push(cx_fn_callees(irf));
+        ir_effects.push(irf.effects);
+        x = x + 1;
+    }
+    // fan-out = distinct callees; fan-in = callers (call-graph inversion);
+    // effect_fanout = distinct callees that are themselves effectful.
+    let ir_fanout: Vec<i64> = Vec::new();
+    let ir_fanin: Vec<i64> = Vec::new();
+    let ir_effect_fanout: Vec<i64> = Vec::new();
+    let mut z: i64 = 0;
+    while z < nirf {
+        let cs: Vec<i64> = ir_callees[z];
+        ir_fanout.push(cs.len());
+        // fan-in = in-file callers of function z. Callee ids equal IR-function
+        // array indices (the lowerer assigns FuncId(i) to the i-th function), so
+        // cx_vec_has(callees[w], z) means w calls z. Count only entry-file callers,
+        // matching the schema's in-file coupling semantics (a dependency calling an
+        // entry function must not inflate that function's fan_in).
+        let mut fin: i64 = 0;
+        let mut w: i64 = 0;
+        while w < nirf {
+            let wf: IrFunction = ir_funcs[w];
+            let csw: Vec<i64> = ir_callees[w];
+            if wf.source_file == path {
+                if cx_vec_has(csw, z) { fin = fin + 1; }
+            }
+            w = w + 1;
+        }
+        ir_fanin.push(fin);
+        let mut efo: i64 = 0;
+        let mut ci: i64 = 0;
+        let ncs: i64 = cs.len();
+        while ci < ncs {
+            let callee: i64 = cs[ci];
+            if callee >= 0 && callee < nirf {
+                if ir_effects[callee] != 0 { efo = efo + 1; }
+            }
+            ci = ci + 1;
+        }
+        ir_effect_fanout.push(efo);
+        z = z + 1;
+    }
+
+    // Pass 1: analyze + score every function; match IR metrics by name.
+    let rows: Vec<CxRow> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        let it: i64 = items[i];
+        if item_kind(it) == ITEM_FN() {
+            // Only report functions defined in the queried file; `use`d-dep
+            // functions have spans relative to their own source, so reporting
+            // them here would mis-map line/nloc.
+            let itf: String = item_files[i];
+            if itf == path {
+                rows.push(cx_analyze_row(a, item_id(it), src, struct_names, struct_linear, cog_anchor, nloc_anchor, ir_names, ir_cyclo, ir_effect_fanout, ir_consumes, ir_borrows));
+            }
+        }
+        i = i + 1;
+    }
+
+    // File-level aggregates + exit-gating.
+    let nf: i64 = rows.len();
+    let mut file_max: i64 = 0;
+    let mut over_count: i64 = 0;
+    let mut exit_code: i32 = 0;
+    let mut j: i64 = 0;
+    while j < nf {
+        let rowj: CxRow = rows[j];
+        let r: CxFn = rowj.rec;
+        let sc: CxScore = rowj.sc;
+        if sc.score > file_max { file_max = sc.score; }
+        if sc.score > thr { over_count = over_count + 1; }
+        if max_score >= 0 && sc.score > max_score { exit_code = 1; }
+        if max_cognitive >= 0 && r.cognitive > max_cognitive { exit_code = 1; }
+        if max_cyclomatic >= 0 && r.cyclomatic > max_cyclomatic { exit_code = 1; }
+        j = j + 1;
+    }
+
+    // Module-level coupling maxima, restricted to the entry file's reported
+    // functions (rows) — not all lowered IR functions — so a multi-module run
+    // can't attribute fan-in/out or Henry-Kafura to an imported helper.
+    let mut fan_in_max: i64 = 0;
+    let mut fan_out_max: i64 = 0;
+    let mut hk_max: i64 = 0;
+    let mut hi: i64 = 0;
+    while hi < nf {
+        let rowh: CxRow = rows[hi];
+        let hr: CxFn = rowh.rec;
+        let hrn: String = hr.name;
+        let fi: i64 = cx_clamp0(cx_ir_val_for(hrn, ir_names, ir_fanin));
+        let fo: i64 = cx_clamp0(cx_ir_val_for(hrn, ir_names, ir_fanout));
+        let hk: i64 = cx_henry_kafura(hr.nloc, fi, fo);
+        if hk > hk_max { hk_max = hk; }
+        if fi > fan_in_max { fan_in_max = fi; }
+        if fo > fan_out_max { fan_out_max = fo; }
+        hi = hi + 1;
+    }
+
+    // Pass 2: emit.
+    let out: String = String::from("{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"");
+    out.push_str(cx_json_escape(path));
+    out.push_str(String::from("\",\"complexity_score\":"));
+    out.push_str(i64_to_string(file_max));
+    out.push_str(String::from(",\"functions_over_threshold\":"));
+    out.push_str(i64_to_string(over_count));
+    out.push_str(String::from(",\"nloc\":"));
+    out.push_str(i64_to_string(file_nloc));
+    out.push_str(String::from(",\"functions\":["));
+    let mut k: i64 = 0;
+    while k < nf {
+        if k > 0 { out.push_str(String::from(",")); }
+        let rowk: CxRow = rows[k];
+        cx_emit_fn(out, rowk.rec, rowk.sc, thr, rowk.ex);
+        k = k + 1;
+    }
+    out.push_str(String::from("],\"module\":{\"tier\":\"experimental\",\"functions\":"));
+    out.push_str(i64_to_string(nf));
+    out.push_str(String::from(",\"fan_in_max\":"));
+    out.push_str(i64_to_string(fan_in_max));
+    out.push_str(String::from(",\"fan_out_max\":"));
+    out.push_str(i64_to_string(fan_out_max));
+    out.push_str(String::from(",\"henry_kafura_max\":"));
+    out.push_str(i64_to_string(hk_max));
+    out.push_str(String::from("}}],\"summary\":{\"functions\":"));
+    out.push_str(i64_to_string(nf));
+    out.push_str(String::from(",\"nloc_total\":"));
+    out.push_str(i64_to_string(file_nloc));
+    out.push_str(String::from(",\"threshold\":"));
+    out.push_str(i64_to_string(thr));
+    out.push_str(String::from(",\"functions_over_threshold\":"));
+    out.push_str(i64_to_string(over_count));
+    out.push_str(String::from(",\"thresholds_exceeded\":["));
+    let mut e: i64 = 0;
+    let mut emitted: i64 = 0;
+    while e < nf {
+        let rowe: CxRow = rows[e];
+        let sc: CxScore = rowe.sc;
+        if sc.score > thr {
+            if emitted > 0 { out.push_str(String::from(",")); }
+            out.push_str(String::from("\""));
+            let r: CxFn = rowe.rec;
+            out.push_str(cx_json_escape(r.name));
+            out.push_str(String::from("\""));
+            emitted = emitted + 1;
+        }
+        e = e + 1;
+    }
+    out.push_str(String::from("]}}\n"));
+    print_str(out);
+    exit_code
+}

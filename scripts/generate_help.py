@@ -296,6 +296,16 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
         contracts_options[key] = value
         contracts_option_entries.append(option)
 
+    complexity_opt_rows = extract_table(cli, "vow complexity", heading_level=3)
+    complexity_options: dict[str, str] = {}
+    complexity_option_entries: list[dict] = []
+    for row in complexity_opt_rows:
+        if len(row) < 3:
+            continue
+        key, value, option = normalize_option(row[0], row[1], row[2])
+        complexity_options[key] = value
+        complexity_option_entries.append(option)
+
     # --- Verification defaults ---
     # Collection model capacities (Vec/String/HashMap/BTreeMap) are deliberately
     # absent: they are internal verifier-model bounds, not language properties or
@@ -327,6 +337,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "counterexample": "schemas/counterexample.schema.json",
                 "mutants_result": "schemas/mutants-result.schema.json",
                 "test_result": "schemas/test-result.schema.json",
+                "complexity_result": "schemas/complexity-result.schema.json",
                 "vow_violation": "schemas/vow-violation.schema.json",
             },
         },
@@ -348,6 +359,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "decl": "Emit declaration file (.vow.d) with type signatures only",
             "contracts": "List all contracts with optional verification status",
             "skill": "Generate or install the Claude Code skill document for this compiler version",
+            "complexity": "Report per-function complexity metrics as deterministic, byte-identical JSON",
         },
         "command_details": {
             "build": {
@@ -441,12 +453,30 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                     "use --verify for per-contract ESBMC status",
                 ],
             },
+            "complexity": {
+                "status": "implemented",
+                "usage": "vow complexity [OPTIONS] <source.vow>",
+                "arguments": [
+                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                ],
+                "options": complexity_option_entries,
+                "stdout": {
+                    "format": "json",
+                    "schema_ref": "schemas/complexity-result.schema.json",
+                },
+                "notes": [
+                    "reports only functions defined in the queried entry file",
+                    "complexity_score is a readability / refactor-priority gate, not a defect predictor",
+                    "--max-score / --max-cognitive / --max-cyclomatic gates are opt-in; exit nonzero only when set",
+                ],
+            },
         },
         "build_options": build_options,
         "verify_options": verify_options,
         "test_options": test_options,
         "decl_options": decl_options,
         "contracts_options": contracts_options,
+        "complexity_options": complexity_options,
         "global_options": {
             "--help": "Emit versioned JSON tool-help data",
             "--help --human": "Emit legacy human-readable help (compatibility mode)",

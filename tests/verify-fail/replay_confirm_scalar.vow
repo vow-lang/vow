@@ -1,0 +1,23 @@
+// TEST: category callee-blame
+// TEST: counterexample-fn "pinned"
+// TEST: counterexample-blame callee
+// TEST: counterexample-vow-id 1
+// TEST: replay confirmed
+//
+// Counterexample-replay fixture (#335). `pinned`'s `requires: x == 3` forces
+// the verifier to pick x=3 for the counterexample, so reconstruction is
+// deterministic: the only renderable input is the scalar literal 3. The body
+// returns x=3, violating `ensures: result == 0` (vow_id 1, Callee blame).
+//
+// With `--replay-cex`, both compilers build a `--mode debug` harness that calls
+// `pinned(3)` and observe the runtime VowViolation fire with the same vow_id 1
+// and Callee blame -> replay "confirmed". No `fn main` here, so the self-hosted
+// compiler (which skips replay when the entry file defines main) also confirms.
+module ReplayConfirmScalar
+
+fn pinned(x: i64) -> i64 vow {
+  requires: x == 3,
+  ensures: result == 0
+} {
+  x
+}
