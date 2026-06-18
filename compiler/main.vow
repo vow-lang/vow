@@ -256,12 +256,14 @@ fn replay_ty_name(ty: i64) -> String {
 }
 
 fn replay_effects_suffix(effects: i64) -> String {
+    // Canonical (alphabetical) effect order, per CLAUDE.md, so the synthesized
+    // `fn main()` annotation matches the printer/type-checker's expected form.
     let parts: Vec<String> = Vec::new();
     if (effects & EFF_IO()) != 0 { parts.push(String::from("io")); }
-    if (effects & EFF_READ()) != 0 { parts.push(String::from("read")); }
-    if (effects & EFF_WRITE()) != 0 { parts.push(String::from("write")); }
     if (effects & EFF_PANIC()) != 0 { parts.push(String::from("panic")); }
+    if (effects & EFF_READ()) != 0 { parts.push(String::from("read")); }
     if (effects & EFF_UNSAFE()) != 0 { parts.push(String::from("unsafe")); }
+    if (effects & EFF_WRITE()) != 0 { parts.push(String::from("write")); }
     if parts.len() == 0 { return String::from(""); }
     let s: String = String::from(" [");
     let mut i: i64 = 0;
@@ -349,6 +351,11 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     if ce.function == String::from("main") {
         return replay_skip(String::from("cannot replay the entry function `main`"));
     }
+    // Synthetic verifier-only ids never match a runtime-emitted vow_id, so an
+    // exact id comparison would always diverge — skip them.
+    if ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() {
+        return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op sentinel)"));
+    }
     let fi: i64 = replay_find_fn(fns, ce.function);
     if fi < 0 {
         return replay_skip(str3(String::from("no IR for function `"), ce.function, String::from("`")));
@@ -411,9 +418,18 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     harness.push_str(String::from("}\n"));
 
     let dir: String = replay_dir_of(path);
-    let tag: String = str3(String::from("__vow_replay_"), i64_to_str(ce.vow_id), String::from(""));
-    let harness_path: String = str4(dir, tag, String::from(""), String::from(".vow"));
+    // Tag by function + vow_id so two functions sharing a (per-function-local)
+    // vow_id do not collide within one run.
+    let tag: String = str4(String::from("__vow_replay_"), ce.function, String::from("_"), i64_to_str(ce.vow_id));
+    let harness_path: String = str3(dir, tag, String::from(".vow"));
     let bin_path: String = str2(dir, tag);
+    let oext: String = str2(bin_path, String::from(".o"));
+
+    // Never overwrite an existing file in the source tree — a collision with a
+    // user file would otherwise be silently clobbered and then deleted.
+    if fs_exists(harness_path) != 0 || fs_exists(bin_path) != 0 {
+        return replay_skip(String::from("replay: temp path already exists; not overwriting"));
+    }
 
     if fs_write(harness_path, harness) != 0 {
         return replay_skip(String::from("replay: could not write harness"));
@@ -429,7 +445,6 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     bargs.push(bin_path);
     let brc: i64 = process_run(argv0, bargs);
 
-    let oext: String = str2(bin_path, String::from(".o"));
     if brc != 0 {
         fs_remove(harness_path);
         fs_remove(bin_path);
@@ -437,23 +452,68 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
         return replay_skip(String::from("replay: harness did not compile"));
     }
 
+    // Run the harness with a bounded timeout: a replayed function could loop
+    // forever (the very drift being tested), and an unbounded wait would hang
+    // `verify --replay-cex` instead of returning the original VerifyFailed JSON.
     let runargs: Vec<String> = Vec::new();
-    let rrc: i64 = process_run(bin_path, runargs);
-    let err: String = process_get_stderr();
+    let pid: i64 = process_start(bin_path, runargs);
+    if pid < 0 {
+        fs_remove(harness_path);
+        fs_remove(bin_path);
+        fs_remove(oext);
+        return replay_skip(String::from("replay: harness failed to start"));
+    }
+    let rrc: i64 = process_wait_timeout(pid, 10000);
+    let timed_out: bool = rrc == -2;
+    let err: String = {
+        if timed_out {
+            process_kill(pid);
+            String::from("")
+        } else {
+            process_stderr_for(pid)
+        }
+    };
 
     fs_remove(harness_path);
     fs_remove(bin_path);
     fs_remove(oext);
 
+    if timed_out {
+        return replay_skip(String::from("replay: harness timed out"));
+    }
+
+    // Confirm only if a SINGLE VowViolation line carries both the predicted
+    // vow_id and blame — a substring scan over all of stderr could otherwise
+    // splice a vow_id and blame from two different lines into a false confirm.
+    let viol: String = replay_find_violation_line(err);
     let vowid_needle: String = str3(String::from("\"vow_id\":"), i64_to_str(ce.vow_id), String::from(","));
     let blame_needle: String = str3(String::from("\"blame\":\""), replay_blame_runtime_name(ce.blame), String::from("\""));
-    if err.contains(vowid_needle) && err.contains(blame_needle) {
+    if viol.len() > 0 && viol.contains(vowid_needle) && viol.contains(blame_needle) {
         return ReplayVerdict { status: String::from("confirmed"), reason: String::from("") };
     }
     if rrc == 0 {
         return replay_diverge(String::from("harness exited cleanly; no VowViolation fired at runtime"));
     }
     replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"))
+}
+
+// First stderr line containing the VowViolation marker, or "" if none. Used so
+// the confirm check reads vow_id and blame from one JSON object.
+fn replay_find_violation_line(err: String) -> String {
+    let n: i64 = err.len();
+    let mut start: i64 = 0;
+    let mut i: i64 = 0;
+    while i <= n {
+        if i == n || err.byte_at(i) == 10 {
+            let line: String = err.substring(start, i);
+            if line.contains(String::from("\"error\":\"VowViolation\"")) {
+                return line;
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    String::from("")
 }
 
 fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: String) -> Vec<VerifyCE> [io] {
@@ -1039,16 +1099,20 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else if any_skipped == 1 { String::from("Skipped") }
         else { String::from("Verified") }
     };
+    let mut ces_final: Vec<VerifyCE> = ces;
+    if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
+        ces_final = replay_all(ces_final, fns, path, argv[0]);
+    }
     let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
     let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
     let mut vf_func: String = String::from("");
     let mut vf_ce: String = String::from("");
     if status_str == String::from("VerifyFailed") {
-        let legacy: Vec<String> = vf_legacy_fields(ces, soft_meta);
+        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta);
         vf_func = legacy[0];
         vf_ce = legacy[1];
     }
-    diag_emit_build_verify_json_full(status_str, out, dctx, ces, vstatus, vmsg, vf_func, vf_ce);
+    diag_emit_build_verify_json_full(status_str, out, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if all_proven == 0 || any_skipped == 1 {
         return 1;
     }

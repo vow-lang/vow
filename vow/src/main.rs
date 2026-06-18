@@ -10380,8 +10380,12 @@ fn parse_vow_violation_line(line: &str) -> Option<(u32, String)> {
 }
 
 /// Classify a finished harness run against the counterexample's prediction.
-fn classify_replay_run(out: &std::process::Output, ce: &StructuredCounterexample) -> ReplayOutcome {
-    let stderr = String::from_utf8_lossy(&out.stderr);
+fn classify_replay_run(
+    success: bool,
+    code: Option<i32>,
+    stderr: &str,
+    ce: &StructuredCounterexample,
+) -> ReplayOutcome {
     match stderr.lines().find_map(parse_vow_violation_line) {
         Some((vid, blame)) => {
             if vid == ce.vow_id && blame.eq_ignore_ascii_case(&ce.blame) {
@@ -10396,12 +10400,11 @@ fn classify_replay_run(out: &std::process::Output, ce: &StructuredCounterexample
                 ))
             }
         }
-        None if out.status.success() => {
+        None if success => {
             replay_diverge("harness exited cleanly; no VowViolation fired at runtime".to_string())
         }
         None => replay_diverge(format!(
-            "harness exited with status {:?} but emitted no VowViolation",
-            out.status.code()
+            "harness exited with status {code:?} but emitted no VowViolation"
         )),
     }
 }
@@ -10452,12 +10455,51 @@ fn compile_and_run_replay(
         return replay_skip(format!("replay: harness did not compile ({msg})"));
     }
 
-    let outcome = match std::process::Command::new(&bin_path).output() {
-        Ok(out) => classify_replay_run(&out, ce),
-        Err(e) => replay_skip(format!("replay: harness failed to execute: {e}")),
+    // Run the harness with a bounded timeout: a replayed function could loop
+    // forever (the very drift being tested), and an unbounded wait would hang
+    // `verify --replay-cex` instead of returning the original VerifyFailed JSON.
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let mut child = match std::process::Command::new(&bin_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            cleanup();
+            return replay_skip(format!("replay: harness failed to execute: {e}"));
+        }
     };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                cleanup();
+                return replay_skip(format!("replay: error waiting on harness: {e}"));
+            }
+        }
+    };
+    let mut stderr = String::new();
+    if let Some(mut es) = child.stderr.take() {
+        let _ = es.read_to_string(&mut stderr);
+    }
     cleanup();
-    outcome
+    match status {
+        None => replay_skip("replay: harness timed out".to_string()),
+        Some(s) => classify_replay_run(s.success(), s.code(), &stderr, ce),
+    }
 }
 
 /// Replay a single counterexample end to end.
@@ -10471,6 +10513,15 @@ fn replay_one(
     use vow_syntax::ast::Item;
     if ce.function == "main" {
         return replay_skip("cannot replay the entry function `main`".to_string());
+    }
+    // Synthetic verifier-only ids (caller-precondition / unsupported-op
+    // sentinels) never match a runtime-emitted vow_id, so an exact id comparison
+    // would always diverge — skip them.
+    if ce.vow_id == CALLER_PRECONDITION_VOW_ID || ce.vow_id == UNSUPPORTED_OP_VOW_ID {
+        return replay_skip(
+            "replay: synthetic counterexample id (caller-precondition / unsupported-op sentinel)"
+                .to_string(),
+        );
     }
     let Some(ast_fn) = ast_module.items.iter().find_map(|it| match it {
         Item::Fn(f) if f.name == ce.function => Some(f),
