@@ -213,7 +213,7 @@ fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
 }
 
 use crate::emit_frontend_diagnostics;
-use crate::frontend::{prepare_frontend, FrontendGoal};
+use crate::frontend::{FrontendGoal, prepare_frontend};
 
 // Structural counts accumulated by the AST walk. Mirrors the self-hosted
 // `cx_walk_*` (compiler/complexity.vow) handled-kind set exactly so the JSON
@@ -894,11 +894,7 @@ fn cx_soft_or(c: i64, s: i64) -> i64 {
 
 fn cx_round_0_100(val_scaled: i64) -> i64 {
     let r = (val_scaled * 100 + 500) / 1000;
-    if r > 100 {
-        100
-    } else {
-        r
-    }
+    if r > 100 { 100 } else { r }
 }
 
 fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64) -> CxScore {
@@ -919,11 +915,7 @@ fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64
 const CX_SAT: i64 = 2_000_000_000;
 
 fn cx_sat(x: i64) -> i64 {
-    if x > CX_SAT {
-        CX_SAT
-    } else {
-        x
-    }
+    if x > CX_SAT { CX_SAT } else { x }
 }
 
 fn cx_log2_milli(n: i64) -> i64 {
