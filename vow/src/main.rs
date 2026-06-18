@@ -2,6 +2,7 @@ mod cache;
 mod complexity;
 mod frontend;
 mod module_loader;
+mod perfetto;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -132,6 +133,8 @@ struct Args {
     #[arg(long)]
     replay_cex: bool,
     #[arg(long)]
+    perfetto: Option<PathBuf>,
+    #[arg(long)]
     help: bool,
     #[arg(long)]
     human: bool,
@@ -187,6 +190,8 @@ struct BuildArgs {
     #[arg(long)]
     replay_cex: bool,
     #[arg(long)]
+    perfetto: Option<PathBuf>,
+    #[arg(long)]
     help: bool,
     #[arg(long)]
     human: bool,
@@ -212,6 +217,8 @@ struct VerifyArgs {
     timeout: Option<u32>,
     #[arg(long)]
     verify_jobs: Option<u32>,
+    #[arg(long)]
+    perfetto: Option<PathBuf>,
     /// Differential-test counterexamples against runtime semantics (issue #335).
     #[arg(long)]
     replay_cex: bool,
@@ -532,6 +539,13 @@ fn skill_json() -> String {
           "description": "Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)",
           "long": "--replay-cex",
           "value_kind": "flag"
+        },
+        {
+          "form": "--perfetto <path>",
+          "description": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only).",
+          "long": "--perfetto",
+          "value_name": "path",
+          "value_kind": "string"
         }
       ],
       "stdout": {
@@ -627,6 +641,13 @@ fn skill_json() -> String {
           "description": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
           "long": "--replay-cex",
           "value_kind": "flag"
+        },
+        {
+          "form": "--perfetto <path>",
+          "description": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only).",
+          "long": "--perfetto",
+          "value_name": "path",
+          "value_kind": "string"
         }
       ],
       "stdout": {
@@ -906,7 +927,8 @@ fn skill_json() -> String {
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
     "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
-    "--replay-cex": "Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)"
+    "--replay-cex": "Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)",
+    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only)."
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
@@ -915,7 +937,8 @@ fn skill_json() -> String {
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
     "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
-    "--replay-cex": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build."
+    "--replay-cex": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
+    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only)."
   },
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
@@ -1320,6 +1343,7 @@ BUILD OPTIONS
   --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
   --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
   --replay-cex            Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)
+  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only).
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
@@ -1329,6 +1353,7 @@ VERIFY OPTIONS
   --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
   --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
   --replay-cex            Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by vow build.
+  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only).
 
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
@@ -2560,6 +2585,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 | `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
@@ -2582,6 +2608,7 @@ vow verify [OPTIONS] <source.vow>
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 | `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |
 
 ### `vow contracts`
 
@@ -6620,6 +6647,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 | `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
@@ -6642,6 +6670,7 @@ vow verify [OPTIONS] <source.vow>
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 | `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |
 
 ### `vow contracts`
 
@@ -11173,8 +11202,11 @@ fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
     }
 }
 
-fn compile_frontend(source: &Path) -> Result<FrontendBundle, Box<BuildOutput>> {
-    compile_frontend_with_root(source, None)
+fn compile_frontend(
+    source: &Path,
+    prof: Option<&perfetto::Profiler>,
+) -> Result<FrontendBundle, Box<BuildOutput>> {
+    compile_frontend_with_root(source, None, prof)
 }
 
 /// Same as `compile_frontend`, but resolves `use` declarations against
@@ -11183,8 +11215,9 @@ fn compile_frontend(source: &Path) -> Result<FrontendBundle, Box<BuildOutput>> {
 fn compile_frontend_with_root(
     source: &Path,
     module_root: Option<&Path>,
+    prof: Option<&perfetto::Profiler>,
 ) -> Result<FrontendBundle, Box<BuildOutput>> {
-    match prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr) {
+    match prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr, prof) {
         Ok(bundle) => {
             emit_frontend_diagnostics(bundle.diagnostics());
             Ok(bundle)
@@ -11324,6 +11357,45 @@ fn verify_one_function(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Record one per-function ESBMC proof as a span on its worker thread track,
+/// plus a flow arrow from the verification handoff origin to the proof start.
+/// No-op when profiling is off.
+fn record_proof_span(
+    prof: Option<&perfetto::Profiler>,
+    verify_start: u64,
+    idx: usize,
+    name: &str,
+    tid: u64,
+    start_us: u64,
+) {
+    let Some(p) = prof else { return };
+    p.flow(
+        "verify->esbmc",
+        perfetto::PID_COMPILER,
+        perfetto::TID_VERIFY_DRIVER,
+        verify_start,
+        idx as u64,
+        perfetto::FlowEdge::Start,
+    );
+    p.flow(
+        "verify->esbmc",
+        perfetto::PID_COMPILER,
+        tid,
+        start_us,
+        idx as u64,
+        perfetto::FlowEdge::End,
+    );
+    p.span(
+        &format!("esbmc:{name}"),
+        perfetto::PID_COMPILER,
+        tid,
+        start_us,
+        p.now_us().saturating_sub(start_us),
+        vec![("function".to_string(), name.to_string())],
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_verification_sync(
     ir_module: &vow_ir::Module,
     file: &str,
@@ -11332,6 +11404,7 @@ fn run_verification_sync(
     limits: &VerifyLimits,
     jobs: usize,
     config: &SolverConfig,
+    prof: Option<&perfetto::Profiler>,
 ) -> (VerifyOutcome, Vec<SkippedFunction>) {
     let const_fns = detect_constant_functions(ir_module);
 
@@ -11345,11 +11418,15 @@ fn run_verification_sync(
         return (VerifyOutcome::Proven, Vec::new());
     }
 
+    // Handoff origin: a flow arrow runs from here to each per-function proof.
+    let verify_start = prof.map(|p| p.now_us()).unwrap_or(0);
+
     let jobs = jobs.max(1).min(vowed.len());
     if jobs == 1 {
         let mut skipped = Vec::new();
-        for func in &vowed {
-            match verify_one_function(
+        for (idx, func) in vowed.iter().enumerate() {
+            let proof_start = prof.map(|p| p.now_us()).unwrap_or(0);
+            let result = verify_one_function(
                 func,
                 ir_module,
                 &const_fns,
@@ -11358,7 +11435,16 @@ fn run_verification_sync(
                 verify_cache,
                 limits,
                 config,
-            ) {
+            );
+            record_proof_span(
+                prof,
+                verify_start,
+                idx,
+                &func.name,
+                perfetto::TID_VERIFY_DRIVER,
+                proof_start,
+            );
+            match result {
                 PerFuncResult::Ok => {}
                 PerFuncResult::Skipped(s) => skipped.push(s),
                 PerFuncResult::Halt(out) => return (out, skipped),
@@ -11381,13 +11467,14 @@ fn run_verification_sync(
         StdMutex::new((0..vowed.len()).map(|_| None).collect());
 
     thread::scope(|scope| {
-        for _ in 0..jobs {
+        for w in 0..jobs {
             let next = &next;
             let stop = &stop;
             let halts = &halts;
             let skipped_acc = &skipped_acc;
             let vowed = &vowed;
             let const_fns = &const_fns;
+            let worker_tid = perfetto::TID_WORKER_BASE + w as u64;
             scope.spawn(move || {
                 loop {
                     if stop.load(Ordering::Acquire) {
@@ -11401,7 +11488,8 @@ fn run_verification_sync(
                     // its true verdict — otherwise lowest-index halt reporting
                     // becomes timing-dependent. The pre-check already avoids claims
                     // in the common post-halt case.
-                    match verify_one_function(
+                    let proof_start = prof.map(|p| p.now_us()).unwrap_or(0);
+                    let result = verify_one_function(
                         vowed[idx],
                         ir_module,
                         const_fns,
@@ -11410,7 +11498,16 @@ fn run_verification_sync(
                         verify_cache,
                         limits,
                         config,
-                    ) {
+                    );
+                    record_proof_span(
+                        prof,
+                        verify_start,
+                        idx,
+                        &vowed[idx].name,
+                        worker_tid,
+                        proof_start,
+                    );
+                    match result {
                         PerFuncResult::Ok => {}
                         PerFuncResult::Skipped(s) => {
                             let mut guard =
@@ -11649,17 +11746,26 @@ fn verify_outcome_to_output_with_skipped(
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
     let limits = VerifyLimits::default();
-    run_verify_only_inner(source, false, &limits, 1, &SolverConfig::default_config())
+    run_verify_only_inner(
+        source,
+        false,
+        &limits,
+        1,
+        &SolverConfig::default_config(),
+        None,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_verify_only_inner(
     source: &Path,
     no_cache: bool,
     limits: &VerifyLimits,
     jobs: usize,
     config: &SolverConfig,
+    prof: Option<&perfetto::Profiler>,
 ) -> BuildOutput {
-    let frontend = match compile_frontend(source) {
+    let frontend = match compile_frontend(source, prof) {
         Ok(f) => f,
         Err(output) => return *output,
     };
@@ -11683,6 +11789,7 @@ fn run_verify_only_inner(
         limits,
         jobs,
         config,
+        prof,
     );
     verify_outcome_to_output_with_skipped(outcome, all_diagnostics, &skipped, None)
 }
@@ -11733,6 +11840,7 @@ pub fn run_pipeline(
         &limits,
         1,
         &SolverConfig::default_config(),
+        None,
     )
 }
 
@@ -11748,14 +11856,16 @@ fn run_pipeline_inner(
     limits: &VerifyLimits,
     jobs: usize,
     config: &SolverConfig,
+    prof: Option<&perfetto::Profiler>,
 ) -> BuildOutput {
-    let frontend = match compile_frontend(source) {
+    let frontend = match compile_frontend(source, prof) {
         Ok(f) => f,
         Err(output) => return *output,
     };
 
     run_pipeline_from_frontend(
         frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, limits, jobs, config,
+        prof,
     )
 }
 
@@ -11797,6 +11907,7 @@ fn run_pipeline_from_frontend(
     limits: &VerifyLimits,
     jobs: usize,
     config: &SolverConfig,
+    prof: Option<&perfetto::Profiler>,
 ) -> BuildOutput {
     // Consume the frontend bundle immediately so the AST `Module` field can
     // be dropped before codegen + verify start. The `deps` manifest survives
@@ -11841,25 +11952,42 @@ fn run_pipeline_from_frontend(
     };
     let verify_limits = *limits;
     let verify_config = *config;
+    // Owned clone (Arc-backed) moved into the verify thread so it can record
+    // proof spans on its own track; the synchronous side keeps `prof`.
+    let verify_prof = prof.cloned();
     let verify_handle = thread::spawn(move || -> (VerifyOutcome, Vec<SkippedFunction>) {
-        if no_verify {
-            return (VerifyOutcome::NotRun, Vec::new());
+        let driver_start = verify_prof.as_ref().map(|p| p.now_us()).unwrap_or(0);
+        let result = if no_verify {
+            (VerifyOutcome::NotRun, Vec::new())
+        } else {
+            // Test-only fault injection: simulate a verifier-worker crash so the
+            // fail-closed JoinError path (#413) is exercised end-to-end. Guarded
+            // by an env var that is never set in production; one lookup per build.
+            if std::env::var_os("VOW_TEST_VERIFIER_PANIC").is_some() {
+                panic!("injected verifier panic (VOW_TEST_VERIFIER_PANIC)");
+            }
+            run_verification_sync(
+                &module_for_verify,
+                &file_for_verify,
+                &call_site_index,
+                verify_cache.as_ref(),
+                &verify_limits,
+                jobs,
+                &verify_config,
+                verify_prof.as_ref(),
+            )
+        };
+        if let Some(p) = verify_prof.as_ref() {
+            p.span(
+                "verification",
+                perfetto::PID_COMPILER,
+                perfetto::TID_VERIFY_DRIVER,
+                driver_start,
+                p.now_us().saturating_sub(driver_start),
+                vec![],
+            );
         }
-        // Test-only fault injection: simulate a verifier-worker crash so the
-        // fail-closed JoinError path (#413) is exercised end-to-end. Guarded by
-        // an env var that is never set in production; one lookup per build.
-        if std::env::var_os("VOW_TEST_VERIFIER_PANIC").is_some() {
-            panic!("injected verifier panic (VOW_TEST_VERIFIER_PANIC)");
-        }
-        run_verification_sync(
-            &module_for_verify,
-            &file_for_verify,
-            &call_site_index,
-            verify_cache.as_ref(),
-            &verify_limits,
-            jobs,
-            &verify_config,
-        )
+        result
     });
 
     let output_path = output.map(|p| p.to_path_buf()).unwrap_or_else(|| {
@@ -11890,6 +12018,20 @@ fn run_pipeline_from_frontend(
         && let Some(cached_obj) = cc.lookup(key)
         && std::fs::copy(&cached_obj, &obj_path).is_ok()
     {
+        // Codegen was skipped (object cache hit). Mark it so a loaded trace's
+        // empty codegen region is not mistaken for missing instrumentation.
+        if let Some(p) = prof {
+            let t = p.now_us();
+            p.span(
+                "codegen:cache-hit",
+                perfetto::PID_COMPILER,
+                perfetto::TID_MAIN,
+                t,
+                0,
+                vec![],
+            );
+        }
+        let link_start = prof.map(|p| p.now_us()).unwrap_or(0);
         let exe_path = match link_obj(&obj_path, &output_path) {
             Ok(p) => Some(p),
             Err(message) => {
@@ -11904,6 +12046,16 @@ fn run_pipeline_from_frontend(
                 };
             }
         };
+        if let Some(p) = prof {
+            p.span(
+                "link",
+                perfetto::PID_COMPILER,
+                perfetto::TID_MAIN,
+                link_start,
+                p.now_us().saturating_sub(link_start),
+                vec![],
+            );
+        }
         let (verify_outcome, skipped) = match verify_handle.join() {
             Ok(result) => result,
             Err(_) => return verifier_panicked_output(all_diagnostics, exe_path),
@@ -11917,6 +12069,7 @@ fn run_pipeline_from_frontend(
     }
 
     // Codegen
+    let codegen_start = prof.map(|p| p.now_us()).unwrap_or(0);
     let backend = CraneliftBackend::new();
     let compiled = match backend.compile_module(&ir_module, mode, trace) {
         Ok(c) => c,
@@ -11953,6 +12106,17 @@ fn run_pipeline_from_frontend(
         };
     }
 
+    if let Some(p) = prof {
+        p.span(
+            "codegen",
+            perfetto::PID_COMPILER,
+            perfetto::TID_MAIN,
+            codegen_start,
+            p.now_us().saturating_sub(codegen_start),
+            vec![],
+        );
+    }
+
     // Store in cache
     if let Some(ref cc) = compile_cache
         && let Some(ref key) = cache_key
@@ -11960,6 +12124,7 @@ fn run_pipeline_from_frontend(
         cc.store(key, &obj_path);
     }
 
+    let link_start = prof.map(|p| p.now_us()).unwrap_or(0);
     let exe_path = match link_obj(&obj_path, &output_path) {
         Ok(p) => Some(p),
         Err(message) => {
@@ -11974,6 +12139,16 @@ fn run_pipeline_from_frontend(
             };
         }
     };
+    if let Some(p) = prof {
+        p.span(
+            "link",
+            perfetto::PID_COMPILER,
+            perfetto::TID_MAIN,
+            link_start,
+            p.now_us().saturating_sub(link_start),
+            vec![],
+        );
+    }
 
     let (verify_outcome, skipped) = match verify_handle.join() {
         Ok(result) => result,
@@ -12115,7 +12290,7 @@ fn run_test_command(
             .unwrap_or_default();
 
         // Compile frontend once — extract density before codegen
-        let frontend = match compile_frontend_with_root(test_file, module_root) {
+        let frontend = match compile_frontend_with_root(test_file, module_root, None) {
             Ok(f) => f,
             Err(output) => {
                 let diagnostics: Vec<DiagnosticJson> = output
@@ -12159,6 +12334,7 @@ fn run_test_command(
             limits,
             jobs,
             &SolverConfig::default_config(),
+            None,
         );
 
         let diagnostics: Vec<DiagnosticJson> = result
@@ -12378,6 +12554,40 @@ fn resolve_verify_jobs(opt: Option<u32>) -> usize {
     }
 }
 
+/// Lifecycle for a `--perfetto` profiling run: holds the profiler, starts a
+/// background resource sampler, and writes the gzipped trace on `finish()`. The
+/// trace is a pure side artifact — it is produced only after the pipeline has
+/// fully returned, so it cannot perturb codegen, the build JSON, or any cache.
+struct PerfettoSession {
+    prof: perfetto::Profiler,
+    sampler: Option<perfetto::ResourceSampler>,
+    path: PathBuf,
+}
+
+impl PerfettoSession {
+    fn start(path: &Path) -> Self {
+        let prof = perfetto::Profiler::new();
+        let sampler = Some(prof.start_sampler(std::time::Duration::from_millis(25)));
+        PerfettoSession {
+            prof,
+            sampler,
+            path: path.to_path_buf(),
+        }
+    }
+
+    fn finish(mut self) {
+        if let Some(s) = self.sampler.take() {
+            s.stop();
+        }
+        if let Err(e) = perfetto::write_trace_gz(&self.prof.snapshot(), &self.path) {
+            eprintln!(
+                "warning: failed to write perfetto trace to {}: {e}",
+                self.path.display()
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_build_command(
     source: &Path,
@@ -12391,12 +12601,27 @@ fn run_build_command(
     jobs: usize,
     config: &SolverConfig,
     replay_cex: bool,
+    perfetto_path: Option<&Path>,
 ) {
+    let session = perfetto_path.map(PerfettoSession::start);
     let mut result = run_pipeline_inner(
-        source, output, mode, no_verify, dump_ir, trace, no_cache, limits, jobs, config,
+        source,
+        output,
+        mode,
+        no_verify,
+        dump_ir,
+        trace,
+        no_cache,
+        limits,
+        jobs,
+        config,
+        session.as_ref().map(|s| &s.prof),
     );
     if replay_cex && !no_verify && !dump_ir {
         run_replay_cex(source, &mut result);
+    }
+    if let Some(session) = session {
+        session.finish();
     }
     if !dump_ir {
         result.emit_json();
@@ -12451,10 +12676,22 @@ fn run_verify_command(
     jobs: usize,
     config: &SolverConfig,
     replay_cex: bool,
+    perfetto_path: Option<&Path>,
 ) {
-    let mut result = run_verify_only_inner(source, no_cache, limits, jobs, config);
+    let session = perfetto_path.map(PerfettoSession::start);
+    let mut result = run_verify_only_inner(
+        source,
+        no_cache,
+        limits,
+        jobs,
+        config,
+        session.as_ref().map(|s| &s.prof),
+    );
     if replay_cex {
         run_replay_cex(source, &mut result);
+    }
+    if let Some(session) = session {
+        session.finish();
     }
     result.emit_json();
     if matches!(
@@ -12721,7 +12958,7 @@ fn run_contracts_command(
     limits: &VerifyLimits,
     config: &SolverConfig,
 ) {
-    let frontend = match compile_frontend(source) {
+    let frontend = match compile_frontend(source, None) {
         Ok(f) => f,
         Err(output) => {
             output.emit_json();
@@ -12846,6 +13083,7 @@ fn main() {
                 jobs,
                 &bconfig,
                 b.replay_cex,
+                b.perfetto.as_deref(),
             );
         }
         Some(Command::Verify(v)) => {
@@ -12870,7 +13108,15 @@ fn main() {
             };
             let jobs = resolve_verify_jobs(v.verify_jobs);
             let config = make_solver_config(v.solver, v.encoding, v.timeout);
-            run_verify_command(&source, v.no_cache, &limits, jobs, &config, v.replay_cex);
+            run_verify_command(
+                &source,
+                v.no_cache,
+                &limits,
+                jobs,
+                &config,
+                v.replay_cex,
+                v.perfetto.as_deref(),
+            );
         }
         Some(Command::Test(t)) => {
             if t.help {
@@ -13059,6 +13305,7 @@ fn main() {
                 jobs,
                 &config,
                 args.replay_cex,
+                args.perfetto.as_deref(),
             );
         }
     }
@@ -15771,8 +16018,14 @@ fn main() -> i32 {
         let source = write_source(&dir, "multi.vow", src);
         let limits = VerifyLimits::default();
         // jobs=4 with 4 vowed functions forces the threaded path.
-        let result =
-            run_verify_only_inner(&source, true, &limits, 4, &SolverConfig::default_config());
+        let result = run_verify_only_inner(
+            &source,
+            true,
+            &limits,
+            4,
+            &SolverConfig::default_config(),
+            None,
+        );
         match &result.status {
             status if esbmc_not_found(status) => {
                 eprintln!("SKIP: esbmc not found");
@@ -15823,8 +16076,14 @@ fn main() -> i32 {
 }"#;
         let source = write_source(&dir, "fail_det.vow", src);
         let limits = VerifyLimits::default();
-        let result =
-            run_verify_only_inner(&source, true, &limits, 4, &SolverConfig::default_config());
+        let result = run_verify_only_inner(
+            &source,
+            true,
+            &limits,
+            4,
+            &SolverConfig::default_config(),
+            None,
+        );
         match &result.status {
             status if esbmc_not_found(status) => {
                 eprintln!("SKIP: esbmc not found");
@@ -15860,8 +16119,14 @@ fn main() -> i32 {
 }"#;
         let source = write_source(&dir, "skip_demo.vow", src);
         let limits = VerifyLimits::default();
-        let result =
-            run_verify_only_inner(&source, true, &limits, 1, &SolverConfig::default_config());
+        let result = run_verify_only_inner(
+            &source,
+            true,
+            &limits,
+            1,
+            &SolverConfig::default_config(),
+            None,
+        );
         match &result.status {
             BuildStatus::Skipped => {
                 assert!(
