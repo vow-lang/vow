@@ -1,14 +1,7 @@
-//! `vow complexity` — per-function complexity metrics emitted as JSON.
-//!
-//! The JSON must be **byte-identical** to the self-hosted compiler's
-//! (`compiler/complexity.vow` + `compiler/complexity_main.vow`). To preserve
-//! that, this module hand-builds the JSON string with integer-only arithmetic
-//! and never uses `serde_json` or native float formatting.
+//! `vow complexity` — hand-built JSON; never use serde_json (byte-identity with self-hosted).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-
-use std::collections::HashSet;
 
 use vow_ir::{InstData, Opcode};
 use vow_syntax::ast::{
