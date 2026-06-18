@@ -681,8 +681,6 @@ pub(crate) fn run_complexity_command(
                 .flat_map(|b| &b.insts)
                 .filter(|x| matches!(x.opcode, Opcode::LinearBorrow))
                 .count() as i64;
-            fan_in_max = fan_in_max.max(fan_in);
-            fan_out_max = fan_out_max.max(fan_out);
             ir_info.insert(
                 f.name.clone(),
                 IrInfo {
@@ -808,11 +806,15 @@ pub(crate) fn run_complexity_command(
         }
     }
 
-    // Module-level Henry-Kafura max (needs AST nloc + IR fan-in/out by name).
+    // Module-level coupling maxima, restricted to the entry file's reported
+    // functions (recs) — not all lowered IR functions — so a multi-module run
+    // can't attribute fan-in/out or Henry-Kafura to an imported helper.
     let mut hk_max: i64 = 0;
     for r in &recs {
         if let Some(info) = ir_info.get(&r.name) {
             hk_max = hk_max.max(cx_henry_kafura(r.nloc, info.fan_in, info.fan_out));
+            fan_in_max = fan_in_max.max(info.fan_in);
+            fan_out_max = fan_out_max.max(info.fan_out);
         }
     }
 

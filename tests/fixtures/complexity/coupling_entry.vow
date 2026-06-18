@@ -1,0 +1,7 @@
+module CouplingEntry
+
+use coupling_lib
+
+fn main() -> i64 {
+    a(1)
+}

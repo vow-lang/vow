@@ -311,16 +311,12 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
         j = j + 1;
     }
 
-    // Module-level coupling aggregates.
+    // Module-level coupling maxima, restricted to the entry file's reported
+    // functions (rows) — not all lowered IR functions — so a multi-module run
+    // can't attribute fan-in/out or Henry-Kafura to an imported helper.
     let mut fan_in_max: i64 = 0;
     let mut fan_out_max: i64 = 0;
     let mut hk_max: i64 = 0;
-    let mut zz: i64 = 0;
-    while zz < nirf {
-        if ir_fanin[zz] > fan_in_max { fan_in_max = ir_fanin[zz]; }
-        if ir_fanout[zz] > fan_out_max { fan_out_max = ir_fanout[zz]; }
-        zz = zz + 1;
-    }
     let mut hi: i64 = 0;
     while hi < nf {
         let rowh: CxRow = rows[hi];
@@ -330,6 +326,8 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
         let fo: i64 = cx_clamp0(cx_ir_val_for(hrn, ir_names, ir_fanout));
         let hk: i64 = cx_henry_kafura(hr.nloc, fi, fo);
         if hk > hk_max { hk_max = hk; }
+        if fi > fan_in_max { fan_in_max = fi; }
+        if fo > fan_out_max { fan_out_max = fo; }
         hi = hi + 1;
     }
 
