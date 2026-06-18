@@ -987,6 +987,16 @@ if [ "$r_bad" != "0" ] && [ "$s_bad" != "0" ]; then
 else
     fail "complexity/gate-fail-closed" "rust=$r_bad self=$s_bad (expected both nonzero)"
 fi
+# A non-ASCII (UTF-8) source path must stay byte-identical across compilers: the
+# JSON escaper must emit raw UTF-8 bytes, not mojibake (Rust byte-as-char bug).
+utf8dir=$(mktemp -d)
+cp tests/fixtures/complexity/params_basic.vow "$utf8dir/café.vow"
+if diff -q <("$RUST" complexity "$utf8dir/café.vow" 2>/dev/null) <(run_self complexity "$utf8dir/café.vow" 2>/dev/null) >/dev/null; then
+    pass "complexity/utf8-path-parity (café.vow byte-identical)"
+else
+    fail "complexity/utf8-path-parity" "non-ASCII path JSON diverges between compilers"
+fi
+rm -rf "$utf8dir"
 echo ""
 
 # ─── Summary ────────────────────────────────────────────────────────

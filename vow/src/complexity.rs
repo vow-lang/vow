@@ -1490,16 +1490,20 @@ fn line_at(src: &str, offset: usize) -> i64 {
 }
 
 fn cx_json_escape(s: &str) -> String {
+    // Iterate chars, not bytes: `byte as char` would map a UTF-8 lead byte like
+    // 0xC3 to U+00C3 and re-encode it as two bytes (mojibake), diverging from the
+    // self-hosted escaper, which appends the original UTF-8 bytes. Pushing the
+    // char preserves those bytes and stays byte-identical for non-ASCII paths.
     let mut r = String::new();
-    for b in s.bytes() {
-        match b {
-            34 => r.push_str("\\\""),
-            92 => r.push_str("\\\\"),
-            10 => r.push_str("\\n"),
-            13 => r.push_str("\\r"),
-            9 => r.push_str("\\t"),
-            x if x < 32 => r.push('?'),
-            x => r.push(x as char),
+    for c in s.chars() {
+        match c {
+            '"' => r.push_str("\\\""),
+            '\\' => r.push_str("\\\\"),
+            '\n' => r.push_str("\\n"),
+            '\r' => r.push_str("\\r"),
+            '\t' => r.push_str("\\t"),
+            c if (c as u32) < 32 => r.push('?'),
+            c => r.push(c),
         }
     }
     r

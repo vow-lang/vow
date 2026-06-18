@@ -6006,7 +6006,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("      \"required\": [\"cyclomatic\", \"cyclomatic_ir\", \"cognitive\", \"max_nesting\", \"halstead\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));
     r.push_str(String::from("        \"cyclomatic\": { \"type\": \"integer\", \"minimum\": 1, \"description\": \"AST decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?.\" },\n"));
-    r.push_str(String::from("        \"cyclomatic_ir\": { \"type\": \"integer\", \"description\": \"IR branch-count cross-check: (number of IOP_BRANCH) + 1, or -1 if the function has no IR (e.g. a body-less declaration). Agrees with `cyclomatic` modulo &&/||/? lowering. Experimental tier.\" },\n"));
+    r.push_str(String::from("        \"cyclomatic_ir\": { \"type\": \"integer\", \"minimum\": -1, \"description\": \"IR branch-count cross-check: (number of IOP_BRANCH) + 1, or -1 if the function has no IR (e.g. a body-less declaration). Agrees with `cyclomatic` modulo &&/||/? lowering. Experimental tier.\" },\n"));
     r.push_str(String::from("        \"cognitive\": { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Vow-adapted Cognitive Complexity (nesting-aware). Headline structural metric.\" },\n"));
     r.push_str(String::from("        \"max_nesting\": { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Deepest structural nesting depth.\" },\n"));
     r.push_str(String::from("        \"halstead\": { \"$ref\": \"#/$defs/Halstead\" }\n"));
@@ -9987,7 +9987,7 @@ fn skill_support_content_7() -> String {
     r.push_str(String::from("      \"required\": [\"cyclomatic\", \"cyclomatic_ir\", \"cognitive\", \"max_nesting\", \"halstead\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));
     r.push_str(String::from("        \"cyclomatic\": { \"type\": \"integer\", \"minimum\": 1, \"description\": \"AST decision-count form: base 1 + if/while/for/loop + (match arms - 1) + each &&/|| + each ?.\" },\n"));
-    r.push_str(String::from("        \"cyclomatic_ir\": { \"type\": \"integer\", \"description\": \"IR branch-count cross-check: (number of IOP_BRANCH) + 1, or -1 if the function has no IR (e.g. a body-less declaration). Agrees with `cyclomatic` modulo &&/||/? lowering. Experimental tier.\" },\n"));
+    r.push_str(String::from("        \"cyclomatic_ir\": { \"type\": \"integer\", \"minimum\": -1, \"description\": \"IR branch-count cross-check: (number of IOP_BRANCH) + 1, or -1 if the function has no IR (e.g. a body-less declaration). Agrees with `cyclomatic` modulo &&/||/? lowering. Experimental tier.\" },\n"));
     r.push_str(String::from("        \"cognitive\": { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Vow-adapted Cognitive Complexity (nesting-aware). Headline structural metric.\" },\n"));
     r.push_str(String::from("        \"max_nesting\": { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Deepest structural nesting depth.\" },\n"));
     r.push_str(String::from("        \"halstead\": { \"$ref\": \"#/$defs/Halstead\" }\n"));
