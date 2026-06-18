@@ -204,6 +204,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let m: Module = fr.merged;
     let a: AstArena = m.arena;
     let items: Vec<i64> = m.items;
+    let item_files: Vec<String> = fr.item_files;
     let n: i64 = items.len();
 
     // Struct definitions (name -> is_linear) for linear-value counting.
@@ -281,7 +282,13 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     while i < n {
         let it: i64 = items[i];
         if item_kind(it) == ITEM_FN() {
-            rows.push(cx_analyze_row(a, item_id(it), src, struct_names, struct_linear, cog_anchor, nloc_anchor, ir_names, ir_cyclo, ir_effect_fanout, ir_consumes, ir_borrows));
+            // Only report functions defined in the queried file; `use`d-dep
+            // functions have spans relative to their own source, so reporting
+            // them here would mis-map line/nloc.
+            let itf: String = item_files[i];
+            if itf == path {
+                rows.push(cx_analyze_row(a, item_id(it), src, struct_names, struct_linear, cog_anchor, nloc_anchor, ir_names, ir_cyclo, ir_effect_fanout, ir_consumes, ir_borrows));
+            }
         }
         i = i + 1;
     }

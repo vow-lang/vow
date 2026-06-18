@@ -646,6 +646,10 @@ pub(crate) fn run_complexity_command(
     let src = std::fs::read_to_string(source).unwrap_or_default();
     let file_nloc = line_at(&src, src.len());
     let module = frontend.module();
+    // Entry module's items come last in item_files; report only its functions
+    // (deps' spans are relative to their own files).
+    let item_files = frontend.item_files();
+    let entry_file = item_files.last().cloned().unwrap_or_default();
     let thr = if max_score >= 0 { max_score } else { 80 };
 
     // IR-derived per-function info, matched to AST functions by name.
@@ -706,10 +710,13 @@ pub(crate) fn run_complexity_command(
         })
         .collect();
 
-    // Pass 1: analyze + score every function.
+    // Pass 1: analyze + score every function defined in the entry file.
     let mut recs: Vec<CxEmit> = Vec::new();
-    for item in &module.items {
+    for (idx, item) in module.items.iter().enumerate() {
         if let Item::Fn(f) = item {
+            if item_files.get(idx).map(String::as_str) != Some(entry_file.as_str()) {
+                continue;
+            }
             let start = f.span.start as usize;
             let end = (f.span.start + f.span.len) as usize;
             let first_line = line_at(&src, start);

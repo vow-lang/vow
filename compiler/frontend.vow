@@ -26,6 +26,9 @@ struct LoweredFrontend {
     // `vow complexity`) get them from one frontend run. Mirrors the Rust
     // FrontendBundle, which already exposes both module() and ir().
     merged: Module,
+    // Parallel to merged.items: originating source path per item. Lets a pass
+    // restrict itself to items defined in the entry file (vs `use`d deps).
+    item_files: Vec<String>,
 }
 
 struct FrontendPrep {
@@ -230,5 +233,6 @@ fn frontend_lower_path_with_root(path: String, module_root: String) -> LoweredFr
         checked: updated_checked,
         ir_mod: ir_mod,
         merged: prep.merged,
+        item_files: prep.item_files,
     }
 }
