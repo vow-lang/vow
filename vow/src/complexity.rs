@@ -646,10 +646,11 @@ pub(crate) fn run_complexity_command(
     let src = std::fs::read_to_string(source).unwrap_or_default();
     let file_nloc = line_at(&src, src.len());
     let module = frontend.module();
-    // Entry module's items come last in item_files; report only its functions
-    // (deps' spans are relative to their own files).
+    // Report only the entry file's functions (deps' spans are foreign). Match by
+    // `source`'s path — what module_loader stored for the entry's items — so this
+    // mirrors the self-hosted `itf == path` and stays correct when the entry has no items.
     let item_files = frontend.item_files();
-    let entry_file = item_files.last().cloned().unwrap_or_default();
+    let entry_file = source.to_string_lossy().into_owned();
     let thr = if max_score >= 0 { max_score } else { 80 };
 
     // IR-derived per-function info, matched to AST functions by name.
