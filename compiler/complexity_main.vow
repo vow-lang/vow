@@ -32,6 +32,27 @@ fn cx_int_flag(argv: Vec<String>, name: String, dflt: i64) -> i64 {
     parse_i64_default(v, dflt)
 }
 
+fn cx_flag_present(argv: Vec<String>, name: String) -> bool {
+    let n: i64 = argv.len();
+    let mut i: i64 = 1;
+    while i < n {
+        if argv[i] == name { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Fail closed on a malformed value for a value-taking flag: if the flag is
+// present but its value is missing or not a decimal integer, the gate would
+// otherwise silently fall back to its default (disabling an opt-in CI gate).
+// Returns true if OK (flag absent, or present with a valid integer value).
+fn cx_int_flag_ok(argv: Vec<String>, name: String) -> bool {
+    if !cx_flag_present(argv, name) { return true; }
+    let v: String = get_flag_arg(argv, name);
+    if v.len() == 0 { return false; }
+    is_decimal_int_literal(v)
+}
+
 // Look up an IR-derived per-function value by name (parallel name/value Vecs).
 // Returns -1 if the function has no IR (e.g. a body-less declaration).
 fn cx_ir_val_for(name: String, ir_names: Vec<String>, ir_vals: Vec<i64>) -> i64 {
@@ -181,6 +202,17 @@ fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, ex: CxExtra) {
 }
 
 fn run_complexity(argv: Vec<String>) -> i32 [io] {
+    // Fail closed on a malformed value-taking flag (mirrors the Rust CLI, which
+    // rejects non-integer values): a typo'd `--max-*` must not silently disable
+    // the opt-in CI gate.
+    if !cx_int_flag_ok(argv, String::from("--cog-anchor"))
+        || !cx_int_flag_ok(argv, String::from("--nloc-anchor"))
+        || !cx_int_flag_ok(argv, String::from("--max-score"))
+        || !cx_int_flag_ok(argv, String::from("--max-cognitive"))
+        || !cx_int_flag_ok(argv, String::from("--max-cyclomatic")) {
+        eprintln_str(String::from("vow complexity: invalid integer value for a --cog-anchor/--nloc-anchor/--max-* flag"));
+        return 1;
+    }
     let cog_anchor: i64 = cx_int_flag(argv, String::from("--cog-anchor"), 15);
     let nloc_anchor: i64 = cx_int_flag(argv, String::from("--nloc-anchor"), 60);
     let max_score: i64 = cx_int_flag(argv, String::from("--max-score"), -1);

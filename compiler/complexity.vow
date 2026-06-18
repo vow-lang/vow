@@ -796,9 +796,19 @@ struct CxExtra {
 }
 
 // A loop's invariant list is empty (BMC must unwind it blind).
-fn cx_loop_has_no_inv(a: AstArena, inv_lid: i64) -> bool {
-    if inv_lid < 0 { return true; }
-    list_len(a, inv_lid) == 0
+// A loop lacks an invariant unless its vow clause list carries an actual
+// invariant clause (a loop vow block with only requires/ensures still forces a
+// blind unwind). `lid` is the vow clause list (while/loop/for all pass one).
+fn cx_loop_has_no_inv(a: AstArena, lid: i64) -> bool {
+    if lid < 0 { return true; }
+    let n: i64 = list_len(a, lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let cid: i64 = list_get(a, lid, i);
+        if vow_clause_kind(a, cid) == CLAUSE_INVARIANT() { return false; }
+        i = i + 1;
+    }
+    true
 }
 
 fn cx_loops_block(a: AstArena, bid: i64, nesting: i64, acc: Vec<i64>) {

@@ -822,38 +822,43 @@ fn skill_json() -> String {
       ],
       "options": [
         {
-          "form": "--cog-anchor",
+          "form": "--cog-anchor <N>",
           "description": "Cognitive-complexity value mapped to sub-score 0.800 (SonarQube's default flag line). (default: 15)",
           "long": "--cog-anchor",
-          "value_kind": "flag",
+          "value_name": "N",
+          "value_kind": "integer",
           "default": "15"
         },
         {
-          "form": "--nloc-anchor",
+          "form": "--nloc-anchor <N>",
           "description": "NLOC value mapped to sub-score 0.800 (~50\u201360 line guidance). (default: 60)",
           "long": "--nloc-anchor",
-          "value_kind": "flag",
+          "value_name": "N",
+          "value_kind": "integer",
           "default": "60"
         },
         {
-          "form": "--max-score",
+          "form": "--max-score <N>",
           "description": "CI gate: exit nonzero if any function's complexity_score exceeds N. The recommended line is 80, but gating is opt-in only. (default: (unset))",
           "long": "--max-score",
-          "value_kind": "flag",
+          "value_name": "N",
+          "value_kind": "integer",
           "default": "(unset)"
         },
         {
-          "form": "--max-cognitive",
+          "form": "--max-cognitive <N>",
           "description": "CI gate: exit nonzero if any function's cognitive exceeds N. (default: (unset))",
           "long": "--max-cognitive",
-          "value_kind": "flag",
+          "value_name": "N",
+          "value_kind": "integer",
           "default": "(unset)"
         },
         {
-          "form": "--max-cyclomatic",
+          "form": "--max-cyclomatic <N>",
           "description": "CI gate: exit nonzero if any function's cyclomatic exceeds N. (default: (unset))",
           "long": "--max-cyclomatic",
-          "value_kind": "flag",
+          "value_name": "N",
+          "value_kind": "integer",
           "default": "(unset)"
         }
       ],
@@ -910,11 +915,11 @@ fn skill_json() -> String {
     "--verify-jobs <N>": "Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)"
   },
   "complexity_options": {
-    "--cog-anchor": "Cognitive-complexity value mapped to sub-score 0.800 (SonarQube's default flag line). (default: 15)",
-    "--nloc-anchor": "NLOC value mapped to sub-score 0.800 (~50\u201360 line guidance). (default: 60)",
-    "--max-score": "CI gate: exit nonzero if any function's complexity_score exceeds N. The recommended line is 80, but gating is opt-in only. (default: (unset))",
-    "--max-cognitive": "CI gate: exit nonzero if any function's cognitive exceeds N. (default: (unset))",
-    "--max-cyclomatic": "CI gate: exit nonzero if any function's cyclomatic exceeds N. (default: (unset))"
+    "--cog-anchor <N>": "Cognitive-complexity value mapped to sub-score 0.800 (SonarQube's default flag line). (default: 15)",
+    "--nloc-anchor <N>": "NLOC value mapped to sub-score 0.800 (~50\u201360 line guidance). (default: 60)",
+    "--max-score <N>": "CI gate: exit nonzero if any function's complexity_score exceeds N. The recommended line is 80, but gating is opt-in only. (default: (unset))",
+    "--max-cognitive <N>": "CI gate: exit nonzero if any function's cognitive exceeds N. (default: (unset))",
+    "--max-cyclomatic <N>": "CI gate: exit nonzero if any function's cyclomatic exceeds N. (default: (unset))"
   },
   "global_options": {
     "--help": "Emit versioned JSON tool-help data",
@@ -2703,11 +2708,11 @@ vow complexity <source.vow>
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--cog-anchor` | `15` | Cognitive-complexity value mapped to sub-score `0.800` (SonarQube's default flag line). |
-| `--nloc-anchor` | `60` | NLOC value mapped to sub-score `0.800` (~50–60 line guidance). |
-| `--max-score` | (unset) | CI gate: exit nonzero if any function's `complexity_score` exceeds N. The recommended line is 80, but gating is opt-in only. |
-| `--max-cognitive` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
-| `--max-cyclomatic` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
+| `--cog-anchor <N>` | `15` | Cognitive-complexity value mapped to sub-score `0.800` (SonarQube's default flag line). |
+| `--nloc-anchor <N>` | `60` | NLOC value mapped to sub-score `0.800` (~50–60 line guidance). |
+| `--max-score <N>` | (unset) | CI gate: exit nonzero if any function's `complexity_score` exceeds N. The recommended line is 80, but gating is opt-in only. |
+| `--max-cognitive <N>` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
+| `--max-cyclomatic <N>` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
 
 **Exit code.** `0` always, unless a `--max-*` threshold is passed and exceeded, in which case nonzero. With no `--max-*` flag the command is pure reporting — no threshold gates by default (per the decouple-language-from-prover principle).
 
@@ -6663,11 +6668,11 @@ vow complexity <source.vow>
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--cog-anchor` | `15` | Cognitive-complexity value mapped to sub-score `0.800` (SonarQube's default flag line). |
-| `--nloc-anchor` | `60` | NLOC value mapped to sub-score `0.800` (~50–60 line guidance). |
-| `--max-score` | (unset) | CI gate: exit nonzero if any function's `complexity_score` exceeds N. The recommended line is 80, but gating is opt-in only. |
-| `--max-cognitive` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
-| `--max-cyclomatic` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
+| `--cog-anchor <N>` | `15` | Cognitive-complexity value mapped to sub-score `0.800` (SonarQube's default flag line). |
+| `--nloc-anchor <N>` | `60` | NLOC value mapped to sub-score `0.800` (~50–60 line guidance). |
+| `--max-score <N>` | (unset) | CI gate: exit nonzero if any function's `complexity_score` exceeds N. The recommended line is 80, but gating is opt-in only. |
+| `--max-cognitive <N>` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
+| `--max-cyclomatic <N>` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
 
 **Exit code.** `0` always, unless a `--max-*` threshold is passed and exceeded, in which case nonzero. With no `--max-*` flag the command is pure reporting — no threshold gates by default (per the decouple-language-from-prover principle).
 

@@ -1310,9 +1310,15 @@ struct Verif {
 }
 
 fn loop_no_inv(vow: &Option<VowBlock>) -> bool {
+    // A loop counts as lacking an invariant unless its vow block carries an
+    // actual `invariant:` clause — a loop vow block with only requires/ensures
+    // still forces the verifier to unwind blind.
     match vow {
         None => true,
-        Some(vb) => vb.clauses.is_empty(),
+        Some(vb) => !vb
+            .clauses
+            .iter()
+            .any(|c| matches!(c, VowClause::Invariant { .. })),
     }
 }
 

@@ -212,11 +212,11 @@ vow complexity <source.vow>
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--cog-anchor` | `15` | Cognitive-complexity value mapped to sub-score `0.800` (SonarQube's default flag line). |
-| `--nloc-anchor` | `60` | NLOC value mapped to sub-score `0.800` (~50–60 line guidance). |
-| `--max-score` | (unset) | CI gate: exit nonzero if any function's `complexity_score` exceeds N. The recommended line is 80, but gating is opt-in only. |
-| `--max-cognitive` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
-| `--max-cyclomatic` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
+| `--cog-anchor <N>` | `15` | Cognitive-complexity value mapped to sub-score `0.800` (SonarQube's default flag line). |
+| `--nloc-anchor <N>` | `60` | NLOC value mapped to sub-score `0.800` (~50–60 line guidance). |
+| `--max-score <N>` | (unset) | CI gate: exit nonzero if any function's `complexity_score` exceeds N. The recommended line is 80, but gating is opt-in only. |
+| `--max-cognitive <N>` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
+| `--max-cyclomatic <N>` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
 
 **Exit code.** `0` always, unless a `--max-*` threshold is passed and exceeded, in which case nonzero. With no `--max-*` flag the command is pure reporting — no threshold gates by default (per the decouple-language-from-prover principle).
 

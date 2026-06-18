@@ -1,0 +1,13 @@
+module LoopNoinv
+
+fn scan(n: i64) -> i64 {
+    let mut i: i64 = 0;
+    while i < n vow { requires: n > 0 } {
+        i = i + 1;
+    }
+    i
+}
+
+fn main() -> i64 {
+    scan(3)
+}
