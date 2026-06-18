@@ -3,10 +3,13 @@
 //! Emits a gzipped JSON trace loadable at ui.perfetto.dev. The trace is a pure
 //! side artifact: it never feeds codegen, the build JSON, or any cache key.
 
-// The driver wiring (`--perfetto` flag, phase/proof spans) lands in the next
-// commit; until then the public API is exercised only by tests. Removed when
-// the driver starts calling this module.
-#![allow(dead_code)]
+/// Perfetto pid/tid layout for one compilation. The compiler is a single
+/// "process"; codegen/frontend share the main thread, verification has its own
+/// driver thread, and each verify worker gets a distinct thread track.
+pub const PID_COMPILER: u64 = 1;
+pub const TID_MAIN: u64 = 1;
+pub const TID_VERIFY_DRIVER: u64 = 2;
+pub const TID_WORKER_BASE: u64 = 100;
 
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -167,9 +170,17 @@ impl Profiler {
                     .collect();
                 let ts = prof.now_us();
                 for s in collect_samples(&procs, own_pid) {
+                    // Place the compiler's counters on PID_COMPILER so they
+                    // share the process row with the compiler's spans; ESBMC
+                    // children keep their real pid as their own process track.
+                    let track_pid = if s.group == "compiler" {
+                        PID_COMPILER
+                    } else {
+                        s.pid
+                    };
                     prof.counter(
                         &s.group,
-                        s.pid,
+                        track_pid,
                         ts,
                         vec![
                             ("rss_kb".to_string(), s.rss_kb),

@@ -135,7 +135,7 @@ pub(crate) fn prepare_frontend(
     source: &Path,
     goal: FrontendGoal,
 ) -> Result<FrontendBundle, FrontendError> {
-    prepare_frontend_with_root(source, None, goal)
+    prepare_frontend_with_root(source, None, goal, None)
 }
 
 /// Same as `prepare_frontend`, but resolves `use` declarations against
@@ -147,12 +147,32 @@ pub(crate) fn prepare_frontend_with_root(
     source: &Path,
     module_root: Option<&Path>,
     goal: FrontendGoal,
+    prof: Option<&crate::perfetto::Profiler>,
 ) -> Result<FrontendBundle, FrontendError> {
+    use crate::perfetto::{PID_COMPILER, TID_MAIN};
+    // Record a completed phase span [start, now] on the compiler's main track.
+    // No-op when profiling is off.
+    let record = |name: &str, start: u64| {
+        if let Some(p) = prof {
+            p.span(
+                name,
+                PID_COMPILER,
+                TID_MAIN,
+                start,
+                p.now_us().saturating_sub(start),
+                vec![],
+            );
+        }
+    };
+    let now = || prof.map(|p| p.now_us()).unwrap_or(0);
+
     let src = std::fs::read_to_string(source).map_err(|e| FrontendError::Io(e.to_string()))?;
     let file_str = source.to_string_lossy();
 
     let mut diagnostics = Vec::new();
+    let t_parse = now();
     let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src, &file_str);
+    record("parse", t_parse);
     let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
     diagnostics.extend(parse_diags);
     if parse_failed {
@@ -162,6 +182,7 @@ pub(crate) fn prepare_frontend_with_root(
         });
     }
 
+    let t_load = now();
     let graph = match module_loader::load_modules_with_root(source, module_root, &root_ast) {
         Ok(graph) => graph,
         Err(diags) => {
@@ -172,17 +193,22 @@ pub(crate) fn prepare_frontend_with_root(
             });
         }
     };
+    record("module-load", t_load);
 
     let deps = DependencyManifest::from_paths(
         graph.modules.iter().map(|(path, _)| path.clone()).collect(),
     );
+    let t_merge = now();
     let (ast, item_files) = module_loader::merge_modules(graph);
+    record("merge", t_merge);
 
     let mut null_emit = NullEmitter;
     let mut collecting_emit = CollectingEmitter::new(&mut null_emit);
     let mut checker =
         vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
+    let t_check = now();
     checker.check_module(&ast, &item_files);
+    record("typecheck", t_check);
     let has_errors = checker.has_errors();
     let string_exprs = if matches!(goal, FrontendGoal::LoweredIr) && !has_errors {
         Some(checker.into_string_exprs())
@@ -202,7 +228,9 @@ pub(crate) fn prepare_frontend_with_root(
         FrontendGoal::MergedAst => None,
         FrontendGoal::LoweredIr => {
             let string_exprs = string_exprs.expect("LoweredIr goal must preserve string exprs");
+            let t_lower = now();
             let mut module = vow_ir::lower_module(&ast, &item_files, &string_exprs);
+            record("lower", t_lower);
             // Track lower-warning count so region inference does not see them
             // as its own (and the post-pass error check below only reacts to
             // newly-added Severity::Error diagnostics from infer_regions).
@@ -213,7 +241,9 @@ pub(crate) fn prepare_frontend_with_root(
             // `module.warnings`. Diagnostic file labels come from each
             // `Function.source_file` (set by `lower_module`), not a single
             // shared root path — see #254.
+            let t_region = now();
             vow_ir::infer_regions(&mut module);
+            record("region-inference", t_region);
             diagnostics.extend(module.warnings.iter().cloned());
             // If region inference emitted any errors, fail compilation here so
             // the build pipeline reports CompileFailed (spec §4.4 — rejection,
@@ -231,7 +261,9 @@ pub(crate) fn prepare_frontend_with_root(
             }
             // Phase 4 / S3: insert RegionOpen / RegionClose markers around
             // every block whose region is non-empty (spec §3.5).
+            let t_markers = now();
             vow_ir::insert_region_markers(&mut module);
+            record("region-markers", t_markers);
             Some(Arc::new(module))
         }
     };
@@ -329,7 +361,7 @@ mod tests {
 
         // With override: resolves against `dir.path()` and finds lib.vow.
         let bundle =
-            prepare_frontend_with_root(&test_path, Some(dir.path()), FrontendGoal::MergedAst)
+            prepare_frontend_with_root(&test_path, Some(dir.path()), FrontendGoal::MergedAst, None)
                 .unwrap();
         assert_eq!(bundle.module().name, "TestLib");
         assert_eq!(bundle.dependencies().paths().len(), 2);
