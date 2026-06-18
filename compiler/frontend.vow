@@ -22,6 +22,13 @@ struct CheckedFrontend {
 struct LoweredFrontend {
     checked: CheckedFrontend,
     ir_mod: IrModule,
+    // Merged AST module, retained so passes needing both AST and IR (e.g.
+    // `vow complexity`) get them from one frontend run. Mirrors the Rust
+    // FrontendBundle, which already exposes both module() and ir().
+    merged: Module,
+    // Parallel to merged.items: originating source path per item. Lets a pass
+    // restrict itself to items defined in the entry file (vs `use`d deps).
+    item_files: Vec<String>,
 }
 
 struct FrontendPrep {
@@ -225,5 +232,7 @@ fn frontend_lower_path_with_root(path: String, module_root: String) -> LoweredFr
     LoweredFrontend {
         checked: updated_checked,
         ir_mod: ir_mod,
+        merged: prep.merged,
+        item_files: prep.item_files,
     }
 }

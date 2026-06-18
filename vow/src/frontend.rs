@@ -33,6 +33,9 @@ pub(crate) struct FrontendBundle {
     module: Module,
     deps: DependencyManifest,
     ir: Option<Arc<vow_ir::Module>>,
+    // Parallel to `module.items`: originating source path per item. The entry
+    // module's items come last. Lets a pass restrict to entry-file items.
+    item_files: Vec<String>,
 }
 
 impl FrontendBundle {
@@ -42,6 +45,10 @@ impl FrontendBundle {
 
     pub(crate) fn module(&self) -> &Module {
         &self.module
+    }
+
+    pub(crate) fn item_files(&self) -> &[String] {
+        &self.item_files
     }
 
     #[cfg(test)]
@@ -241,6 +248,7 @@ pub(crate) fn prepare_frontend_with_root(
         module: ast,
         deps,
         ir,
+        item_files,
     })
 }
 

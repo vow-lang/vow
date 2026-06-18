@@ -1,0 +1,13 @@
+module Nested
+
+fn deep(a: i64, b: i64, c: i64) -> i64 {
+    let mut r: i64 = 0;
+    if a > 0 {
+        if b > 0 {
+            if c > 0 {
+                r = 1;
+            }
+        }
+    }
+    r
+}

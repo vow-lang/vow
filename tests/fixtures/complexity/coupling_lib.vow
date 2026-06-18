@@ -1,0 +1,17 @@
+module CouplingLib
+
+pub fn helper(x: i64) -> i64 {
+    x + 1
+}
+
+pub fn a(x: i64) -> i64 {
+    helper(x)
+}
+
+pub fn b(x: i64) -> i64 {
+    helper(x)
+}
+
+pub fn c(x: i64) -> i64 {
+    helper(x)
+}
