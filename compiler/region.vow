@@ -2205,6 +2205,13 @@ fn analyze_function(
     // materializing a must_outlive set for every value: for each heap producer,
     // gather direct-use markers plus Phi/call return-alias users, then compute
     // the cached block-tree LCA when only block markers remain.
+    //
+    // Loop-header blocks (back-edge targets). Computed once per function from
+    // the CFG (not the inferred regions, to avoid circularity). A value carried
+    // into a loop-header Phi must not be placed in the header's refreshed
+    // Block(_) arena; see the Upsilon arm of `direct_markers_collect_regions`.
+    let loop_be: BackEdges = detect_loop_back_edges(f);
+    let loop_headers: Vec<i64> = loop_be.headers;
     let mut rbi: i64 = 0;
     while rbi < n_bks {
         let rb: IrBlock = bks[rbi];
@@ -2214,7 +2221,7 @@ fn analyze_function(
             if is_heap_producing_for_region(rinst, int_kinds) {
                 let mut rgn: i64 = value_lub_region(
                     f, rinst.id, rb.id, fidx, id_to_inst, id_to_block,
-                    block_parent, block_depth,
+                    block_parent, block_depth, loop_headers,
                     is_scalar_ity(f.return_ty),
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux,
@@ -2225,12 +2232,15 @@ fn analyze_function(
                 // them to Root for codegen conservatism, which would otherwise
                 // silence the diagnostic. Mirrors the nested structure at
                 // vow-ir/src/region.rs:1437-1455.
+                // Issue #400: only internal-call results that escape to a
+                // hidden caller arena (Caller(_)) are still collapsed to Root.
+                // Block(_) results are kept local — loop-carried escape (the
+                // hazard the old blanket collapse masked) is handled by the
+                // loop-header Upsilon lifting in direct_markers_collect_regions.
                 if rinst.op == IOP_CALL() && rinst.dk != IDATA_CALL_EXTERN() {
                     let rk: i64 = region_kind(rgn);
                     if rk == REGION_KIND_CALLER() {
                         put_inst_region(note_region_keys[fidx], note_region_vals[fidx], rinst.id, rgn);
-                    }
-                    if rk == REGION_KIND_BLOCK() || rk == REGION_KIND_CALLER() {
                         rgn = region_root();
                     }
                 }
@@ -2452,7 +2462,7 @@ fn lookup_inst_block(id_to_block: Vec<i64>, id: i64) -> i64 {
 fn value_lub_region(
     f: IrFunction, id: i64, defining_block: i64, fi: i64,
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
-    block_parent: Vec<i64>, block_depth: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>, loop_headers: Vec<i64>,
     return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>
@@ -2474,6 +2484,8 @@ fn value_lub_region(
             cur,
             id_to_inst,
             id_to_block,
+            block_parent,
+            loop_headers,
             markers,
             return_is_scalar,
             int_kinds,
@@ -2598,6 +2610,7 @@ fn region_lub_from_markers(
 fn direct_markers_collect_regions(
     f: IrFunction, id: i64,
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    block_parent: Vec<i64>, loop_headers: Vec<i64>,
     markers: Vec<i64>,
     return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
@@ -2632,7 +2645,22 @@ fn direct_markers_collect_regions(
                     if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
                         let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
                         if phi_block >= 0 {
-                            linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), phi_block));
+                            // Issue #400: a source carried into a loop-header
+                            // Phi is live across the back-edge; Block(header)
+                            // would be freed by the loop-region refresh. Lift it
+                            // to the loop's enclosing block region (Root if the
+                            // loop has no enclosing block). A non-loop Phi keeps
+                            // Block(header).
+                            if region_vec_contains_i64(loop_headers, phi_block) {
+                                let lifted_parent: i64 = block_parent_at(block_parent, phi_block);
+                                if lifted_parent >= 0 {
+                                    linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), lifted_parent));
+                                } else {
+                                    linear_insert_i64(markers, region_root());
+                                }
+                            } else {
+                                linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), phi_block));
+                            }
                             push_region_work(work, seen, inst.dv);
                         } else {
                             linear_insert_i64(markers, region_root());

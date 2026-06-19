@@ -1,0 +1,86 @@
+// TEST: stdout "ok"
+// Regression for issue #400 (loop-carried struct-wrapped Vec must not be
+// freed by the loop-region refresh).
+//
+// `Box` wraps a `Vec<i64>`. `box_step` takes the box by value, aliases its
+// backing via a FieldGet (`let d = b.data`), mutates it in place, and returns
+// a new box wrapping the SAME backing. The loop reassigns `b = box_step(b, i)`
+// every iteration (loop-carried via an Upsilon into the loop-header Phi) and
+// reads the backing both inside the loop (`box_first`) and after it
+// (`box_sum`), so the backing must stay live across every iteration.
+//
+// If region inference placed the loop-carried backing in the refreshed
+// `Block(loop)` arena, the back-edge close would free it while still live —
+// a use-after-free that corrupts the running read and the final sum. The fix
+// lifts loop-carried Upsilon sources out of the refreshed loop arena into the
+// loop's enclosing block region. This is the heap-MinHeap pattern distilled.
+module Issue400LoopCarriedAggregate
+
+struct Box {
+    data: Vec<i64>,
+    size: i64,
+}
+
+fn box_new() -> Box {
+    let v: Vec<i64> = Vec::new();
+    v.push(7);
+    Box { data: v, size: 1 }
+}
+
+fn box_step(b: Box, val: i64) -> Box {
+    let d: Vec<i64> = b.data;
+    d.push(val);
+    Box { data: d, size: b.size + 1 }
+}
+
+fn box_first(b: Box) -> i64 {
+    let d: Vec<i64> = b.data;
+    d[0]
+}
+
+fn box_size(b: Box) -> i64 {
+    b.size
+}
+
+fn box_sum(b: Box) -> i64 {
+    let d: Vec<i64> = b.data;
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < d.len() {
+        s = s + d[i];
+        i = i + 1;
+    }
+    s
+}
+
+fn main() -> i32 [io] {
+    let mut b: Box = box_new();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 1;
+    // Push 1..=1000; read the carried backing's first element each iteration
+    // (always 7) so an early free would corrupt the running total.
+    while i <= 1000 {
+        acc = acc + box_first(b);
+        b = box_step(b, i);
+        i = i + 1;
+    }
+    // backing = [7, 1, 2, ..., 1000]; sum = 7 + (1000*1001/2) = 500507.
+    // box_sum walks the whole grown backing, so a freed/realloc'd backing
+    // would yield a wrong total.
+    let total: i64 = box_sum(b);
+    let sz: i64 = box_size(b);
+    let running_ok: bool = acc == 7000;
+    let sum_ok: bool = total == 500507;
+    let size_ok: bool = sz == 1001;
+    if running_ok && sum_ok && size_ok {
+        print_str("ok");
+    } else {
+        print_str("running=");
+        print_i64(acc);
+        print_str(" sum=");
+        print_i64(total);
+        print_str(" size=");
+        print_i64(sz);
+    }
+    0
+}
