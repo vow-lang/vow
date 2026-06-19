@@ -2540,6 +2540,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_time_unix_ms" => {
             sig.returns.push(AbiParam::new(types::I64)); // unix timestamp ms
         }
+        "__vow_time_micros" => {
+            sig.returns.push(AbiParam::new(types::I64)); // monotonic micros
+        }
+        "__vow_proc_sample" => {
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8> (sample string)
+        }
+        "__vow_gzip_write_file" => {
+            sig.params.push(AbiParam::new(types::I64)); // path string ptr
+            sig.params.push(AbiParam::new(types::I64)); // data string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // 0 ok / nonzero error
+        }
         "__vow_num_cpus" => {
             sig.returns.push(AbiParam::new(types::I64)); // available CPU count
         }
@@ -2601,6 +2612,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // handle
             sig.params.push(AbiParam::new(types::I64)); // timeout_ms
             sig.returns.push(AbiParam::new(types::I64)); // exit code or -2 timeout
+        }
+        "__vow_process_poll_wait" => {
+            sig.params.push(AbiParam::new(types::I64)); // handle
+            sig.params.push(AbiParam::new(types::I64)); // budget ms
+            sig.returns.push(AbiParam::new(types::I64)); // exit code or STILL_RUNNING
         }
         "__vow_process_kill" => {
             sig.params.push(AbiParam::new(types::I64)); // handle

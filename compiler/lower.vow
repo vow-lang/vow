@@ -643,6 +643,9 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("memory_root_arena_bytes") { return String::from("__vow_memory_root_arena_bytes"); }
     if name == String::from("memory_peak_bytes") { return String::from("__vow_memory_peak_bytes"); }
     if name == String::from("memory_alloc_count_since_start") { return String::from("__vow_memory_alloc_count_since_start"); }
+    if name == String::from("time_micros") { return String::from("__vow_time_micros"); }
+    if name == String::from("proc_sample") { return String::from("__vow_proc_sample"); }
+    if name == String::from("gzip_write_file") { return String::from("__vow_gzip_write_file"); }
     if name == String::from("hex_encode") { return String::from("__vow_hex_encode"); }
     if name == String::from("hex_decode") { return String::from("__vow_hex_decode"); }
     if name == String::from("args") { return String::from("__vow_args"); }
@@ -656,6 +659,7 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("process_start") { return String::from("__vow_process_start"); }
     if name == String::from("process_wait") { return String::from("__vow_process_wait"); }
     if name == String::from("process_wait_timeout") { return String::from("__vow_process_wait_timeout"); }
+    if name == String::from("process_poll_wait") { return String::from("__vow_process_poll_wait"); }
     if name == String::from("process_kill") { return String::from("__vow_process_kill"); }
     if name == String::from("process_stdout_for") { return String::from("__vow_process_stdout_for"); }
     if name == String::from("process_stderr_for") { return String::from("__vow_process_stderr_for"); }
@@ -706,6 +710,9 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("memory_root_arena_bytes") { return ITY_U64(); }
     if name == String::from("memory_peak_bytes") { return ITY_U64(); }
     if name == String::from("memory_alloc_count_since_start") { return ITY_U64(); }
+    if name == String::from("time_micros") { return ITY_I64(); }
+    if name == String::from("proc_sample") { return ITY_PTR(); }
+    if name == String::from("gzip_write_file") { return ITY_I64(); }
     if name == String::from("hex_encode") { return ITY_PTR(); }
     if name == String::from("hex_decode") { return ITY_PTR(); }
     if name == String::from("args") { return ITY_PTR(); }
@@ -719,6 +726,7 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("process_start") { return ITY_I64(); }
     if name == String::from("process_wait") { return ITY_I64(); }
     if name == String::from("process_wait_timeout") { return ITY_I64(); }
+    if name == String::from("process_poll_wait") { return ITY_I64(); }
     if name == String::from("process_kill") { return ITY_I64(); }
     if name == String::from("process_stdout_for") { return ITY_PTR(); }
     if name == String::from("process_stderr_for") { return ITY_PTR(); }
@@ -1126,7 +1134,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if fn_name == String::from("hex_encode") {
                 lctx_tag(ctx, result, String::from("String"));
             }
-            if fn_name == String::from("process_get_stdout") || fn_name == String::from("process_get_stderr") || fn_name == String::from("process_stdout_for") || fn_name == String::from("process_stderr_for") {
+            if fn_name == String::from("process_get_stdout") || fn_name == String::from("process_get_stderr") || fn_name == String::from("process_stdout_for") || fn_name == String::from("process_stderr_for") || fn_name == String::from("proc_sample") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("vec_sort") || fn_name == String::from("hex_decode") {

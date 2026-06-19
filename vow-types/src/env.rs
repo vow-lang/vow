@@ -411,6 +411,31 @@ impl TypeEnv {
                 effects: [Effect::IO].into_iter().collect(),
             },
         );
+        // Perfetto tracer primitives (issue #784).
+        env.define_fn(
+            "time_micros",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "proc_sample",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::Str,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "gzip_write_file",
+            FnSig {
+                params: vec![Ty::Str, Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
         env.define_fn(
             "num_cpus",
             FnSig {
@@ -560,6 +585,14 @@ impl TypeEnv {
         );
         env.define_fn(
             "process_wait_timeout",
+            FnSig {
+                params: vec![Ty::I64, Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "process_poll_wait",
             FnSig {
                 params: vec![Ty::I64, Ty::I64],
                 return_ty: Ty::I64,

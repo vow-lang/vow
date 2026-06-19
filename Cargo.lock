@@ -1012,6 +1012,7 @@ dependencies = [
 name = "vow-runtime"
 version = "0.2.0"
 dependencies = [
+ "flate2",
  "libc",
  "serde_json",
  "vow-diag",

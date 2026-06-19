@@ -25,6 +25,15 @@ struct FileReadState {
 
 static PROCESS_MAP: Mutex<Option<HashMap<i64, ProcessState>>> = Mutex::new(None);
 static NEXT_PROCESS_HANDLE: AtomicI64 = AtomicI64::new(1);
+// Persistent stdout/stderr drain threads for handles being polled via
+// __vow_process_poll_wait, so a chatty child (ESBMC) cannot deadlock on a full
+// pipe between polls. Keyed by handle; joined when the child completes or is
+// killed (issue #784).
+type PollReaders = (
+    std::thread::JoinHandle<Vec<u8>>,
+    std::thread::JoinHandle<Vec<u8>>,
+);
+static POLL_READERS: Mutex<Option<HashMap<i64, PollReaders>>> = Mutex::new(None);
 static FILE_READ_MAP: Mutex<Option<HashMap<i64, FileReadState>>> = Mutex::new(None);
 static NEXT_FILE_READ_HANDLE: AtomicI64 = AtomicI64::new(1);
 
@@ -2274,11 +2283,255 @@ pub extern "C" fn __vow_time_unix_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Monotonic microseconds since the first call (the process clock origin). Used
+/// by the --perfetto tracer as its `now_us` source, mirroring the Rust driver's
+/// `Instant`-based `Profiler::now_us` (issue #784). The first call returns ~0.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_time_micros() -> i64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_micros() as i64
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_num_cpus() -> i64 {
     std::thread::available_parallelism()
         .map(|n| n.get() as i64)
         .unwrap_or(1)
+}
+
+// ── Perfetto resource sampling (issue #784) ────────────────────────────────
+// One OS process snapshot, decoupled from /proc so the reducer is unit-testable
+// with synthetic tables. Mirrors vow/src/perfetto.rs::ProcInfo.
+#[derive(Clone, Debug)]
+struct ProcInfo {
+    pid: u64,
+    parent: Option<u64>,
+    name: String,
+    rss_kb: f64,
+    cpu_pct: f64,
+}
+
+/// One resource sample to emit as a counter group. Mirrors perfetto.rs::Sample.
+#[derive(Clone, Debug, PartialEq)]
+struct ProcSample {
+    group: String,
+    pid: u64,
+    rss_kb: f64,
+    cpu_pct: f64,
+}
+
+/// Reduce a process table to the compiler self sample (`group = "compiler"`)
+/// plus one group per ESBMC child of `own_pid` (`group = "esbmc:<pid>"`) summing
+/// that child's whole descendant subtree so the SMT solver's memory (z3/
+/// boolector run as ESBMC's children) is counted. Excludes unrelated system
+/// `esbmc` processes (parent check) and the linker child (name check). This is a
+/// faithful port of vow/src/perfetto.rs::collect_samples.
+fn collect_proc_samples(procs: &[ProcInfo], own_pid: u64) -> Vec<ProcSample> {
+    let mut samples = Vec::new();
+    if let Some(me) = procs.iter().find(|p| p.pid == own_pid) {
+        samples.push(ProcSample {
+            group: "compiler".to_string(),
+            pid: own_pid,
+            rss_kb: me.rss_kb,
+            cpu_pct: me.cpu_pct,
+        });
+    }
+
+    let mut children: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
+    for p in procs {
+        if let Some(par) = p.parent {
+            children.entry(par).or_default().push(p.pid);
+        }
+    }
+    let by_pid: std::collections::HashMap<u64, &ProcInfo> =
+        procs.iter().map(|p| (p.pid, p)).collect();
+
+    let mut esbmc_children: Vec<&ProcInfo> = procs
+        .iter()
+        .filter(|p| p.parent == Some(own_pid) && p.name.starts_with("esbmc"))
+        .collect();
+    esbmc_children.sort_by_key(|p| p.pid);
+
+    for child in esbmc_children {
+        // Sum the child's whole descendant subtree (esbmc + its solver procs).
+        let (mut rss_kb, mut cpu_pct) = (0.0, 0.0);
+        let mut stack = vec![child.pid];
+        while let Some(pid) = stack.pop() {
+            if let Some(p) = by_pid.get(&pid) {
+                rss_kb += p.rss_kb;
+                cpu_pct += p.cpu_pct;
+            }
+            if let Some(kids) = children.get(&pid) {
+                stack.extend(kids.iter().copied());
+            }
+        }
+        samples.push(ProcSample {
+            group: format!("esbmc:{}", child.pid),
+            pid: child.pid,
+            rss_kb,
+            cpu_pct,
+        });
+    }
+
+    samples
+}
+
+/// Read the live process table from /proc (Linux only). RSS comes from
+/// /proc/<pid>/statm (resident pages); ppid/comm/jiffies from /proc/<pid>/stat.
+/// `cpu_pct` is best-effort: a CPU-jiffy delta between successive calls divided
+/// by the wall-time delta (0% on a process's first sighting). Returns an empty
+/// table on non-Linux or on any read error, so callers degrade to no counters.
+#[cfg(target_os = "linux")]
+fn read_proc_table() -> Vec<ProcInfo> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+
+    static SAMPLE_EPOCH: OnceLock<Instant> = OnceLock::new();
+    static CPU_PREV: OnceLock<Mutex<std::collections::HashMap<u64, (u64, u128)>>> = OnceLock::new();
+
+    let now_us = SAMPLE_EPOCH.get_or_init(Instant::now).elapsed().as_micros();
+    let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+    let page_kb = (unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as f64) / 1024.0;
+
+    let prev_lock = CPU_PREV.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut prev = match prev_lock.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+
+    let dir = match std::fs::read_dir("/proc") {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for entry in dir.flatten() {
+        let fname = entry.file_name();
+        let name = match fname.to_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        let pid: u64 = match name.parse() {
+            Ok(p) => p,
+            Err(_) => continue, // non-numeric /proc entry
+        };
+
+        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(s) => s,
+            Err(_) => continue, // process gone or unreadable
+        };
+        // comm is wrapped in parens and may contain spaces/parens: fields after
+        // the last ')' are state(0) ppid(1) ... utime(11) stime(12).
+        let open = stat.find('(');
+        let close = stat.rfind(')');
+        let (comm, after) = match (open, close) {
+            (Some(o), Some(c)) if c > o => (stat[o + 1..c].to_string(), &stat[c + 1..]),
+            _ => continue,
+        };
+        let fields: Vec<&str> = after.split_whitespace().collect();
+        if fields.len() < 13 {
+            continue;
+        }
+        let parent: Option<u64> = fields[1].parse().ok();
+        let utime: u64 = fields[11].parse().unwrap_or(0);
+        let stime: u64 = fields[12].parse().unwrap_or(0);
+        let total_jiffies = utime + stime;
+
+        let rss_kb = std::fs::read_to_string(format!("/proc/{pid}/statm"))
+            .ok()
+            .and_then(|s| {
+                s.split_whitespace()
+                    .nth(1)
+                    .and_then(|r| r.parse::<f64>().ok())
+            })
+            .map(|pages| pages * page_kb)
+            .unwrap_or(0.0);
+
+        let cpu_pct = match prev.get(&pid) {
+            Some(&(prev_j, prev_us)) if clk_tck > 0.0 && now_us > prev_us => {
+                let dj = total_jiffies.saturating_sub(prev_j) as f64;
+                let dt_s = (now_us - prev_us) as f64 / 1_000_000.0;
+                if dt_s > 0.0 {
+                    (dj / clk_tck) / dt_s * 100.0
+                } else {
+                    0.0
+                }
+            }
+            _ => 0.0,
+        };
+        prev.insert(pid, (total_jiffies, now_us));
+
+        out.push(ProcInfo {
+            pid,
+            parent,
+            name: comm,
+            rss_kb,
+            cpu_pct,
+        });
+    }
+    out
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_proc_table() -> Vec<ProcInfo> {
+    Vec::new()
+}
+
+/// Sample this process and its ESBMC children, returning a compact newline-
+/// separated string `"<group>|<rss_kb>|<cpu_pct>"` per line (integers), e.g.
+/// `"compiler|10240|3\nesbmc:8123|512000|198"`. Empty string on non-Linux or
+/// when nothing could be read — the Vow tracer then emits no counters.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_proc_sample() -> *mut u8 {
+    let own_pid = std::process::id() as u64;
+    let procs = read_proc_table();
+    let samples = collect_proc_samples(&procs, own_pid);
+    let mut s = String::new();
+    for smp in &samples {
+        if !s.is_empty() {
+            s.push('\n');
+        }
+        s.push_str(&format!(
+            "{}|{}|{}",
+            smp.group, smp.rss_kb as i64, smp.cpu_pct as i64
+        ));
+    }
+    unsafe { __vow_string_new(s.as_ptr() as *const i8, s.len()) }
+}
+
+/// Gzip-compress `data` and write it to `path` (both Vow Strings). Returns 0 on
+/// success, non-zero on error. Used by the self-hosted --perfetto tracer to emit
+/// the gzipped Chrome Trace Event Format file (issue #784). ui.perfetto.dev
+/// auto-decompresses a single gzip stream.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_gzip_write_file(path_ptr: *const u8, data_ptr: *const u8) -> i64 {
+    use std::io::Write;
+    if path_ptr.is_null() || data_ptr.is_null() {
+        return -1;
+    }
+    sanitize_on_read(path_ptr as usize, 0);
+    sanitize_on_read(data_ptr as usize, 0);
+    let vp = unsafe { &*(path_ptr as *const VowVec) };
+    let path_bytes = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
+    let path = match std::str::from_utf8(path_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let vd = unsafe { &*(data_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(vd.ptr, vd.len) };
+    let file = match std::fs::File::create(path) {
+        Ok(f) => f,
+        Err(_) => return -1,
+    };
+    let mut enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    if enc.write_all(bytes).is_err() {
+        return -1;
+    }
+    match enc.finish() {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -2917,6 +3170,94 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
     }
 }
 
+/// Non-killing bounded poll of a process, for the --perfetto tracer (issue
+/// #784). Waits up to `ms` for the child; returns its exit code if it exited,
+/// `i64::MIN` (STILL_RUNNING) if it is still alive (LEFT RUNNING, not killed),
+/// or -1 on an unknown handle / wait error. Unlike `__vow_process_wait_timeout`
+/// it never kills on timeout, so the caller can sample resources between polls
+/// and re-impose its own watchdog deadline. stdout/stderr are drained by
+/// persistent reader threads (POLL_READERS) so a verbose child cannot deadlock.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
+    use std::io::Read;
+    let mut guard = PROCESS_MAP.lock().unwrap();
+    let map = process_map_init(&mut guard);
+    let mut child = match map.remove(&handle) {
+        Some(ProcessState::Running(c)) => c,
+        Some(ProcessState::Completed { stdout, stderr }) => {
+            map.insert(handle, ProcessState::Completed { stdout, stderr });
+            return 0;
+        }
+        None => return -1,
+    };
+
+    // On first poll of this handle, take stdout/stderr and spawn persistent
+    // drain threads so the child never blocks on a full pipe between polls.
+    {
+        let mut rguard = POLL_READERS.lock().unwrap();
+        let readers = rguard.get_or_insert_with(HashMap::new);
+        if let std::collections::hash_map::Entry::Vacant(e) = readers.entry(handle) {
+            let stdout_handle = child.stdout.take();
+            let stderr_handle = child.stderr.take();
+            let stdout_thread = std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = stdout_handle {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                buf
+            });
+            let stderr_thread = std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = stderr_handle {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                buf
+            });
+            e.insert((stdout_thread, stderr_thread));
+        }
+    }
+
+    // Poll without holding the process-map lock across sleeps.
+    drop(guard);
+    let budget = std::time::Duration::from_millis(ms.max(0) as u64);
+    let start = std::time::Instant::now();
+    let outcome: Result<i64, ()> = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status.code().unwrap_or(-1) as i64),
+            Ok(None) => {
+                if start.elapsed() >= budget {
+                    break Err(()); // still running
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(_) => break Ok(-1),
+        }
+    };
+
+    let mut guard = PROCESS_MAP.lock().unwrap();
+    let map = process_map_init(&mut guard);
+    match outcome {
+        Ok(exit_code) => {
+            let readers = POLL_READERS
+                .lock()
+                .unwrap()
+                .as_mut()
+                .and_then(|m| m.remove(&handle));
+            let (stdout, stderr) = match readers {
+                Some((so, se)) => (so.join().unwrap_or_default(), se.join().unwrap_or_default()),
+                None => (Vec::new(), Vec::new()),
+            };
+            map.insert(handle, ProcessState::Completed { stdout, stderr });
+            exit_code
+        }
+        Err(()) => {
+            // Still running — reinsert and report the sentinel; do NOT kill.
+            map.insert(handle, ProcessState::Running(child));
+            i64::MIN
+        }
+    }
+}
+
 /// Kill a running process. Returns 0 on success, -1 on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_process_kill(handle: i64) -> i64 {
@@ -2926,20 +3267,29 @@ pub extern "C" fn __vow_process_kill(handle: i64) -> i64 {
         Some(s) => s,
         None => return -1,
     };
-    match state {
-        ProcessState::Running(mut child) => match child.kill() {
-            Ok(_) => {
-                let _ = child.wait();
-                0
-            }
-            Err(_) => {
-                // Kill failed — process likely already exited. Reap it.
-                let _ = child.wait();
-                0
-            }
-        },
+    let rc = match state {
+        ProcessState::Running(mut child) => {
+            // Kill (or reap if already exited), then close pipes by dropping the
+            // child so any poll-drain threads can finish.
+            let _ = child.kill();
+            let _ = child.wait();
+            0
+        }
         ProcessState::Completed { .. } => 0,
+    };
+    drop(guard);
+    // Reclaim any poll-drain threads for this handle (issue #784) so killing a
+    // polled child during the watchdog path does not leak its reader threads.
+    let readers = POLL_READERS
+        .lock()
+        .unwrap()
+        .as_mut()
+        .and_then(|m| m.remove(&handle));
+    if let Some((so, se)) = readers {
+        let _ = so.join();
+        let _ = se.join();
     }
+    rc
 }
 
 // ---------------------------------------------------------------------------
@@ -3417,6 +3767,143 @@ pub extern "C" fn __vow_sanitize_check_generation(vec: *const u8, index: usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collect_proc_samples_reports_compiler_self() {
+        let procs = vec![ProcInfo {
+            pid: 1,
+            parent: None,
+            name: "vowc".into(),
+            rss_kb: 1000.0,
+            cpu_pct: 10.0,
+        }];
+        let samples = collect_proc_samples(&procs, 1);
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].group, "compiler");
+        assert_eq!(samples[0].pid, 1);
+        assert_eq!(samples[0].rss_kb, 1000.0);
+        assert_eq!(samples[0].cpu_pct, 10.0);
+    }
+
+    #[test]
+    fn collect_proc_samples_sums_esbmc_subtree_and_filters() {
+        let procs = vec![
+            ProcInfo {
+                pid: 1,
+                parent: None,
+                name: "vowc".into(),
+                rss_kb: 1000.0,
+                cpu_pct: 5.0,
+            },
+            // ESBMC child of ours.
+            ProcInfo {
+                pid: 2,
+                parent: Some(1),
+                name: "esbmc".into(),
+                rss_kb: 2000.0,
+                cpu_pct: 20.0,
+            },
+            // Solver grandchild — must fold into the esbmc:2 group.
+            ProcInfo {
+                pid: 3,
+                parent: Some(2),
+                name: "z3".into(),
+                rss_kb: 5000.0,
+                cpu_pct: 50.0,
+            },
+            // Linker child of ours — excluded by name.
+            ProcInfo {
+                pid: 4,
+                parent: Some(1),
+                name: "cc".into(),
+                rss_kb: 800.0,
+                cpu_pct: 1.0,
+            },
+            // Unrelated system esbmc (different parent) — excluded.
+            ProcInfo {
+                pid: 5,
+                parent: Some(99),
+                name: "esbmc".into(),
+                rss_kb: 9999.0,
+                cpu_pct: 9.0,
+            },
+        ];
+        let samples = collect_proc_samples(&procs, 1);
+
+        let esbmc: Vec<&ProcSample> = samples
+            .iter()
+            .filter(|s| s.group.starts_with("esbmc"))
+            .collect();
+        assert_eq!(esbmc.len(), 1, "exactly one esbmc group");
+        assert_eq!(esbmc[0].pid, 2);
+        assert_eq!(esbmc[0].rss_kb, 7000.0, "esbmc + z3 subtree summed");
+        assert_eq!(esbmc[0].cpu_pct, 70.0);
+        // Linker (pid 4) and unrelated esbmc (pid 5) never appear as groups.
+        assert!(samples.iter().all(|s| s.pid != 4 && s.pid != 5));
+    }
+
+    #[test]
+    fn process_poll_wait_does_not_kill_running_child() {
+        // Insert a real sleeping child directly into the process map.
+        let child = std::process::Command::new("sleep")
+            .arg("0.4")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn sleep");
+        let handle = 999_001;
+        {
+            let mut g = PROCESS_MAP.lock().unwrap();
+            let m = process_map_init(&mut g);
+            m.insert(handle, ProcessState::Running(child));
+        }
+        // First poll: child should still be running and NOT killed.
+        let r1 = __vow_process_poll_wait(handle, 10);
+        assert_eq!(r1, i64::MIN, "still-running sentinel, child left alive");
+        // Keep polling until it exits; it must exit 0 (was never killed early).
+        let mut code = i64::MIN;
+        for _ in 0..200 {
+            code = __vow_process_poll_wait(handle, 20);
+            if code != i64::MIN {
+                break;
+            }
+        }
+        assert_eq!(code, 0, "sleep exits 0 — poll_wait did not kill it");
+    }
+
+    #[test]
+    fn time_micros_is_monotonic() {
+        let a = __vow_time_micros();
+        let b = __vow_time_micros();
+        assert!(b >= a, "monotonic, non-decreasing");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let c = __vow_time_micros();
+        assert!(c > a, "advances after a sleep");
+    }
+
+    #[test]
+    fn gzip_write_file_roundtrips() {
+        use std::io::Read;
+        let dir = std::env::temp_dir().join(format!("vow_gz_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.json.gz");
+        let payload = r#"{"traceEvents":[{"ph":"X","name":"parse"}],"displayTimeUnit":"ms"}"#;
+
+        let path_s = path.to_string_lossy().into_owned();
+        let path_v = unsafe { __vow_string_new(path_s.as_ptr() as *const i8, path_s.len()) };
+        let data_v = unsafe { __vow_string_new(payload.as_ptr() as *const i8, payload.len()) };
+        let rc = unsafe { __vow_gzip_write_file(path_v, data_v) };
+        assert_eq!(rc, 0, "gzip write should succeed");
+
+        // Decode the file back and confirm it matches the original payload.
+        let f = std::fs::File::open(&path).unwrap();
+        let mut gz = flate2::read::GzDecoder::new(f);
+        let mut decoded = String::new();
+        gz.read_to_string(&mut decoded).unwrap();
+        assert_eq!(decoded, payload);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn malloc_free_roundtrip() {
