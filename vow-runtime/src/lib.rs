@@ -3170,9 +3170,15 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
     }
 }
 
+/// Sentinel returned by `__vow_process_poll_wait` when the child is still
+/// running (left alive, not killed). Chosen well outside any real process exit
+/// code or the -1/-2/-3 error sentinels, and easily representable in Vow source.
+/// The self-hosted poll loop (verifier.vow) compares against this exact value.
+pub const VOW_PROC_STILL_RUNNING: i64 = -999_999;
+
 /// Non-killing bounded poll of a process, for the --perfetto tracer (issue
 /// #784). Waits up to `ms` for the child; returns its exit code if it exited,
-/// `i64::MIN` (STILL_RUNNING) if it is still alive (LEFT RUNNING, not killed),
+/// `VOW_PROC_STILL_RUNNING` if it is still alive (LEFT RUNNING, not killed),
 /// or -1 on an unknown handle / wait error. Unlike `__vow_process_wait_timeout`
 /// it never kills on timeout, so the caller can sample resources between polls
 /// and re-impose its own watchdog deadline. stdout/stderr are drained by
@@ -3253,7 +3259,7 @@ pub extern "C" fn __vow_process_poll_wait(handle: i64, ms: i64) -> i64 {
         Err(()) => {
             // Still running — reinsert and report the sentinel; do NOT kill.
             map.insert(handle, ProcessState::Running(child));
-            i64::MIN
+            VOW_PROC_STILL_RUNNING
         }
     }
 }
@@ -3843,6 +3849,38 @@ mod tests {
     }
 
     #[test]
+    fn process_poll_wait_captures_stdout() {
+        // Polling a process to completion must still capture its stdout (drained
+        // by the poll reader threads) so verification output is not lost.
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("printf 'VERIFICATION SUCCESSFUL'; sleep 0.05")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn sh");
+        let handle = 999_002;
+        {
+            let mut g = PROCESS_MAP.lock().unwrap();
+            let m = process_map_init(&mut g);
+            m.insert(handle, ProcessState::Running(child));
+        }
+        let mut code = VOW_PROC_STILL_RUNNING;
+        for _ in 0..400 {
+            code = __vow_process_poll_wait(handle, 20);
+            if code != VOW_PROC_STILL_RUNNING {
+                break;
+            }
+        }
+        assert_eq!(code, 0, "sh exits 0");
+        let out_ptr = __vow_process_stdout_for(handle);
+        let v = unsafe { &*(out_ptr as *const VowVec) };
+        let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+        let s = std::str::from_utf8(bytes).unwrap_or("");
+        assert!(s.contains("VERIFICATION SUCCESSFUL"), "captured stdout was: {s:?}");
+    }
+
+    #[test]
     fn process_poll_wait_does_not_kill_running_child() {
         // Insert a real sleeping child directly into the process map.
         let child = std::process::Command::new("sleep")
@@ -3859,12 +3897,12 @@ mod tests {
         }
         // First poll: child should still be running and NOT killed.
         let r1 = __vow_process_poll_wait(handle, 10);
-        assert_eq!(r1, i64::MIN, "still-running sentinel, child left alive");
+        assert_eq!(r1, VOW_PROC_STILL_RUNNING, "still-running sentinel, child left alive");
         // Keep polling until it exits; it must exit 0 (was never killed early).
-        let mut code = i64::MIN;
+        let mut code = VOW_PROC_STILL_RUNNING;
         for _ in 0..200 {
             code = __vow_process_poll_wait(handle, 20);
-            if code != i64::MIN {
+            if code != VOW_PROC_STILL_RUNNING {
                 break;
             }
         }
