@@ -2759,9 +2759,14 @@ fn cargo_target_dir() -> std::path::PathBuf {
 
 fn find_lib_in_cargo_target(name: &str, target_dir: &std::path::Path) -> Option<String> {
     // Development fallback only: env overrides and installed-prefix libraries
-    // are checked first, so prefer plain cargo build/test artifacts here while
-    // still accepting release bootstrap artifacts.
-    for profile in &["debug", "release"] {
+    // are checked first. Prefer `release` over `debug`: the bootstrap
+    // (`cargo build --release --all`, scripts/bootstrap.sh) produces the
+    // release archives, so a stale pre-existing `target/debug/*.a` (left over
+    // from an earlier `cargo build`/`cargo test`) must not shadow the fresh
+    // release runtime — otherwise a newly added `__vow_*` builtin links against
+    // the older debug archive and fails with undefined references. A
+    // debug-only checkout (no release archive) still resolves to debug.
+    for profile in &["release", "debug"] {
         let p = target_dir.join(profile).join(name);
         if p.exists() {
             return Some(p.to_string_lossy().into_owned());
@@ -3795,7 +3800,11 @@ mod tests {
     }
 
     #[test]
-    fn cargo_target_fallback_prefers_debug_before_release() {
+    fn cargo_target_fallback_prefers_release_before_debug() {
+        // A stale pre-existing target/debug archive must not shadow the fresh
+        // release archive produced by the bootstrap; otherwise a newly added
+        // __vow_* runtime symbol links against the older debug build and fails
+        // with undefined references. See find_lib_in_cargo_target.
         let root = tempfile::TempDir::new().unwrap();
         let debug_dir = root.path().join("debug");
         let release_dir = root.path().join("release");
@@ -3808,7 +3817,21 @@ mod tests {
 
         let found =
             find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
-        let expected = debug_lib.to_string_lossy().into_owned();
+        let expected = release_lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_accepts_debug_when_release_missing() {
+        let root = tempfile::TempDir::new().unwrap();
+        let debug_dir = root.path().join("debug");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        let lib = debug_dir.join("libvow_runtime.a");
+        std::fs::write(&lib, b"debug").unwrap();
+
+        let found =
+            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
+        let expected = lib.to_string_lossy().into_owned();
         assert_eq!(found.as_deref(), Some(expected.as_str()));
     }
 
