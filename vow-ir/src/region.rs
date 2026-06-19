@@ -818,6 +818,13 @@ impl BlockTree {
     fn depth_of(&self, block: BlockId) -> u32 {
         self.depth.get(&block).copied().unwrap_or(0)
     }
+
+    /// The block-tree parent of `block` (its enclosing region in the DFS
+    /// spanning tree), or `None` for a DFS root. Used to lift a loop-carried
+    /// value out of a refreshed loop region into the loop's enclosing scope.
+    fn parent_of(&self, block: BlockId) -> Option<BlockId> {
+        self.parent.get(&block).copied().flatten()
+    }
 }
 
 fn emit_live_linear_errors(
@@ -1462,6 +1469,16 @@ fn analyze_function(
     let phi_arms = collect_phi_arms(func);
     let block_tree = BlockTree::from_function(func);
 
+    // Loop-header blocks (back-edge targets). A value loop-carried through
+    // such a Phi must not be placed in the header's own `Block(_)` region:
+    // that arena is refreshed (closed + reopened) on every back-edge, so a
+    // value live across the back-edge would be freed while still reachable.
+    // Computed from the CFG (not the inferred regions) to avoid circularity.
+    let loop_headers: BTreeSet<BlockId> = detect_loop_back_edges(func)
+        .into_iter()
+        .map(|(_, header)| header)
+        .collect();
+
     // Forward sweep collecting use-set contributions.
     for block in &func.blocks {
         for inst in &block.insts {
@@ -1473,6 +1490,8 @@ fn analyze_function(
                 is_scalar_ty(func.return_ty),
                 &mut must_outlive,
                 &mut summary,
+                &loop_headers,
+                &block_tree,
             );
         }
     }
@@ -1511,19 +1530,18 @@ fn analyze_function(
             if inst.opcode == Opcode::Call
                 && !matches!(&inst.data, InstData::CallExtern(sym) if heap_producing_extern(sym))
             {
-                // Hidden caller-region codegen is still too shallow for
-                // unresolved/internal aggregate FreshInCaller call results
-                // that are immediately projected and repackaged. Keep those
-                // materialisations conservative, while allowing recognised
-                // runtime heap producers to route through their explicit
-                // arena-aware ABI.
-                if matches!(region_id, RegionId::Block(_) | RegionId::Caller(_)) {
-                    if matches!(region_id, RegionId::Caller(_)) {
-                        // Stash the pre-rewrite Caller(_) so the note pass can
-                        // see it; only Caller(_) ever fires `RegionRootEscape`,
-                        // so capturing Block(_) would just inflate the map.
-                        note_region_map.insert(inst.id, region_id);
-                    }
+                // Internal `Call` heap results that escape to a hidden caller
+                // arena (`Caller(_)`) are still collapsed to `Root` for codegen
+                // conservatism. `Block(_)` results are now safe to keep local:
+                // loop-carried escape — the hazard the previous blanket collapse
+                // masked (issue #400) — is handled in `must_outlive` via the
+                // loop-header Upsilon lifting above, so a genuinely block-local
+                // internal-call Vec/String/Map is freed at its block's close
+                // instead of leaking into the root arena.
+                if matches!(region_id, RegionId::Caller(_)) {
+                    // Stash the pre-rewrite Caller(_) so the note pass can see
+                    // it; only Caller(_) ever fires `RegionRootEscape`.
+                    note_region_map.insert(inst.id, region_id);
                     region_id = RegionId::Root;
                 }
             }
@@ -1855,6 +1873,8 @@ fn handle_inst(
     return_is_scalar: bool,
     must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
     summary: &mut InternalSummary,
+    loop_headers: &BTreeSet<BlockId>,
+    block_tree: &BlockTree,
 ) {
     match inst.opcode {
         Opcode::Return => {
@@ -1909,11 +1929,21 @@ fn handle_inst(
                 && let Some(&source_id) = inst.args.first()
                 && let Some((target_block, _)) = inst_lookup.get(&target_phi)
             {
-                add_marker(
-                    must_outlive,
-                    source_id,
-                    MustOutliveMarker::Block(*target_block),
-                );
+                // The source is carried into the Phi at `target_block`. If that
+                // block is a loop header, the source is live across the loop's
+                // back-edge, so it must outlive the refreshed `Block(header)`
+                // arena. Lift it to the loop's enclosing block region (the
+                // header's block-tree parent); fall back to Root when the loop
+                // has no enclosing block. A non-loop Phi keeps `Block(header)`.
+                let marker = if loop_headers.contains(target_block) {
+                    match block_tree.parent_of(*target_block) {
+                        Some(parent) => MustOutliveMarker::Block(parent),
+                        None => MustOutliveMarker::Root,
+                    }
+                } else {
+                    MustOutliveMarker::Block(*target_block)
+                };
+                add_marker(must_outlive, source_id, marker);
             }
         }
         Opcode::Call => {
@@ -6035,7 +6065,13 @@ mod tests {
     }
 
     #[test]
-    fn fresh_in_caller_call_result_used_locally_remains_root_until_aggregate_codegen() {
+    fn fresh_in_caller_call_result_used_locally_stays_block_local() {
+        // Issue #400: an internal `Call` FreshInCaller result that is used
+        // locally and never escapes (no return, no store, no loop-carry) must
+        // resolve to its own `Block(_)` region so it frees at block close,
+        // rather than being collapsed into the never-freed root arena. The old
+        // blanket `Block(_) | Caller(_) -> Root` collapse leaked exactly this
+        // shape; the collapse now fires only for `Caller(_)`.
         let callee = build_returning_alloc();
         let caller_insts = vec![
             inst(
@@ -6054,8 +6090,85 @@ mod tests {
         let call = &m.functions[1].blocks[0].insts[0];
         assert_eq!(
             call.region,
-            RegionId::Root,
-            "FreshInCaller call result materialization remains conservative until aggregate hidden-region codegen is complete"
+            RegionId::Block(BlockId(0)),
+            "non-escaping FreshInCaller call result should be block-local, not collapsed to Root"
+        );
+    }
+
+    #[test]
+    fn loop_carried_alloc_is_lifted_out_of_refreshed_header_region() {
+        // Issue #400: a heap value created inside a loop body and carried
+        // across the back-edge (an Upsilon source feeding the loop-header Phi)
+        // must NOT be placed in the loop header's own Block(_) region — that
+        // arena is refreshed (closed + reopened) on every back-edge, which
+        // would free the value while it is still live in the next iteration.
+        // It is lifted to the loop's enclosing block region instead. Without
+        // the lift its must_outlive set {Block(header), Block(body)} LCAs to
+        // Block(header) (the refreshed arena); the lift replaces the header
+        // marker with the header's parent so the LCA becomes the enclosing
+        // block.
+        let entry_alloc = inst(
+            1,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        let b0 = vec![
+            entry_alloc,
+            inst(
+                2,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![1],
+                InstData::PhiTarget(InstId(5)),
+            ),
+            jump_inst(3, 1),
+        ];
+        let b1 = vec![
+            inst(5, Opcode::Phi, Ty::Ptr, vec![], InstData::None),
+            branch_inst(6, 2, 3),
+        ];
+        // The allocation under test: created in the loop body, carried back to
+        // the header Phi across the back-edge (block 2 -> block 1).
+        let body_alloc = inst(
+            7,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        let b2 = vec![
+            body_alloc,
+            inst(
+                8,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![7],
+                InstData::PhiTarget(InstId(5)),
+            ),
+            jump_inst(9, 1),
+        ];
+        let b3 = vec![return_unit_inst(10)];
+        let f = function(
+            0,
+            "loop_carry",
+            vec![],
+            Ty::Unit,
+            vec![block(0, b0), block(1, b1), block(2, b2), block(3, b3)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+        let carried = m.functions[0].blocks[2].insts[0].region;
+        assert_ne!(
+            carried,
+            RegionId::Block(BlockId(1)),
+            "loop-carried alloc must not land in the refreshed loop-header region"
+        );
+        assert_eq!(
+            carried,
+            RegionId::Block(BlockId(0)),
+            "loop-carried alloc should be lifted to the loop's enclosing block region"
         );
     }
 

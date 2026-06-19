@@ -1,4 +1,3 @@
-// TEST: skip "issue #400: internal-Call heap result rewritten Block/Caller -> Root in vow-ir/src/region.rs:1511-1528"
 // TEST: stdout "ok"
 // Regression for issue #400 (small Vec/String backings leak into root region).
 //
@@ -9,24 +8,23 @@
 // `Block(_)` — placing the backing in `consume`'s block arena,
 // which closes at function exit and frees every chunk it owns.
 //
-// Today the region pass infers `Block(_)` correctly, but then
-// `analyze_function` in `vow-ir/src/region.rs:1511-1528` unconditionally
-// rewrites any internal-`Call` heap producer with region
-// `Block(_) | Caller(_)` to `RegionId::Root`, citing
-//   "Hidden caller-region codegen is still too shallow for unresolved/
-//    internal aggregate FreshInCaller call results that are immediately
-//    projected and repackaged."
-// (commit 3916da6 "Implement block-tree region LUB").
+// The region pass infers `Block(_)` for this call result. A previous
+// blanket rewrite in `analyze_function` collapsed *every* internal-`Call`
+// heap producer with region `Block(_) | Caller(_)` to `RegionId::Root` —
+// so transient Vec<i64>/Vec<String>/HashMap<K,V> returns were pinned in
+// the root arena and never freed. PR #392 (issue #391) could not reclaim
+// them because the backings are <2048 bytes and live inside shared normal
+// chunks; `arena_try_free_oversized_chunk` only frees single-resident
+// oversized chunks.
 //
-// The rewrite was intended to protect a specific projection-and-
-// repackaging codegen path, but it fires for every internal-Call heap
-// result — so transient Vec<i64>/Vec<String>/HashMap<K,V> returns get
-// pinned in the root arena and never freed. PR #392 (issue #391) cannot
-// reclaim them because the backings are <2048 bytes and live inside
-// shared normal chunks; `arena_try_free_oversized_chunk` only frees
-// single-resident oversized chunks.
+// The collapse now fires only for `Caller(_)`. Genuinely block-local
+// internal-call results (no return, no store, no loop-carry — like the
+// one below) keep their `Block(_)` region and free at block close. The
+// loop-carried escape the blanket collapse used to mask is handled
+// soundly in `must_outlive` by lifting loop-header Upsilon sources out of
+// the refreshed loop arena.
 //
-// Once the over-approximation is fixed, the loop below should leave
+// With the fix in place, the loop below leaves
 // `memory_root_arena_bytes()` essentially unchanged from before the
 // loop (modulo the initial 4112-byte root chunk plus any small
 // per-iteration allocations that genuinely escape — the Vec is not one
