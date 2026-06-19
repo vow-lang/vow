@@ -7,6 +7,7 @@ use clif
 use c_emitter
 use verifier
 use diag
+use perfetto
 use mutants_sites
 use mutants_patch
 use mutants_oracle
@@ -579,8 +580,30 @@ fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<
 // Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
 fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> i64 [io] {
+    run_verify_loop_traced(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, trace_off())
+}
+
+// Collect one ESBMC result and record its proof span + compiler->esbmc flow
+// arrow (issue #784). `verify_origin` is the verification-driver handoff origin;
+// `fi` is the function index used as the flow id. A no-op for tracing when `t`
+// is disabled. Returns the proven flag from verify_collect_and_report.
+fn verify_collect_traced(t: TraceCtx, verify_origin: i64, h: i64, tmp: String, f: IrFunction, fi: i64, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+    let proof_start: i64 = trace_now(t);
+    trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, fi, TRACE_FLOW_START());
+    trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, fi, TRACE_FLOW_END());
+    let proven: i64 = verify_collect_and_report(h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+    trace_sample(t, trace_now(t));
+    trace_span(t, str2(String::from("esbmc:"), f.name), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, trace_now(t) - proof_start, f.name);
+    proven
+}
+
+// Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
+fn run_verify_loop_traced(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64, t: TraceCtx) -> i64 [io] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
+    let verify_origin: i64 = trace_now(t);
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
     let in_flight_h: Vec<i64> = Vec::new();
     let in_flight_fi: Vec<i64> = Vec::new();
@@ -599,7 +622,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -627,7 +650,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -833,7 +856,11 @@ fn verify_collect_and_report(
 
 fn run_verify(argv: Vec<String>) -> i32 [io] {
     let path: String = frontend_path_from_argv(argv, true);
-    let fr: LoweredFrontend = frontend_lower_path(path);
+    let tctx: TraceCtx = {
+        if has_flag(argv, "--perfetto") { trace_new(get_flag_arg(argv, "--perfetto")) }
+        else { trace_off() }
+    };
+    let fr: LoweredFrontend = frontend_lower_path_traced(path, String::from(""), tctx);
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
     let n_items: i64 = checked.n_items;
@@ -878,7 +905,9 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     let ces: Vec<VerifyCE> = Vec::new();
     let soft_meta: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
-    let outcome: i64 = run_verify_loop(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs);
+    let t_verify: i64 = trace_now(tctx);
+    let outcome: i64 = run_verify_loop_traced(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, tctx);
+    trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), t_verify, trace_now(tctx) - t_verify, String::from(""));
     let status_str: String = {
         if outcome == 0 { String::from("Verified") }
         else if outcome == 2 { String::from("Skipped") }
@@ -897,6 +926,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         vf_func = legacy[0];
         vf_ce = legacy[1];
     }
+    trace_write(tctx);
     diag_emit_verify_json_full(status_str, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if outcome != 0 {
         return 1;
@@ -1008,7 +1038,11 @@ fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, dct
 
 fn run_build(argv: Vec<String>) -> i32 [io] {
     let path: String = frontend_path_from_argv(argv, true);
-    let fr: LoweredFrontend = frontend_lower_path(path);
+    let tctx: TraceCtx = {
+        if has_flag(argv, "--perfetto") { trace_new(get_flag_arg(argv, "--perfetto")) }
+        else { trace_off() }
+    };
+    let fr: LoweredFrontend = frontend_lower_path_traced(path, String::from(""), tctx);
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
     let n_items: i64 = checked.n_items;
@@ -1093,9 +1127,13 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         if phase_result[0] == 0 { all_proven = 0; }
         if phase_result[1] == 1 { any_skipped = 1; }
     }
+    let t_codegen: i64 = trace_now(tctx);
     let codegen_status: i64 = build_codegen_phase(ir_mod, out, mode, trace, dctx);
+    trace_span(tctx, String::from("codegen"), PID_COMPILER(), TID_MAIN(), t_codegen, trace_now(tctx) - t_codegen, String::from(""));
+    trace_sample(tctx, trace_now(tctx));
     if codegen_status != 0 { return 1; }
     if !do_verify {
+        trace_write(tctx);
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
@@ -1118,6 +1156,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         vf_func = legacy[0];
         vf_ce = legacy[1];
     }
+    trace_write(tctx);
     diag_emit_build_verify_json_full(status_str, out, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if all_proven == 0 || any_skipped == 1 {
         return 1;
@@ -11699,9 +11738,6 @@ fn main() -> i32 [io, read, write] {
         return 1;
     }
     let cmd: i64 = get_subcommand(argv);
-    if has_flag(argv, "--perfetto") {
-        eprintln_str(String::from("note: --perfetto is not implemented in the self-hosted compiler; no trace written (use the Rust driver)"));
-    }
     if cmd == CMD_TEST() {
         return run_test(argv);
     }

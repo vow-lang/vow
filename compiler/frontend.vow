@@ -10,6 +10,7 @@ use lower
 use ir
 use diag
 use region
+use perfetto
 
 struct CheckedFrontend {
     path: String,
@@ -123,12 +124,22 @@ fn frontend_prepare_path(path: String) -> FrontendPrep [io] {
 // scan path here so a test at `compiler/tests/test_region.vow` can
 // `use region;` and resolve against `compiler/region.vow`.
 fn frontend_prepare_path_with_root(path: String, module_root: String) -> FrontendPrep [io] {
+    frontend_prepare_path_traced(path, module_root, trace_off())
+}
+
+// Tracing variant of `frontend_prepare_path_with_root`: records parse,
+// module-load, merge, and typecheck phase spans into `t` (a no-op when `t` is
+// disabled). Used by the --perfetto build/verify paths (issue #784).
+fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) -> FrontendPrep [io] {
     let dctx: DiagCtx = diag_ctx_new();
     let src: String = fs_read(path);
     diag_ctx_add_source(dctx, path, src);
+    let t_parse: i64 = trace_now(t);
     let tokens: Vec<Token> = lex(src);
     let arena: AstArena = arena_new();
     let m: Module = parse_module_into(tokens, arena, dctx, path);
+    trace_span(t, String::from("parse"), PID_COMPILER(), TID_MAIN(), t_parse, trace_now(t) - t_parse, String::from(""));
+    trace_sample(t, trace_now(t));
     let root_dir: String = {
         if module_root.len() > 0 { module_root }
         else { frontend_dir_path(path) }
@@ -140,7 +151,10 @@ fn frontend_prepare_path_with_root(path: String, module_root: String) -> Fronten
     let item_files: Vec<String> = Vec::new();
     let visited: Vec<String> = Vec::new();
     visited.push(path);
+    let t_load: i64 = trace_now(t);
     load_frontend_deps(root_dir, m, arena, all_items, item_files, visited, dctx);
+    trace_span(t, String::from("module-load"), PID_COMPILER(), TID_MAIN(), t_load, trace_now(t) - t_load, String::from(""));
+    let t_merge: i64 = trace_now(t);
     let root_items: Vec<i64> = m.items;
     let n_root: i64 = root_items.len();
     let mut ri: i64 = 0;
@@ -155,9 +169,13 @@ fn frontend_prepare_path_with_root(path: String, module_root: String) -> Fronten
         items: all_items,
         arena: arena,
     };
+    trace_span(t, String::from("merge"), PID_COMPILER(), TID_MAIN(), t_merge, trace_now(t) - t_merge, String::from(""));
     let n_items: i64 = all_items.len();
     let e: CheckEnv = env_new(dctx, path);
+    let t_check: i64 = trace_now(t);
     check_module(e, merged, item_files);
+    trace_span(t, String::from("typecheck"), PID_COMPILER(), TID_MAIN(), t_check, trace_now(t) - t_check, String::from(""));
+    trace_sample(t, trace_now(t));
     let checked: CheckedFrontend = CheckedFrontend {
         path: path,
         dctx: dctx,
@@ -181,7 +199,13 @@ fn frontend_lower_path(path: String) -> LoweredFrontend [io] {
 // `module_root` instead of the entry file's parent directory. Empty
 // `module_root` falls back to the default. See `frontend_prepare_path_with_root`.
 fn frontend_lower_path_with_root(path: String, module_root: String) -> LoweredFrontend [io] {
-    let prep: FrontendPrep = frontend_prepare_path_with_root(path, module_root);
+    frontend_lower_path_traced(path, module_root, trace_off())
+}
+
+// Tracing variant of `frontend_lower_path_with_root`: records lower,
+// region-inference, and region-markers spans into `t` (issue #784).
+fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) -> LoweredFrontend [io] {
+    let prep: FrontendPrep = frontend_prepare_path_traced(path, module_root, t);
     let checked: CheckedFrontend = prep.checked;
     // Snapshot the diags-Vec length before region inference. Counting
     // *new* errors after inference (rather than recounting the whole
@@ -199,9 +223,17 @@ fn frontend_lower_path_with_root(path: String, module_root: String) -> LoweredFr
             // Phase 3: region inference. Mutates summaries + per-inst regions
             // in place; emits any RegionConflict diagnostics through dctx so
             // they reach the existing CompileFailed JSON path.
+            let t_lower: i64 = trace_now(t);
             let lowered: IrModule = lower_module_vow(prep.merged, prep.str_eids, prep.item_files);
+            trace_span(t, String::from("lower"), PID_COMPILER(), TID_MAIN(), t_lower, trace_now(t) - t_lower, String::from(""));
+            let t_region: i64 = trace_now(t);
             let inferred: IrModule = infer_regions_module(lowered, checked.dctx);
-            insert_region_markers_module(inferred)
+            trace_span(t, String::from("region-inference"), PID_COMPILER(), TID_MAIN(), t_region, trace_now(t) - t_region, String::from(""));
+            let t_markers: i64 = trace_now(t);
+            let marked: IrModule = insert_region_markers_module(inferred);
+            trace_span(t, String::from("region-markers"), PID_COMPILER(), TID_MAIN(), t_markers, trace_now(t) - t_markers, String::from(""));
+            trace_sample(t, trace_now(t));
+            marked
         }
     };
     // Refresh n_errors so any region diagnostics emitted above propagate to
