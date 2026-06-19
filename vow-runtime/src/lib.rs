@@ -3877,7 +3877,10 @@ mod tests {
         let v = unsafe { &*(out_ptr as *const VowVec) };
         let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
         let s = std::str::from_utf8(bytes).unwrap_or("");
-        assert!(s.contains("VERIFICATION SUCCESSFUL"), "captured stdout was: {s:?}");
+        assert!(
+            s.contains("VERIFICATION SUCCESSFUL"),
+            "captured stdout was: {s:?}"
+        );
     }
 
     #[test]
@@ -3897,7 +3900,10 @@ mod tests {
         }
         // First poll: child should still be running and NOT killed.
         let r1 = __vow_process_poll_wait(handle, 10);
-        assert_eq!(r1, VOW_PROC_STILL_RUNNING, "still-running sentinel, child left alive");
+        assert_eq!(
+            r1, VOW_PROC_STILL_RUNNING,
+            "still-running sentinel, child left alive"
+        );
         // Keep polling until it exits; it must exit 0 (was never killed early).
         let mut code = VOW_PROC_STILL_RUNNING;
         for _ in 0..200 {
