@@ -7,6 +7,7 @@ use clif
 use c_emitter
 use verifier
 use diag
+use perfetto
 use mutants_sites
 use mutants_patch
 use mutants_oracle
@@ -579,8 +580,29 @@ fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<
 // Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
 fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> i64 [io] {
+    run_verify_loop_traced(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, trace_off())
+}
+
+// Collect one ESBMC result and record its proof span + compiler->esbmc flow
+// arrow (issue #784). `verify_origin` is the verification-driver handoff origin;
+// `fi` is the function index used as the flow id. A no-op for tracing when `t`
+// is disabled. Returns the proven flag from verify_collect_and_report.
+fn verify_collect_traced(t: TraceCtx, verify_origin: i64, h: i64, tmp: String, f: IrFunction, fi: i64, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+    let proof_start: i64 = trace_now(t);
+    trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, fi, TRACE_FLOW_START());
+    trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, fi, TRACE_FLOW_END());
+    let proven: i64 = verify_collect_and_report(h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t);
+    trace_span(t, str2(String::from("esbmc:"), f.name), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, trace_now(t) - proof_start, f.name);
+    proven
+}
+
+// Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
+fn run_verify_loop_traced(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64, t: TraceCtx) -> i64 [io] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
+    let verify_origin: i64 = trace_now(t);
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
     let in_flight_h: Vec<i64> = Vec::new();
     let in_flight_fi: Vec<i64> = Vec::new();
@@ -599,7 +621,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -627,7 +649,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -739,10 +761,10 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>) -> Vec<String> {
 fn verify_collect_and_report(
     h: i64, tmp_path: String, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64,
+    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, t: TraceCtx,
 ) -> i64 [io] {
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
-    let vr: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path);
+    let vr: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path, t);
     let st: i64 = vr.status;
     if st == VERIFY_PROVEN() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
@@ -833,7 +855,11 @@ fn verify_collect_and_report(
 
 fn run_verify(argv: Vec<String>) -> i32 [io] {
     let path: String = frontend_path_from_argv(argv, true);
-    let fr: LoweredFrontend = frontend_lower_path(path);
+    let tctx: TraceCtx = {
+        if has_flag(argv, "--perfetto") { trace_new(get_flag_arg(argv, "--perfetto")) }
+        else { trace_off() }
+    };
+    let fr: LoweredFrontend = frontend_lower_path_traced(path, String::from(""), tctx);
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
     let n_items: i64 = checked.n_items;
@@ -878,7 +904,9 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     let ces: Vec<VerifyCE> = Vec::new();
     let soft_meta: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
-    let outcome: i64 = run_verify_loop(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs);
+    let t_verify: i64 = trace_now(tctx);
+    let outcome: i64 = run_verify_loop_traced(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, tctx);
+    trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), t_verify, trace_now(tctx) - t_verify, String::from(""));
     let status_str: String = {
         if outcome == 0 { String::from("Verified") }
         else if outcome == 2 { String::from("Skipped") }
@@ -897,6 +925,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         vf_func = legacy[0];
         vf_ce = legacy[1];
     }
+    trace_write(tctx);
     diag_emit_verify_json_full(status_str, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if outcome != 0 {
         return 1;
@@ -917,7 +946,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
 //     through to `verify_collect_and_report`.
 // Returns `[all_proven, any_skipped]`.
 fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> Vec<i64> [io] {
+                     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64, verify_origin: i64, t: TraceCtx) -> Vec<i64> [io] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
     let mut fi: i64 = 0;
@@ -934,7 +963,7 @@ fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: 
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -968,7 +997,7 @@ fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: 
 //
 // A no-op when `in_flight_h` is empty; callers may invoke it unconditionally
 // without a do_verify guard if desired.
-fn build_drain_verify_phase(in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64) -> i64 [io] {
+fn build_drain_verify_phase(in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx) -> i64 [io] {
     let mut all_proven: i64 = all_proven_in;
     while in_flight_h.len() > 0 {
         let oldest_h: i64 = in_flight_h[0];
@@ -978,7 +1007,7 @@ fn build_drain_verify_phase(in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_fl
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_tmp, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -1008,7 +1037,11 @@ fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, dct
 
 fn run_build(argv: Vec<String>) -> i32 [io] {
     let path: String = frontend_path_from_argv(argv, true);
-    let fr: LoweredFrontend = frontend_lower_path(path);
+    let tctx: TraceCtx = {
+        if has_flag(argv, "--perfetto") { trace_new(get_flag_arg(argv, "--perfetto")) }
+        else { trace_off() }
+    };
+    let fr: LoweredFrontend = frontend_lower_path_traced(path, String::from(""), tctx);
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
     let n_items: i64 = checked.n_items;
@@ -1088,18 +1121,24 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let in_flight_fi: Vec<i64> = Vec::new();
     let in_flight_tmp: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
+    let verify_origin: i64 = trace_now(tctx);
     if do_verify {
-        let phase_result: Vec<i64> = build_verify_phase(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs);
+        let phase_result: Vec<i64> = build_verify_phase(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, verify_origin, tctx);
         if phase_result[0] == 0 { all_proven = 0; }
         if phase_result[1] == 1 { any_skipped = 1; }
     }
+    let t_codegen: i64 = trace_now(tctx);
     let codegen_status: i64 = build_codegen_phase(ir_mod, out, mode, trace, dctx);
+    trace_span(tctx, String::from("codegen"), PID_COMPILER(), TID_MAIN(), t_codegen, trace_now(tctx) - t_codegen, String::from(""));
+    trace_sample(tctx, trace_now(tctx));
     if codegen_status != 0 { return 1; }
     if !do_verify {
+        trace_write(tctx);
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
-    all_proven = build_drain_verify_phase(in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven);
+    all_proven = build_drain_verify_phase(in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx);
+    trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, trace_now(tctx) - verify_origin, String::from(""));
     let status_str: String = {
         if all_proven == 0 { String::from("VerifyFailed") }
         else if any_skipped == 1 { String::from("Skipped") }
@@ -1118,6 +1157,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         vf_func = legacy[0];
         vf_ce = legacy[1];
     }
+    trace_write(tctx);
     diag_emit_build_verify_json_full(status_str, out, dctx, ces_final, vstatus, vmsg, vf_func, vf_ce);
     if all_proven == 0 || any_skipped == 1 {
         return 1;
@@ -1421,7 +1461,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                                 // cmd_test launches verify_start with empty solver/encoding/timeout,
                                 // so effective_timeout matches what start_esbmc passed: 30s under auto.
                                 let t_eff: String = effective_timeout_for(String::from(""), String::from(""), String::from(""));
-                                let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp);
+                                let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp, trace_off());
                                 if ovr.status == VERIFY_FAILED() {
                                     verify_failed = true;
                                 } else if ovr.status == VERIFY_TIMEOUT() || (ovr.status == VERIFY_UNKNOWN() && output_has_memory_limit(ovr.raw_output)) {
@@ -1468,7 +1508,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         verify_failed = true;
                     } else if oh != -2 {
                         let t_eff: String = effective_timeout_for(String::from(""), String::from(""), String::from(""));
-                        let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp);
+                        let ovr: VerifyResult = verify_collect(oh, ovf, t_eff, otmp, trace_off());
                         if ovr.status == VERIFY_FAILED() {
                             verify_failed = true;
                         } else if ovr.status == VERIFY_TIMEOUT() || (ovr.status == VERIFY_UNKNOWN() && output_has_memory_limit(ovr.raw_output)) {
@@ -1891,7 +1931,7 @@ fn skill_json() -> String {
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--perfetto <path>\",\n"));
-    r.push_str(String::from("          \"description\": \"Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only).\",\n"));
+    r.push_str(String::from("          \"description\": \"Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.\",\n"));
     r.push_str(String::from("          \"long\": \"--perfetto\",\n"));
     r.push_str(String::from("          \"value_name\": \"path\",\n"));
     r.push_str(String::from("          \"value_kind\": \"string\"\n"));
@@ -1993,7 +2033,7 @@ fn skill_json() -> String {
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--perfetto <path>\",\n"));
-    r.push_str(String::from("          \"description\": \"Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only).\",\n"));
+    r.push_str(String::from("          \"description\": \"Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact.\",\n"));
     r.push_str(String::from("          \"long\": \"--perfetto\",\n"));
     r.push_str(String::from("          \"value_name\": \"path\",\n"));
     r.push_str(String::from("          \"value_kind\": \"string\"\n"));
@@ -2277,7 +2317,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))\",\n"));
     r.push_str(String::from("    \"--verify-jobs <N>\": \"Max concurrent ESBMC verification jobs (default: num_cpus/2)\",\n"));
     r.push_str(String::from("    \"--replay-cex\": \"Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)\",\n"));
-    r.push_str(String::from("    \"--perfetto <path>\": \"Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only).\"\n"));
+    r.push_str(String::from("    \"--perfetto <path>\": \"Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"verify_options\": {\n"));
     r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\",\n"));
@@ -2287,7 +2327,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))\",\n"));
     r.push_str(String::from("    \"--verify-jobs <N>\": \"Max concurrent ESBMC verification jobs (default: num_cpus/2)\",\n"));
     r.push_str(String::from("    \"--replay-cex\": \"Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \\\"Counterexample replay\\\" below). Opt-in, off by default; also accepted by vow build.\",\n"));
-    r.push_str(String::from("    \"--perfetto <path>\": \"Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only).\"\n"));
+    r.push_str(String::from("    \"--perfetto <path>\": \"Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact.\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"test_options\": {\n"));
     r.push_str(String::from("    \"--verify\": \"Run ESBMC verification on test files\",\n"));
@@ -2692,7 +2732,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))\n"));
     r.push_str(String::from("  --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)\n"));
     r.push_str(String::from("  --replay-cex            Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)\n"));
-    r.push_str(String::from("  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only).\n"));
+    r.push_str(String::from("  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("VERIFY OPTIONS\n"));
     r.push_str(String::from("  --no-cache              Disable verification result caching\n"));
@@ -2702,7 +2742,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))\n"));
     r.push_str(String::from("  --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)\n"));
     r.push_str(String::from("  --replay-cex            Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.\n"));
-    r.push_str(String::from("  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only).\n"));
+    r.push_str(String::from("  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("TEST OPTIONS\n"));
     r.push_str(String::from("  --verify                Run ESBMC verification on test files\n"));
@@ -3934,7 +3974,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |\n"));
     r.push_str(String::from("| `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |\n"));
-    r.push_str(String::from("| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |\n"));
+    r.push_str(String::from("| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.\n"));
     r.push_str(String::from("\n"));
@@ -3957,7 +3997,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |\n"));
     r.push_str(String::from("| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by `vow build`. |\n"));
-    r.push_str(String::from("| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |\n"));
+    r.push_str(String::from("| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow contracts`\n"));
     r.push_str(String::from("\n"));
@@ -8012,7 +8052,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |\n"));
     r.push_str(String::from("| `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |\n"));
-    r.push_str(String::from("| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |\n"));
+    r.push_str(String::from("| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.\n"));
     r.push_str(String::from("\n"));
@@ -8035,7 +8075,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |\n"));
     r.push_str(String::from("| `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by `vow build`. |\n"));
-    r.push_str(String::from("| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |\n"));
+    r.push_str(String::from("| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow contracts`\n"));
     r.push_str(String::from("\n"));
@@ -11699,9 +11739,6 @@ fn main() -> i32 [io, read, write] {
         return 1;
     }
     let cmd: i64 = get_subcommand(argv);
-    if has_flag(argv, "--perfetto") {
-        eprintln_str(String::from("note: --perfetto is not implemented in the self-hosted compiler; no trace written (use the Rust driver)"));
-    }
     if cmd == CMD_TEST() {
         return run_test(argv);
     }

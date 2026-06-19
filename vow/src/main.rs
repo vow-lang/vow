@@ -542,7 +542,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--perfetto <path>",
-          "description": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only).",
+          "description": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.",
           "long": "--perfetto",
           "value_name": "path",
           "value_kind": "string"
@@ -644,7 +644,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--perfetto <path>",
-          "description": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only).",
+          "description": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact.",
           "long": "--perfetto",
           "value_name": "path",
           "value_kind": "string"
@@ -928,7 +928,7 @@ fn skill_json() -> String {
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
     "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
     "--replay-cex": "Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)",
-    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only)."
+    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache."
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
@@ -938,7 +938,7 @@ fn skill_json() -> String {
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))",
     "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
     "--replay-cex": "Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see \"Counterexample replay\" below). Opt-in, off by default; also accepted by vow build.",
-    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only)."
+    "--perfetto <path>": "Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler\u2192ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact."
   },
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
@@ -1343,7 +1343,7 @@ BUILD OPTIONS
   --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
   --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
   --replay-cex            Differential test the verifier model against runtime semantics (same as vow verify --replay-cex; see below)
-  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only).
+  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this compilation to <path> (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from --mode profile, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache.
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
@@ -1353,7 +1353,7 @@ VERIFY OPTIONS
   --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit --timeout overrides both. --timeout 0 is honoured as an immediate watchdog kill (default: 300 (or 30 when --encoding is auto))
   --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
   --replay-cex            Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a --mode debug harness that calls the failing function with the counterexample's concrete inputs and check that the runtime VowViolation agrees (same vow_id and blame). Adds a replay field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by vow build.
-  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only).
+  --perfetto <path>       Write a gzipped Chrome Trace Event Format trace of this verification run to <path> (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact.
 
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
@@ -2585,7 +2585,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 | `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
@@ -2608,7 +2608,7 @@ vow verify [OPTIONS] <source.vow>
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 | `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |
 
 ### `vow contracts`
 
@@ -6647,7 +6647,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 | `--replay-cex`    | (off)       | Differential test the verifier model against runtime semantics (same as `vow verify --replay-cex`; see below) |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this compilation to `<path>` (load directly at ui.perfetto.dev). Captures per-phase spans, codegen/link, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Distinct from `--mode profile`, which instruments the *compiled program*. Pure side artifact: never affects codegen, the build JSON, or the cache. |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
@@ -6670,7 +6670,7 @@ vow verify [OPTIONS] <source.vow>
 | `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 | `--replay-cex`    | (off)       | Differential test of the verifier model against runtime semantics. After ESBMC reports a counterexample, build a `--mode debug` harness that calls the failing function with the counterexample's concrete inputs and check that the runtime `VowViolation` agrees (same `vow_id` and blame). Adds a `replay` field to each counterexample (see "Counterexample replay" below). Opt-in, off by default; also accepted by `vow build`. |
-| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. Self-hosted compiler: accepted but not yet implemented (Rust driver only). |
+| `--perfetto <path>` | (off) | Write a gzipped Chrome Trace Event Format trace of this verification run to `<path>` (load directly at ui.perfetto.dev). Captures frontend phase spans, per-function ESBMC proof spans, the compiler→ESBMC handoff, and time-series CPU/RSS for the compiler and each ESBMC process. Pure side artifact. |
 
 ### `vow contracts`
 

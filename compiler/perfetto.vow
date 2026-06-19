@@ -1,0 +1,217 @@
+module Perfetto
+
+use diag
+
+// Self-hosted --perfetto tracer (issue #784): an in-memory event buffer plus a
+// Chrome "Trace Event Format" JSON serializer, written gzipped after the
+// pipeline returns. Mirrors the shapes emitted by vow/src/perfetto.rs. The
+// trace is a pure side artifact: it never feeds codegen, the build JSON, or any
+// cache. Depends only on `diag` (json escaping) and global builtins
+// (time_micros, proc_sample, gzip_write_file, string_split, parse_i64,
+// i64_to_string), so it can sit immediately after `diag` in the module order.
+
+// Event kinds (the discriminant stored in TraceEvent.kind).
+fn TRACE_SPAN() -> i64 { 0 }
+fn TRACE_COUNTER() -> i64 { 1 }
+fn TRACE_FLOW_START() -> i64 { 2 }
+fn TRACE_FLOW_END() -> i64 { 3 }
+
+// pid/tid layout — mirrors vow/src/perfetto.rs. The self-hosted compiler has no
+// verify worker threads, so every proof span shares TID_VERIFY_DRIVER.
+fn PID_COMPILER() -> i64 { 1 }
+fn TID_MAIN() -> i64 { 1 }
+fn TID_VERIFY_DRIVER() -> i64 { 2 }
+
+struct TraceEvent {
+    kind: i64,
+    name: String,
+    pid: i64,
+    tid: i64,
+    ts: i64,
+    dur: i64,
+    flow_id: i64,
+    fn_arg: String,
+    rss_kb: i64,
+    cpu_pct: i64,
+}
+
+// Threaded by value alongside DiagCtx; appends to `events` propagate to the
+// caller via shared Vec backing (see compiler/frontend.vow notes). Scalar
+// fields (t0/enabled/path) are set once at construction and only read.
+struct TraceCtx {
+    enabled: bool,
+    t0: i64,
+    events: Vec<TraceEvent>,
+    path: String,
+}
+
+// A disabled context for the common no---perfetto path: every helper no-ops.
+fn trace_off() -> TraceCtx {
+    TraceCtx { enabled: false, t0: 0, events: Vec::new(), path: String::from("") }
+}
+
+// An enabled context whose clock origin is captured now.
+fn trace_new(path: String) -> TraceCtx [io] {
+    TraceCtx { enabled: true, t0: time_micros(), events: Vec::new(), path: path }
+}
+
+// Microseconds since this context's clock origin.
+fn trace_now(t: TraceCtx) -> i64 [io] {
+    time_micros() - t.t0
+}
+
+fn trace_push(t: TraceCtx, ev: TraceEvent) {
+    let evs: Vec<TraceEvent> = t.events;
+    evs.push(ev);
+}
+
+// Record a completed duration span (ph:"X"). `fn_arg` is emitted as
+// args.function when non-empty (used for esbmc:<fn> proof spans).
+fn trace_span(t: TraceCtx, name: String, pid: i64, tid: i64, start: i64, dur: i64, fn_arg: String) {
+    if !t.enabled { return; }
+    trace_push(t, TraceEvent {
+        kind: TRACE_SPAN(), name: name, pid: pid, tid: tid, ts: start, dur: dur,
+        flow_id: 0, fn_arg: fn_arg, rss_kb: 0, cpu_pct: 0,
+    });
+}
+
+// Record a counter sample (ph:"C") with rss_kb + cpu_pct series.
+fn trace_counter(t: TraceCtx, group: String, pid: i64, ts: i64, rss_kb: i64, cpu_pct: i64) {
+    if !t.enabled { return; }
+    trace_push(t, TraceEvent {
+        kind: TRACE_COUNTER(), name: group, pid: pid, tid: 0, ts: ts, dur: 0,
+        flow_id: 0, fn_arg: String::from(""), rss_kb: rss_kb, cpu_pct: cpu_pct,
+    });
+}
+
+// Record one endpoint of a flow arrow. `edge` is TRACE_FLOW_START or
+// TRACE_FLOW_END; matching flow_id values draw the arrow.
+fn trace_flow(t: TraceCtx, name: String, pid: i64, tid: i64, ts: i64, id: i64, edge: i64) {
+    if !t.enabled { return; }
+    trace_push(t, TraceEvent {
+        kind: edge, name: name, pid: pid, tid: tid, ts: ts, dur: 0,
+        flow_id: id, fn_arg: String::from(""), rss_kb: 0, cpu_pct: 0,
+    });
+}
+
+// Counter track pid for a sample group: PID_COMPILER for "compiler", else the
+// pid parsed out of "esbmc:<pid>" so each ESBMC child gets its own track.
+fn trace_counter_pid(group: String) -> i64 {
+    if group == String::from("compiler") { return PID_COMPILER(); }
+    let segs: Vec<String> = string_split(group, String::from(":"));
+    if segs.len() == 2 {
+        let pid_str: String = segs[1];
+        return parse_i64(pid_str);
+    }
+    PID_COMPILER()
+}
+
+// Sample the compiler + ESBMC children via /proc and emit counter events at
+// timestamp `ts`. No-op (no counters) when /proc is unavailable (non-Linux) or
+// the sample is empty.
+fn trace_sample(t: TraceCtx, ts: i64) [io] {
+    if !t.enabled { return; }
+    let raw: String = proc_sample();
+    if raw.len() == 0 { return; }
+    let lines: Vec<String> = string_split(raw, String::from("\n"));
+    let n: i64 = lines.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = lines[i];
+        let parts: Vec<String> = string_split(line, String::from("|"));
+        if parts.len() == 3 {
+            let group: String = parts[0];
+            let rss_str: String = parts[1];
+            let cpu_str: String = parts[2];
+            let pid: i64 = trace_counter_pid(group);
+            trace_counter(t, group, pid, ts, parse_i64(rss_str), parse_i64(cpu_str));
+        }
+        i = i + 1;
+    }
+}
+
+fn trace_event_json(ev: TraceEvent) -> String {
+    let k: i64 = ev.kind;
+    if k == TRACE_SPAN() {
+        let r: String = String::from("{\"ph\":\"X\",\"name\":\"");
+        r.push_str(diag_json_escape_str(ev.name));
+        r.push_str(String::from("\",\"pid\":"));
+        r.push_str(i64_to_string(ev.pid));
+        r.push_str(String::from(",\"tid\":"));
+        r.push_str(i64_to_string(ev.tid));
+        r.push_str(String::from(",\"ts\":"));
+        r.push_str(i64_to_string(ev.ts));
+        r.push_str(String::from(",\"dur\":"));
+        r.push_str(i64_to_string(ev.dur));
+        r.push_str(String::from(",\"args\":{"));
+        if ev.fn_arg.len() > 0 {
+            r.push_str(String::from("\"function\":\""));
+            r.push_str(diag_json_escape_str(ev.fn_arg));
+            r.push_str(String::from("\""));
+        }
+        r.push_str(String::from("}}"));
+        return r;
+    }
+    if k == TRACE_COUNTER() {
+        let r: String = String::from("{\"ph\":\"C\",\"name\":\"");
+        r.push_str(diag_json_escape_str(ev.name));
+        r.push_str(String::from("\",\"pid\":"));
+        r.push_str(i64_to_string(ev.pid));
+        r.push_str(String::from(",\"ts\":"));
+        r.push_str(i64_to_string(ev.ts));
+        r.push_str(String::from(",\"args\":{\"rss_kb\":"));
+        r.push_str(i64_to_string(ev.rss_kb));
+        r.push_str(String::from(",\"cpu_pct\":"));
+        r.push_str(i64_to_string(ev.cpu_pct));
+        r.push_str(String::from("}}"));
+        return r;
+    }
+    // Flow endpoint: TRACE_FLOW_START -> "s", TRACE_FLOW_END -> "f" (+ bp:"e").
+    let r: String = String::from("{\"ph\":\"");
+    if k == TRACE_FLOW_END() {
+        r.push_str(String::from("f"));
+    } else {
+        r.push_str(String::from("s"));
+    }
+    r.push_str(String::from("\",\"id\":"));
+    r.push_str(i64_to_string(ev.flow_id));
+    r.push_str(String::from(",\"name\":\""));
+    r.push_str(diag_json_escape_str(ev.name));
+    r.push_str(String::from("\",\"cat\":\""));
+    r.push_str(diag_json_escape_str(ev.name));
+    r.push_str(String::from("\",\"pid\":"));
+    r.push_str(i64_to_string(ev.pid));
+    r.push_str(String::from(",\"tid\":"));
+    r.push_str(i64_to_string(ev.tid));
+    r.push_str(String::from(",\"ts\":"));
+    r.push_str(i64_to_string(ev.ts));
+    if k == TRACE_FLOW_END() {
+        r.push_str(String::from(",\"bp\":\"e\""));
+    }
+    r.push_str(String::from("}"));
+    r
+}
+
+// Serialize all events to the Chrome Trace Event Format JSON object.
+fn trace_serialize(t: TraceCtx) -> String {
+    let r: String = String::from("{\"traceEvents\":[");
+    let evs: Vec<TraceEvent> = t.events;
+    let n: i64 = evs.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { r.push_byte(44); }
+        let ev: TraceEvent = evs[i];
+        r.push_str(trace_event_json(ev));
+        i = i + 1;
+    }
+    r.push_str(String::from("],\"displayTimeUnit\":\"ms\"}"));
+    r
+}
+
+// Serialize + gzip-write the trace to its path. No-op (returns 0) when the
+// context is disabled. Returns the gzip_write_file status (0 = ok).
+fn trace_write(t: TraceCtx) -> i64 [io] {
+    if !t.enabled { return 0; }
+    let json: String = trace_serialize(t);
+    gzip_write_file(t.path, json)
+}

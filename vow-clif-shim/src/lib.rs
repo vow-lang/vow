@@ -3289,6 +3289,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_time_unix_ms" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_time_micros" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_proc_sample" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_gzip_write_file" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_num_cpus" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -3347,6 +3358,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_process_wait_timeout" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_process_poll_wait" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));

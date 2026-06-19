@@ -4,6 +4,7 @@ use c_emitter
 use clif
 use ir
 use ir_printer
+use perfetto
 
 fn VERIFY_PROVEN() -> i64 { 0 }
 fn VERIFY_FAILED() -> i64 { 1 }
@@ -1158,7 +1159,43 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     EsbmcStart { handle: handle, tmp_path: tmp_path }
 }
 
-fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_path: String) -> VerifyResult [io] {
+// STILL_RUNNING sentinel returned by process_poll_wait — must match
+// VOW_PROC_STILL_RUNNING in vow-runtime/src/lib.rs (issue #784).
+fn proc_still_running() -> i64 { 0 - 999999 }
+
+// Wait for ESBMC, re-imposing the same watchdog (`watchdog_ms` deadline, kill,
+// -2 timeout sentinel) as process_wait_timeout. When tracing is enabled, poll
+// in 25ms slices and sample /proc each tick so the ESBMC child's (and its SMT
+// solver subtree's) RSS is captured while it runs; otherwise fall back to the
+// original single blocking wait verbatim so non-perfetto verification is
+// byte-for-byte unchanged (issue #784).
+fn verify_wait_sampled(handle: i64, watchdog_ms: i64, t: TraceCtx) -> i64 [io] {
+    if !t.enabled {
+        return process_wait_timeout(handle, watchdog_ms);
+    }
+    let deadline: i64 = trace_now(t) + watchdog_ms * 1000;
+    let still: i64 = proc_still_running();
+    let mut result: i64 = -2;
+    let mut done: bool = false;
+    while !done {
+        let rc: i64 = process_poll_wait(handle, 25);
+        if rc != still {
+            result = rc;
+            done = true;
+        } else {
+            let now: i64 = trace_now(t);
+            trace_sample(t, now);
+            if now >= deadline {
+                process_kill(handle);
+                result = -2;
+                done = true;
+            }
+        }
+    }
+    result
+}
+
+fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_path: String, t: TraceCtx) -> VerifyResult [io] {
     if handle == -3 {
         cleanup_verify_tmp_path(tmp_path);
         return VerifyResult {
@@ -1182,7 +1219,7 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
         };
     }
     // Kernel watchdog sized to match ESBMC's --timeout so a runaway process can't block indefinitely.
-    let exit_code: i64 = process_wait_timeout(handle, watchdog_ms_for(effective_timeout));
+    let exit_code: i64 = verify_wait_sampled(handle, watchdog_ms_for(effective_timeout), t);
     // exit_code == -1 is a wait/runtime error, not a missing ESBMC binary.
     // Let it fall through to VERIFY_ERROR below; process_kill still evicts the
     // completed handle entry from PROCESS_MAP.

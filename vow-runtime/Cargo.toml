@@ -10,3 +10,4 @@ crate-type = ["staticlib", "rlib"]
 vow-diag = { path = "../vow-diag" }
 serde_json = "1"
 libc = "0.2"
+flate2 = "1"
