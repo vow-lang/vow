@@ -27,6 +27,23 @@ build/vowc verify examples/divide.vow              # verify contracts only
 build/vowc build --mode debug examples/divide.vow  # runtime vow checks
 ```
 
+## Standard Library
+
+`stdlib/` holds reusable, contract-annotated Vow modules — `math` (arithmetic,
+number theory, vector math), `heap` (min/max binary heaps), `stack`, `geometry`,
+`bignum` (arbitrary-precision integers), and `gc` (mark-and-sweep). Each module is a
+self-contained directory with a runnable `main.vow` demo.
+
+Vow has no module search path yet, so you consume a module by running its demo in
+place or copying its `.vow` file(s) into your project. Only `geometry` verifies
+end-to-end under the current ESBMC model; the others carry precise contracts that are
+enforced at runtime in `--mode debug` while static verifiability is improved. See
+[stdlib/README.md](stdlib/README.md) (human map) and
+[docs/spec/stdlib.md](docs/spec/stdlib.md) (full API + verification reference).
+
+`examples/` keeps the language demos (contracts, blame, CEGIS, IO) and the larger
+showcases (`sat/`, `chess_uci.vow`).
+
 ## Agent Setup (Claude Code Skill)
 
 Vow ships a Claude Code skill embedded in the compiler binary. The skill is the
