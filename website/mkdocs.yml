@@ -1,0 +1,89 @@
+site_name: Vow
+site_description: A systems language for AI agents with built-in, statically-verified contracts.
+site_url: https://vow-lang.github.io/vow/
+repo_url: https://github.com/vow-lang/vow
+repo_name: vow-lang/vow
+edit_uri: edit/main/docs/spec/
+copyright: Vow is open source under the MIT License.
+
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/vow-lang/vow
+
+# NOTE: the `reference/` and `stdlib.md` pages below are generated from the
+# canonical markdown in docs/spec/ by scripts/build_docs_site.py. Run that
+# script before `mkdocs build`/`serve` (the docs workflow and website/README
+# both do this). The tutorial and landing pages are authored here directly.
+nav:
+  - Home: index.md
+  - Tutorial:
+      - tutorial/index.md
+      - Install & first program: tutorial/getting-started.md
+      - Your first contract: tutorial/first-contract.md
+      - The CEGIS loop: tutorial/cegis.md
+      - Loop invariants: tutorial/loop-invariants.md
+      - Using the standard library: tutorial/using-stdlib.md
+  - Language:
+      - reference/index.md
+      - Grammar & syntax: reference/grammar.md
+      - Contracts & verification: reference/contracts.md
+      - Contract methodology: reference/contracts-methodology.md
+      - CLI reference: reference/cli.md
+      - Diagnostics: reference/errors.md
+      - Worked examples: reference/examples.md
+  - Standard Library: stdlib.md

@@ -29,3 +29,13 @@ mutants-shard-*/
 
 # verifier-evaluation harness output (issue #334)
 verify-eval.out/
+
+# MkDocs documentation site. Pages under website/docs/reference/ and
+# website/docs/stdlib.md are GENERATED from docs/spec/ by
+# scripts/build_docs_site.py; only the hand-written pages are tracked.
+/website/site/
+/website/docs/reference/*.md
+!/website/docs/reference/index.md
+/website/docs/reference/schemas/
+/website/docs/stdlib.md
+/website/.cache/
