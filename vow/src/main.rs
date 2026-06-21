@@ -4531,7 +4531,7 @@ wrong — in `--mode debug` every contract is still enforced at runtime via
 
 | Module          | `vow verify` result | Why                                                                                                   |
 |-----------------|---------------------|-------------------------------------------------------------------------------------------------------|
-| `geometry`      | `Verified`          | Pure `i64` arithmetic with explicit overflow bounds; fully modelable.                                 |
+| `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation — see the geometry section.) |
 | `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |
 | `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |
 | `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |
@@ -4540,7 +4540,9 @@ wrong — in `--mode debug` every contract is still enforced at runtime via
 
 \* Environmental verifier limitation, not a contract defect.
 
-**Takeaway for agents:** only `geometry` is statically proven end-to-end today. For
+**Takeaway for agents:** only `geometry`'s `vow verify` passes today — and that proves
+the *vowed* checks reachable from its demo, not every function (e.g. `point_distance_sq`
+carries no contract and is not a proof obligation). For
 the others, the contracts are precise specifications that are enforced at runtime in
 `--mode debug`; static proof is gated on verifier-model improvements (Vec/region
 modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build
@@ -4683,8 +4685,10 @@ unused.
 ## geometry
 
 `stdlib/geometry/point.vow` (a `Point` struct) and `shape.vow` (a `Shape` enum with
-circle/rectangle area and perimeter). **The only fully ESBMC-verified module** — its
-overflow guards are exact derived bounds.
+circle/rectangle area and perimeter). **The only module whose `vow verify` passes
+today** — its shape functions use exact derived overflow bounds. Note this means the
+*vowed* checks verify (`vow verify stdlib/geometry/main.vow` → `Verified`); it is not a
+proof of the whole API, since `point_distance_sq` carries no contract (see Known gaps).
 
 | Function | Signature | Key contracts |
 |----------|-----------|---------------|
@@ -4758,7 +4762,8 @@ handles returned by `gc_alloc`; never fabricate them.
 | `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
 | `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive — you may unroot a freed slot) |
 | `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |
-| `gc_read` / `gc_write` | `(h, slot, [val]) ` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
 | `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |
 | `gc_count` | `(h) -> i64` | — |
 | `gc_collect` | `(h) -> i64` | — (returns count of newly-freed objects) |
@@ -8942,7 +8947,7 @@ wrong — in `--mode debug` every contract is still enforced at runtime via
 
 | Module          | `vow verify` result | Why                                                                                                   |
 |-----------------|---------------------|-------------------------------------------------------------------------------------------------------|
-| `geometry`      | `Verified`          | Pure `i64` arithmetic with explicit overflow bounds; fully modelable.                                 |
+| `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation — see the geometry section.) |
 | `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |
 | `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |
 | `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |
@@ -8951,7 +8956,9 @@ wrong — in `--mode debug` every contract is still enforced at runtime via
 
 \* Environmental verifier limitation, not a contract defect.
 
-**Takeaway for agents:** only `geometry` is statically proven end-to-end today. For
+**Takeaway for agents:** only `geometry`'s `vow verify` passes today — and that proves
+the *vowed* checks reachable from its demo, not every function (e.g. `point_distance_sq`
+carries no contract and is not a proof obligation). For
 the others, the contracts are precise specifications that are enforced at runtime in
 `--mode debug`; static proof is gated on verifier-model improvements (Vec/region
 modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build
@@ -9094,8 +9101,10 @@ unused.
 ## geometry
 
 `stdlib/geometry/point.vow` (a `Point` struct) and `shape.vow` (a `Shape` enum with
-circle/rectangle area and perimeter). **The only fully ESBMC-verified module** — its
-overflow guards are exact derived bounds.
+circle/rectangle area and perimeter). **The only module whose `vow verify` passes
+today** — its shape functions use exact derived overflow bounds. Note this means the
+*vowed* checks verify (`vow verify stdlib/geometry/main.vow` → `Verified`); it is not a
+proof of the whole API, since `point_distance_sq` carries no contract (see Known gaps).
 
 | Function | Signature | Key contracts |
 |----------|-----------|---------------|
@@ -9169,7 +9178,8 @@ handles returned by `gc_alloc`; never fabricate them.
 | `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
 | `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive — you may unroot a freed slot) |
 | `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |
-| `gc_read` / `gc_write` | `(h, slot, [val]) ` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
 | `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |
 | `gc_count` | `(h) -> i64` | — |
 | `gc_collect` | `(h) -> i64` | — (returns count of newly-freed objects) |

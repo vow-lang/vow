@@ -5920,7 +5920,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Module          | `vow verify` result | Why                                                                                                   |\n"));
     r.push_str(String::from("|-----------------|---------------------|-------------------------------------------------------------------------------------------------------|\n"));
-    r.push_str(String::from("| `geometry`      | `Verified`          | Pure `i64` arithmetic with explicit overflow bounds; fully modelable.                                 |\n"));
+    r.push_str(String::from("| `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation -- see the geometry section.) |\n"));
     r.push_str(String::from("| `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |\n"));
     r.push_str(String::from("| `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |\n"));
     r.push_str(String::from("| `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |\n"));
@@ -5929,7 +5929,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("\\* Environmental verifier limitation, not a contract defect.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Takeaway for agents:** only `geometry` is statically proven end-to-end today. For\n"));
+    r.push_str(String::from("**Takeaway for agents:** only `geometry`'s `vow verify` passes today -- and that proves\n"));
+    r.push_str(String::from("the *vowed* checks reachable from its demo, not every function (e.g. `point_distance_sq`\n"));
+    r.push_str(String::from("carries no contract and is not a proof obligation). For\n"));
     r.push_str(String::from("the others, the contracts are precise specifications that are enforced at runtime in\n"));
     r.push_str(String::from("`--mode debug`; static proof is gated on verifier-model improvements (Vec/region\n"));
     r.push_str(String::from("modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build\n"));
@@ -6072,8 +6074,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("## geometry\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`stdlib/geometry/point.vow` (a `Point` struct) and `shape.vow` (a `Shape` enum with\n"));
-    r.push_str(String::from("circle/rectangle area and perimeter). **The only fully ESBMC-verified module** -- its\n"));
-    r.push_str(String::from("overflow guards are exact derived bounds.\n"));
+    r.push_str(String::from("circle/rectangle area and perimeter). **The only module whose `vow verify` passes\n"));
+    r.push_str(String::from("today** -- its shape functions use exact derived overflow bounds. Note this means the\n"));
+    r.push_str(String::from("*vowed* checks verify (`vow verify stdlib/geometry/main.vow` → `Verified`); it is not a\n"));
+    r.push_str(String::from("proof of the whole API, since `point_distance_sq` carries no contract (see Known gaps).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Function | Signature | Key contracts |\n"));
     r.push_str(String::from("|----------|-----------|---------------|\n"));
@@ -6147,7 +6151,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
     r.push_str(String::from("| `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive -- you may unroot a freed slot) |\n"));
     r.push_str(String::from("| `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |\n"));
-    r.push_str(String::from("| `gc_read` / `gc_write` | `(h, slot, [val]) ` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
     r.push_str(String::from("| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |\n"));
     r.push_str(String::from("| `gc_count` | `(h) -> i64` | -- |\n"));
     r.push_str(String::from("| `gc_collect` | `(h) -> i64` | -- (returns count of newly-freed objects) |\n"));
@@ -10352,7 +10357,7 @@ fn skill_support_content_5() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Module          | `vow verify` result | Why                                                                                                   |\n"));
     r.push_str(String::from("|-----------------|---------------------|-------------------------------------------------------------------------------------------------------|\n"));
-    r.push_str(String::from("| `geometry`      | `Verified`          | Pure `i64` arithmetic with explicit overflow bounds; fully modelable.                                 |\n"));
+    r.push_str(String::from("| `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation -- see the geometry section.) |\n"));
     r.push_str(String::from("| `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |\n"));
     r.push_str(String::from("| `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |\n"));
     r.push_str(String::from("| `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |\n"));
@@ -10361,7 +10366,9 @@ fn skill_support_content_5() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("\\* Environmental verifier limitation, not a contract defect.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Takeaway for agents:** only `geometry` is statically proven end-to-end today. For\n"));
+    r.push_str(String::from("**Takeaway for agents:** only `geometry`'s `vow verify` passes today -- and that proves\n"));
+    r.push_str(String::from("the *vowed* checks reachable from its demo, not every function (e.g. `point_distance_sq`\n"));
+    r.push_str(String::from("carries no contract and is not a proof obligation). For\n"));
     r.push_str(String::from("the others, the contracts are precise specifications that are enforced at runtime in\n"));
     r.push_str(String::from("`--mode debug`; static proof is gated on verifier-model improvements (Vec/region\n"));
     r.push_str(String::from("modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build\n"));
@@ -10504,8 +10511,10 @@ fn skill_support_content_5() -> String {
     r.push_str(String::from("## geometry\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`stdlib/geometry/point.vow` (a `Point` struct) and `shape.vow` (a `Shape` enum with\n"));
-    r.push_str(String::from("circle/rectangle area and perimeter). **The only fully ESBMC-verified module** -- its\n"));
-    r.push_str(String::from("overflow guards are exact derived bounds.\n"));
+    r.push_str(String::from("circle/rectangle area and perimeter). **The only module whose `vow verify` passes\n"));
+    r.push_str(String::from("today** -- its shape functions use exact derived overflow bounds. Note this means the\n"));
+    r.push_str(String::from("*vowed* checks verify (`vow verify stdlib/geometry/main.vow` → `Verified`); it is not a\n"));
+    r.push_str(String::from("proof of the whole API, since `point_distance_sq` carries no contract (see Known gaps).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Function | Signature | Key contracts |\n"));
     r.push_str(String::from("|----------|-----------|---------------|\n"));
@@ -10579,7 +10588,8 @@ fn skill_support_content_5() -> String {
     r.push_str(String::from("| `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
     r.push_str(String::from("| `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive -- you may unroot a freed slot) |\n"));
     r.push_str(String::from("| `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |\n"));
-    r.push_str(String::from("| `gc_read` / `gc_write` | `(h, slot, [val]) ` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
     r.push_str(String::from("| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |\n"));
     r.push_str(String::from("| `gc_count` | `(h) -> i64` | -- |\n"));
     r.push_str(String::from("| `gc_collect` | `(h) -> i64` | -- (returns count of newly-freed objects) |\n"));
