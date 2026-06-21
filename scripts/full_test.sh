@@ -383,6 +383,80 @@ for vow_file in examples/*.vow; do
 done
 echo ""
 
+# ─── Section 2b: Verifier C Preamble ──────────────────────────────
+
+section_begin "Section 2b: Verifier C Preamble"
+
+fake_esbmc_dir="$TMPDIR/fake-esbmc"
+mkdir -p "$fake_esbmc_dir"
+cat > "$fake_esbmc_dir/esbmc" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+capture_dir="${VOW_ESBMC_CAPTURE_DIR:?}"
+mkdir -p "$capture_dir"
+
+for arg in "$@"; do
+    if [ -f "$arg" ] && [ "${arg##*.}" = "c" ]; then
+        dest=$(mktemp "$capture_dir/esbmc.XXXXXX.c")
+        cp "$arg" "$dest"
+        break
+    fi
+done
+
+echo "VERIFICATION SUCCESSFUL"
+SH
+chmod +x "$fake_esbmc_dir/esbmc"
+
+u64_preamble_fixture="$TMPDIR/u64_nondet_preamble.vow"
+cat > "$u64_preamble_fixture" <<'VOW'
+module U64NondetPreamble
+
+fn keep_u64(x: u64) -> u64 vow {
+    ensures: result == x
+} {
+    x
+}
+
+fn main() -> i32 {
+    0
+}
+VOW
+
+check_unsigned_long_preamble_capture() {
+    local label="$1" capture_dir="$2" json="$3" exit_code="$4"
+    if grep -R -q 'extern unsigned long __VERIFIER_nondet_unsigned_long(void);' "$capture_dir" 2>/dev/null; then
+        pass "$label"
+    else
+        local verify_status=""
+        verify_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$json" 2>/dev/null) || verify_status=""
+        fail "$label" "missing unsigned-long nondet extern in captured C (verify_status=${verify_status:-unknown}, exit=$exit_code)"
+    fi
+}
+
+rust_capture="$TMPDIR/rust-esbmc-capture"
+self_capture="$TMPDIR/self-esbmc-capture"
+mkdir -p "$rust_capture" "$self_capture"
+
+rust_json="" self_json="" rust_exit=0 self_exit=0
+rust_json=$(PATH="$fake_esbmc_dir:$PATH" VOW_ESBMC_CAPTURE_DIR="$rust_capture" \
+    "$RUST" verify --no-cache --verify-jobs 1 "$u64_preamble_fixture" 2>/dev/null) || rust_exit=$?
+self_json=$(PATH="$fake_esbmc_dir:$PATH" VOW_ESBMC_CAPTURE_DIR="$self_capture" \
+    run_self verify --no-cache --verify-jobs 1 "$u64_preamble_fixture" 2>/dev/null) || self_exit=$?
+
+if [ -z "$rust_json" ]; then
+    fail "verifier-preamble/rust" "empty output (exit=$rust_exit)"
+else
+    check_unsigned_long_preamble_capture "verifier-preamble/rust" "$rust_capture" "$rust_json" "$rust_exit"
+fi
+
+if [ -z "$self_json" ]; then
+    fail "verifier-preamble/self" "empty output (exit=$self_exit)"
+else
+    check_unsigned_long_preamble_capture "verifier-preamble/self" "$self_capture" "$self_json" "$self_exit"
+fi
+echo ""
+
 # ─── Section 3: Runtime Execution ──────────────────────────────────
 
 section_begin "Section 3: Runtime Execution"
