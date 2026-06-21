@@ -168,6 +168,10 @@ fn is_reserved_verifier_symbol(name: String) -> bool {
     || str_starts_with(name, String::from("__VERIFIER_"))
 }
 
+fn verifier_c_function_name(f: IrFunction) -> String {
+    str4(String::from("vow_fn_"), i64_to_str(f.id), String::from("_"), f.name)
+}
+
 // Returns the args[] index of the value stored into __vow_vec_t::data[] for
 // vec store-ops. Returns -1 when the op is __vow_vec_get_val (the relevant id
 // is then inst.id, not an arg) or when the op is not one of these.
@@ -1234,10 +1238,10 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
                         }
                         if ty != ITY_UNIT() {
                             out.push_str(str6(String::from("  v"), i64_to_str(id),
-                                String::from(" = "), callee.name,
+                                String::from(" = "), verifier_c_function_name(callee),
                                 String::from("("), str2(args_str, String::from(");\n"))));
                         } else {
-                            out.push_str(str4(String::from("  "), callee.name,
+                            out.push_str(str4(String::from("  "), verifier_c_function_name(callee),
                                 String::from("("), str2(args_str, String::from(");\n"))));
                         }
                         fi = fns.len();
@@ -2028,7 +2032,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
     }
 
     let param_str: String = if cl_idx == 0 { String::from("void") } else { params_list };
-    out.push_str(str5(ret_c, String::from(" "), f.name, String::from("("), str3(param_str, String::from(") {\n"), String::from(""))));
+    out.push_str(str5(ret_c, String::from(" "), verifier_c_function_name(f), String::from("("), str3(param_str, String::from(") {\n"), String::from(""))));
 
     let blocks: Vec<IrBlock> = f.blocks;
     let n_blocks: i64 = blocks.len();
@@ -2502,7 +2506,7 @@ fn emit_forward_declaration(out: String, f: IrFunction) {
         pi = pi + 1;
     }
     let param_str: String = if cl_idx == 0 { String::from("void") } else { params_list };
-    out.push_str(str5(ret_c, String::from(" "), f.name, String::from("("), str2(param_str, String::from(");\n"))));
+    out.push_str(str5(ret_c, String::from(" "), verifier_c_function_name(f), String::from("("), str2(param_str, String::from(");\n"))));
 }
 
 fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {

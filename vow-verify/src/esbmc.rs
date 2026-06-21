@@ -13,7 +13,7 @@ use crate::solver_strategy::{
 
 use crate::c_emitter::{
     ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
-    emit_c_module, emit_c_module_with_callees, non_modelable_reason,
+    emit_c_module, emit_c_module_with_callees, non_modelable_reason, verifier_c_function_name,
 };
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ fn emit_harness(func: &Function) -> String {
         .collect();
     format!(
         "int main(void) {{ {}({}); return 0; }}\n",
-        func.name,
+        verifier_c_function_name(func),
         args.join(", ")
     )
 }
