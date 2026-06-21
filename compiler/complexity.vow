@@ -9,6 +9,32 @@ struct CxIr {
     cyclomatic_ir: i64,
 }
 
+struct CxReadSource {
+    ok: bool,
+    src: String,
+}
+
+fn cx_read_source(path: String) -> CxReadSource [read] {
+    let h: i64 = fs_open(path);
+    if h < 0 {
+        return CxReadSource { ok: false, src: String::from("") };
+    }
+
+    let src: String = String::from("");
+    let mut line: String = fs_read_line(h);
+    while line.len() != 0 {
+        src.push_str(line);
+        line = fs_read_line(h);
+    }
+
+    let status: i64 = fs_status(h);
+    let close_status: i64 = fs_close(h);
+    if status != 1 || close_status != 0 {
+        return CxReadSource { ok: false, src: String::from("") };
+    }
+    CxReadSource { ok: true, src: src }
+}
+
 // Cyclomatic complexity from the IR CFG, decision-count form:
 // (number of conditional branches) + 1. Each AST decision (if / while / for /
 // loop / &&/|| / ? / match arm) lowers to exactly one IOP_BRANCH, so this

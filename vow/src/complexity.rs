@@ -639,7 +639,13 @@ pub(crate) fn run_complexity_command(
         }
     };
 
-    let src = std::fs::read_to_string(source).unwrap_or_default();
+    let src = match read_complexity_source(source) {
+        Ok(src) => src,
+        Err(error) => {
+            eprintln!("vow complexity: {error}");
+            std::process::exit(1);
+        }
+    };
     let file_nloc = line_at(&src, src.len());
     let module = frontend.module();
     // Report only the entry file's functions (deps' spans are foreign). Match by
@@ -1584,6 +1590,10 @@ fn analyze_verif(f: &FnDef, predicate_cost: i64) -> Verif {
     }
 }
 
+fn read_complexity_source(source: &Path) -> Result<String, String> {
+    std::fs::read_to_string(source).map_err(|_| format!("cannot read {}", source.to_string_lossy()))
+}
+
 // Experimental Vow-surface score bump (§3.2a Step 3), fixed-point, capped 150.
 fn cx_vow_bump(effect_breadth: i64, linear_consumes: i64, contract_predicate_cost: i64) -> i64 {
     let excess_eff = (effect_breadth - 2).max(0);
@@ -1625,4 +1635,31 @@ fn cx_json_escape(s: &str) -> String {
         }
     }
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn read_complexity_source_reports_missing_path() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("missing.vow");
+
+        let err = read_complexity_source(&path).unwrap_err();
+
+        assert_eq!(err, format!("cannot read {}", path.to_string_lossy()));
+    }
+
+    #[test]
+    fn read_complexity_source_allows_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.vow");
+        std::fs::write(&path, "").unwrap();
+
+        let src = read_complexity_source(&path).unwrap();
+
+        assert_eq!(src, "");
+    }
 }
