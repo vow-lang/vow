@@ -6997,26 +6997,30 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r
 }
-fn skill_support_paths() -> Vec<String> {
-    let v: Vec<String> = Vec::new();
-    v.push(String::from("reference/grammar.md"));
-    v.push(String::from("reference/cli.md"));
-    v.push(String::from("reference/contracts.md"));
-    v.push(String::from("reference/contracts-methodology.md"));
-    v.push(String::from("reference/errors.md"));
-    v.push(String::from("examples/examples.md"));
-    v.push(String::from("schemas/build-result.schema.json"));
-    v.push(String::from("schemas/complexity-result.schema.json"));
-    v.push(String::from("schemas/contracts-result.schema.json"));
-    v.push(String::from("schemas/counterexample.schema.json"));
-    v.push(String::from("schemas/diagnostic.schema.json"));
-    v.push(String::from("schemas/mutants-result.schema.json"));
-    v.push(String::from("schemas/test-result.schema.json"));
-    v.push(String::from("schemas/vow-violation.schema.json"));
-    v
+
+fn skill_support_count() -> i64 {
+    14
 }
 
-fn skill_support_content_0() -> String {
+fn skill_support_path(index: i64) -> String {
+    if index == 0 { return String::from("reference/grammar.md"); }
+    if index == 1 { return String::from("reference/cli.md"); }
+    if index == 2 { return String::from("reference/contracts.md"); }
+    if index == 3 { return String::from("reference/contracts-methodology.md"); }
+    if index == 4 { return String::from("reference/errors.md"); }
+    if index == 5 { return String::from("examples/examples.md"); }
+    if index == 6 { return String::from("schemas/build-result.schema.json"); }
+    if index == 7 { return String::from("schemas/complexity-result.schema.json"); }
+    if index == 8 { return String::from("schemas/contracts-result.schema.json"); }
+    if index == 9 { return String::from("schemas/counterexample.schema.json"); }
+    if index == 10 { return String::from("schemas/diagnostic.schema.json"); }
+    if index == 11 { return String::from("schemas/mutants-result.schema.json"); }
+    if index == 12 { return String::from("schemas/test-result.schema.json"); }
+    if index == 13 { return String::from("schemas/vow-violation.schema.json"); }
+    String::from("")
+}
+
+fn skill_support_content_reference_grammar_md_92418de9() -> String {
     let r: String = String::from("# Vow Grammar Reference\n");
     r.push_str(String::from("\n"));
     r.push_str(String::from("Complete grammar for the Vow programming language. Vow source files use the `.vow` extension.\n"));
@@ -8022,7 +8026,7 @@ fn skill_support_content_0() -> String {
     r
 }
 
-fn skill_support_content_1() -> String {
+fn skill_support_content_reference_cli_md_31f8541a() -> String {
     let r: String = String::from("# Vow CLI Reference\n");
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Commands\n"));
@@ -8583,7 +8587,7 @@ fn skill_support_content_1() -> String {
     r
 }
 
-fn skill_support_content_2() -> String {
+fn skill_support_content_reference_contracts_md_2474f258() -> String {
     let r: String = String::from("# Contract Authoring and Verification\n");
     r.push_str(String::from("\n"));
     r.push_str(String::from("Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.\n"));
@@ -8966,7 +8970,7 @@ fn skill_support_content_2() -> String {
     r
 }
 
-fn skill_support_content_3() -> String {
+fn skill_support_content_reference_contracts_methodology_md_3030be1e() -> String {
     let r: String = String::from("# Contract Methodology: What to Verify\n");
     r.push_str(String::from("\n"));
     r.push_str(String::from("This document answers a question that `contracts.md` does not: given a function,\n"));
@@ -9392,7 +9396,7 @@ fn skill_support_content_3() -> String {
     r
 }
 
-fn skill_support_content_4() -> String {
+fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     let r: String = String::from("# Vow Error Catalog\n");
     r.push_str(String::from("\n"));
     r.push_str(String::from("Every Vow error has a machine-readable `error_code` in the JSON output. This document lists all error codes, their phase, meaning, an example trigger, and how to fix them.\n"));
@@ -9924,7 +9928,7 @@ fn skill_support_content_4() -> String {
     r
 }
 
-fn skill_support_content_5() -> String {
+fn skill_support_content_examples_examples_md_d533c48e() -> String {
     let r: String = String::from("# Worked Examples\n");
     r.push_str(String::from("\n"));
     r.push_str(String::from("Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`. The sixth shows bounded-memory streaming file input.\n"));
@@ -10389,7 +10393,7 @@ fn skill_support_content_5() -> String {
     r
 }
 
-fn skill_support_content_6() -> String {
+fn skill_support_content_schemas_build_result_schema_json_a625cdcd() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/build-result.schema.json\",\n"));
@@ -10455,7 +10459,7 @@ fn skill_support_content_6() -> String {
     r
 }
 
-fn skill_support_content_7() -> String {
+fn skill_support_content_schemas_complexity_result_schema_json_5ff34513() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.org/schemas/complexity-result.schema.json\",\n"));
@@ -10631,7 +10635,7 @@ fn skill_support_content_7() -> String {
     r
 }
 
-fn skill_support_content_8() -> String {
+fn skill_support_content_schemas_contracts_result_schema_json_0598862c() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/contracts-result.schema.json\",\n"));
@@ -10736,7 +10740,7 @@ fn skill_support_content_8() -> String {
     r
 }
 
-fn skill_support_content_9() -> String {
+fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/counterexample.schema.json\",\n"));
@@ -10795,7 +10799,7 @@ fn skill_support_content_9() -> String {
     r
 }
 
-fn skill_support_content_10() -> String {
+fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/diagnostic.schema.json\",\n"));
@@ -10860,7 +10864,7 @@ fn skill_support_content_10() -> String {
     r
 }
 
-fn skill_support_content_11() -> String {
+fn skill_support_content_schemas_mutants_result_schema_json_415bbfa4() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.org/schemas/mutants-result.schema.json\",\n"));
@@ -10943,7 +10947,7 @@ fn skill_support_content_11() -> String {
     r
 }
 
-fn skill_support_content_12() -> String {
+fn skill_support_content_schemas_test_result_schema_json_16feeafc() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/test-result.schema.json\",\n"));
@@ -11029,7 +11033,7 @@ fn skill_support_content_12() -> String {
     r
 }
 
-fn skill_support_content_13() -> String {
+fn skill_support_content_schemas_vow_violation_schema_json_169d051f() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/vow-violation.schema.json\",\n"));
@@ -11080,23 +11084,22 @@ fn skill_support_content_13() -> String {
     r
 }
 
-fn skill_support_contents() -> Vec<String> {
-    let v: Vec<String> = Vec::new();
-    v.push(skill_support_content_0());
-    v.push(skill_support_content_1());
-    v.push(skill_support_content_2());
-    v.push(skill_support_content_3());
-    v.push(skill_support_content_4());
-    v.push(skill_support_content_5());
-    v.push(skill_support_content_6());
-    v.push(skill_support_content_7());
-    v.push(skill_support_content_8());
-    v.push(skill_support_content_9());
-    v.push(skill_support_content_10());
-    v.push(skill_support_content_11());
-    v.push(skill_support_content_12());
-    v.push(skill_support_content_13());
-    v
+fn skill_support_content(index: i64) -> String {
+    if index == 0 { return skill_support_content_reference_grammar_md_92418de9(); }
+    if index == 1 { return skill_support_content_reference_cli_md_31f8541a(); }
+    if index == 2 { return skill_support_content_reference_contracts_md_2474f258(); }
+    if index == 3 { return skill_support_content_reference_contracts_methodology_md_3030be1e(); }
+    if index == 4 { return skill_support_content_reference_errors_md_5d90ef26(); }
+    if index == 5 { return skill_support_content_examples_examples_md_d533c48e(); }
+    if index == 6 { return skill_support_content_schemas_build_result_schema_json_a625cdcd(); }
+    if index == 7 { return skill_support_content_schemas_complexity_result_schema_json_5ff34513(); }
+    if index == 8 { return skill_support_content_schemas_contracts_result_schema_json_0598862c(); }
+    if index == 9 { return skill_support_content_schemas_counterexample_schema_json_4a456c17(); }
+    if index == 10 { return skill_support_content_schemas_diagnostic_schema_json_a46eae68(); }
+    if index == 11 { return skill_support_content_schemas_mutants_result_schema_json_415bbfa4(); }
+    if index == 12 { return skill_support_content_schemas_test_result_schema_json_16feeafc(); }
+    if index == 13 { return skill_support_content_schemas_vow_violation_schema_json_169d051f(); }
+    String::from("")
 }
 // GENERATE:SKILL_FULL:END
 
@@ -11148,11 +11151,9 @@ fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
         return String::from("");
     }
 
-    let paths: Vec<String> = skill_support_paths();
-    let contents: Vec<String> = skill_support_contents();
     let mut i: i64 = 0;
-    while i < paths.len() {
-        let support_path: String = str3(dir, String::from("/"), paths[i]);
+    while i < skill_support_count() {
+        let support_path: String = str3(dir, String::from("/"), skill_support_path(i));
         let support_parent: String = skill_parent_dir(support_path);
         if support_parent.len() > 0 {
             let parent_mk: i64 = fs_mkdir(support_parent);
@@ -11163,7 +11164,7 @@ fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
                 return String::from("");
             }
         }
-        let support_wr: i64 = fs_write(support_path, contents[i]);
+        let support_wr: i64 = fs_write(support_path, skill_support_content(i));
         if support_wr < 0 {
             if emit_errors {
                 eprintln_str(str2(String::from("vow skill install: cannot write "), support_path));
