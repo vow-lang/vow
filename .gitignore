@@ -12,6 +12,7 @@ compiler/*.vow.c
 /codecov
 /lcov.info
 bench/results/
+reports.out/
 workflow/results/
 __pycache__/
 
