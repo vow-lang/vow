@@ -166,6 +166,7 @@ fn is_known_builtin(name: String) -> bool {
 fn is_reserved_verifier_symbol(name: String) -> bool {
     str_starts_with(name, String::from("__ESBMC_"))
     || str_starts_with(name, String::from("__VERIFIER_"))
+    || name == String::from("abs")
 }
 
 // Returns the args[] index of the value stored into __vow_vec_t::data[] for
