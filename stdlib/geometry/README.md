@@ -4,8 +4,10 @@
 `Shape` enum with area/perimeter for circles and rectangles. `shape.vow` internally
 does `use point`, so **copy both files together** to consume this module.
 
-This is the **only fully ESBMC-verified stdlib module** — its overflow guards are
-exact derived bounds.
+This is the **only stdlib module whose `vow verify` passes today** — its shape
+functions use exact derived overflow bounds. That proves the *vowed* checks reachable
+from the demo, not the whole API: `point_distance_sq` carries no contract (see Gotchas
+below), so a `Verified` result does not prove all of this module's arithmetic.
 
 Public API:
 - `point_new`, `point_x`, `point_y`, `point_distance_sq`
