@@ -35,8 +35,9 @@ number theory, vector math), `heap` (min/max binary heaps), `stack`, `geometry`,
 self-contained directory with a runnable `main.vow` demo.
 
 Vow has no module search path yet, so you consume a module by running its demo in
-place or copying its `.vow` file(s) into your project. Only `geometry` verifies
-end-to-end under the current ESBMC model; the others carry precise contracts that are
+place or copying its `.vow` file(s) into your project. Only `geometry` currently passes
+`vow verify` — and that proves the vowed checks reachable from its demo, not the whole
+API (`point_distance_sq` has no contract); the others carry precise contracts that are
 enforced at runtime in `--mode debug` while static verifiability is improved. See
 [stdlib/README.md](stdlib/README.md) (human map) and
 [docs/spec/stdlib.md](docs/spec/stdlib.md) (full API + verification reference).

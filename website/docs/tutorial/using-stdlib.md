@@ -18,7 +18,7 @@ So there are two practical ways to use a stdlib module:
 Each module ships a `main.vow` you can build and run directly:
 
 ```console
-$ ulimit -v 2000000; build/vowc build stdlib/math/main.vow -o /tmp/math_demo
+$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
 $ ulimit -v 2000000; /tmp/math_demo
 ```
 
@@ -46,7 +46,7 @@ fn gcd_example() -> i64 {
 ```
 
 ```console
-$ ulimit -v 2000000; build/vowc build myproject/main.vow -o myproject/app
+$ ulimit -v 2000000; build/vowc build --no-verify myproject/main.vow -o myproject/app
 $ ulimit -v 2000000; myproject/app
 ```
 
