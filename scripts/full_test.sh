@@ -531,6 +531,42 @@ for vow_file in tests/verify-fail/*.vow; do
 done
 echo ""
 
+name="verify_jobs_counterexample_suppresses_later_soft_meta"
+fixture="tests/verify-fail/verify_jobs_ce_before_soft.vow"
+errors=()
+for mode in verify build legacy; do
+    self_json="" self_exit=0
+    case "$mode" in
+        verify)
+            self_json=$(run_self verify --verify-jobs 2 "$fixture" 2>/dev/null) || self_exit=$?
+            ;;
+        build)
+            self_json=$(run_self build --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft" 2>/dev/null) || self_exit=$?
+            ;;
+        legacy)
+            self_json=$(run_self --verify --verify-jobs 2 "$fixture" 2>/dev/null) || self_exit=$?
+            ;;
+    esac
+    actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$self_json" 2>/dev/null) || actual_status=""
+    verify_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('verify_status',''))" "$self_json" 2>/dev/null) || verify_status=""
+    ce_function=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); c=d.get('counterexamples') or []; print(c[0].get('function','') if c else '')" "$self_json" 2>/dev/null) || ce_function=""
+    if [ "$self_exit" -eq 0 ]; then
+        errors+=("$mode exited 0")
+    elif [ "$actual_status" != "VerifyFailed" ]; then
+        errors+=("$mode status=$actual_status")
+    elif [ "$ce_function" != "early_bad" ]; then
+        errors+=("$mode counterexample function=$ce_function")
+    elif [ -n "$verify_status" ]; then
+        errors+=("$mode verify_status=$verify_status")
+    fi
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "$name"
+else
+    fail "$name" "$(IFS='; '; echo "${errors[*]}")"
+fi
+echo ""
+
 # ─── Section 4d: Verify-Skip Tests (tests/verify-skip/) ───────────
 #
 # Functions that exercise a non-modelable construct (e.g. nested-collection

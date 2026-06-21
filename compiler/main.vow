@@ -938,14 +938,15 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         else { String::from("VerifyFailed") }
     };
     let mut ces_final: Vec<VerifyCE> = Vec::new();
-    if vf_prefers_counterexample(ces, soft_meta, fns) {
+    let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
+    if ce_wins {
         ces_final = ces;
     }
     if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
         ces_final = replay_all(ces_final, fns, path, argv[0]);
     }
-    let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
-    let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
+    let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
+    let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
     let mut vf_func: String = String::from("");
     let mut vf_ce: String = String::from("");
     if status_str == String::from("VerifyFailed") {
@@ -1173,14 +1174,15 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else { String::from("Verified") }
     };
     let mut ces_final: Vec<VerifyCE> = Vec::new();
-    if vf_prefers_counterexample(ces, soft_meta, fns) {
+    let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
+    if ce_wins {
         ces_final = ces;
     }
     if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
         ces_final = replay_all(ces_final, fns, path, argv[0]);
     }
-    let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
-    let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
+    let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
+    let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
     let mut vf_func: String = String::from("");
     let mut vf_ce: String = String::from("");
     if status_str == String::from("VerifyFailed") {
@@ -1733,12 +1735,13 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 else if outcome == 2 { String::from("Skipped") }
                 else { String::from("VerifyFailed") }
             };
-            let vstatus_leg: String = { if soft_meta_leg.len() >= 1 { soft_meta_leg[0] } else { String::from("") } };
-            let vmsg_leg: String = { if soft_meta_leg.len() >= 2 { soft_meta_leg[1] } else { String::from("") } };
             let mut ces_final_leg: Vec<VerifyCE> = Vec::new();
-            if vf_prefers_counterexample(ces, soft_meta_leg, fns) {
+            let ce_wins_leg: bool = vf_prefers_counterexample(ces, soft_meta_leg, fns);
+            if ce_wins_leg {
                 ces_final_leg = ces;
             }
+            let vstatus_leg: String = { if ce_wins_leg { String::from("") } else if soft_meta_leg.len() >= 1 { soft_meta_leg[0] } else { String::from("") } };
+            let vmsg_leg: String = { if ce_wins_leg { String::from("") } else if soft_meta_leg.len() >= 2 { soft_meta_leg[1] } else { String::from("") } };
             let mut vf_func_leg: String = String::from("");
             let mut vf_ce_leg: String = String::from("");
             if status_str == String::from("VerifyFailed") {
