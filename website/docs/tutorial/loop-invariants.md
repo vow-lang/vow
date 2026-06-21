@@ -7,15 +7,15 @@ In Vow you attach one to a loop with `invariant`.
 
 ## A loop without help
 
-Consider summing `1 + 2 + ... + n`. The loop counter must stay in range so the work is
-well-defined:
+Consider summing `1 + 2 + ... + n`. Its only real precondition is `n >= 0`, plus an
+overflow guard so the running total stays within `i64`:
 
 ```vow
 module SumRange
 
 fn sum_to(n: i64) -> i64 vow {
     requires: n >= 0,
-    requires: n <= 1000000,
+    requires: n <= 4294967295,
     ensures: result >= 0
 } {
     let mut total: i64 = 0;
@@ -55,10 +55,12 @@ If you drop the invariants, the verifier cannot conclude `result >= 0` for an ar
 "true after."
 
 !!! note "Bounds vs. contracts"
-    `requires: n <= 1000000` here is a real semantic bound chosen for the example. In
-    general, do **not** add bounds just to satisfy the verifier's unwinding limits —
-    contracts express what is mathematically required, not what the tool finds
-    convenient. See [Contract methodology](../reference/contracts-methodology.md).
+    The `requires: n <= 4294967295` bound is **semantic**: it is the largest `n` for
+    which `n*(n+1)/2` still fits in `i64`, so it is a genuine overflow guard. Do **not**
+    instead add a bound purely to fit the verifier's unwinding limits — CLAUDE.md is
+    explicit that *ESBMC bounds are not contracts*. A contract expresses what is
+    mathematically required, not what the tool finds convenient. See
+    [Contract methodology](../reference/contracts-methodology.md).
 
 For more worked loops (binary search, Vec fills), see the
 [worked examples](../reference/examples.md). Next: reuse verified code from the
