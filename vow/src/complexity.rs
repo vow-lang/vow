@@ -203,6 +203,22 @@ fn ir_callees(f: &vow_ir::Function) -> std::collections::HashSet<u32> {
     s
 }
 
+fn ir_fan_in_counts<'a, I>(entry_file: &str, caller_callees: I) -> HashMap<u32, i64>
+where
+    I: IntoIterator<Item = (&'a str, &'a HashSet<u32>)>,
+{
+    let mut counts = HashMap::new();
+    for (source_file, callees) in caller_callees {
+        if source_file != entry_file {
+            continue;
+        }
+        for callee in callees {
+            *counts.entry(*callee).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
 fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
     let fl = fan_in.wrapping_mul(fan_out);
     cx_sat(nloc.wrapping_mul(fl).wrapping_mul(fl))
@@ -659,6 +675,13 @@ pub(crate) fn run_complexity_command(
     if let Some(m) = frontend.ir() {
         let funcs = &m.functions;
         let callees: Vec<HashSet<u32>> = funcs.iter().map(ir_callees).collect();
+        let fan_in_counts = ir_fan_in_counts(
+            entry_file.as_str(),
+            funcs
+                .iter()
+                .zip(callees.iter())
+                .map(|(f, s)| (f.source_file.as_str(), s)),
+        );
         let effectful: HashSet<u32> = funcs
             .iter()
             .filter(|f| !f.effects.is_empty())
@@ -667,14 +690,7 @@ pub(crate) fn run_complexity_command(
         for (idx, f) in funcs.iter().enumerate() {
             let fan_out = callees[idx].len() as i64;
             let fid = f.id.0;
-            // fan_in counts in-file callers only (schema), so restrict the caller
-            // scan to entry-file functions — a dependency that calls an entry
-            // function must not inflate the entry function's fan_in.
-            let fan_in = funcs
-                .iter()
-                .zip(callees.iter())
-                .filter(|(cf, s)| cf.source_file == entry_file && s.contains(&fid))
-                .count() as i64;
+            let fan_in = fan_in_counts.get(&fid).copied().unwrap_or(0);
             let effect_fanout = callees[idx]
                 .iter()
                 .filter(|c| effectful.contains(c))
@@ -1588,6 +1604,25 @@ mod tests {
         assert_eq!(cx_sat(-1), CX_SAT);
         assert_eq!(cx_sat(0), 0);
         assert_eq!(cx_sat(CX_SAT + 1), CX_SAT);
+    }
+
+    #[test]
+    fn ir_fan_in_counts_only_entry_file_callers_once_per_caller() {
+        let source_files = ["entry.vow", "dep.vow", "entry.vow"];
+        let callee_sets = [
+            HashSet::from([1, 2]),
+            HashSet::from([2]),
+            HashSet::from([1]),
+        ];
+
+        let counts = ir_fan_in_counts(
+            "entry.vow",
+            source_files.iter().copied().zip(callee_sets.iter()),
+        );
+
+        assert_eq!(counts.get(&1).copied().unwrap_or(0), 2);
+        assert_eq!(counts.get(&2).copied().unwrap_or(0), 1);
+        assert_eq!(counts.get(&3).copied().unwrap_or(0), 0);
     }
 }
 

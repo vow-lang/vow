@@ -14681,6 +14681,44 @@ fn main() -> i32 [io] {
     }
 
     #[test]
+    fn generated_vow_skill_support_uses_indexed_lookup() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("CARGO_MANIFEST_DIR has a parent");
+        let compiler_main = repo_root.join("compiler/main.vow");
+        let source = std::fs::read_to_string(&compiler_main).expect("compiler/main.vow must exist");
+
+        assert!(source.contains("fn skill_support_count() -> i64"));
+        assert!(source.contains("fn skill_support_path(index: i64) -> String vow {"));
+        assert!(source.contains("fn skill_support_content_index_guard(index: i64) vow {"));
+        assert!(source.contains("fn skill_support_content(index: i64) -> String {"));
+        assert!(source.contains("    skill_support_content_index_guard(index);"));
+        assert_eq!(
+            source
+                .matches("requires: index >= 0 && index < skill_support_count()")
+                .count(),
+            2,
+            "indexed support lookup contracts should guard path lookup and content access"
+        );
+        assert!(
+            !source.contains("fn skill_support_paths() -> Vec<String>"),
+            "generated Vow should expose indexed path lookup, not a path vector"
+        );
+        assert!(
+            !source.contains("fn skill_support_content_0()"),
+            "generated Vow support helpers should not be numbered by bundle position"
+        );
+        assert!(
+            source.contains("fn skill_support_content_reference_grammar_md_92418de9() -> String {"),
+            "generated Vow content helpers should use stable path-derived names with an 8-char hash suffix"
+        );
+        assert!(
+            !source.contains("fn skill_support_contents() -> Vec<String>"),
+            "generated Vow should stream support contents by index during install"
+        );
+    }
+
+    #[test]
     fn auto_install_skill_skips_when_no_claude_dir() {
         let dir = TempDir::new().unwrap();
         maybe_auto_install_skill(dir.path());
