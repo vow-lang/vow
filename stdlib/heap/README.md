@@ -12,7 +12,7 @@ Public API (min-heap; `max_heap_*` mirrors it): `min_heap_new`, `min_heap_len`,
 ## Usage
 
 ```
-ulimit -v 2000000; build/vowc build stdlib/heap/main.vow -o /tmp/heap_demo && /tmp/heap_demo
+ulimit -v 2000000; build/vowc build --no-verify stdlib/heap/main.vow -o /tmp/heap_demo && /tmp/heap_demo
 ```
 
 ## Key idea: the size-shadow invariant

@@ -11,7 +11,7 @@ contracts: [docs/spec/stdlib.md#gc](../../docs/spec/stdlib.md#gc).
 ## Usage
 
 ```
-ulimit -v 2000000; build/vowc build stdlib/gc/main.vow -o /tmp/gc_demo && /tmp/gc_demo
+ulimit -v 2000000; build/vowc build --no-verify stdlib/gc/main.vow -o /tmp/gc_demo && /tmp/gc_demo
 ```
 
 ## Gotchas

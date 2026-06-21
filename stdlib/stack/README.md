@@ -10,7 +10,7 @@ Full signatures and contracts:
 ## Usage
 
 ```
-ulimit -v 2000000; build/vowc build stdlib/stack/main.vow -o /tmp/stack_demo && /tmp/stack_demo
+ulimit -v 2000000; build/vowc build --no-verify stdlib/stack/main.vow -o /tmp/stack_demo && /tmp/stack_demo
 ```
 
 ## Gotchas / known gaps

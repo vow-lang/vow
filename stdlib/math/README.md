@@ -13,7 +13,7 @@ All functions are `pub`. Full signatures and contracts:
 ## Usage
 
 ```
-ulimit -v 2000000; build/vowc build stdlib/math/main.vow -o /tmp/math_demo && /tmp/math_demo
+ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo && /tmp/math_demo
 ```
 To consume in your own program, copy the single file you need next to your entry file:
 ```

@@ -37,7 +37,7 @@ for the full explanation.
 
 **Run a module's demo in place:**
 ```
-ulimit -v 2000000; build/vowc build stdlib/math/main.vow -o /tmp/math_demo && /tmp/math_demo
+ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo && /tmp/math_demo
 ```
 
 **Copy a module into your project** (copy every sibling `.vow` for multi-file modules):
