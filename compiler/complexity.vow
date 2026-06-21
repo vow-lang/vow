@@ -693,8 +693,41 @@ struct CxContract {
 // acc[2]=has-Vec-index flag (proxy for Vec quantification, no quantifier
 // syntax exists). `seen` collects distinct free identifiers.
 fn cx_pred_bind_pattern(a: AstArena, pid: i64, bound: Vec<String>) {
-    if pid >= 0 && pat_tag(a, pid) == PAT_IDENT() {
+    if pid < 0 { return; }
+    let tag: i64 = pat_tag(a, pid);
+    if tag == PAT_IDENT() {
         bound.push(arena_str(a, pat_a(a, pid)));
+        return;
+    }
+    if tag == PAT_ENUM() {
+        let inner_lid: i64 = pat_b(a, pid);
+        let n: i64 = list_len(a, inner_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            cx_pred_bind_pattern(a, list_get(a, inner_lid, i), bound);
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == PAT_STRUCT() {
+        let fields_lid: i64 = pat_b(a, pid);
+        let n_fields: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n_fields {
+            cx_pred_bind_pattern(a, list_get(a, fields_lid, i * 2 + 1), bound);
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == PAT_TUPLE() || tag == PAT_OR() {
+        let elems_lid: i64 = pat_a(a, pid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            cx_pred_bind_pattern(a, list_get(a, elems_lid, i), bound);
+            i = i + 1;
+        }
+        return;
     }
 }
 
@@ -773,9 +806,20 @@ fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<Stri
         if else_eid != -1 { cx_pred_walk(a, else_eid, depth + 1, acc, seen, bound); }
         return;
     }
-    if tag == EXPR_WHILE() || tag == EXPR_FOR() {
+    if tag == EXPR_WHILE() {
         cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen, bound);
         cx_pred_block(a, expr_b(a, eid), depth + 1, acc, seen, bound);
+        return;
+    }
+    if tag == EXPR_FOR() {
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen, bound);
+        let mark: i64 = bound.len();
+        let info_lid: i64 = expr_c(a, eid);
+        if list_len(a, info_lid) > 0 {
+            bound.push(arena_str(a, list_get(a, info_lid, 0)));
+        }
+        cx_pred_block(a, expr_b(a, eid), depth + 1, acc, seen, bound);
+        bound.truncate(mark);
         return;
     }
     if tag == EXPR_LOOP() {
@@ -788,7 +832,10 @@ fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<Stri
         let n_arms: i64 = list_len(a, arms_lid) / 2;
         let mut i: i64 = 0;
         while i < n_arms {
+            let mark: i64 = bound.len();
+            cx_pred_bind_pattern(a, list_get(a, arms_lid, i * 2), bound);
             cx_pred_walk(a, list_get(a, arms_lid, i * 2 + 1), depth + 1, acc, seen, bound);
+            bound.truncate(mark);
             i = i + 1;
         }
         return;

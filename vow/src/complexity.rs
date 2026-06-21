@@ -1207,8 +1207,24 @@ struct Contract {
 }
 
 fn pred_bind_pattern(p: &Pat, bound: &mut Vec<String>) {
-    if let PatKind::Ident { name, .. } = &p.kind {
-        bound.push(name.clone());
+    match &p.kind {
+        PatKind::Ident { name, .. } => bound.push(name.clone()),
+        PatKind::Tuple(items) | PatKind::Or(items) => {
+            for item in items {
+                pred_bind_pattern(item, bound);
+            }
+        }
+        PatKind::Struct { fields, .. } => {
+            for (_, item) in fields {
+                pred_bind_pattern(item, bound);
+            }
+        }
+        PatKind::EnumVariant { inner, .. } => {
+            for item in inner {
+                pred_bind_pattern(item, bound);
+            }
+        }
+        PatKind::Wildcard | PatKind::Lit(_) => {}
     }
 }
 
@@ -1346,9 +1362,17 @@ fn pred_walk(
             );
             pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
-        ExprKind::ForEach { iterable, body, .. } => {
+        ExprKind::ForEach {
+            binding,
+            iterable,
+            body,
+            ..
+        } => {
             pred_walk(iterable, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            let mark = bound.len();
+            bound.push(binding.clone());
             pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            bound.truncate(mark);
         }
         ExprKind::Loop { body, .. } => {
             pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
@@ -1364,6 +1388,8 @@ fn pred_walk(
                 bound,
             );
             for arm in arms {
+                let mark = bound.len();
+                pred_bind_pattern(&arm.pattern, bound);
                 pred_walk(
                     &arm.body,
                     depth + 1,
@@ -1373,6 +1399,7 @@ fn pred_walk(
                     seen,
                     bound,
                 );
+                bound.truncate(mark);
             }
         }
         ExprKind::Return { value } | ExprKind::Break { value } => {
