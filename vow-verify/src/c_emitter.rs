@@ -116,6 +116,10 @@ fn ir_ty_to_c(ty: Ty) -> &'static str {
     }
 }
 
+pub(crate) fn c_function_name(func: &Function) -> String {
+    format!("__vow_fn_{}_{}", func.id.0, func.name)
+}
+
 // ---------------------------------------------------------------------------
 // Typed variable analysis (Vec, String, HashMap)
 // ---------------------------------------------------------------------------
@@ -1596,11 +1600,15 @@ fn emit_inst(
                     out.push_str(&format!(
                         "  v{} = {}({});\n",
                         id,
-                        callee.name,
+                        c_function_name(callee),
                         args_str.join(", ")
                     ));
                 } else {
-                    out.push_str(&format!("  {}({});\n", callee.name, args_str.join(", ")));
+                    out.push_str(&format!(
+                        "  {}({});\n",
+                        c_function_name(callee),
+                        args_str.join(", ")
+                    ));
                 }
             }
         }
@@ -1903,7 +1911,12 @@ pub fn emit_c_function_full(
         params.join(", ")
     };
 
-    out.push_str(&format!("{} {}({}) {{\n", ret_c, func.name, param_str));
+    out.push_str(&format!(
+        "{} {}({}) {{\n",
+        ret_c,
+        c_function_name(func),
+        param_str
+    ));
 
     // Map arg index to parameter name at the top of the function
     // GetArg(idx) refers to p{cl_idx} where cl_idx skips Unit params
@@ -2279,7 +2292,12 @@ fn emit_forward_declaration(func: &Function, out: &mut String) {
     } else {
         params.join(", ")
     };
-    out.push_str(&format!("{} {}({});\n", ret_c, func.name, param_str));
+    out.push_str(&format!(
+        "{} {}({});\n",
+        ret_c,
+        c_function_name(func),
+        param_str
+    ));
 }
 
 pub fn emit_c_module(
@@ -2537,7 +2555,7 @@ mod tests {
             source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("int64_t add("), "signature: {c}");
+        assert!(c.contains("int64_t __vow_fn_0_add("), "signature: {c}");
         assert!(c.contains("v2 = v0 + v1"), "add: {c}");
         assert!(c.contains("return v2"), "return: {c}");
     }
@@ -2886,6 +2904,25 @@ mod tests {
     }
 
     #[test]
+    fn emit_user_function_names_are_prefixed() {
+        let func = make_func(
+            "abs",
+            vec![Ty::I64],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("int64_t __vow_fn_0_abs(int64_t p0)"),
+            "prefixed signature: {c}"
+        );
+        assert!(!c.contains("int64_t abs("), "raw libc-colliding name: {c}");
+    }
+
+    #[test]
     fn emit_const_variants() {
         let func = make_func(
             "f",
@@ -2960,7 +2997,10 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("void void_fn("), "void signature: {c}");
+        assert!(
+            c.contains("void __vow_fn_0_void_fn("),
+            "void signature: {c}"
+        );
         assert!(c.contains("  return;\n"), "bare return: {c}");
         assert!(!c.contains("return v0;"), "no value returned: {c}");
         assert!(!c.contains("return 0;"), "no value returned: {c}");
@@ -3433,8 +3473,11 @@ mod tests {
         let out = emit_c_module(&[&f1, &f2], &HashMap::new(), &VerifyLimits::default());
         assert!(out.contains("#include <stdint.h>"), "includes: {out}");
         assert!(out.contains("__ESBMC_assume"), "esbmc assume: {out}");
-        assert!(out.contains("void f1(void)"), "f1 signature: {out}");
-        assert!(out.contains("f2("), "f2 signature: {out}");
+        assert!(
+            out.contains("void __vow_fn_0_f1(void)"),
+            "f1 signature: {out}"
+        );
+        assert!(out.contains("__vow_fn_0_f2("), "f2 signature: {out}");
     }
 
     #[test]
