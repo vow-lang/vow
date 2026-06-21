@@ -1502,6 +1502,8 @@ fn cx_json_escape(s: &str) -> String {
             '\n' => r.push_str("\\n"),
             '\r' => r.push_str("\\r"),
             '\t' => r.push_str("\\t"),
+            '\x08' => r.push_str("\\b"),
+            '\x0c' => r.push_str("\\f"),
             c if (c as u32) < 32 => r.push('?'),
             c => r.push(c),
         }
