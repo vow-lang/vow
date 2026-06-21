@@ -14000,6 +14000,10 @@ fn main() -> i32 [io] {
             "generated Vow support helpers should not be numbered by bundle position"
         );
         assert!(
+            source.contains("fn skill_support_content_reference_grammar_md_92418de9() -> String {"),
+            "generated Vow content helpers should use stable path-derived names with an 8-char hash suffix"
+        );
+        assert!(
             !source.contains("fn skill_support_contents() -> Vec<String>"),
             "generated Vow should stream support contents by index during install"
         );
