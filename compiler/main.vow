@@ -190,15 +190,21 @@ fn frontend_path_from_argv(argv: Vec<String>, sub: bool) -> String [io] {
 }
 
 fn build_ce_from_result(f: IrFunction, vr: VerifyResult, path: String) -> VerifyCE {
-    let vow_id: i64 = vr.vow_id;
+    let raw_vow_id: i64 = vr.vow_id;
+    // Rust serializes an ESBMC failure with no `vow:N` label as public
+    // `vow_id: 0` (`Counterexample.vow_id.unwrap_or(0)`). Keep `-1` as the
+    // parser sentinel internally, but do not leak it into the JSON API.
+    let public_vow_id: i64 = {
+        if raw_vow_id < 0 { 0 } else { raw_vow_id }
+    };
     let mut ce_violation: String = String::from("");
     let mut ce_blame: i64 = DIAG_BLAME_NONE();
-    if vow_id == unsupported_op_vow_id() {
+    if raw_vow_id == unsupported_op_vow_id() {
         // Fail-closed assertion from emit_unsupported_for_verification: no
         // user-authored vow has this id, so synthesize an actionable message
         // instead of leaving the violation blank.
         ce_violation = String::from("function uses side-effecting operations not supported for verification");
-    } else if vow_id == caller_precondition_vow_id() {
+    } else if raw_vow_id == caller_precondition_vow_id() {
         // A co-emitted callee's `requires` was violated by this caller. The
         // sentinel id matches no vow in `f`, so synthesize a Caller-blamed
         // precondition diagnostic rather than mis-resolving to the target's vow
@@ -210,7 +216,7 @@ fn build_ce_from_result(f: IrFunction, vr: VerifyResult, path: String) -> Verify
         let mut vi: i64 = 0;
         while vi < vow_entries.len() {
             let ve: IrVowEntry = vow_entries[vi];
-            if ve.id == vow_id {
+            if ve.id == raw_vow_id {
                 ce_violation = ve.description;
                 ce_blame = ve.blame;
             }
@@ -222,7 +228,7 @@ fn build_ce_from_result(f: IrFunction, vr: VerifyResult, path: String) -> Verify
         var_names: vr.var_names,
         var_values: vr.var_values,
         violation: ce_violation,
-        vow_id: vow_id,
+        vow_id: public_vow_id,
         source: path,
         blame: ce_blame,
         replay: String::from(""),
