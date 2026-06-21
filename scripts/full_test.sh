@@ -124,6 +124,10 @@ soft_fail = rs == 'VerifyFailed' and ss == 'VerifyFailed' and rvs and svs
 if soft_fail:
     if rvs != svs:
         errors.append(f'verify_status: {rvs} vs {svs}')
+    if len(rc) != 0:
+        errors.append(f'rust soft VerifyFailed has {len(rc)} counterexamples')
+    if len(sc) != 0:
+        errors.append(f'self soft VerifyFailed has {len(sc)} counterexamples')
     # For deterministic inputs the same function should trigger the soft fail on
     # both compilers; a divergence on which function was selected would otherwise
     # pass silently (verify_message is still skipped — ESBMC text is non-deterministic).

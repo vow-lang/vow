@@ -738,21 +738,22 @@ fn verify_function_index(fns: Vec<IrFunction>, name: String) -> i64 {
     9223372036854775807
 }
 
+fn vf_prefers_counterexample(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunction>) -> bool {
+    if ces.len() == 0 {
+        return false;
+    }
+    if soft_meta.len() < 3 {
+        return true;
+    }
+    let ce: VerifyCE = ces[0];
+    let ce_idx: i64 = verify_function_index(fns, ce.function);
+    let soft_idx: i64 = verify_function_index(fns, soft_meta[2]);
+    ce_idx <= soft_idx
+}
+
 fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunction>) -> Vec<String> {
     let result: Vec<String> = Vec::new();
-    let prefer_ce: bool = {
-        if ces.len() == 0 {
-            false
-        } else if soft_meta.len() < 3 {
-            true
-        } else {
-            let ce: VerifyCE = ces[0];
-            let ce_idx: i64 = verify_function_index(fns, ce.function);
-            let soft_idx: i64 = verify_function_index(fns, soft_meta[2]);
-            ce_idx <= soft_idx
-        }
-    };
-    if prefer_ce {
+    if vf_prefers_counterexample(ces, soft_meta, fns) {
         let ce: VerifyCE = ces[0];
         result.push(ce.function);
         let desc: String = String::from("VerifyFailed: ");
@@ -936,7 +937,10 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         else if outcome == 2 { String::from("Skipped") }
         else { String::from("VerifyFailed") }
     };
-    let mut ces_final: Vec<VerifyCE> = ces;
+    let mut ces_final: Vec<VerifyCE> = Vec::new();
+    if vf_prefers_counterexample(ces, soft_meta, fns) {
+        ces_final = ces;
+    }
     if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
         ces_final = replay_all(ces_final, fns, path, argv[0]);
     }
@@ -1168,7 +1172,10 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else if any_skipped == 1 { String::from("Skipped") }
         else { String::from("Verified") }
     };
-    let mut ces_final: Vec<VerifyCE> = ces;
+    let mut ces_final: Vec<VerifyCE> = Vec::new();
+    if vf_prefers_counterexample(ces, soft_meta, fns) {
+        ces_final = ces;
+    }
     if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
         ces_final = replay_all(ces_final, fns, path, argv[0]);
     }
@@ -1728,14 +1735,18 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             };
             let vstatus_leg: String = { if soft_meta_leg.len() >= 1 { soft_meta_leg[0] } else { String::from("") } };
             let vmsg_leg: String = { if soft_meta_leg.len() >= 2 { soft_meta_leg[1] } else { String::from("") } };
+            let mut ces_final_leg: Vec<VerifyCE> = Vec::new();
+            if vf_prefers_counterexample(ces, soft_meta_leg, fns) {
+                ces_final_leg = ces;
+            }
             let mut vf_func_leg: String = String::from("");
             let mut vf_ce_leg: String = String::from("");
             if status_str == String::from("VerifyFailed") {
-                let legacy_leg: Vec<String> = vf_legacy_fields(ces, soft_meta_leg, fns);
+                let legacy_leg: Vec<String> = vf_legacy_fields(ces_final_leg, soft_meta_leg, fns);
                 vf_func_leg = legacy_leg[0];
                 vf_ce_leg = legacy_leg[1];
             }
-            diag_emit_verify_json_full(status_str, dctx, ces, vstatus_leg, vmsg_leg, vf_func_leg, vf_ce_leg);
+            diag_emit_verify_json_full(status_str, dctx, ces_final_leg, vstatus_leg, vmsg_leg, vf_func_leg, vf_ce_leg);
             if outcome != 0 {
                 return 1;
             }
