@@ -1,0 +1,48 @@
+module TestVerifier
+
+use ir
+use verifier_harness
+
+fn check_known_nondet_calls() -> i64 {
+    if esbmc_nondet_call(ITY_I32()) != String::from("__VERIFIER_nondet_int()") { return 1; }
+    if esbmc_nondet_call(ITY_I64()) != String::from("__VERIFIER_nondet_long()") { return 2; }
+    if esbmc_nondet_call(ITY_U64()) != String::from("__VERIFIER_nondet_unsigned_long()") { return 3; }
+    if esbmc_nondet_call(ITY_F32()) != String::from("__VERIFIER_nondet_float()") { return 4; }
+    if esbmc_nondet_call(ITY_F64()) != String::from("__VERIFIER_nondet_double()") { return 5; }
+    if esbmc_nondet_call(ITY_BOOL()) != String::from("__VERIFIER_nondet_bool()") { return 6; }
+    if esbmc_nondet_call(ITY_UNIT()) != String::from("0") { return 7; }
+    if esbmc_nondet_call(ITY_PTR()) != String::from("0") { return 8; }
+    if esbmc_nondet_call(ITY_LPTR()) != String::from("0") { return 9; }
+    0
+}
+
+fn check_unknown_type_fails_loud() -> i64 {
+    let call: String = esbmc_nondet_call(9999);
+    if call == String::from("0") { return 10; }
+    if !call.contains(String::from("__ESBMC_assert(0, \"vow:4294967295\")")) { return 11; }
+    0
+}
+
+fn i64_result_to_i32(r: i64) -> i32 {
+    if r == 1 { return 1; }
+    if r == 2 { return 2; }
+    if r == 3 { return 3; }
+    if r == 4 { return 4; }
+    if r == 5 { return 5; }
+    if r == 6 { return 6; }
+    if r == 7 { return 7; }
+    if r == 8 { return 8; }
+    if r == 9 { return 9; }
+    if r == 10 { return 10; }
+    if r == 11 { return 11; }
+    if r != 0 { return 99; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_known_nondet_calls();
+    if r1 != 0 { return i64_result_to_i32(r1); }
+    let r2: i64 = check_unknown_type_fails_loud();
+    if r2 != 0 { return i64_result_to_i32(r2); }
+    0
+}

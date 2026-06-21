@@ -81,7 +81,7 @@ fn esbmc_nondet_call(ty: Ty) -> &'static str {
         Ty::F32 => "__VERIFIER_nondet_float()",
         Ty::F64 => "__VERIFIER_nondet_double()",
         Ty::Bool => "__VERIFIER_nondet_bool()",
-        _ => "0",
+        Ty::Unit | Ty::Ptr | Ty::LinearPtr => "0",
     }
 }
 
@@ -928,6 +928,25 @@ mod tests {
     fn find_esbmc_agrees_with_path_lookup() {
         let from_path = which("esbmc");
         assert_eq!(find_esbmc(), from_path);
+    }
+
+    #[test]
+    fn esbmc_nondet_call_all_current_variants() {
+        let cases = [
+            (Ty::I32, "__VERIFIER_nondet_int()"),
+            (Ty::I64, "__VERIFIER_nondet_long()"),
+            (Ty::U64, "__VERIFIER_nondet_unsigned_long()"),
+            (Ty::F32, "__VERIFIER_nondet_float()"),
+            (Ty::F64, "__VERIFIER_nondet_double()"),
+            (Ty::Bool, "__VERIFIER_nondet_bool()"),
+            (Ty::Unit, "0"),
+            (Ty::Ptr, "0"),
+            (Ty::LinearPtr, "0"),
+        ];
+
+        for (ty, expected) in cases {
+            assert_eq!(esbmc_nondet_call(ty), expected);
+        }
     }
 
     fn inst(id: u32, op: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
