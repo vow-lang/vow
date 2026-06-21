@@ -348,9 +348,11 @@ def print_summary(report: dict) -> None:
 
     print("")
     for row in report["results"]:
+        elapsed = row.get("elapsed_s")
+        elapsed_str = f"{elapsed:8.3f}s" if elapsed is not None else f"{'-':>8} "
         print(
             f"{row['tier']:7s} {row['solver']:8s} {row['classification']:26s} "
-            f"{row['elapsed_s']:8.3f}s {row['benchmark']}"
+            f"{elapsed_str} {row['benchmark']}"
         )
 
 
