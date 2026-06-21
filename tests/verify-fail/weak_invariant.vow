@@ -1,22 +1,22 @@
 // TEST: category invariant
-// TEST: counterexample-vow-id 4
+// TEST: counterexample-vow-id 2
 // TEST: counterexample-fn "fill_and_sum"
 // TEST: counterexample-blame callee
 // The loop invariant claims sum == i but the loop
 // adds (i+1) each iteration, so sum grows faster than i.
+// Concrete loop bound (8), not a `requires n <= 8` clause: ESBMC unwind limits
+// must never be encoded as contract bounds (see the contract-authoring rules).
 // ESBMC catches the invariant violation on the second iteration.
 module WeakInvariant
 
-fn fill_and_sum(n: i64) -> i64 vow {
-  requires: n >= 0,
-  requires: n <= 8,
+fn fill_and_sum() -> i64 vow {
   ensures: result >= 0
 } {
   let mut sum: i64 = 0;
   let mut i: i64 = 0;
-  while i < n vow {
+  while i < 8 vow {
     invariant: i >= 0,
-    invariant: i <= n,
+    invariant: i <= 8,
     invariant: sum == i
   } {
     sum = sum + i + 1;
@@ -26,6 +26,6 @@ fn fill_and_sum(n: i64) -> i64 vow {
 }
 
 fn main() -> i32 [io] {
-  print_i64(fill_and_sum(5));
+  print_i64(fill_and_sum());
   0
 }

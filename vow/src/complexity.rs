@@ -1384,6 +1384,20 @@ fn analyze_contract(f: &FnDef) -> Contract {
     let mut maxdepth = 0i64;
     let mut has_index = false;
     let mut seen: HashSet<String> = HashSet::new();
+    for param in &f.params {
+        if let Some(refinement) = &param.refinement {
+            requires += 1;
+            pred_walk(
+                refinement,
+                1,
+                &mut nodes,
+                &mut maxdepth,
+                &mut has_index,
+                true,
+                &mut seen,
+            );
+        }
+    }
     if let Some(vb) = &f.vow {
         for clause in &vb.clauses {
             let expr = match clause {
@@ -1424,6 +1438,106 @@ fn analyze_contract(f: &FnDef) -> Contract {
 
 fn contract_predicate_cost(ct: &Contract) -> i64 {
     ct.predicate_nodes + ct.free_vars + if ct.has_vec_quant { 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use vow_syntax::ast::{Param, Type, Visibility};
+    use vow_syntax::span::Span;
+
+    fn sp() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn i64_ty() -> Type {
+        Type::Named {
+            name: "i64".to_string(),
+            span: sp(),
+        }
+    }
+
+    fn ident(name: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Ident(name.to_string()),
+            span: sp(),
+        }
+    }
+
+    fn int(value: i128) -> Expr {
+        Expr {
+            kind: ExprKind::Lit(Lit::Int(value)),
+            span: sp(),
+        }
+    }
+
+    #[test]
+    fn analyze_contract_counts_param_refinement_requires() {
+        let fn_def = FnDef {
+            vis: Visibility::Private,
+            name: "positive".to_string(),
+            params: vec![Param {
+                name: "x".to_string(),
+                ty: i64_ty(),
+                refinement: Some(Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Gt,
+                        lhs: Box::new(ident("x")),
+                        rhs: Box::new(int(0)),
+                    },
+                    span: sp(),
+                })),
+                span: sp(),
+            }],
+            return_ty: i64_ty(),
+            effects: vec![],
+            vow: None,
+            body: Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(ident("x"))),
+                span: sp(),
+            },
+            span: sp(),
+            is_declaration: false,
+        };
+
+        let contract = analyze_contract(&fn_def);
+
+        assert_eq!(contract.requires, 1);
+        assert_eq!(contract.ensures, 0);
+        assert_eq!(contract.invariants, 0);
+        assert_eq!(contract.predicate_nodes, 3);
+        assert_eq!(contract.predicate_depth, 2);
+        assert_eq!(contract.free_vars, 1);
+        assert!(!contract.has_vec_quant);
+        assert_eq!(contract_predicate_cost(&contract), 4);
+    }
+
+    #[test]
+    fn read_complexity_source_reports_missing_path() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("missing.vow");
+
+        let err = read_complexity_source(&path).unwrap_err();
+
+        let prefix = format!("cannot read {}: ", path.to_string_lossy());
+        assert!(
+            err.starts_with(&prefix),
+            "error should surface the OS detail after the path: {err}"
+        );
+    }
+
+    #[test]
+    fn read_complexity_source_allows_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.vow");
+        std::fs::write(&path, "").unwrap();
+
+        let src = read_complexity_source(&path).unwrap();
+
+        assert_eq!(src, "");
+    }
 }
 
 struct Verif {
@@ -1636,35 +1750,4 @@ fn cx_json_escape(s: &str) -> String {
         }
     }
     r
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn read_complexity_source_reports_missing_path() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("missing.vow");
-
-        let err = read_complexity_source(&path).unwrap_err();
-
-        let prefix = format!("cannot read {}: ", path.to_string_lossy());
-        assert!(
-            err.starts_with(&prefix),
-            "error should surface the OS detail after the path: {err}"
-        );
-    }
-
-    #[test]
-    fn read_complexity_source_allows_empty_file() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("empty.vow");
-        std::fs::write(&path, "").unwrap();
-
-        let src = read_complexity_source(&path).unwrap();
-
-        assert_eq!(src, "");
-    }
 }

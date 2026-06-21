@@ -726,9 +726,34 @@ fn record_soft_fail(meta: Vec<String>, status: String, message: String, function
 // Compute (function, counterexample) for the VerifyFailed top-level JSON fields.
 // Precondition: status is VerifyFailed (i.e. ces non-empty OR soft_meta has 3 entries).
 // Mirrors Rust's BuildStatus::VerifyFailed { function, description } shape.
-fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>) -> Vec<String> {
+fn verify_function_index(fns: Vec<IrFunction>, name: String) -> i64 {
+    let mut i: i64 = 0;
+    while i < fns.len() {
+        let f: IrFunction = fns[i];
+        if f.name == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    9223372036854775807
+}
+
+fn vf_prefers_counterexample(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunction>) -> bool {
+    if ces.len() == 0 {
+        return false;
+    }
+    if soft_meta.len() < 3 {
+        return true;
+    }
+    let ce: VerifyCE = ces[0];
+    let ce_idx: i64 = verify_function_index(fns, ce.function);
+    let soft_idx: i64 = verify_function_index(fns, soft_meta[2]);
+    ce_idx <= soft_idx
+}
+
+fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunction>) -> Vec<String> {
     let result: Vec<String> = Vec::new();
-    if ces.len() > 0 {
+    if vf_prefers_counterexample(ces, soft_meta, fns) {
         let ce: VerifyCE = ces[0];
         result.push(ce.function);
         let desc: String = String::from("VerifyFailed: ");
@@ -912,16 +937,20 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         else if outcome == 2 { String::from("Skipped") }
         else { String::from("VerifyFailed") }
     };
-    let mut ces_final: Vec<VerifyCE> = ces;
+    let mut ces_final: Vec<VerifyCE> = Vec::new();
+    let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
+    if ce_wins {
+        ces_final = ces;
+    }
     if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
         ces_final = replay_all(ces_final, fns, path, argv[0]);
     }
-    let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
-    let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
+    let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
+    let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
     let mut vf_func: String = String::from("");
     let mut vf_ce: String = String::from("");
     if status_str == String::from("VerifyFailed") {
-        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta);
+        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta, fns);
         vf_func = legacy[0];
         vf_ce = legacy[1];
     }
@@ -1144,16 +1173,20 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else if any_skipped == 1 { String::from("Skipped") }
         else { String::from("Verified") }
     };
-    let mut ces_final: Vec<VerifyCE> = ces;
+    let mut ces_final: Vec<VerifyCE> = Vec::new();
+    let ce_wins: bool = vf_prefers_counterexample(ces, soft_meta, fns);
+    if ce_wins {
+        ces_final = ces;
+    }
     if has_flag(argv, "--replay-cex") && ces_final.len() > 0 {
         ces_final = replay_all(ces_final, fns, path, argv[0]);
     }
-    let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
-    let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
+    let vstatus: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
+    let vmsg: String = { if ce_wins { String::from("") } else if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
     let mut vf_func: String = String::from("");
     let mut vf_ce: String = String::from("");
     if status_str == String::from("VerifyFailed") {
-        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta);
+        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta, fns);
         vf_func = legacy[0];
         vf_ce = legacy[1];
     }
@@ -1702,16 +1735,21 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 else if outcome == 2 { String::from("Skipped") }
                 else { String::from("VerifyFailed") }
             };
-            let vstatus_leg: String = { if soft_meta_leg.len() >= 1 { soft_meta_leg[0] } else { String::from("") } };
-            let vmsg_leg: String = { if soft_meta_leg.len() >= 2 { soft_meta_leg[1] } else { String::from("") } };
+            let mut ces_final_leg: Vec<VerifyCE> = Vec::new();
+            let ce_wins_leg: bool = vf_prefers_counterexample(ces, soft_meta_leg, fns);
+            if ce_wins_leg {
+                ces_final_leg = ces;
+            }
+            let vstatus_leg: String = { if ce_wins_leg { String::from("") } else if soft_meta_leg.len() >= 1 { soft_meta_leg[0] } else { String::from("") } };
+            let vmsg_leg: String = { if ce_wins_leg { String::from("") } else if soft_meta_leg.len() >= 2 { soft_meta_leg[1] } else { String::from("") } };
             let mut vf_func_leg: String = String::from("");
             let mut vf_ce_leg: String = String::from("");
             if status_str == String::from("VerifyFailed") {
-                let legacy_leg: Vec<String> = vf_legacy_fields(ces, soft_meta_leg);
+                let legacy_leg: Vec<String> = vf_legacy_fields(ces_final_leg, soft_meta_leg, fns);
                 vf_func_leg = legacy_leg[0];
                 vf_ce_leg = legacy_leg[1];
             }
-            diag_emit_verify_json_full(status_str, dctx, ces, vstatus_leg, vmsg_leg, vf_func_leg, vf_ce_leg);
+            diag_emit_verify_json_full(status_str, dctx, ces_final_leg, vstatus_leg, vmsg_leg, vf_func_leg, vf_ce_leg);
             if outcome != 0 {
                 return 1;
             }
@@ -1772,6 +1810,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"cli\": \"reference/cli.md\",\n"));
     r.push_str(String::from("    \"contracts\": \"reference/contracts.md\",\n"));
     r.push_str(String::from("    \"errors\": \"reference/errors.md\",\n"));
+    r.push_str(String::from("    \"stdlib\": \"reference/stdlib.md\",\n"));
     r.push_str(String::from("    \"examples\": \"examples/examples.md\",\n"));
     r.push_str(String::from("    \"schemas\": {\n"));
     r.push_str(String::from("      \"build_result\": \"schemas/build-result.schema.json\",\n"));
@@ -2868,6 +2907,7 @@ fn skill_entrypoint() -> String {
     r.push_str(String::from("- Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)\n"));
     r.push_str(String::from("- Which contracts to write (taxonomy & strength): [reference/contracts-methodology.md](reference/contracts-methodology.md)\n"));
     r.push_str(String::from("- Diagnostics and fixes: [reference/errors.md](reference/errors.md)\n"));
+    r.push_str(String::from("- Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)\n"));
     r.push_str(String::from("- Worked examples: [examples/examples.md](examples/examples.md)\n"));
     r.push_str(String::from("- JSON schemas: [schemas/](schemas/)\n"));
     r.push_str(String::from("\n"));
@@ -5841,6 +5881,359 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("---\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("# Vow Standard Library\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The standard library is a curated set of reusable, contract-annotated Vow modules\n"));
+    r.push_str(String::from("under `stdlib/`. Each module is a self-contained directory: one or more library\n"));
+    r.push_str(String::from("`.vow` files plus a `main.vow` that demonstrates and exercises the API.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("This is a **reference collection**, not a globally-importable package set. Vow has\n"));
+    r.push_str(String::from("no module search path today (see [Consumption model](#consumption-model)). Modules\n"));
+    r.push_str(String::from("carry contracts, but only some are statically verifiable under the current ESBMC\n"));
+    r.push_str(String::from("model -- read [Verification status](#verification-status) before relying on a\n"));
+    r.push_str(String::from("contract as a proof rather than a runtime check.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("In all examples below, `vow` refers to `build/vowc`. Always run `ulimit -v 2000000`\n"));
+    r.push_str(String::from("before invoking the compiler or any binary it produces.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Modules at a glance\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Module path           | Provides                                                                 | ESBMC status |\n"));
+    r.push_str(String::from("|-----------------------|-------------------------------------------------------------------------|---------------------------|\n"));
+    r.push_str(String::from("| `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` -- integer & vector math        | VerifyFailed (env)        |\n"));
+    r.push_str(String::from("| `stdlib/heap`         | `min_heap`, `max_heap` -- binary heaps over `i64`                          | VerifyFailed (env)        |\n"));
+    r.push_str(String::from("| `stdlib/stack`        | `stack` -- Vec-backed LIFO stack over `i64`                               | Skipped     |\n"));
+    r.push_str(String::from("| `stdlib/geometry`     | `point`, `shape` -- 2D points, circles, rectangles                        | **Verified**              |\n"));
+    r.push_str(String::from("| `stdlib/bignum`       | `bignum` -- arbitrary-precision signed integers                          | Skipped     |\n"));
+    r.push_str(String::from("| `stdlib/gc`           | `gc` -- mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0. `(env)` marks an environmental verifier limitation, not a contract\n"));
+    r.push_str(String::from("defect. The statuses reflect the verifier's memory model, **not** the soundness of\n"));
+    r.push_str(String::from("the contracts -- see [Verification status](#verification-status).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Consumption model\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,\n"));
+    r.push_str(String::from("where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.\n"));
+    r.push_str(String::from("All transitive `use`s in dependency modules resolve against that **same** directory.\n"));
+    r.push_str(String::from("There is no search path, and `--module-root` is only available on `vow test` -- not\n"));
+    r.push_str(String::from("`vow build` or `vow verify`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Two practical ways to use a stdlib module:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**1. Run the module's own demo in place.** Each module ships a `main.vow`. Build with\n"));
+    r.push_str(String::from("`--no-verify` -- most stdlib modules do not pass `vow verify` yet (see\n"));
+    r.push_str(String::from("[Verification status](#verification-status)), and the point here is to *run* the demo,\n"));
+    r.push_str(String::from("not to verify it:\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo\n"));
+    r.push_str(String::from("$ ulimit -v 2000000; /tmp/math_demo\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**2. Copy the module's `.vow` file(s) into your project directory.** Because `use`\n"));
+    r.push_str(String::from("resolves against your entry file's directory, the library file must sit next to\n"));
+    r.push_str(String::from("your program. For a single-file module:\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("$ cp stdlib/math/arithmetic.vow myproject/arithmetic.vow\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("module Main\n"));
+    r.push_str(String::from("use arithmetic\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("fn main() -> i32 [io] {\n"));
+    r.push_str(String::from("    print_i64(clamp(15, 0, 10));   // 10\n"));
+    r.push_str(String::from("    0\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("For a multi-file module, copy **all** sibling files together -- e.g. `stdlib/geometry`\n"));
+    r.push_str(String::from("ships `shape.vow` which internally does `use point`, so `point.vow` must be copied\n"));
+    r.push_str(String::from("alongside it.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("> A real import mechanism (a module search path so `use std.math.arithmetic`\n"));
+    r.push_str(String::from("> resolves from any location) is future work. Until then, treat stdlib modules as\n"));
+    r.push_str(String::from("> vendored source you copy in, exactly like the self-hosted compiler's own modules.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Verification status\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The verifier statuses below were measured with `vow verify` against ESBMC 8.3.0.\n"));
+    r.push_str(String::from("They are **pre-existing properties of the code and the verifier**, unchanged by the\n"));
+    r.push_str(String::from("move into `stdlib/`. A `Skipped`/`VerifyFailed` status does not mean a contract is\n"));
+    r.push_str(String::from("wrong -- in `--mode debug` every contract is still enforced at runtime via\n"));
+    r.push_str(String::from("`__vow_violation`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Module          | `vow verify` result | Why                                                                                                   |\n"));
+    r.push_str(String::from("|-----------------|---------------------|-------------------------------------------------------------------------------------------------------|\n"));
+    r.push_str(String::from("| `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation -- see the geometry section.) |\n"));
+    r.push_str(String::from("| `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |\n"));
+    r.push_str(String::from("| `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |\n"));
+    r.push_str(String::from("| `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |\n"));
+    r.push_str(String::from("| `bignum`        | `Skipped`           | `Vec`-based limb arithmetic allocates per call (`RegionAlloc`); not modelable. 24 `RegionRootEscape` notes (the demo intentionally holds results for program lifetime). |\n"));
+    r.push_str(String::from("| `gc`            | `VerifyFailed`      | ESBMC produces a `gc_add_root` precondition counterexample related to in-module caller-`requires` checking (cf. issue #764). |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("\\* Environmental verifier limitation, not a contract defect.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Takeaway for agents:** only `geometry`'s `vow verify` passes today -- and that proves\n"));
+    r.push_str(String::from("the *vowed* checks reachable from its demo, not every function (e.g. `point_distance_sq`\n"));
+    r.push_str(String::from("carries no contract and is not a proof obligation). For\n"));
+    r.push_str(String::from("the others, the contracts are precise specifications that are enforced at runtime in\n"));
+    r.push_str(String::from("`--mode debug`; static proof is gated on verifier-model improvements (Vec/region\n"));
+    r.push_str(String::from("modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build\n"));
+    r.push_str(String::from("on these modules and need a *static* guarantee, prefer `geometry`'s pattern: keep\n"));
+    r.push_str(String::from("hot paths in plain `i64` with explicit overflow `requires`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## math\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Three modules under `stdlib/math/`. Each is independent (no cross-`use`); copy only\n"));
+    r.push_str(String::from("the one you need. All functions are `pub`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### math.arithmetic\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Integer primitives with overflow-guarded contracts. The `safe_*` family operates on\n"));
+    r.push_str(String::from("**non-negative** inputs only -- they are overflow-checked unsigned-style helpers, not\n"));
+    r.push_str(String::from("general signed wrappers.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts | Notes |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|-------|\n"));
+    r.push_str(String::from("| `abs` | `(x: i64) -> i64` | `requires x > -9223372036854775807`; `ensures result >= 0`; `ensures result == x \\|\\| result == 0 - x` | Guards `i64::MIN` negation overflow. |\n"));
+    r.push_str(String::from("| `min` | `(a, b: i64) -> i64` | `ensures result <= a`; `result <= b`; `result == a \\|\\| result == b` | Tight: result is one of the inputs. |\n"));
+    r.push_str(String::from("| `max` | `(a, b: i64) -> i64` | `ensures result >= a`; `result >= b`; `result == a \\|\\| result == b` | |\n"));
+    r.push_str(String::from("| `clamp` | `(x, lo, hi: i64) -> i64` | `requires lo <= hi`; `ensures lo <= result <= hi` | |\n"));
+    r.push_str(String::from("| `sign` | `(x: i64) -> i64` | `ensures -1 <= result <= 1` | -1 / 0 / 1. |\n"));
+    r.push_str(String::from("| `safe_add` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a <= I64_MAX - b`; `ensures result == a + b` | Non-negative inputs only. |\n"));
+    r.push_str(String::from("| `safe_sub` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a >= b`; `ensures 0 <= result <= a` | |\n"));
+    r.push_str(String::from("| `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \\|\\| a <= I64_MAX / b`; `ensures result == a * b` | |\n"));
+    r.push_str(String::from("| `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |\n"));
+    r.push_str(String::from("| `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |\n"));
+    r.push_str(String::from("| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) -- no fast exponentiation; no overflow guard on the running product. |\n"));
+    r.push_str(String::from("| `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |\n"));
+    r.push_str(String::from("| `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |\n"));
+    r.push_str(String::from("| `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |\n"));
+    r.push_str(String::from("| `is_even` / `is_odd` | `(x: i64) -> bool` | -- | |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Representative contract -- overflow guard expressed in the precondition rather than\n"));
+    r.push_str(String::from("via checked arithmetic:\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("pub fn safe_mul(a: i64, b: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    requires: a >= 0,\n"));
+    r.push_str(String::from("    requires: b >= 0,\n"));
+    r.push_str(String::from("    requires: b == 0 || a <= 9223372036854775807 / b,\n"));
+    r.push_str(String::from("    ensures: result == a * b,\n"));
+    r.push_str(String::from("    ensures: result >= 0\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### math.number_theory\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts | Notes |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|-------|\n"));
+    r.push_str(String::from("| `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \\|\\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |\n"));
+    r.push_str(String::from("| `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |\n"));
+    r.push_str(String::from("| `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |\n"));
+    r.push_str(String::from("| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |\n"));
+    r.push_str(String::from("| `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` -- product overflows past 20!. |\n"));
+    r.push_str(String::from("| `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |\n"));
+    r.push_str(String::from("| `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |\n"));
+    r.push_str(String::from("| `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |\n"));
+    r.push_str(String::from("| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### math.vec_math\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Operates on `Vec<i64>`. None of the summation helpers guard against accumulator\n"));
+    r.push_str(String::from("overflow -- use on bounded data, or add `requires` bounds at the call site.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts | Notes |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|-------|\n"));
+    r.push_str(String::from("| `vec_sum` | `(v: Vec<i64>) -> i64` | -- | No overflow guard. |\n"));
+    r.push_str(String::from("| `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |\n"));
+    r.push_str(String::from("| `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |\n"));
+    r.push_str(String::from("| `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |\n"));
+    r.push_str(String::from("| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures 0 <= result <= v.len()` | Invariant `count <= i`. |\n"));
+    r.push_str(String::from("| `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |\n"));
+    r.push_str(String::from("| `vec_is_sorted` | `(v: Vec<i64>) -> bool` | -- | Ascending. |\n"));
+    r.push_str(String::from("| `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |\n"));
+    r.push_str(String::from("| `vec_reverse` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## heap\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/heap/min_heap.vow` and `max_heap.vow` are structural mirrors (a min-heap and\n"));
+    r.push_str(String::from("a max-heap over `i64`), with the comparator flipped. Both are value types: every\n"));
+    r.push_str(String::from("mutator takes a heap by value and returns a new one.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The defining contract pattern is the **size-shadow invariant** `size == data.len()`,\n"));
+    r.push_str(String::from("threaded through every mutator. This is what lets ESBMC reason about in-bounds\n"));
+    r.push_str(String::from("`data[i]` access without a universal quantifier:\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {\n"));
+    r.push_str(String::from("    requires: h.size == h.data.len(),\n"));
+    r.push_str(String::from("    requires: h.size < 9223372036854775807,\n"));
+    r.push_str(String::from("    ensures: result.size == h.size + 1,\n"));
+    r.push_str(String::from("    ensures: result.size == result.data.len()\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function (min; `max_*` mirrors) | Signature | Key contracts |\n"));
+    r.push_str(String::from("|---------------------------------|-----------|---------------|\n"));
+    r.push_str(String::from("| `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |\n"));
+    r.push_str(String::from("| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |\n"));
+    r.push_str(String::from("| `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |\n"));
+    r.push_str(String::from("| `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |\n"));
+    r.push_str(String::from("| `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |\n"));
+    r.push_str(String::from("| `min_heap_pop` | `(h) -> MinHeap` | `requires h.size > 0, size-shadow`; `ensures result.size == h.size - 1` |\n"));
+    r.push_str(String::from("| `min_heap_clear` | `(h) -> MinHeap` | size-shadow in; `ensures result.size == 0` |\n"));
+    r.push_str(String::from("| `is_min_heap` | `(h) -> bool` | `requires size-shadow` -- runtime check of the heap-order property |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Heap-order is a runtime predicate, by design.** Vow has no universal quantifier, so\n"));
+    r.push_str(String::from("the property `∀i. data[parent(i)] <= data[i]` cannot be written as an `ensures`.\n"));
+    r.push_str(String::from("`is_min_heap` / `is_max_heap` check it at runtime instead; the static contracts cover\n"));
+    r.push_str(String::from("index safety and the size-shadow invariant only.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## stack\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/stack/stack.vow` -- a `Vec<i64>`-backed LIFO stack (value type). `node.vow` in\n"));
+    r.push_str(String::from("the same directory is a vestigial `Node` struct kept for the demo; the stack does not\n"));
+    r.push_str(String::from("use it.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|\n"));
+    r.push_str(String::from("| `stack_new` | `() -> Stack` | -- |\n"));
+    r.push_str(String::from("| `stack_push` | `(s, val: i64) -> Stack` | `ensures result.size == s.size + 1` |\n"));
+    r.push_str(String::from("| `stack_peek` | `(s) -> i64` | `requires s.size > 0` |\n"));
+    r.push_str(String::from("| `stack_size` | `(s) -> i64` | -- |\n"));
+    r.push_str(String::from("| `stack_is_empty` | `(s) -> bool` | -- |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Known gaps (move-verbatim; tracked follow-up):** no `stack_pop`; no size-shadow\n"));
+    r.push_str(String::from("invariant (`size == data.len()`) like `heap` has; `stack_peek` has no `ensures`\n"));
+    r.push_str(String::from("relating the result to `data[size-1]`; functions are not marked `pub`; `node.vow` is\n"));
+    r.push_str(String::from("unused.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## geometry\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/geometry/point.vow` (a `Point` struct) and `shape.vow` (a `Shape` enum with\n"));
+    r.push_str(String::from("circle/rectangle area and perimeter). **The only module whose `vow verify` passes\n"));
+    r.push_str(String::from("today** -- its shape functions use exact derived overflow bounds. Note this means the\n"));
+    r.push_str(String::from("*vowed* checks verify (`vow verify stdlib/geometry/main.vow` → `Verified`); it is not a\n"));
+    r.push_str(String::from("proof of the whole API, since `point_distance_sq` carries no contract (see Known gaps).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|\n"));
+    r.push_str(String::from("| `point_new` / `point_x` / `point_y` | `Point` accessors | -- |\n"));
+    r.push_str(String::from("| `point_distance_sq` | `(a, b: Point) -> i64` | -- (no overflow guard -- gap for large coordinates) |\n"));
+    r.push_str(String::from("| `circle_area` | `(r: i64) -> i64` | `requires 0 <= r <= 1753413056`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("| `rect_area` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, h == 0 \\|\\| w <= I64_MAX / h`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("| `circle_perimeter` | `(r: i64) -> i64` | `requires 0 <= r <= 1537228672809129301`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, w <= 4611686018427387903 - h`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Each magic bound is the exact threshold below which the arithmetic cannot overflow --\n"));
+    r.push_str(String::from("e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn circle_area(r: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    requires: r >= 0,\n"));
+    r.push_str(String::from("    requires: r <= 1753413056,\n"));
+    r.push_str(String::from("    ensures: result >= 0\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Known gaps:** the `Shape` enum is declared but the area/perimeter functions are\n"));
+    r.push_str(String::from("free functions that don't dispatch on it; `point_distance_sq` lacks an overflow\n"));
+    r.push_str(String::from("guard; `shape_at` is a demo artifact, not a real API.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## bignum\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/bignum/bignum.vow` -- arbitrary-precision **signed** integers in base 10⁹\n"));
+    r.push_str(String::from("sign-magnitude form (`struct BigNum { digits: Vec<i64>, sign: i64 }`). Pure core\n"));
+    r.push_str(String::from("language; no builtins beyond `Vec`/`String`/`i64`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Public API (selected):**\n"));
+    r.push_str(String::from("- Construct: `bignum_zero`, `bignum_from_i64`, `bignum_from_string`\n"));
+    r.push_str(String::from("- Convert: `bignum_to_string`\n"));
+    r.push_str(String::from("- Predicates: `bignum_is_zero`, `bignum_is_negative`, `bignum_is_positive`\n"));
+    r.push_str(String::from("- Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`\n"));
+    r.push_str(String::from("- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`\n"));
+    r.push_str(String::from("- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Contracts present:** `bignum_sub_abs` requires `bignum_cmp_abs(a, b) >= 0`;\n"));
+    r.push_str(String::from("`bignum_div`/`bignum_mod`/`bignum_divmod` require `!bignum_is_zero(b)`; `bignum_pow`\n"));
+    r.push_str(String::from("requires `exp >= 0`; `bignum_factorial` requires `n >= 0`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Semantics to know:**\n"));
+    r.push_str(String::from("- The representation invariant (non-empty `digits`, no leading-zero limbs except the\n"));
+    r.push_str(String::from("  canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`) is maintained internally\n"));
+    r.push_str(String::from("  but **not** stated as a struct invariant or `ensures`.\n"));
+    r.push_str(String::from("- Division truncates toward zero; the remainder's sign matches the dividend.\n"));
+    r.push_str(String::from("- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.\n"));
+    r.push_str(String::from("- `bignum_gcd` operates on absolute values; the result is non-negative.\n"));
+    r.push_str(String::from("- Multiplication is O(n·m) schoolbook (no Karatsuba).\n"));
+    r.push_str(String::from("- Helpers prefixed for internal use (`bignum_strip_zeros`, `bignum_shift_limbs`,\n"));
+    r.push_str(String::from("  `i64_to_decimal*`, `bignum_divmod_long`, …) are not part of the public API.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Verification:** `Skipped` -- limb arithmetic allocates `Vec`s per call (`RegionAlloc`),\n"));
+    r.push_str(String::from("which the verifier cannot model. Contracts are runtime-enforced in `--mode debug`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## gc\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/gc/gc.vow` -- a mark-and-sweep garbage collector over a heap of `i64` values\n"));
+    r.push_str(String::from("with explicit roots and reference edges (`struct GcHeap`). Slots are opaque integer\n"));
+    r.push_str(String::from("handles returned by `gc_alloc`; never fabricate them.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|\n"));
+    r.push_str(String::from("| `gc_new` | `() -> GcHeap` | -- |\n"));
+    r.push_str(String::from("| `gc_alloc` | `(h, val: i64) -> i64` | -- (returns a slot; reuses freed slots) |\n"));
+    r.push_str(String::from("| `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive -- you may unroot a freed slot) |\n"));
+    r.push_str(String::from("| `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |\n"));
+    r.push_str(String::from("| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |\n"));
+    r.push_str(String::from("| `gc_count` | `(h) -> i64` | -- |\n"));
+    r.push_str(String::from("| `gc_collect` | `(h) -> i64` | -- (returns count of newly-freed objects) |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Semantics to know:**\n"));
+    r.push_str(String::from("- `gc_collect` invalidates every slot not reachable from a root; calling\n"));
+    r.push_str(String::from("  `gc_read`/`gc_write` on a freed slot violates its precondition.\n"));
+    r.push_str(String::from("- Roots and references are not deduplicated -- adding a root twice needs two\n"));
+    r.push_str(String::from("  `gc_remove_root` calls.\n"));
+    r.push_str(String::from("- The heap stores only `i64`; represent richer object graphs as indices/tagged ints.\n"));
+    r.push_str(String::from("- Mark/sweep handles cycles naturally via the mark bit; no separate cycle detection.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Verification:** `VerifyFailed` -- ESBMC produces a `gc_add_root` precondition\n"));
+    r.push_str(String::from("counterexample tied to how in-module caller-`requires` are checked (cf. issue #764).\n"));
+    r.push_str(String::from("Contracts are runtime-enforced in `--mode debug`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Known gaps and roadmap\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("These are tracked follow-ups, intentionally **not** addressed by the reorg that\n"));
+    r.push_str(String::from("created `stdlib/` (which moved code verbatim):\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("- **Static verifiability.** Make `Vec`/region-allocating functions modelable so\n"));
+    r.push_str(String::from("  `stack`, `bignum`, and most of `heap` can be statically verified; rename `abs` to\n"));
+    r.push_str(String::from("  avoid the C `<stdlib.h>` collision that blocks `math`; resolve the `gc_add_root`\n"));
+    r.push_str(String::from("  caller-`requires` counterexample (#764).\n"));
+    r.push_str(String::from("- **Contract hardening.** Add struct/representation invariants and `ensures` clauses\n"));
+    r.push_str(String::from("  to `bignum` and `gc`; add a size-shadow invariant and `stack_pop` to `stack`; add\n"));
+    r.push_str(String::from("  an overflow guard to `point_distance_sq`; wire the `Shape` enum into `geometry`'s\n"));
+    r.push_str(String::from("  area/perimeter functions.\n"));
+    r.push_str(String::from("- **Consistency.** Mark all intended-public functions `pub` (currently only `math`\n"));
+    r.push_str(String::from("  and `heap` do); remove or rebuild the vestigial `stack/node.vow`.\n"));
+    r.push_str(String::from("- **Distribution.** A module search path so stdlib modules can be imported without\n"));
+    r.push_str(String::from("  copying source into the consuming project.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("# Worked Examples\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`. The sixth shows bounded-memory streaming file input.\n"));
@@ -7006,6 +7399,7 @@ fn skill_support_paths() -> Vec<String> {
     v.push(String::from("reference/contracts.md"));
     v.push(String::from("reference/contracts-methodology.md"));
     v.push(String::from("reference/errors.md"));
+    v.push(String::from("reference/stdlib.md"));
     v.push(String::from("examples/examples.md"));
     v.push(String::from("schemas/build-result.schema.json"));
     v.push(String::from("schemas/complexity-result.schema.json"));
@@ -9929,6 +10323,361 @@ fn skill_support_content_4() -> String {
 }
 
 fn skill_support_content_5() -> String {
+    let r: String = String::from("# Vow Standard Library\n");
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The standard library is a curated set of reusable, contract-annotated Vow modules\n"));
+    r.push_str(String::from("under `stdlib/`. Each module is a self-contained directory: one or more library\n"));
+    r.push_str(String::from("`.vow` files plus a `main.vow` that demonstrates and exercises the API.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("This is a **reference collection**, not a globally-importable package set. Vow has\n"));
+    r.push_str(String::from("no module search path today (see [Consumption model](#consumption-model)). Modules\n"));
+    r.push_str(String::from("carry contracts, but only some are statically verifiable under the current ESBMC\n"));
+    r.push_str(String::from("model -- read [Verification status](#verification-status) before relying on a\n"));
+    r.push_str(String::from("contract as a proof rather than a runtime check.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("In all examples below, `vow` refers to `build/vowc`. Always run `ulimit -v 2000000`\n"));
+    r.push_str(String::from("before invoking the compiler or any binary it produces.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Modules at a glance\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Module path           | Provides                                                                 | ESBMC status |\n"));
+    r.push_str(String::from("|-----------------------|-------------------------------------------------------------------------|---------------------------|\n"));
+    r.push_str(String::from("| `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` -- integer & vector math        | VerifyFailed (env)        |\n"));
+    r.push_str(String::from("| `stdlib/heap`         | `min_heap`, `max_heap` -- binary heaps over `i64`                          | VerifyFailed (env)        |\n"));
+    r.push_str(String::from("| `stdlib/stack`        | `stack` -- Vec-backed LIFO stack over `i64`                               | Skipped     |\n"));
+    r.push_str(String::from("| `stdlib/geometry`     | `point`, `shape` -- 2D points, circles, rectangles                        | **Verified**              |\n"));
+    r.push_str(String::from("| `stdlib/bignum`       | `bignum` -- arbitrary-precision signed integers                          | Skipped     |\n"));
+    r.push_str(String::from("| `stdlib/gc`           | `gc` -- mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0. `(env)` marks an environmental verifier limitation, not a contract\n"));
+    r.push_str(String::from("defect. The statuses reflect the verifier's memory model, **not** the soundness of\n"));
+    r.push_str(String::from("the contracts -- see [Verification status](#verification-status).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Consumption model\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,\n"));
+    r.push_str(String::from("where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.\n"));
+    r.push_str(String::from("All transitive `use`s in dependency modules resolve against that **same** directory.\n"));
+    r.push_str(String::from("There is no search path, and `--module-root` is only available on `vow test` -- not\n"));
+    r.push_str(String::from("`vow build` or `vow verify`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Two practical ways to use a stdlib module:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**1. Run the module's own demo in place.** Each module ships a `main.vow`. Build with\n"));
+    r.push_str(String::from("`--no-verify` -- most stdlib modules do not pass `vow verify` yet (see\n"));
+    r.push_str(String::from("[Verification status](#verification-status)), and the point here is to *run* the demo,\n"));
+    r.push_str(String::from("not to verify it:\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo\n"));
+    r.push_str(String::from("$ ulimit -v 2000000; /tmp/math_demo\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**2. Copy the module's `.vow` file(s) into your project directory.** Because `use`\n"));
+    r.push_str(String::from("resolves against your entry file's directory, the library file must sit next to\n"));
+    r.push_str(String::from("your program. For a single-file module:\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("$ cp stdlib/math/arithmetic.vow myproject/arithmetic.vow\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("module Main\n"));
+    r.push_str(String::from("use arithmetic\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("fn main() -> i32 [io] {\n"));
+    r.push_str(String::from("    print_i64(clamp(15, 0, 10));   // 10\n"));
+    r.push_str(String::from("    0\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("For a multi-file module, copy **all** sibling files together -- e.g. `stdlib/geometry`\n"));
+    r.push_str(String::from("ships `shape.vow` which internally does `use point`, so `point.vow` must be copied\n"));
+    r.push_str(String::from("alongside it.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("> A real import mechanism (a module search path so `use std.math.arithmetic`\n"));
+    r.push_str(String::from("> resolves from any location) is future work. Until then, treat stdlib modules as\n"));
+    r.push_str(String::from("> vendored source you copy in, exactly like the self-hosted compiler's own modules.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Verification status\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The verifier statuses below were measured with `vow verify` against ESBMC 8.3.0.\n"));
+    r.push_str(String::from("They are **pre-existing properties of the code and the verifier**, unchanged by the\n"));
+    r.push_str(String::from("move into `stdlib/`. A `Skipped`/`VerifyFailed` status does not mean a contract is\n"));
+    r.push_str(String::from("wrong -- in `--mode debug` every contract is still enforced at runtime via\n"));
+    r.push_str(String::from("`__vow_violation`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Module          | `vow verify` result | Why                                                                                                   |\n"));
+    r.push_str(String::from("|-----------------|---------------------|-------------------------------------------------------------------------------------------------------|\n"));
+    r.push_str(String::from("| `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation -- see the geometry section.) |\n"));
+    r.push_str(String::from("| `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |\n"));
+    r.push_str(String::from("| `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |\n"));
+    r.push_str(String::from("| `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |\n"));
+    r.push_str(String::from("| `bignum`        | `Skipped`           | `Vec`-based limb arithmetic allocates per call (`RegionAlloc`); not modelable. 24 `RegionRootEscape` notes (the demo intentionally holds results for program lifetime). |\n"));
+    r.push_str(String::from("| `gc`            | `VerifyFailed`      | ESBMC produces a `gc_add_root` precondition counterexample related to in-module caller-`requires` checking (cf. issue #764). |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("\\* Environmental verifier limitation, not a contract defect.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Takeaway for agents:** only `geometry`'s `vow verify` passes today -- and that proves\n"));
+    r.push_str(String::from("the *vowed* checks reachable from its demo, not every function (e.g. `point_distance_sq`\n"));
+    r.push_str(String::from("carries no contract and is not a proof obligation). For\n"));
+    r.push_str(String::from("the others, the contracts are precise specifications that are enforced at runtime in\n"));
+    r.push_str(String::from("`--mode debug`; static proof is gated on verifier-model improvements (Vec/region\n"));
+    r.push_str(String::from("modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build\n"));
+    r.push_str(String::from("on these modules and need a *static* guarantee, prefer `geometry`'s pattern: keep\n"));
+    r.push_str(String::from("hot paths in plain `i64` with explicit overflow `requires`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## math\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Three modules under `stdlib/math/`. Each is independent (no cross-`use`); copy only\n"));
+    r.push_str(String::from("the one you need. All functions are `pub`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### math.arithmetic\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Integer primitives with overflow-guarded contracts. The `safe_*` family operates on\n"));
+    r.push_str(String::from("**non-negative** inputs only -- they are overflow-checked unsigned-style helpers, not\n"));
+    r.push_str(String::from("general signed wrappers.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts | Notes |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|-------|\n"));
+    r.push_str(String::from("| `abs` | `(x: i64) -> i64` | `requires x > -9223372036854775807`; `ensures result >= 0`; `ensures result == x \\|\\| result == 0 - x` | Guards `i64::MIN` negation overflow. |\n"));
+    r.push_str(String::from("| `min` | `(a, b: i64) -> i64` | `ensures result <= a`; `result <= b`; `result == a \\|\\| result == b` | Tight: result is one of the inputs. |\n"));
+    r.push_str(String::from("| `max` | `(a, b: i64) -> i64` | `ensures result >= a`; `result >= b`; `result == a \\|\\| result == b` | |\n"));
+    r.push_str(String::from("| `clamp` | `(x, lo, hi: i64) -> i64` | `requires lo <= hi`; `ensures lo <= result <= hi` | |\n"));
+    r.push_str(String::from("| `sign` | `(x: i64) -> i64` | `ensures -1 <= result <= 1` | -1 / 0 / 1. |\n"));
+    r.push_str(String::from("| `safe_add` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a <= I64_MAX - b`; `ensures result == a + b` | Non-negative inputs only. |\n"));
+    r.push_str(String::from("| `safe_sub` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a >= b`; `ensures 0 <= result <= a` | |\n"));
+    r.push_str(String::from("| `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \\|\\| a <= I64_MAX / b`; `ensures result == a * b` | |\n"));
+    r.push_str(String::from("| `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |\n"));
+    r.push_str(String::from("| `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |\n"));
+    r.push_str(String::from("| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) -- no fast exponentiation; no overflow guard on the running product. |\n"));
+    r.push_str(String::from("| `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |\n"));
+    r.push_str(String::from("| `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |\n"));
+    r.push_str(String::from("| `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |\n"));
+    r.push_str(String::from("| `is_even` / `is_odd` | `(x: i64) -> bool` | -- | |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Representative contract -- overflow guard expressed in the precondition rather than\n"));
+    r.push_str(String::from("via checked arithmetic:\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("pub fn safe_mul(a: i64, b: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    requires: a >= 0,\n"));
+    r.push_str(String::from("    requires: b >= 0,\n"));
+    r.push_str(String::from("    requires: b == 0 || a <= 9223372036854775807 / b,\n"));
+    r.push_str(String::from("    ensures: result == a * b,\n"));
+    r.push_str(String::from("    ensures: result >= 0\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### math.number_theory\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts | Notes |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|-------|\n"));
+    r.push_str(String::from("| `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \\|\\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |\n"));
+    r.push_str(String::from("| `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |\n"));
+    r.push_str(String::from("| `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |\n"));
+    r.push_str(String::from("| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |\n"));
+    r.push_str(String::from("| `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` -- product overflows past 20!. |\n"));
+    r.push_str(String::from("| `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |\n"));
+    r.push_str(String::from("| `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |\n"));
+    r.push_str(String::from("| `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |\n"));
+    r.push_str(String::from("| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### math.vec_math\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Operates on `Vec<i64>`. None of the summation helpers guard against accumulator\n"));
+    r.push_str(String::from("overflow -- use on bounded data, or add `requires` bounds at the call site.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts | Notes |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|-------|\n"));
+    r.push_str(String::from("| `vec_sum` | `(v: Vec<i64>) -> i64` | -- | No overflow guard. |\n"));
+    r.push_str(String::from("| `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |\n"));
+    r.push_str(String::from("| `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |\n"));
+    r.push_str(String::from("| `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |\n"));
+    r.push_str(String::from("| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures 0 <= result <= v.len()` | Invariant `count <= i`. |\n"));
+    r.push_str(String::from("| `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |\n"));
+    r.push_str(String::from("| `vec_is_sorted` | `(v: Vec<i64>) -> bool` | -- | Ascending. |\n"));
+    r.push_str(String::from("| `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |\n"));
+    r.push_str(String::from("| `vec_reverse` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## heap\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/heap/min_heap.vow` and `max_heap.vow` are structural mirrors (a min-heap and\n"));
+    r.push_str(String::from("a max-heap over `i64`), with the comparator flipped. Both are value types: every\n"));
+    r.push_str(String::from("mutator takes a heap by value and returns a new one.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The defining contract pattern is the **size-shadow invariant** `size == data.len()`,\n"));
+    r.push_str(String::from("threaded through every mutator. This is what lets ESBMC reason about in-bounds\n"));
+    r.push_str(String::from("`data[i]` access without a universal quantifier:\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {\n"));
+    r.push_str(String::from("    requires: h.size == h.data.len(),\n"));
+    r.push_str(String::from("    requires: h.size < 9223372036854775807,\n"));
+    r.push_str(String::from("    ensures: result.size == h.size + 1,\n"));
+    r.push_str(String::from("    ensures: result.size == result.data.len()\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function (min; `max_*` mirrors) | Signature | Key contracts |\n"));
+    r.push_str(String::from("|---------------------------------|-----------|---------------|\n"));
+    r.push_str(String::from("| `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |\n"));
+    r.push_str(String::from("| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |\n"));
+    r.push_str(String::from("| `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |\n"));
+    r.push_str(String::from("| `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |\n"));
+    r.push_str(String::from("| `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |\n"));
+    r.push_str(String::from("| `min_heap_pop` | `(h) -> MinHeap` | `requires h.size > 0, size-shadow`; `ensures result.size == h.size - 1` |\n"));
+    r.push_str(String::from("| `min_heap_clear` | `(h) -> MinHeap` | size-shadow in; `ensures result.size == 0` |\n"));
+    r.push_str(String::from("| `is_min_heap` | `(h) -> bool` | `requires size-shadow` -- runtime check of the heap-order property |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Heap-order is a runtime predicate, by design.** Vow has no universal quantifier, so\n"));
+    r.push_str(String::from("the property `∀i. data[parent(i)] <= data[i]` cannot be written as an `ensures`.\n"));
+    r.push_str(String::from("`is_min_heap` / `is_max_heap` check it at runtime instead; the static contracts cover\n"));
+    r.push_str(String::from("index safety and the size-shadow invariant only.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## stack\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/stack/stack.vow` -- a `Vec<i64>`-backed LIFO stack (value type). `node.vow` in\n"));
+    r.push_str(String::from("the same directory is a vestigial `Node` struct kept for the demo; the stack does not\n"));
+    r.push_str(String::from("use it.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|\n"));
+    r.push_str(String::from("| `stack_new` | `() -> Stack` | -- |\n"));
+    r.push_str(String::from("| `stack_push` | `(s, val: i64) -> Stack` | `ensures result.size == s.size + 1` |\n"));
+    r.push_str(String::from("| `stack_peek` | `(s) -> i64` | `requires s.size > 0` |\n"));
+    r.push_str(String::from("| `stack_size` | `(s) -> i64` | -- |\n"));
+    r.push_str(String::from("| `stack_is_empty` | `(s) -> bool` | -- |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Known gaps (move-verbatim; tracked follow-up):** no `stack_pop`; no size-shadow\n"));
+    r.push_str(String::from("invariant (`size == data.len()`) like `heap` has; `stack_peek` has no `ensures`\n"));
+    r.push_str(String::from("relating the result to `data[size-1]`; functions are not marked `pub`; `node.vow` is\n"));
+    r.push_str(String::from("unused.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## geometry\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/geometry/point.vow` (a `Point` struct) and `shape.vow` (a `Shape` enum with\n"));
+    r.push_str(String::from("circle/rectangle area and perimeter). **The only module whose `vow verify` passes\n"));
+    r.push_str(String::from("today** -- its shape functions use exact derived overflow bounds. Note this means the\n"));
+    r.push_str(String::from("*vowed* checks verify (`vow verify stdlib/geometry/main.vow` → `Verified`); it is not a\n"));
+    r.push_str(String::from("proof of the whole API, since `point_distance_sq` carries no contract (see Known gaps).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|\n"));
+    r.push_str(String::from("| `point_new` / `point_x` / `point_y` | `Point` accessors | -- |\n"));
+    r.push_str(String::from("| `point_distance_sq` | `(a, b: Point) -> i64` | -- (no overflow guard -- gap for large coordinates) |\n"));
+    r.push_str(String::from("| `circle_area` | `(r: i64) -> i64` | `requires 0 <= r <= 1753413056`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("| `rect_area` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, h == 0 \\|\\| w <= I64_MAX / h`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("| `circle_perimeter` | `(r: i64) -> i64` | `requires 0 <= r <= 1537228672809129301`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, w <= 4611686018427387903 - h`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Each magic bound is the exact threshold below which the arithmetic cannot overflow --\n"));
+    r.push_str(String::from("e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn circle_area(r: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    requires: r >= 0,\n"));
+    r.push_str(String::from("    requires: r <= 1753413056,\n"));
+    r.push_str(String::from("    ensures: result >= 0\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Known gaps:** the `Shape` enum is declared but the area/perimeter functions are\n"));
+    r.push_str(String::from("free functions that don't dispatch on it; `point_distance_sq` lacks an overflow\n"));
+    r.push_str(String::from("guard; `shape_at` is a demo artifact, not a real API.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## bignum\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/bignum/bignum.vow` -- arbitrary-precision **signed** integers in base 10⁹\n"));
+    r.push_str(String::from("sign-magnitude form (`struct BigNum { digits: Vec<i64>, sign: i64 }`). Pure core\n"));
+    r.push_str(String::from("language; no builtins beyond `Vec`/`String`/`i64`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Public API (selected):**\n"));
+    r.push_str(String::from("- Construct: `bignum_zero`, `bignum_from_i64`, `bignum_from_string`\n"));
+    r.push_str(String::from("- Convert: `bignum_to_string`\n"));
+    r.push_str(String::from("- Predicates: `bignum_is_zero`, `bignum_is_negative`, `bignum_is_positive`\n"));
+    r.push_str(String::from("- Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`\n"));
+    r.push_str(String::from("- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`\n"));
+    r.push_str(String::from("- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Contracts present:** `bignum_sub_abs` requires `bignum_cmp_abs(a, b) >= 0`;\n"));
+    r.push_str(String::from("`bignum_div`/`bignum_mod`/`bignum_divmod` require `!bignum_is_zero(b)`; `bignum_pow`\n"));
+    r.push_str(String::from("requires `exp >= 0`; `bignum_factorial` requires `n >= 0`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Semantics to know:**\n"));
+    r.push_str(String::from("- The representation invariant (non-empty `digits`, no leading-zero limbs except the\n"));
+    r.push_str(String::from("  canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`) is maintained internally\n"));
+    r.push_str(String::from("  but **not** stated as a struct invariant or `ensures`.\n"));
+    r.push_str(String::from("- Division truncates toward zero; the remainder's sign matches the dividend.\n"));
+    r.push_str(String::from("- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.\n"));
+    r.push_str(String::from("- `bignum_gcd` operates on absolute values; the result is non-negative.\n"));
+    r.push_str(String::from("- Multiplication is O(n·m) schoolbook (no Karatsuba).\n"));
+    r.push_str(String::from("- Helpers prefixed for internal use (`bignum_strip_zeros`, `bignum_shift_limbs`,\n"));
+    r.push_str(String::from("  `i64_to_decimal*`, `bignum_divmod_long`, …) are not part of the public API.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Verification:** `Skipped` -- limb arithmetic allocates `Vec`s per call (`RegionAlloc`),\n"));
+    r.push_str(String::from("which the verifier cannot model. Contracts are runtime-enforced in `--mode debug`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## gc\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`stdlib/gc/gc.vow` -- a mark-and-sweep garbage collector over a heap of `i64` values\n"));
+    r.push_str(String::from("with explicit roots and reference edges (`struct GcHeap`). Slots are opaque integer\n"));
+    r.push_str(String::from("handles returned by `gc_alloc`; never fabricate them.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Key contracts |\n"));
+    r.push_str(String::from("|----------|-----------|---------------|\n"));
+    r.push_str(String::from("| `gc_new` | `() -> GcHeap` | -- |\n"));
+    r.push_str(String::from("| `gc_alloc` | `(h, val: i64) -> i64` | -- (returns a slot; reuses freed slots) |\n"));
+    r.push_str(String::from("| `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive -- you may unroot a freed slot) |\n"));
+    r.push_str(String::from("| `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |\n"));
+    r.push_str(String::from("| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |\n"));
+    r.push_str(String::from("| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |\n"));
+    r.push_str(String::from("| `gc_count` | `(h) -> i64` | -- |\n"));
+    r.push_str(String::from("| `gc_collect` | `(h) -> i64` | -- (returns count of newly-freed objects) |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Semantics to know:**\n"));
+    r.push_str(String::from("- `gc_collect` invalidates every slot not reachable from a root; calling\n"));
+    r.push_str(String::from("  `gc_read`/`gc_write` on a freed slot violates its precondition.\n"));
+    r.push_str(String::from("- Roots and references are not deduplicated -- adding a root twice needs two\n"));
+    r.push_str(String::from("  `gc_remove_root` calls.\n"));
+    r.push_str(String::from("- The heap stores only `i64`; represent richer object graphs as indices/tagged ints.\n"));
+    r.push_str(String::from("- Mark/sweep handles cycles naturally via the mark bit; no separate cycle detection.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Verification:** `VerifyFailed` -- ESBMC produces a `gc_add_root` precondition\n"));
+    r.push_str(String::from("counterexample tied to how in-module caller-`requires` are checked (cf. issue #764).\n"));
+    r.push_str(String::from("Contracts are runtime-enforced in `--mode debug`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("---\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("## Known gaps and roadmap\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("These are tracked follow-ups, intentionally **not** addressed by the reorg that\n"));
+    r.push_str(String::from("created `stdlib/` (which moved code verbatim):\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("- **Static verifiability.** Make `Vec`/region-allocating functions modelable so\n"));
+    r.push_str(String::from("  `stack`, `bignum`, and most of `heap` can be statically verified; rename `abs` to\n"));
+    r.push_str(String::from("  avoid the C `<stdlib.h>` collision that blocks `math`; resolve the `gc_add_root`\n"));
+    r.push_str(String::from("  caller-`requires` counterexample (#764).\n"));
+    r.push_str(String::from("- **Contract hardening.** Add struct/representation invariants and `ensures` clauses\n"));
+    r.push_str(String::from("  to `bignum` and `gc`; add a size-shadow invariant and `stack_pop` to `stack`; add\n"));
+    r.push_str(String::from("  an overflow guard to `point_distance_sq`; wire the `Shape` enum into `geometry`'s\n"));
+    r.push_str(String::from("  area/perimeter functions.\n"));
+    r.push_str(String::from("- **Consistency.** Mark all intended-public functions `pub` (currently only `math`\n"));
+    r.push_str(String::from("  and `heap` do); remove or rebuild the vestigial `stack/node.vow`.\n"));
+    r.push_str(String::from("- **Distribution.** A module search path so stdlib modules can be imported without\n"));
+    r.push_str(String::from("  copying source into the consuming project.\n"));
+    r.push_str(String::from("\n"));
+    r
+}
+
+fn skill_support_content_6() -> String {
     let r: String = String::from("# Worked Examples\n");
     r.push_str(String::from("\n"));
     r.push_str(String::from("Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`. The sixth shows bounded-memory streaming file input.\n"));
@@ -10393,7 +11142,7 @@ fn skill_support_content_5() -> String {
     r
 }
 
-fn skill_support_content_6() -> String {
+fn skill_support_content_7() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/build-result.schema.json\",\n"));
@@ -10459,7 +11208,7 @@ fn skill_support_content_6() -> String {
     r
 }
 
-fn skill_support_content_7() -> String {
+fn skill_support_content_8() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.org/schemas/complexity-result.schema.json\",\n"));
@@ -10635,7 +11384,7 @@ fn skill_support_content_7() -> String {
     r
 }
 
-fn skill_support_content_8() -> String {
+fn skill_support_content_9() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/contracts-result.schema.json\",\n"));
@@ -10740,7 +11489,7 @@ fn skill_support_content_8() -> String {
     r
 }
 
-fn skill_support_content_9() -> String {
+fn skill_support_content_10() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/counterexample.schema.json\",\n"));
@@ -10799,7 +11548,7 @@ fn skill_support_content_9() -> String {
     r
 }
 
-fn skill_support_content_10() -> String {
+fn skill_support_content_11() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/diagnostic.schema.json\",\n"));
@@ -10864,7 +11613,7 @@ fn skill_support_content_10() -> String {
     r
 }
 
-fn skill_support_content_11() -> String {
+fn skill_support_content_12() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.org/schemas/mutants-result.schema.json\",\n"));
@@ -10947,7 +11696,7 @@ fn skill_support_content_11() -> String {
     r
 }
 
-fn skill_support_content_12() -> String {
+fn skill_support_content_13() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/test-result.schema.json\",\n"));
@@ -11033,7 +11782,7 @@ fn skill_support_content_12() -> String {
     r
 }
 
-fn skill_support_content_13() -> String {
+fn skill_support_content_14() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
     r.push_str(String::from("  \"$id\": \"https://vow-lang.dev/schemas/vow-violation.schema.json\",\n"));
@@ -11100,6 +11849,7 @@ fn skill_support_contents() -> Vec<String> {
     v.push(skill_support_content_11());
     v.push(skill_support_content_12());
     v.push(skill_support_content_13());
+    v.push(skill_support_content_14());
     v
 }
 // GENERATE:SKILL_FULL:END

@@ -2,6 +2,10 @@
 
 _Generated 2026-06-18 by scripts/complexity_calibrate.py over `compiler/*.vow` (25 files)._
 
+_Retention: `current-baseline` for the `complexity-calibration` stream. Replace
+this snapshot in the same PR as the next committed complexity calibration
+snapshot unless a reviewer reclassifies it as `release-evidence`._
+
 > Validation target is comprehensibility / refactor priority, NOT correctness
 > (docs/design Part 4). Correctness is the job of contracts + tests.
 
@@ -65,4 +69,3 @@ Functions the score DEPRIORITIZES below their size rank (long but flat):
 | `lex` | 163 | 100 | 66 | 190 | 269 |
 | `lower_expr` | 841 | 100 | 272 | 634 | 2048 |
 | `lower_function_vow` | 3271 | 100 | 19 | 52 | 134 |
-
