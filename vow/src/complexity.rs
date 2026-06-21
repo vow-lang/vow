@@ -201,13 +201,29 @@ fn ir_callees(f: &vow_ir::Function) -> std::collections::HashSet<u32> {
     s
 }
 
+fn ir_fan_in_counts<'a, I>(entry_file: &str, caller_callees: I) -> HashMap<u32, i64>
+where
+    I: IntoIterator<Item = (&'a str, &'a HashSet<u32>)>,
+{
+    let mut counts = HashMap::new();
+    for (source_file, callees) in caller_callees {
+        if source_file != entry_file {
+            continue;
+        }
+        for callee in callees {
+            *counts.entry(*callee).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
 fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
     let fl = fan_in.wrapping_mul(fan_out);
     cx_sat(nloc.wrapping_mul(fl).wrapping_mul(fl))
 }
 
 use crate::emit_frontend_diagnostics;
-use crate::frontend::{FrontendGoal, prepare_frontend};
+use crate::frontend::{prepare_frontend, FrontendGoal};
 
 // Structural counts accumulated by the AST walk. Mirrors the self-hosted
 // `cx_walk_*` (compiler/complexity.vow) handled-kind set exactly so the JSON
@@ -656,6 +672,13 @@ pub(crate) fn run_complexity_command(
     if let Some(m) = frontend.ir() {
         let funcs = &m.functions;
         let callees: Vec<HashSet<u32>> = funcs.iter().map(ir_callees).collect();
+        let fan_in_counts = ir_fan_in_counts(
+            entry_file.as_str(),
+            funcs
+                .iter()
+                .zip(callees.iter())
+                .map(|(f, s)| (f.source_file.as_str(), s)),
+        );
         let effectful: HashSet<u32> = funcs
             .iter()
             .filter(|f| !f.effects.is_empty())
@@ -664,14 +687,7 @@ pub(crate) fn run_complexity_command(
         for (idx, f) in funcs.iter().enumerate() {
             let fan_out = callees[idx].len() as i64;
             let fid = f.id.0;
-            // fan_in counts in-file callers only (schema), so restrict the caller
-            // scan to entry-file functions — a dependency that calls an entry
-            // function must not inflate the entry function's fan_in.
-            let fan_in = funcs
-                .iter()
-                .zip(callees.iter())
-                .filter(|(cf, s)| cf.source_file == entry_file && s.contains(&fid))
-                .count() as i64;
+            let fan_in = fan_in_counts.get(&fid).copied().unwrap_or(0);
             let effect_fanout = callees[idx]
                 .iter()
                 .filter(|c| effectful.contains(c))
@@ -900,7 +916,11 @@ fn cx_soft_or(c: i64, s: i64) -> i64 {
 
 fn cx_round_0_100(val_scaled: i64) -> i64 {
     let r = (val_scaled * 100 + 500) / 1000;
-    if r > 100 { 100 } else { r }
+    if r > 100 {
+        100
+    } else {
+        r
+    }
 }
 
 fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64) -> CxScore {
@@ -921,7 +941,11 @@ fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64
 const CX_SAT: i64 = 2_000_000_000;
 
 fn cx_sat(x: i64) -> i64 {
-    if x > CX_SAT { CX_SAT } else { x }
+    if x > CX_SAT {
+        CX_SAT
+    } else {
+        x
+    }
 }
 
 fn cx_log2_milli(n: i64) -> i64 {
@@ -1386,6 +1410,25 @@ mod tests {
         assert_eq!(contract.free_vars, 1);
         assert!(!contract.has_vec_quant);
         assert_eq!(contract_predicate_cost(&contract), 4);
+    }
+
+    #[test]
+    fn ir_fan_in_counts_only_entry_file_callers_once_per_caller() {
+        let source_files = ["entry.vow", "dep.vow", "entry.vow"];
+        let callee_sets = [
+            HashSet::from([1, 2]),
+            HashSet::from([2]),
+            HashSet::from([1]),
+        ];
+
+        let counts = ir_fan_in_counts(
+            "entry.vow",
+            source_files.iter().copied().zip(callee_sets.iter()),
+        );
+
+        assert_eq!(counts.get(&1).copied().unwrap_or(0), 2);
+        assert_eq!(counts.get(&2).copied().unwrap_or(0), 1);
+        assert_eq!(counts.get(&3).copied().unwrap_or(0), 0);
     }
 }
 
