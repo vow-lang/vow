@@ -1,0 +1,30 @@
+module PredicateControlFlow
+
+struct Pair {
+    left: i64,
+    right: i64,
+}
+
+enum Bucket {
+    Small(i64),
+    Large(i64),
+}
+
+fn pair_ordered(p: Pair) -> bool {
+    p.left <= p.right
+}
+
+fn bucket_nonneg(b: Bucket) -> bool {
+    true
+}
+
+fn select(c: bool, x: i64, y: i64) -> i64 vow {
+    requires: if c { let sum: i64 = x + y; sum >= x } else { pair_ordered(Pair { left: x, right: y }) },
+    requires: bucket_nonneg(Bucket::Small(y)),
+    ensures: match c {
+        true => { result == x },
+        false => { let z: i64 = y; result == z },
+    }
+} {
+    if c { x } else { y }
+}

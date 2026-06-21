@@ -605,7 +605,7 @@ fn cog_expr(a: AstArena, eid: i64, nesting: i64, logctx: i64, selfn: String, acc
 fn CX_SAT() -> i64 { 2000000000 }
 
 fn cx_sat(x: i64) -> i64 {
-    if x > CX_SAT() { CX_SAT() } else { x }
+    if x < 0 || x > CX_SAT() { CX_SAT() } else { x }
 }
 
 // Clamp a possibly-(-1) IR lookup result to 0. Pure (no let-mut + if-reassign)
@@ -692,6 +692,24 @@ struct CxContract {
 // Walk a contract predicate expr. acc[0]=node count, acc[1]=max depth,
 // acc[2]=has-Vec-index flag (proxy for Vec quantification, no quantifier
 // syntax exists). `seen` collects distinct free identifiers.
+fn cx_pred_block(a: AstArena, bid: i64, depth: i64, acc: Vec<i64>, seen: Vec<String>) {
+    if bid < 0 { return; }
+    let slid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, slid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, slid, i);
+        if stmt_tag(a, sid) == STMT_LET() {
+            cx_pred_walk(a, stmt_c(a, sid), depth, acc, seen);
+        } else {
+            cx_pred_walk(a, stmt_a(a, sid), depth, acc, seen);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 { cx_pred_walk(a, trail, depth, acc, seen); }
+}
+
 fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<String>) {
     if eid < 0 { return; }
     acc[0] = acc[0] + 1;
@@ -737,6 +755,62 @@ fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<Stri
         let na: i64 = list_len(a, args_lid);
         let mut i: i64 = 0;
         while i < na { cx_pred_walk(a, list_get(a, args_lid, i), depth + 1, acc, seen); i = i + 1; }
+        return;
+    }
+    if tag == EXPR_IF() {
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        cx_pred_block(a, expr_b(a, eid), depth + 1, acc, seen);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 { cx_pred_walk(a, else_eid, depth + 1, acc, seen); }
+        return;
+    }
+    if tag == EXPR_WHILE() || tag == EXPR_FOR() {
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        cx_pred_block(a, expr_b(a, eid), depth + 1, acc, seen);
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        cx_pred_block(a, expr_a(a, eid), depth + 1, acc, seen);
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_arms: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n_arms {
+            cx_pred_walk(a, list_get(a, arms_lid, i * 2 + 1), depth + 1, acc, seen);
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == EXPR_RETURN() || tag == EXPR_BREAK() {
+        let v: i64 = expr_a(a, eid);
+        if v != -1 { cx_pred_walk(a, v, depth + 1, acc, seen); }
+        return;
+    }
+    if tag == EXPR_BLOCK() {
+        cx_pred_block(a, expr_a(a, eid), depth + 1, acc, seen);
+        return;
+    }
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let n_fields: i64 = list_len(a, fields_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n_fields {
+            cx_pred_walk(a, list_get(a, fields_lid, i * 2 + 1), depth + 1, acc, seen);
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            cx_pred_walk(a, list_get(a, args_lid, i), depth + 1, acc, seen);
+            i = i + 1;
+        }
         return;
     }
     if tag == EXPR_TUPLE() {

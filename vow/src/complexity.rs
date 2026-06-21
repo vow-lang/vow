@@ -96,6 +96,7 @@ fn lv_expr(e: &Expr, linear: &HashSet<String>) -> i64 {
         ExprKind::FieldAccess { base, .. } => c += lv_expr(base, linear),
         ExprKind::Question { expr } => c += lv_expr(expr, linear),
         ExprKind::Cast { expr, .. } => c += lv_expr(expr, linear),
+        // Borrow has no node in the self-hosted AST: walk through it transparently.
         ExprKind::Borrow { expr } => c += lv_expr(expr, linear),
         ExprKind::Call { callee, args } => {
             c += lv_expr(callee, linear);
@@ -378,6 +379,7 @@ fn cog_expr(e: &Expr, nesting: i64, logctx: Option<BinOp>, selfn: &str, acc: &mu
                 cog_expr(v, nesting, None, selfn, acc);
             }
         }
+        // Borrow has no node in the self-hosted AST: walk through it transparently.
         ExprKind::Borrow { expr } => cog_expr(expr, nesting, None, selfn, acc),
         ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
     }
@@ -921,7 +923,23 @@ fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64
 const CX_SAT: i64 = 2_000_000_000;
 
 fn cx_sat(x: i64) -> i64 {
-    if x > CX_SAT { CX_SAT } else { x }
+    if !(0..=CX_SAT).contains(&x) {
+        CX_SAT
+    } else {
+        x
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CX_SAT, cx_sat};
+
+    #[test]
+    fn cx_sat_floors_negative_wraparound_to_saturation() {
+        assert_eq!(cx_sat(-1), CX_SAT);
+        assert_eq!(cx_sat(0), 0);
+        assert_eq!(cx_sat(CX_SAT + 1), CX_SAT);
+    }
 }
 
 fn cx_log2_milli(n: i64) -> i64 {
@@ -1187,6 +1205,25 @@ struct Contract {
     has_vec_quant: bool,
 }
 
+fn pred_walk_block(
+    b: &Block,
+    depth: i64,
+    nodes: &mut i64,
+    maxdepth: &mut i64,
+    has_index: &mut bool,
+    seen: &mut HashSet<String>,
+) {
+    for s in &b.stmts {
+        match s {
+            Stmt::Let { init, .. } => pred_walk(init, depth, nodes, maxdepth, has_index, seen),
+            Stmt::Expr { expr, .. } => pred_walk(expr, depth, nodes, maxdepth, has_index, seen),
+        }
+    }
+    if let Some(t) = &b.trailing_expr {
+        pred_walk(t, depth, nodes, maxdepth, has_index, seen);
+    }
+}
+
 fn pred_walk(
     e: &Expr,
     depth: i64,
@@ -1244,6 +1281,52 @@ fn pred_walk(
             pred_walk(receiver, depth + 1, nodes, maxdepth, has_index, seen);
             for a in args {
                 pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            pred_walk(condition, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk_block(then_branch, depth + 1, nodes, maxdepth, has_index, seen);
+            if let Some(e2) = else_branch {
+                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            pred_walk(condition, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen);
+        }
+        ExprKind::ForEach { iterable, body, .. } => {
+            pred_walk(iterable, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen);
+        }
+        ExprKind::Loop { body, .. } => {
+            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            pred_walk(scrutinee, depth + 1, nodes, maxdepth, has_index, seen);
+            for arm in arms {
+                pred_walk(&arm.body, depth + 1, nodes, maxdepth, has_index, seen);
+            }
+        }
+        ExprKind::Return { value } | ExprKind::Break { value } => {
+            if let Some(v) = value {
+                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen);
+            }
+        }
+        ExprKind::Block(b) => pred_walk_block(b, depth + 1, nodes, maxdepth, has_index, seen),
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, v) in fields {
+                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen);
+            }
+        }
+        ExprKind::EnumConstruct { fields, .. } => {
+            for v in fields {
+                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen);
             }
         }
         ExprKind::Tuple(elems) => {
@@ -1411,6 +1494,7 @@ fn loops_expr(e: &Expr, nesting: i64, total: &mut i64, without: &mut i64, maxnes
         ExprKind::FieldAccess { base, .. } => loops_expr(base, nesting, total, without, maxnest),
         ExprKind::Question { expr } => loops_expr(expr, nesting, total, without, maxnest),
         ExprKind::Cast { expr, .. } => loops_expr(expr, nesting, total, without, maxnest),
+        // Borrow has no node in the self-hosted AST: walk through it transparently.
         ExprKind::Borrow { expr } => loops_expr(expr, nesting, total, without, maxnest),
         ExprKind::Return { value } => {
             if let Some(v) = value {
