@@ -12,12 +12,13 @@ struct CxIr {
 struct CxReadSource {
     ok: bool,
     src: String,
+    err: String,
 }
 
 fn cx_read_source(path: String) -> CxReadSource [read] {
     let h: i64 = fs_open(path);
     if h < 0 {
-        return CxReadSource { ok: false, src: String::from("") };
+        return CxReadSource { ok: false, src: String::from(""), err: String::from("open failed") };
     }
 
     let src: String = String::from("");
@@ -29,10 +30,13 @@ fn cx_read_source(path: String) -> CxReadSource [read] {
 
     let status: i64 = fs_status(h);
     let close_status: i64 = fs_close(h);
-    if status != 1 || close_status != 0 {
-        return CxReadSource { ok: false, src: String::from("") };
+    if status != 1 {
+        return CxReadSource { ok: false, src: String::from(""), err: String::from("read failed") };
     }
-    CxReadSource { ok: true, src: src }
+    if close_status != 0 {
+        return CxReadSource { ok: false, src: String::from(""), err: String::from("close failed") };
+    }
+    CxReadSource { ok: true, src: src, err: String::from("") }
 }
 
 // Cyclomatic complexity from the IR CFG, decision-count form:

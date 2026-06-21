@@ -235,6 +235,10 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     if !source_read.ok {
         let msg: String = String::from("vow complexity: cannot read ");
         msg.push_str(path);
+        if source_read.err.len() != 0 {
+            msg.push_str(String::from(": "));
+            msg.push_str(source_read.err);
+        }
         eprintln_str(msg);
         return 1;
     }
