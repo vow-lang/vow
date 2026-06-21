@@ -1,6 +1,6 @@
 module Arithmetic
 
-pub fn abs(x: i64) -> i64 vow {
+pub fn abs_val(x: i64) -> i64 vow {
     requires: x > -9223372036854775807,
     ensures: result >= 0,
     ensures: result == x || result == 0 - x
