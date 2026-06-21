@@ -51,5 +51,6 @@ it locally before pushing.
 `.github/workflows/docs.yml` assembles the source, builds with `--strict`, and deploys
 to GitHub Pages on every push to `main` that touches the docs (or via
 `workflow_dispatch`). One-time setup: in the repository settings, set
-**Pages → Build and deployment → Source = GitHub Actions**. The site publishes to
-<https://vow-lang.github.io/vow/>.
+**Pages → Build and deployment → Source = GitHub Actions**, and set the custom
+domain to `docs.vow-lang.com` (a `CNAME` file is committed at `docs/CNAME` and copied
+into the build). The site publishes to <https://docs.vow-lang.com/>.

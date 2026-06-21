@@ -1,6 +1,6 @@
 site_name: Vow
 site_description: A systems language for AI agents with built-in, statically-verified contracts.
-site_url: https://vow-lang.github.io/vow/
+site_url: https://docs.vow-lang.com/
 repo_url: https://github.com/vow-lang/vow
 repo_name: vow-lang/vow
 edit_uri: edit/main/docs/spec/
