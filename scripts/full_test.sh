@@ -1017,8 +1017,14 @@ section_begin "Section 13: vow complexity Parity"
 for vow_file in tests/fixtures/complexity/*.vow; do
     [ -f "$vow_file" ] || continue
     name=$(basename "$vow_file" .vow)
-    rust_json=$("$RUST" complexity "$vow_file" 2>/dev/null)
-    self_json=$(run_self complexity "$vow_file" 2>/dev/null)
+    rust_exit=0
+    self_exit=0
+    rust_json=$("$RUST" complexity "$vow_file" 2>/dev/null) || rust_exit=$?
+    self_json=$(run_self complexity "$vow_file" 2>/dev/null) || self_exit=$?
+    if [ "$rust_exit" != "0" ] || [ "$self_exit" != "0" ]; then
+        fail "complexity/${name}" "rust_exit=${rust_exit} self_exit=${self_exit} (expected both 0)"
+        continue
+    fi
     golden="tests/fixtures/complexity/${name}.expected.json"
     if [ "$rust_json" != "$self_json" ]; then
         fail "complexity/${name}" "JSON differs between compilers"
