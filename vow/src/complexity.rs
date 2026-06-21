@@ -1193,11 +1193,20 @@ fn pred_walk(
     nodes: &mut i64,
     maxdepth: &mut i64,
     has_index: &mut bool,
+    collect_free_vars: bool,
     seen: &mut HashSet<String>,
 ) {
     // Borrow has no node in the self-hosted AST: walk through it transparently.
     if let ExprKind::Borrow { expr } = &e.kind {
-        pred_walk(expr, depth, nodes, maxdepth, has_index, seen);
+        pred_walk(
+            expr,
+            depth,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+        );
         return;
     }
     *nodes += 1;
@@ -1209,46 +1218,154 @@ fn pred_walk(
             // `result` is the ensures-result binding; the self-hosted parser
             // models it as EXPR_RESULT (not an identifier), so it is not a free
             // var. It is reserved, so excluding it here is always correct.
-            if name != "result" {
+            if collect_free_vars && name != "result" {
                 seen.insert(name.clone());
             }
         }
         ExprKind::Index { base, index } => {
             *has_index = true;
-            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk(index, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(
+                base,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+            );
+            pred_walk(
+                index,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+            );
         }
         ExprKind::BinaryOp { lhs, rhs, .. } => {
-            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(
+                lhs,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+            );
+            pred_walk(
+                rhs,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+            );
         }
         ExprKind::Assign { lhs, rhs } => {
-            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(
+                lhs,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+            );
+            pred_walk(
+                rhs,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+            );
         }
-        ExprKind::UnaryOp { operand, .. } => {
-            pred_walk(operand, depth + 1, nodes, maxdepth, has_index, seen)
-        }
-        ExprKind::FieldAccess { base, .. } => {
-            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen)
-        }
-        ExprKind::Question { expr } => pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen),
-        ExprKind::Cast { expr, .. } => pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen),
+        ExprKind::UnaryOp { operand, .. } => pred_walk(
+            operand,
+            depth + 1,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+        ),
+        ExprKind::FieldAccess { base, .. } => pred_walk(
+            base,
+            depth + 1,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+        ),
+        ExprKind::Question { expr } => pred_walk(
+            expr,
+            depth + 1,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+        ),
+        ExprKind::Cast { expr, .. } => pred_walk(
+            expr,
+            depth + 1,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+        ),
         ExprKind::Call { callee, args } => {
-            pred_walk(callee, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(callee, depth + 1, nodes, maxdepth, has_index, false, seen);
             for a in args {
-                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(
+                    a,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                );
             }
         }
         ExprKind::MethodCall { receiver, args, .. } => {
-            pred_walk(receiver, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(
+                receiver,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+            );
             for a in args {
-                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(
+                    a,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                );
             }
         }
         ExprKind::Tuple(elems) => {
             for e2 in elems {
-                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(
+                    e2,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                );
             }
         }
         _ => {}
@@ -1283,6 +1400,7 @@ fn analyze_contract(f: &FnDef) -> Contract {
                 &mut nodes,
                 &mut maxdepth,
                 &mut has_index,
+                true,
                 &mut seen,
             );
         }

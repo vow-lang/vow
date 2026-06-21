@@ -691,59 +691,60 @@ struct CxContract {
 
 // Walk a contract predicate expr. acc[0]=node count, acc[1]=max depth,
 // acc[2]=has-Vec-index flag (proxy for Vec quantification, no quantifier
-// syntax exists). `seen` collects distinct free identifiers.
-fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<String>) {
+// syntax exists). `seen` collects distinct free identifiers when
+// `collect_free_vars` is true.
+fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<String>, collect_free_vars: bool) {
     if eid < 0 { return; }
     acc[0] = acc[0] + 1;
     if depth > acc[1] { acc[1] = depth; }
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_IDENT() {
         let nm: String = arena_str(a, expr_a(a, eid));
-        if !cx_seen_contains(seen, nm) { seen.push(nm); }
+        if collect_free_vars && !cx_seen_contains(seen, nm) { seen.push(nm); }
         return;
     }
     if tag == EXPR_INDEX() {
         acc[2] = 1;
-        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
-        cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen);
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen, collect_free_vars);
+        cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen, collect_free_vars);
         return;
     }
     if tag == EXPR_BINOP() {
-        cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen);
-        cx_pred_walk(a, expr_c(a, eid), depth + 1, acc, seen);
+        cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen, collect_free_vars);
+        cx_pred_walk(a, expr_c(a, eid), depth + 1, acc, seen, collect_free_vars);
         return;
     }
     if tag == EXPR_ASSIGN() {
-        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
-        cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen);
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen, collect_free_vars);
+        cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen, collect_free_vars);
         return;
     }
-    if tag == EXPR_UNOP() { cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen); return; }
+    if tag == EXPR_UNOP() { cx_pred_walk(a, expr_b(a, eid), depth + 1, acc, seen, collect_free_vars); return; }
     if tag == EXPR_FIELD() || tag == EXPR_QUESTION() || tag == EXPR_CAST() {
-        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen, collect_free_vars);
         return;
     }
     if tag == EXPR_CALL() {
-        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen, false);
         let args_lid: i64 = expr_b(a, eid);
         let na: i64 = list_len(a, args_lid);
         let mut i: i64 = 0;
-        while i < na { cx_pred_walk(a, list_get(a, args_lid, i), depth + 1, acc, seen); i = i + 1; }
+        while i < na { cx_pred_walk(a, list_get(a, args_lid, i), depth + 1, acc, seen, collect_free_vars); i = i + 1; }
         return;
     }
     if tag == EXPR_METHOD() {
-        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen);
+        cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen, collect_free_vars);
         let args_lid: i64 = expr_c(a, eid);
         let na: i64 = list_len(a, args_lid);
         let mut i: i64 = 0;
-        while i < na { cx_pred_walk(a, list_get(a, args_lid, i), depth + 1, acc, seen); i = i + 1; }
+        while i < na { cx_pred_walk(a, list_get(a, args_lid, i), depth + 1, acc, seen, collect_free_vars); i = i + 1; }
         return;
     }
     if tag == EXPR_TUPLE() {
         let elems_lid: i64 = expr_a(a, eid);
         let ne: i64 = list_len(a, elems_lid);
         let mut i: i64 = 0;
-        while i < ne { cx_pred_walk(a, list_get(a, elems_lid, i), depth + 1, acc, seen); i = i + 1; }
+        while i < ne { cx_pred_walk(a, list_get(a, elems_lid, i), depth + 1, acc, seen, collect_free_vars); i = i + 1; }
         return;
     }
 }
@@ -767,7 +768,7 @@ fn cx_analyze_contract(a: AstArena, fid: i64) -> CxContract {
             if kind == CLAUSE_REQUIRES() { n_req = n_req + 1; }
             else if kind == CLAUSE_ENSURES() { n_ens = n_ens + 1; }
             else if kind == CLAUSE_INVARIANT() { n_inv = n_inv + 1; }
-            cx_pred_walk(a, vow_clause_expr(a, cid), 1, acc, seen);
+            cx_pred_walk(a, vow_clause_expr(a, cid), 1, acc, seen, true);
             i = i + 1;
         }
     }
