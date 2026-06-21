@@ -1,0 +1,4 @@
+# Documentation site dependencies (Material for MkDocs).
+# Used by CI (.github/workflows/docs.yml). For local dev you can skip installing
+# these and use the zero-install path documented in website/README.md.
+mkdocs-material>=9.5,<10

@@ -666,11 +666,7 @@ echo ""
 section_begin "Section 6: Multi-Module"
 
 for multi in stack geometry bignum gc math heap; do
-    case "$multi" in
-        math) main_file="lib/math/main.vow" ;;
-        heap) main_file="lib/heap/main.vow" ;;
-        *)    main_file="examples/${multi}/main.vow" ;;
-    esac
+    main_file="stdlib/${multi}/main.vow"
     printf "${BOLD}%s${RESET}\n" "$multi"
 
     # build --no-verify
