@@ -376,6 +376,44 @@ print('ok' if any(s in ('proven', 'proven-ir') for s in ss) else 'no_proven')
     fi
   fi
 
+  name="verify_jobs_counterexample_suppresses_later_soft_meta"
+  if matches_filter "$name"; then
+    errors=()
+    for mode in verify build legacy; do
+      set +e
+      case "$mode" in
+        verify)
+          verify_json="$(run_vowc verify --verify-jobs 2 "$SCRIPT_DIR/verify-fail/verify_jobs_ce_before_soft.vow" 2>/dev/null)"
+          ;;
+        build)
+          verify_json="$(run_vowc build --verify-jobs 2 "$SCRIPT_DIR/verify-fail/verify_jobs_ce_before_soft.vow" -o "$TMPDIR/ce_before_soft" 2>/dev/null)"
+          ;;
+        legacy)
+          verify_json="$(run_vowc --verify --verify-jobs 2 "$SCRIPT_DIR/verify-fail/verify_jobs_ce_before_soft.vow" 2>/dev/null)"
+          ;;
+      esac
+      verify_exit=$?
+      set -e
+      actual_status="$(json_field "$verify_json" "status")"
+      verify_status="$(json_field "$verify_json" "verify_status")"
+      ce_function="$(json_cx_field "$verify_json" "function")"
+      if [[ "$verify_exit" -eq 0 ]]; then
+        errors+=("$mode exited 0")
+      elif [[ "$actual_status" != "VerifyFailed" ]]; then
+        errors+=("$mode status=$actual_status")
+      elif [[ "$ce_function" != "early_bad" ]]; then
+        errors+=("$mode counterexample function=$ce_function")
+      elif [[ -n "$verify_status" ]]; then
+        errors+=("$mode verify_status=$verify_status")
+      fi
+    done
+    if [[ "${#errors[@]}" -eq 0 ]]; then
+      pass "$name"
+    else
+      fail "$name" "$(IFS='; '; echo "${errors[*]}")"
+    fi
+  fi
+
   name="contracts_per_clause_precise"
   if matches_filter "$name"; then
     # PR-A (#81): ESBMC --multi-property gives each ensures clause an individual

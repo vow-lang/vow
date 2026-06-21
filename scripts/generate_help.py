@@ -28,6 +28,7 @@ METHODOLOGY = SPEC_DIR / "contracts-methodology.md"
 INDEX = SPEC_DIR / "index.md"
 ERRORS = SPEC_DIR / "errors.md"
 EXAMPLES = SPEC_DIR / "examples.md"
+STDLIB = SPEC_DIR / "stdlib.md"
 SCHEMAS_DIR = SPEC_DIR / "schemas"
 MAIN_RS = REPO / "vow" / "src" / "main.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
@@ -330,6 +331,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "cli": "reference/cli.md",
             "contracts": "reference/contracts.md",
             "errors": "reference/errors.md",
+            "stdlib": "reference/stdlib.md",
             "examples": "examples/examples.md",
             "schemas": {
                 "build_result": "schemas/build-result.schema.json",
@@ -924,6 +926,7 @@ def build_skill_entrypoint() -> str:
             "- Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)",
             "- Which contracts to write (taxonomy & strength): [reference/contracts-methodology.md](reference/contracts-methodology.md)",
             "- Diagnostics and fixes: [reference/errors.md](reference/errors.md)",
+            "- Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)",
             "- Worked examples: [examples/examples.md](examples/examples.md)",
             "- JSON schemas: [schemas/](schemas/)",
             "",
@@ -942,7 +945,7 @@ def build_skill_bundle() -> str:
     parts.append("")
 
     # Append each spec file
-    for spec_file in [GRAMMAR, CLI, CONTRACTS, METHODOLOGY, ERRORS, EXAMPLES]:
+    for spec_file in [GRAMMAR, CLI, CONTRACTS, METHODOLOGY, ERRORS, STDLIB, EXAMPLES]:
         parts.append("---")
         parts.append("")
         parts.append(spec_file.read_text().rstrip())
@@ -974,6 +977,7 @@ def build_skill_support_files() -> dict[str, str]:
         "reference/contracts.md": CONTRACTS.read_text().rstrip() + "\n",
         "reference/contracts-methodology.md": METHODOLOGY.read_text().rstrip() + "\n",
         "reference/errors.md": ERRORS.read_text().rstrip() + "\n",
+        "reference/stdlib.md": STDLIB.read_text().rstrip() + "\n",
         "examples/examples.md": EXAMPLES.read_text().rstrip() + "\n",
     }
     for sf in sorted(SCHEMAS_DIR.glob("*.json")):

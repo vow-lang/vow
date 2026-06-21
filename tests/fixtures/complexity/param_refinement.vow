@@ -1,0 +1,24 @@
+module ParamRefinement
+
+fn positive(x: i64 where x > 0) -> i64 {
+    x
+}
+
+fn mixed(x: i64 where x > 0, y: i64 where y > 0) -> i64 vow {
+    requires: x < y,
+    ensures: result == y
+} {
+    y
+}
+
+fn heavy(
+    a: i64 where a > 0,
+    b: i64 where b > 0,
+    c: i64 where c > 0,
+    d: i64 where d > 0,
+    e: i64 where e > 0,
+    f: i64 where f > 0,
+    g: i64 where g > 0
+) -> i64 {
+    a + b + c + d + e + f + g
+}
