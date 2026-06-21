@@ -468,7 +468,8 @@ fn is_known_builtin(name: &str) -> bool {
 }
 
 fn is_reserved_verifier_symbol(name: &str) -> bool {
-    name.starts_with("__ESBMC_") || name.starts_with("__VERIFIER_")
+    // `abs` is part of ESBMC's C stdlib model; don't emit a competing definition.
+    name.starts_with("__ESBMC_") || name.starts_with("__VERIFIER_") || name == "abs"
 }
 
 /// Check whether a function can be precisely modeled in the C emitter.
