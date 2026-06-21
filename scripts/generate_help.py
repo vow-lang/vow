@@ -1064,7 +1064,9 @@ def inject_skill_vow(
         f"    {len(support_entries)}",
         "}",
         "",
-        "fn skill_support_path(index: i64) -> String {",
+        "fn skill_support_path(index: i64) -> String vow {",
+        "    requires: index >= 0 && index < skill_support_count()",
+        "} {",
     ]
     for idx, (path, _, _) in enumerate(support_entries):
         escaped = path.replace("\\", "\\\\").replace('"', '\\"')
@@ -1086,7 +1088,14 @@ def inject_skill_vow(
 
     sections.extend(
         [
+            "fn skill_support_content_index_guard(index: i64) vow {",
+            "    requires: index >= 0 && index < skill_support_count()",
+            "} {",
+            "    let _ok: i64 = 0;",
+            "}",
+            "",
             "fn skill_support_content(index: i64) -> String {",
+            "    skill_support_content_index_guard(index);",
         ]
     )
     for idx, (_, _, fn_name) in enumerate(support_entries):

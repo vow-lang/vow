@@ -7002,7 +7002,9 @@ fn skill_support_count() -> i64 {
     14
 }
 
-fn skill_support_path(index: i64) -> String {
+fn skill_support_path(index: i64) -> String vow {
+    requires: index >= 0 && index < skill_support_count()
+} {
     if index == 0 { return String::from("reference/grammar.md"); }
     if index == 1 { return String::from("reference/cli.md"); }
     if index == 2 { return String::from("reference/contracts.md"); }
@@ -11084,7 +11086,14 @@ fn skill_support_content_schemas_vow_violation_schema_json_169d051f() -> String 
     r
 }
 
+fn skill_support_content_index_guard(index: i64) vow {
+    requires: index >= 0 && index < skill_support_count()
+} {
+    let _ok: i64 = 0;
+}
+
 fn skill_support_content(index: i64) -> String {
+    skill_support_content_index_guard(index);
     if index == 0 { return skill_support_content_reference_grammar_md_92418de9(); }
     if index == 1 { return skill_support_content_reference_cli_md_31f8541a(); }
     if index == 2 { return skill_support_content_reference_contracts_md_2474f258(); }

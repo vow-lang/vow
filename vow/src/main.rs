@@ -13980,8 +13980,17 @@ fn main() -> i32 [io] {
         let source = std::fs::read_to_string(&compiler_main).expect("compiler/main.vow must exist");
 
         assert!(source.contains("fn skill_support_count() -> i64"));
-        assert!(source.contains("fn skill_support_path(index: i64) -> String"));
-        assert!(source.contains("fn skill_support_content(index: i64) -> String"));
+        assert!(source.contains("fn skill_support_path(index: i64) -> String vow {"));
+        assert!(source.contains("fn skill_support_content_index_guard(index: i64) vow {"));
+        assert!(source.contains("fn skill_support_content(index: i64) -> String {"));
+        assert!(source.contains("    skill_support_content_index_guard(index);"));
+        assert_eq!(
+            source
+                .matches("requires: index >= 0 && index < skill_support_count()")
+                .count(),
+            2,
+            "indexed support lookup contracts should guard path lookup and content access"
+        );
         assert!(
             !source.contains("fn skill_support_paths() -> Vec<String>"),
             "generated Vow should expose indexed path lookup, not a path vector"
