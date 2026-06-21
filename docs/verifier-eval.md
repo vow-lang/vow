@@ -129,6 +129,11 @@ None currently open.
 cargo build --release -p vow
 python3 scripts/verify_eval.py
 
+# Local, against the fixed-point self-hosted compiler:
+scripts/bootstrap.sh --stage3-no-verify
+ulimit -v 2000000
+python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
+
 # Authoring aid — print actual outcomes for every program:
 python3 scripts/verify_eval.py --discover
 
@@ -136,5 +141,7 @@ python3 scripts/verify_eval.py --discover
 python3 scripts/verify_eval.py --filter off_by_one_bounds
 ```
 
-It also runs as **Section 4e** of `scripts/full_test.sh` and as a dedicated step
-in the `build-and-test` CI job, so a soundness or blame regression blocks PRs.
+It also runs as **Section 4e** of `scripts/full_test.sh`, as a dedicated Rust
+verifier step in the `build-and-test` CI job, and against the fixed-point
+self-hosted `build/vowc` in the Ubuntu `bootstrap` CI job. That means a
+soundness, blame, or exact `vow_id` regression in either verifier blocks PRs.
