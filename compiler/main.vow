@@ -277,6 +277,225 @@ fn inst_const_i64_string_by_id(f: IrFunction, inst_id: i64) -> String {
     String::from("")
 }
 
+fn string_is_i64_literal(s: String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    let v: i64 = str_to_i64(s);
+    i64_to_str(v) == s
+}
+
+fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_inst: IrInst) -> String {
+    let blocks: Vec<IrBlock> = callee.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == inst_id {
+                if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
+                    return i64_to_str(inst.dv);
+                }
+                if inst.op == IOP_CONST_U64() && inst.dv >= 0 {
+                    return i64_to_str(inst.dv);
+                }
+                if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
+                    let pidx: i64 = inst.dv;
+                    if pidx >= 0 && pidx < call_inst.args.len() {
+                        return inst_const_i64_string_by_id(f, call_inst.args[pidx]);
+                    }
+                    return String::from("");
+                }
+                if inst.args.len() >= 2 {
+                    let lhs_s: String = callee_i64_string_for_call(f, callee, inst.args[0], call_inst);
+                    let rhs_s: String = callee_i64_string_for_call(f, callee, inst.args[1], call_inst);
+                    if string_is_i64_literal(lhs_s) && string_is_i64_literal(rhs_s) {
+                        let lhs: i64 = str_to_i64(lhs_s);
+                        let rhs: i64 = str_to_i64(rhs_s);
+                        if inst.op == IOP_WADD_I32() || inst.op == IOP_WADD_I64() || inst.op == IOP_CADD_I32() || inst.op == IOP_CADD_I64() {
+                            return i64_to_str(lhs + rhs);
+                        }
+                        if inst.op == IOP_WSUB_I32() || inst.op == IOP_WSUB_I64() || inst.op == IOP_CSUB_I32() || inst.op == IOP_CSUB_I64() {
+                            return i64_to_str(lhs - rhs);
+                        }
+                        if inst.op == IOP_WMUL_I32() || inst.op == IOP_WMUL_I64() || inst.op == IOP_CMUL_I32() || inst.op == IOP_CMUL_I64() {
+                            return i64_to_str(lhs * rhs);
+                        }
+                    }
+                }
+                return String::from("");
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+fn callee_bool_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_inst: IrInst) -> i64 {
+    let blocks: Vec<IrBlock> = callee.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == inst_id {
+                if inst.op == IOP_CONST_BOOL() {
+                    if inst.dv == 0 {
+                        return 0;
+                    }
+                    return 1;
+                }
+                if inst.op == IOP_NOT() && inst.args.len() >= 1 {
+                    let v: i64 = callee_bool_for_call(f, callee, inst.args[0], call_inst);
+                    if v == 0 {
+                        return 1;
+                    }
+                    if v == 1 {
+                        return 0;
+                    }
+                    return -1;
+                }
+                if (inst.op == IOP_AND() || inst.op == IOP_OR()) && inst.args.len() >= 2 {
+                    let lhs_b: i64 = callee_bool_for_call(f, callee, inst.args[0], call_inst);
+                    let rhs_b: i64 = callee_bool_for_call(f, callee, inst.args[1], call_inst);
+                    if lhs_b < 0 || rhs_b < 0 {
+                        return -1;
+                    }
+                    if inst.op == IOP_AND() {
+                        if lhs_b == 1 && rhs_b == 1 {
+                            return 1;
+                        }
+                        return 0;
+                    }
+                    if lhs_b == 1 || rhs_b == 1 {
+                        return 1;
+                    }
+                    return 0;
+                }
+                if inst.args.len() >= 2 {
+                    let lhs_s: String = callee_i64_string_for_call(f, callee, inst.args[0], call_inst);
+                    let rhs_s: String = callee_i64_string_for_call(f, callee, inst.args[1], call_inst);
+                    if string_is_i64_literal(lhs_s) && string_is_i64_literal(rhs_s) {
+                        let lhs: i64 = str_to_i64(lhs_s);
+                        let rhs: i64 = str_to_i64(rhs_s);
+                        if inst.op == IOP_EQ_I32() || inst.op == IOP_EQ_I64() {
+                            if lhs == rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_NE_I32() || inst.op == IOP_NE_I64() {
+                            if lhs != rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_LT_I32() || inst.op == IOP_LT_I64() {
+                            if lhs < rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_LE_I32() || inst.op == IOP_LE_I64() {
+                            if lhs <= rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_GT_I32() || inst.op == IOP_GT_I64() {
+                            if lhs > rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_GE_I32() || inst.op == IOP_GE_I64() {
+                            if lhs >= rhs { return 1; }
+                            return 0;
+                        }
+                    }
+                }
+                return -1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    -1
+}
+
+fn callee_precondition_predicate_inst_id(callee: IrFunction, ve: IrVowEntry) -> i64 {
+    let blocks: Vec<IrBlock> = callee.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_VOW_REQ() && inst.dk == IDATA_VOW_ID() && inst.dv == ve.id && inst.args.len() > 0 {
+                return inst.args[0];
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    -1
+}
+
+fn call_violates_callee_precondition_const(f: IrFunction, callee: IrFunction, ve: IrVowEntry, inst: IrInst) -> bool {
+    let pred_id: i64 = callee_precondition_predicate_inst_id(callee, ve);
+    if pred_id < 0 {
+        return false;
+    }
+    callee_bool_for_call(f, callee, pred_id, inst) == 0
+}
+
+fn call_matches_callee_precondition_values(f: IrFunction, callee: IrFunction, ve: IrVowEntry, inst: IrInst, vr: VerifyResult) -> bool {
+    let mut matched_binding: bool = false;
+    let mut bindi: i64 = 0;
+    while bindi < ve.binding_names.len() {
+        let bname: String = ve.binding_names[bindi];
+        let pidx: i64 = find_param_index(callee.param_names, bname);
+        if pidx < 0 || pidx >= inst.args.len() {
+            return false;
+        }
+        let ce_val: String = ce_value_for_param(vr.var_names, vr.var_values, bname, pidx);
+        if ce_val.len() == 0 {
+            return false;
+        }
+        let arg_val: String = inst_const_i64_string_by_id(f, inst.args[pidx]);
+        if arg_val.len() == 0 {
+            return false;
+        }
+        if arg_val != ce_val {
+            return false;
+        }
+        matched_binding = true;
+        bindi = bindi + 1;
+    }
+    matched_binding
+}
+
+fn call_matches_callee_precondition_candidate(f: IrFunction, callee: IrFunction, ve: IrVowEntry, inst: IrInst, vr: VerifyResult) -> bool {
+    if call_matches_callee_precondition_values(f, callee, ve, inst, vr) {
+        return true;
+    }
+    call_violates_callee_precondition_const(f, callee, ve, inst)
+}
+
+fn count_exact_callee_precondition_calls(f: IrFunction, callee: IrFunction, ve: IrVowEntry, vr: VerifyResult) -> i64 {
+    let mut count: i64 = 0;
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() && inst.dv == callee.id {
+                if call_matches_callee_precondition_candidate(f, callee, ve, inst, vr) {
+                    count = count + 1;
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    count
+}
+
 fn inst_offset_by_id(f: IrFunction, inst_id: i64) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
@@ -341,6 +560,7 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
                 ce_violation = ve.description;
                 ce_blame = DIAG_BLAME_CALLER();
 
+                let exact_call_matches: i64 = count_exact_callee_precondition_calls(f, callee, ve, vr);
                 let blocks: Vec<IrBlock> = f.blocks;
                 let mut bi: i64 = 0;
                 while bi < blocks.len() {
@@ -349,28 +569,30 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
                     while ii < insts.len() {
                         let inst: IrInst = insts[ii];
                         if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() && inst.dv == callee.id {
-                            call_site_functions.push(f.name);
-                            call_site_files.push(path);
-                            call_site_offsets.push(inst.ostart);
-                            call_site_lengths.push(inst.olen);
+                            if exact_call_matches == 0 || call_matches_callee_precondition_candidate(f, callee, ve, inst, vr) {
+                                call_site_functions.push(f.name);
+                                call_site_files.push(path);
+                                call_site_offsets.push(inst.ostart);
+                                call_site_lengths.push(inst.olen);
 
-                            let mut bindi: i64 = 0;
-                            while bindi < ve.binding_names.len() {
-                                let bname: String = ve.binding_names[bindi];
-                                let pidx: i64 = find_param_index(callee.param_names, bname);
-                                if pidx >= 0 && pidx < inst.args.len() {
-                                    violating_arg_params.push(bname);
-                                    let arg_inst_id: i64 = inst.args[pidx];
-                                    let ce_val: String = ce_value_for_param(vr.var_names, vr.var_values, bname, pidx);
-                                    if ce_val.len() > 0 {
-                                        violating_arg_values.push(ce_val);
-                                    } else {
-                                        violating_arg_values.push(inst_const_i64_string_by_id(f, arg_inst_id));
+                                let mut bindi: i64 = 0;
+                                while bindi < ve.binding_names.len() {
+                                    let bname: String = ve.binding_names[bindi];
+                                    let pidx: i64 = find_param_index(callee.param_names, bname);
+                                    if pidx >= 0 && pidx < inst.args.len() {
+                                        violating_arg_params.push(bname);
+                                        let arg_inst_id: i64 = inst.args[pidx];
+                                        let ce_val: String = ce_value_for_param(vr.var_names, vr.var_values, bname, pidx);
+                                        if ce_val.len() > 0 {
+                                            violating_arg_values.push(ce_val);
+                                        } else {
+                                            violating_arg_values.push(inst_const_i64_string_by_id(f, arg_inst_id));
+                                        }
+                                        violating_arg_offsets.push(inst_offset_by_id(f, arg_inst_id));
+                                        violating_arg_lengths.push(inst_len_by_id(f, arg_inst_id));
                                     }
-                                    violating_arg_offsets.push(inst_offset_by_id(f, arg_inst_id));
-                                    violating_arg_lengths.push(inst_len_by_id(f, arg_inst_id));
+                                    bindi = bindi + 1;
                                 }
-                                bindi = bindi + 1;
                             }
                         }
                         ii = ii + 1;

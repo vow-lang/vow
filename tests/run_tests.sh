@@ -127,6 +127,28 @@ json_cx_array_field() {
   local json="$1"
   local array_field="$2"
   local field="$3"
+  json_cx_array_field_at "$json" "$array_field" 0 "$field"
+}
+
+json_cx_array_len() {
+  local json="$1"
+  local array_field="$2"
+  python3 -c "
+import json,sys
+d=json.loads(sys.stdin.read())
+cx=d.get('counterexamples',[])
+if not cx:
+    print('0')
+else:
+    print(len(cx[0].get('$array_field',[])))
+" <<< "$json"
+}
+
+json_cx_array_field_at() {
+  local json="$1"
+  local array_field="$2"
+  local index="$3"
+  local field="$4"
   python3 -c "
 import json,sys
 d=json.loads(sys.stdin.read())
@@ -135,8 +157,9 @@ if not cx:
     print('')
 else:
     arr=cx[0].get('$array_field',[])
-    if arr:
-        print(arr[0].get('$field',''))
+    index=int('$index')
+    if 0 <= index < len(arr):
+        print(arr[index].get('$field',''))
     else:
         print('')
 " <<< "$json"
@@ -158,9 +181,13 @@ parse_annotations() {
   TEST_CX_BLAME=""
   TEST_CX_VOW_ID=""
   TEST_CX_VIOLATION=""
+  TEST_CX_CALL_SITE_COUNT=""
   TEST_CX_CALL_SITE_FN=""
+  TEST_CX_CALL_SITE_OFFSET=""
+  TEST_CX_ARG_COUNT=""
   TEST_CX_ARG_PARAM=""
   TEST_CX_ARG_VALUE=""
+  TEST_CX_ARG_OFFSET=""
   TEST_ERROR_CODE=""
   TEST_SKIP=""
   TEST_STDIN=""
@@ -188,12 +215,20 @@ parse_annotations() {
       TEST_CX_VOW_ID="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ counterexample-violation\ \"(.*)\" ]]; then
       TEST_CX_VIOLATION="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ counterexample-call-site-count\ ([0-9]+) ]]; then
+      TEST_CX_CALL_SITE_COUNT="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ counterexample-call-site-fn\ \"(.+)\" ]]; then
       TEST_CX_CALL_SITE_FN="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ counterexample-call-site-offset\ ([0-9]+) ]]; then
+      TEST_CX_CALL_SITE_OFFSET="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ counterexample-violating-arg-count\ ([0-9]+) ]]; then
+      TEST_CX_ARG_COUNT="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ counterexample-violating-arg-param\ \"(.+)\" ]]; then
       TEST_CX_ARG_PARAM="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ counterexample-violating-arg-value\ \"(.*)\" ]]; then
       TEST_CX_ARG_VALUE="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ counterexample-violating-arg-offset\ ([0-9]+) ]]; then
+      TEST_CX_ARG_OFFSET="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ error-code\ (.+) ]]; then
       TEST_ERROR_CODE="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ stdin\ \"(.*)\" ]]; then
@@ -602,10 +637,31 @@ else
         continue
       fi
     fi
+    if [[ -n "$TEST_CX_CALL_SITE_COUNT" ]]; then
+      actual_call_site_count="$(json_cx_array_len "$verify_json" "call_sites")"
+      if [[ "$actual_call_site_count" != "$TEST_CX_CALL_SITE_COUNT" ]]; then
+        fail "$name" "counterexample call_sites count=$actual_call_site_count (expected $TEST_CX_CALL_SITE_COUNT)"
+        continue
+      fi
+    fi
     if [[ -n "$TEST_CX_CALL_SITE_FN" ]]; then
       actual_call_site_fn="$(json_cx_array_field "$verify_json" "call_sites" "caller_function")"
       if [[ "$actual_call_site_fn" != "$TEST_CX_CALL_SITE_FN" ]]; then
         fail "$name" "counterexample call_site caller_function=$actual_call_site_fn (expected $TEST_CX_CALL_SITE_FN)"
+        continue
+      fi
+    fi
+    if [[ -n "$TEST_CX_CALL_SITE_OFFSET" ]]; then
+      actual_call_site_offset="$(json_cx_array_field "$verify_json" "call_sites" "offset")"
+      if [[ "$actual_call_site_offset" != "$TEST_CX_CALL_SITE_OFFSET" ]]; then
+        fail "$name" "counterexample call_site offset=$actual_call_site_offset (expected $TEST_CX_CALL_SITE_OFFSET)"
+        continue
+      fi
+    fi
+    if [[ -n "$TEST_CX_ARG_COUNT" ]]; then
+      actual_arg_count="$(json_cx_array_len "$verify_json" "violating_args")"
+      if [[ "$actual_arg_count" != "$TEST_CX_ARG_COUNT" ]]; then
+        fail "$name" "counterexample violating_args count=$actual_arg_count (expected $TEST_CX_ARG_COUNT)"
         continue
       fi
     fi
@@ -620,6 +676,13 @@ else
       actual_arg_value="$(json_cx_array_field "$verify_json" "violating_args" "value")"
       if [[ "$actual_arg_value" != "$TEST_CX_ARG_VALUE" ]]; then
         fail "$name" "counterexample violating_arg value=$actual_arg_value (expected $TEST_CX_ARG_VALUE)"
+        continue
+      fi
+    fi
+    if [[ -n "$TEST_CX_ARG_OFFSET" ]]; then
+      actual_arg_offset="$(json_cx_array_field "$verify_json" "violating_args" "arg_offset")"
+      if [[ "$actual_arg_offset" != "$TEST_CX_ARG_OFFSET" ]]; then
+        fail "$name" "counterexample violating_arg offset=$actual_arg_offset (expected $TEST_CX_ARG_OFFSET)"
         continue
       fi
     fi

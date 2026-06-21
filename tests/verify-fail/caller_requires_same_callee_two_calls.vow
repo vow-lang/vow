@@ -5,16 +5,11 @@
 // TEST: counterexample-violation "requires x > 0"
 // TEST: counterexample-call-site-count 1
 // TEST: counterexample-call-site-fn "f"
+// TEST: counterexample-call-site-offset 623
 // TEST: counterexample-violating-arg-count 1
 // TEST: counterexample-violating-arg-param "x"
 // TEST: counterexample-violating-arg-value "-5"
-// Regression for the caller-blame hole: a callee's `requires` was emitted as
-// `__ESBMC_assume` at its co-emitted call site, so calling `g(-5)` — which
-// violates `g`'s precondition `x > 0` — injected `assume(false)` and vacuously
-// verified the rest of `f`. `f`'s own postcondition here is TRUE (it returns 0),
-// so the only fault is the precondition-violating call; the verifier must now
-// blame the caller for it instead of reporting `Verified`.
-module CallerRequiresViolation
+module CallerRequiresSameCalleeTwoCalls
 
 fn g(x: i64) -> i64 vow {
   requires: x > 0
@@ -25,7 +20,8 @@ fn g(x: i64) -> i64 vow {
 fn f() -> i64 vow {
   ensures: result == 0
 } {
-  let unused: i64 = g(0 - 5);
+  let safe: i64 = g(1);
+  let bad: i64 = g(0 - 5);
   0
 }
 

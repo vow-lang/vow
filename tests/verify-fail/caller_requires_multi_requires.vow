@@ -3,7 +3,9 @@
 // TEST: counterexample-blame caller
 // TEST: counterexample-vow-id 1
 // TEST: counterexample-violation "requires y != 0"
+// TEST: counterexample-call-site-count 1
 // TEST: counterexample-call-site-fn "f"
+// TEST: counterexample-violating-arg-count 1
 // TEST: counterexample-violating-arg-param "y"
 // TEST: counterexample-violating-arg-value "0"
 module CallerRequiresMultiRequires

@@ -10482,6 +10482,226 @@ fn map_counterexample_values(
         .collect()
 }
 
+fn call_site_args_match_counterexample(
+    callee: &vow_ir::Function,
+    entry: &vow_ir::VowEntry,
+    mapped_values: &[(String, String)],
+    call_site: &CallSiteInfo,
+) -> bool {
+    let mut matched_binding = false;
+    for (binding_name, _) in &entry.bindings {
+        let Some(param_idx) = callee.param_names.iter().position(|n| n == binding_name) else {
+            return false;
+        };
+        let Some((_, expected_value)) = mapped_values
+            .iter()
+            .find(|(name, value)| name == binding_name && !value.is_empty())
+        else {
+            return false;
+        };
+        let Some(Some(actual_value)) = call_site.arg_values.get(param_idx) else {
+            return false;
+        };
+        if actual_value != expected_value {
+            return false;
+        }
+        matched_binding = true;
+    }
+    matched_binding
+}
+
+fn callee_precondition_predicate_inst_id(
+    callee: &vow_ir::Function,
+    entry: &vow_ir::VowEntry,
+) -> Option<u32> {
+    use vow_ir::{InstData, Opcode};
+    for block in &callee.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::VowRequires
+                && let InstData::VowId(id) = inst.data
+                && id == entry.id
+            {
+                return inst.args.first().map(|arg| arg.0);
+            }
+        }
+    }
+    None
+}
+
+fn eval_callee_i64_for_call_site(
+    inst_id: u32,
+    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
+    call_site: &CallSiteInfo,
+) -> Option<i64> {
+    use vow_ir::{InstData, Opcode};
+    let inst = *inst_by_id.get(&inst_id)?;
+    match inst.opcode {
+        Opcode::ConstI32 => {
+            if let InstData::ConstI32(v) = inst.data {
+                Some(v as i64)
+            } else {
+                None
+            }
+        }
+        Opcode::ConstI64 => {
+            if let InstData::ConstI64(v) = inst.data {
+                Some(v)
+            } else {
+                None
+            }
+        }
+        Opcode::ConstU64 => {
+            if let InstData::ConstU64(v) = inst.data {
+                i64::try_from(v).ok()
+            } else {
+                None
+            }
+        }
+        Opcode::GetArg => {
+            if let InstData::ArgIndex(idx) = inst.data {
+                call_site
+                    .arg_values
+                    .get(idx as usize)?
+                    .as_ref()?
+                    .parse::<i64>()
+                    .ok()
+            } else {
+                None
+            }
+        }
+        Opcode::WrappingAddI32
+        | Opcode::CheckedAddI32
+        | Opcode::WrappingAddI64
+        | Opcode::CheckedAddI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs.wrapping_add(rhs))
+        }
+        Opcode::WrappingSubI32
+        | Opcode::CheckedSubI32
+        | Opcode::WrappingSubI64
+        | Opcode::CheckedSubI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs.wrapping_sub(rhs))
+        }
+        Opcode::WrappingMulI32
+        | Opcode::CheckedMulI32
+        | Opcode::WrappingMulI64
+        | Opcode::CheckedMulI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs.wrapping_mul(rhs))
+        }
+        _ => None,
+    }
+}
+
+fn eval_callee_bool_for_call_site(
+    inst_id: u32,
+    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
+    call_site: &CallSiteInfo,
+) -> Option<bool> {
+    use vow_ir::{InstData, Opcode};
+    let inst = *inst_by_id.get(&inst_id)?;
+    match inst.opcode {
+        Opcode::ConstBool => {
+            if let InstData::ConstBool(v) = inst.data {
+                Some(v)
+            } else {
+                None
+            }
+        }
+        Opcode::GetArg => {
+            if let InstData::ArgIndex(idx) = inst.data {
+                match call_site.arg_values.get(idx as usize)?.as_deref()? {
+                    "true" => Some(true),
+                    "false" => Some(false),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        Opcode::EqI32 | Opcode::EqI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs == rhs)
+        }
+        Opcode::NeI32 | Opcode::NeI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs != rhs)
+        }
+        Opcode::LtI32 | Opcode::LtI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs < rhs)
+        }
+        Opcode::LeI32 | Opcode::LeI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs <= rhs)
+        }
+        Opcode::GtI32 | Opcode::GtI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs > rhs)
+        }
+        Opcode::GeI32 | Opcode::GeI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs >= rhs)
+        }
+        Opcode::Not => {
+            let value =
+                eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            Some(!value)
+        }
+        Opcode::And => {
+            let lhs = eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_bool_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs && rhs)
+        }
+        Opcode::Or => {
+            let lhs = eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_bool_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs || rhs)
+        }
+        _ => None,
+    }
+}
+
+fn filter_callee_precondition_call_sites(
+    candidates: Vec<CallSiteInfo>,
+    callee: &vow_ir::Function,
+    entry: &vow_ir::VowEntry,
+    mapped_values: &[(String, String)],
+) -> Vec<CallSiteInfo> {
+    let inst_by_id: std::collections::HashMap<u32, &vow_ir::Inst> = callee
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .map(|inst| (inst.id.0, inst))
+        .collect();
+    let predicate_inst_id = callee_precondition_predicate_inst_id(callee, entry);
+    let exact_matches: Vec<CallSiteInfo> = candidates
+        .iter()
+        .filter(|cs| {
+            call_site_args_match_counterexample(callee, entry, mapped_values, cs)
+                || predicate_inst_id
+                    .and_then(|id| eval_callee_bool_for_call_site(id, &inst_by_id, cs))
+                    == Some(false)
+        })
+        .cloned()
+        .collect();
+    if exact_matches.is_empty() {
+        candidates
+    } else {
+        exact_matches
+    }
+}
+
 #[cfg(test)]
 fn build_structured_counterexample(
     func: &vow_ir::Function,
@@ -10573,8 +10793,8 @@ fn build_structured_counterexample_with_module(
     let name_map = build_c_to_source_name_map(value_func);
     let mapped_values = map_counterexample_values(&ce.values, &name_map);
     let sites_raw: Vec<CallSiteInfo> = if blame == "caller" {
-        if let Some((callee, _)) = resolved_callee_precondition {
-            call_site_index
+        if let Some((callee, entry)) = resolved_callee_precondition {
+            let candidates = call_site_index
                 .get(&callee.name)
                 .map(|sites| {
                     sites
@@ -10583,7 +10803,8 @@ fn build_structured_counterexample_with_module(
                         .cloned()
                         .collect()
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            filter_callee_precondition_call_sites(candidates, callee, entry, &mapped_values)
         } else {
             call_site_index.get(&func.name).cloned().unwrap_or_default()
         }
@@ -17390,6 +17611,201 @@ fn main() -> i32 {
         assert_eq!(sce.violating_args[0].value, "0");
         assert_eq!(sce.violating_args[0].arg_offset, 103);
         assert_eq!(sce.violating_args[0].arg_length, 1);
+    }
+
+    #[test]
+    fn callee_precondition_counterexample_filters_same_caller_calls_by_arg_value() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+
+        let callee = Function {
+            id: FuncId(7),
+            name: "g".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["x".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "requires x > 0".to_string(),
+                blame: vow_diag::Blame::Caller,
+                bindings: vec![("x".to_string(), InstId(0))],
+                file: "test.vow".to_string(),
+                offset: 20,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(10, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(14, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::GtI64,
+                        ty: Ty::Bool,
+                        args: vec![InstId(0), InstId(1)],
+                        data: InstData::None,
+                        origin: Span::new(10, 5),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::VowRequires,
+                        ty: Ty::Unit,
+                        args: vec![InstId(2)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: Span::new(20, 15),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::None,
+                        origin: Span::new(40, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let target = Function {
+            id: FuncId(1),
+            name: "f".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(10),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(1),
+                        origin: Span::new(95, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(11),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(10)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(90, 4),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(12),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(125, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(13),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(5),
+                        origin: Span::new(129, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(14),
+                        opcode: Opcode::WrappingSubI64,
+                        ty: Ty::I64,
+                        args: vec![InstId(12), InstId(13)],
+                        data: InstData::None,
+                        origin: Span::new(125, 5),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(15),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(14)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(120, 10),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(16),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(15)],
+                        data: InstData::None,
+                        origin: Span::new(140, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![callee, target.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let call_site_index = build_call_site_index(&module, "test.vow");
+        let ce = vow_verify::Counterexample {
+            description: "raw".to_string(),
+            vow_id: Some(0),
+            callee_precondition: Some(vow_verify::CalleePrecondition {
+                func_id: 7,
+                vow_id: 0,
+            }),
+            values: vec![],
+            block_visits: vec![0],
+            raw_output: String::new(),
+        };
+
+        let sce = build_structured_counterexample_with_module(
+            &target,
+            Some(&module),
+            &ce,
+            "test.vow",
+            &call_site_index,
+        );
+
+        assert_eq!(sce.call_sites.len(), 1);
+        assert_eq!(sce.call_sites[0].caller_function, "f");
+        assert_eq!(sce.call_sites[0].offset, 120);
+        assert_eq!(sce.violating_args.len(), 1);
+        assert_eq!(sce.violating_args[0].param, "x");
+        assert_eq!(sce.violating_args[0].value, "-5");
+        assert_eq!(sce.violating_args[0].arg_offset, 125);
+        assert_eq!(sce.violating_args[0].arg_length, 5);
     }
 
     #[test]
