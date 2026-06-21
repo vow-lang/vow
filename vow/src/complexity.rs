@@ -5,7 +5,8 @@ use std::path::Path;
 
 use vow_ir::{InstData, Opcode};
 use vow_syntax::ast::{
-    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Stmt, UnOp, VowBlock, VowClause,
+    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Pat, PatKind, Stmt, UnOp, VowBlock,
+    VowClause,
 };
 
 // Effect -> bit, matching the self-hosted EFF_* constants (io=1,panic=2,
@@ -1205,6 +1206,12 @@ struct Contract {
     has_vec_quant: bool,
 }
 
+fn pred_bind_pattern(p: &Pat, bound: &mut Vec<String>) {
+    if let PatKind::Ident { name, .. } = &p.kind {
+        bound.push(name.clone());
+    }
+}
+
 fn pred_walk_block(
     b: &Block,
     depth: i64,
@@ -1212,16 +1219,24 @@ fn pred_walk_block(
     maxdepth: &mut i64,
     has_index: &mut bool,
     seen: &mut HashSet<String>,
+    bound: &mut Vec<String>,
 ) {
+    let mark = bound.len();
     for s in &b.stmts {
         match s {
-            Stmt::Let { init, .. } => pred_walk(init, depth, nodes, maxdepth, has_index, seen),
-            Stmt::Expr { expr, .. } => pred_walk(expr, depth, nodes, maxdepth, has_index, seen),
+            Stmt::Let { pattern, init, .. } => {
+                pred_walk(init, depth, nodes, maxdepth, has_index, seen, bound);
+                pred_bind_pattern(pattern, bound);
+            }
+            Stmt::Expr { expr, .. } => {
+                pred_walk(expr, depth, nodes, maxdepth, has_index, seen, bound)
+            }
         }
     }
     if let Some(t) = &b.trailing_expr {
-        pred_walk(t, depth, nodes, maxdepth, has_index, seen);
+        pred_walk(t, depth, nodes, maxdepth, has_index, seen, bound);
     }
+    bound.truncate(mark);
 }
 
 fn pred_walk(
@@ -1231,10 +1246,11 @@ fn pred_walk(
     maxdepth: &mut i64,
     has_index: &mut bool,
     seen: &mut HashSet<String>,
+    bound: &mut Vec<String>,
 ) {
     // Borrow has no node in the self-hosted AST: walk through it transparently.
     if let ExprKind::Borrow { expr } = &e.kind {
-        pred_walk(expr, depth, nodes, maxdepth, has_index, seen);
+        pred_walk(expr, depth, nodes, maxdepth, has_index, seen, bound);
         return;
     }
     *nodes += 1;
@@ -1246,41 +1262,45 @@ fn pred_walk(
             // `result` is the ensures-result binding; the self-hosted parser
             // models it as EXPR_RESULT (not an identifier), so it is not a free
             // var. It is reserved, so excluding it here is always correct.
-            if name != "result" {
+            if name != "result" && !bound.iter().any(|n| n == name) {
                 seen.insert(name.clone());
             }
         }
         ExprKind::Index { base, index } => {
             *has_index = true;
-            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk(index, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(index, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::BinaryOp { lhs, rhs, .. } => {
-            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::Assign { lhs, rhs } => {
-            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::UnaryOp { operand, .. } => {
-            pred_walk(operand, depth + 1, nodes, maxdepth, has_index, seen)
+            pred_walk(operand, depth + 1, nodes, maxdepth, has_index, seen, bound)
         }
         ExprKind::FieldAccess { base, .. } => {
-            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen)
+            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen, bound)
         }
-        ExprKind::Question { expr } => pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen),
-        ExprKind::Cast { expr, .. } => pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen),
+        ExprKind::Question { expr } => {
+            pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen, bound)
+        }
+        ExprKind::Cast { expr, .. } => {
+            pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen, bound)
+        }
         ExprKind::Call { callee, args } => {
-            pred_walk(callee, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(callee, depth + 1, nodes, maxdepth, has_index, seen, bound);
             for a in args {
-                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
         ExprKind::MethodCall { receiver, args, .. } => {
-            pred_walk(receiver, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(receiver, depth + 1, nodes, maxdepth, has_index, seen, bound);
             for a in args {
-                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
         ExprKind::If {
@@ -1288,50 +1308,94 @@ fn pred_walk(
             then_branch,
             else_branch,
         } => {
-            pred_walk(condition, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk_block(then_branch, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(
+                condition,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                seen,
+                bound,
+            );
+            pred_walk_block(
+                then_branch,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                seen,
+                bound,
+            );
             if let Some(e2) = else_branch {
-                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
         ExprKind::While {
-            condition, body, ..
+            condition,
+            body,
+            vow: _, // Invariant blocks belong to body metrics, not this predicate walk.
         } => {
-            pred_walk(condition, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(
+                condition,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                seen,
+                bound,
+            );
+            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::ForEach { iterable, body, .. } => {
-            pred_walk(iterable, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(iterable, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::Loop { body, .. } => {
-            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::Match { scrutinee, arms } => {
-            pred_walk(scrutinee, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(
+                scrutinee,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                seen,
+                bound,
+            );
             for arm in arms {
-                pred_walk(&arm.body, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(
+                    &arm.body,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    seen,
+                    bound,
+                );
             }
         }
         ExprKind::Return { value } | ExprKind::Break { value } => {
             if let Some(v) = value {
-                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
-        ExprKind::Block(b) => pred_walk_block(b, depth + 1, nodes, maxdepth, has_index, seen),
+        ExprKind::Block(b) => {
+            pred_walk_block(b, depth + 1, nodes, maxdepth, has_index, seen, bound)
+        }
         ExprKind::StructLiteral { fields, .. } => {
             for (_, v) in fields {
-                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
         ExprKind::EnumConstruct { fields, .. } => {
             for v in fields {
-                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
         ExprKind::Tuple(elems) => {
             for e2 in elems {
-                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
         _ => {}
@@ -1360,6 +1424,7 @@ fn analyze_contract(f: &FnDef) -> Contract {
                     expr
                 }
             };
+            let mut bound = Vec::new();
             pred_walk(
                 expr,
                 1,
@@ -1367,6 +1432,7 @@ fn analyze_contract(f: &FnDef) -> Contract {
                 &mut maxdepth,
                 &mut has_index,
                 &mut seen,
+                &mut bound,
             );
         }
     }
