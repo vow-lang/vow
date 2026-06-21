@@ -123,6 +123,25 @@ else: print('')
 " <<< "$json"
 }
 
+json_cx_array_field() {
+  local json="$1"
+  local array_field="$2"
+  local field="$3"
+  python3 -c "
+import json,sys
+d=json.loads(sys.stdin.read())
+cx=d.get('counterexamples',[])
+if not cx:
+    print('')
+else:
+    arr=cx[0].get('$array_field',[])
+    if arr:
+        print(arr[0].get('$field',''))
+    else:
+        print('')
+" <<< "$json"
+}
+
 count_verify_scratch_dirs() {
   local tmp_root="$1"
   find "$tmp_root" -maxdepth 1 -type d -name 'vow-verify.*' | wc -l | tr -d '[:space:]'
@@ -137,6 +156,11 @@ parse_annotations() {
   TEST_STATUS=""
   TEST_CX_FN=""
   TEST_CX_BLAME=""
+  TEST_CX_VOW_ID=""
+  TEST_CX_VIOLATION=""
+  TEST_CX_CALL_SITE_FN=""
+  TEST_CX_ARG_PARAM=""
+  TEST_CX_ARG_VALUE=""
   TEST_ERROR_CODE=""
   TEST_SKIP=""
   TEST_STDIN=""
@@ -160,6 +184,16 @@ parse_annotations() {
       TEST_CX_FN="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ counterexample-blame\ (.+) ]]; then
       TEST_CX_BLAME="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ counterexample-vow-id\ ([0-9]+) ]]; then
+      TEST_CX_VOW_ID="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ counterexample-violation\ \"(.*)\" ]]; then
+      TEST_CX_VIOLATION="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ counterexample-call-site-fn\ \"(.+)\" ]]; then
+      TEST_CX_CALL_SITE_FN="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ counterexample-violating-arg-param\ \"(.+)\" ]]; then
+      TEST_CX_ARG_PARAM="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ counterexample-violating-arg-value\ \"(.*)\" ]]; then
+      TEST_CX_ARG_VALUE="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ error-code\ (.+) ]]; then
       TEST_ERROR_CODE="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ stdin\ \"(.*)\" ]]; then
@@ -551,6 +585,41 @@ else
       actual_blame="$(json_cx_field "$verify_json" "blame")"
       if [[ "$actual_blame" != "$TEST_CX_BLAME" ]]; then
         fail "$name" "counterexample blame=$actual_blame (expected $TEST_CX_BLAME)"
+        continue
+      fi
+    fi
+    if [[ -n "$TEST_CX_VOW_ID" ]]; then
+      actual_vow_id="$(json_cx_field "$verify_json" "vow_id")"
+      if [[ "$actual_vow_id" != "$TEST_CX_VOW_ID" ]]; then
+        fail "$name" "counterexample vow_id=$actual_vow_id (expected $TEST_CX_VOW_ID)"
+        continue
+      fi
+    fi
+    if [[ -n "$TEST_CX_VIOLATION" ]]; then
+      actual_violation="$(json_cx_field "$verify_json" "violation")"
+      if [[ "$actual_violation" != "$TEST_CX_VIOLATION" ]]; then
+        fail "$name" "counterexample violation=$actual_violation (expected $TEST_CX_VIOLATION)"
+        continue
+      fi
+    fi
+    if [[ -n "$TEST_CX_CALL_SITE_FN" ]]; then
+      actual_call_site_fn="$(json_cx_array_field "$verify_json" "call_sites" "caller_function")"
+      if [[ "$actual_call_site_fn" != "$TEST_CX_CALL_SITE_FN" ]]; then
+        fail "$name" "counterexample call_site caller_function=$actual_call_site_fn (expected $TEST_CX_CALL_SITE_FN)"
+        continue
+      fi
+    fi
+    if [[ -n "$TEST_CX_ARG_PARAM" ]]; then
+      actual_arg_param="$(json_cx_array_field "$verify_json" "violating_args" "param")"
+      if [[ "$actual_arg_param" != "$TEST_CX_ARG_PARAM" ]]; then
+        fail "$name" "counterexample violating_arg param=$actual_arg_param (expected $TEST_CX_ARG_PARAM)"
+        continue
+      fi
+    fi
+    if [[ -n "$TEST_CX_ARG_VALUE" ]]; then
+      actual_arg_value="$(json_cx_array_field "$verify_json" "violating_args" "value")"
+      if [[ "$actual_arg_value" != "$TEST_CX_ARG_VALUE" ]]; then
+        fail "$name" "counterexample violating_arg value=$actual_arg_value (expected $TEST_CX_ARG_VALUE)"
         continue
       fi
     fi

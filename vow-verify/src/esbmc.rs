@@ -24,9 +24,16 @@ use crate::c_emitter::{
 pub struct Counterexample {
     pub description: String,
     pub vow_id: Option<u32>,
+    pub callee_precondition: Option<CalleePrecondition>,
     pub values: Vec<(String, String)>,
     pub block_visits: Vec<u32>,
     pub raw_output: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalleePrecondition {
+    pub func_id: u32,
+    pub vow_id: u32,
 }
 
 #[derive(Debug)]
@@ -104,7 +111,9 @@ fn emit_harness(func: &Function) -> String {
 // ---------------------------------------------------------------------------
 
 pub fn parse_esbmc_output(output: &str) -> Counterexample {
-    let vow_id = extract_vow_id(output);
+    let label = extract_vow_label(output);
+    let vow_id = label.as_ref().map(VowLabel::vow_id);
+    let callee_precondition = label.and_then(VowLabel::callee_precondition);
     let all_assignments = extract_variable_assignments(output);
 
     let mut values = Vec::new();
@@ -133,13 +142,51 @@ pub fn parse_esbmc_output(output: &str) -> Counterexample {
     Counterexample {
         description,
         vow_id,
+        callee_precondition,
         values,
         block_visits,
         raw_output: output.to_string(),
     }
 }
 
-fn extract_vow_id(output: &str) -> Option<u32> {
+enum VowLabel {
+    Numeric(u32),
+    CalleePrecondition(CalleePrecondition),
+}
+
+impl VowLabel {
+    fn vow_id(&self) -> u32 {
+        match self {
+            VowLabel::Numeric(id) => *id,
+            VowLabel::CalleePrecondition(pre) => pre.vow_id,
+        }
+    }
+
+    fn callee_precondition(self) -> Option<CalleePrecondition> {
+        match self {
+            VowLabel::Numeric(_) => None,
+            VowLabel::CalleePrecondition(pre) => Some(pre),
+        }
+    }
+}
+
+fn parse_vow_label(label: &str) -> Option<VowLabel> {
+    if let Some(rest) = label.strip_prefix("pre:") {
+        let mut parts = rest.split(':');
+        let func_id = parts.next()?.parse::<u32>().ok()?;
+        let vow_id = parts.next()?.parse::<u32>().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        return Some(VowLabel::CalleePrecondition(CalleePrecondition {
+            func_id,
+            vow_id,
+        }));
+    }
+    label.parse::<u32>().ok().map(VowLabel::Numeric)
+}
+
+fn extract_vow_label(output: &str) -> Option<VowLabel> {
     let mut in_violated = false;
     for line in output.lines() {
         let trimmed = line.trim();
@@ -149,9 +196,9 @@ fn extract_vow_id(output: &str) -> Option<u32> {
         }
         if in_violated
             && let Some(rest) = trimmed.strip_prefix("vow:")
-            && let Ok(id) = rest.parse::<u32>()
+            && let Some(label) = parse_vow_label(rest)
         {
-            return Some(id);
+            return Some(label);
         }
     }
     None
@@ -1318,6 +1365,25 @@ VERIFICATION SUCCESSFUL";
             ce.vow_id,
             Some(CALLER_PRECONDITION_VOW_ID),
             "caller-precondition sentinel must round-trip through extract_vow_id"
+        );
+    }
+
+    #[test]
+    fn parse_callee_precondition_label_extracts_callee_contract() {
+        let output = "[Counterexample]\n\n\
+                      Violated property:\n\
+                        file /tmp/test.c line 1 column 1 function f\n\
+                        vow:pre:7:2\n\n\
+                      VERIFICATION FAILED";
+        let ce = parse_esbmc_output(output);
+
+        assert_eq!(ce.vow_id, Some(2));
+        assert_eq!(
+            ce.callee_precondition,
+            Some(CalleePrecondition {
+                func_id: 7,
+                vow_id: 2,
+            })
         );
     }
 
