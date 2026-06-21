@@ -1591,7 +1591,8 @@ fn analyze_verif(f: &FnDef, predicate_cost: i64) -> Verif {
 }
 
 fn read_complexity_source(source: &Path) -> Result<String, String> {
-    std::fs::read_to_string(source).map_err(|_| format!("cannot read {}", source.to_string_lossy()))
+    std::fs::read_to_string(source)
+        .map_err(|e| format!("cannot read {}: {e}", source.to_string_lossy()))
 }
 
 // Experimental Vow-surface score bump (§3.2a Step 3), fixed-point, capped 150.
@@ -1649,7 +1650,11 @@ mod tests {
 
         let err = read_complexity_source(&path).unwrap_err();
 
-        assert_eq!(err, format!("cannot read {}", path.to_string_lossy()));
+        let prefix = format!("cannot read {}: ", path.to_string_lossy());
+        assert!(
+            err.starts_with(&prefix),
+            "error should surface the OS detail after the path: {err}"
+        );
     }
 
     #[test]
