@@ -4469,18 +4469,19 @@ before invoking the compiler or any binary it produces.
 
 ## Modules at a glance
 
-| Module path           | Provides                                                                 | ESBMC status (2026-06-21) |
+| Module path           | Provides                                                                 | ESBMC status |
 |-----------------------|-------------------------------------------------------------------------|---------------------------|
-| `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | Blocked (env)             |
-| `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | Partial / blocked         |
-| `stdlib/stack`        | `stack` — Vec-backed LIFO stack over `i64`                               | Skipped (documentary)     |
+| `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | VerifyFailed (env)        |
+| `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | VerifyFailed (env)        |
+| `stdlib/stack`        | `stack` — Vec-backed LIFO stack over `i64`                               | Skipped     |
 | `stdlib/geometry`     | `point`, `shape` — 2D points, circles, rectangles                        | **Verified**              |
-| `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped (documentary)     |
-| `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed (see notes)  |
+| `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped     |
+| `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |
 
-"ESBMC status" is what `vow verify <module>/main.vow` reports today. It reflects
-limitations of the verifier's memory model, **not** the soundness of the contracts.
-See [Verification status](#verification-status).
+These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0
+as of 2026-06-21. `(env)` marks an environmental verifier limitation, not a contract
+defect. The statuses reflect the verifier's memory model, **not** the soundness of
+the contracts — see [Verification status](#verification-status).
 
 ## Consumption model
 
@@ -8885,18 +8886,19 @@ before invoking the compiler or any binary it produces.
 
 ## Modules at a glance
 
-| Module path           | Provides                                                                 | ESBMC status (2026-06-21) |
+| Module path           | Provides                                                                 | ESBMC status |
 |-----------------------|-------------------------------------------------------------------------|---------------------------|
-| `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | Blocked (env)             |
-| `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | Partial / blocked         |
-| `stdlib/stack`        | `stack` — Vec-backed LIFO stack over `i64`                               | Skipped (documentary)     |
+| `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | VerifyFailed (env)        |
+| `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | VerifyFailed (env)        |
+| `stdlib/stack`        | `stack` — Vec-backed LIFO stack over `i64`                               | Skipped     |
 | `stdlib/geometry`     | `point`, `shape` — 2D points, circles, rectangles                        | **Verified**              |
-| `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped (documentary)     |
-| `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed (see notes)  |
+| `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped     |
+| `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |
 
-"ESBMC status" is what `vow verify <module>/main.vow` reports today. It reflects
-limitations of the verifier's memory model, **not** the soundness of the contracts.
-See [Verification status](#verification-status).
+These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0
+as of 2026-06-21. `(env)` marks an environmental verifier limitation, not a contract
+defect. The statuses reflect the verifier's memory model, **not** the soundness of
+the contracts — see [Verification status](#verification-status).
 
 ## Consumption model
 
