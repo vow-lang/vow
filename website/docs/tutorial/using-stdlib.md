@@ -36,11 +36,11 @@ use arithmetic
 
 fn main() -> i32 [io] {
     print_i64(clamp(15, 0, 10));   // 10
-    print_i64(gcd_example());
+    print_i64(max_example());
     0
 }
 
-fn gcd_example() -> i64 {
+fn max_example() -> i64 {
     max(3, 7)                      // 7
 }
 ```
