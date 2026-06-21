@@ -2189,6 +2189,7 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     out.push_str("extern void __ESBMC_assert(_Bool, const char*);\n");
     out.push_str("extern int __VERIFIER_nondet_int(void);\n");
     out.push_str("extern long __VERIFIER_nondet_long(void);\n");
+    out.push_str("extern unsigned long __VERIFIER_nondet_unsigned_long(void);\n");
     out.push_str("extern float __VERIFIER_nondet_float(void);\n");
     out.push_str("extern double __VERIFIER_nondet_double(void);\n");
     out.push_str("extern _Bool __VERIFIER_nondet_bool(void);\n\n");
@@ -2393,6 +2394,15 @@ mod tests {
             origin: sp(),
             region: RegionId::Root,
         }
+    }
+
+    #[test]
+    fn emit_c_module_declares_unsigned_long_nondet() {
+        let c = emit_c_module(&[], &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("extern unsigned long __VERIFIER_nondet_unsigned_long(void);"),
+            "generated C preamble must declare the u64 nondet intrinsic:\n{c}"
+        );
     }
 
     #[test]
