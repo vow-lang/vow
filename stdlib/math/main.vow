@@ -5,7 +5,7 @@ use vec_math
 
 fn main() -> i32 [io] {
     // Arithmetic
-    print_i64(abs_i64(-5));
+    print_i64(abs(-5));
     print_str(String::from(" "));
     print_i64(min(3, 7));
     print_str(String::from(" "));

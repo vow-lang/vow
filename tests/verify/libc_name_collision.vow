@@ -1,0 +1,31 @@
+// TEST: category model-drift
+module LibcNameCollision
+
+fn abs(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  x
+}
+
+fn div(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  x
+}
+
+fn exit(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  x
+}
+
+fn round_trip(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  exit(div(abs(x)))
+}
+
+fn main() -> i32 [io] {
+  print_i64(round_trip(3));
+  0
+}

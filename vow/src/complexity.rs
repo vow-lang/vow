@@ -223,7 +223,7 @@ fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
 }
 
 use crate::emit_frontend_diagnostics;
-use crate::frontend::{FrontendGoal, prepare_frontend};
+use crate::frontend::{prepare_frontend, FrontendGoal};
 
 // Structural counts accumulated by the AST walk. Mirrors the self-hosted
 // `cx_walk_*` (compiler/complexity.vow) handled-kind set exactly so the JSON
@@ -916,7 +916,11 @@ fn cx_soft_or(c: i64, s: i64) -> i64 {
 
 fn cx_round_0_100(val_scaled: i64) -> i64 {
     let r = (val_scaled * 100 + 500) / 1000;
-    if r > 100 { 100 } else { r }
+    if r > 100 {
+        100
+    } else {
+        r
+    }
 }
 
 fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64) -> CxScore {
@@ -937,7 +941,11 @@ fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64
 const CX_SAT: i64 = 2_000_000_000;
 
 fn cx_sat(x: i64) -> i64 {
-    if x > CX_SAT { CX_SAT } else { x }
+    if x > CX_SAT {
+        CX_SAT
+    } else {
+        x
+    }
 }
 
 fn cx_log2_milli(n: i64) -> i64 {
@@ -1277,6 +1285,19 @@ fn analyze_contract(f: &FnDef) -> Contract {
     let mut maxdepth = 0i64;
     let mut has_index = false;
     let mut seen: HashSet<String> = HashSet::new();
+    for param in &f.params {
+        if let Some(refinement) = &param.refinement {
+            requires += 1;
+            pred_walk(
+                refinement,
+                1,
+                &mut nodes,
+                &mut maxdepth,
+                &mut has_index,
+                &mut seen,
+            );
+        }
+    }
     if let Some(vb) = &f.vow {
         for clause in &vb.clauses {
             let expr = match clause {
@@ -1316,6 +1337,99 @@ fn analyze_contract(f: &FnDef) -> Contract {
 
 fn contract_predicate_cost(ct: &Contract) -> i64 {
     ct.predicate_nodes + ct.free_vars + if ct.has_vec_quant { 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vow_syntax::ast::{Param, Type, Visibility};
+    use vow_syntax::span::Span;
+
+    fn sp() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn i64_ty() -> Type {
+        Type::Named {
+            name: "i64".to_string(),
+            span: sp(),
+        }
+    }
+
+    fn ident(name: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Ident(name.to_string()),
+            span: sp(),
+        }
+    }
+
+    fn int(value: i128) -> Expr {
+        Expr {
+            kind: ExprKind::Lit(Lit::Int(value)),
+            span: sp(),
+        }
+    }
+
+    #[test]
+    fn analyze_contract_counts_param_refinement_requires() {
+        let fn_def = FnDef {
+            vis: Visibility::Private,
+            name: "positive".to_string(),
+            params: vec![Param {
+                name: "x".to_string(),
+                ty: i64_ty(),
+                refinement: Some(Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Gt,
+                        lhs: Box::new(ident("x")),
+                        rhs: Box::new(int(0)),
+                    },
+                    span: sp(),
+                })),
+                span: sp(),
+            }],
+            return_ty: i64_ty(),
+            effects: vec![],
+            vow: None,
+            body: Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(ident("x"))),
+                span: sp(),
+            },
+            span: sp(),
+            is_declaration: false,
+        };
+
+        let contract = analyze_contract(&fn_def);
+
+        assert_eq!(contract.requires, 1);
+        assert_eq!(contract.ensures, 0);
+        assert_eq!(contract.invariants, 0);
+        assert_eq!(contract.predicate_nodes, 3);
+        assert_eq!(contract.predicate_depth, 2);
+        assert_eq!(contract.free_vars, 1);
+        assert!(!contract.has_vec_quant);
+        assert_eq!(contract_predicate_cost(&contract), 4);
+    }
+
+    #[test]
+    fn ir_fan_in_counts_only_entry_file_callers_once_per_caller() {
+        let source_files = ["entry.vow", "dep.vow", "entry.vow"];
+        let callee_sets = [
+            HashSet::from([1, 2]),
+            HashSet::from([2]),
+            HashSet::from([1]),
+        ];
+
+        let counts = ir_fan_in_counts(
+            "entry.vow",
+            source_files.iter().copied().zip(callee_sets.iter()),
+        );
+
+        assert_eq!(counts.get(&1).copied().unwrap_or(0), 2);
+        assert_eq!(counts.get(&2).copied().unwrap_or(0), 1);
+        assert_eq!(counts.get(&3).copied().unwrap_or(0), 0);
+    }
 }
 
 struct Verif {
@@ -1523,28 +1637,4 @@ fn cx_json_escape(s: &str) -> String {
         }
     }
     r
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ir_fan_in_counts_only_entry_file_callers_once_per_caller() {
-        let source_files = ["entry.vow", "dep.vow", "entry.vow"];
-        let callee_sets = [
-            HashSet::from([1, 2]),
-            HashSet::from([2]),
-            HashSet::from([1]),
-        ];
-
-        let counts = ir_fan_in_counts(
-            "entry.vow",
-            source_files.iter().copied().zip(callee_sets.iter()),
-        );
-
-        assert_eq!(counts.get(&1).copied().unwrap_or(0), 2);
-        assert_eq!(counts.get(&2).copied().unwrap_or(0), 1);
-        assert_eq!(counts.get(&3).copied().unwrap_or(0), 0);
-    }
 }
