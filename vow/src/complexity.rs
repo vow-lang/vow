@@ -5,7 +5,8 @@ use std::path::Path;
 
 use vow_ir::{InstData, Opcode};
 use vow_syntax::ast::{
-    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Stmt, UnOp, VowBlock, VowClause,
+    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Pat, PatKind, Stmt, UnOp, VowBlock,
+    VowClause,
 };
 
 // Effect -> bit, matching the self-hosted EFF_* constants (io=1,panic=2,
@@ -96,6 +97,7 @@ fn lv_expr(e: &Expr, linear: &HashSet<String>) -> i64 {
         ExprKind::FieldAccess { base, .. } => c += lv_expr(base, linear),
         ExprKind::Question { expr } => c += lv_expr(expr, linear),
         ExprKind::Cast { expr, .. } => c += lv_expr(expr, linear),
+        // Borrow has no node in the self-hosted AST: walk through it transparently.
         ExprKind::Borrow { expr } => c += lv_expr(expr, linear),
         ExprKind::Call { callee, args } => {
             c += lv_expr(callee, linear);
@@ -199,6 +201,22 @@ fn ir_callees(f: &vow_ir::Function) -> std::collections::HashSet<u32> {
         }
     }
     s
+}
+
+fn ir_fan_in_counts<'a, I>(entry_file: &str, caller_callees: I) -> HashMap<u32, i64>
+where
+    I: IntoIterator<Item = (&'a str, &'a HashSet<u32>)>,
+{
+    let mut counts = HashMap::new();
+    for (source_file, callees) in caller_callees {
+        if source_file != entry_file {
+            continue;
+        }
+        for callee in callees {
+            *counts.entry(*callee).or_insert(0) += 1;
+        }
+    }
+    counts
 }
 
 fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
@@ -378,6 +396,7 @@ fn cog_expr(e: &Expr, nesting: i64, logctx: Option<BinOp>, selfn: &str, acc: &mu
                 cog_expr(v, nesting, None, selfn, acc);
             }
         }
+        // Borrow has no node in the self-hosted AST: walk through it transparently.
         ExprKind::Borrow { expr } => cog_expr(expr, nesting, None, selfn, acc),
         ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Continue | ExprKind::Result => {}
     }
@@ -656,6 +675,13 @@ pub(crate) fn run_complexity_command(
     if let Some(m) = frontend.ir() {
         let funcs = &m.functions;
         let callees: Vec<HashSet<u32>> = funcs.iter().map(ir_callees).collect();
+        let fan_in_counts = ir_fan_in_counts(
+            entry_file.as_str(),
+            funcs
+                .iter()
+                .zip(callees.iter())
+                .map(|(f, s)| (f.source_file.as_str(), s)),
+        );
         let effectful: HashSet<u32> = funcs
             .iter()
             .filter(|f| !f.effects.is_empty())
@@ -664,14 +690,7 @@ pub(crate) fn run_complexity_command(
         for (idx, f) in funcs.iter().enumerate() {
             let fan_out = callees[idx].len() as i64;
             let fid = f.id.0;
-            // fan_in counts in-file callers only (schema), so restrict the caller
-            // scan to entry-file functions — a dependency that calls an entry
-            // function must not inflate the entry function's fan_in.
-            let fan_in = funcs
-                .iter()
-                .zip(callees.iter())
-                .filter(|(cf, s)| cf.source_file == entry_file && s.contains(&fid))
-                .count() as i64;
+            let fan_in = fan_in_counts.get(&fid).copied().unwrap_or(0);
             let effect_fanout = callees[idx]
                 .iter()
                 .filter(|c| effectful.contains(c))
@@ -921,7 +940,11 @@ fn cx_score(cognitive: i64, nloc: i64, cog_anchor: i64, nloc_anchor: i64, v: i64
 const CX_SAT: i64 = 2_000_000_000;
 
 fn cx_sat(x: i64) -> i64 {
-    if x > CX_SAT { CX_SAT } else { x }
+    if !(0..=CX_SAT).contains(&x) {
+        CX_SAT
+    } else {
+        x
+    }
 }
 
 fn cx_log2_milli(n: i64) -> i64 {
@@ -1187,6 +1210,55 @@ struct Contract {
     has_vec_quant: bool,
 }
 
+fn pred_bind_pattern(p: &Pat, bound: &mut Vec<String>) {
+    match &p.kind {
+        PatKind::Ident { name, .. } => bound.push(name.clone()),
+        PatKind::Tuple(items) | PatKind::Or(items) => {
+            for item in items {
+                pred_bind_pattern(item, bound);
+            }
+        }
+        PatKind::Struct { fields, .. } => {
+            for (_, item) in fields {
+                pred_bind_pattern(item, bound);
+            }
+        }
+        PatKind::EnumVariant { inner, .. } => {
+            for item in inner {
+                pred_bind_pattern(item, bound);
+            }
+        }
+        PatKind::Wildcard | PatKind::Lit(_) => {}
+    }
+}
+
+fn pred_walk_block(
+    b: &Block,
+    depth: i64,
+    nodes: &mut i64,
+    maxdepth: &mut i64,
+    has_index: &mut bool,
+    seen: &mut HashSet<String>,
+    bound: &mut Vec<String>,
+) {
+    let mark = bound.len();
+    for s in &b.stmts {
+        match s {
+            Stmt::Let { pattern, init, .. } => {
+                pred_walk(init, depth, nodes, maxdepth, has_index, seen, bound);
+                pred_bind_pattern(pattern, bound);
+            }
+            Stmt::Expr { expr, .. } => {
+                pred_walk(expr, depth, nodes, maxdepth, has_index, seen, bound)
+            }
+        }
+    }
+    if let Some(t) = &b.trailing_expr {
+        pred_walk(t, depth, nodes, maxdepth, has_index, seen, bound);
+    }
+    bound.truncate(mark);
+}
+
 fn pred_walk(
     e: &Expr,
     depth: i64,
@@ -1194,10 +1266,11 @@ fn pred_walk(
     maxdepth: &mut i64,
     has_index: &mut bool,
     seen: &mut HashSet<String>,
+    bound: &mut Vec<String>,
 ) {
     // Borrow has no node in the self-hosted AST: walk through it transparently.
     if let ExprKind::Borrow { expr } = &e.kind {
-        pred_walk(expr, depth, nodes, maxdepth, has_index, seen);
+        pred_walk(expr, depth, nodes, maxdepth, has_index, seen, bound);
         return;
     }
     *nodes += 1;
@@ -1209,49 +1282,183 @@ fn pred_walk(
             // `result` is the ensures-result binding; the self-hosted parser
             // models it as EXPR_RESULT (not an identifier), so it is not a free
             // var. It is reserved, so excluding it here is always correct.
-            if name != "result" {
+            if name != "result" && !bound.iter().any(|n| n == name) {
                 seen.insert(name.clone());
             }
         }
         ExprKind::Index { base, index } => {
             *has_index = true;
-            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk(index, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(index, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::BinaryOp { lhs, rhs, .. } => {
-            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::Assign { lhs, rhs } => {
-            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen);
-            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::UnaryOp { operand, .. } => {
-            pred_walk(operand, depth + 1, nodes, maxdepth, has_index, seen)
+            pred_walk(operand, depth + 1, nodes, maxdepth, has_index, seen, bound)
         }
         ExprKind::FieldAccess { base, .. } => {
-            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen)
+            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen, bound)
         }
-        ExprKind::Question { expr } => pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen),
-        ExprKind::Cast { expr, .. } => pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen),
+        ExprKind::Question { expr } => {
+            pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen, bound)
+        }
+        ExprKind::Cast { expr, .. } => {
+            pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen, bound)
+        }
         ExprKind::Call { callee, args } => {
-            pred_walk(callee, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(callee, depth + 1, nodes, maxdepth, has_index, seen, bound);
             for a in args {
-                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
         ExprKind::MethodCall { receiver, args, .. } => {
-            pred_walk(receiver, depth + 1, nodes, maxdepth, has_index, seen);
+            pred_walk(receiver, depth + 1, nodes, maxdepth, has_index, seen, bound);
             for a in args {
-                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            pred_walk(
+                condition,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                seen,
+                bound,
+            );
+            pred_walk_block(
+                then_branch,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                seen,
+                bound,
+            );
+            if let Some(e2) = else_branch {
+                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            }
+        }
+        ExprKind::While {
+            condition,
+            body,
+            vow,
+        } => {
+            pred_walk(
+                condition,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                seen,
+                bound,
+            );
+            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            // A loop nested inside a predicate is reached by neither the body
+            // loop-walk nor a separate pass, so its own vow clauses are part of
+            // this predicate's complexity and must be counted here.
+            pred_walk_vow(vow, depth + 1, nodes, maxdepth, has_index, seen, bound);
+        }
+        ExprKind::ForEach {
+            binding,
+            iterable,
+            body,
+            vow,
+        } => {
+            pred_walk(iterable, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            let mark = bound.len();
+            bound.push(binding.clone());
+            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            // Walk vow clauses with the loop binding still in scope so an
+            // invariant referencing it is not mistaken for a free variable.
+            pred_walk_vow(vow, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            bound.truncate(mark);
+        }
+        ExprKind::Loop { body, vow } => {
+            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk_vow(vow, depth + 1, nodes, maxdepth, has_index, seen, bound);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            pred_walk(
+                scrutinee,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                seen,
+                bound,
+            );
+            for arm in arms {
+                let mark = bound.len();
+                pred_bind_pattern(&arm.pattern, bound);
+                pred_walk(
+                    &arm.body,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    seen,
+                    bound,
+                );
+                bound.truncate(mark);
+            }
+        }
+        ExprKind::Return { value } | ExprKind::Break { value } => {
+            if let Some(v) = value {
+                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            }
+        }
+        ExprKind::Block(b) => {
+            pred_walk_block(b, depth + 1, nodes, maxdepth, has_index, seen, bound)
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, v) in fields {
+                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            }
+        }
+        ExprKind::EnumConstruct { fields, .. } => {
+            for v in fields {
+                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
         ExprKind::Tuple(elems) => {
             for e2 in elems {
-                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen);
+                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen, bound);
             }
         }
         _ => {}
+    }
+}
+
+fn pred_walk_vow(
+    vow: &Option<VowBlock>,
+    depth: i64,
+    nodes: &mut i64,
+    maxdepth: &mut i64,
+    has_index: &mut bool,
+    seen: &mut HashSet<String>,
+    bound: &mut Vec<String>,
+) {
+    if let Some(vb) = vow {
+        for clause in &vb.clauses {
+            let expr = match clause {
+                VowClause::Requires { expr, .. }
+                | VowClause::Ensures { expr, .. }
+                | VowClause::Invariant { expr, .. } => expr,
+            };
+            pred_walk(expr, depth, nodes, maxdepth, has_index, seen, bound);
+        }
     }
 }
 
@@ -1261,6 +1468,21 @@ fn analyze_contract(f: &FnDef) -> Contract {
     let mut maxdepth = 0i64;
     let mut has_index = false;
     let mut seen: HashSet<String> = HashSet::new();
+    for param in &f.params {
+        if let Some(refinement) = &param.refinement {
+            requires += 1;
+            let mut bound = Vec::new();
+            pred_walk(
+                refinement,
+                1,
+                &mut nodes,
+                &mut maxdepth,
+                &mut has_index,
+                &mut seen,
+                &mut bound,
+            );
+        }
+    }
     if let Some(vb) = &f.vow {
         for clause in &vb.clauses {
             let expr = match clause {
@@ -1277,6 +1499,7 @@ fn analyze_contract(f: &FnDef) -> Contract {
                     expr
                 }
             };
+            let mut bound = Vec::new();
             pred_walk(
                 expr,
                 1,
@@ -1284,6 +1507,7 @@ fn analyze_contract(f: &FnDef) -> Contract {
                 &mut maxdepth,
                 &mut has_index,
                 &mut seen,
+                &mut bound,
             );
         }
     }
@@ -1300,6 +1524,106 @@ fn analyze_contract(f: &FnDef) -> Contract {
 
 fn contract_predicate_cost(ct: &Contract) -> i64 {
     ct.predicate_nodes + ct.free_vars + if ct.has_vec_quant { 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vow_syntax::ast::{Param, Type, Visibility};
+    use vow_syntax::span::Span;
+
+    fn sp() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn i64_ty() -> Type {
+        Type::Named {
+            name: "i64".to_string(),
+            span: sp(),
+        }
+    }
+
+    fn ident(name: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Ident(name.to_string()),
+            span: sp(),
+        }
+    }
+
+    fn int(value: i128) -> Expr {
+        Expr {
+            kind: ExprKind::Lit(Lit::Int(value)),
+            span: sp(),
+        }
+    }
+
+    #[test]
+    fn analyze_contract_counts_param_refinement_requires() {
+        let fn_def = FnDef {
+            vis: Visibility::Private,
+            name: "positive".to_string(),
+            params: vec![Param {
+                name: "x".to_string(),
+                ty: i64_ty(),
+                refinement: Some(Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Gt,
+                        lhs: Box::new(ident("x")),
+                        rhs: Box::new(int(0)),
+                    },
+                    span: sp(),
+                })),
+                span: sp(),
+            }],
+            return_ty: i64_ty(),
+            effects: vec![],
+            vow: None,
+            body: Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(ident("x"))),
+                span: sp(),
+            },
+            span: sp(),
+            is_declaration: false,
+        };
+
+        let contract = analyze_contract(&fn_def);
+
+        assert_eq!(contract.requires, 1);
+        assert_eq!(contract.ensures, 0);
+        assert_eq!(contract.invariants, 0);
+        assert_eq!(contract.predicate_nodes, 3);
+        assert_eq!(contract.predicate_depth, 2);
+        assert_eq!(contract.free_vars, 1);
+        assert!(!contract.has_vec_quant);
+        assert_eq!(contract_predicate_cost(&contract), 4);
+    }
+
+    #[test]
+    fn cx_sat_floors_negative_wraparound_to_saturation() {
+        assert_eq!(cx_sat(-1), CX_SAT);
+        assert_eq!(cx_sat(0), 0);
+        assert_eq!(cx_sat(CX_SAT + 1), CX_SAT);
+    }
+
+    #[test]
+    fn ir_fan_in_counts_only_entry_file_callers_once_per_caller() {
+        let source_files = ["entry.vow", "dep.vow", "entry.vow"];
+        let callee_sets = [
+            HashSet::from([1, 2]),
+            HashSet::from([2]),
+            HashSet::from([1]),
+        ];
+
+        let counts = ir_fan_in_counts(
+            "entry.vow",
+            source_files.iter().copied().zip(callee_sets.iter()),
+        );
+
+        assert_eq!(counts.get(&1).copied().unwrap_or(0), 2);
+        assert_eq!(counts.get(&2).copied().unwrap_or(0), 1);
+        assert_eq!(counts.get(&3).copied().unwrap_or(0), 0);
+    }
 }
 
 struct Verif {
@@ -1411,6 +1735,7 @@ fn loops_expr(e: &Expr, nesting: i64, total: &mut i64, without: &mut i64, maxnes
         ExprKind::FieldAccess { base, .. } => loops_expr(base, nesting, total, without, maxnest),
         ExprKind::Question { expr } => loops_expr(expr, nesting, total, without, maxnest),
         ExprKind::Cast { expr, .. } => loops_expr(expr, nesting, total, without, maxnest),
+        // Borrow has no node in the self-hosted AST: walk through it transparently.
         ExprKind::Borrow { expr } => loops_expr(expr, nesting, total, without, maxnest),
         ExprKind::Return { value } => {
             if let Some(v) = value {

@@ -13,7 +13,7 @@ use crate::solver_strategy::{
 
 use crate::c_emitter::{
     ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
-    emit_c_module, emit_c_module_with_callees, non_modelable_reason,
+    emit_c_module, emit_c_module_with_callees, non_modelable_reason, verifier_c_func_name,
 };
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ fn emit_harness(func: &Function) -> String {
         .collect();
     format!(
         "int main(void) {{ {}({}); return 0; }}\n",
-        func.name,
+        verifier_c_func_name(func),
         args.join(", ")
     )
 }
@@ -1093,6 +1093,78 @@ mod tests {
         let c = emit_verify_c_source(&func, &module, &HashMap::new(), &VerifyLimits::default());
 
         assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
+    }
+
+    #[test]
+    fn emit_verify_c_source_uses_private_symbols_for_target_and_callees() {
+        let callee = Function {
+            id: FuncId(5),
+            name: "div".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let target = Function {
+            id: FuncId(2),
+            name: "abs".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![0],
+                        InstData::CallTarget(FuncId(5)),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: String::new(),
+            functions: vec![target.clone(), callee],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+
+        let c = emit_verify_c_source(&target, &module, &HashMap::new(), &VerifyLimits::default());
+
+        assert!(
+            c.contains("int64_t vow_user_fn_5("),
+            "callee definition: {c}"
+        );
+        assert!(c.contains("v1 = vow_user_fn_5(v0);"), "callee call: {c}");
+        assert!(
+            c.contains("int main(void) { vow_user_fn_2(__VERIFIER_nondet_long()); return 0; }"),
+            "harness target call: {c}"
+        );
+        assert!(!c.contains("int64_t div("), "raw callee definition: {c}");
+        assert!(!c.contains(" div(v0)"), "raw callee call: {c}");
+        assert!(!c.contains(" abs("), "raw target call: {c}");
     }
 
     #[test]

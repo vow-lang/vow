@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -27,6 +28,7 @@ METHODOLOGY = SPEC_DIR / "contracts-methodology.md"
 INDEX = SPEC_DIR / "index.md"
 ERRORS = SPEC_DIR / "errors.md"
 EXAMPLES = SPEC_DIR / "examples.md"
+STDLIB = SPEC_DIR / "stdlib.md"
 SCHEMAS_DIR = SPEC_DIR / "schemas"
 MAIN_RS = REPO / "vow" / "src" / "main.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
@@ -329,6 +331,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "cli": "reference/cli.md",
             "contracts": "reference/contracts.md",
             "errors": "reference/errors.md",
+            "stdlib": "reference/stdlib.md",
             "examples": "examples/examples.md",
             "schemas": {
                 "build_result": "schemas/build-result.schema.json",
@@ -923,6 +926,7 @@ def build_skill_entrypoint() -> str:
             "- Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)",
             "- Which contracts to write (taxonomy & strength): [reference/contracts-methodology.md](reference/contracts-methodology.md)",
             "- Diagnostics and fixes: [reference/errors.md](reference/errors.md)",
+            "- Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)",
             "- Worked examples: [examples/examples.md](examples/examples.md)",
             "- JSON schemas: [schemas/](schemas/)",
             "",
@@ -941,7 +945,7 @@ def build_skill_bundle() -> str:
     parts.append("")
 
     # Append each spec file
-    for spec_file in [GRAMMAR, CLI, CONTRACTS, METHODOLOGY, ERRORS, EXAMPLES]:
+    for spec_file in [GRAMMAR, CLI, CONTRACTS, METHODOLOGY, ERRORS, STDLIB, EXAMPLES]:
         parts.append("---")
         parts.append("")
         parts.append(spec_file.read_text().rstrip())
@@ -973,6 +977,7 @@ def build_skill_support_files() -> dict[str, str]:
         "reference/contracts.md": CONTRACTS.read_text().rstrip() + "\n",
         "reference/contracts-methodology.md": METHODOLOGY.read_text().rstrip() + "\n",
         "reference/errors.md": ERRORS.read_text().rstrip() + "\n",
+        "reference/stdlib.md": STDLIB.read_text().rstrip() + "\n",
         "examples/examples.md": EXAMPLES.read_text().rstrip() + "\n",
     }
     for sf in sorted(SCHEMAS_DIR.glob("*.json")):
@@ -986,6 +991,14 @@ def _rust_raw_string(text: str) -> str:
         if f'"{hashes}' not in text:
             return f'r{hashes}"{text}"{hashes}'
     raise ValueError("could not find Rust raw string delimiter")
+
+
+def _vow_skill_support_content_fn_name(path: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9]+", "_", path).strip("_").lower()
+    if not stem:
+        stem = "file"
+    digest = hashlib.sha256(path.encode("utf-8")).hexdigest()[:8]
+    return f"skill_support_content_{stem}_{digest}"
 
 
 def inject_skill_rust(
@@ -1032,6 +1045,10 @@ def inject_skill_vow(
     """Inject generated skill helpers into self-hosted main.vow."""
     first_entrypoint, rest_entrypoint = _vow_pushstr_body(entrypoint_md)
     first_bundle, rest_bundle = _vow_pushstr_body(bundle_md)
+    support_entries = [
+        (path, body, _vow_skill_support_content_fn_name(path))
+        for path, body in support_files.items()
+    ]
 
     sections = [
         "// GENERATE:SKILL_FULL:START",
@@ -1046,18 +1063,21 @@ def inject_skill_vow(
         rest_bundle,
         "    r",
         "}",
-        "fn skill_support_paths() -> Vec<String> {",
-        "    let v: Vec<String> = Vec::new();",
+        "",
+        "fn skill_support_count() -> i64 {",
+        f"    {len(support_entries)}",
+        "}",
+        "",
+        "fn skill_support_path(index: i64) -> String vow {",
+        "    requires: index >= 0 && index < skill_support_count()",
+        "} {",
     ]
-    for path in support_files:
+    for idx, (path, _, _) in enumerate(support_entries):
         escaped = path.replace("\\", "\\\\").replace('"', '\\"')
-        sections.append(f'    v.push(String::from("{escaped}"));')
-    sections.extend(["    v", "}", ""])
+        sections.append(f'    if index == {idx} {{ return String::from("{escaped}"); }}')
+    sections.extend(['    String::from("")', "}", ""])
 
-    content_fn_names = []
-    for idx, body in enumerate(support_files.values()):
-        fn_name = f"skill_support_content_{idx}"
-        content_fn_names.append(fn_name)
+    for _, body, fn_name in support_entries:
         first, rest = _vow_pushstr_body(body)
         sections.extend(
             [
@@ -1072,13 +1092,19 @@ def inject_skill_vow(
 
     sections.extend(
         [
-            "fn skill_support_contents() -> Vec<String> {",
-            "    let v: Vec<String> = Vec::new();",
+            "fn skill_support_content_index_guard(index: i64) vow {",
+            "    requires: index >= 0 && index < skill_support_count()",
+            "} {",
+            "    let _ok: i64 = 0;",
+            "}",
+            "",
+            "fn skill_support_content(index: i64) -> String {",
+            "    skill_support_content_index_guard(index);",
         ]
     )
-    for fn_name in content_fn_names:
-        sections.append(f"    v.push({fn_name}());")
-    sections.extend(["    v", "}", "// GENERATE:SKILL_FULL:END"])
+    for idx, (_, _, fn_name) in enumerate(support_entries):
+        sections.append(f"    if index == {idx} {{ return {fn_name}(); }}")
+    sections.extend(['    String::from("")', "}", "// GENERATE:SKILL_FULL:END"])
 
     fn_body = "\n".join(sections)
     return _replace_between_markers(
