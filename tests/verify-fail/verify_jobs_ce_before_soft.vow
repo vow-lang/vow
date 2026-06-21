@@ -1,0 +1,30 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-fn "early_bad"
+// TEST: counterexample-blame callee
+// Regression: with --verify-jobs > 1, an earlier counterexample must suppress
+// later in-flight soft verifier metadata in the final JSON payload.
+module VerifyJobsCeBeforeSoft
+
+fn early_bad(x: i64) -> i64 vow {
+  ensures: result >= 0
+} {
+  x
+}
+
+fn later_unbounded_count(n: i64) -> i64 vow {
+  requires: n >= 0,
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(early_bad(-1));
+  print_i64(later_unbounded_count(100000));
+  0
+}

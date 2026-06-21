@@ -905,6 +905,20 @@ fn cx_analyze_contract(a: AstArena, fid: i64) -> CxContract {
     acc.push(0);
     let seen: Vec<String> = Vec::new();
     let bound: Vec<String> = Vec::new();
+    let params_lid: i64 = fn_params_lid(a, fid);
+    if params_lid >= 0 {
+        let n_params: i64 = list_len(a, params_lid) / 3;
+        let mut pi: i64 = 0;
+        while pi < n_params {
+            let refinement_eid: i64 = list_get(a, params_lid, pi * 3 + 2);
+            if refinement_eid >= 0 {
+                n_req = n_req + 1;
+                cx_pred_walk(a, refinement_eid, 1, acc, seen, bound);
+                bound.truncate(0);
+            }
+            pi = pi + 1;
+        }
+    }
     if vow_lid >= 0 {
         let n: i64 = list_len(a, vow_lid);
         let mut i: i64 = 0;
@@ -1351,7 +1365,7 @@ fn cx_analyze_fn(a: AstArena, fid: i64, src: String, struct_names: Vec<String>, 
     let plid: i64 = fn_params_lid(a, fid);
     let mut pc: i64 = 0;
     if plid >= 0 {
-        // Each parameter occupies 3 list slots (name_sid, type_tid, mutable).
+        // Each parameter occupies 3 list slots (name_sid, type_tid, refinement_eid).
         pc = list_len(a, plid) / 3;
     }
 

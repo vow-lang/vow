@@ -183,7 +183,7 @@ fn esbmc_nondet_call(ty: i64) -> String {
 
 fn emit_harness(f: IrFunction) -> String {
     let out: String = String::from("int main(void) { ");
-    out.push_str(f.name);
+    out.push_str(verifier_c_func_name(f));
     out.push_byte(40);
     let params: Vec<i64> = f.params;
     let np: i64 = params.len();

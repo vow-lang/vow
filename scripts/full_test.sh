@@ -124,6 +124,10 @@ soft_fail = rs == 'VerifyFailed' and ss == 'VerifyFailed' and rvs and svs
 if soft_fail:
     if rvs != svs:
         errors.append(f'verify_status: {rvs} vs {svs}')
+    if len(rc) != 0:
+        errors.append(f'rust soft VerifyFailed has {len(rc)} counterexamples')
+    if len(sc) != 0:
+        errors.append(f'self soft VerifyFailed has {len(sc)} counterexamples')
     # For deterministic inputs the same function should trigger the soft fail on
     # both compilers; a divergence on which function was selected would otherwise
     # pass silently (verify_message is still skipped — ESBMC text is non-deterministic).
@@ -379,6 +383,80 @@ for vow_file in examples/*.vow; do
 done
 echo ""
 
+# ─── Section 2b: Verifier C Preamble ──────────────────────────────
+
+section_begin "Section 2b: Verifier C Preamble"
+
+fake_esbmc_dir="$TMPDIR/fake-esbmc"
+mkdir -p "$fake_esbmc_dir"
+cat > "$fake_esbmc_dir/esbmc" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+capture_dir="${VOW_ESBMC_CAPTURE_DIR:?}"
+mkdir -p "$capture_dir"
+
+for arg in "$@"; do
+    if [ -f "$arg" ] && [ "${arg##*.}" = "c" ]; then
+        dest=$(mktemp "$capture_dir/esbmc.XXXXXX.c")
+        cp "$arg" "$dest"
+        break
+    fi
+done
+
+echo "VERIFICATION SUCCESSFUL"
+SH
+chmod +x "$fake_esbmc_dir/esbmc"
+
+u64_preamble_fixture="$TMPDIR/u64_nondet_preamble.vow"
+cat > "$u64_preamble_fixture" <<'VOW'
+module U64NondetPreamble
+
+fn keep_u64(x: u64) -> u64 vow {
+    ensures: result == x
+} {
+    x
+}
+
+fn main() -> i32 {
+    0
+}
+VOW
+
+check_unsigned_long_preamble_capture() {
+    local label="$1" capture_dir="$2" json="$3" exit_code="$4"
+    if grep -R -q 'extern unsigned long __VERIFIER_nondet_unsigned_long(void);' "$capture_dir" 2>/dev/null; then
+        pass "$label"
+    else
+        local verify_status=""
+        verify_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$json" 2>/dev/null) || verify_status=""
+        fail "$label" "missing unsigned-long nondet extern in captured C (verify_status=${verify_status:-unknown}, exit=$exit_code)"
+    fi
+}
+
+rust_capture="$TMPDIR/rust-esbmc-capture"
+self_capture="$TMPDIR/self-esbmc-capture"
+mkdir -p "$rust_capture" "$self_capture"
+
+rust_json="" self_json="" rust_exit=0 self_exit=0
+rust_json=$(PATH="$fake_esbmc_dir:$PATH" VOW_ESBMC_CAPTURE_DIR="$rust_capture" \
+    "$RUST" verify --no-cache --verify-jobs 1 "$u64_preamble_fixture" 2>/dev/null) || rust_exit=$?
+self_json=$(PATH="$fake_esbmc_dir:$PATH" VOW_ESBMC_CAPTURE_DIR="$self_capture" \
+    run_self verify --no-cache --verify-jobs 1 "$u64_preamble_fixture" 2>/dev/null) || self_exit=$?
+
+if [ -z "$rust_json" ]; then
+    fail "verifier-preamble/rust" "empty output (exit=$rust_exit)"
+else
+    check_unsigned_long_preamble_capture "verifier-preamble/rust" "$rust_capture" "$rust_json" "$rust_exit"
+fi
+
+if [ -z "$self_json" ]; then
+    fail "verifier-preamble/self" "empty output (exit=$self_exit)"
+else
+    check_unsigned_long_preamble_capture "verifier-preamble/self" "$self_capture" "$self_json" "$self_exit"
+fi
+echo ""
+
 # ─── Section 3: Runtime Execution ──────────────────────────────────
 
 section_begin "Section 3: Runtime Execution"
@@ -527,6 +605,42 @@ for vow_file in tests/verify-fail/*.vow; do
 done
 echo ""
 
+name="verify_jobs_counterexample_suppresses_later_soft_meta"
+fixture="tests/verify-fail/verify_jobs_ce_before_soft.vow"
+errors=()
+for mode in verify build legacy; do
+    self_json="" self_exit=0
+    case "$mode" in
+        verify)
+            self_json=$(run_self verify --verify-jobs 2 "$fixture" 2>/dev/null) || self_exit=$?
+            ;;
+        build)
+            self_json=$(run_self build --verify-jobs 2 "$fixture" -o "$TMPDIR/ce_before_soft" 2>/dev/null) || self_exit=$?
+            ;;
+        legacy)
+            self_json=$(run_self --verify --verify-jobs 2 "$fixture" 2>/dev/null) || self_exit=$?
+            ;;
+    esac
+    actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$self_json" 2>/dev/null) || actual_status=""
+    verify_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('verify_status',''))" "$self_json" 2>/dev/null) || verify_status=""
+    ce_function=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); c=d.get('counterexamples') or []; print(c[0].get('function','') if c else '')" "$self_json" 2>/dev/null) || ce_function=""
+    if [ "$self_exit" -eq 0 ]; then
+        errors+=("$mode exited 0")
+    elif [ "$actual_status" != "VerifyFailed" ]; then
+        errors+=("$mode status=$actual_status")
+    elif [ "$ce_function" != "early_bad" ]; then
+        errors+=("$mode counterexample function=$ce_function")
+    elif [ -n "$verify_status" ]; then
+        errors+=("$mode verify_status=$verify_status")
+    fi
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "$name"
+else
+    fail "$name" "$(IFS='; '; echo "${errors[*]}")"
+fi
+echo ""
+
 # ─── Section 4d: Verify-Skip Tests (tests/verify-skip/) ───────────
 #
 # Functions that exercise a non-modelable construct (e.g. nested-collection
@@ -666,11 +780,7 @@ echo ""
 section_begin "Section 6: Multi-Module"
 
 for multi in stack geometry bignum gc math heap; do
-    case "$multi" in
-        math) main_file="lib/math/main.vow" ;;
-        heap) main_file="lib/heap/main.vow" ;;
-        *)    main_file="examples/${multi}/main.vow" ;;
-    esac
+    main_file="stdlib/${multi}/main.vow"
     printf "${BOLD}%s${RESET}\n" "$multi"
 
     # build --no-verify
@@ -1017,8 +1127,14 @@ section_begin "Section 13: vow complexity Parity"
 for vow_file in tests/fixtures/complexity/*.vow; do
     [ -f "$vow_file" ] || continue
     name=$(basename "$vow_file" .vow)
-    rust_json=$("$RUST" complexity "$vow_file" 2>/dev/null)
-    self_json=$(run_self complexity "$vow_file" 2>/dev/null)
+    rust_exit=0
+    self_exit=0
+    rust_json=$("$RUST" complexity "$vow_file" 2>/dev/null) || rust_exit=$?
+    self_json=$(run_self complexity "$vow_file" 2>/dev/null) || self_exit=$?
+    if [ "$rust_exit" != "0" ] || [ "$self_exit" != "0" ]; then
+        fail "complexity/${name}" "rust_exit=${rust_exit} self_exit=${self_exit} (expected both 0)"
+        continue
+    fi
     golden="tests/fixtures/complexity/${name}.expected.json"
     if [ "$rust_json" != "$self_json" ]; then
         fail "complexity/${name}" "JSON differs between compilers"

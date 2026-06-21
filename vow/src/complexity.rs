@@ -931,18 +931,6 @@ fn cx_sat(x: i64) -> i64 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{CX_SAT, cx_sat};
-
-    #[test]
-    fn cx_sat_floors_negative_wraparound_to_saturation() {
-        assert_eq!(cx_sat(-1), CX_SAT);
-        assert_eq!(cx_sat(0), 0);
-        assert_eq!(cx_sat(CX_SAT + 1), CX_SAT);
-    }
-}
-
 fn cx_log2_milli(n: i64) -> i64 {
     if n <= 1 {
         return 0;
@@ -1464,6 +1452,21 @@ fn analyze_contract(f: &FnDef) -> Contract {
     let mut maxdepth = 0i64;
     let mut has_index = false;
     let mut seen: HashSet<String> = HashSet::new();
+    for param in &f.params {
+        if let Some(refinement) = &param.refinement {
+            requires += 1;
+            let mut bound = Vec::new();
+            pred_walk(
+                refinement,
+                1,
+                &mut nodes,
+                &mut maxdepth,
+                &mut has_index,
+                &mut seen,
+                &mut bound,
+            );
+        }
+    }
     if let Some(vb) = &f.vow {
         for clause in &vb.clauses {
             let expr = match clause {
@@ -1505,6 +1508,87 @@ fn analyze_contract(f: &FnDef) -> Contract {
 
 fn contract_predicate_cost(ct: &Contract) -> i64 {
     ct.predicate_nodes + ct.free_vars + if ct.has_vec_quant { 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vow_syntax::ast::{Param, Type, Visibility};
+    use vow_syntax::span::Span;
+
+    fn sp() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn i64_ty() -> Type {
+        Type::Named {
+            name: "i64".to_string(),
+            span: sp(),
+        }
+    }
+
+    fn ident(name: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Ident(name.to_string()),
+            span: sp(),
+        }
+    }
+
+    fn int(value: i128) -> Expr {
+        Expr {
+            kind: ExprKind::Lit(Lit::Int(value)),
+            span: sp(),
+        }
+    }
+
+    #[test]
+    fn analyze_contract_counts_param_refinement_requires() {
+        let fn_def = FnDef {
+            vis: Visibility::Private,
+            name: "positive".to_string(),
+            params: vec![Param {
+                name: "x".to_string(),
+                ty: i64_ty(),
+                refinement: Some(Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Gt,
+                        lhs: Box::new(ident("x")),
+                        rhs: Box::new(int(0)),
+                    },
+                    span: sp(),
+                })),
+                span: sp(),
+            }],
+            return_ty: i64_ty(),
+            effects: vec![],
+            vow: None,
+            body: Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(ident("x"))),
+                span: sp(),
+            },
+            span: sp(),
+            is_declaration: false,
+        };
+
+        let contract = analyze_contract(&fn_def);
+
+        assert_eq!(contract.requires, 1);
+        assert_eq!(contract.ensures, 0);
+        assert_eq!(contract.invariants, 0);
+        assert_eq!(contract.predicate_nodes, 3);
+        assert_eq!(contract.predicate_depth, 2);
+        assert_eq!(contract.free_vars, 1);
+        assert!(!contract.has_vec_quant);
+        assert_eq!(contract_predicate_cost(&contract), 4);
+    }
+
+    #[test]
+    fn cx_sat_floors_negative_wraparound_to_saturation() {
+        assert_eq!(cx_sat(-1), CX_SAT);
+        assert_eq!(cx_sat(0), 0);
+        assert_eq!(cx_sat(CX_SAT + 1), CX_SAT);
+    }
 }
 
 struct Verif {
