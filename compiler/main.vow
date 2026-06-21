@@ -6095,8 +6095,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn circle_area(r: i64) -> i64 vow {\n"));
-    r.push_str(String::from("    requires: r >= 0\n"));
-    r.push_str(String::from("    requires: r <= 1753413056\n"));
+    r.push_str(String::from("    requires: r >= 0,\n"));
+    r.push_str(String::from("    requires: r <= 1753413056,\n"));
     r.push_str(String::from("    ensures: result >= 0\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
@@ -10535,8 +10535,8 @@ fn skill_support_content_5() -> String {
     r.push_str(String::from("e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn circle_area(r: i64) -> i64 vow {\n"));
-    r.push_str(String::from("    requires: r >= 0\n"));
-    r.push_str(String::from("    requires: r <= 1753413056\n"));
+    r.push_str(String::from("    requires: r >= 0,\n"));
+    r.push_str(String::from("    requires: r <= 1753413056,\n"));
     r.push_str(String::from("    ensures: result >= 0\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));

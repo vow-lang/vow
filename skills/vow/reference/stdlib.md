@@ -252,8 +252,8 @@ Each magic bound is the exact threshold below which the arithmetic cannot overfl
 e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:
 ```vow
 fn circle_area(r: i64) -> i64 vow {
-    requires: r >= 0
-    requires: r <= 1753413056
+    requires: r >= 0,
+    requires: r <= 1753413056,
     ensures: result >= 0
 }
 ```
