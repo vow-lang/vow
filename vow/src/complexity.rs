@@ -1526,6 +1526,10 @@ mod tests {
             err.starts_with(&prefix),
             "error should surface the OS detail after the path: {err}"
         );
+        assert!(
+            err[prefix.len()..].trim().len() > 0,
+            "error should include non-empty OS detail: {err}"
+        );
     }
 
     #[test]
