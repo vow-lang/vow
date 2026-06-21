@@ -22,7 +22,9 @@ the human-facing map.
 | [bignum](bignum/README.md) | `bignum` | Arbitrary-precision signed integers (base 10⁹) | Skipped (documentary) |
 | [gc](gc/README.md) | `gc` | Mark-and-sweep GC over `i64` slots | VerifyFailed (#764) |
 
-Only `geometry` is statically proven end-to-end today. For the rest, contracts are
+Only `geometry` currently passes `vow verify` — and that proves the *vowed* checks
+reachable from its demo, not the whole API (`point_distance_sq` carries no contract).
+For the rest, contracts are
 precise specifications enforced at runtime in `--mode debug`; static proof is gated on
 verifier-model improvements. The statuses are pre-existing properties of the code and
 the verifier — see [docs/spec/stdlib.md](../docs/spec/stdlib.md#verification-status)

@@ -4492,9 +4492,12 @@ There is no search path, and `--module-root` is only available on `vow test` —
 
 Two practical ways to use a stdlib module:
 
-**1. Run the module's own demo in place.** Each module ships a `main.vow`:
+**1. Run the module's own demo in place.** Each module ships a `main.vow`. Build with
+`--no-verify` — most stdlib modules do not pass `vow verify` yet (see
+[Verification status](#verification-status)), and the point here is to *run* the demo,
+not to verify it:
 ```
-$ ulimit -v 2000000; build/vowc build stdlib/math/main.vow -o /tmp/math_demo
+$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
 $ ulimit -v 2000000; /tmp/math_demo
 ```
 
@@ -8908,9 +8911,12 @@ There is no search path, and `--module-root` is only available on `vow test` —
 
 Two practical ways to use a stdlib module:
 
-**1. Run the module's own demo in place.** Each module ships a `main.vow`:
+**1. Run the module's own demo in place.** Each module ships a `main.vow`. Build with
+`--no-verify` — most stdlib modules do not pass `vow verify` yet (see
+[Verification status](#verification-status)), and the point here is to *run* the demo,
+not to verify it:
 ```
-$ ulimit -v 2000000; build/vowc build stdlib/math/main.vow -o /tmp/math_demo
+$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
 $ ulimit -v 2000000; /tmp/math_demo
 ```
 
