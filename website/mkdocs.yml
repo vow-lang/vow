@@ -3,7 +3,10 @@ site_description: A systems language for AI agents with built-in, statically-ver
 site_url: https://docs.vow-lang.com/
 repo_url: https://github.com/vow-lang/vow
 repo_name: vow-lang/vow
-edit_uri: edit/main/docs/spec/
+# Per-page edit links are suppressed: reference pages are generated from docs/spec/
+# into website/docs/reference/, and tutorial pages live under website/docs/tutorial/,
+# so a single edit_uri base cannot point at the right source for every page.
+edit_uri: ""
 copyright: Vow is open source under the MIT License.
 
 docs_dir: docs
