@@ -16,8 +16,10 @@ silent soundness regression can never hide in an aggregate pass/fail count:
   * SOUNDNESS  (false-accept) — an expected-fail program was Verified, or a
                  should-pass program was proven only vacuously. Hard failure.
   * PRECISION  (false-reject) — a should-pass program was rejected.
-  * BLAME      — wrong Caller/Callee attribution, or wrong violated vow_id.
-  * STATUS     — any other expected/actual status mismatch (e.g. Skipped).
+  * BLAME      — wrong Caller/Callee attribution, wrong violated vow_id, or a
+                 surplus counterexample.
+  * STATUS     — any other expected/actual status mismatch (e.g. Skipped), or
+                 a missing expected counterexample.
 
 Ground truth lives next to each program as `// TEST:` directives (the same
 comment convention tests/run_tests.sh already uses), extended here with
@@ -117,6 +119,20 @@ def validate_blame(path, blame):
     return blame
 
 
+def validate_known_gap_path(path):
+    """Keep known soundness gaps confined to the should-pass corpus."""
+    allowed_dir = os.path.abspath(os.path.join(REPO_ROOT, "tests", "verify"))
+    actual_path = os.path.abspath(path)
+    try:
+        common = os.path.commonpath([allowed_dir, actual_path])
+    except ValueError:
+        common = None
+    if common != allowed_dir:
+        raise ValueError(
+            f"{path}: known-soundness-gap is only valid under tests/verify/"
+        )
+
+
 def parse_directives(path, default_status):
     """Read `// TEST:` directives from a program into an Expect."""
     exp = Expect(path, default_status)
@@ -156,6 +172,7 @@ def parse_directives(path, default_status):
                         f"{path}: malformed known-soundness-gap directive "
                         f'(expected: known-soundness-gap "<reason>" #<issue>): {body!r}'
                     )
+                validate_known_gap_path(path)
                 exp.known_gap = gm.group(1)
                 exp.known_gap_issue = gm.group(2)
             elif body.startswith("counterexample-fn"):
@@ -290,6 +307,8 @@ def match_cex(want, actuals):
         if "vow_id" in want and want["vow_id"] != got["vow_id"]:
             continue
         return "ok", None, got
+    if not actuals:
+        return "missing", f"no counterexample matched {want}", None
     # No exact match: diagnose the closest cause for the same function.
     same_fn = [g for g in actuals if g["fn"] == want.get("fn")] or actuals
     if "blame" in want and all(want["blame"] != g["blame"] for g in same_fn):
@@ -395,13 +414,15 @@ def classify(exp, verify_json, verifier):
         if not actuals:
             return STATUS, "VerifyFailed but no counterexamples emitted"
         # Enforce the EXACT counterexample set: every expected cex must match a
-        # distinct actual, and no surplus actual may remain. Consuming matches
-        # lets a verifier regression that emits an extra bogus counterexample
-        # (on top of the expected one) surface instead of passing silently.
+        # distinct actual, and no surplus actual may remain. Missing expected
+        # cex entries are STATUS diagnostics; wrong blame/vow_id and surplus
+        # actuals remain BLAME diagnostics.
         remaining = list(actuals)
         for want in exp.cex:
             kind, detail, matched = match_cex(want, remaining)
             if kind != "ok":
+                if kind == "missing":
+                    return STATUS, detail
                 return BLAME, detail
             remaining.remove(matched)
         if remaining:
