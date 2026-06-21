@@ -809,6 +809,7 @@ fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<Stri
     if tag == EXPR_WHILE() {
         cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen, bound);
         cx_pred_block(a, expr_b(a, eid), depth + 1, acc, seen, bound);
+        cx_pred_walk_vow(a, expr_c(a, eid), depth + 1, acc, seen, bound);
         return;
     }
     if tag == EXPR_FOR() {
@@ -819,11 +820,15 @@ fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<Stri
             bound.push(arena_str(a, list_get(a, info_lid, 0)));
         }
         cx_pred_block(a, expr_b(a, eid), depth + 1, acc, seen, bound);
+        let mut for_vow: i64 = -1;
+        if list_len(a, info_lid) > 1 { for_vow = list_get(a, info_lid, 1); }
+        cx_pred_walk_vow(a, for_vow, depth + 1, acc, seen, bound);
         bound.truncate(mark);
         return;
     }
     if tag == EXPR_LOOP() {
         cx_pred_block(a, expr_a(a, eid), depth + 1, acc, seen, bound);
+        cx_pred_walk_vow(a, expr_b(a, eid), depth + 1, acc, seen, bound);
         return;
     }
     if tag == EXPR_MATCH() {
@@ -875,6 +880,17 @@ fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<Stri
         let mut i: i64 = 0;
         while i < ne { cx_pred_walk(a, list_get(a, elems_lid, i), depth + 1, acc, seen, bound); i = i + 1; }
         return;
+    }
+}
+
+fn cx_pred_walk_vow(a: AstArena, lid: i64, depth: i64, acc: Vec<i64>, seen: Vec<String>, bound: Vec<String>) {
+    if lid < 0 { return; }
+    let n: i64 = list_len(a, lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let cid: i64 = list_get(a, lid, i);
+        cx_pred_walk(a, vow_clause_expr(a, cid), depth, acc, seen, bound);
+        i = i + 1;
     }
 }
 

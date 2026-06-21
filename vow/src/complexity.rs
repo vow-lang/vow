@@ -1349,7 +1349,7 @@ fn pred_walk(
         ExprKind::While {
             condition,
             body,
-            vow: _, // Invariant blocks belong to body metrics, not this predicate walk.
+            vow,
         } => {
             pred_walk(
                 condition,
@@ -1361,21 +1361,29 @@ fn pred_walk(
                 bound,
             );
             pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            // A loop nested inside a predicate is reached by neither the body
+            // loop-walk nor a separate pass, so its own vow clauses are part of
+            // this predicate's complexity and must be counted here.
+            pred_walk_vow(vow, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::ForEach {
             binding,
             iterable,
             body,
-            ..
+            vow,
         } => {
             pred_walk(iterable, depth + 1, nodes, maxdepth, has_index, seen, bound);
             let mark = bound.len();
             bound.push(binding.clone());
             pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            // Walk vow clauses with the loop binding still in scope so an
+            // invariant referencing it is not mistaken for a free variable.
+            pred_walk_vow(vow, depth + 1, nodes, maxdepth, has_index, seen, bound);
             bound.truncate(mark);
         }
-        ExprKind::Loop { body, .. } => {
+        ExprKind::Loop { body, vow } => {
             pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk_vow(vow, depth + 1, nodes, maxdepth, has_index, seen, bound);
         }
         ExprKind::Match { scrutinee, arms } => {
             pred_walk(
@@ -1426,6 +1434,27 @@ fn pred_walk(
             }
         }
         _ => {}
+    }
+}
+
+fn pred_walk_vow(
+    vow: &Option<VowBlock>,
+    depth: i64,
+    nodes: &mut i64,
+    maxdepth: &mut i64,
+    has_index: &mut bool,
+    seen: &mut HashSet<String>,
+    bound: &mut Vec<String>,
+) {
+    if let Some(vb) = vow {
+        for clause in &vb.clauses {
+            let expr = match clause {
+                VowClause::Requires { expr, .. }
+                | VowClause::Ensures { expr, .. }
+                | VowClause::Invariant { expr, .. } => expr,
+            };
+            pred_walk(expr, depth, nodes, maxdepth, has_index, seen, bound);
+        }
     }
 }
 

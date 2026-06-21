@@ -38,3 +38,9 @@ fn select(c: bool, x: i64, y: i64) -> i64 vow {
 } {
     if c { x } else { y }
 }
+
+fn loop_invariant_pred(xs: Vec<i64>, lo: i64, hi: i64) -> bool vow {
+    requires: { for v in xs vow { invariant: hi >= lo } { v >= 0 }; true }
+} {
+    true
+}
