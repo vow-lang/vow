@@ -27,6 +27,23 @@ class ClassifyCounterexamplesTest(unittest.TestCase):
         self.assertEqual(verify_eval.STATUS, verdict)
         self.assertIn("no counterexample matched", detail)
 
+    def test_wrong_function_counterexample_is_a_status_mismatch(self):
+        exp = verify_eval.Expect(
+            "tests/verify-fail/wrong_function.vow", "VerifyFailed"
+        )
+        exp.cex = [{"fn": "expected", "blame": "caller", "vow_id": 1}]
+        verify_json = {
+            "status": "VerifyFailed",
+            "counterexamples": [
+                {"function": "other", "blame": "Callee", "vow_id": 1},
+            ],
+        }
+
+        verdict, detail = verify_eval.classify(exp, verify_json, verifier="/unused/vow")
+
+        self.assertEqual(verify_eval.STATUS, verdict)
+        self.assertIn("no counterexample matched", detail)
+
     def test_wrong_counterexample_blame_stays_a_blame_regression(self):
         exp = verify_eval.Expect("tests/verify-fail/wrong_blame.vow", "VerifyFailed")
         exp.cex = [{"fn": "f", "blame": "caller", "vow_id": 7}]

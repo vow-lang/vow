@@ -296,7 +296,10 @@ def match_cex(want, actuals):
 
     kind is 'ok' (with the matched actual cex as the third element so the
     caller can consume it and detect surplus), or 'blame'/'vow_id'/'missing'
-    (with detail and a None matched).
+    (with detail and a None matched). "missing" covers both an exhausted
+    actual list after earlier expected cex entries consumed matches, and a
+    non-empty actual list with no same-function match or no clean blame/vow_id
+    mismatch cause.
     """
     # An exact match on every specified field is success.
     for got in actuals:
@@ -310,7 +313,12 @@ def match_cex(want, actuals):
     if not actuals:
         return "missing", f"no counterexample matched {want}", None
     # No exact match: diagnose the closest cause for the same function.
-    same_fn = [g for g in actuals if g["fn"] == want.get("fn")] or actuals
+    if "fn" in want:
+        same_fn = [g for g in actuals if g["fn"] == want["fn"]]
+        if not same_fn:
+            return "missing", f"no counterexample matched {want}", None
+    else:
+        same_fn = actuals
     if "blame" in want and all(want["blame"] != g["blame"] for g in same_fn):
         got = ", ".join(sorted({g["blame"] for g in same_fn}))
         return "blame", f"blame want={want['blame']} got={got or 'none'}", None
