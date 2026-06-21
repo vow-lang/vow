@@ -2394,6 +2394,7 @@ fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64
     out.push_str(String::from("extern void __ESBMC_assert(_Bool, const char*);\n"));
     out.push_str(String::from("extern int __VERIFIER_nondet_int(void);\n"));
     out.push_str(String::from("extern long __VERIFIER_nondet_long(void);\n"));
+    out.push_str(String::from("extern unsigned long __VERIFIER_nondet_unsigned_long(void);\n"));
     out.push_str(String::from("extern float __VERIFIER_nondet_float(void);\n"));
     out.push_str(String::from("extern double __VERIFIER_nondet_double(void);\n"));
     out.push_str(String::from("extern _Bool __VERIFIER_nondet_bool(void);\n\n"));
