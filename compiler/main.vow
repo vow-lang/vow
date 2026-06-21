@@ -726,9 +726,33 @@ fn record_soft_fail(meta: Vec<String>, status: String, message: String, function
 // Compute (function, counterexample) for the VerifyFailed top-level JSON fields.
 // Precondition: status is VerifyFailed (i.e. ces non-empty OR soft_meta has 3 entries).
 // Mirrors Rust's BuildStatus::VerifyFailed { function, description } shape.
-fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>) -> Vec<String> {
+fn verify_function_index(fns: Vec<IrFunction>, name: String) -> i64 {
+    let mut i: i64 = 0;
+    while i < fns.len() {
+        let f: IrFunction = fns[i];
+        if f.name == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    9223372036854775807
+}
+
+fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunction>) -> Vec<String> {
     let result: Vec<String> = Vec::new();
-    if ces.len() > 0 {
+    let prefer_ce: bool = {
+        if ces.len() == 0 {
+            false
+        } else if soft_meta.len() < 3 {
+            true
+        } else {
+            let ce: VerifyCE = ces[0];
+            let ce_idx: i64 = verify_function_index(fns, ce.function);
+            let soft_idx: i64 = verify_function_index(fns, soft_meta[2]);
+            ce_idx <= soft_idx
+        }
+    };
+    if prefer_ce {
         let ce: VerifyCE = ces[0];
         result.push(ce.function);
         let desc: String = String::from("VerifyFailed: ");
@@ -921,7 +945,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     let mut vf_func: String = String::from("");
     let mut vf_ce: String = String::from("");
     if status_str == String::from("VerifyFailed") {
-        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta);
+        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta, fns);
         vf_func = legacy[0];
         vf_ce = legacy[1];
     }
@@ -1153,7 +1177,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let mut vf_func: String = String::from("");
     let mut vf_ce: String = String::from("");
     if status_str == String::from("VerifyFailed") {
-        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta);
+        let legacy: Vec<String> = vf_legacy_fields(ces_final, soft_meta, fns);
         vf_func = legacy[0];
         vf_ce = legacy[1];
     }
@@ -1707,7 +1731,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let mut vf_func_leg: String = String::from("");
             let mut vf_ce_leg: String = String::from("");
             if status_str == String::from("VerifyFailed") {
-                let legacy_leg: Vec<String> = vf_legacy_fields(ces, soft_meta_leg);
+                let legacy_leg: Vec<String> = vf_legacy_fields(ces, soft_meta_leg, fns);
                 vf_func_leg = legacy_leg[0];
                 vf_ce_leg = legacy_leg[1];
             }
