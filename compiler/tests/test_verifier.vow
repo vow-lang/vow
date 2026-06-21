@@ -2,6 +2,7 @@ module TestVerifier
 
 use ir
 use verifier_harness
+use verifier_ids
 
 fn check_known_nondet_calls() -> i64 {
     if esbmc_nondet_call(ITY_I32()) != String::from("__VERIFIER_nondet_int()") { return 1; }
@@ -19,7 +20,12 @@ fn check_known_nondet_calls() -> i64 {
 fn check_unknown_type_fails_loud() -> i64 {
     let call: String = esbmc_nondet_call(9999);
     if call == String::from("0") { return 10; }
-    if !call.contains(String::from("__ESBMC_assert(0, \"vow:4294967295\")")) { return 11; }
+    let expected: String = verifier_harness_str3(
+        String::from("__ESBMC_assert(0, \"vow:"),
+        verifier_unsupported_op_vow_id_str(),
+        String::from("\"")
+    );
+    if !call.contains(expected) { return 11; }
     0
 }
 
