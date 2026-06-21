@@ -27,9 +27,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.13"
       - name: Install dependencies
-        run: pip install -r website/requirements.txt
+        run: python -m pip install --require-hashes -r website/requirements.txt
       - name: Assemble site source from canonical spec
         run: python3 scripts/build_docs_site.py
       - name: Build site (strict)
