@@ -1,0 +1,46 @@
+module PredicateControlFlow
+
+struct Pair {
+    left: i64,
+    right: i64,
+}
+
+enum Bucket {
+    Small(i64),
+    Large(i64),
+}
+
+fn pair_ordered(p: Pair) -> bool {
+    p.left <= p.right
+}
+
+fn bucket_nonneg(b: Bucket) -> bool {
+    true
+}
+
+fn predicate_scopes(xs: Vec<i64>, b: Bucket) -> bool vow {
+    requires: { for v in xs { v >= 0 }; true },
+    requires: match b {
+        Bucket::Small(v) => v >= 0,
+        Bucket::Large(w) => w >= 0,
+    }
+} {
+    true
+}
+
+fn select(c: bool, x: i64, y: i64) -> i64 vow {
+    requires: if c { let sum: i64 = x + y; sum >= x } else { pair_ordered(Pair { left: x, right: y }) },
+    requires: bucket_nonneg(Bucket::Small(y)),
+    ensures: match c {
+        true => { result == x },
+        false => { let z: i64 = y; result == z },
+    }
+} {
+    if c { x } else { y }
+}
+
+fn loop_invariant_pred(xs: Vec<i64>, lo: i64, hi: i64) -> bool vow {
+    requires: { for v in xs vow { invariant: hi >= lo } { v >= 0 }; true }
+} {
+    true
+}

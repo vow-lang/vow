@@ -122,6 +122,12 @@ jobs:
       - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify
+      - name: Verifier-evaluation suite (self-hosted)
+        # Holds the fixed-point self-hosted compiler to the same exact
+        # ground-truth blame/vow_id corpus as the Rust verifier.
+        run: |
+          ulimit -v 2000000
+          python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
 
   # ─── macOS jobs ───────────────────────────────────────────────────
   #

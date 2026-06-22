@@ -468,6 +468,9 @@ fn is_known_builtin(name: &str) -> bool {
 }
 
 fn is_reserved_verifier_symbol(name: &str) -> bool {
+    // User functions are namespaced to `vow_user_fn_<id>` in the emitted C, so a
+    // user symbol named after a libc function (e.g. `abs`) cannot collide with the
+    // stdlib declaration; only the verifier's own intrinsics are truly reserved.
     name.starts_with("__ESBMC_") || name.starts_with("__VERIFIER_")
 }
 
@@ -826,6 +829,7 @@ fn emit_inst(
     module: &Module,
     limits: &VerifyLimits,
     func_return_ty: Ty,
+    current_func_id: FuncId,
     requires_as_assert: bool,
 ) {
     let id = inst.id.0;
@@ -1021,12 +1025,17 @@ fn emit_inst(
                 // it (requires → Caller blame). Asserting it here — rather than
                 // assuming it — is what makes a caller that passes a violating
                 // argument fail, instead of injecting `assume(false)` and
-                // vacuously verifying the rest of the caller's body. The label is
-                // the reserved CALLER_PRECONDITION sentinel, not the callee's
-                // function-local vow id (which would collide with the target's).
+                // vacuously verifying the rest of the caller's body. The label
+                // carries both the callee function id and the callee-local vow id
+                // so diagnostics can resolve the exact precondition without
+                // colliding with the target function's vow ids.
+                let vow_id = match inst.data {
+                    InstData::VowId(v) => v.0,
+                    _ => 0,
+                };
                 out.push_str(&format!(
-                    "  __ESBMC_assert(v{}, \"vow:{}\");\n",
-                    pred, CALLER_PRECONDITION_VOW_ID
+                    "  __ESBMC_assert(v{}, \"vow:pre:{}:{}\");\n",
+                    pred, current_func_id.0, vow_id
                 ));
             } else {
                 // Target function precondition: assumed for the function under
@@ -2124,6 +2133,7 @@ pub fn emit_c_function_full(
                 module,
                 limits,
                 func.return_ty,
+                func.id,
                 requires_as_assert,
             );
             if reach_after == Some(inst.id.0) {
@@ -2159,6 +2169,7 @@ pub fn emit_c_function_full(
                 module,
                 limits,
                 func.return_ty,
+                func.id,
                 requires_as_assert,
             );
         }
@@ -2593,6 +2604,40 @@ mod tests {
     }
 
     #[test]
+    fn libc_named_user_function_is_modelable() {
+        // A user function named like a libc/ESBMC stdlib symbol (`abs`) must
+        // still be modeled: it is emitted under a mangled `vow_user_fn_<id>`
+        // name, so it cannot collide with ESBMC's C stdlib model. Regression
+        // test for the `verify/libc_name_collision` verifier-eval fixture.
+        let func = make_func(
+            "abs",
+            vec![Ty::I64],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![func.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        assert_eq!(
+            non_modelable_reason(&func, &module, &HashMap::new()),
+            None,
+            "a libc-named user function should be modelable, not skipped as reserved"
+        );
+        // The genuine ESBMC/verifier intrinsic namespaces remain reserved.
+        assert!(is_reserved_verifier_symbol("__VERIFIER_nondet_int"));
+        assert!(is_reserved_verifier_symbol("__ESBMC_assume"));
+        assert!(!is_reserved_verifier_symbol("abs"));
+    }
+
+    #[test]
     fn emit_string_matches_literal_at_uses_static_bytes() {
         let func = Function {
             id: FuncId(0),
@@ -2706,6 +2751,72 @@ mod tests {
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assume(v3)"), "requires: {c}");
         assert!(!c.contains("__ESBMC_assert"), "no assert for requires: {c}");
+    }
+
+    #[test]
+    fn emit_callee_requires_as_structured_precondition_assert() {
+        let func = Function {
+            id: FuncId(7),
+            name: "divide".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(2),
+                description: "y != 0".to_string(),
+                blame: Blame::Caller,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::NeI64, Ty::Bool, vec![1, 2], InstData::None),
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::VowRequires,
+                        ty: Ty::Unit,
+                        args: vec![InstId(3)],
+                        data: InstData::VowId(VowId(2)),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(5, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: String::new(),
+            functions: vec![],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+            false,
+            false,
+            true,
+        );
+
+        assert!(
+            c.contains("__ESBMC_assert(v3, \"vow:pre:7:2\")"),
+            "callee requires assert should carry function-local disambiguation:\n{c}"
+        );
     }
 
     #[test]
@@ -6529,6 +6640,7 @@ mod tests {
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
+            FuncId(0),
             false,
         );
         assert!(out.contains("v5 = 42LL;"), "inlined constant: {out}");
@@ -6570,6 +6682,7 @@ mod tests {
             &empty_module,
             &VerifyLimits::default(),
             Ty::I64,
+            FuncId(0),
             false,
         );
         assert!(

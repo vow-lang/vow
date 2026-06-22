@@ -2877,18 +2877,25 @@ that path produces `Unverified` (exit 0).
   "counterexamples": [
     {
       "function": "safe_sub",
-      "inputs": { "a": "-9223372036854775808", "b": "0" },
+      "values": { "a": "-9223372036854775808", "b": "0" },
       "violation": "ensures result >= 0",
       "vow_id": 1,
       "source": {
         "file": "examples/cegis_broken.vow",
         "offset": 76,
         "length": 20
-      }
+      },
+      "blame": "callee"
     }
   ]
 }
 ```
+
+For caller-blame failures where a verified function violates a callee's
+`requires` clause, the counterexample reports the callee clause in `violation`
+and `vow_id`, and includes the caller expression in `call_sites`. When the
+callee precondition binds a parameter, `violating_args` names the callee
+parameter, the counterexample value when available, and the caller argument span.
 
 ### Fields Reference
 
@@ -3446,20 +3453,27 @@ A counterexample in the JSON output:
 ```json
 {
   "function": "safe_sub",
-  "inputs": { "a": "-9223372036854775808", "b": "0" },
+  "values": { "a": "-9223372036854775808", "b": "0" },
   "violation": "ensures result >= 0",
   "vow_id": 1,
-  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 }
+  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 },
+  "blame": "callee"
 }
 ```
 
-| Field       | Meaning                                                |
-|-------------|--------------------------------------------------------|
-| `function`  | Which function failed                                  |
-| `inputs`    | Parameter values that trigger the violation            |
-| `violation` | Which contract clause was violated                     |
-| `vow_id`    | Internal ID linking to the specific vow clause         |
-| `source`    | Byte offset in the source file of the violated clause  |
+| Field       | Meaning                                                        |
+|-------------|----------------------------------------------------------------|
+| `function`  | Which function's verification query failed                     |
+| `values`    | Source or ESBMC variable values in the counterexample           |
+| `violation` | Which contract clause was violated                             |
+| `vow_id`    | Function-local ID linking to the specific vow clause            |
+| `source`    | Byte offset in the source file of the violated clause           |
+| `blame`     | Whether the caller, callee, or neither party is responsible     |
+
+When caller code violates a callee's `requires` clause, `violation` and
+`vow_id` identify the callee clause. `call_sites` points back to the caller
+expression, and `violating_args` identifies the callee parameter and caller
+argument span when Vow can recover it.
 
 Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
 
@@ -5628,25 +5642,25 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "title": "Counterexample",
   "description": "A structured counterexample from ESBMC verification failure",
   "type": "object",
-  "required": ["function", "inputs", "violation", "vow_id", "source"],
+  "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
     "function": {
       "type": "string",
-      "description": "Name of the function where verification failed"
+      "description": "Name of the function whose verification query failed"
     },
-    "inputs": {
+    "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of parameter names to counterexample values"
+      "description": "Map of source names or ESBMC variable names to counterexample values"
     },
     "violation": {
       "type": "string",
-      "description": "Description of the violated contract"
+      "description": "Description of the violated contract clause"
     },
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Numeric ID of the violated vow (matches vow_id in VowViolation)"
+      "description": "Function-local ID of the violated vow clause"
     },
     "source": {
       "oneOf": [
@@ -5660,18 +5674,80 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "additionalProperties": false
         },
+        { "type": "string" },
         { "type": "null" }
       ],
-      "description": "Source location of the violated vow clause, or null"
+      "description": "Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["caller", "callee", "none"],
+      "description": "Who is responsible for the violation"
+    },
+    "call_sites": {
+      "type": "array",
+      "description": "Caller locations relevant to caller-blame failures",
+      "items": {
+        "type": "object",
+        "required": ["caller_function", "file", "offset", "length"],
+        "properties": {
+          "caller_function": { "type": "string" },
+          "file": { "type": "string" },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "violating_args": {
+      "type": "array",
+      "description": "Callee parameters and caller argument spans for caller-blame precondition failures",
+      "items": {
+        "type": "object",
+        "required": ["param", "value", "arg_offset", "arg_length"],
+        "properties": {
+          "param": { "type": "string" },
+          "value": { "type": "string" },
+          "arg_offset": { "type": "integer", "minimum": 0 },
+          "arg_length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "execution_path": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["block_id", "offset", "length"],
+        "properties": {
+          "block_id": { "type": "integer", "minimum": 0 },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "branch_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["condition_offset", "condition_length", "taken"],
+        "properties": {
+          "condition_offset": { "type": "integer", "minimum": 0 },
+          "condition_length": { "type": "integer", "minimum": 0 },
+          "taken": { "type": "string", "enum": ["then", "else"] }
+        },
+        "additionalProperties": false
+      }
     },
     "replay": {
       "type": "string",
       "enum": ["confirmed", "diverged", "skipped"],
-      "description": "Differential-test outcome (present only with --replay-cex): whether a debug-mode harness replaying the counterexample's concrete inputs fired the same VowViolation (vow_id + blame). Not part of the soundness proof."
+      "description": "Differential-test outcome, present only with --replay-cex"
     },
     "replay_reason": {
       "type": "string",
-      "description": "Human-readable explanation for a diverged or skipped replay (present only with --replay-cex when replay is not confirmed)"
+      "description": "Human-readable explanation for a diverged or skipped replay"
     }
   },
   "additionalProperties": false
@@ -7294,18 +7370,25 @@ that path produces `Unverified` (exit 0).
   "counterexamples": [
     {
       "function": "safe_sub",
-      "inputs": { "a": "-9223372036854775808", "b": "0" },
+      "values": { "a": "-9223372036854775808", "b": "0" },
       "violation": "ensures result >= 0",
       "vow_id": 1,
       "source": {
         "file": "examples/cegis_broken.vow",
         "offset": 76,
         "length": 20
-      }
+      },
+      "blame": "callee"
     }
   ]
 }
 ```
+
+For caller-blame failures where a verified function violates a callee's
+`requires` clause, the counterexample reports the callee clause in `violation`
+and `vow_id`, and includes the caller expression in `call_sites`. When the
+callee precondition binds a parameter, `violating_args` names the callee
+parameter, the counterexample value when available, and the caller argument span.
 
 ### Fields Reference
 
@@ -7864,20 +7947,27 @@ A counterexample in the JSON output:
 ```json
 {
   "function": "safe_sub",
-  "inputs": { "a": "-9223372036854775808", "b": "0" },
+  "values": { "a": "-9223372036854775808", "b": "0" },
   "violation": "ensures result >= 0",
   "vow_id": 1,
-  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 }
+  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 },
+  "blame": "callee"
 }
 ```
 
-| Field       | Meaning                                                |
-|-------------|--------------------------------------------------------|
-| `function`  | Which function failed                                  |
-| `inputs`    | Parameter values that trigger the violation            |
-| `violation` | Which contract clause was violated                     |
-| `vow_id`    | Internal ID linking to the specific vow clause         |
-| `source`    | Byte offset in the source file of the violated clause  |
+| Field       | Meaning                                                        |
+|-------------|----------------------------------------------------------------|
+| `function`  | Which function's verification query failed                     |
+| `values`    | Source or ESBMC variable values in the counterexample           |
+| `violation` | Which contract clause was violated                             |
+| `vow_id`    | Function-local ID linking to the specific vow clause            |
+| `source`    | Byte offset in the source file of the violated clause           |
+| `blame`     | Whether the caller, callee, or neither party is responsible     |
+
+When caller code violates a callee's `requires` clause, `violation` and
+`vow_id` identify the callee clause. `call_sites` points back to the caller
+expression, and `violating_args` identifies the callee parameter and caller
+argument span when Vow can recover it.
 
 Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
 
@@ -10043,25 +10133,25 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "title": "Counterexample",
   "description": "A structured counterexample from ESBMC verification failure",
   "type": "object",
-  "required": ["function", "inputs", "violation", "vow_id", "source"],
+  "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
     "function": {
       "type": "string",
-      "description": "Name of the function where verification failed"
+      "description": "Name of the function whose verification query failed"
     },
-    "inputs": {
+    "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of parameter names to counterexample values"
+      "description": "Map of source names or ESBMC variable names to counterexample values"
     },
     "violation": {
       "type": "string",
-      "description": "Description of the violated contract"
+      "description": "Description of the violated contract clause"
     },
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Numeric ID of the violated vow (matches vow_id in VowViolation)"
+      "description": "Function-local ID of the violated vow clause"
     },
     "source": {
       "oneOf": [
@@ -10075,18 +10165,80 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "additionalProperties": false
         },
+        { "type": "string" },
         { "type": "null" }
       ],
-      "description": "Source location of the violated vow clause, or null"
+      "description": "Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["caller", "callee", "none"],
+      "description": "Who is responsible for the violation"
+    },
+    "call_sites": {
+      "type": "array",
+      "description": "Caller locations relevant to caller-blame failures",
+      "items": {
+        "type": "object",
+        "required": ["caller_function", "file", "offset", "length"],
+        "properties": {
+          "caller_function": { "type": "string" },
+          "file": { "type": "string" },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "violating_args": {
+      "type": "array",
+      "description": "Callee parameters and caller argument spans for caller-blame precondition failures",
+      "items": {
+        "type": "object",
+        "required": ["param", "value", "arg_offset", "arg_length"],
+        "properties": {
+          "param": { "type": "string" },
+          "value": { "type": "string" },
+          "arg_offset": { "type": "integer", "minimum": 0 },
+          "arg_length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "execution_path": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["block_id", "offset", "length"],
+        "properties": {
+          "block_id": { "type": "integer", "minimum": 0 },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "branch_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["condition_offset", "condition_length", "taken"],
+        "properties": {
+          "condition_offset": { "type": "integer", "minimum": 0 },
+          "condition_length": { "type": "integer", "minimum": 0 },
+          "taken": { "type": "string", "enum": ["then", "else"] }
+        },
+        "additionalProperties": false
+      }
     },
     "replay": {
       "type": "string",
       "enum": ["confirmed", "diverged", "skipped"],
-      "description": "Differential-test outcome (present only with --replay-cex): whether a debug-mode harness replaying the counterexample's concrete inputs fired the same VowViolation (vow_id + blame). Not part of the soundness proof."
+      "description": "Differential-test outcome, present only with --replay-cex"
     },
     "replay_reason": {
       "type": "string",
-      "description": "Human-readable explanation for a diverged or skipped replay (present only with --replay-cex when replay is not confirmed)"
+      "description": "Human-readable explanation for a diverged or skipped replay"
     }
   },
   "additionalProperties": false
@@ -11043,36 +11195,280 @@ fn map_counterexample_values(
         .collect()
 }
 
+fn call_site_args_match_counterexample(
+    callee: &vow_ir::Function,
+    entry: &vow_ir::VowEntry,
+    mapped_values: &[(String, String)],
+    call_site: &CallSiteInfo,
+) -> bool {
+    let mut matched_binding = false;
+    for (binding_name, _) in &entry.bindings {
+        let Some(param_idx) = callee.param_names.iter().position(|n| n == binding_name) else {
+            return false;
+        };
+        let Some((_, expected_value)) = mapped_values
+            .iter()
+            .find(|(name, value)| name == binding_name && !value.is_empty())
+        else {
+            return false;
+        };
+        let Some(Some(actual_value)) = call_site.arg_values.get(param_idx) else {
+            return false;
+        };
+        if actual_value != expected_value {
+            return false;
+        }
+        matched_binding = true;
+    }
+    matched_binding
+}
+
+fn callee_precondition_predicate_inst_id(
+    callee: &vow_ir::Function,
+    entry: &vow_ir::VowEntry,
+) -> Option<u32> {
+    use vow_ir::{InstData, Opcode};
+    for block in &callee.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::VowRequires
+                && let InstData::VowId(id) = inst.data
+                && id == entry.id
+            {
+                return inst.args.first().map(|arg| arg.0);
+            }
+        }
+    }
+    None
+}
+
+fn eval_callee_i64_for_call_site(
+    inst_id: u32,
+    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
+    call_site: &CallSiteInfo,
+) -> Option<i64> {
+    use vow_ir::{InstData, Opcode};
+    let inst = *inst_by_id.get(&inst_id)?;
+    match inst.opcode {
+        Opcode::ConstI32 => {
+            if let InstData::ConstI32(v) = inst.data {
+                Some(v as i64)
+            } else {
+                None
+            }
+        }
+        Opcode::ConstI64 => {
+            if let InstData::ConstI64(v) = inst.data {
+                Some(v)
+            } else {
+                None
+            }
+        }
+        Opcode::ConstU64 => {
+            if let InstData::ConstU64(v) = inst.data {
+                i64::try_from(v).ok()
+            } else {
+                None
+            }
+        }
+        Opcode::GetArg => {
+            if let InstData::ArgIndex(idx) = inst.data {
+                call_site
+                    .arg_values
+                    .get(idx as usize)?
+                    .as_ref()?
+                    .parse::<i64>()
+                    .ok()
+            } else {
+                None
+            }
+        }
+        Opcode::WrappingAddI32
+        | Opcode::CheckedAddI32
+        | Opcode::WrappingAddI64
+        | Opcode::CheckedAddI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs.wrapping_add(rhs))
+        }
+        Opcode::WrappingSubI32
+        | Opcode::CheckedSubI32
+        | Opcode::WrappingSubI64
+        | Opcode::CheckedSubI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs.wrapping_sub(rhs))
+        }
+        Opcode::WrappingMulI32
+        | Opcode::CheckedMulI32
+        | Opcode::WrappingMulI64
+        | Opcode::CheckedMulI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs.wrapping_mul(rhs))
+        }
+        _ => None,
+    }
+}
+
+fn eval_callee_bool_for_call_site(
+    inst_id: u32,
+    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
+    call_site: &CallSiteInfo,
+) -> Option<bool> {
+    use vow_ir::{InstData, Opcode};
+    let inst = *inst_by_id.get(&inst_id)?;
+    match inst.opcode {
+        Opcode::ConstBool => {
+            if let InstData::ConstBool(v) = inst.data {
+                Some(v)
+            } else {
+                None
+            }
+        }
+        Opcode::GetArg => {
+            if let InstData::ArgIndex(idx) = inst.data {
+                match call_site.arg_values.get(idx as usize)?.as_deref()? {
+                    "true" => Some(true),
+                    "false" => Some(false),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        Opcode::EqI32 | Opcode::EqI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs == rhs)
+        }
+        Opcode::NeI32 | Opcode::NeI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs != rhs)
+        }
+        Opcode::LtI32 | Opcode::LtI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs < rhs)
+        }
+        Opcode::LeI32 | Opcode::LeI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs <= rhs)
+        }
+        Opcode::GtI32 | Opcode::GtI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs > rhs)
+        }
+        Opcode::GeI32 | Opcode::GeI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs >= rhs)
+        }
+        Opcode::Not => {
+            let value =
+                eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            Some(!value)
+        }
+        Opcode::And => {
+            let lhs = eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_bool_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs && rhs)
+        }
+        Opcode::Or => {
+            let lhs = eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_bool_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs || rhs)
+        }
+        _ => None,
+    }
+}
+
+fn filter_callee_precondition_call_sites(
+    candidates: Vec<CallSiteInfo>,
+    callee: &vow_ir::Function,
+    entry: &vow_ir::VowEntry,
+    mapped_values: &[(String, String)],
+) -> Vec<CallSiteInfo> {
+    let inst_by_id: std::collections::HashMap<u32, &vow_ir::Inst> = callee
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .map(|inst| (inst.id.0, inst))
+        .collect();
+    let predicate_inst_id = callee_precondition_predicate_inst_id(callee, entry);
+    let exact_matches: Vec<CallSiteInfo> = candidates
+        .iter()
+        .filter(|cs| {
+            call_site_args_match_counterexample(callee, entry, mapped_values, cs)
+                || predicate_inst_id
+                    .and_then(|id| eval_callee_bool_for_call_site(id, &inst_by_id, cs))
+                    == Some(false)
+        })
+        .cloned()
+        .collect();
+    if exact_matches.is_empty() {
+        candidates
+    } else {
+        exact_matches
+    }
+}
+
+#[cfg(test)]
 fn build_structured_counterexample(
     func: &vow_ir::Function,
     ce: &Counterexample,
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
 ) -> StructuredCounterexample {
+    build_structured_counterexample_with_module(func, None, ce, file, call_site_index)
+}
+
+fn build_structured_counterexample_with_module(
+    func: &vow_ir::Function,
+    module: Option<&vow_ir::Module>,
+    ce: &Counterexample,
+    file: &str,
+    call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
+) -> StructuredCounterexample {
     use vow_ir::InstData;
     let vid = ce.vow_id.unwrap_or(0);
+    let resolved_callee_precondition = ce.callee_precondition.and_then(|pre| {
+        let module = module?;
+        let callee = module.functions.iter().find(|f| f.id.0 == pre.func_id)?;
+        let entry = callee.vows.iter().find(|v| v.id.0 == pre.vow_id)?;
+        Some((callee, entry))
+    });
+
     // ESBMC tripped a fail-closed assertion that vow-verify's c_emitter inserts
     // for opcodes the verifier model does not handle. The sentinel id is
     // reserved and never matches a user-authored vow, so synthesize a
     // diagnostic that an agent can act on instead of letting the code below
     // fall through to the generic "unmatched id" path.
     let unsupported_op = ce.vow_id == Some(UNSUPPORTED_OP_VOW_ID);
-    // A co-emitted callee's `requires` was violated by this caller. The sentinel
-    // id deliberately does not match any vow in `func`, so synthesize a
-    // Caller-blamed precondition diagnostic rather than mis-resolving it to the
-    // target function's vow of the same local index.
-    let caller_precondition = ce.vow_id == Some(CALLER_PRECONDITION_VOW_ID);
-    let vow_entry = ce
-        .vow_id
-        .and_then(|id| func.vows.iter().find(|v| v.id.0 == id));
+    // A co-emitted callee's `requires` was violated by this caller. New C labels
+    // carry the callee function id and callee-local vow id; keep the old
+    // sentinel branch for stale cache entries or older verifier output.
+    let caller_precondition =
+        ce.callee_precondition.is_some() || ce.vow_id == Some(CALLER_PRECONDITION_VOW_ID);
+    let vow_func = resolved_callee_precondition
+        .map(|(callee, _)| callee)
+        .unwrap_or(func);
+    let vow_entry = resolved_callee_precondition
+        .map(|(_, entry)| entry)
+        .or_else(|| {
+            ce.vow_id
+                .and_then(|id| func.vows.iter().find(|v| v.id.0 == id))
+        });
     let violation = if unsupported_op {
         "function uses side-effecting operations not supported for verification".to_string()
+    } else if let Some(entry) = vow_entry {
+        entry.description.clone()
     } else if caller_precondition {
         "callee precondition violated by the caller".to_string()
     } else {
-        vow_entry
-            .map(|v| v.description.clone())
-            .unwrap_or_else(|| ce.description.clone())
+        ce.description.clone()
     };
     let blame = if caller_precondition {
         "caller".to_string()
@@ -11086,18 +11482,45 @@ fn build_structured_counterexample(
             .unwrap_or("none")
             .to_string()
     };
-    let source = ce
-        .vow_id
-        .and_then(|id| find_vow_span(func, id))
-        .map(|span| CeSource {
-            file: file.to_string(),
-            offset: span.start,
-            length: span.len,
-        });
-    let name_map = build_c_to_source_name_map(func);
+    let source = if unsupported_op {
+        None
+    } else {
+        vow_entry.and_then(|entry| {
+            find_vow_span(vow_func, entry.id.0).map(|span| {
+                let source_file = if !entry.file.is_empty() {
+                    entry.file.clone()
+                } else if !vow_func.source_file.is_empty() {
+                    vow_func.source_file.clone()
+                } else {
+                    file.to_string()
+                };
+                CeSource {
+                    file: source_file,
+                    offset: span.start,
+                    length: span.len,
+                }
+            })
+        })
+    };
+    let value_func = vow_func;
+    let name_map = build_c_to_source_name_map(value_func);
     let mapped_values = map_counterexample_values(&ce.values, &name_map);
-    let sites_raw = if blame == "caller" {
-        call_site_index.get(&func.name).cloned().unwrap_or_default()
+    let sites_raw: Vec<CallSiteInfo> = if blame == "caller" {
+        if let Some((callee, entry)) = resolved_callee_precondition {
+            let candidates = call_site_index
+                .get(&callee.name)
+                .map(|sites| {
+                    sites
+                        .iter()
+                        .filter(|cs| cs.caller_function == func.name)
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            filter_callee_precondition_call_sites(candidates, callee, entry, &mapped_values)
+        } else {
+            call_site_index.get(&func.name).cloned().unwrap_or_default()
+        }
     } else {
         vec![]
     };
@@ -11116,17 +11539,29 @@ fn build_structured_counterexample(
         if let Some(entry) = vow_entry {
             let mut args = Vec::new();
             for (binding_name, _inst_id) in &entry.bindings {
-                if let Some(param_idx) = func.param_names.iter().position(|n| n == binding_name) {
-                    let value = mapped_values
+                if let Some(param_idx) = value_func
+                    .param_names
+                    .iter()
+                    .position(|n| n == binding_name)
+                {
+                    let mapped_value = mapped_values
                         .iter()
                         .find(|(n, _)| n == binding_name)
                         .map(|(_, v)| v.clone())
                         .unwrap_or_default();
                     for cs in &sites_raw {
                         if let Some(&(off, len)) = cs.arg_spans.get(param_idx) {
+                            let value = if mapped_value.is_empty() {
+                                cs.arg_values
+                                    .get(param_idx)
+                                    .and_then(|v| v.clone())
+                                    .unwrap_or_default()
+                            } else {
+                                mapped_value.clone()
+                            };
                             args.push(CeViolatingArg {
                                 param: binding_name.clone(),
-                                value: value.clone(),
+                                value,
                                 arg_offset: off,
                                 arg_length: len,
                             });
@@ -11832,6 +12267,91 @@ struct CallSiteInfo {
     offset: u32,
     length: u32,
     arg_spans: Vec<(u32, u32)>,
+    arg_values: Vec<Option<String>>,
+}
+
+fn inst_constant_value_for_counterexample(inst: &vow_ir::Inst) -> Option<String> {
+    use vow_ir::{InstData, Opcode};
+    match inst.opcode {
+        Opcode::ConstI32 => {
+            if let InstData::ConstI32(v) = inst.data {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        }
+        Opcode::ConstI64 => {
+            if let InstData::ConstI64(v) = inst.data {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        }
+        Opcode::ConstU64 => {
+            if let InstData::ConstU64(v) = inst.data {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        }
+        Opcode::ConstBool => {
+            if let InstData::ConstBool(v) = inst.data {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn eval_const_i64_for_counterexample(
+    inst_id: u32,
+    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
+) -> Option<i64> {
+    use vow_ir::{InstData, Opcode};
+    let inst = *inst_by_id.get(&inst_id)?;
+    match inst.opcode {
+        Opcode::ConstI32 => {
+            if let InstData::ConstI32(v) = inst.data {
+                Some(v as i64)
+            } else {
+                None
+            }
+        }
+        Opcode::ConstI64 => {
+            if let InstData::ConstI64(v) = inst.data {
+                Some(v)
+            } else {
+                None
+            }
+        }
+        Opcode::WrappingAddI32
+        | Opcode::CheckedAddI32
+        | Opcode::WrappingAddI64
+        | Opcode::CheckedAddI64 => {
+            let lhs = eval_const_i64_for_counterexample(inst.args.first()?.0, inst_by_id)?;
+            let rhs = eval_const_i64_for_counterexample(inst.args.get(1)?.0, inst_by_id)?;
+            Some(lhs.wrapping_add(rhs))
+        }
+        Opcode::WrappingSubI32
+        | Opcode::CheckedSubI32
+        | Opcode::WrappingSubI64
+        | Opcode::CheckedSubI64 => {
+            let lhs = eval_const_i64_for_counterexample(inst.args.first()?.0, inst_by_id)?;
+            let rhs = eval_const_i64_for_counterexample(inst.args.get(1)?.0, inst_by_id)?;
+            Some(lhs.wrapping_sub(rhs))
+        }
+        Opcode::WrappingMulI32
+        | Opcode::CheckedMulI32
+        | Opcode::WrappingMulI64
+        | Opcode::CheckedMulI64 => {
+            let lhs = eval_const_i64_for_counterexample(inst.args.first()?.0, inst_by_id)?;
+            let rhs = eval_const_i64_for_counterexample(inst.args.get(1)?.0, inst_by_id)?;
+            Some(lhs.wrapping_mul(rhs))
+        }
+        _ => None,
+    }
 }
 
 fn build_call_site_index(
@@ -11855,6 +12375,12 @@ fn build_call_site_index(
             .flat_map(|b| b.insts.iter())
             .map(|i| (i.id.0, i.origin))
             .collect();
+        let inst_by_id: std::collections::HashMap<u32, &vow_ir::Inst> = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .map(|i| (i.id.0, i))
+            .collect();
 
         for block in &func.blocks {
             for inst in &block.insts {
@@ -11872,6 +12398,19 @@ fn build_call_site_index(
                                 .unwrap_or((0, 0))
                         })
                         .collect();
+                    let arg_values: Vec<Option<String>> = inst
+                        .args
+                        .iter()
+                        .map(|a| {
+                            eval_const_i64_for_counterexample(a.0, &inst_by_id)
+                                .map(|v| v.to_string())
+                                .or_else(|| {
+                                    inst_by_id.get(&a.0).and_then(|inst| {
+                                        inst_constant_value_for_counterexample(inst)
+                                    })
+                                })
+                        })
+                        .collect();
                     index
                         .entry(callee_name.to_string())
                         .or_default()
@@ -11881,6 +12420,7 @@ fn build_call_site_index(
                             offset: inst.origin.start,
                             length: inst.origin.len,
                             arg_spans,
+                            arg_values,
                         });
                 }
             }
@@ -12017,6 +12557,7 @@ fn verify_one_function(
                     &store_key,
                     &CachedFailure {
                         vow_id: ce.vow_id,
+                        callee_precondition: ce.callee_precondition,
                         description: ce.description.clone(),
                         values: ce.values.clone(),
                         block_visits: ce.block_visits.clone(),
@@ -12039,7 +12580,13 @@ fn verify_one_function(
 
     match result {
         VerificationResult::Failed(ce) => {
-            let sce = build_structured_counterexample(func, &ce, file, call_site_index);
+            let sce = build_structured_counterexample_with_module(
+                func,
+                Some(ir_module),
+                &ce,
+                file,
+                call_site_index,
+            );
             PerFuncResult::Halt(VerifyOutcome::Failed {
                 function: func.name.clone(),
                 description: ce.description.clone(),
@@ -14685,6 +15232,44 @@ fn main() -> i32 [io] {
     }
 
     #[test]
+    fn generated_vow_skill_support_uses_indexed_lookup() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("CARGO_MANIFEST_DIR has a parent");
+        let compiler_main = repo_root.join("compiler/main.vow");
+        let source = std::fs::read_to_string(&compiler_main).expect("compiler/main.vow must exist");
+
+        assert!(source.contains("fn skill_support_count() -> i64"));
+        assert!(source.contains("fn skill_support_path(index: i64) -> String vow {"));
+        assert!(source.contains("fn skill_support_content_index_guard(index: i64) vow {"));
+        assert!(source.contains("fn skill_support_content(index: i64) -> String {"));
+        assert!(source.contains("    skill_support_content_index_guard(index);"));
+        assert_eq!(
+            source
+                .matches("requires: index >= 0 && index < skill_support_count()")
+                .count(),
+            2,
+            "indexed support lookup contracts should guard path lookup and content access"
+        );
+        assert!(
+            !source.contains("fn skill_support_paths() -> Vec<String>"),
+            "generated Vow should expose indexed path lookup, not a path vector"
+        );
+        assert!(
+            !source.contains("fn skill_support_content_0()"),
+            "generated Vow support helpers should not be numbered by bundle position"
+        );
+        assert!(
+            source.contains("fn skill_support_content_reference_grammar_md_92418de9() -> String {"),
+            "generated Vow content helpers should use stable path-derived names with an 8-char hash suffix"
+        );
+        assert!(
+            !source.contains("fn skill_support_contents() -> Vec<String>"),
+            "generated Vow should stream support contents by index during install"
+        );
+    }
+
+    #[test]
     fn auto_install_skill_skips_when_no_claude_dir() {
         let dir = TempDir::new().unwrap();
         maybe_auto_install_skill(dir.path());
@@ -17102,6 +17687,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "y != 0".to_string(),
             vow_id: Some(0),
+            callee_precondition: None,
             values: vec![
                 ("p0".to_string(), "10".to_string()),
                 ("p1".to_string(), "0".to_string()),
@@ -17119,6 +17705,7 @@ fn main() -> i32 {
                 offset: 120,
                 length: 18,
                 arg_spans: vec![],
+                arg_values: vec![],
             }],
         );
 
@@ -17169,6 +17756,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "[Counterexample]".to_string(),
             vow_id: Some(UNSUPPORTED_OP_VOW_ID),
+            callee_precondition: None,
             values: vec![],
             block_visits: vec![],
             raw_output: String::new(),
@@ -17231,6 +17819,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "result == x + x".to_string(),
             vow_id: Some(0),
+            callee_precondition: None,
             values: vec![("p0".to_string(), "5".to_string())],
             block_visits: vec![0],
             raw_output: String::new(),
@@ -17245,6 +17834,7 @@ fn main() -> i32 {
                 offset: 100,
                 length: 10,
                 arg_spans: vec![],
+                arg_values: vec![],
             }],
         );
 
@@ -17513,6 +18103,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
             vow_id: Some(0),
+            callee_precondition: None,
             values: vec![
                 ("p0".to_string(), "10".to_string()),
                 ("p1".to_string(), "0".to_string()),
@@ -17529,6 +18120,7 @@ fn main() -> i32 {
                 offset: 50,
                 length: 15,
                 arg_spans: vec![(55, 2), (59, 1)],
+                arg_values: vec![Some("10".to_string()), Some("0".to_string())],
             }],
         );
         let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_site_index);
@@ -17538,6 +18130,433 @@ fn main() -> i32 {
         assert_eq!(sce.violating_args[0].value, "0");
         assert_eq!(sce.violating_args[0].arg_offset, 59);
         assert_eq!(sce.violating_args[0].arg_length, 1);
+    }
+
+    #[test]
+    fn callee_precondition_counterexample_resolves_callee_contract_and_current_call_site() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+
+        let callee = Function {
+            id: FuncId(7),
+            name: "g".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec!["x".to_string(), "y".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![
+                VowEntry {
+                    id: VowId(0),
+                    description: "x > 0".to_string(),
+                    blame: vow_diag::Blame::Caller,
+                    bindings: vec![("x".to_string(), InstId(0))],
+                    file: "test.vow".to_string(),
+                    offset: 20,
+                },
+                VowEntry {
+                    id: VowId(1),
+                    description: "requires y != 0".to_string(),
+                    blame: vow_diag::Blame::Caller,
+                    bindings: vec![("y".to_string(), InstId(1))],
+                    file: "test.vow".to_string(),
+                    offset: 30,
+                },
+            ],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(10, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(1),
+                        origin: Span::new(12, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::VowRequires,
+                        ty: Ty::Unit,
+                        args: vec![InstId(1)],
+                        data: InstData::VowId(VowId(1)),
+                        origin: Span::new(30, 15),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::None,
+                        origin: Span::new(50, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let target = Function {
+            id: FuncId(1),
+            name: "f".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(10),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(1),
+                        origin: Span::new(100, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(11),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(103, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(12),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(10), InstId(11)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(95, 12),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(13),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(12)],
+                        data: InstData::None,
+                        origin: Span::new(110, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let other_caller = Function {
+            id: FuncId(2),
+            name: "h".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(20),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(1),
+                        origin: Span::new(200, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(21),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(203, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(22),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(20), InstId(21)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(195, 12),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(23),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(22)],
+                        data: InstData::None,
+                        origin: Span::new(210, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![callee, target.clone(), other_caller],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let call_site_index = build_call_site_index(&module, "test.vow");
+        let ce = vow_verify::Counterexample {
+            description: "raw".to_string(),
+            vow_id: Some(1),
+            callee_precondition: Some(vow_verify::CalleePrecondition {
+                func_id: 7,
+                vow_id: 1,
+            }),
+            values: vec![
+                ("p0".to_string(), "1".to_string()),
+                ("p1".to_string(), "0".to_string()),
+            ],
+            block_visits: vec![0],
+            raw_output: String::new(),
+        };
+
+        let sce = build_structured_counterexample_with_module(
+            &target,
+            Some(&module),
+            &ce,
+            "test.vow",
+            &call_site_index,
+        );
+
+        assert_eq!(sce.function, "f");
+        assert_eq!(sce.blame, "caller");
+        assert_eq!(sce.vow_id, 1);
+        assert_eq!(sce.violation, "requires y != 0");
+        assert_eq!(sce.source.as_ref().map(|s| s.offset), Some(30));
+        assert_eq!(sce.source.as_ref().map(|s| s.length), Some(15));
+        assert_eq!(sce.call_sites.len(), 1);
+        assert_eq!(sce.call_sites[0].caller_function, "f");
+        assert_eq!(sce.call_sites[0].offset, 95);
+        assert_eq!(sce.violating_args.len(), 1);
+        assert_eq!(sce.violating_args[0].param, "y");
+        assert_eq!(sce.violating_args[0].value, "0");
+        assert_eq!(sce.violating_args[0].arg_offset, 103);
+        assert_eq!(sce.violating_args[0].arg_length, 1);
+    }
+
+    #[test]
+    fn callee_precondition_counterexample_filters_same_caller_calls_by_arg_value() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+
+        let callee = Function {
+            id: FuncId(7),
+            name: "g".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["x".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "requires x > 0".to_string(),
+                blame: vow_diag::Blame::Caller,
+                bindings: vec![("x".to_string(), InstId(0))],
+                file: "test.vow".to_string(),
+                offset: 20,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(10, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(14, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::GtI64,
+                        ty: Ty::Bool,
+                        args: vec![InstId(0), InstId(1)],
+                        data: InstData::None,
+                        origin: Span::new(10, 5),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::VowRequires,
+                        ty: Ty::Unit,
+                        args: vec![InstId(2)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: Span::new(20, 15),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::None,
+                        origin: Span::new(40, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let target = Function {
+            id: FuncId(1),
+            name: "f".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(10),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(1),
+                        origin: Span::new(95, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(11),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(10)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(90, 4),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(12),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(125, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(13),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(5),
+                        origin: Span::new(129, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(14),
+                        opcode: Opcode::WrappingSubI64,
+                        ty: Ty::I64,
+                        args: vec![InstId(12), InstId(13)],
+                        data: InstData::None,
+                        origin: Span::new(125, 5),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(15),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(14)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(120, 10),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(16),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(15)],
+                        data: InstData::None,
+                        origin: Span::new(140, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![callee, target.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let call_site_index = build_call_site_index(&module, "test.vow");
+        let ce = vow_verify::Counterexample {
+            description: "raw".to_string(),
+            vow_id: Some(0),
+            callee_precondition: Some(vow_verify::CalleePrecondition {
+                func_id: 7,
+                vow_id: 0,
+            }),
+            values: vec![],
+            block_visits: vec![0],
+            raw_output: String::new(),
+        };
+
+        let sce = build_structured_counterexample_with_module(
+            &target,
+            Some(&module),
+            &ce,
+            "test.vow",
+            &call_site_index,
+        );
+
+        assert_eq!(sce.call_sites.len(), 1);
+        assert_eq!(sce.call_sites[0].caller_function, "f");
+        assert_eq!(sce.call_sites[0].offset, 120);
+        assert_eq!(sce.violating_args.len(), 1);
+        assert_eq!(sce.violating_args[0].param, "x");
+        assert_eq!(sce.violating_args[0].value, "-5");
+        assert_eq!(sce.violating_args[0].arg_offset, 125);
+        assert_eq!(sce.violating_args[0].arg_length, 5);
     }
 
     #[test]
@@ -17618,6 +18637,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
             vow_id: Some(0),
+            callee_precondition: None,
             values: vec![("p0".to_string(), "0".to_string())],
             block_visits: vec![0, 2],
             raw_output: String::new(),

@@ -325,20 +325,27 @@ A counterexample in the JSON output:
 ```json
 {
   "function": "safe_sub",
-  "inputs": { "a": "-9223372036854775808", "b": "0" },
+  "values": { "a": "-9223372036854775808", "b": "0" },
   "violation": "ensures result >= 0",
   "vow_id": 1,
-  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 }
+  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 },
+  "blame": "callee"
 }
 ```
 
-| Field       | Meaning                                                |
-|-------------|--------------------------------------------------------|
-| `function`  | Which function failed                                  |
-| `inputs`    | Parameter values that trigger the violation            |
-| `violation` | Which contract clause was violated                     |
-| `vow_id`    | Internal ID linking to the specific vow clause         |
-| `source`    | Byte offset in the source file of the violated clause  |
+| Field       | Meaning                                                        |
+|-------------|----------------------------------------------------------------|
+| `function`  | Which function's verification query failed                     |
+| `values`    | Source or ESBMC variable values in the counterexample           |
+| `violation` | Which contract clause was violated                             |
+| `vow_id`    | Function-local ID linking to the specific vow clause            |
+| `source`    | Byte offset in the source file of the violated clause           |
+| `blame`     | Whether the caller, callee, or neither party is responsible     |
+
+When caller code violates a callee's `requires` clause, `violation` and
+`vow_id` identify the callee clause. `call_sites` points back to the caller
+expression, and `violating_args` identifies the callee parameter and caller
+argument span when Vow can recover it.
 
 Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
 
