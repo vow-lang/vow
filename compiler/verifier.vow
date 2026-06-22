@@ -5,6 +5,7 @@ use clif
 use ir
 use ir_printer
 use perfetto
+use verifier_harness
 
 fn VERIFY_PROVEN() -> i64 { 0 }
 fn VERIFY_FAILED() -> i64 { 1 }
@@ -17,10 +18,18 @@ fn VERIFY_UNKNOWN() -> i64 { 6 }
 struct VerifyResult {
     status: i64,
     vow_id: i64,
+    callee_precondition_func_id: i64,
+    callee_precondition_vow_id: i64,
     var_names: Vec<String>,
     var_values: Vec<String>,
     block_visits: Vec<i64>,
     raw_output: String,
+}
+
+struct ParsedVowLabel {
+    vow_id: i64,
+    callee_precondition_func_id: i64,
+    callee_precondition_vow_id: i64,
 }
 
 // exit_code sentinels: -3 ESBMC not found, -1 spawn failure, -2 kernel watchdog kill, else child exit code.
@@ -169,16 +178,6 @@ fn str_find_byte(s: String, b: i64) -> i64 {
         i = i + 1;
     }
     -1
-}
-
-fn esbmc_nondet_call(ty: i64) -> String {
-    if ty == ITY_I32() { return String::from("__VERIFIER_nondet_int()"); }
-    if ty == ITY_I64() { return String::from("__VERIFIER_nondet_long()"); }
-    if ty == ITY_U64() { return String::from("__VERIFIER_nondet_unsigned_long()"); }
-    if ty == ITY_F32() { return String::from("__VERIFIER_nondet_float()"); }
-    if ty == ITY_F64() { return String::from("__VERIFIER_nondet_double()"); }
-    if ty == ITY_BOOL() { return String::from("__VERIFIER_nondet_bool()"); }
-    String::from("0")
 }
 
 fn emit_harness(f: IrFunction) -> String {
@@ -560,7 +559,44 @@ fn parse_unknown_reason(combined: String) -> String {
     }
 }
 
-fn parse_vow_id(output: String) -> i64 {
+fn parsed_vow_label_none() -> ParsedVowLabel {
+    ParsedVowLabel {
+        vow_id: -1,
+        callee_precondition_func_id: -1,
+        callee_precondition_vow_id: -1,
+    }
+}
+
+fn parse_vow_label_text(rest: String) -> ParsedVowLabel {
+    if str_starts_with(rest, String::from("pre:")) {
+        let payload: String = str_substring(rest, 4, rest.len());
+        let sep: i64 = str_find_str(payload, String::from(":"));
+        if sep < 0 {
+            return parsed_vow_label_none();
+        }
+        let func_id: i64 = str_to_i64(str_substring(payload, 0, sep));
+        let vow_id: i64 = str_to_i64(str_substring(payload, sep + 1, payload.len()));
+        if func_id < 0 || vow_id < 0 {
+            return parsed_vow_label_none();
+        }
+        return ParsedVowLabel {
+            vow_id: vow_id,
+            callee_precondition_func_id: func_id,
+            callee_precondition_vow_id: vow_id,
+        };
+    }
+    let id: i64 = str_to_i64(rest);
+    if id < 0 {
+        return parsed_vow_label_none();
+    }
+    ParsedVowLabel {
+        vow_id: id,
+        callee_precondition_func_id: -1,
+        callee_precondition_vow_id: -1,
+    }
+}
+
+fn parse_vow_label(output: String) -> ParsedVowLabel {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
     let n: i64 = lines.len();
@@ -573,12 +609,16 @@ fn parse_vow_id(output: String) -> i64 {
         } else if in_violated {
             if str_starts_with(line, String::from("vow:")) {
                 let rest: String = str_substring(line, 4, line.len());
-                return str_to_i64(rest);
+                return parse_vow_label_text(rest);
             }
         }
         i = i + 1;
     }
-    -1
+    parsed_vow_label_none()
+}
+
+fn parse_vow_id(output: String) -> i64 {
+    parse_vow_label(output).vow_id
 }
 
 // Read the run of ASCII digits starting at `pos`, returning the parsed value or
@@ -1060,13 +1100,14 @@ fn is_auto_encoding(encoding: String) -> bool {
 }
 
 fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyResult {
-    let vow_id: i64 = {
+    let label: ParsedVowLabel = {
         if status == VERIFY_FAILED() {
-            parse_vow_id(combined)
+            parse_vow_label(combined)
         } else {
-            -1
+            parsed_vow_label_none()
         }
     };
+    let vow_id: i64 = label.vow_id;
     let var_names: Vec<String> = Vec::new();
     let var_values: Vec<String> = Vec::new();
     let block_visits: Vec<i64> = Vec::new();
@@ -1083,6 +1124,8 @@ fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyRe
     VerifyResult {
         status: status,
         vow_id: vow_id,
+        callee_precondition_func_id: label.callee_precondition_func_id,
+        callee_precondition_vow_id: label.callee_precondition_vow_id,
         var_names: var_names,
         var_values: var_values,
         block_visits: block_visits,
@@ -1097,6 +1140,8 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         return VerifyResult {
             status: VERIFY_PROVEN(),
             vow_id: -1,
+            callee_precondition_func_id: -1,
+            callee_precondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1120,6 +1165,8 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
+            callee_precondition_func_id: -1,
+            callee_precondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1201,6 +1248,8 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
+            callee_precondition_func_id: -1,
+            callee_precondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1212,6 +1261,8 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
         return VerifyResult {
             status: VERIFY_ERROR(),
             vow_id: -1,
+            callee_precondition_func_id: -1,
+            callee_precondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1229,6 +1280,8 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
         return VerifyResult {
             status: VERIFY_TIMEOUT(),
             vow_id: -1,
+            callee_precondition_func_id: -1,
+            callee_precondition_vow_id: -1,
             var_names: Vec::new(),
             var_values: Vec::new(),
             block_visits: Vec::new(),
@@ -1245,13 +1298,14 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
     process_kill(handle);
     cleanup_verify_tmp_path(tmp_path);
     let status: i64 = parse_verify_status(combined);
-    let vow_id: i64 = {
+    let label: ParsedVowLabel = {
         if status == VERIFY_FAILED() {
-            parse_vow_id(combined)
+            parse_vow_label(combined)
         } else {
-            -1
+            parsed_vow_label_none()
         }
     };
+    let vow_id: i64 = label.vow_id;
     let var_names: Vec<String> = Vec::new();
     let var_values: Vec<String> = Vec::new();
     let block_visits: Vec<i64> = Vec::new();
@@ -1268,6 +1322,8 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_pat
     VerifyResult {
         status: status,
         vow_id: vow_id,
+        callee_precondition_func_id: label.callee_precondition_func_id,
+        callee_precondition_vow_id: label.callee_precondition_vow_id,
         var_names: var_names,
         var_values: var_values,
         block_visits: block_visits,

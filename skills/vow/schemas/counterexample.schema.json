@@ -4,25 +4,25 @@
   "title": "Counterexample",
   "description": "A structured counterexample from ESBMC verification failure",
   "type": "object",
-  "required": ["function", "inputs", "violation", "vow_id", "source"],
+  "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
     "function": {
       "type": "string",
-      "description": "Name of the function where verification failed"
+      "description": "Name of the function whose verification query failed"
     },
-    "inputs": {
+    "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of parameter names to counterexample values"
+      "description": "Map of source names or ESBMC variable names to counterexample values"
     },
     "violation": {
       "type": "string",
-      "description": "Description of the violated contract"
+      "description": "Description of the violated contract clause"
     },
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Numeric ID of the violated vow (matches vow_id in VowViolation)"
+      "description": "Function-local ID of the violated vow clause"
     },
     "source": {
       "oneOf": [
@@ -36,18 +36,80 @@
           },
           "additionalProperties": false
         },
+        { "type": "string" },
         { "type": "null" }
       ],
-      "description": "Source location of the violated vow clause, or null"
+      "description": "Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["caller", "callee", "none"],
+      "description": "Who is responsible for the violation"
+    },
+    "call_sites": {
+      "type": "array",
+      "description": "Caller locations relevant to caller-blame failures",
+      "items": {
+        "type": "object",
+        "required": ["caller_function", "file", "offset", "length"],
+        "properties": {
+          "caller_function": { "type": "string" },
+          "file": { "type": "string" },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "violating_args": {
+      "type": "array",
+      "description": "Callee parameters and caller argument spans for caller-blame precondition failures",
+      "items": {
+        "type": "object",
+        "required": ["param", "value", "arg_offset", "arg_length"],
+        "properties": {
+          "param": { "type": "string" },
+          "value": { "type": "string" },
+          "arg_offset": { "type": "integer", "minimum": 0 },
+          "arg_length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "execution_path": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["block_id", "offset", "length"],
+        "properties": {
+          "block_id": { "type": "integer", "minimum": 0 },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "branch_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["condition_offset", "condition_length", "taken"],
+        "properties": {
+          "condition_offset": { "type": "integer", "minimum": 0 },
+          "condition_length": { "type": "integer", "minimum": 0 },
+          "taken": { "type": "string", "enum": ["then", "else"] }
+        },
+        "additionalProperties": false
+      }
     },
     "replay": {
       "type": "string",
       "enum": ["confirmed", "diverged", "skipped"],
-      "description": "Differential-test outcome (present only with --replay-cex): whether a debug-mode harness replaying the counterexample's concrete inputs fired the same VowViolation (vow_id + blame). Not part of the soundness proof."
+      "description": "Differential-test outcome, present only with --replay-cex"
     },
     "replay_reason": {
       "type": "string",
-      "description": "Human-readable explanation for a diverged or skipped replay (present only with --replay-cex when replay is not confirmed)"
+      "description": "Human-readable explanation for a diverged or skipped replay"
     }
   },
   "additionalProperties": false
