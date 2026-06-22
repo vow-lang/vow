@@ -468,8 +468,10 @@ fn is_known_builtin(name: &str) -> bool {
 }
 
 fn is_reserved_verifier_symbol(name: &str) -> bool {
-    // `abs` is part of ESBMC's C stdlib model; don't emit a competing definition.
-    name.starts_with("__ESBMC_") || name.starts_with("__VERIFIER_") || name == "abs"
+    // User functions are namespaced to `vow_user_fn_<id>` in the emitted C, so a
+    // user symbol named after a libc function (e.g. `abs`) cannot collide with the
+    // stdlib declaration; only the verifier's own intrinsics are truly reserved.
+    name.starts_with("__ESBMC_") || name.starts_with("__VERIFIER_")
 }
 
 pub(crate) fn verifier_c_func_name(func: &Function) -> String {
