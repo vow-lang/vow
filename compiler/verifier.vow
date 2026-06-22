@@ -5,6 +5,7 @@ use clif
 use ir
 use ir_printer
 use perfetto
+use verifier_harness
 
 fn VERIFY_PROVEN() -> i64 { 0 }
 fn VERIFY_FAILED() -> i64 { 1 }
@@ -169,16 +170,6 @@ fn str_find_byte(s: String, b: i64) -> i64 {
         i = i + 1;
     }
     -1
-}
-
-fn esbmc_nondet_call(ty: i64) -> String {
-    if ty == ITY_I32() { return String::from("__VERIFIER_nondet_int()"); }
-    if ty == ITY_I64() { return String::from("__VERIFIER_nondet_long()"); }
-    if ty == ITY_U64() { return String::from("__VERIFIER_nondet_unsigned_long()"); }
-    if ty == ITY_F32() { return String::from("__VERIFIER_nondet_float()"); }
-    if ty == ITY_F64() { return String::from("__VERIFIER_nondet_double()"); }
-    if ty == ITY_BOOL() { return String::from("__VERIFIER_nondet_bool()"); }
-    String::from("0")
 }
 
 fn emit_harness(f: IrFunction) -> String {

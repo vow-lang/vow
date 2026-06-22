@@ -3,6 +3,7 @@ module CEmitter
 use clif
 use ir
 use ir_printer
+use verifier_ids
 
 // Internal verifier-model bounds for bounded model checking. ESBMC models
 // Vec/String/HashMap/BTreeMap as fixed-size C arrays, so the model needs a
@@ -164,10 +165,11 @@ fn is_known_builtin(name: String) -> bool {
 }
 
 fn is_reserved_verifier_symbol(name: String) -> bool {
-    // `abs` is part of ESBMC's C stdlib model; don't emit a competing definition.
+    // User functions are namespaced to `vow_user_fn_<id>` in the emitted C, so a
+    // user symbol named after a libc function (e.g. `abs`) cannot collide with the
+    // stdlib declaration; only the verifier's own intrinsics are truly reserved.
     str_starts_with(name, String::from("__ESBMC_"))
     || str_starts_with(name, String::from("__VERIFIER_"))
-    || name == String::from("abs")
 }
 
 fn verifier_c_func_name(f: IrFunction) -> String {
@@ -874,13 +876,13 @@ fn emit_unmodelled(out: String, inst: IrInst) {
 // Mirrors `vow_verify::c_emitter::UNSUPPORTED_OP_VOW_ID = u32::MAX`. Reserved so
 // the diagnostic pipeline can distinguish a verifier-limitation failure from
 // a real vow violation. Single source of truth for the self-hosted side; the
-// stringified form is derived via `i64_to_str` so the two cannot drift.
+// stringified form is derived from the shared value so the two cannot drift.
 fn unsupported_op_vow_id() -> i64 {
-    4294967295
+    verifier_unsupported_op_vow_id()
 }
 
 fn unsupported_op_vow_id_str() -> String {
-    i64_to_str(unsupported_op_vow_id())
+    verifier_unsupported_op_vow_id_str()
 }
 
 // Sentinel vow_id reported when a co-emitted callee's `requires` is violated by
