@@ -17,10 +17,42 @@ always 0 — calibration reports, it does not gate.
 """
 
 import argparse
+import glob
 import json
 import math
+import os
+import re
 import subprocess
 import sys
+
+
+REPORT_BASENAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-.+\.md$")
+REPORT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+RETENTION_CLASSES = ("current-baseline", "release-evidence", "temporary-review")
+
+
+def out_targets_reports(path):
+    reports_dir = os.path.abspath("reports")
+    out_path = os.path.abspath(path)
+    try:
+        return os.path.commonpath([reports_dir, out_path]) == reports_dir
+    except ValueError:
+        return False
+
+
+def validate_report_output(parser, args):
+    if not out_targets_reports(args.out):
+        return
+
+    basename = os.path.basename(os.path.normpath(args.out))
+    if not args.date:
+        parser.error("--date is required when --out targets reports/")
+    if not REPORT_DATE_RE.fullmatch(args.date):
+        parser.error("--date must use YYYY-MM-DD when --out targets reports/")
+    if not REPORT_BASENAME_RE.fullmatch(basename):
+        parser.error("--out under reports/ must use YYYY-MM-DD-<topic>.md")
+    if not basename.startswith(f"{args.date}-"):
+        parser.error("--out filename date must match --date")
 
 
 def run_complexity(vowc, path, extra):
@@ -89,12 +121,18 @@ def main():
     ap.add_argument("--threshold", type=int, default=80)
     ap.add_argument("--cog-anchor", type=int, default=15)
     ap.add_argument("--nloc-anchor", type=int, default=60)
-    ap.add_argument("--out", default="reports/complexity-calibration.md")
+    ap.add_argument("--out", default="reports.out/complexity-calibration.md")
     ap.add_argument("--date", default="", help="report date stamp (caller-supplied; no clock in-script)")
+    ap.add_argument(
+        "--retention-class",
+        choices=RETENTION_CLASSES,
+        default="current-baseline",
+        help="retention policy class for committed reports/ snapshots",
+    )
     args = ap.parse_args()
+    validate_report_output(ap, args)
 
     extra = ["--cog-anchor", str(args.cog_anchor), "--nloc-anchor", str(args.nloc_anchor)]
-    import glob, os
     files = sorted(
         p for p in glob.glob(os.path.join(args.dir, "*.vow"))
         if not os.path.basename(p).startswith("test_")
@@ -129,9 +167,21 @@ def main():
 
     lines = []
     lines.append("# `vow complexity` gate calibration")
-    if args.date:
-        lines.append(f"\n_Generated {args.date} by scripts/complexity_calibrate.py over `{args.dir}/*.vow` ({len(files)} files)._")
     lines.append("")
+    generated = "Generated"
+    if args.date:
+        generated += f" {args.date}"
+    lines.append(f"_{generated} by scripts/complexity_calibrate.py over `{args.dir}/*.vow` ({len(files)} files)._")
+    lines.append("")
+    if out_targets_reports(args.out):
+        lines.append(f"_Retention: `{args.retention_class}` for the `complexity-calibration` stream.")
+        if args.retention_class == "current-baseline":
+            lines.append("Replace")
+            lines.append("this snapshot in the same PR as the next committed complexity calibration")
+            lines.append("snapshot unless a reviewer reclassifies it as `release-evidence`._")
+        else:
+            lines[-1] += "_"
+        lines.append("")
     lines.append("> Validation target is comprehensibility / refactor priority, NOT correctness")
     lines.append("> (docs/design Part 4). Correctness is the job of contracts + tests.")
     lines.append("")
@@ -176,7 +226,6 @@ def main():
     lines.append("")
     report = "\n".join(lines) + "\n"
 
-    import os
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(report)

@@ -12,8 +12,8 @@ use crate::solver_strategy::{
 };
 
 use crate::c_emitter::{
-    ConstantValue, VerifyLimits, c_function_name, collect_modelable_callees,
-    detect_constant_functions, emit_c_module, emit_c_module_with_callees, non_modelable_reason,
+    ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
+    emit_c_module, emit_c_module_with_callees, non_modelable_reason, verifier_c_func_name,
 };
 
 // ---------------------------------------------------------------------------
@@ -24,9 +24,16 @@ use crate::c_emitter::{
 pub struct Counterexample {
     pub description: String,
     pub vow_id: Option<u32>,
+    pub callee_precondition: Option<CalleePrecondition>,
     pub values: Vec<(String, String)>,
     pub block_visits: Vec<u32>,
     pub raw_output: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalleePrecondition {
+    pub func_id: u32,
+    pub vow_id: u32,
 }
 
 #[derive(Debug)]
@@ -81,7 +88,7 @@ fn esbmc_nondet_call(ty: Ty) -> &'static str {
         Ty::F32 => "__VERIFIER_nondet_float()",
         Ty::F64 => "__VERIFIER_nondet_double()",
         Ty::Bool => "__VERIFIER_nondet_bool()",
-        _ => "0",
+        Ty::Unit | Ty::Ptr | Ty::LinearPtr => "0",
     }
 }
 
@@ -94,7 +101,7 @@ fn emit_harness(func: &Function) -> String {
         .collect();
     format!(
         "int main(void) {{ {}({}); return 0; }}\n",
-        c_function_name(func),
+        verifier_c_func_name(func),
         args.join(", ")
     )
 }
@@ -104,7 +111,9 @@ fn emit_harness(func: &Function) -> String {
 // ---------------------------------------------------------------------------
 
 pub fn parse_esbmc_output(output: &str) -> Counterexample {
-    let vow_id = extract_vow_id(output);
+    let label = extract_vow_label(output);
+    let vow_id = label.as_ref().map(VowLabel::vow_id);
+    let callee_precondition = label.and_then(VowLabel::callee_precondition);
     let all_assignments = extract_variable_assignments(output);
 
     let mut values = Vec::new();
@@ -133,13 +142,51 @@ pub fn parse_esbmc_output(output: &str) -> Counterexample {
     Counterexample {
         description,
         vow_id,
+        callee_precondition,
         values,
         block_visits,
         raw_output: output.to_string(),
     }
 }
 
-fn extract_vow_id(output: &str) -> Option<u32> {
+enum VowLabel {
+    Numeric(u32),
+    CalleePrecondition(CalleePrecondition),
+}
+
+impl VowLabel {
+    fn vow_id(&self) -> u32 {
+        match self {
+            VowLabel::Numeric(id) => *id,
+            VowLabel::CalleePrecondition(pre) => pre.vow_id,
+        }
+    }
+
+    fn callee_precondition(self) -> Option<CalleePrecondition> {
+        match self {
+            VowLabel::Numeric(_) => None,
+            VowLabel::CalleePrecondition(pre) => Some(pre),
+        }
+    }
+}
+
+fn parse_vow_label(label: &str) -> Option<VowLabel> {
+    if let Some(rest) = label.strip_prefix("pre:") {
+        let mut parts = rest.split(':');
+        let func_id = parts.next()?.parse::<u32>().ok()?;
+        let vow_id = parts.next()?.parse::<u32>().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        return Some(VowLabel::CalleePrecondition(CalleePrecondition {
+            func_id,
+            vow_id,
+        }));
+    }
+    label.parse::<u32>().ok().map(VowLabel::Numeric)
+}
+
+fn extract_vow_label(output: &str) -> Option<VowLabel> {
     let mut in_violated = false;
     for line in output.lines() {
         let trimmed = line.trim();
@@ -149,9 +196,9 @@ fn extract_vow_id(output: &str) -> Option<u32> {
         }
         if in_violated
             && let Some(rest) = trimmed.strip_prefix("vow:")
-            && let Ok(id) = rest.parse::<u32>()
+            && let Some(label) = parse_vow_label(rest)
         {
-            return Some(id);
+            return Some(label);
         }
     }
     None
@@ -930,6 +977,25 @@ mod tests {
         assert_eq!(find_esbmc(), from_path);
     }
 
+    #[test]
+    fn esbmc_nondet_call_all_current_variants() {
+        let cases = [
+            (Ty::I32, "__VERIFIER_nondet_int()"),
+            (Ty::I64, "__VERIFIER_nondet_long()"),
+            (Ty::U64, "__VERIFIER_nondet_unsigned_long()"),
+            (Ty::F32, "__VERIFIER_nondet_float()"),
+            (Ty::F64, "__VERIFIER_nondet_double()"),
+            (Ty::Bool, "__VERIFIER_nondet_bool()"),
+            (Ty::Unit, "0"),
+            (Ty::Ptr, "0"),
+            (Ty::LinearPtr, "0"),
+        ];
+
+        for (ty, expected) in cases {
+            assert_eq!(esbmc_nondet_call(ty), expected);
+        }
+    }
+
     fn inst(id: u32, op: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
         Inst {
             id: InstId(id),
@@ -1074,6 +1140,78 @@ mod tests {
         let c = emit_verify_c_source(&func, &module, &HashMap::new(), &VerifyLimits::default());
 
         assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
+    }
+
+    #[test]
+    fn emit_verify_c_source_uses_private_symbols_for_target_and_callees() {
+        let callee = Function {
+            id: FuncId(5),
+            name: "div".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let target = Function {
+            id: FuncId(2),
+            name: "abs".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![0],
+                        InstData::CallTarget(FuncId(5)),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: String::new(),
+            functions: vec![target.clone(), callee],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+
+        let c = emit_verify_c_source(&target, &module, &HashMap::new(), &VerifyLimits::default());
+
+        assert!(
+            c.contains("int64_t vow_user_fn_5("),
+            "callee definition: {c}"
+        );
+        assert!(c.contains("v1 = vow_user_fn_5(v0);"), "callee call: {c}");
+        assert!(
+            c.contains("int main(void) { vow_user_fn_2(__VERIFIER_nondet_long()); return 0; }"),
+            "harness target call: {c}"
+        );
+        assert!(!c.contains("int64_t div("), "raw callee definition: {c}");
+        assert!(!c.contains(" div(v0)"), "raw callee call: {c}");
+        assert!(!c.contains(" abs("), "raw target call: {c}");
     }
 
     #[test]
@@ -1318,6 +1456,25 @@ VERIFICATION SUCCESSFUL";
             ce.vow_id,
             Some(CALLER_PRECONDITION_VOW_ID),
             "caller-precondition sentinel must round-trip through extract_vow_id"
+        );
+    }
+
+    #[test]
+    fn parse_callee_precondition_label_extracts_callee_contract() {
+        let output = "[Counterexample]\n\n\
+                      Violated property:\n\
+                        file /tmp/test.c line 1 column 1 function f\n\
+                        vow:pre:7:2\n\n\
+                      VERIFICATION FAILED";
+        let ce = parse_esbmc_output(output);
+
+        assert_eq!(ce.vow_id, Some(2));
+        assert_eq!(
+            ce.callee_precondition,
+            Some(CalleePrecondition {
+                func_id: 7,
+                vow_id: 2,
+            })
         );
     }
 

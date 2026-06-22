@@ -1,0 +1,49 @@
+module TestJsonEscape
+
+use diag
+
+fn sample_json_string() -> String {
+    let s: String = String::from("");
+    s.push_byte(34);
+    s.push_byte(92);
+    s.push_byte(10);
+    s.push_byte(13);
+    s.push_byte(9);
+    s.push_byte(8);
+    s.push_byte(12);
+    s.push_byte(1);
+    s.push_byte(65);
+    s.push_byte(195);
+    s.push_byte(169);
+    s
+}
+
+fn expected_json_escape() -> String {
+    let s: String = String::from("");
+    s.push_byte(92);
+    s.push_byte(34);
+    s.push_byte(92);
+    s.push_byte(92);
+    s.push_byte(92);
+    s.push_byte(110);
+    s.push_byte(92);
+    s.push_byte(114);
+    s.push_byte(92);
+    s.push_byte(116);
+    s.push_byte(92);
+    s.push_byte(98);
+    s.push_byte(92);
+    s.push_byte(102);
+    s.push_byte(63);
+    s.push_byte(65);
+    s.push_byte(195);
+    s.push_byte(169);
+    s
+}
+
+fn main() -> i32 {
+    let got: String = diag_json_escape_str(sample_json_string());
+    let want: String = expected_json_escape();
+    if got != want { return 1; }
+    0
+}

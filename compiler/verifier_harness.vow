@@ -1,0 +1,30 @@
+module VerifierHarness
+
+use ir
+use verifier_ids
+
+fn verifier_harness_str3(a: String, b: String, c: String) -> String {
+    let r: String = String::from("");
+    r.push_str(a);
+    r.push_str(b);
+    r.push_str(c);
+    r
+}
+
+fn esbmc_nondet_call(ty: i64) -> String {
+    if ty == ITY_I32() { return String::from("__VERIFIER_nondet_int()"); }
+    if ty == ITY_I64() { return String::from("__VERIFIER_nondet_long()"); }
+    if ty == ITY_U64() { return String::from("__VERIFIER_nondet_unsigned_long()"); }
+    if ty == ITY_F32() { return String::from("__VERIFIER_nondet_float()"); }
+    if ty == ITY_F64() { return String::from("__VERIFIER_nondet_double()"); }
+    if ty == ITY_BOOL() { return String::from("__VERIFIER_nondet_bool()"); }
+    if ty == ITY_UNIT() { return String::from("0"); }
+    if ty == ITY_PTR() { return String::from("0"); }
+    if ty == ITY_LPTR() { return String::from("0"); }
+
+    verifier_harness_str3(
+        String::from("(__ESBMC_assert(0, \"vow:"),
+        verifier_unsupported_op_vow_id_str(),
+        String::from("\"), 0)")
+    )
+}

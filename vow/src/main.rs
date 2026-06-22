@@ -383,6 +383,7 @@ fn skill_json() -> String {
     "cli": "reference/cli.md",
     "contracts": "reference/contracts.md",
     "errors": "reference/errors.md",
+    "stdlib": "reference/stdlib.md",
     "examples": "examples/examples.md",
     "schemas": {
       "build_result": "schemas/build-result.schema.json",
@@ -1479,6 +1480,7 @@ fn main() -> i32 [io] {
 - Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)
 - Which contracts to write (taxonomy & strength): [reference/contracts-methodology.md](reference/contracts-methodology.md)
 - Diagnostics and fixes: [reference/errors.md](reference/errors.md)
+- Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
 - JSON schemas: [schemas/](schemas/)
 "#
@@ -2873,18 +2875,25 @@ that path produces `Unverified` (exit 0).
   "counterexamples": [
     {
       "function": "safe_sub",
-      "inputs": { "a": "-9223372036854775808", "b": "0" },
+      "values": { "a": "-9223372036854775808", "b": "0" },
       "violation": "ensures result >= 0",
       "vow_id": 1,
       "source": {
         "file": "examples/cegis_broken.vow",
         "offset": 76,
         "length": 20
-      }
+      },
+      "blame": "callee"
     }
   ]
 }
 ```
+
+For caller-blame failures where a verified function violates a callee's
+`requires` clause, the counterexample reports the callee clause in `violation`
+and `vow_id`, and includes the caller expression in `call_sites`. When the
+callee precondition binds a parameter, `violating_args` names the callee
+parameter, the counterexample value when available, and the caller argument span.
 
 ### Fields Reference
 
@@ -3442,20 +3451,27 @@ A counterexample in the JSON output:
 ```json
 {
   "function": "safe_sub",
-  "inputs": { "a": "-9223372036854775808", "b": "0" },
+  "values": { "a": "-9223372036854775808", "b": "0" },
   "violation": "ensures result >= 0",
   "vow_id": 1,
-  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 }
+  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 },
+  "blame": "callee"
 }
 ```
 
-| Field       | Meaning                                                |
-|-------------|--------------------------------------------------------|
-| `function`  | Which function failed                                  |
-| `inputs`    | Parameter values that trigger the violation            |
-| `violation` | Which contract clause was violated                     |
-| `vow_id`    | Internal ID linking to the specific vow clause         |
-| `source`    | Byte offset in the source file of the violated clause  |
+| Field       | Meaning                                                        |
+|-------------|----------------------------------------------------------------|
+| `function`  | Which function's verification query failed                     |
+| `values`    | Source or ESBMC variable values in the counterexample           |
+| `violation` | Which contract clause was violated                             |
+| `vow_id`    | Function-local ID linking to the specific vow clause            |
+| `source`    | Byte offset in the source file of the violated clause           |
+| `blame`     | Whether the caller, callee, or neither party is responsible     |
+
+When caller code violates a callee's `requires` clause, `violation` and
+`vow_id` identify the callee clause. `call_sites` points back to the caller
+expression, and `violating_args` identifies the callee parameter and caller
+argument span when Vow can recover it.
 
 Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
 
@@ -4450,6 +4466,359 @@ The `operation` field is `arena_open` for the initial chunk allocation or `arena
 
 ---
 
+# Vow Standard Library
+
+The standard library is a curated set of reusable, contract-annotated Vow modules
+under `stdlib/`. Each module is a self-contained directory: one or more library
+`.vow` files plus a `main.vow` that demonstrates and exercises the API.
+
+This is a **reference collection**, not a globally-importable package set. Vow has
+no module search path today (see [Consumption model](#consumption-model)). Modules
+carry contracts, but only some are statically verifiable under the current ESBMC
+model — read [Verification status](#verification-status) before relying on a
+contract as a proof rather than a runtime check.
+
+In all examples below, `vow` refers to `build/vowc`. Always run `ulimit -v 2000000`
+before invoking the compiler or any binary it produces.
+
+## Modules at a glance
+
+| Module path           | Provides                                                                 | ESBMC status |
+|-----------------------|-------------------------------------------------------------------------|---------------------------|
+| `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | VerifyFailed (env)        |
+| `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | VerifyFailed (env)        |
+| `stdlib/stack`        | `stack` — Vec-backed LIFO stack over `i64`                               | Skipped     |
+| `stdlib/geometry`     | `point`, `shape` — 2D points, circles, rectangles                        | **Verified**              |
+| `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped     |
+| `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |
+
+These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0. `(env)` marks an environmental verifier limitation, not a contract
+defect. The statuses reflect the verifier's memory model, **not** the soundness of
+the contracts — see [Verification status](#verification-status).
+
+## Consumption model
+
+`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,
+where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.
+All transitive `use`s in dependency modules resolve against that **same** directory.
+There is no search path, and `--module-root` is only available on `vow test` — not
+`vow build` or `vow verify`.
+
+Two practical ways to use a stdlib module:
+
+**1. Run the module's own demo in place.** Each module ships a `main.vow`. Build with
+`--no-verify` — most stdlib modules do not pass `vow verify` yet (see
+[Verification status](#verification-status)), and the point here is to *run* the demo,
+not to verify it:
+```
+$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
+$ ulimit -v 2000000; /tmp/math_demo
+```
+
+**2. Copy the module's `.vow` file(s) into your project directory.** Because `use`
+resolves against your entry file's directory, the library file must sit next to
+your program. For a single-file module:
+```
+$ cp stdlib/math/arithmetic.vow myproject/arithmetic.vow
+```
+```vow
+module Main
+use arithmetic
+
+fn main() -> i32 [io] {
+    print_i64(clamp(15, 0, 10));   // 10
+    0
+}
+```
+For a multi-file module, copy **all** sibling files together — e.g. `stdlib/geometry`
+ships `shape.vow` which internally does `use point`, so `point.vow` must be copied
+alongside it.
+
+> A real import mechanism (a module search path so `use std.math.arithmetic`
+> resolves from any location) is future work. Until then, treat stdlib modules as
+> vendored source you copy in, exactly like the self-hosted compiler's own modules.
+
+## Verification status
+
+The verifier statuses below were measured with `vow verify` against ESBMC 8.3.0.
+They are **pre-existing properties of the code and the verifier**, unchanged by the
+move into `stdlib/`. A `Skipped`/`VerifyFailed` status does not mean a contract is
+wrong — in `--mode debug` every contract is still enforced at runtime via
+`__vow_violation`.
+
+| Module          | `vow verify` result | Why                                                                                                   |
+|-----------------|---------------------|-------------------------------------------------------------------------------------------------------|
+| `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation — see the geometry section.) |
+| `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |
+| `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |
+| `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |
+| `bignum`        | `Skipped`           | `Vec`-based limb arithmetic allocates per call (`RegionAlloc`); not modelable. 24 `RegionRootEscape` notes (the demo intentionally holds results for program lifetime). |
+| `gc`            | `VerifyFailed`      | ESBMC produces a `gc_add_root` precondition counterexample related to in-module caller-`requires` checking (cf. issue #764). |
+
+\* Environmental verifier limitation, not a contract defect.
+
+**Takeaway for agents:** only `geometry`'s `vow verify` passes today — and that proves
+the *vowed* checks reachable from its demo, not every function (e.g. `point_distance_sq`
+carries no contract and is not a proof obligation). For
+the others, the contracts are precise specifications that are enforced at runtime in
+`--mode debug`; static proof is gated on verifier-model improvements (Vec/region
+modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build
+on these modules and need a *static* guarantee, prefer `geometry`'s pattern: keep
+hot paths in plain `i64` with explicit overflow `requires`.
+
+---
+
+## math
+
+Three modules under `stdlib/math/`. Each is independent (no cross-`use`); copy only
+the one you need. All functions are `pub`.
+
+### math.arithmetic
+
+Integer primitives with overflow-guarded contracts. The `safe_*` family operates on
+**non-negative** inputs only — they are overflow-checked unsigned-style helpers, not
+general signed wrappers.
+
+| Function | Signature | Key contracts | Notes |
+|----------|-----------|---------------|-------|
+| `abs` | `(x: i64) -> i64` | `requires x > -9223372036854775807`; `ensures result >= 0`; `ensures result == x \|\| result == 0 - x` | Guards `i64::MIN` negation overflow. |
+| `min` | `(a, b: i64) -> i64` | `ensures result <= a`; `result <= b`; `result == a \|\| result == b` | Tight: result is one of the inputs. |
+| `max` | `(a, b: i64) -> i64` | `ensures result >= a`; `result >= b`; `result == a \|\| result == b` | |
+| `clamp` | `(x, lo, hi: i64) -> i64` | `requires lo <= hi`; `ensures lo <= result <= hi` | |
+| `sign` | `(x: i64) -> i64` | `ensures -1 <= result <= 1` | -1 / 0 / 1. |
+| `safe_add` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a <= I64_MAX - b`; `ensures result == a + b` | Non-negative inputs only. |
+| `safe_sub` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a >= b`; `ensures 0 <= result <= a` | |
+| `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \|\| a <= I64_MAX / b`; `ensures result == a * b` | |
+| `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |
+| `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |
+| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
+| `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |
+| `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |
+| `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |
+| `is_even` / `is_odd` | `(x: i64) -> bool` | — | |
+
+Representative contract — overflow guard expressed in the precondition rather than
+via checked arithmetic:
+```vow
+pub fn safe_mul(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: b == 0 || a <= 9223372036854775807 / b,
+    ensures: result == a * b,
+    ensures: result >= 0
+}
+```
+
+### math.number_theory
+
+| Function | Signature | Key contracts | Notes |
+|----------|-----------|---------------|-------|
+| `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \|\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |
+| `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |
+| `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |
+| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
+| `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` — product overflows past 20!. |
+| `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |
+| `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |
+| `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |
+| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |
+
+### math.vec_math
+
+Operates on `Vec<i64>`. None of the summation helpers guard against accumulator
+overflow — use on bounded data, or add `requires` bounds at the call site.
+
+| Function | Signature | Key contracts | Notes |
+|----------|-----------|---------------|-------|
+| `vec_sum` | `(v: Vec<i64>) -> i64` | — | No overflow guard. |
+| `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |
+| `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |
+| `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |
+| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures 0 <= result <= v.len()` | Invariant `count <= i`. |
+| `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |
+| `vec_is_sorted` | `(v: Vec<i64>) -> bool` | — | Ascending. |
+| `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
+| `vec_reverse` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
+
+---
+
+## heap
+
+`stdlib/heap/min_heap.vow` and `max_heap.vow` are structural mirrors (a min-heap and
+a max-heap over `i64`), with the comparator flipped. Both are value types: every
+mutator takes a heap by value and returns a new one.
+
+The defining contract pattern is the **size-shadow invariant** `size == data.len()`,
+threaded through every mutator. This is what lets ESBMC reason about in-bounds
+`data[i]` access without a universal quantifier:
+```vow
+pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
+    requires: h.size == h.data.len(),
+    requires: h.size < 9223372036854775807,
+    ensures: result.size == h.size + 1,
+    ensures: result.size == result.data.len()
+}
+```
+
+| Function (min; `max_*` mirrors) | Signature | Key contracts |
+|---------------------------------|-----------|---------------|
+| `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |
+| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |
+| `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |
+| `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |
+| `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |
+| `min_heap_pop` | `(h) -> MinHeap` | `requires h.size > 0, size-shadow`; `ensures result.size == h.size - 1` |
+| `min_heap_clear` | `(h) -> MinHeap` | size-shadow in; `ensures result.size == 0` |
+| `is_min_heap` | `(h) -> bool` | `requires size-shadow` — runtime check of the heap-order property |
+
+**Heap-order is a runtime predicate, by design.** Vow has no universal quantifier, so
+the property `∀i. data[parent(i)] <= data[i]` cannot be written as an `ensures`.
+`is_min_heap` / `is_max_heap` check it at runtime instead; the static contracts cover
+index safety and the size-shadow invariant only.
+
+---
+
+## stack
+
+`stdlib/stack/stack.vow` — a `Vec<i64>`-backed LIFO stack (value type). `node.vow` in
+the same directory is a vestigial `Node` struct kept for the demo; the stack does not
+use it.
+
+| Function | Signature | Key contracts |
+|----------|-----------|---------------|
+| `stack_new` | `() -> Stack` | — |
+| `stack_push` | `(s, val: i64) -> Stack` | `ensures result.size == s.size + 1` |
+| `stack_peek` | `(s) -> i64` | `requires s.size > 0` |
+| `stack_size` | `(s) -> i64` | — |
+| `stack_is_empty` | `(s) -> bool` | — |
+
+**Known gaps (move-verbatim; tracked follow-up):** no `stack_pop`; no size-shadow
+invariant (`size == data.len()`) like `heap` has; `stack_peek` has no `ensures`
+relating the result to `data[size-1]`; functions are not marked `pub`; `node.vow` is
+unused.
+
+---
+
+## geometry
+
+`stdlib/geometry/point.vow` (a `Point` struct) and `shape.vow` (a `Shape` enum with
+circle/rectangle area and perimeter). **The only module whose `vow verify` passes
+today** — its shape functions use exact derived overflow bounds. Note this means the
+*vowed* checks verify (`vow verify stdlib/geometry/main.vow` → `Verified`); it is not a
+proof of the whole API, since `point_distance_sq` carries no contract (see Known gaps).
+
+| Function | Signature | Key contracts |
+|----------|-----------|---------------|
+| `point_new` / `point_x` / `point_y` | `Point` accessors | — |
+| `point_distance_sq` | `(a, b: Point) -> i64` | — (no overflow guard — gap for large coordinates) |
+| `circle_area` | `(r: i64) -> i64` | `requires 0 <= r <= 1753413056`; `ensures result >= 0` |
+| `rect_area` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, h == 0 \|\| w <= I64_MAX / h`; `ensures result >= 0` |
+| `circle_perimeter` | `(r: i64) -> i64` | `requires 0 <= r <= 1537228672809129301`; `ensures result >= 0` |
+| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, w <= 4611686018427387903 - h`; `ensures result >= 0` |
+
+Each magic bound is the exact threshold below which the arithmetic cannot overflow —
+e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:
+```vow
+fn circle_area(r: i64) -> i64 vow {
+    requires: r >= 0,
+    requires: r <= 1753413056,
+    ensures: result >= 0
+}
+```
+
+**Known gaps:** the `Shape` enum is declared but the area/perimeter functions are
+free functions that don't dispatch on it; `point_distance_sq` lacks an overflow
+guard; `shape_at` is a demo artifact, not a real API.
+
+---
+
+## bignum
+
+`stdlib/bignum/bignum.vow` — arbitrary-precision **signed** integers in base 10⁹
+sign-magnitude form (`struct BigNum { digits: Vec<i64>, sign: i64 }`). Pure core
+language; no builtins beyond `Vec`/`String`/`i64`.
+
+**Public API (selected):**
+- Construct: `bignum_zero`, `bignum_from_i64`, `bignum_from_string`
+- Convert: `bignum_to_string`
+- Predicates: `bignum_is_zero`, `bignum_is_negative`, `bignum_is_positive`
+- Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`
+- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
+- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`
+
+**Contracts present:** `bignum_sub_abs` requires `bignum_cmp_abs(a, b) >= 0`;
+`bignum_div`/`bignum_mod`/`bignum_divmod` require `!bignum_is_zero(b)`; `bignum_pow`
+requires `exp >= 0`; `bignum_factorial` requires `n >= 0`.
+
+**Semantics to know:**
+- The representation invariant (non-empty `digits`, no leading-zero limbs except the
+  canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`) is maintained internally
+  but **not** stated as a struct invariant or `ensures`.
+- Division truncates toward zero; the remainder's sign matches the dividend.
+- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
+- `bignum_gcd` operates on absolute values; the result is non-negative.
+- Multiplication is O(n·m) schoolbook (no Karatsuba).
+- Helpers prefixed for internal use (`bignum_strip_zeros`, `bignum_shift_limbs`,
+  `i64_to_decimal*`, `bignum_divmod_long`, …) are not part of the public API.
+
+**Verification:** `Skipped` — limb arithmetic allocates `Vec`s per call (`RegionAlloc`),
+which the verifier cannot model. Contracts are runtime-enforced in `--mode debug`.
+
+---
+
+## gc
+
+`stdlib/gc/gc.vow` — a mark-and-sweep garbage collector over a heap of `i64` values
+with explicit roots and reference edges (`struct GcHeap`). Slots are opaque integer
+handles returned by `gc_alloc`; never fabricate them.
+
+| Function | Signature | Key contracts |
+|----------|-----------|---------------|
+| `gc_new` | `() -> GcHeap` | — |
+| `gc_alloc` | `(h, val: i64) -> i64` | — (returns a slot; reuses freed slots) |
+| `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive — you may unroot a freed slot) |
+| `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |
+| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |
+| `gc_count` | `(h) -> i64` | — |
+| `gc_collect` | `(h) -> i64` | — (returns count of newly-freed objects) |
+
+**Semantics to know:**
+- `gc_collect` invalidates every slot not reachable from a root; calling
+  `gc_read`/`gc_write` on a freed slot violates its precondition.
+- Roots and references are not deduplicated — adding a root twice needs two
+  `gc_remove_root` calls.
+- The heap stores only `i64`; represent richer object graphs as indices/tagged ints.
+- Mark/sweep handles cycles naturally via the mark bit; no separate cycle detection.
+
+**Verification:** `VerifyFailed` — ESBMC produces a `gc_add_root` precondition
+counterexample tied to how in-module caller-`requires` are checked (cf. issue #764).
+Contracts are runtime-enforced in `--mode debug`.
+
+---
+
+## Known gaps and roadmap
+
+These are tracked follow-ups, intentionally **not** addressed by the reorg that
+created `stdlib/` (which moved code verbatim):
+
+- **Static verifiability.** Make `Vec`/region-allocating functions modelable so
+  `stack`, `bignum`, and most of `heap` can be statically verified; rename `abs` to
+  avoid the C `<stdlib.h>` collision that blocks `math`; resolve the `gc_add_root`
+  caller-`requires` counterexample (#764).
+- **Contract hardening.** Add struct/representation invariants and `ensures` clauses
+  to `bignum` and `gc`; add a size-shadow invariant and `stack_pop` to `stack`; add
+  an overflow guard to `point_distance_sq`; wire the `Shape` enum into `geometry`'s
+  area/perimeter functions.
+- **Consistency.** Mark all intended-public functions `pub` (currently only `math`
+  and `heap` do); remove or rebuild the vestigial `stack/node.vow`.
+- **Distribution.** A module search path so stdlib modules can be imported without
+  copying source into the consuming project.
+
+---
+
 # Worked Examples
 
 Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`. The sixth shows bounded-memory streaming file input.
@@ -5271,25 +5640,25 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "title": "Counterexample",
   "description": "A structured counterexample from ESBMC verification failure",
   "type": "object",
-  "required": ["function", "inputs", "violation", "vow_id", "source"],
+  "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
     "function": {
       "type": "string",
-      "description": "Name of the function where verification failed"
+      "description": "Name of the function whose verification query failed"
     },
-    "inputs": {
+    "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of parameter names to counterexample values"
+      "description": "Map of source names or ESBMC variable names to counterexample values"
     },
     "violation": {
       "type": "string",
-      "description": "Description of the violated contract"
+      "description": "Description of the violated contract clause"
     },
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Numeric ID of the violated vow (matches vow_id in VowViolation)"
+      "description": "Function-local ID of the violated vow clause"
     },
     "source": {
       "oneOf": [
@@ -5303,18 +5672,80 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "additionalProperties": false
         },
+        { "type": "string" },
         { "type": "null" }
       ],
-      "description": "Source location of the violated vow clause, or null"
+      "description": "Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["caller", "callee", "none"],
+      "description": "Who is responsible for the violation"
+    },
+    "call_sites": {
+      "type": "array",
+      "description": "Caller locations relevant to caller-blame failures",
+      "items": {
+        "type": "object",
+        "required": ["caller_function", "file", "offset", "length"],
+        "properties": {
+          "caller_function": { "type": "string" },
+          "file": { "type": "string" },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "violating_args": {
+      "type": "array",
+      "description": "Callee parameters and caller argument spans for caller-blame precondition failures",
+      "items": {
+        "type": "object",
+        "required": ["param", "value", "arg_offset", "arg_length"],
+        "properties": {
+          "param": { "type": "string" },
+          "value": { "type": "string" },
+          "arg_offset": { "type": "integer", "minimum": 0 },
+          "arg_length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "execution_path": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["block_id", "offset", "length"],
+        "properties": {
+          "block_id": { "type": "integer", "minimum": 0 },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "branch_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["condition_offset", "condition_length", "taken"],
+        "properties": {
+          "condition_offset": { "type": "integer", "minimum": 0 },
+          "condition_length": { "type": "integer", "minimum": 0 },
+          "taken": { "type": "string", "enum": ["then", "else"] }
+        },
+        "additionalProperties": false
+      }
     },
     "replay": {
       "type": "string",
       "enum": ["confirmed", "diverged", "skipped"],
-      "description": "Differential-test outcome (present only with --replay-cex): whether a debug-mode harness replaying the counterexample's concrete inputs fired the same VowViolation (vow_id + blame). Not part of the soundness proof."
+      "description": "Differential-test outcome, present only with --replay-cex"
     },
     "replay_reason": {
       "type": "string",
-      "description": "Human-readable explanation for a diverged or skipped replay (present only with --replay-cex when replay is not confirmed)"
+      "description": "Human-readable explanation for a diverged or skipped replay"
     }
   },
   "additionalProperties": false
@@ -6935,18 +7366,25 @@ that path produces `Unverified` (exit 0).
   "counterexamples": [
     {
       "function": "safe_sub",
-      "inputs": { "a": "-9223372036854775808", "b": "0" },
+      "values": { "a": "-9223372036854775808", "b": "0" },
       "violation": "ensures result >= 0",
       "vow_id": 1,
       "source": {
         "file": "examples/cegis_broken.vow",
         "offset": 76,
         "length": 20
-      }
+      },
+      "blame": "callee"
     }
   ]
 }
 ```
+
+For caller-blame failures where a verified function violates a callee's
+`requires` clause, the counterexample reports the callee clause in `violation`
+and `vow_id`, and includes the caller expression in `call_sites`. When the
+callee precondition binds a parameter, `violating_args` names the callee
+parameter, the counterexample value when available, and the caller argument span.
 
 ### Fields Reference
 
@@ -7505,20 +7943,27 @@ A counterexample in the JSON output:
 ```json
 {
   "function": "safe_sub",
-  "inputs": { "a": "-9223372036854775808", "b": "0" },
+  "values": { "a": "-9223372036854775808", "b": "0" },
   "violation": "ensures result >= 0",
   "vow_id": 1,
-  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 }
+  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 },
+  "blame": "callee"
 }
 ```
 
-| Field       | Meaning                                                |
-|-------------|--------------------------------------------------------|
-| `function`  | Which function failed                                  |
-| `inputs`    | Parameter values that trigger the violation            |
-| `violation` | Which contract clause was violated                     |
-| `vow_id`    | Internal ID linking to the specific vow clause         |
-| `source`    | Byte offset in the source file of the violated clause  |
+| Field       | Meaning                                                        |
+|-------------|----------------------------------------------------------------|
+| `function`  | Which function's verification query failed                     |
+| `values`    | Source or ESBMC variable values in the counterexample           |
+| `violation` | Which contract clause was violated                             |
+| `vow_id`    | Function-local ID linking to the specific vow clause            |
+| `source`    | Byte offset in the source file of the violated clause           |
+| `blame`     | Whether the caller, callee, or neither party is responsible     |
+
+When caller code violates a callee's `requires` clause, `violation` and
+`vow_id` identify the callee clause. `call_sites` points back to the caller
+expression, and `violating_args` identifies the callee parameter and caller
+argument span when Vow can recover it.
 
 Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
 
@@ -8515,6 +8960,360 @@ The `operation` field is `arena_open` for the initial chunk allocation or `arena
 "#,
         ),
         (
+            r#"reference/stdlib.md"#,
+            r#"# Vow Standard Library
+
+The standard library is a curated set of reusable, contract-annotated Vow modules
+under `stdlib/`. Each module is a self-contained directory: one or more library
+`.vow` files plus a `main.vow` that demonstrates and exercises the API.
+
+This is a **reference collection**, not a globally-importable package set. Vow has
+no module search path today (see [Consumption model](#consumption-model)). Modules
+carry contracts, but only some are statically verifiable under the current ESBMC
+model — read [Verification status](#verification-status) before relying on a
+contract as a proof rather than a runtime check.
+
+In all examples below, `vow` refers to `build/vowc`. Always run `ulimit -v 2000000`
+before invoking the compiler or any binary it produces.
+
+## Modules at a glance
+
+| Module path           | Provides                                                                 | ESBMC status |
+|-----------------------|-------------------------------------------------------------------------|---------------------------|
+| `stdlib/math`         | `arithmetic`, `number_theory`, `vec_math` — integer & vector math        | VerifyFailed (env)        |
+| `stdlib/heap`         | `min_heap`, `max_heap` — binary heaps over `i64`                          | VerifyFailed (env)        |
+| `stdlib/stack`        | `stack` — Vec-backed LIFO stack over `i64`                               | Skipped     |
+| `stdlib/geometry`     | `point`, `shape` — 2D points, circles, rectangles                        | **Verified**              |
+| `stdlib/bignum`       | `bignum` — arbitrary-precision signed integers                          | Skipped     |
+| `stdlib/gc`           | `gc` — mark-and-sweep garbage collector over `i64` slots                 | VerifyFailed              |
+
+These are the `vow verify <module>/main.vow` results, measured against ESBMC 8.3.0. `(env)` marks an environmental verifier limitation, not a contract
+defect. The statuses reflect the verifier's memory model, **not** the soundness of
+the contracts — see [Verification status](#verification-status).
+
+## Consumption model
+
+`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,
+where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.
+All transitive `use`s in dependency modules resolve against that **same** directory.
+There is no search path, and `--module-root` is only available on `vow test` — not
+`vow build` or `vow verify`.
+
+Two practical ways to use a stdlib module:
+
+**1. Run the module's own demo in place.** Each module ships a `main.vow`. Build with
+`--no-verify` — most stdlib modules do not pass `vow verify` yet (see
+[Verification status](#verification-status)), and the point here is to *run* the demo,
+not to verify it:
+```
+$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
+$ ulimit -v 2000000; /tmp/math_demo
+```
+
+**2. Copy the module's `.vow` file(s) into your project directory.** Because `use`
+resolves against your entry file's directory, the library file must sit next to
+your program. For a single-file module:
+```
+$ cp stdlib/math/arithmetic.vow myproject/arithmetic.vow
+```
+```vow
+module Main
+use arithmetic
+
+fn main() -> i32 [io] {
+    print_i64(clamp(15, 0, 10));   // 10
+    0
+}
+```
+For a multi-file module, copy **all** sibling files together — e.g. `stdlib/geometry`
+ships `shape.vow` which internally does `use point`, so `point.vow` must be copied
+alongside it.
+
+> A real import mechanism (a module search path so `use std.math.arithmetic`
+> resolves from any location) is future work. Until then, treat stdlib modules as
+> vendored source you copy in, exactly like the self-hosted compiler's own modules.
+
+## Verification status
+
+The verifier statuses below were measured with `vow verify` against ESBMC 8.3.0.
+They are **pre-existing properties of the code and the verifier**, unchanged by the
+move into `stdlib/`. A `Skipped`/`VerifyFailed` status does not mean a contract is
+wrong — in `--mode debug` every contract is still enforced at runtime via
+`__vow_violation`.
+
+| Module          | `vow verify` result | Why                                                                                                   |
+|-----------------|---------------------|-------------------------------------------------------------------------------------------------------|
+| `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation — see the geometry section.) |
+| `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |
+| `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |
+| `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |
+| `bignum`        | `Skipped`           | `Vec`-based limb arithmetic allocates per call (`RegionAlloc`); not modelable. 24 `RegionRootEscape` notes (the demo intentionally holds results for program lifetime). |
+| `gc`            | `VerifyFailed`      | ESBMC produces a `gc_add_root` precondition counterexample related to in-module caller-`requires` checking (cf. issue #764). |
+
+\* Environmental verifier limitation, not a contract defect.
+
+**Takeaway for agents:** only `geometry`'s `vow verify` passes today — and that proves
+the *vowed* checks reachable from its demo, not every function (e.g. `point_distance_sq`
+carries no contract and is not a proof obligation). For
+the others, the contracts are precise specifications that are enforced at runtime in
+`--mode debug`; static proof is gated on verifier-model improvements (Vec/region
+modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build
+on these modules and need a *static* guarantee, prefer `geometry`'s pattern: keep
+hot paths in plain `i64` with explicit overflow `requires`.
+
+---
+
+## math
+
+Three modules under `stdlib/math/`. Each is independent (no cross-`use`); copy only
+the one you need. All functions are `pub`.
+
+### math.arithmetic
+
+Integer primitives with overflow-guarded contracts. The `safe_*` family operates on
+**non-negative** inputs only — they are overflow-checked unsigned-style helpers, not
+general signed wrappers.
+
+| Function | Signature | Key contracts | Notes |
+|----------|-----------|---------------|-------|
+| `abs` | `(x: i64) -> i64` | `requires x > -9223372036854775807`; `ensures result >= 0`; `ensures result == x \|\| result == 0 - x` | Guards `i64::MIN` negation overflow. |
+| `min` | `(a, b: i64) -> i64` | `ensures result <= a`; `result <= b`; `result == a \|\| result == b` | Tight: result is one of the inputs. |
+| `max` | `(a, b: i64) -> i64` | `ensures result >= a`; `result >= b`; `result == a \|\| result == b` | |
+| `clamp` | `(x, lo, hi: i64) -> i64` | `requires lo <= hi`; `ensures lo <= result <= hi` | |
+| `sign` | `(x: i64) -> i64` | `ensures -1 <= result <= 1` | -1 / 0 / 1. |
+| `safe_add` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a <= I64_MAX - b`; `ensures result == a + b` | Non-negative inputs only. |
+| `safe_sub` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a >= b`; `ensures 0 <= result <= a` | |
+| `safe_mul` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, b == 0 \|\| a <= I64_MAX / b`; `ensures result == a * b` | |
+| `safe_div` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result <= a` | `b > 0`, not just `b != 0`. |
+| `safe_mod` | `(a, b: i64) -> i64` | `requires a >= 0, b > 0`; `ensures 0 <= result < b` | |
+| `pow` | `(base, exp: i64) -> i64` | `requires base >= 0, exp >= 0`; `ensures result >= 0` | O(exp) — no fast exponentiation; no overflow guard on the running product. |
+| `midpoint` | `(a, b: i64) -> i64` | `requires a >= 0, a <= b`; `ensures a <= result <= b` | Overflow-safe `a + (b-a)/2`. |
+| `diff` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0`; `ensures result >= 0` | `|a - b|`. |
+| `divides` | `(d, n: i64) -> bool` | `requires d != 0` | |
+| `is_even` / `is_odd` | `(x: i64) -> bool` | — | |
+
+Representative contract — overflow guard expressed in the precondition rather than
+via checked arithmetic:
+```vow
+pub fn safe_mul(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: b == 0 || a <= 9223372036854775807 / b,
+    ensures: result == a * b,
+    ensures: result >= 0
+}
+```
+
+### math.number_theory
+
+| Function | Signature | Key contracts | Notes |
+|----------|-----------|---------------|-------|
+| `gcd` | `(a, b: i64) -> i64` | `requires a >= 0, b >= 0, a > 0 \|\| b > 0`; `ensures result > 0` | Euclid; loop invariants `x >= 0, y >= 0`. |
+| `lcm` | `(a, b: i64) -> i64` | `requires a > 0, b > 0`; `ensures result > 0` | No overflow guard on `(a/g)*b`. |
+| `is_prime` | `(n: i64) -> bool` | `requires n >= 0` | Trial division to `i*i <= n`. |
+| `power_mod` | `(base, exp, modulus: i64) -> i64` | `requires base >= 0, exp >= 0, modulus > 1, modulus <= 3037000499`; `ensures 0 <= result < modulus` | Modulus bound = `isqrt(I64_MAX)`, prevents `(r*b)` overflow. |
+| `factorial` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 1` | No upper bound on `n` — product overflows past 20!. |
+| `fibonacci` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0` | Iterative; overflows past F(92). |
+| `isqrt` | `(n: i64) -> i64` | `requires n >= 0`; `ensures result >= 0, result*result <= n` | Floor integer sqrt; postcondition is the real spec. |
+| `largest_divisor` | `(n: i64) -> i64` | `requires n > 1`; `ensures 1 <= result < n` | Largest proper divisor. |
+| `count_divisors` | `(n: i64) -> i64` | `requires n > 0`; `ensures result >= 1` | |
+
+### math.vec_math
+
+Operates on `Vec<i64>`. None of the summation helpers guard against accumulator
+overflow — use on bounded data, or add `requires` bounds at the call site.
+
+| Function | Signature | Key contracts | Notes |
+|----------|-----------|---------------|-------|
+| `vec_sum` | `(v: Vec<i64>) -> i64` | — | No overflow guard. |
+| `vec_min` / `vec_max` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | |
+| `vec_mean` | `(v: Vec<i64>) -> i64` | `requires v.len() > 0` | Integer mean. |
+| `vec_dot` | `(a, b: Vec<i64>) -> i64` | `requires a.len() == b.len()` | |
+| `vec_count` | `(v: Vec<i64>, target: i64) -> i64` | `ensures 0 <= result <= v.len()` | Invariant `count <= i`. |
+| `vec_all_in_range` | `(v: Vec<i64>, lo, hi: i64) -> bool` | `requires lo <= hi` | |
+| `vec_is_sorted` | `(v: Vec<i64>) -> bool` | — | Ascending. |
+| `vec_prefix_sum` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
+| `vec_reverse` | `(v: Vec<i64>) -> Vec<i64>` | `ensures result.len() == v.len()` | |
+
+---
+
+## heap
+
+`stdlib/heap/min_heap.vow` and `max_heap.vow` are structural mirrors (a min-heap and
+a max-heap over `i64`), with the comparator flipped. Both are value types: every
+mutator takes a heap by value and returns a new one.
+
+The defining contract pattern is the **size-shadow invariant** `size == data.len()`,
+threaded through every mutator. This is what lets ESBMC reason about in-bounds
+`data[i]` access without a universal quantifier:
+```vow
+pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
+    requires: h.size == h.data.len(),
+    requires: h.size < 9223372036854775807,
+    ensures: result.size == h.size + 1,
+    ensures: result.size == result.data.len()
+}
+```
+
+| Function (min; `max_*` mirrors) | Signature | Key contracts |
+|---------------------------------|-----------|---------------|
+| `min_heap_new` | `() -> MinHeap` | `ensures result.size == 0, result.data.len() == 0` |
+| `min_heap_len` | `(h) -> i64` | `ensures result == h.size` |
+| `min_heap_is_empty` | `(h) -> bool` | `ensures result == (h.size == 0)` |
+| `min_heap_push` | `(h, val: i64) -> MinHeap` | size-shadow in/out; `ensures result.size == h.size + 1` |
+| `min_heap_peek` | `(h) -> i64` | `requires h.size > 0, size-shadow`; `ensures result == h.data[0]` |
+| `min_heap_pop` | `(h) -> MinHeap` | `requires h.size > 0, size-shadow`; `ensures result.size == h.size - 1` |
+| `min_heap_clear` | `(h) -> MinHeap` | size-shadow in; `ensures result.size == 0` |
+| `is_min_heap` | `(h) -> bool` | `requires size-shadow` — runtime check of the heap-order property |
+
+**Heap-order is a runtime predicate, by design.** Vow has no universal quantifier, so
+the property `∀i. data[parent(i)] <= data[i]` cannot be written as an `ensures`.
+`is_min_heap` / `is_max_heap` check it at runtime instead; the static contracts cover
+index safety and the size-shadow invariant only.
+
+---
+
+## stack
+
+`stdlib/stack/stack.vow` — a `Vec<i64>`-backed LIFO stack (value type). `node.vow` in
+the same directory is a vestigial `Node` struct kept for the demo; the stack does not
+use it.
+
+| Function | Signature | Key contracts |
+|----------|-----------|---------------|
+| `stack_new` | `() -> Stack` | — |
+| `stack_push` | `(s, val: i64) -> Stack` | `ensures result.size == s.size + 1` |
+| `stack_peek` | `(s) -> i64` | `requires s.size > 0` |
+| `stack_size` | `(s) -> i64` | — |
+| `stack_is_empty` | `(s) -> bool` | — |
+
+**Known gaps (move-verbatim; tracked follow-up):** no `stack_pop`; no size-shadow
+invariant (`size == data.len()`) like `heap` has; `stack_peek` has no `ensures`
+relating the result to `data[size-1]`; functions are not marked `pub`; `node.vow` is
+unused.
+
+---
+
+## geometry
+
+`stdlib/geometry/point.vow` (a `Point` struct) and `shape.vow` (a `Shape` enum with
+circle/rectangle area and perimeter). **The only module whose `vow verify` passes
+today** — its shape functions use exact derived overflow bounds. Note this means the
+*vowed* checks verify (`vow verify stdlib/geometry/main.vow` → `Verified`); it is not a
+proof of the whole API, since `point_distance_sq` carries no contract (see Known gaps).
+
+| Function | Signature | Key contracts |
+|----------|-----------|---------------|
+| `point_new` / `point_x` / `point_y` | `Point` accessors | — |
+| `point_distance_sq` | `(a, b: Point) -> i64` | — (no overflow guard — gap for large coordinates) |
+| `circle_area` | `(r: i64) -> i64` | `requires 0 <= r <= 1753413056`; `ensures result >= 0` |
+| `rect_area` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, h == 0 \|\| w <= I64_MAX / h`; `ensures result >= 0` |
+| `circle_perimeter` | `(r: i64) -> i64` | `requires 0 <= r <= 1537228672809129301`; `ensures result >= 0` |
+| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, w <= 4611686018427387903 - h`; `ensures result >= 0` |
+
+Each magic bound is the exact threshold below which the arithmetic cannot overflow —
+e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:
+```vow
+fn circle_area(r: i64) -> i64 vow {
+    requires: r >= 0,
+    requires: r <= 1753413056,
+    ensures: result >= 0
+}
+```
+
+**Known gaps:** the `Shape` enum is declared but the area/perimeter functions are
+free functions that don't dispatch on it; `point_distance_sq` lacks an overflow
+guard; `shape_at` is a demo artifact, not a real API.
+
+---
+
+## bignum
+
+`stdlib/bignum/bignum.vow` — arbitrary-precision **signed** integers in base 10⁹
+sign-magnitude form (`struct BigNum { digits: Vec<i64>, sign: i64 }`). Pure core
+language; no builtins beyond `Vec`/`String`/`i64`.
+
+**Public API (selected):**
+- Construct: `bignum_zero`, `bignum_from_i64`, `bignum_from_string`
+- Convert: `bignum_to_string`
+- Predicates: `bignum_is_zero`, `bignum_is_negative`, `bignum_is_positive`
+- Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`
+- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
+- Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`
+
+**Contracts present:** `bignum_sub_abs` requires `bignum_cmp_abs(a, b) >= 0`;
+`bignum_div`/`bignum_mod`/`bignum_divmod` require `!bignum_is_zero(b)`; `bignum_pow`
+requires `exp >= 0`; `bignum_factorial` requires `n >= 0`.
+
+**Semantics to know:**
+- The representation invariant (non-empty `digits`, no leading-zero limbs except the
+  canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`) is maintained internally
+  but **not** stated as a struct invariant or `ensures`.
+- Division truncates toward zero; the remainder's sign matches the dividend.
+- `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
+- `bignum_gcd` operates on absolute values; the result is non-negative.
+- Multiplication is O(n·m) schoolbook (no Karatsuba).
+- Helpers prefixed for internal use (`bignum_strip_zeros`, `bignum_shift_limbs`,
+  `i64_to_decimal*`, `bignum_divmod_long`, …) are not part of the public API.
+
+**Verification:** `Skipped` — limb arithmetic allocates `Vec`s per call (`RegionAlloc`),
+which the verifier cannot model. Contracts are runtime-enforced in `--mode debug`.
+
+---
+
+## gc
+
+`stdlib/gc/gc.vow` — a mark-and-sweep garbage collector over a heap of `i64` values
+with explicit roots and reference edges (`struct GcHeap`). Slots are opaque integer
+handles returned by `gc_alloc`; never fabricate them.
+
+| Function | Signature | Key contracts |
+|----------|-----------|---------------|
+| `gc_new` | `() -> GcHeap` | — |
+| `gc_alloc` | `(h, val: i64) -> i64` | — (returns a slot; reuses freed slots) |
+| `gc_add_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_remove_root` | `(h, slot: i64)` | `requires 0 <= slot < values.len()` (does **not** require alive — you may unroot a freed slot) |
+| `gc_add_ref` | `(h, from, to: i64)` | `requires` both in range and alive |
+| `gc_read` | `(h, slot: i64) -> i64` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_write` | `(h, slot, val: i64)` | `requires 0 <= slot < values.len(), alive[slot] == 1` |
+| `gc_is_alive` | `(h, slot: i64) -> bool` | `requires 0 <= slot < values.len()` |
+| `gc_count` | `(h) -> i64` | — |
+| `gc_collect` | `(h) -> i64` | — (returns count of newly-freed objects) |
+
+**Semantics to know:**
+- `gc_collect` invalidates every slot not reachable from a root; calling
+  `gc_read`/`gc_write` on a freed slot violates its precondition.
+- Roots and references are not deduplicated — adding a root twice needs two
+  `gc_remove_root` calls.
+- The heap stores only `i64`; represent richer object graphs as indices/tagged ints.
+- Mark/sweep handles cycles naturally via the mark bit; no separate cycle detection.
+
+**Verification:** `VerifyFailed` — ESBMC produces a `gc_add_root` precondition
+counterexample tied to how in-module caller-`requires` are checked (cf. issue #764).
+Contracts are runtime-enforced in `--mode debug`.
+
+---
+
+## Known gaps and roadmap
+
+These are tracked follow-ups, intentionally **not** addressed by the reorg that
+created `stdlib/` (which moved code verbatim):
+
+- **Static verifiability.** Make `Vec`/region-allocating functions modelable so
+  `stack`, `bignum`, and most of `heap` can be statically verified; rename `abs` to
+  avoid the C `<stdlib.h>` collision that blocks `math`; resolve the `gc_add_root`
+  caller-`requires` counterexample (#764).
+- **Contract hardening.** Add struct/representation invariants and `ensures` clauses
+  to `bignum` and `gc`; add a size-shadow invariant and `stack_pop` to `stack`; add
+  an overflow guard to `point_distance_sq`; wire the `Shape` enum into `geometry`'s
+  area/perimeter functions.
+- **Consistency.** Mark all intended-public functions `pub` (currently only `math`
+  and `heap` do); remove or rebuild the vestigial `stack/node.vow`.
+- **Distribution.** A module search path so stdlib modules can be imported without
+  copying source into the consuming project.
+"#,
+        ),
+        (
             r#"examples/examples.md"#,
             r#"# Worked Examples
 
@@ -9330,25 +10129,25 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "title": "Counterexample",
   "description": "A structured counterexample from ESBMC verification failure",
   "type": "object",
-  "required": ["function", "inputs", "violation", "vow_id", "source"],
+  "required": ["function", "values", "violation", "vow_id", "source", "blame"],
   "properties": {
     "function": {
       "type": "string",
-      "description": "Name of the function where verification failed"
+      "description": "Name of the function whose verification query failed"
     },
-    "inputs": {
+    "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of parameter names to counterexample values"
+      "description": "Map of source names or ESBMC variable names to counterexample values"
     },
     "violation": {
       "type": "string",
-      "description": "Description of the violated contract"
+      "description": "Description of the violated contract clause"
     },
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Numeric ID of the violated vow (matches vow_id in VowViolation)"
+      "description": "Function-local ID of the violated vow clause"
     },
     "source": {
       "oneOf": [
@@ -9362,18 +10161,80 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "additionalProperties": false
         },
+        { "type": "string" },
         { "type": "null" }
       ],
-      "description": "Source location of the violated vow clause, or null"
+      "description": "Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["caller", "callee", "none"],
+      "description": "Who is responsible for the violation"
+    },
+    "call_sites": {
+      "type": "array",
+      "description": "Caller locations relevant to caller-blame failures",
+      "items": {
+        "type": "object",
+        "required": ["caller_function", "file", "offset", "length"],
+        "properties": {
+          "caller_function": { "type": "string" },
+          "file": { "type": "string" },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "violating_args": {
+      "type": "array",
+      "description": "Callee parameters and caller argument spans for caller-blame precondition failures",
+      "items": {
+        "type": "object",
+        "required": ["param", "value", "arg_offset", "arg_length"],
+        "properties": {
+          "param": { "type": "string" },
+          "value": { "type": "string" },
+          "arg_offset": { "type": "integer", "minimum": 0 },
+          "arg_length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "execution_path": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["block_id", "offset", "length"],
+        "properties": {
+          "block_id": { "type": "integer", "minimum": 0 },
+          "offset": { "type": "integer", "minimum": 0 },
+          "length": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "branch_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["condition_offset", "condition_length", "taken"],
+        "properties": {
+          "condition_offset": { "type": "integer", "minimum": 0 },
+          "condition_length": { "type": "integer", "minimum": 0 },
+          "taken": { "type": "string", "enum": ["then", "else"] }
+        },
+        "additionalProperties": false
+      }
     },
     "replay": {
       "type": "string",
       "enum": ["confirmed", "diverged", "skipped"],
-      "description": "Differential-test outcome (present only with --replay-cex): whether a debug-mode harness replaying the counterexample's concrete inputs fired the same VowViolation (vow_id + blame). Not part of the soundness proof."
+      "description": "Differential-test outcome, present only with --replay-cex"
     },
     "replay_reason": {
       "type": "string",
-      "description": "Human-readable explanation for a diverged or skipped replay (present only with --replay-cex when replay is not confirmed)"
+      "description": "Human-readable explanation for a diverged or skipped replay"
     }
   },
   "additionalProperties": false
@@ -10330,36 +11191,280 @@ fn map_counterexample_values(
         .collect()
 }
 
+fn call_site_args_match_counterexample(
+    callee: &vow_ir::Function,
+    entry: &vow_ir::VowEntry,
+    mapped_values: &[(String, String)],
+    call_site: &CallSiteInfo,
+) -> bool {
+    let mut matched_binding = false;
+    for (binding_name, _) in &entry.bindings {
+        let Some(param_idx) = callee.param_names.iter().position(|n| n == binding_name) else {
+            return false;
+        };
+        let Some((_, expected_value)) = mapped_values
+            .iter()
+            .find(|(name, value)| name == binding_name && !value.is_empty())
+        else {
+            return false;
+        };
+        let Some(Some(actual_value)) = call_site.arg_values.get(param_idx) else {
+            return false;
+        };
+        if actual_value != expected_value {
+            return false;
+        }
+        matched_binding = true;
+    }
+    matched_binding
+}
+
+fn callee_precondition_predicate_inst_id(
+    callee: &vow_ir::Function,
+    entry: &vow_ir::VowEntry,
+) -> Option<u32> {
+    use vow_ir::{InstData, Opcode};
+    for block in &callee.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::VowRequires
+                && let InstData::VowId(id) = inst.data
+                && id == entry.id
+            {
+                return inst.args.first().map(|arg| arg.0);
+            }
+        }
+    }
+    None
+}
+
+fn eval_callee_i64_for_call_site(
+    inst_id: u32,
+    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
+    call_site: &CallSiteInfo,
+) -> Option<i64> {
+    use vow_ir::{InstData, Opcode};
+    let inst = *inst_by_id.get(&inst_id)?;
+    match inst.opcode {
+        Opcode::ConstI32 => {
+            if let InstData::ConstI32(v) = inst.data {
+                Some(v as i64)
+            } else {
+                None
+            }
+        }
+        Opcode::ConstI64 => {
+            if let InstData::ConstI64(v) = inst.data {
+                Some(v)
+            } else {
+                None
+            }
+        }
+        Opcode::ConstU64 => {
+            if let InstData::ConstU64(v) = inst.data {
+                i64::try_from(v).ok()
+            } else {
+                None
+            }
+        }
+        Opcode::GetArg => {
+            if let InstData::ArgIndex(idx) = inst.data {
+                call_site
+                    .arg_values
+                    .get(idx as usize)?
+                    .as_ref()?
+                    .parse::<i64>()
+                    .ok()
+            } else {
+                None
+            }
+        }
+        Opcode::WrappingAddI32
+        | Opcode::CheckedAddI32
+        | Opcode::WrappingAddI64
+        | Opcode::CheckedAddI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs.wrapping_add(rhs))
+        }
+        Opcode::WrappingSubI32
+        | Opcode::CheckedSubI32
+        | Opcode::WrappingSubI64
+        | Opcode::CheckedSubI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs.wrapping_sub(rhs))
+        }
+        Opcode::WrappingMulI32
+        | Opcode::CheckedMulI32
+        | Opcode::WrappingMulI64
+        | Opcode::CheckedMulI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs.wrapping_mul(rhs))
+        }
+        _ => None,
+    }
+}
+
+fn eval_callee_bool_for_call_site(
+    inst_id: u32,
+    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
+    call_site: &CallSiteInfo,
+) -> Option<bool> {
+    use vow_ir::{InstData, Opcode};
+    let inst = *inst_by_id.get(&inst_id)?;
+    match inst.opcode {
+        Opcode::ConstBool => {
+            if let InstData::ConstBool(v) = inst.data {
+                Some(v)
+            } else {
+                None
+            }
+        }
+        Opcode::GetArg => {
+            if let InstData::ArgIndex(idx) = inst.data {
+                match call_site.arg_values.get(idx as usize)?.as_deref()? {
+                    "true" => Some(true),
+                    "false" => Some(false),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        Opcode::EqI32 | Opcode::EqI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs == rhs)
+        }
+        Opcode::NeI32 | Opcode::NeI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs != rhs)
+        }
+        Opcode::LtI32 | Opcode::LtI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs < rhs)
+        }
+        Opcode::LeI32 | Opcode::LeI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs <= rhs)
+        }
+        Opcode::GtI32 | Opcode::GtI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs > rhs)
+        }
+        Opcode::GeI32 | Opcode::GeI64 => {
+            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs >= rhs)
+        }
+        Opcode::Not => {
+            let value =
+                eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            Some(!value)
+        }
+        Opcode::And => {
+            let lhs = eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_bool_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs && rhs)
+        }
+        Opcode::Or => {
+            let lhs = eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
+            let rhs = eval_callee_bool_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
+            Some(lhs || rhs)
+        }
+        _ => None,
+    }
+}
+
+fn filter_callee_precondition_call_sites(
+    candidates: Vec<CallSiteInfo>,
+    callee: &vow_ir::Function,
+    entry: &vow_ir::VowEntry,
+    mapped_values: &[(String, String)],
+) -> Vec<CallSiteInfo> {
+    let inst_by_id: std::collections::HashMap<u32, &vow_ir::Inst> = callee
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .map(|inst| (inst.id.0, inst))
+        .collect();
+    let predicate_inst_id = callee_precondition_predicate_inst_id(callee, entry);
+    let exact_matches: Vec<CallSiteInfo> = candidates
+        .iter()
+        .filter(|cs| {
+            call_site_args_match_counterexample(callee, entry, mapped_values, cs)
+                || predicate_inst_id
+                    .and_then(|id| eval_callee_bool_for_call_site(id, &inst_by_id, cs))
+                    == Some(false)
+        })
+        .cloned()
+        .collect();
+    if exact_matches.is_empty() {
+        candidates
+    } else {
+        exact_matches
+    }
+}
+
+#[cfg(test)]
 fn build_structured_counterexample(
     func: &vow_ir::Function,
     ce: &Counterexample,
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
 ) -> StructuredCounterexample {
+    build_structured_counterexample_with_module(func, None, ce, file, call_site_index)
+}
+
+fn build_structured_counterexample_with_module(
+    func: &vow_ir::Function,
+    module: Option<&vow_ir::Module>,
+    ce: &Counterexample,
+    file: &str,
+    call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
+) -> StructuredCounterexample {
     use vow_ir::InstData;
     let vid = ce.vow_id.unwrap_or(0);
+    let resolved_callee_precondition = ce.callee_precondition.and_then(|pre| {
+        let module = module?;
+        let callee = module.functions.iter().find(|f| f.id.0 == pre.func_id)?;
+        let entry = callee.vows.iter().find(|v| v.id.0 == pre.vow_id)?;
+        Some((callee, entry))
+    });
+
     // ESBMC tripped a fail-closed assertion that vow-verify's c_emitter inserts
     // for opcodes the verifier model does not handle. The sentinel id is
     // reserved and never matches a user-authored vow, so synthesize a
     // diagnostic that an agent can act on instead of letting the code below
     // fall through to the generic "unmatched id" path.
     let unsupported_op = ce.vow_id == Some(UNSUPPORTED_OP_VOW_ID);
-    // A co-emitted callee's `requires` was violated by this caller. The sentinel
-    // id deliberately does not match any vow in `func`, so synthesize a
-    // Caller-blamed precondition diagnostic rather than mis-resolving it to the
-    // target function's vow of the same local index.
-    let caller_precondition = ce.vow_id == Some(CALLER_PRECONDITION_VOW_ID);
-    let vow_entry = ce
-        .vow_id
-        .and_then(|id| func.vows.iter().find(|v| v.id.0 == id));
+    // A co-emitted callee's `requires` was violated by this caller. New C labels
+    // carry the callee function id and callee-local vow id; keep the old
+    // sentinel branch for stale cache entries or older verifier output.
+    let caller_precondition =
+        ce.callee_precondition.is_some() || ce.vow_id == Some(CALLER_PRECONDITION_VOW_ID);
+    let vow_func = resolved_callee_precondition
+        .map(|(callee, _)| callee)
+        .unwrap_or(func);
+    let vow_entry = resolved_callee_precondition
+        .map(|(_, entry)| entry)
+        .or_else(|| {
+            ce.vow_id
+                .and_then(|id| func.vows.iter().find(|v| v.id.0 == id))
+        });
     let violation = if unsupported_op {
         "function uses side-effecting operations not supported for verification".to_string()
+    } else if let Some(entry) = vow_entry {
+        entry.description.clone()
     } else if caller_precondition {
         "callee precondition violated by the caller".to_string()
     } else {
-        vow_entry
-            .map(|v| v.description.clone())
-            .unwrap_or_else(|| ce.description.clone())
+        ce.description.clone()
     };
     let blame = if caller_precondition {
         "caller".to_string()
@@ -10373,18 +11478,45 @@ fn build_structured_counterexample(
             .unwrap_or("none")
             .to_string()
     };
-    let source = ce
-        .vow_id
-        .and_then(|id| find_vow_span(func, id))
-        .map(|span| CeSource {
-            file: file.to_string(),
-            offset: span.start,
-            length: span.len,
-        });
-    let name_map = build_c_to_source_name_map(func);
+    let source = if unsupported_op {
+        None
+    } else {
+        vow_entry.and_then(|entry| {
+            find_vow_span(vow_func, entry.id.0).map(|span| {
+                let source_file = if !entry.file.is_empty() {
+                    entry.file.clone()
+                } else if !vow_func.source_file.is_empty() {
+                    vow_func.source_file.clone()
+                } else {
+                    file.to_string()
+                };
+                CeSource {
+                    file: source_file,
+                    offset: span.start,
+                    length: span.len,
+                }
+            })
+        })
+    };
+    let value_func = vow_func;
+    let name_map = build_c_to_source_name_map(value_func);
     let mapped_values = map_counterexample_values(&ce.values, &name_map);
-    let sites_raw = if blame == "caller" {
-        call_site_index.get(&func.name).cloned().unwrap_or_default()
+    let sites_raw: Vec<CallSiteInfo> = if blame == "caller" {
+        if let Some((callee, entry)) = resolved_callee_precondition {
+            let candidates = call_site_index
+                .get(&callee.name)
+                .map(|sites| {
+                    sites
+                        .iter()
+                        .filter(|cs| cs.caller_function == func.name)
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            filter_callee_precondition_call_sites(candidates, callee, entry, &mapped_values)
+        } else {
+            call_site_index.get(&func.name).cloned().unwrap_or_default()
+        }
     } else {
         vec![]
     };
@@ -10403,17 +11535,29 @@ fn build_structured_counterexample(
         if let Some(entry) = vow_entry {
             let mut args = Vec::new();
             for (binding_name, _inst_id) in &entry.bindings {
-                if let Some(param_idx) = func.param_names.iter().position(|n| n == binding_name) {
-                    let value = mapped_values
+                if let Some(param_idx) = value_func
+                    .param_names
+                    .iter()
+                    .position(|n| n == binding_name)
+                {
+                    let mapped_value = mapped_values
                         .iter()
                         .find(|(n, _)| n == binding_name)
                         .map(|(_, v)| v.clone())
                         .unwrap_or_default();
                     for cs in &sites_raw {
                         if let Some(&(off, len)) = cs.arg_spans.get(param_idx) {
+                            let value = if mapped_value.is_empty() {
+                                cs.arg_values
+                                    .get(param_idx)
+                                    .and_then(|v| v.clone())
+                                    .unwrap_or_default()
+                            } else {
+                                mapped_value.clone()
+                            };
                             args.push(CeViolatingArg {
                                 param: binding_name.clone(),
-                                value: value.clone(),
+                                value,
                                 arg_offset: off,
                                 arg_length: len,
                             });
@@ -11119,6 +12263,91 @@ struct CallSiteInfo {
     offset: u32,
     length: u32,
     arg_spans: Vec<(u32, u32)>,
+    arg_values: Vec<Option<String>>,
+}
+
+fn inst_constant_value_for_counterexample(inst: &vow_ir::Inst) -> Option<String> {
+    use vow_ir::{InstData, Opcode};
+    match inst.opcode {
+        Opcode::ConstI32 => {
+            if let InstData::ConstI32(v) = inst.data {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        }
+        Opcode::ConstI64 => {
+            if let InstData::ConstI64(v) = inst.data {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        }
+        Opcode::ConstU64 => {
+            if let InstData::ConstU64(v) = inst.data {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        }
+        Opcode::ConstBool => {
+            if let InstData::ConstBool(v) = inst.data {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn eval_const_i64_for_counterexample(
+    inst_id: u32,
+    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
+) -> Option<i64> {
+    use vow_ir::{InstData, Opcode};
+    let inst = *inst_by_id.get(&inst_id)?;
+    match inst.opcode {
+        Opcode::ConstI32 => {
+            if let InstData::ConstI32(v) = inst.data {
+                Some(v as i64)
+            } else {
+                None
+            }
+        }
+        Opcode::ConstI64 => {
+            if let InstData::ConstI64(v) = inst.data {
+                Some(v)
+            } else {
+                None
+            }
+        }
+        Opcode::WrappingAddI32
+        | Opcode::CheckedAddI32
+        | Opcode::WrappingAddI64
+        | Opcode::CheckedAddI64 => {
+            let lhs = eval_const_i64_for_counterexample(inst.args.first()?.0, inst_by_id)?;
+            let rhs = eval_const_i64_for_counterexample(inst.args.get(1)?.0, inst_by_id)?;
+            Some(lhs.wrapping_add(rhs))
+        }
+        Opcode::WrappingSubI32
+        | Opcode::CheckedSubI32
+        | Opcode::WrappingSubI64
+        | Opcode::CheckedSubI64 => {
+            let lhs = eval_const_i64_for_counterexample(inst.args.first()?.0, inst_by_id)?;
+            let rhs = eval_const_i64_for_counterexample(inst.args.get(1)?.0, inst_by_id)?;
+            Some(lhs.wrapping_sub(rhs))
+        }
+        Opcode::WrappingMulI32
+        | Opcode::CheckedMulI32
+        | Opcode::WrappingMulI64
+        | Opcode::CheckedMulI64 => {
+            let lhs = eval_const_i64_for_counterexample(inst.args.first()?.0, inst_by_id)?;
+            let rhs = eval_const_i64_for_counterexample(inst.args.get(1)?.0, inst_by_id)?;
+            Some(lhs.wrapping_mul(rhs))
+        }
+        _ => None,
+    }
 }
 
 fn build_call_site_index(
@@ -11142,6 +12371,12 @@ fn build_call_site_index(
             .flat_map(|b| b.insts.iter())
             .map(|i| (i.id.0, i.origin))
             .collect();
+        let inst_by_id: std::collections::HashMap<u32, &vow_ir::Inst> = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .map(|i| (i.id.0, i))
+            .collect();
 
         for block in &func.blocks {
             for inst in &block.insts {
@@ -11159,6 +12394,19 @@ fn build_call_site_index(
                                 .unwrap_or((0, 0))
                         })
                         .collect();
+                    let arg_values: Vec<Option<String>> = inst
+                        .args
+                        .iter()
+                        .map(|a| {
+                            eval_const_i64_for_counterexample(a.0, &inst_by_id)
+                                .map(|v| v.to_string())
+                                .or_else(|| {
+                                    inst_by_id.get(&a.0).and_then(|inst| {
+                                        inst_constant_value_for_counterexample(inst)
+                                    })
+                                })
+                        })
+                        .collect();
                     index
                         .entry(callee_name.to_string())
                         .or_default()
@@ -11168,6 +12416,7 @@ fn build_call_site_index(
                             offset: inst.origin.start,
                             length: inst.origin.len,
                             arg_spans,
+                            arg_values,
                         });
                 }
             }
@@ -11304,6 +12553,7 @@ fn verify_one_function(
                     &store_key,
                     &CachedFailure {
                         vow_id: ce.vow_id,
+                        callee_precondition: ce.callee_precondition,
                         description: ce.description.clone(),
                         values: ce.values.clone(),
                         block_visits: ce.block_visits.clone(),
@@ -11326,7 +12576,13 @@ fn verify_one_function(
 
     match result {
         VerificationResult::Failed(ce) => {
-            let sce = build_structured_counterexample(func, &ce, file, call_site_index);
+            let sce = build_structured_counterexample_with_module(
+                func,
+                Some(ir_module),
+                &ce,
+                file,
+                call_site_index,
+            );
             PerFuncResult::Halt(VerifyOutcome::Failed {
                 function: func.name.clone(),
                 description: ce.description.clone(),
@@ -13972,6 +15228,44 @@ fn main() -> i32 [io] {
     }
 
     #[test]
+    fn generated_vow_skill_support_uses_indexed_lookup() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("CARGO_MANIFEST_DIR has a parent");
+        let compiler_main = repo_root.join("compiler/main.vow");
+        let source = std::fs::read_to_string(&compiler_main).expect("compiler/main.vow must exist");
+
+        assert!(source.contains("fn skill_support_count() -> i64"));
+        assert!(source.contains("fn skill_support_path(index: i64) -> String vow {"));
+        assert!(source.contains("fn skill_support_content_index_guard(index: i64) vow {"));
+        assert!(source.contains("fn skill_support_content(index: i64) -> String {"));
+        assert!(source.contains("    skill_support_content_index_guard(index);"));
+        assert_eq!(
+            source
+                .matches("requires: index >= 0 && index < skill_support_count()")
+                .count(),
+            2,
+            "indexed support lookup contracts should guard path lookup and content access"
+        );
+        assert!(
+            !source.contains("fn skill_support_paths() -> Vec<String>"),
+            "generated Vow should expose indexed path lookup, not a path vector"
+        );
+        assert!(
+            !source.contains("fn skill_support_content_0()"),
+            "generated Vow support helpers should not be numbered by bundle position"
+        );
+        assert!(
+            source.contains("fn skill_support_content_reference_grammar_md_92418de9() -> String {"),
+            "generated Vow content helpers should use stable path-derived names with an 8-char hash suffix"
+        );
+        assert!(
+            !source.contains("fn skill_support_contents() -> Vec<String>"),
+            "generated Vow should stream support contents by index during install"
+        );
+    }
+
+    #[test]
     fn auto_install_skill_skips_when_no_claude_dir() {
         let dir = TempDir::new().unwrap();
         maybe_auto_install_skill(dir.path());
@@ -16389,6 +17683,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "y != 0".to_string(),
             vow_id: Some(0),
+            callee_precondition: None,
             values: vec![
                 ("p0".to_string(), "10".to_string()),
                 ("p1".to_string(), "0".to_string()),
@@ -16406,6 +17701,7 @@ fn main() -> i32 {
                 offset: 120,
                 length: 18,
                 arg_spans: vec![],
+                arg_values: vec![],
             }],
         );
 
@@ -16456,6 +17752,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "[Counterexample]".to_string(),
             vow_id: Some(UNSUPPORTED_OP_VOW_ID),
+            callee_precondition: None,
             values: vec![],
             block_visits: vec![],
             raw_output: String::new(),
@@ -16518,6 +17815,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "result == x + x".to_string(),
             vow_id: Some(0),
+            callee_precondition: None,
             values: vec![("p0".to_string(), "5".to_string())],
             block_visits: vec![0],
             raw_output: String::new(),
@@ -16532,6 +17830,7 @@ fn main() -> i32 {
                 offset: 100,
                 length: 10,
                 arg_spans: vec![],
+                arg_values: vec![],
             }],
         );
 
@@ -16800,6 +18099,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
             vow_id: Some(0),
+            callee_precondition: None,
             values: vec![
                 ("p0".to_string(), "10".to_string()),
                 ("p1".to_string(), "0".to_string()),
@@ -16816,6 +18116,7 @@ fn main() -> i32 {
                 offset: 50,
                 length: 15,
                 arg_spans: vec![(55, 2), (59, 1)],
+                arg_values: vec![Some("10".to_string()), Some("0".to_string())],
             }],
         );
         let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_site_index);
@@ -16825,6 +18126,433 @@ fn main() -> i32 {
         assert_eq!(sce.violating_args[0].value, "0");
         assert_eq!(sce.violating_args[0].arg_offset, 59);
         assert_eq!(sce.violating_args[0].arg_length, 1);
+    }
+
+    #[test]
+    fn callee_precondition_counterexample_resolves_callee_contract_and_current_call_site() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+
+        let callee = Function {
+            id: FuncId(7),
+            name: "g".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec!["x".to_string(), "y".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![
+                VowEntry {
+                    id: VowId(0),
+                    description: "x > 0".to_string(),
+                    blame: vow_diag::Blame::Caller,
+                    bindings: vec![("x".to_string(), InstId(0))],
+                    file: "test.vow".to_string(),
+                    offset: 20,
+                },
+                VowEntry {
+                    id: VowId(1),
+                    description: "requires y != 0".to_string(),
+                    blame: vow_diag::Blame::Caller,
+                    bindings: vec![("y".to_string(), InstId(1))],
+                    file: "test.vow".to_string(),
+                    offset: 30,
+                },
+            ],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(10, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(1),
+                        origin: Span::new(12, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::VowRequires,
+                        ty: Ty::Unit,
+                        args: vec![InstId(1)],
+                        data: InstData::VowId(VowId(1)),
+                        origin: Span::new(30, 15),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::None,
+                        origin: Span::new(50, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let target = Function {
+            id: FuncId(1),
+            name: "f".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(10),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(1),
+                        origin: Span::new(100, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(11),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(103, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(12),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(10), InstId(11)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(95, 12),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(13),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(12)],
+                        data: InstData::None,
+                        origin: Span::new(110, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let other_caller = Function {
+            id: FuncId(2),
+            name: "h".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(20),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(1),
+                        origin: Span::new(200, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(21),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(203, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(22),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(20), InstId(21)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(195, 12),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(23),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(22)],
+                        data: InstData::None,
+                        origin: Span::new(210, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![callee, target.clone(), other_caller],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let call_site_index = build_call_site_index(&module, "test.vow");
+        let ce = vow_verify::Counterexample {
+            description: "raw".to_string(),
+            vow_id: Some(1),
+            callee_precondition: Some(vow_verify::CalleePrecondition {
+                func_id: 7,
+                vow_id: 1,
+            }),
+            values: vec![
+                ("p0".to_string(), "1".to_string()),
+                ("p1".to_string(), "0".to_string()),
+            ],
+            block_visits: vec![0],
+            raw_output: String::new(),
+        };
+
+        let sce = build_structured_counterexample_with_module(
+            &target,
+            Some(&module),
+            &ce,
+            "test.vow",
+            &call_site_index,
+        );
+
+        assert_eq!(sce.function, "f");
+        assert_eq!(sce.blame, "caller");
+        assert_eq!(sce.vow_id, 1);
+        assert_eq!(sce.violation, "requires y != 0");
+        assert_eq!(sce.source.as_ref().map(|s| s.offset), Some(30));
+        assert_eq!(sce.source.as_ref().map(|s| s.length), Some(15));
+        assert_eq!(sce.call_sites.len(), 1);
+        assert_eq!(sce.call_sites[0].caller_function, "f");
+        assert_eq!(sce.call_sites[0].offset, 95);
+        assert_eq!(sce.violating_args.len(), 1);
+        assert_eq!(sce.violating_args[0].param, "y");
+        assert_eq!(sce.violating_args[0].value, "0");
+        assert_eq!(sce.violating_args[0].arg_offset, 103);
+        assert_eq!(sce.violating_args[0].arg_length, 1);
+    }
+
+    #[test]
+    fn callee_precondition_counterexample_filters_same_caller_calls_by_arg_value() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+
+        let callee = Function {
+            id: FuncId(7),
+            name: "g".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["x".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "requires x > 0".to_string(),
+                blame: vow_diag::Blame::Caller,
+                bindings: vec![("x".to_string(), InstId(0))],
+                file: "test.vow".to_string(),
+                offset: 20,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(10, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(14, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::GtI64,
+                        ty: Ty::Bool,
+                        args: vec![InstId(0), InstId(1)],
+                        data: InstData::None,
+                        origin: Span::new(10, 5),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::VowRequires,
+                        ty: Ty::Unit,
+                        args: vec![InstId(2)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: Span::new(20, 15),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::None,
+                        origin: Span::new(40, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let target = Function {
+            id: FuncId(1),
+            name: "f".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(10),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(1),
+                        origin: Span::new(95, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(11),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(10)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(90, 4),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(12),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(125, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(13),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(5),
+                        origin: Span::new(129, 1),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(14),
+                        opcode: Opcode::WrappingSubI64,
+                        ty: Ty::I64,
+                        args: vec![InstId(12), InstId(13)],
+                        data: InstData::None,
+                        origin: Span::new(125, 5),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(15),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(14)],
+                        data: InstData::CallTarget(FuncId(7)),
+                        origin: Span::new(120, 10),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(16),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(15)],
+                        data: InstData::None,
+                        origin: Span::new(140, 1),
+                        region: RegionId::Root,
+                    },
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![callee, target.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let call_site_index = build_call_site_index(&module, "test.vow");
+        let ce = vow_verify::Counterexample {
+            description: "raw".to_string(),
+            vow_id: Some(0),
+            callee_precondition: Some(vow_verify::CalleePrecondition {
+                func_id: 7,
+                vow_id: 0,
+            }),
+            values: vec![],
+            block_visits: vec![0],
+            raw_output: String::new(),
+        };
+
+        let sce = build_structured_counterexample_with_module(
+            &target,
+            Some(&module),
+            &ce,
+            "test.vow",
+            &call_site_index,
+        );
+
+        assert_eq!(sce.call_sites.len(), 1);
+        assert_eq!(sce.call_sites[0].caller_function, "f");
+        assert_eq!(sce.call_sites[0].offset, 120);
+        assert_eq!(sce.violating_args.len(), 1);
+        assert_eq!(sce.violating_args[0].param, "x");
+        assert_eq!(sce.violating_args[0].value, "-5");
+        assert_eq!(sce.violating_args[0].arg_offset, 125);
+        assert_eq!(sce.violating_args[0].arg_length, 5);
     }
 
     #[test]
@@ -16905,6 +18633,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
             vow_id: Some(0),
+            callee_precondition: None,
             values: vec![("p0".to_string(), "0".to_string())],
             block_visits: vec![0, 2],
             raw_output: String::new(),

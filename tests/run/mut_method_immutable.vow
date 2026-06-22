@@ -1,7 +1,7 @@
 // TEST: stdout "3"
 // Scope A: a binding mutated solely through a method call (`v.push`) does NOT
 // need `mut`. Regression for the #735 corpus-migration miss in
-// examples/stack/stack.vow, where `let mut d; d.push(val)` tripped UnusedMut.
+// stdlib/stack/stack.vow, where `let mut d; d.push(val)` tripped UnusedMut.
 module MutMethodImmutable
 
 fn build() -> i64 {

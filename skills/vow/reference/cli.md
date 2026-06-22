@@ -315,18 +315,25 @@ that path produces `Unverified` (exit 0).
   "counterexamples": [
     {
       "function": "safe_sub",
-      "inputs": { "a": "-9223372036854775808", "b": "0" },
+      "values": { "a": "-9223372036854775808", "b": "0" },
       "violation": "ensures result >= 0",
       "vow_id": 1,
       "source": {
         "file": "examples/cegis_broken.vow",
         "offset": 76,
         "length": 20
-      }
+      },
+      "blame": "callee"
     }
   ]
 }
 ```
+
+For caller-blame failures where a verified function violates a callee's
+`requires` clause, the counterexample reports the callee clause in `violation`
+and `vow_id`, and includes the caller expression in `call_sites`. When the
+callee precondition binds a parameter, `violating_args` names the callee
+parameter, the counterexample value when available, and the caller argument span.
 
 ### Fields Reference
 

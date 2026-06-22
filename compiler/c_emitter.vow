@@ -3,6 +3,7 @@ module CEmitter
 use clif
 use ir
 use ir_printer
+use verifier_ids
 
 // Internal verifier-model bounds for bounded model checking. ESBMC models
 // Vec/String/HashMap/BTreeMap as fixed-size C arrays, so the model needs a
@@ -67,10 +68,6 @@ fn str7(a: String, b: String, c: String, d: String, e: String, f: String, g: Str
 
 fn vid(id: i64) -> String {
     str2(String::from("v"), i64_to_str(id))
-}
-
-fn c_func_name(f: IrFunction) -> String {
-    str4(String::from("__vow_fn_"), i64_to_str(f.id), String::from("_"), f.name)
 }
 
 fn str_starts_with(s: String, prefix: String) -> bool {
@@ -168,8 +165,15 @@ fn is_known_builtin(name: String) -> bool {
 }
 
 fn is_reserved_verifier_symbol(name: String) -> bool {
+    // User functions are namespaced to `vow_user_fn_<id>` in the emitted C, so a
+    // user symbol named after a libc function (e.g. `abs`) cannot collide with the
+    // stdlib declaration; only the verifier's own intrinsics are truly reserved.
     str_starts_with(name, String::from("__ESBMC_"))
     || str_starts_with(name, String::from("__VERIFIER_"))
+}
+
+fn verifier_c_func_name(f: IrFunction) -> String {
+    str2(String::from("vow_user_fn_"), i64_to_str(f.id))
 }
 
 // Returns the args[] index of the value stored into __vow_vec_t::data[] for
@@ -872,19 +876,19 @@ fn emit_unmodelled(out: String, inst: IrInst) {
 // Mirrors `vow_verify::c_emitter::UNSUPPORTED_OP_VOW_ID = u32::MAX`. Reserved so
 // the diagnostic pipeline can distinguish a verifier-limitation failure from
 // a real vow violation. Single source of truth for the self-hosted side; the
-// stringified form is derived via `i64_to_str` so the two cannot drift.
+// stringified form is derived from the shared value so the two cannot drift.
 fn unsupported_op_vow_id() -> i64 {
-    4294967295
+    verifier_unsupported_op_vow_id()
 }
 
 fn unsupported_op_vow_id_str() -> String {
-    i64_to_str(unsupported_op_vow_id())
+    verifier_unsupported_op_vow_id_str()
 }
 
-// Sentinel vow_id reported when a co-emitted callee's `requires` is violated by
-// its caller. Mirrors `vow_verify::c_emitter::CALLER_PRECONDITION_VOW_ID =
-// u32::MAX - 1`. Reserved (never a real vow id) so the diagnostic maps it to a
-// Caller-blamed "callee precondition violated" without a per-function lookup.
+// Legacy sentinel vow_id reported by older verifier output when a co-emitted
+// callee's `requires` is violated by its caller. New verifier labels use
+// `vow:pre:<callee-func-id>:<callee-vow-id>` so diagnostics can resolve the
+// exact callee clause without colliding with function-local vow ids.
 fn caller_precondition_vow_id() -> i64 {
     4294967294
 }
@@ -894,9 +898,9 @@ fn caller_precondition_vow_id_str() -> String {
 }
 
 // Fail-closed marker for opcodes that have side effects but no verifier model.
-// The assertion text must be exactly `vow:<id>` — `parse_vow_id` (and the Rust
-// `extract_vow_id`) accept only pure digits after `vow:`, so any trailing text
-// would defeat the sentinel. Descriptive context lives in a separate C comment.
+// The unsupported assertion text must be exactly `vow:<id>` so both compilers
+// can parse the reserved numeric sentinel. Descriptive context lives in a
+// separate C comment.
 fn emit_unsupported_for_verification(out: String, inst: IrInst) {
     let id: i64 = inst.id;
     out.push_str(str3(
@@ -1129,11 +1133,11 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
         if requires_as_assert == 1 {
             // Callee precondition: assert it (Caller blame) so a caller passing a
             // violating argument fails, instead of injecting `assume(false)` and
-            // vacuously verifying the caller's body. The label is the reserved
-            // CALLER_PRECONDITION sentinel, not the callee's function-local vow id
-            // (which would collide with the target's).
-            out.push_str(str5(String::from("  __ESBMC_assert(v"), i64_to_str(iargs[0]),
-                String::from(", \"vow:"), caller_precondition_vow_id_str(), String::from("\");\n")));
+            // vacuously verifying the caller's body. The label carries both the
+            // callee function id and its function-local vow id.
+            out.push_str(str7(String::from("  __ESBMC_assert(v"), i64_to_str(iargs[0]),
+                String::from(", \"vow:pre:"), i64_to_str(f.id), String::from(":"),
+                i64_to_str(inst.dv), String::from("\");\n")));
         } else {
             out.push_str(str3(String::from("  __ESBMC_assume(v"), i64_to_str(iargs[0]), String::from(");\n")));
         }
@@ -1238,10 +1242,10 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
                         }
                         if ty != ITY_UNIT() {
                             out.push_str(str6(String::from("  v"), i64_to_str(id),
-                                String::from(" = "), c_func_name(callee),
+                                String::from(" = "), verifier_c_func_name(callee),
                                 String::from("("), str2(args_str, String::from(");\n"))));
                         } else {
-                            out.push_str(str4(String::from("  "), c_func_name(callee),
+                            out.push_str(str4(String::from("  "), verifier_c_func_name(callee),
                                 String::from("("), str2(args_str, String::from(");\n"))));
                         }
                         fi = fns.len();
@@ -2032,7 +2036,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
     }
 
     let param_str: String = if cl_idx == 0 { String::from("void") } else { params_list };
-    out.push_str(str5(ret_c, String::from(" "), c_func_name(f), String::from("("), str3(param_str, String::from(") {\n"), String::from(""))));
+    out.push_str(str5(ret_c, String::from(" "), verifier_c_func_name(f), String::from("("), str3(param_str, String::from(") {\n"), String::from(""))));
 
     let blocks: Vec<IrBlock> = f.blocks;
     let n_blocks: i64 = blocks.len();
@@ -2397,6 +2401,7 @@ fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64
     out.push_str(String::from("extern void __ESBMC_assert(_Bool, const char*);\n"));
     out.push_str(String::from("extern int __VERIFIER_nondet_int(void);\n"));
     out.push_str(String::from("extern long __VERIFIER_nondet_long(void);\n"));
+    out.push_str(String::from("extern unsigned long __VERIFIER_nondet_unsigned_long(void);\n"));
     out.push_str(String::from("extern float __VERIFIER_nondet_float(void);\n"));
     out.push_str(String::from("extern double __VERIFIER_nondet_double(void);\n"));
     out.push_str(String::from("extern _Bool __VERIFIER_nondet_bool(void);\n\n"));
@@ -2506,7 +2511,7 @@ fn emit_forward_declaration(out: String, f: IrFunction) {
         pi = pi + 1;
     }
     let param_str: String = if cl_idx == 0 { String::from("void") } else { params_list };
-    out.push_str(str5(ret_c, String::from(" "), c_func_name(f), String::from("("), str2(param_str, String::from(");\n"))));
+    out.push_str(str5(ret_c, String::from(" "), verifier_c_func_name(f), String::from("("), str2(param_str, String::from(");\n"))));
 }
 
 fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {

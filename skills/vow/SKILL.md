@@ -45,5 +45,6 @@ fn main() -> i32 [io] {
 - Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)
 - Which contracts to write (taxonomy & strength): [reference/contracts-methodology.md](reference/contracts-methodology.md)
 - Diagnostics and fixes: [reference/errors.md](reference/errors.md)
+- Standard library (math, heap, stack, geometry, bignum, gc): [reference/stdlib.md](reference/stdlib.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
 - JSON schemas: [schemas/](schemas/)

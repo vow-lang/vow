@@ -1,0 +1,31 @@
+// TEST: category caller-blame
+// TEST: counterexample-fn "f"
+// TEST: counterexample-blame caller
+// TEST: counterexample-vow-id 0
+// TEST: counterexample-violation "requires x > 0"
+// TEST: counterexample-call-site-count 1
+// TEST: counterexample-call-site-fn "f"
+// TEST: counterexample-call-site-offset 623
+// TEST: counterexample-violating-arg-count 1
+// TEST: counterexample-violating-arg-param "x"
+// TEST: counterexample-violating-arg-value "-5"
+module CallerRequiresSameCalleeTwoCalls
+
+fn g(x: i64) -> i64 vow {
+  requires: x > 0
+} {
+  x
+}
+
+fn f() -> i64 vow {
+  ensures: result == 0
+} {
+  let safe: i64 = g(1);
+  let bad: i64 = g(0 - 5);
+  0
+}
+
+fn main() -> i32 [io] {
+  print_i64(f());
+  0
+}

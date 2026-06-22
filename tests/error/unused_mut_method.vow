@@ -2,7 +2,7 @@
 // TEST: stderr "never reassigned"
 // Scope A: a method call (`v.push`) is not a whole-binding reassignment, so a
 // `let mut` used only that way is UnusedMut. Pins the exact rule that broke
-// examples/stack/stack.vow under #735.
+// stdlib/stack/stack.vow under #735.
 module UnusedMutMethod
 
 fn build() -> i64 {
