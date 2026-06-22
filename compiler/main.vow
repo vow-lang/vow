@@ -189,15 +189,422 @@ fn frontend_path_from_argv(argv: Vec<String>, sub: bool) -> String [io] {
     path
 }
 
-fn build_ce_from_result(f: IrFunction, vr: VerifyResult, path: String) -> VerifyCE {
+fn find_ir_function_index_by_id(fns: Vec<IrFunction>, id: i64) -> i64 {
+    let mut i: i64 = 0;
+    while i < fns.len() {
+        let f: IrFunction = fns[i];
+        if f.id == id {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn find_ir_vow_index(vows: Vec<IrVowEntry>, id: i64) -> i64 {
+    let mut i: i64 = 0;
+    while i < vows.len() {
+        let ve: IrVowEntry = vows[i];
+        if ve.id == id {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn find_param_index(names: Vec<String>, name: String) -> i64 {
+    let mut i: i64 = 0;
+    while i < names.len() {
+        if names[i] == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn ce_value_for_param(names: Vec<String>, vals: Vec<String>, param: String, param_idx: i64) -> String {
+    let fallback_esbmc: String = str2(String::from("_esbmc_p"), i64_to_str(param_idx));
+    let fallback_raw: String = str2(String::from("p"), i64_to_str(param_idx));
+    let mut i: i64 = 0;
+    while i < names.len() {
+        if names[i] == param || names[i] == fallback_esbmc || names[i] == fallback_raw {
+            return vals[i];
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+fn inst_const_i64_string_by_id(f: IrFunction, inst_id: i64) -> String {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == inst_id {
+                if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
+                    return i64_to_str(inst.dv);
+                }
+                if inst.args.len() >= 2 {
+                    let lhs_s: String = inst_const_i64_string_by_id(f, inst.args[0]);
+                    let rhs_s: String = inst_const_i64_string_by_id(f, inst.args[1]);
+                    if lhs_s.len() > 0 && rhs_s.len() > 0 {
+                        let lhs: i64 = str_to_i64(lhs_s);
+                        let rhs: i64 = str_to_i64(rhs_s);
+                        if lhs_s == i64_to_str(lhs) && rhs_s == i64_to_str(rhs) {
+                            if inst.op == IOP_WADD_I32() || inst.op == IOP_WADD_I64() || inst.op == IOP_CADD_I32() || inst.op == IOP_CADD_I64() {
+                                return i64_to_str(lhs + rhs);
+                            }
+                            if inst.op == IOP_WSUB_I32() || inst.op == IOP_WSUB_I64() || inst.op == IOP_CSUB_I32() || inst.op == IOP_CSUB_I64() {
+                                return i64_to_str(lhs - rhs);
+                            }
+                            if inst.op == IOP_WMUL_I32() || inst.op == IOP_WMUL_I64() || inst.op == IOP_CMUL_I32() || inst.op == IOP_CMUL_I64() {
+                                return i64_to_str(lhs * rhs);
+                            }
+                        }
+                    }
+                }
+                return String::from("");
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+fn string_is_i64_literal(s: String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    let v: i64 = str_to_i64(s);
+    i64_to_str(v) == s
+}
+
+fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_inst: IrInst) -> String {
+    let blocks: Vec<IrBlock> = callee.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == inst_id {
+                if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
+                    return i64_to_str(inst.dv);
+                }
+                if inst.op == IOP_CONST_U64() && inst.dv >= 0 {
+                    return i64_to_str(inst.dv);
+                }
+                if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
+                    let pidx: i64 = inst.dv;
+                    if pidx >= 0 && pidx < call_inst.args.len() {
+                        return inst_const_i64_string_by_id(f, call_inst.args[pidx]);
+                    }
+                    return String::from("");
+                }
+                if inst.args.len() >= 2 {
+                    let lhs_s: String = callee_i64_string_for_call(f, callee, inst.args[0], call_inst);
+                    let rhs_s: String = callee_i64_string_for_call(f, callee, inst.args[1], call_inst);
+                    if string_is_i64_literal(lhs_s) && string_is_i64_literal(rhs_s) {
+                        let lhs: i64 = str_to_i64(lhs_s);
+                        let rhs: i64 = str_to_i64(rhs_s);
+                        if inst.op == IOP_WADD_I32() || inst.op == IOP_WADD_I64() || inst.op == IOP_CADD_I32() || inst.op == IOP_CADD_I64() {
+                            return i64_to_str(lhs + rhs);
+                        }
+                        if inst.op == IOP_WSUB_I32() || inst.op == IOP_WSUB_I64() || inst.op == IOP_CSUB_I32() || inst.op == IOP_CSUB_I64() {
+                            return i64_to_str(lhs - rhs);
+                        }
+                        if inst.op == IOP_WMUL_I32() || inst.op == IOP_WMUL_I64() || inst.op == IOP_CMUL_I32() || inst.op == IOP_CMUL_I64() {
+                            return i64_to_str(lhs * rhs);
+                        }
+                    }
+                }
+                return String::from("");
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+fn callee_bool_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_inst: IrInst) -> i64 {
+    let blocks: Vec<IrBlock> = callee.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == inst_id {
+                if inst.op == IOP_CONST_BOOL() {
+                    if inst.dv == 0 {
+                        return 0;
+                    }
+                    return 1;
+                }
+                if inst.op == IOP_NOT() && inst.args.len() >= 1 {
+                    let v: i64 = callee_bool_for_call(f, callee, inst.args[0], call_inst);
+                    if v == 0 {
+                        return 1;
+                    }
+                    if v == 1 {
+                        return 0;
+                    }
+                    return -1;
+                }
+                if (inst.op == IOP_AND() || inst.op == IOP_OR()) && inst.args.len() >= 2 {
+                    let lhs_b: i64 = callee_bool_for_call(f, callee, inst.args[0], call_inst);
+                    let rhs_b: i64 = callee_bool_for_call(f, callee, inst.args[1], call_inst);
+                    if lhs_b < 0 || rhs_b < 0 {
+                        return -1;
+                    }
+                    if inst.op == IOP_AND() {
+                        if lhs_b == 1 && rhs_b == 1 {
+                            return 1;
+                        }
+                        return 0;
+                    }
+                    if lhs_b == 1 || rhs_b == 1 {
+                        return 1;
+                    }
+                    return 0;
+                }
+                if inst.args.len() >= 2 {
+                    let lhs_s: String = callee_i64_string_for_call(f, callee, inst.args[0], call_inst);
+                    let rhs_s: String = callee_i64_string_for_call(f, callee, inst.args[1], call_inst);
+                    if string_is_i64_literal(lhs_s) && string_is_i64_literal(rhs_s) {
+                        let lhs: i64 = str_to_i64(lhs_s);
+                        let rhs: i64 = str_to_i64(rhs_s);
+                        if inst.op == IOP_EQ_I32() || inst.op == IOP_EQ_I64() {
+                            if lhs == rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_NE_I32() || inst.op == IOP_NE_I64() {
+                            if lhs != rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_LT_I32() || inst.op == IOP_LT_I64() {
+                            if lhs < rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_LE_I32() || inst.op == IOP_LE_I64() {
+                            if lhs <= rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_GT_I32() || inst.op == IOP_GT_I64() {
+                            if lhs > rhs { return 1; }
+                            return 0;
+                        }
+                        if inst.op == IOP_GE_I32() || inst.op == IOP_GE_I64() {
+                            if lhs >= rhs { return 1; }
+                            return 0;
+                        }
+                    }
+                }
+                return -1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    -1
+}
+
+fn callee_precondition_predicate_inst_id(callee: IrFunction, ve: IrVowEntry) -> i64 {
+    let blocks: Vec<IrBlock> = callee.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_VOW_REQ() && inst.dk == IDATA_VOW_ID() && inst.dv == ve.id && inst.args.len() > 0 {
+                return inst.args[0];
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    -1
+}
+
+fn call_violates_callee_precondition_const(f: IrFunction, callee: IrFunction, ve: IrVowEntry, inst: IrInst) -> bool {
+    let pred_id: i64 = callee_precondition_predicate_inst_id(callee, ve);
+    if pred_id < 0 {
+        return false;
+    }
+    callee_bool_for_call(f, callee, pred_id, inst) == 0
+}
+
+fn call_matches_callee_precondition_values(f: IrFunction, callee: IrFunction, ve: IrVowEntry, inst: IrInst, vr: VerifyResult) -> bool {
+    let mut matched_binding: bool = false;
+    let mut bindi: i64 = 0;
+    while bindi < ve.binding_names.len() {
+        let bname: String = ve.binding_names[bindi];
+        let pidx: i64 = find_param_index(callee.param_names, bname);
+        if pidx < 0 || pidx >= inst.args.len() {
+            return false;
+        }
+        let ce_val: String = ce_value_for_param(vr.var_names, vr.var_values, bname, pidx);
+        if ce_val.len() == 0 {
+            return false;
+        }
+        let arg_val: String = inst_const_i64_string_by_id(f, inst.args[pidx]);
+        if arg_val.len() == 0 {
+            return false;
+        }
+        if arg_val != ce_val {
+            return false;
+        }
+        matched_binding = true;
+        bindi = bindi + 1;
+    }
+    matched_binding
+}
+
+fn call_matches_callee_precondition_candidate(f: IrFunction, callee: IrFunction, ve: IrVowEntry, inst: IrInst, vr: VerifyResult) -> bool {
+    if call_matches_callee_precondition_values(f, callee, ve, inst, vr) {
+        return true;
+    }
+    call_violates_callee_precondition_const(f, callee, ve, inst)
+}
+
+fn count_exact_callee_precondition_calls(f: IrFunction, callee: IrFunction, ve: IrVowEntry, vr: VerifyResult) -> i64 {
+    let mut count: i64 = 0;
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() && inst.dv == callee.id {
+                if call_matches_callee_precondition_candidate(f, callee, ve, inst, vr) {
+                    count = count + 1;
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    count
+}
+
+fn inst_offset_by_id(f: IrFunction, inst_id: i64) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == inst_id {
+                return inst.ostart;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    0
+}
+
+fn inst_len_by_id(f: IrFunction, inst_id: i64) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id == inst_id {
+                return inst.olen;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    0
+}
+
+fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path: String) -> VerifyCE {
     let vow_id: i64 = vr.vow_id;
     let mut ce_violation: String = String::from("");
     let mut ce_blame: i64 = DIAG_BLAME_NONE();
+    let call_site_functions: Vec<String> = Vec::new();
+    let call_site_files: Vec<String> = Vec::new();
+    let call_site_offsets: Vec<i64> = Vec::new();
+    let call_site_lengths: Vec<i64> = Vec::new();
+    let violating_arg_params: Vec<String> = Vec::new();
+    let violating_arg_values: Vec<String> = Vec::new();
+    let violating_arg_offsets: Vec<i64> = Vec::new();
+    let violating_arg_lengths: Vec<i64> = Vec::new();
     if vow_id == unsupported_op_vow_id() {
         // Fail-closed assertion from emit_unsupported_for_verification: no
         // user-authored vow has this id, so synthesize an actionable message
         // instead of leaving the violation blank.
         ce_violation = String::from("function uses side-effecting operations not supported for verification");
+    } else if vr.callee_precondition_func_id >= 0 && vr.callee_precondition_vow_id >= 0 {
+        let fi: i64 = find_ir_function_index_by_id(ir_mod.functions, vr.callee_precondition_func_id);
+        if fi >= 0 {
+            let callee: IrFunction = ir_mod.functions[fi];
+            let vows: Vec<IrVowEntry> = callee.vows;
+            let vi: i64 = find_ir_vow_index(vows, vr.callee_precondition_vow_id);
+            if vi >= 0 {
+                let ve: IrVowEntry = vows[vi];
+                ce_violation = ve.description;
+                ce_blame = DIAG_BLAME_CALLER();
+
+                let exact_call_matches: i64 = count_exact_callee_precondition_calls(f, callee, ve, vr);
+                let blocks: Vec<IrBlock> = f.blocks;
+                let mut bi: i64 = 0;
+                while bi < blocks.len() {
+                    let insts: Vec<IrInst> = blocks[bi].insts;
+                    let mut ii: i64 = 0;
+                    while ii < insts.len() {
+                        let inst: IrInst = insts[ii];
+                        if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() && inst.dv == callee.id {
+                            if exact_call_matches == 0 || call_matches_callee_precondition_candidate(f, callee, ve, inst, vr) {
+                                call_site_functions.push(f.name);
+                                call_site_files.push(path);
+                                call_site_offsets.push(inst.ostart);
+                                call_site_lengths.push(inst.olen);
+
+                                let mut bindi: i64 = 0;
+                                while bindi < ve.binding_names.len() {
+                                    let bname: String = ve.binding_names[bindi];
+                                    let pidx: i64 = find_param_index(callee.param_names, bname);
+                                    if pidx >= 0 && pidx < inst.args.len() {
+                                        violating_arg_params.push(bname);
+                                        let arg_inst_id: i64 = inst.args[pidx];
+                                        let ce_val: String = ce_value_for_param(vr.var_names, vr.var_values, bname, pidx);
+                                        if ce_val.len() > 0 {
+                                            violating_arg_values.push(ce_val);
+                                        } else {
+                                            violating_arg_values.push(inst_const_i64_string_by_id(f, arg_inst_id));
+                                        }
+                                        violating_arg_offsets.push(inst_offset_by_id(f, arg_inst_id));
+                                        violating_arg_lengths.push(inst_len_by_id(f, arg_inst_id));
+                                    }
+                                    bindi = bindi + 1;
+                                }
+                            }
+                        }
+                        ii = ii + 1;
+                    }
+                    bi = bi + 1;
+                }
+            }
+        }
+        if ce_violation.len() == 0 {
+            ce_violation = String::from("callee precondition violated by the caller");
+            ce_blame = DIAG_BLAME_CALLER();
+        }
     } else if vow_id == caller_precondition_vow_id() {
         // A co-emitted callee's `requires` was violated by this caller. The
         // sentinel id matches no vow in `f`, so synthesize a Caller-blamed
@@ -225,6 +632,14 @@ fn build_ce_from_result(f: IrFunction, vr: VerifyResult, path: String) -> Verify
         vow_id: vow_id,
         source: path,
         blame: ce_blame,
+        call_site_functions: call_site_functions,
+        call_site_files: call_site_files,
+        call_site_offsets: call_site_offsets,
+        call_site_lengths: call_site_lengths,
+        violating_arg_params: violating_arg_params,
+        violating_arg_values: violating_arg_values,
+        violating_arg_offsets: violating_arg_offsets,
+        violating_arg_lengths: violating_arg_lengths,
         replay: String::from(""),
         replay_reason: String::from(""),
     }
@@ -541,6 +956,14 @@ fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: Str
             vow_id: ce.vow_id,
             source: ce.source,
             blame: ce.blame,
+            call_site_functions: ce.call_site_functions,
+            call_site_files: ce.call_site_files,
+            call_site_offsets: ce.call_site_offsets,
+            call_site_lengths: ce.call_site_lengths,
+            violating_arg_params: ce.violating_arg_params,
+            violating_arg_values: ce.violating_arg_values,
+            violating_arg_offsets: ce.violating_arg_offsets,
+            violating_arg_lengths: ce.violating_arg_lengths,
             replay: v.status,
             replay_reason: reason,
         });
@@ -761,25 +1184,28 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
         result.push(desc);
         return result;
     }
-    let status: String = soft_meta[0];
-    let message: String = soft_meta[1];
-    let func: String = soft_meta[2];
-    result.push(func);
-    let desc: String = String::from("");
-    if status == String::from("timeout") {
-        desc.push_str(String::from("verification timed out"));
-    } else if status == String::from("unknown") {
-        desc.push_str(String::from("verification result unknown: "));
-        desc.push_str(message);
-    } else if status == String::from("error") {
-        desc.push_str(String::from("esbmc error: "));
-        desc.push_str(message);
-    } else if status == String::from("tool_not_found") {
-        desc.push_str(String::from("ESBMC not found"));
-    } else {
-        desc.push_str(message);
+    if soft_meta.len() >= 3 {
+        let status: String = soft_meta[0];
+        let message: String = soft_meta[1];
+        let func: String = soft_meta[2];
+        result.push(func);
+        let desc: String = String::from("");
+        if status == String::from("timeout") {
+            desc.push_str(String::from("verification timed out"));
+        } else if status == String::from("unknown") {
+            desc.push_str(String::from("verification result unknown: "));
+            desc.push_str(message);
+        } else if status == String::from("error") {
+            desc.push_str(String::from("esbmc error: "));
+            desc.push_str(message);
+        } else if status == String::from("tool_not_found") {
+            desc.push_str(String::from("ESBMC not found"));
+        } else {
+            desc.push_str(message);
+        }
+        result.push(desc);
+        return result;
     }
-    result.push(desc);
     result
 }
 
@@ -804,7 +1230,7 @@ fn verify_collect_and_report(
     if st == VERIFY_FAILED() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
         emit_ce_vars(vr);
-        ces.push(build_ce_from_result(f, vr, path));
+        ces.push(build_ce_from_result(f, ir_mod, vr, path));
         return 0;
     }
     if st == VERIFY_TIMEOUT() || st == VERIFY_UNKNOWN() {
@@ -4302,18 +4728,25 @@ fn skill_bundle() -> String {
     r.push_str(String::from("  \"counterexamples\": [\n"));
     r.push_str(String::from("    {\n"));
     r.push_str(String::from("      \"function\": \"safe_sub\",\n"));
-    r.push_str(String::from("      \"inputs\": { \"a\": \"-9223372036854775808\", \"b\": \"0\" },\n"));
+    r.push_str(String::from("      \"values\": { \"a\": \"-9223372036854775808\", \"b\": \"0\" },\n"));
     r.push_str(String::from("      \"violation\": \"ensures result >= 0\",\n"));
     r.push_str(String::from("      \"vow_id\": 1,\n"));
     r.push_str(String::from("      \"source\": {\n"));
     r.push_str(String::from("        \"file\": \"examples/cegis_broken.vow\",\n"));
     r.push_str(String::from("        \"offset\": 76,\n"));
     r.push_str(String::from("        \"length\": 20\n"));
-    r.push_str(String::from("      }\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"blame\": \"callee\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ]\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For caller-blame failures where a verified function violates a callee's\n"));
+    r.push_str(String::from("`requires` clause, the counterexample reports the callee clause in `violation`\n"));
+    r.push_str(String::from("and `vow_id`, and includes the caller expression in `call_sites`. When the\n"));
+    r.push_str(String::from("callee precondition binds a parameter, `violating_args` names the callee\n"));
+    r.push_str(String::from("parameter, the counterexample value when available, and the caller argument span.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
@@ -4871,20 +5304,27 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\n"));
     r.push_str(String::from("  \"function\": \"safe_sub\",\n"));
-    r.push_str(String::from("  \"inputs\": { \"a\": \"-9223372036854775808\", \"b\": \"0\" },\n"));
+    r.push_str(String::from("  \"values\": { \"a\": \"-9223372036854775808\", \"b\": \"0\" },\n"));
     r.push_str(String::from("  \"violation\": \"ensures result >= 0\",\n"));
     r.push_str(String::from("  \"vow_id\": 1,\n"));
-    r.push_str(String::from("  \"source\": { \"file\": \"cegis_broken.vow\", \"offset\": 76, \"length\": 20 }\n"));
+    r.push_str(String::from("  \"source\": { \"file\": \"cegis_broken.vow\", \"offset\": 76, \"length\": 20 },\n"));
+    r.push_str(String::from("  \"blame\": \"callee\"\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("| Field       | Meaning                                                |\n"));
-    r.push_str(String::from("|-------------|--------------------------------------------------------|\n"));
-    r.push_str(String::from("| `function`  | Which function failed                                  |\n"));
-    r.push_str(String::from("| `inputs`    | Parameter values that trigger the violation            |\n"));
-    r.push_str(String::from("| `violation` | Which contract clause was violated                     |\n"));
-    r.push_str(String::from("| `vow_id`    | Internal ID linking to the specific vow clause         |\n"));
-    r.push_str(String::from("| `source`    | Byte offset in the source file of the violated clause  |\n"));
+    r.push_str(String::from("| Field       | Meaning                                                        |\n"));
+    r.push_str(String::from("|-------------|----------------------------------------------------------------|\n"));
+    r.push_str(String::from("| `function`  | Which function's verification query failed                     |\n"));
+    r.push_str(String::from("| `values`    | Source or ESBMC variable values in the counterexample           |\n"));
+    r.push_str(String::from("| `violation` | Which contract clause was violated                             |\n"));
+    r.push_str(String::from("| `vow_id`    | Function-local ID linking to the specific vow clause            |\n"));
+    r.push_str(String::from("| `source`    | Byte offset in the source file of the violated clause           |\n"));
+    r.push_str(String::from("| `blame`     | Whether the caller, callee, or neither party is responsible     |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("When caller code violates a callee's `requires` clause, `violation` and\n"));
+    r.push_str(String::from("`vow_id` identify the callee clause. `call_sites` points back to the caller\n"));
+    r.push_str(String::from("expression, and `violating_args` identifies the callee parameter and caller\n"));
+    r.push_str(String::from("argument span when Vow can recover it.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.\n"));
     r.push_str(String::from("\n"));
@@ -7053,25 +7493,25 @@ fn skill_bundle() -> String {
     r.push_str(String::from("  \"title\": \"Counterexample\",\n"));
     r.push_str(String::from("  \"description\": \"A structured counterexample from ESBMC verification failure\",\n"));
     r.push_str(String::from("  \"type\": \"object\",\n"));
-    r.push_str(String::from("  \"required\": [\"function\", \"inputs\", \"violation\", \"vow_id\", \"source\"],\n"));
+    r.push_str(String::from("  \"required\": [\"function\", \"values\", \"violation\", \"vow_id\", \"source\", \"blame\"],\n"));
     r.push_str(String::from("  \"properties\": {\n"));
     r.push_str(String::from("    \"function\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Name of the function where verification failed\"\n"));
+    r.push_str(String::from("      \"description\": \"Name of the function whose verification query failed\"\n"));
     r.push_str(String::from("    },\n"));
-    r.push_str(String::from("    \"inputs\": {\n"));
+    r.push_str(String::from("    \"values\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
     r.push_str(String::from("      \"additionalProperties\": { \"type\": \"string\" },\n"));
-    r.push_str(String::from("      \"description\": \"Map of parameter names to counterexample values\"\n"));
+    r.push_str(String::from("      \"description\": \"Map of source names or ESBMC variable names to counterexample values\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"violation\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Description of the violated contract\"\n"));
+    r.push_str(String::from("      \"description\": \"Description of the violated contract clause\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"vow_id\": {\n"));
     r.push_str(String::from("      \"type\": \"integer\",\n"));
     r.push_str(String::from("      \"minimum\": 0,\n"));
-    r.push_str(String::from("      \"description\": \"Numeric ID of the violated vow (matches vow_id in VowViolation)\"\n"));
+    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"source\": {\n"));
     r.push_str(String::from("      \"oneOf\": [\n"));
@@ -7085,18 +7525,80 @@ fn skill_bundle() -> String {
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"additionalProperties\": false\n"));
     r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        { \"type\": \"string\" },\n"));
     r.push_str(String::from("        { \"type\": \"null\" }\n"));
     r.push_str(String::from("      ],\n"));
-    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause, or null\"\n"));
+    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"blame\": {\n"));
+    r.push_str(String::from("      \"type\": \"string\",\n"));
+    r.push_str(String::from("      \"enum\": [\"caller\", \"callee\", \"none\"],\n"));
+    r.push_str(String::from("      \"description\": \"Who is responsible for the violation\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"call_sites\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"description\": \"Caller locations relevant to caller-blame failures\",\n"));
+    r.push_str(String::from("      \"items\": {\n"));
+    r.push_str(String::from("        \"type\": \"object\",\n"));
+    r.push_str(String::from("        \"required\": [\"caller_function\", \"file\", \"offset\", \"length\"],\n"));
+    r.push_str(String::from("        \"properties\": {\n"));
+    r.push_str(String::from("          \"caller_function\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"file\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"length\": { \"type\": \"integer\", \"minimum\": 0 }\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        \"additionalProperties\": false\n"));
+    r.push_str(String::from("      }\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"violating_args\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"description\": \"Callee parameters and caller argument spans for caller-blame precondition failures\",\n"));
+    r.push_str(String::from("      \"items\": {\n"));
+    r.push_str(String::from("        \"type\": \"object\",\n"));
+    r.push_str(String::from("        \"required\": [\"param\", \"value\", \"arg_offset\", \"arg_length\"],\n"));
+    r.push_str(String::from("        \"properties\": {\n"));
+    r.push_str(String::from("          \"param\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"value\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"arg_offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"arg_length\": { \"type\": \"integer\", \"minimum\": 0 }\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        \"additionalProperties\": false\n"));
+    r.push_str(String::from("      }\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"execution_path\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": {\n"));
+    r.push_str(String::from("        \"type\": \"object\",\n"));
+    r.push_str(String::from("        \"required\": [\"block_id\", \"offset\", \"length\"],\n"));
+    r.push_str(String::from("        \"properties\": {\n"));
+    r.push_str(String::from("          \"block_id\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"length\": { \"type\": \"integer\", \"minimum\": 0 }\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        \"additionalProperties\": false\n"));
+    r.push_str(String::from("      }\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"branch_decisions\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": {\n"));
+    r.push_str(String::from("        \"type\": \"object\",\n"));
+    r.push_str(String::from("        \"required\": [\"condition_offset\", \"condition_length\", \"taken\"],\n"));
+    r.push_str(String::from("        \"properties\": {\n"));
+    r.push_str(String::from("          \"condition_offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"condition_length\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"taken\": { \"type\": \"string\", \"enum\": [\"then\", \"else\"] }\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        \"additionalProperties\": false\n"));
+    r.push_str(String::from("      }\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"replay\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
     r.push_str(String::from("      \"enum\": [\"confirmed\", \"diverged\", \"skipped\"],\n"));
-    r.push_str(String::from("      \"description\": \"Differential-test outcome (present only with --replay-cex): whether a debug-mode harness replaying the counterexample's concrete inputs fired the same VowViolation (vow_id + blame). Not part of the soundness proof.\"\n"));
+    r.push_str(String::from("      \"description\": \"Differential-test outcome, present only with --replay-cex\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"replay_reason\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Human-readable explanation for a diverged or skipped replay (present only with --replay-cex when replay is not confirmed)\"\n"));
+    r.push_str(String::from("      \"description\": \"Human-readable explanation for a diverged or skipped replay\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"additionalProperties\": false\n"));
@@ -8740,18 +9242,25 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("  \"counterexamples\": [\n"));
     r.push_str(String::from("    {\n"));
     r.push_str(String::from("      \"function\": \"safe_sub\",\n"));
-    r.push_str(String::from("      \"inputs\": { \"a\": \"-9223372036854775808\", \"b\": \"0\" },\n"));
+    r.push_str(String::from("      \"values\": { \"a\": \"-9223372036854775808\", \"b\": \"0\" },\n"));
     r.push_str(String::from("      \"violation\": \"ensures result >= 0\",\n"));
     r.push_str(String::from("      \"vow_id\": 1,\n"));
     r.push_str(String::from("      \"source\": {\n"));
     r.push_str(String::from("        \"file\": \"examples/cegis_broken.vow\",\n"));
     r.push_str(String::from("        \"offset\": 76,\n"));
     r.push_str(String::from("        \"length\": 20\n"));
-    r.push_str(String::from("      }\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"blame\": \"callee\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ]\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For caller-blame failures where a verified function violates a callee's\n"));
+    r.push_str(String::from("`requires` clause, the counterexample reports the callee clause in `violation`\n"));
+    r.push_str(String::from("and `vow_id`, and includes the caller expression in `call_sites`. When the\n"));
+    r.push_str(String::from("callee precondition binds a parameter, `violating_args` names the callee\n"));
+    r.push_str(String::from("parameter, the counterexample value when available, and the caller argument span.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
@@ -9311,20 +9820,27 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\n"));
     r.push_str(String::from("  \"function\": \"safe_sub\",\n"));
-    r.push_str(String::from("  \"inputs\": { \"a\": \"-9223372036854775808\", \"b\": \"0\" },\n"));
+    r.push_str(String::from("  \"values\": { \"a\": \"-9223372036854775808\", \"b\": \"0\" },\n"));
     r.push_str(String::from("  \"violation\": \"ensures result >= 0\",\n"));
     r.push_str(String::from("  \"vow_id\": 1,\n"));
-    r.push_str(String::from("  \"source\": { \"file\": \"cegis_broken.vow\", \"offset\": 76, \"length\": 20 }\n"));
+    r.push_str(String::from("  \"source\": { \"file\": \"cegis_broken.vow\", \"offset\": 76, \"length\": 20 },\n"));
+    r.push_str(String::from("  \"blame\": \"callee\"\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("| Field       | Meaning                                                |\n"));
-    r.push_str(String::from("|-------------|--------------------------------------------------------|\n"));
-    r.push_str(String::from("| `function`  | Which function failed                                  |\n"));
-    r.push_str(String::from("| `inputs`    | Parameter values that trigger the violation            |\n"));
-    r.push_str(String::from("| `violation` | Which contract clause was violated                     |\n"));
-    r.push_str(String::from("| `vow_id`    | Internal ID linking to the specific vow clause         |\n"));
-    r.push_str(String::from("| `source`    | Byte offset in the source file of the violated clause  |\n"));
+    r.push_str(String::from("| Field       | Meaning                                                        |\n"));
+    r.push_str(String::from("|-------------|----------------------------------------------------------------|\n"));
+    r.push_str(String::from("| `function`  | Which function's verification query failed                     |\n"));
+    r.push_str(String::from("| `values`    | Source or ESBMC variable values in the counterexample           |\n"));
+    r.push_str(String::from("| `violation` | Which contract clause was violated                             |\n"));
+    r.push_str(String::from("| `vow_id`    | Function-local ID linking to the specific vow clause            |\n"));
+    r.push_str(String::from("| `source`    | Byte offset in the source file of the violated clause           |\n"));
+    r.push_str(String::from("| `blame`     | Whether the caller, callee, or neither party is responsible     |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("When caller code violates a callee's `requires` clause, `violation` and\n"));
+    r.push_str(String::from("`vow_id` identify the callee clause. `call_sites` points back to the caller\n"));
+    r.push_str(String::from("expression, and `violating_args` identifies the callee parameter and caller\n"));
+    r.push_str(String::from("argument span when Vow can recover it.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.\n"));
     r.push_str(String::from("\n"));
@@ -11498,25 +12014,25 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("  \"title\": \"Counterexample\",\n"));
     r.push_str(String::from("  \"description\": \"A structured counterexample from ESBMC verification failure\",\n"));
     r.push_str(String::from("  \"type\": \"object\",\n"));
-    r.push_str(String::from("  \"required\": [\"function\", \"inputs\", \"violation\", \"vow_id\", \"source\"],\n"));
+    r.push_str(String::from("  \"required\": [\"function\", \"values\", \"violation\", \"vow_id\", \"source\", \"blame\"],\n"));
     r.push_str(String::from("  \"properties\": {\n"));
     r.push_str(String::from("    \"function\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Name of the function where verification failed\"\n"));
+    r.push_str(String::from("      \"description\": \"Name of the function whose verification query failed\"\n"));
     r.push_str(String::from("    },\n"));
-    r.push_str(String::from("    \"inputs\": {\n"));
+    r.push_str(String::from("    \"values\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
     r.push_str(String::from("      \"additionalProperties\": { \"type\": \"string\" },\n"));
-    r.push_str(String::from("      \"description\": \"Map of parameter names to counterexample values\"\n"));
+    r.push_str(String::from("      \"description\": \"Map of source names or ESBMC variable names to counterexample values\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"violation\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Description of the violated contract\"\n"));
+    r.push_str(String::from("      \"description\": \"Description of the violated contract clause\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"vow_id\": {\n"));
     r.push_str(String::from("      \"type\": \"integer\",\n"));
     r.push_str(String::from("      \"minimum\": 0,\n"));
-    r.push_str(String::from("      \"description\": \"Numeric ID of the violated vow (matches vow_id in VowViolation)\"\n"));
+    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"source\": {\n"));
     r.push_str(String::from("      \"oneOf\": [\n"));
@@ -11530,18 +12046,80 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"additionalProperties\": false\n"));
     r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        { \"type\": \"string\" },\n"));
     r.push_str(String::from("        { \"type\": \"null\" }\n"));
     r.push_str(String::from("      ],\n"));
-    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause, or null\"\n"));
+    r.push_str(String::from("      \"description\": \"Source location of the violated vow clause; Rust emits a span object, self-hosted emits the source path string\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"blame\": {\n"));
+    r.push_str(String::from("      \"type\": \"string\",\n"));
+    r.push_str(String::from("      \"enum\": [\"caller\", \"callee\", \"none\"],\n"));
+    r.push_str(String::from("      \"description\": \"Who is responsible for the violation\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"call_sites\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"description\": \"Caller locations relevant to caller-blame failures\",\n"));
+    r.push_str(String::from("      \"items\": {\n"));
+    r.push_str(String::from("        \"type\": \"object\",\n"));
+    r.push_str(String::from("        \"required\": [\"caller_function\", \"file\", \"offset\", \"length\"],\n"));
+    r.push_str(String::from("        \"properties\": {\n"));
+    r.push_str(String::from("          \"caller_function\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"file\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"length\": { \"type\": \"integer\", \"minimum\": 0 }\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        \"additionalProperties\": false\n"));
+    r.push_str(String::from("      }\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"violating_args\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"description\": \"Callee parameters and caller argument spans for caller-blame precondition failures\",\n"));
+    r.push_str(String::from("      \"items\": {\n"));
+    r.push_str(String::from("        \"type\": \"object\",\n"));
+    r.push_str(String::from("        \"required\": [\"param\", \"value\", \"arg_offset\", \"arg_length\"],\n"));
+    r.push_str(String::from("        \"properties\": {\n"));
+    r.push_str(String::from("          \"param\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"value\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"arg_offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"arg_length\": { \"type\": \"integer\", \"minimum\": 0 }\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        \"additionalProperties\": false\n"));
+    r.push_str(String::from("      }\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"execution_path\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": {\n"));
+    r.push_str(String::from("        \"type\": \"object\",\n"));
+    r.push_str(String::from("        \"required\": [\"block_id\", \"offset\", \"length\"],\n"));
+    r.push_str(String::from("        \"properties\": {\n"));
+    r.push_str(String::from("          \"block_id\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"length\": { \"type\": \"integer\", \"minimum\": 0 }\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        \"additionalProperties\": false\n"));
+    r.push_str(String::from("      }\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"branch_decisions\": {\n"));
+    r.push_str(String::from("      \"type\": \"array\",\n"));
+    r.push_str(String::from("      \"items\": {\n"));
+    r.push_str(String::from("        \"type\": \"object\",\n"));
+    r.push_str(String::from("        \"required\": [\"condition_offset\", \"condition_length\", \"taken\"],\n"));
+    r.push_str(String::from("        \"properties\": {\n"));
+    r.push_str(String::from("          \"condition_offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"condition_length\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("          \"taken\": { \"type\": \"string\", \"enum\": [\"then\", \"else\"] }\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        \"additionalProperties\": false\n"));
+    r.push_str(String::from("      }\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"replay\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
     r.push_str(String::from("      \"enum\": [\"confirmed\", \"diverged\", \"skipped\"],\n"));
-    r.push_str(String::from("      \"description\": \"Differential-test outcome (present only with --replay-cex): whether a debug-mode harness replaying the counterexample's concrete inputs fired the same VowViolation (vow_id + blame). Not part of the soundness proof.\"\n"));
+    r.push_str(String::from("      \"description\": \"Differential-test outcome, present only with --replay-cex\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"replay_reason\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Human-readable explanation for a diverged or skipped replay (present only with --replay-cex when replay is not confirmed)\"\n"));
+    r.push_str(String::from("      \"description\": \"Human-readable explanation for a diverged or skipped replay\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"additionalProperties\": false\n"));

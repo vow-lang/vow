@@ -443,6 +443,14 @@ struct VerifyCE {
     vow_id: i64,
     source: String,
     blame: i64,
+    call_site_functions: Vec<String>,
+    call_site_files: Vec<String>,
+    call_site_offsets: Vec<i64>,
+    call_site_lengths: Vec<i64>,
+    violating_arg_params: Vec<String>,
+    violating_arg_values: Vec<String>,
+    violating_arg_offsets: Vec<i64>,
+    violating_arg_lengths: Vec<i64>,
     replay: String,
     replay_reason: String,
 }
@@ -479,6 +487,48 @@ fn diag_ce_to_json(ce: VerifyCE) -> String {
         r.push_str(String::from("none"));
     }
     r.push_str(String::from("\""));
+    let csn: i64 = ce.call_site_functions.len();
+    if csn > 0 {
+        r.push_str(String::from(",\"call_sites\":["));
+        let mut csi: i64 = 0;
+        while csi < csn {
+            if csi > 0 {
+                r.push_str(String::from(","));
+            }
+            r.push_str(String::from("{\"caller_function\":\""));
+            r.push_str(diag_json_escape_str(ce.call_site_functions[csi]));
+            r.push_str(String::from("\",\"file\":\""));
+            r.push_str(diag_json_escape_str(ce.call_site_files[csi]));
+            r.push_str(String::from("\",\"offset\":"));
+            r.push_str(diag_i64_to_str(ce.call_site_offsets[csi]));
+            r.push_str(String::from(",\"length\":"));
+            r.push_str(diag_i64_to_str(ce.call_site_lengths[csi]));
+            r.push_str(String::from("}"));
+            csi = csi + 1;
+        }
+        r.push_str(String::from("]"));
+    }
+    let van: i64 = ce.violating_arg_params.len();
+    if van > 0 {
+        r.push_str(String::from(",\"violating_args\":["));
+        let mut vai: i64 = 0;
+        while vai < van {
+            if vai > 0 {
+                r.push_str(String::from(","));
+            }
+            r.push_str(String::from("{\"param\":\""));
+            r.push_str(diag_json_escape_str(ce.violating_arg_params[vai]));
+            r.push_str(String::from("\",\"value\":\""));
+            r.push_str(diag_json_escape_str(ce.violating_arg_values[vai]));
+            r.push_str(String::from("\",\"arg_offset\":"));
+            r.push_str(diag_i64_to_str(ce.violating_arg_offsets[vai]));
+            r.push_str(String::from(",\"arg_length\":"));
+            r.push_str(diag_i64_to_str(ce.violating_arg_lengths[vai]));
+            r.push_str(String::from("}"));
+            vai = vai + 1;
+        }
+        r.push_str(String::from("]"));
+    }
     if ce.replay.len() > 0 {
         r.push_str(String::from(",\"replay\":\""));
         r.push_str(diag_json_escape_str(ce.replay));
