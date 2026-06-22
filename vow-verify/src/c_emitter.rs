@@ -2596,6 +2596,40 @@ mod tests {
     }
 
     #[test]
+    fn libc_named_user_function_is_modelable() {
+        // A user function named like a libc/ESBMC stdlib symbol (`abs`) must
+        // still be modeled: it is emitted under a mangled `vow_user_fn_<id>`
+        // name, so it cannot collide with ESBMC's C stdlib model. Regression
+        // test for the `verify/libc_name_collision` verifier-eval fixture.
+        let func = make_func(
+            "abs",
+            vec![Ty::I64],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![func.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        assert_eq!(
+            non_modelable_reason(&func, &module, &HashMap::new()),
+            None,
+            "a libc-named user function should be modelable, not skipped as reserved"
+        );
+        // The genuine ESBMC/verifier intrinsic namespaces remain reserved.
+        assert!(is_reserved_verifier_symbol("__VERIFIER_nondet_int"));
+        assert!(is_reserved_verifier_symbol("__ESBMC_assume"));
+        assert!(!is_reserved_verifier_symbol("abs"));
+    }
+
+    #[test]
     fn emit_string_matches_literal_at_uses_static_bytes() {
         let func = Function {
             id: FuncId(0),
