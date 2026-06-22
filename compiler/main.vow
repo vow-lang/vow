@@ -534,6 +534,12 @@ fn inst_len_by_id(f: IrFunction, inst_id: i64) -> i64 {
 
 fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path: String) -> VerifyCE {
     let vow_id: i64 = vr.vow_id;
+    // Rust serializes an ESBMC failure with no `vow:N` label as public
+    // `vow_id: 0` (`Counterexample.vow_id.unwrap_or(0)`). Keep the raw `-1`
+    // sentinel internally for vow matching, but do not leak it into the JSON API.
+    let public_vow_id: i64 = {
+        if vow_id < 0 { 0 } else { vow_id }
+    };
     let mut ce_violation: String = String::from("");
     let mut ce_blame: i64 = DIAG_BLAME_NONE();
     let call_site_functions: Vec<String> = Vec::new();
@@ -629,7 +635,7 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
         var_names: vr.var_names,
         var_values: vr.var_values,
         violation: ce_violation,
-        vow_id: vow_id,
+        vow_id: public_vow_id,
         source: path,
         blame: ce_blame,
         call_site_functions: call_site_functions,
