@@ -39,8 +39,10 @@ fn gcd_or_clamp() -> i64 { clamp(15, 0, 10) }   // 10
 
 ## Verification
 
-`vow verify stdlib/math/main.vow` currently errors: `abs` collides with C
-`<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model. This is an environmental
-verifier limitation, not a contract defect; the contracts are sound and are enforced
-at runtime in `--mode debug`. See
+`vow verify stdlib/math/main.vow` reports `VerifyFailed`. The former `abs`/`<stdlib.h>`
+collision is resolved — the verifier now namespaces user functions as `vow_user_fn_<id>`,
+so a function named `abs` no longer clashes with `int abs(int)`. The remaining blocker is
+a genuine contract gap: `pow`'s `ensures result >= 0` is refuted by an `i64` overflow
+counterexample (a large `base`/`exp` wraps negative). All contracts are still enforced at
+runtime in `--mode debug`. See
 [docs/spec/stdlib.md#verification-status](../../docs/spec/stdlib.md#verification-status).

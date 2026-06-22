@@ -4549,7 +4549,7 @@ wrong — in `--mode debug` every contract is still enforced at runtime via
 | Module          | `vow verify` result | Why                                                                                                   |
 |-----------------|---------------------|-------------------------------------------------------------------------------------------------------|
 | `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation — see the geometry section.) |
-| `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |
+| `math`          | `VerifyFailed`      | The old `abs`/`<stdlib.h>` collision is resolved — user functions are namespaced `vow_user_fn_<id>` in the emitted ESBMC model. The remaining blocker is genuine: `pow`'s `ensures result >= 0` is refuted by an `i64` overflow counterexample (a large `base`/`exp` wraps negative). A contract-hardening gap (overflow guard needed), not environmental. |
 | `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |
 | `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |
 | `bignum`        | `Skipped`           | `Vec`-based limb arithmetic allocates per call (`RegionAlloc`); not modelable. 24 `RegionRootEscape` notes (the demo intentionally holds results for program lifetime). |
@@ -4562,7 +4562,7 @@ the *vowed* checks reachable from its demo, not every function (e.g. `point_dist
 carries no contract and is not a proof obligation). For
 the others, the contracts are precise specifications that are enforced at runtime in
 `--mode debug`; static proof is gated on verifier-model improvements (Vec/region
-modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build
+modeling and the #764 caller-`requires` fix). When you build
 on these modules and need a *static* guarantee, prefer `geometry`'s pattern: keep
 hot paths in plain `i64` with explicit overflow `requires`.
 
@@ -4805,13 +4805,12 @@ These are tracked follow-ups, intentionally **not** addressed by the reorg that
 created `stdlib/` (which moved code verbatim):
 
 - **Static verifiability.** Make `Vec`/region-allocating functions modelable so
-  `stack`, `bignum`, and most of `heap` can be statically verified; rename `abs` to
-  avoid the C `<stdlib.h>` collision that blocks `math`; resolve the `gc_add_root`
-  caller-`requires` counterexample (#764).
+  `stack`, `bignum`, and most of `heap` can be statically verified; resolve the
+  `gc_add_root` caller-`requires` counterexample (#764).
 - **Contract hardening.** Add struct/representation invariants and `ensures` clauses
   to `bignum` and `gc`; add a size-shadow invariant and `stack_pop` to `stack`; add
-  an overflow guard to `point_distance_sq`; wire the `Shape` enum into `geometry`'s
-  area/perimeter functions.
+  an overflow guard to `point_distance_sq` and to `pow` (so its `ensures result >= 0`
+  holds under `i64`); wire the `Shape` enum into `geometry`'s area/perimeter functions.
 - **Consistency.** Mark all intended-public functions `pub` (currently only `math`
   and `heap` do); remove or rebuild the vestigial `stack/node.vow`.
 - **Distribution.** A module search path so stdlib modules can be imported without
@@ -9044,7 +9043,7 @@ wrong — in `--mode debug` every contract is still enforced at runtime via
 | Module          | `vow verify` result | Why                                                                                                   |
 |-----------------|---------------------|-------------------------------------------------------------------------------------------------------|
 | `geometry`      | `Verified`          | The vowed shape functions use exact `i64` overflow bounds and are fully modelable. (`point_distance_sq` carries no contract, so it is not a proof obligation — see the geometry section.) |
-| `math`          | `VerifyFailed`*     | `abs` collides with C `<stdlib.h>`'s `int abs(int)` in the emitted ESBMC model (parse error). Environmental; the contracts themselves are sound. |
+| `math`          | `VerifyFailed`      | The old `abs`/`<stdlib.h>` collision is resolved — user functions are namespaced `vow_user_fn_<id>` in the emitted ESBMC model. The remaining blocker is genuine: `pow`'s `ensures result >= 0` is refuted by an `i64` overflow counterexample (a large `base`/`exp` wraps negative). A contract-hardening gap (overflow guard needed), not environmental. |
 | `heap`          | `VerifyFailed`*     | A `Vec`-typed argument to a helper hits a C-model type mismatch; most heap functions are `Skipped` because `Vec`/region allocation (`RegionAlloc`) is not modelable. |
 | `stack`         | `Skipped`           | `stack_push` allocates a `Vec` (`RegionAlloc`), which the verifier cannot model; contracts are documentary. |
 | `bignum`        | `Skipped`           | `Vec`-based limb arithmetic allocates per call (`RegionAlloc`); not modelable. 24 `RegionRootEscape` notes (the demo intentionally holds results for program lifetime). |
@@ -9057,7 +9056,7 @@ the *vowed* checks reachable from its demo, not every function (e.g. `point_dist
 carries no contract and is not a proof obligation). For
 the others, the contracts are precise specifications that are enforced at runtime in
 `--mode debug`; static proof is gated on verifier-model improvements (Vec/region
-modeling, the `abs`/libc rename, and the #764 caller-`requires` fix). When you build
+modeling and the #764 caller-`requires` fix). When you build
 on these modules and need a *static* guarantee, prefer `geometry`'s pattern: keep
 hot paths in plain `i64` with explicit overflow `requires`.
 
@@ -9300,13 +9299,12 @@ These are tracked follow-ups, intentionally **not** addressed by the reorg that
 created `stdlib/` (which moved code verbatim):
 
 - **Static verifiability.** Make `Vec`/region-allocating functions modelable so
-  `stack`, `bignum`, and most of `heap` can be statically verified; rename `abs` to
-  avoid the C `<stdlib.h>` collision that blocks `math`; resolve the `gc_add_root`
-  caller-`requires` counterexample (#764).
+  `stack`, `bignum`, and most of `heap` can be statically verified; resolve the
+  `gc_add_root` caller-`requires` counterexample (#764).
 - **Contract hardening.** Add struct/representation invariants and `ensures` clauses
   to `bignum` and `gc`; add a size-shadow invariant and `stack_pop` to `stack`; add
-  an overflow guard to `point_distance_sq`; wire the `Shape` enum into `geometry`'s
-  area/perimeter functions.
+  an overflow guard to `point_distance_sq` and to `pow` (so its `ensures result >= 0`
+  holds under `i64`); wire the `Shape` enum into `geometry`'s area/perimeter functions.
 - **Consistency.** Mark all intended-public functions `pub` (currently only `math`
   and `heap` do); remove or rebuild the vestigial `stack/node.vow`.
 - **Distribution.** A module search path so stdlib modules can be imported without
