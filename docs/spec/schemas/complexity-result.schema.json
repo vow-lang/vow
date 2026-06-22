@@ -83,7 +83,7 @@
         "loops_total": { "type": "integer", "minimum": 0 },
         "loops_without_invariant": { "type": "integer", "minimum": 0, "description": "Loops the BMC must unwind without an invariant." },
         "max_loop_nesting": { "type": "integer", "minimum": 0 },
-        "contract_predicate_cost": { "type": "integer", "minimum": 0, "description": "predicate_nodes + free_vars + quantifier flag, summed across clauses." }
+        "contract_predicate_cost": { "type": "integer", "minimum": 0, "description": "predicate_nodes + free_vars (value identifiers, excluding callees/method names/result) + quantifier flag, summed across clauses." }
       },
       "additionalProperties": false
     },
@@ -97,7 +97,7 @@
         "invariants": { "type": "integer", "minimum": 0, "description": "Function-level invariant clauses (loop invariants are counted under verification)." },
         "predicate_nodes": { "type": "integer", "minimum": 0, "description": "Total AST nodes across all clause predicates." },
         "predicate_depth": { "type": "integer", "minimum": 0 },
-        "free_vars": { "type": "integer", "minimum": 0, "description": "Distinct free identifiers across clauses (excludes the result binding)." },
+        "free_vars": { "type": "integer", "minimum": 0, "description": "Distinct value identifiers across clauses; excludes the result binding, function callee identifiers, and method names." },
         "has_vec_quantification": { "type": "boolean", "description": "A predicate indexes a Vec (no quantifier syntax exists; this is the proxy)." }
       },
       "additionalProperties": false

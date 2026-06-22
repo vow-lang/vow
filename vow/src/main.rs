@@ -2782,9 +2782,11 @@ vow complexity <source.vow>
 | `--max-cognitive <N>` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
 | `--max-cyclomatic <N>` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
 
-**Exit code.** `0` always, unless a `--max-*` threshold is passed and exceeded, in which case nonzero. With no `--max-*` flag the command is pure reporting — no threshold gates by default (per the decouple-language-from-prover principle).
+**Exit code.** Nonzero on frontend/read failures, malformed numeric flags, or when a `--max-*` threshold is passed and exceeded. With no `--max-*` flag the command is pure reporting once the input is readable and valid — no threshold gates by default (per the decouple-language-from-prover principle).
 
 **Numeric convention.** The non-integer metrics (`halstead.volume`/`difficulty`/`effort` and `score_factors.*`) are emitted as fixed-3-decimal JSON numbers computed in **integer fixed-point** (scale 1000) — never native floats — so both compilers stay byte-identical. `complexity_score` is an integer in `[0, 100]`. The score's saturating anchor map uses a rational curve (`0.800` at the anchor, asymptoting to `1.000`), not an exponential, because the self-hosted compiler has no floating point.
+
+**Contract identifier convention.** `vow.contract.free_vars` counts distinct value identifiers referenced by clause predicates. It excludes the `result` binding, function callee identifiers, and method names; receiver and argument expressions still count when they are values.
 
 Output schema: see `docs/spec/schemas/complexity-result.schema.json`.
 
@@ -5437,7 +5439,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "loops_total": { "type": "integer", "minimum": 0 },
         "loops_without_invariant": { "type": "integer", "minimum": 0, "description": "Loops the BMC must unwind without an invariant." },
         "max_loop_nesting": { "type": "integer", "minimum": 0 },
-        "contract_predicate_cost": { "type": "integer", "minimum": 0, "description": "predicate_nodes + free_vars + quantifier flag, summed across clauses." }
+        "contract_predicate_cost": { "type": "integer", "minimum": 0, "description": "predicate_nodes + free_vars (value identifiers, excluding callees/method names/result) + quantifier flag, summed across clauses." }
       },
       "additionalProperties": false
     },
@@ -5451,7 +5453,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "invariants": { "type": "integer", "minimum": 0, "description": "Function-level invariant clauses (loop invariants are counted under verification)." },
         "predicate_nodes": { "type": "integer", "minimum": 0, "description": "Total AST nodes across all clause predicates." },
         "predicate_depth": { "type": "integer", "minimum": 0 },
-        "free_vars": { "type": "integer", "minimum": 0, "description": "Distinct free identifiers across clauses (excludes the result binding)." },
+        "free_vars": { "type": "integer", "minimum": 0, "description": "Distinct value identifiers across clauses; excludes the result binding, function callee identifiers, and method names." },
         "has_vec_quantification": { "type": "boolean", "description": "A predicate indexes a Vec (no quantifier syntax exists; this is the proxy)." }
       },
       "additionalProperties": false
@@ -7272,9 +7274,11 @@ vow complexity <source.vow>
 | `--max-cognitive <N>` | (unset) | CI gate: exit nonzero if any function's `cognitive` exceeds N. |
 | `--max-cyclomatic <N>` | (unset) | CI gate: exit nonzero if any function's `cyclomatic` exceeds N. |
 
-**Exit code.** `0` always, unless a `--max-*` threshold is passed and exceeded, in which case nonzero. With no `--max-*` flag the command is pure reporting — no threshold gates by default (per the decouple-language-from-prover principle).
+**Exit code.** Nonzero on frontend/read failures, malformed numeric flags, or when a `--max-*` threshold is passed and exceeded. With no `--max-*` flag the command is pure reporting once the input is readable and valid — no threshold gates by default (per the decouple-language-from-prover principle).
 
 **Numeric convention.** The non-integer metrics (`halstead.volume`/`difficulty`/`effort` and `score_factors.*`) are emitted as fixed-3-decimal JSON numbers computed in **integer fixed-point** (scale 1000) — never native floats — so both compilers stay byte-identical. `complexity_score` is an integer in `[0, 100]`. The score's saturating anchor map uses a rational curve (`0.800` at the anchor, asymptoting to `1.000`), not an exponential, because the self-hosted compiler has no floating point.
+
+**Contract identifier convention.** `vow.contract.free_vars` counts distinct value identifiers referenced by clause predicates. It excludes the `result` binding, function callee identifiers, and method names; receiver and argument expressions still count when they are values.
 
 Output schema: see `docs/spec/schemas/complexity-result.schema.json`.
 
@@ -9927,7 +9931,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "loops_total": { "type": "integer", "minimum": 0 },
         "loops_without_invariant": { "type": "integer", "minimum": 0, "description": "Loops the BMC must unwind without an invariant." },
         "max_loop_nesting": { "type": "integer", "minimum": 0 },
-        "contract_predicate_cost": { "type": "integer", "minimum": 0, "description": "predicate_nodes + free_vars + quantifier flag, summed across clauses." }
+        "contract_predicate_cost": { "type": "integer", "minimum": 0, "description": "predicate_nodes + free_vars (value identifiers, excluding callees/method names/result) + quantifier flag, summed across clauses." }
       },
       "additionalProperties": false
     },
@@ -9941,7 +9945,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "invariants": { "type": "integer", "minimum": 0, "description": "Function-level invariant clauses (loop invariants are counted under verification)." },
         "predicate_nodes": { "type": "integer", "minimum": 0, "description": "Total AST nodes across all clause predicates." },
         "predicate_depth": { "type": "integer", "minimum": 0 },
-        "free_vars": { "type": "integer", "minimum": 0, "description": "Distinct free identifiers across clauses (excludes the result binding)." },
+        "free_vars": { "type": "integer", "minimum": 0, "description": "Distinct value identifiers across clauses; excludes the result binding, function callee identifiers, and method names." },
         "has_vec_quantification": { "type": "boolean", "description": "A predicate indexes a Vec (no quantifier syntax exists; this is the proxy)." }
       },
       "additionalProperties": false

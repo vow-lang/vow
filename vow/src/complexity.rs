@@ -658,7 +658,13 @@ pub(crate) fn run_complexity_command(
         }
     };
 
-    let src = std::fs::read_to_string(source).unwrap_or_default();
+    let src = match read_complexity_source(source) {
+        Ok(src) => src,
+        Err(error) => {
+            eprintln!("vow complexity: {error}");
+            std::process::exit(1);
+        }
+    };
     let file_nloc = line_at(&src, src.len());
     let module = frontend.module();
     // Report only the entry file's functions (deps' spans are foreign). Match by
@@ -1232,12 +1238,14 @@ fn pred_bind_pattern(p: &Pat, bound: &mut Vec<String>) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pred_walk_block(
     b: &Block,
     depth: i64,
     nodes: &mut i64,
     maxdepth: &mut i64,
     has_index: &mut bool,
+    collect_free_vars: bool,
     seen: &mut HashSet<String>,
     bound: &mut Vec<String>,
 ) {
@@ -1245,32 +1253,68 @@ fn pred_walk_block(
     for s in &b.stmts {
         match s {
             Stmt::Let { pattern, init, .. } => {
-                pred_walk(init, depth, nodes, maxdepth, has_index, seen, bound);
+                pred_walk(
+                    init,
+                    depth,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                    bound,
+                );
                 pred_bind_pattern(pattern, bound);
             }
-            Stmt::Expr { expr, .. } => {
-                pred_walk(expr, depth, nodes, maxdepth, has_index, seen, bound)
-            }
+            Stmt::Expr { expr, .. } => pred_walk(
+                expr,
+                depth,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            ),
         }
     }
     if let Some(t) = &b.trailing_expr {
-        pred_walk(t, depth, nodes, maxdepth, has_index, seen, bound);
+        pred_walk(
+            t,
+            depth,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+            bound,
+        );
     }
     bound.truncate(mark);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pred_walk(
     e: &Expr,
     depth: i64,
     nodes: &mut i64,
     maxdepth: &mut i64,
     has_index: &mut bool,
+    collect_free_vars: bool,
     seen: &mut HashSet<String>,
     bound: &mut Vec<String>,
 ) {
     // Borrow has no node in the self-hosted AST: walk through it transparently.
     if let ExprKind::Borrow { expr } = &e.kind {
-        pred_walk(expr, depth, nodes, maxdepth, has_index, seen, bound);
+        pred_walk(
+            expr,
+            depth,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+            bound,
+        );
         return;
     }
     *nodes += 1;
@@ -1282,45 +1326,167 @@ fn pred_walk(
             // `result` is the ensures-result binding; the self-hosted parser
             // models it as EXPR_RESULT (not an identifier), so it is not a free
             // var. It is reserved, so excluding it here is always correct.
-            if name != "result" && !bound.iter().any(|n| n == name) {
+            // `collect_free_vars` is false in callee position (function names are
+            // not predicate variables); `bound` holds quantifier/let-bound names.
+            if collect_free_vars && name != "result" && !bound.iter().any(|n| n == name) {
                 seen.insert(name.clone());
             }
         }
         ExprKind::Index { base, index } => {
             *has_index = true;
-            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen, bound);
-            pred_walk(index, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(
+                base,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
+            pred_walk(
+                index,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
         }
         ExprKind::BinaryOp { lhs, rhs, .. } => {
-            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
-            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(
+                lhs,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
+            pred_walk(
+                rhs,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
         }
         ExprKind::Assign { lhs, rhs } => {
-            pred_walk(lhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
-            pred_walk(rhs, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(
+                lhs,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
+            pred_walk(
+                rhs,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
         }
-        ExprKind::UnaryOp { operand, .. } => {
-            pred_walk(operand, depth + 1, nodes, maxdepth, has_index, seen, bound)
-        }
-        ExprKind::FieldAccess { base, .. } => {
-            pred_walk(base, depth + 1, nodes, maxdepth, has_index, seen, bound)
-        }
-        ExprKind::Question { expr } => {
-            pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen, bound)
-        }
-        ExprKind::Cast { expr, .. } => {
-            pred_walk(expr, depth + 1, nodes, maxdepth, has_index, seen, bound)
-        }
+        ExprKind::UnaryOp { operand, .. } => pred_walk(
+            operand,
+            depth + 1,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+            bound,
+        ),
+        ExprKind::FieldAccess { base, .. } => pred_walk(
+            base,
+            depth + 1,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+            bound,
+        ),
+        ExprKind::Question { expr } => pred_walk(
+            expr,
+            depth + 1,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+            bound,
+        ),
+        ExprKind::Cast { expr, .. } => pred_walk(
+            expr,
+            depth + 1,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+            bound,
+        ),
         ExprKind::Call { callee, args } => {
-            pred_walk(callee, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            // Callee identifiers are function names, not predicate free vars, so
+            // descend into the callee with collect_free_vars = false.
+            pred_walk(
+                callee,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                false,
+                seen,
+                bound,
+            );
             for a in args {
-                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen, bound);
+                pred_walk(
+                    a,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                    bound,
+                );
             }
         }
         ExprKind::MethodCall { receiver, args, .. } => {
-            pred_walk(receiver, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(
+                receiver,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
             for a in args {
-                pred_walk(a, depth + 1, nodes, maxdepth, has_index, seen, bound);
+                pred_walk(
+                    a,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                    bound,
+                );
             }
         }
         ExprKind::If {
@@ -1334,6 +1500,7 @@ fn pred_walk(
                 nodes,
                 maxdepth,
                 has_index,
+                collect_free_vars,
                 seen,
                 bound,
             );
@@ -1343,11 +1510,21 @@ fn pred_walk(
                 nodes,
                 maxdepth,
                 has_index,
+                collect_free_vars,
                 seen,
                 bound,
             );
             if let Some(e2) = else_branch {
-                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen, bound);
+                pred_walk(
+                    e2,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                    bound,
+                );
             }
         }
         ExprKind::While {
@@ -1361,14 +1538,33 @@ fn pred_walk(
                 nodes,
                 maxdepth,
                 has_index,
+                collect_free_vars,
                 seen,
                 bound,
             );
-            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk_block(
+                body,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
             // A loop nested inside a predicate is reached by neither the body
             // loop-walk nor a separate pass, so its own vow clauses are part of
             // this predicate's complexity and must be counted here.
-            pred_walk_vow(vow, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk_vow(
+                vow,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
         }
         ExprKind::ForEach {
             binding,
@@ -1376,18 +1572,63 @@ fn pred_walk(
             body,
             vow,
         } => {
-            pred_walk(iterable, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(
+                iterable,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
             let mark = bound.len();
             bound.push(binding.clone());
-            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk_block(
+                body,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
             // Walk vow clauses with the loop binding still in scope so an
             // invariant referencing it is not mistaken for a free variable.
-            pred_walk_vow(vow, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk_vow(
+                vow,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
             bound.truncate(mark);
         }
         ExprKind::Loop { body, vow } => {
-            pred_walk_block(body, depth + 1, nodes, maxdepth, has_index, seen, bound);
-            pred_walk_vow(vow, depth + 1, nodes, maxdepth, has_index, seen, bound);
+            pred_walk_block(
+                body,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
+            pred_walk_vow(
+                vow,
+                depth + 1,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
         }
         ExprKind::Match { scrutinee, arms } => {
             pred_walk(
@@ -1396,6 +1637,7 @@ fn pred_walk(
                 nodes,
                 maxdepth,
                 has_index,
+                collect_free_vars,
                 seen,
                 bound,
             );
@@ -1408,6 +1650,7 @@ fn pred_walk(
                     nodes,
                     maxdepth,
                     has_index,
+                    collect_free_vars,
                     seen,
                     bound,
                 );
@@ -1416,37 +1659,82 @@ fn pred_walk(
         }
         ExprKind::Return { value } | ExprKind::Break { value } => {
             if let Some(v) = value {
-                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen, bound);
+                pred_walk(
+                    v,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                    bound,
+                );
             }
         }
-        ExprKind::Block(b) => {
-            pred_walk_block(b, depth + 1, nodes, maxdepth, has_index, seen, bound)
-        }
+        ExprKind::Block(b) => pred_walk_block(
+            b,
+            depth + 1,
+            nodes,
+            maxdepth,
+            has_index,
+            collect_free_vars,
+            seen,
+            bound,
+        ),
         ExprKind::StructLiteral { fields, .. } => {
             for (_, v) in fields {
-                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen, bound);
+                pred_walk(
+                    v,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                    bound,
+                );
             }
         }
         ExprKind::EnumConstruct { fields, .. } => {
             for v in fields {
-                pred_walk(v, depth + 1, nodes, maxdepth, has_index, seen, bound);
+                pred_walk(
+                    v,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                    bound,
+                );
             }
         }
         ExprKind::Tuple(elems) => {
             for e2 in elems {
-                pred_walk(e2, depth + 1, nodes, maxdepth, has_index, seen, bound);
+                pred_walk(
+                    e2,
+                    depth + 1,
+                    nodes,
+                    maxdepth,
+                    has_index,
+                    collect_free_vars,
+                    seen,
+                    bound,
+                );
             }
         }
         _ => {}
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pred_walk_vow(
     vow: &Option<VowBlock>,
     depth: i64,
     nodes: &mut i64,
     maxdepth: &mut i64,
     has_index: &mut bool,
+    collect_free_vars: bool,
     seen: &mut HashSet<String>,
     bound: &mut Vec<String>,
 ) {
@@ -1457,7 +1745,16 @@ fn pred_walk_vow(
                 | VowClause::Ensures { expr, .. }
                 | VowClause::Invariant { expr, .. } => expr,
             };
-            pred_walk(expr, depth, nodes, maxdepth, has_index, seen, bound);
+            pred_walk(
+                expr,
+                depth,
+                nodes,
+                maxdepth,
+                has_index,
+                collect_free_vars,
+                seen,
+                bound,
+            );
         }
     }
 }
@@ -1478,6 +1775,7 @@ fn analyze_contract(f: &FnDef) -> Contract {
                 &mut nodes,
                 &mut maxdepth,
                 &mut has_index,
+                true,
                 &mut seen,
                 &mut bound,
             );
@@ -1506,6 +1804,7 @@ fn analyze_contract(f: &FnDef) -> Contract {
                 &mut nodes,
                 &mut maxdepth,
                 &mut has_index,
+                true,
                 &mut seen,
                 &mut bound,
             );
@@ -1529,6 +1828,7 @@ fn contract_predicate_cost(ct: &Contract) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
     use vow_syntax::ast::{Param, Type, Visibility};
     use vow_syntax::span::Span;
 
@@ -1597,6 +1897,35 @@ mod tests {
         assert_eq!(contract.free_vars, 1);
         assert!(!contract.has_vec_quant);
         assert_eq!(contract_predicate_cost(&contract), 4);
+    }
+
+    #[test]
+    fn read_complexity_source_reports_missing_path() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("missing.vow");
+
+        let err = read_complexity_source(&path).unwrap_err();
+
+        let prefix = format!("cannot read {}: ", path.to_string_lossy());
+        assert!(
+            err.starts_with(&prefix),
+            "error should surface the OS detail after the path: {err}"
+        );
+        assert!(
+            err[prefix.len()..].trim().len() > 0,
+            "error should include non-empty OS detail: {err}"
+        );
+    }
+
+    #[test]
+    fn read_complexity_source_allows_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.vow");
+        std::fs::write(&path, "").unwrap();
+
+        let src = read_complexity_source(&path).unwrap();
+
+        assert_eq!(src, "");
     }
 
     #[test]
@@ -1789,6 +2118,11 @@ fn analyze_verif(f: &FnDef, predicate_cost: i64) -> Verif {
         max_loop_nesting: maxnest,
         contract_predicate_cost: predicate_cost,
     }
+}
+
+fn read_complexity_source(source: &Path) -> Result<String, String> {
+    std::fs::read_to_string(source)
+        .map_err(|e| format!("cannot read {}: {e}", source.to_string_lossy()))
 }
 
 // Experimental Vow-surface score bump (§3.2a Step 3), fixed-point, capped 150.

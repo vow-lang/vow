@@ -1,0 +1,50 @@
+module TestComplexityIo
+
+use complexity
+use diag
+
+fn check_missing_path_fails() -> i64 [read] {
+    let r: CxReadSource = cx_read_source(String::from("compiler/tests/no_such_complexity_input.vow"));
+    if r.ok { return 1; }
+    if r.src.len() != 0 { return 2; }
+    if r.err.len() == 0 { return 7; }
+    0
+}
+
+fn check_empty_readable_file_succeeds() -> i64 [read] {
+    let r: CxReadSource = cx_read_source(String::from("/dev/null"));
+    if !r.ok { return 3; }
+    if r.src.len() != 0 { return 4; }
+    0
+}
+
+fn check_nonempty_file_succeeds() -> i64 [read] {
+    let r: CxReadSource = cx_read_source(String::from("tests/fixtures/complexity/callee_free_vars.vow"));
+    if !r.ok { return 5; }
+    if string_starts_with(r.src, String::from("module CalleeFreeVars")) == 0 { return 6; }
+    if diag_compute_line(r.src, r.src.len()) != 13 { return 8; }
+    0
+}
+
+fn i64_result_to_i32(r: i64) -> i32 {
+    if r == 1 { return 1; }
+    if r == 2 { return 2; }
+    if r == 3 { return 3; }
+    if r == 4 { return 4; }
+    if r == 5 { return 5; }
+    if r == 6 { return 6; }
+    if r == 7 { return 7; }
+    if r == 8 { return 8; }
+    if r != 0 { return 99; }
+    0
+}
+
+fn main() -> i32 [read] {
+    let r1: i64 = check_missing_path_fails();
+    if r1 != 0 { return i64_result_to_i32(r1); }
+    let r2: i64 = check_empty_readable_file_succeeds();
+    if r2 != 0 { return i64_result_to_i32(r2); }
+    let r3: i64 = check_nonempty_file_succeeds();
+    if r3 != 0 { return i64_result_to_i32(r3); }
+    0
+}

@@ -1,0 +1,12 @@
+module CalleeFreeVars
+
+fn id(n: i64) -> i64 {
+    n
+}
+
+fn checked(n: i64) -> i64 vow {
+    requires: id(n) > 0,
+    ensures: id(result) == n
+} {
+    n
+}
