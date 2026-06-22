@@ -468,11 +468,12 @@ fn is_known_builtin(name: &str) -> bool {
 }
 
 fn is_reserved_verifier_symbol(name: &str) -> bool {
-    name.starts_with("__ESBMC_") || name.starts_with("__VERIFIER_")
+    // `abs` is part of ESBMC's C stdlib model; don't emit a competing definition.
+    name.starts_with("__ESBMC_") || name.starts_with("__VERIFIER_") || name == "abs"
 }
 
-pub(crate) fn verifier_c_function_name(func: &Function) -> String {
-    format!("vow_fn_{}_{}", func.id.0, func.name)
+pub(crate) fn verifier_c_func_name(func: &Function) -> String {
+    format!("vow_user_fn_{}", func.id.0)
 }
 
 /// Check whether a function can be precisely modeled in the C emitter.
@@ -1600,13 +1601,13 @@ fn emit_inst(
                     out.push_str(&format!(
                         "  v{} = {}({});\n",
                         id,
-                        verifier_c_function_name(callee),
+                        verifier_c_func_name(callee),
                         args_str.join(", ")
                     ));
                 } else {
                     out.push_str(&format!(
                         "  {}({});\n",
-                        verifier_c_function_name(callee),
+                        verifier_c_func_name(callee),
                         args_str.join(", ")
                     ));
                 }
@@ -1914,7 +1915,7 @@ pub fn emit_c_function_full(
     out.push_str(&format!(
         "{} {}({}) {{\n",
         ret_c,
-        verifier_c_function_name(func),
+        verifier_c_func_name(func),
         param_str
     ));
 
@@ -2202,6 +2203,7 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     out.push_str("extern void __ESBMC_assert(_Bool, const char*);\n");
     out.push_str("extern int __VERIFIER_nondet_int(void);\n");
     out.push_str("extern long __VERIFIER_nondet_long(void);\n");
+    out.push_str("extern unsigned long __VERIFIER_nondet_unsigned_long(void);\n");
     out.push_str("extern float __VERIFIER_nondet_float(void);\n");
     out.push_str("extern double __VERIFIER_nondet_double(void);\n");
     out.push_str("extern _Bool __VERIFIER_nondet_bool(void);\n\n");
@@ -2295,7 +2297,7 @@ fn emit_forward_declaration(func: &Function, out: &mut String) {
     out.push_str(&format!(
         "{} {}({});\n",
         ret_c,
-        verifier_c_function_name(func),
+        verifier_c_func_name(func),
         param_str
     ));
 }
@@ -2411,6 +2413,15 @@ mod tests {
             origin: sp(),
             region: RegionId::Root,
         }
+    }
+
+    #[test]
+    fn emit_c_module_declares_unsigned_long_nondet() {
+        let c = emit_c_module(&[], &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("extern unsigned long __VERIFIER_nondet_unsigned_long(void);"),
+            "generated C preamble must declare the u64 nondet intrinsic:\n{c}"
+        );
     }
 
     #[test]
@@ -2555,9 +2566,31 @@ mod tests {
             source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("int64_t vow_fn_0_add("), "signature: {c}");
+        assert!(c.contains("int64_t vow_user_fn_0("), "signature: {c}");
         assert!(c.contains("v2 = v0 + v1"), "add: {c}");
         assert!(c.contains("return v2"), "return: {c}");
+    }
+
+    #[test]
+    fn emit_function_uses_verifier_private_symbol_for_source_name() {
+        let mut func = make_func(
+            "abs",
+            vec![Ty::I64],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        func.id = FuncId(7);
+
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+
+        assert!(
+            c.contains("int64_t vow_user_fn_7("),
+            "mangled signature: {c}"
+        );
+        assert!(!c.contains("int64_t abs("), "raw libc name leaked: {c}");
     }
 
     #[test]
@@ -2978,7 +3011,7 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("void vow_fn_0_void_fn("), "void signature: {c}");
+        assert!(c.contains("void vow_user_fn_0("), "void signature: {c}");
         assert!(c.contains("  return;\n"), "bare return: {c}");
         assert!(!c.contains("return v0;"), "no value returned: {c}");
         assert!(!c.contains("return 0;"), "no value returned: {c}");
@@ -3433,13 +3466,14 @@ mod tests {
 
     #[test]
     fn emit_c_module_wraps_multiple_functions() {
-        let f1 = make_func(
+        let mut f1 = make_func(
             "f1",
             vec![],
             Ty::Unit,
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
-        let f2 = make_func(
+        f1.id = FuncId(1);
+        let mut f2 = make_func(
             "f2",
             vec![Ty::I64],
             Ty::I64,
@@ -3448,14 +3482,15 @@ mod tests {
                 inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
+        f2.id = FuncId(2);
         let out = emit_c_module(&[&f1, &f2], &HashMap::new(), &VerifyLimits::default());
         assert!(out.contains("#include <stdint.h>"), "includes: {out}");
         assert!(out.contains("__ESBMC_assume"), "esbmc assume: {out}");
         assert!(
-            out.contains("void vow_fn_0_f1(void)"),
+            out.contains("void vow_user_fn_1(void)"),
             "f1 signature: {out}"
         );
-        assert!(out.contains("vow_fn_0_f2("), "f2 signature: {out}");
+        assert!(out.contains("vow_user_fn_2("), "f2 signature: {out}");
     }
 
     #[test]

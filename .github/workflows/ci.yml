@@ -45,10 +45,13 @@ jobs:
           rm "/tmp/$ESBMC_ZIP"
       - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
       - run: cargo build --all
+      - name: Verifier-evaluation unit tests
+        run: python3 scripts/test_verify_eval.py
       - name: Verifier-evaluation suite (#334)
         # Asserts the labelled corpus in tests/verify* against ground-truth
         # blame/vow_id, with false-accepts (incl. vacuous proofs) failing the
         # build under a SOUNDNESS banner. ESBMC is on PATH from the step above.
+        # Reuse the debug binary produced by the preceding `cargo build --all`.
         run: python3 scripts/verify_eval.py --verifier ./target/debug/vow --output-dir /tmp/verify-eval
       - name: Build concatenated self-hosted compiler
         run: |

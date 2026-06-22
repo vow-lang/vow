@@ -74,7 +74,7 @@ extending the same `// TEST:` convention `tests/run_tests.sh` already uses.
 | `// TEST: counterexample-blame <caller\|callee\|none>` | Expected blame; `none` = a memory-safety/builtin failure with no contract attribution. |
 | `// TEST: counterexample-vow-id <N>` | Expected violated `vow_id` (from the `vow verify` counterexample, which is a distinct id space from `vow contracts --verify`). |
 | `// TEST: cex fn="<fn>" blame=<b> vow_id=<N>` | Repeatable form for programs with multiple expected counterexamples. |
-| `// TEST: known-soundness-gap "<reason>" #<issue>` | Marks a documented false-accept the verifier does not yet catch. Reported under the KNOWN SOUNDNESS GAPS banner, non-fatal — until the verifier *starts* catching it, at which point the harness fails and demands promotion to a real verify-fail program. |
+| `// TEST: known-soundness-gap "<reason>" #<issue>` | Marks a documented false-accept in `tests/verify/` that the verifier does not yet catch. Reported under the KNOWN SOUNDNESS GAPS banner, non-fatal — until the verifier *starts* catching it, at which point the harness fails and demands promotion to a real verify-fail program. |
 | `// TEST: status <Status>` / `// TEST: skip "<reason>"` | Override the directory's expected status / exclude a program. |
 
 ## How the harness classifies results
@@ -86,8 +86,10 @@ result is bucketed:
 - **SOUNDNESS** — expected-fail program reported `Verified`, or a should-pass
   program proven vacuously. **Hard failure.**
 - **PRECISION** — should-pass program reported `VerifyFailed`/`Skipped`.
-- **BLAME / VOW_ID** — wrong blame or wrong violated `vow_id`.
-- **STATUS** — any other expected/actual status mismatch.
+- **BLAME / VOW_ID** — wrong blame, wrong violated `vow_id`, or surplus
+  counterexamples.
+- **STATUS** — any other expected/actual status mismatch, including a missing
+  expected counterexample.
 - **KNOWN SOUNDNESS GAPS** — tracked false-accepts (non-fatal).
 - **KNOWN GAP APPEARS FIXED** — a known gap the verifier now catches (**hard
   failure**: promote the label).

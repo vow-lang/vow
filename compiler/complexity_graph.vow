@@ -1,0 +1,32 @@
+module ComplexityGraph
+
+fn cx_ir_fan_in_lookup(counts: BTreeMap<i64, i64>, fid: i64) -> i64 {
+    match counts.get(fid) {
+        Option::Some(v) => { v },
+        Option::None => { 0 },
+    }
+}
+
+// Invert distinct caller -> callee sets once, counting only callers from the
+// entry file. `callee_sets` is already deduplicated by cx_fn_callees.
+fn cx_ir_fan_in_counts(entry_file: String, source_files: Vec<String>, callee_sets: Vec<Vec<i64>>, fn_count: i64) -> BTreeMap<i64, i64> {
+    let counts: BTreeMap<i64, i64> = BTreeMap::new();
+    let mut caller: i64 = 0;
+    let n: i64 = callee_sets.len();
+    while caller < n {
+        let source_file: String = source_files[caller];
+        if source_file == entry_file {
+            let callees: Vec<i64> = callee_sets[caller];
+            let mut ci: i64 = 0;
+            while ci < callees.len() {
+                let callee: i64 = callees[ci];
+                if callee >= 0 && callee < fn_count {
+                    counts.insert(callee, cx_ir_fan_in_lookup(counts, callee) + 1);
+                }
+                ci = ci + 1;
+            }
+        }
+        caller = caller + 1;
+    }
+    counts
+}

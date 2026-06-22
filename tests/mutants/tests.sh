@@ -514,6 +514,56 @@ V
     fi
 }
 
+t27_json_escapes_control_bytes_in_paths() {
+    # Protect JSON escaping for file/name fields beyond the common quote case:
+    # quote, backslash, backspace, and form-feed must parse and round-trip.
+    local escaped_dir=$'json_escape_quote"backslash\\backspace\bformfeed\f'
+    local fix="$TMP/$escaped_dir"
+    mkdir -p "$fix"
+    local escaped_file="$fix/sample.vow"
+    cat > "$escaped_file" <<'V'
+module JsonEscapePath
+
+fn add(a: i64, b: i64) -> i64 { a + b }
+V
+    local out rc list_jsonl
+    list_jsonl="$TMP/t27_list.jsonl"
+    set +e
+    run_vowm list --root "$fix" > "$list_jsonl" 2>&1
+    rc=$?
+    set -e
+    assert_eq "T27: list with JSON-escaped path exits 0" "0" "$rc"
+    if MUTANTS_EXPECT_FILE="$escaped_file" python3 - "$list_jsonl" <<'PY'
+import json
+import os
+import sys
+
+expected = os.environ["MUTANTS_EXPECT_FILE"]
+with open(sys.argv[1], encoding="utf-8") as f:
+    rows = [json.loads(line) for line in f if line.strip()]
+
+mutants = [row for row in rows if "file" in row]
+if not mutants:
+    raise SystemExit("no mutants emitted")
+
+if not any(m.get("file") == expected and expected in m.get("name", "") for m in mutants):
+    raise SystemExit("list JSON did not round-trip escaped file/name")
+
+for m in mutants:
+    for key in ("name", "file", "from", "to", "label"):
+        if not isinstance(m.get(key), str):
+            raise SystemExit(f"mutant field {key} is not a string")
+PY
+    then
+        printf "  ${GREEN}PASS${RESET} T27: list JSON escaped path fields parse and round-trip\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T27: escaped path fields did not parse or round-trip\n    list:\n%s\n" "$(head -c 400 "$list_jsonl" 2>/dev/null)"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T27")
+    fi
+}
+
 t13_records_carry_line_col_and_name() {
     local out
     set +e
@@ -832,6 +882,7 @@ t23_workdir_with_spaces_is_shell_quoted
 t24_invalid_shard_warns_to_stderr
 t25_body_replace_label_has_no_double_space
 t26_modulo_paired_with_division
+t27_json_escapes_control_bytes_in_paths
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then

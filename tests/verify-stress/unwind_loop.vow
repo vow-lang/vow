@@ -1,4 +1,5 @@
-// CATEGORY: unverifiable (stress; non-gating)
+// Non-gating stress fixture; this prose comment is intentionally not a `// TEST:`
+// directive read by scripts/verify_eval.py.
 //
 // A loop with no invariant whose trip count (100000, passed from `main`) ESBMC
 // must unwind to discharge its postcondition; at the configured unwind budget

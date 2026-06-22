@@ -33,7 +33,7 @@ $ ulimit -v 2000000; build/vowc build examples/clamp.vow -o /tmp/clamp_test
 ### Sanity check: multi-module build
 
 ```
-$ ulimit -v 2000000; build/vowc build --no-verify examples/geometry/main.vow -o /tmp/geom_test
+$ ulimit -v 2000000; build/vowc build --no-verify stdlib/geometry/main.vow -o /tmp/geom_test
 12 items, 0 errors
 {"status":"Unverified","executable":"/tmp/geom_test","diagnostics":[],"counterexamples":[]}
 ```
