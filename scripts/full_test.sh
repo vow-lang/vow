@@ -1189,6 +1189,21 @@ else
     fail "complexity/utf8-path-parity" "non-ASCII path JSON diverges between compilers"
 fi
 rm -rf "$utf8dir"
+# JSON named-control escapes in source paths must be byte-identical and must
+# round-trip through a parser. Backspace/form-feed are control bytes that remain
+# shell-log friendly but distinguish `\b`/`\f` from generic `?` escaping.
+escape_dir=$(mktemp -d)
+escape_name=$'quote"backslash\\backspace\bformfeed\f.vow'
+escape_path="$escape_dir/$escape_name"
+cp tests/fixtures/complexity/params_basic.vow "$escape_path"
+rust_escape_json=$("$RUST" complexity "$escape_path" 2>/dev/null)
+self_escape_json=$(run_self complexity "$escape_path" 2>/dev/null)
+if [ "$rust_escape_json" = "$self_escape_json" ] && COMPLEXITY_EXPECT_PATH="$escape_path" python3 -c 'import json, os, sys; d=json.load(sys.stdin); sys.exit(0 if d["files"][0]["file"] == os.environ["COMPLEXITY_EXPECT_PATH"] else 1)' <<< "$rust_escape_json"; then
+    pass "complexity/control-path-parity (quote/backslash/backspace/form-feed round-trip)"
+else
+    fail "complexity/control-path-parity" "escaped control-byte path did not stay byte-identical and round-trip"
+fi
+rm -rf "$escape_dir"
 echo ""
 
 # ─── Section 6: Perfetto Trace (--perfetto, #784) ───────────────────

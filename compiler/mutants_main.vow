@@ -3,6 +3,7 @@ module MutantsMain
 use mutants_sites
 use mutants_patch
 use mutants_oracle
+use diag
 
 fn mutants_print_usage() [io] {
     eprintln_str("usage: vowc mutants <subcommand> [flags]");
@@ -161,37 +162,11 @@ fn join_path(dir: String, name: String) -> String {
     r
 }
 
-// Escape a string for inclusion inside a JSON `"..."` literal.
-// Handles the cases that occur in vow-mutants output: `"`, `\`, newlines,
-// carriage returns, tabs, and other control bytes (rendered as `?`).
-// Raw `"` is the practical concern — `String::from("")` and `Vec::new()`
-// body-replacement defaults plus contract clauses that reference string
-// literals would otherwise produce malformed JSON.
-fn json_escape_str(s: String) -> String {
-    let r: String = String::from("");
-    let n: i64 = s.len();
-    let mut i: i64 = 0;
-    while i < n {
-        let b: i64 = s.byte_at(i);
-        if b == 34 { r.push_byte(92); r.push_byte(34); }
-        else if b == 92 { r.push_byte(92); r.push_byte(92); }
-        else if b == 10 { r.push_byte(92); r.push_byte(110); }
-        else if b == 13 { r.push_byte(92); r.push_byte(114); }
-        else if b == 9  { r.push_byte(92); r.push_byte(116); }
-        else if b == 8  { r.push_byte(92); r.push_byte(98);  }
-        else if b == 12 { r.push_byte(92); r.push_byte(102); }
-        else if b < 32  { r.push_byte(63); }
-        else { r.push_byte(b); }
-        i = i + 1;
-    }
-    r
-}
-
 fn site_to_json(s: Site) -> String {
     let r: String = String::from("{\"name\":\"");
-    r.push_str(json_escape_str(mutant_name(s.file, s.line, s.col, s.label)));
+    r.push_str(diag_json_escape_str(mutant_name(s.file, s.line, s.col, s.label)));
     r.push_str(String::from("\",\"file\":\""));
-    r.push_str(json_escape_str(s.file));
+    r.push_str(diag_json_escape_str(s.file));
     r.push_str(String::from("\",\"line\":"));
     r.push_str(i64_to_string(s.line));
     r.push_str(String::from(",\"col\":"));
@@ -201,13 +176,13 @@ fn site_to_json(s: Site) -> String {
     r.push_str(String::from(",\"len\":"));
     r.push_str(i64_to_string(s.len));
     r.push_str(String::from(",\"kind\":\""));
-    r.push_str(json_escape_str(s.kind));
+    r.push_str(diag_json_escape_str(s.kind));
     r.push_str(String::from("\",\"from\":\""));
-    r.push_str(json_escape_str(s.from_text));
+    r.push_str(diag_json_escape_str(s.from_text));
     r.push_str(String::from("\",\"to\":\""));
-    r.push_str(json_escape_str(s.replacement));
+    r.push_str(diag_json_escape_str(s.replacement));
     r.push_str(String::from("\",\"label\":\""));
-    r.push_str(json_escape_str(s.label));
+    r.push_str(diag_json_escape_str(s.label));
     r.push_str(String::from("\",\"clause_index\":"));
     r.push_str(i64_to_string(s.clause_index));
     r.push_str(String::from("}"));
@@ -387,9 +362,9 @@ fn outcome_record_json(id: i64, s: Site, status: i64, tier: i64, oracle_ms: i64)
     let r: String = String::from("{\"id\":");
     r.push_str(i64_to_string(id));
     r.push_str(String::from(",\"name\":\""));
-    r.push_str(json_escape_str(mutant_name(s.file, s.line, s.col, s.label)));
+    r.push_str(diag_json_escape_str(mutant_name(s.file, s.line, s.col, s.label)));
     r.push_str(String::from("\",\"status\":\""));
-    r.push_str(json_escape_str(status_str(status)));
+    r.push_str(diag_json_escape_str(status_str(status)));
     r.push_str(String::from("\",\"tier\":"));
     r.push_str(i64_to_string(tier));
     r.push_str(String::from(",\"oracle_ms\":"));
