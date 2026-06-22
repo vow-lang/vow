@@ -7,26 +7,6 @@ use frontend
 use diag
 use ir
 
-// Minimal JSON string escaper (function names/paths rarely need it, but be
-// safe). Kept local to avoid cross-module coupling with mutants_main.
-fn cx_json_escape(s: String) -> String {
-    let r: String = String::from("");
-    let n: i64 = s.len();
-    let mut i: i64 = 0;
-    while i < n {
-        let b: i64 = s.byte_at(i);
-        if b == 34 { r.push_byte(92); r.push_byte(34); }
-        else if b == 92 { r.push_byte(92); r.push_byte(92); }
-        else if b == 10 { r.push_byte(92); r.push_byte(110); }
-        else if b == 13 { r.push_byte(92); r.push_byte(114); }
-        else if b == 9  { r.push_byte(92); r.push_byte(116); }
-        else if b < 32  { r.push_byte(63); }
-        else { r.push_byte(b); }
-        i = i + 1;
-    }
-    r
-}
-
 fn cx_int_flag(argv: Vec<String>, name: String, dflt: i64) -> i64 {
     let v: String = get_flag_arg(argv, name);
     if v.len() == 0 { return dflt; }
@@ -114,7 +94,7 @@ fn cx_emit_effects(out: String, eff: i64) {
 fn cx_emit_fn(out: String, rec: CxFn, sc: CxScore, thr: i64, ex: CxExtra) {
     out.push_str(String::from("{\"name\":\""));
     let rn: String = rec.name;
-    out.push_str(cx_json_escape(rn));
+    out.push_str(diag_json_escape_str(rn));
     out.push_str(String::from("\",\"line\":"));
     out.push_str(i64_to_string(rec.line));
     out.push_str(String::from(",\"complexity_score\":"));
@@ -362,7 +342,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
 
     // Pass 2: emit.
     let out: String = String::from("{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"");
-    out.push_str(cx_json_escape(path));
+    out.push_str(diag_json_escape_str(path));
     out.push_str(String::from("\",\"complexity_score\":"));
     out.push_str(i64_to_string(file_max));
     out.push_str(String::from(",\"functions_over_threshold\":"));
@@ -403,7 +383,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
             if emitted > 0 { out.push_str(String::from(",")); }
             out.push_str(String::from("\""));
             let r: CxFn = rowe.rec;
-            out.push_str(cx_json_escape(r.name));
+            out.push_str(diag_json_escape_str(r.name));
             out.push_str(String::from("\""));
             emitted = emitted + 1;
         }

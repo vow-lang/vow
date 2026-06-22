@@ -282,9 +282,20 @@ fn diag_json_escape_str(s: String) -> String {
         } else if b == 10 {
             r.push_byte(92);
             r.push_byte(110);
+        } else if b == 13 {
+            r.push_byte(92);
+            r.push_byte(114);
         } else if b == 9 {
             r.push_byte(92);
             r.push_byte(116);
+        } else if b == 8 {
+            r.push_byte(92);
+            r.push_byte(98);
+        } else if b == 12 {
+            r.push_byte(92);
+            r.push_byte(102);
+        } else if b < 32 {
+            r.push_byte(63);
         } else {
             r.push_byte(b);
         }
