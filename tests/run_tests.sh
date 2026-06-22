@@ -613,6 +613,56 @@ else:
       pass "$name"
     fi
   fi
+
+  name="contracts_suffix_len_unknown_clause_set_membership"
+  if matches_filter "$name"; then
+    set +e
+    suffix_contracts_json="$(run_vowc contracts "$ROOT_DIR/compiler/main.vow" 2>/dev/null)"
+    suffix_contracts_exit=$?
+    set -e
+    suffix_check="$(python3 -c "
+import json, sys
+
+suffixes = [
+    'i8', 'i16', 'i32', 'i64', 'i128',
+    'u8', 'u16', 'u32', 'u64', 'u128',
+    'usize', 'isize',
+]
+
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('parse_error'); sys.exit(0)
+
+descriptions = [
+    e.get('description', '')
+    for e in d.get('contracts', [])
+    if e.get('function', '') == 'suffix_len' and e.get('kind', '') == 'ensures'
+]
+text = '\n'.join(descriptions)
+missing = [s for s in suffixes if ('suffix == tok_suffix_%s()' % s) not in text]
+has_range = (
+    'suffix >= tok_suffix_i8()' in text
+    or 'suffix <= tok_suffix_isize()' in text
+)
+
+if not descriptions:
+    print('missing_suffix_len')
+elif has_range:
+    print('range_guard_present')
+elif missing:
+    print('missing_membership=' + ','.join(missing))
+else:
+    print('ok')
+" <<< "$suffix_contracts_json")"
+    if [[ "$suffix_contracts_exit" -ne 0 ]]; then
+      fail "$name" "exit $suffix_contracts_exit"
+    elif [[ "$suffix_check" != "ok" ]]; then
+      fail "$name" "suffix_len unknown-suffix clause mismatch ($suffix_check)"
+    else
+      pass "$name"
+    fi
+  fi
 fi
 
 # --- Phase 3: verify-fail/ tests ---
