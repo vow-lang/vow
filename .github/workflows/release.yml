@@ -106,7 +106,7 @@ jobs:
       - name: Cache ESBMC
         id: cache-esbmc
         if: matrix.verify
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/esbmc
           key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
