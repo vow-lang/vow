@@ -35,7 +35,7 @@ jobs:
       - name: Build site (strict)
         run: mkdocs build --strict --config-file website/mkdocs.yml
       - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: website/site
 
