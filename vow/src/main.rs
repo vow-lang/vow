@@ -1326,6 +1326,7 @@ USAGE
   vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)
   vow test [OPTIONS] [<path>]          Run tests with JSON results
   vow contracts [OPTIONS] <source.vow> List all contracts
+  vow complexity [OPTIONS] <source.vow> Report per-function complexity metrics (JSON)
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow skill [print [--bundle]|install [--local|--global]]
                                         Generate or install Claude Code skill
@@ -1372,6 +1373,13 @@ CONTRACTS OPTIONS
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)
   --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
   --verify-jobs <N>       Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)
+
+COMPLEXITY OPTIONS
+  --cog-anchor <N>        Cognitive-complexity value mapped to sub-score 0.800 (SonarQube's default flag line). (default: 15)
+  --nloc-anchor <N>       NLOC value mapped to sub-score 0.800 (~50–60 line guidance). (default: 60)
+  --max-score <N>         CI gate: exit nonzero if any function's complexity_score exceeds N. The recommended line is 80, but gating is opt-in only. (default: (unset))
+  --max-cognitive <N>     CI gate: exit nonzero if any function's cognitive exceeds N. (default: (unset))
+  --max-cyclomatic <N>    CI gate: exit nonzero if any function's cyclomatic exceeds N. (default: (unset))
 
 DECL OPTIONS
   -o, --output <path>     Output declaration file path (default: <source>.vow.d)

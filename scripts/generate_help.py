@@ -652,6 +652,7 @@ def build_help_human(data: dict) -> str:
     lines.append("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)")
     lines.append("  vow test [OPTIONS] [<path>]          Run tests with JSON results")
     lines.append("  vow contracts [OPTIONS] <source.vow> List all contracts")
+    lines.append("  vow complexity [OPTIONS] <source.vow> Report per-function complexity metrics (JSON)")
     lines.append("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)")
     lines.append("  vow skill [print [--bundle]|install [--local|--global]]")
     lines.append("                                        Generate or install Claude Code skill")
@@ -682,6 +683,13 @@ def build_help_human(data: dict) -> str:
         pad = max(24, len(flag) + 2)
         lines.append(f"  {flag:<{pad}s}{desc}")
     lines.append("")
+
+    if data.get("complexity_options"):
+        lines.append("COMPLEXITY OPTIONS")
+        for flag, desc in data["complexity_options"].items():
+            pad = max(24, len(flag) + 2)
+            lines.append(f"  {flag:<{pad}s}{desc}")
+        lines.append("")
 
     if data.get("decl_options"):
         lines.append("DECL OPTIONS")

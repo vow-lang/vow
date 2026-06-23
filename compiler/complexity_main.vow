@@ -202,7 +202,7 @@ fn run_complexity(argv: Vec<String>) -> i32 [io] {
     let mut thr: i64 = 80;
     if max_score >= 0 { thr = max_score; }
 
-    let path: String = frontend_path_from_argv(argv, true);
+    let path: String = frontend_path_from_argv(argv, true, String::from("complexity"));
     let fr: LoweredFrontend = frontend_lower_path(path);
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;

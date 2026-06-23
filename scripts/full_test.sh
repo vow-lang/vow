@@ -1204,6 +1204,26 @@ else
     fail "complexity/control-path-parity" "escaped control-byte path did not stay byte-identical and round-trip"
 fi
 rm -rf "$escape_dir"
+# Missing source file must produce a command-specific error in BOTH compilers and
+# exit nonzero. Regression: the self-hosted compiler previously printed a generic
+# `usage: vowc <command> ...` line for every subcommand (confusing `vow complexity` UX).
+r_nosrc=0; "$RUST" complexity >/dev/null 2>"$TMPDIR/r_nosrc.err" || r_nosrc=$?
+s_nosrc=0; run_self complexity >/dev/null 2>"$TMPDIR/s_nosrc.err" || s_nosrc=$?
+if [ "$r_nosrc" != "0" ] && [ "$s_nosrc" != "0" ] \
+   && grep -q "vow complexity: source file required" "$TMPDIR/r_nosrc.err" \
+   && grep -q "vow complexity: source file required" "$TMPDIR/s_nosrc.err"; then
+    pass "complexity/no-source-message (command-specific, both nonzero)"
+else
+    fail "complexity/no-source-message" "rust=$r_nosrc self=$s_nosrc (expected nonzero + 'vow complexity: source file required')"
+fi
+# `--help --human` must document the complexity command in BOTH compilers. The JSON
+# --help always listed it; the legacy human help previously omitted it.
+if "$RUST" --help --human 2>/dev/null | grep -q "vow complexity \[OPTIONS\]" \
+   && run_self --help --human 2>/dev/null | grep -q "vow complexity \[OPTIONS\]"; then
+    pass "complexity/human-help-documented (both compilers)"
+else
+    fail "complexity/human-help-documented" "vow complexity missing from --help --human"
+fi
 echo ""
 
 # ─── Section 6: Perfetto Trace (--perfetto, #784) ───────────────────
