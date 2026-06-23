@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    AbiParam, Block, FuncRef, GlobalValue, InstBuilder, MemFlags, Signature, StackSlot,
+    AbiParam, Block, FuncRef, GlobalValue, InstBuilder, MemFlagsData, Signature, StackSlot,
     StackSlotData, StackSlotKind, TrapCode, Value, types,
 };
 use cranelift_codegen::isa::{self, TargetIsa};
@@ -2123,11 +2123,13 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 // Memory
                 IOP_LOAD => {
                     let cl_ty = ity_to_cranelift(ity).unwrap_or(types::I64);
-                    let val = builder.ins().load(cl_ty, MemFlags::new(), arg!(0), 0);
+                    let val = builder.ins().load(cl_ty, MemFlagsData::new(), arg!(0), 0);
                     set_val!(iid, val);
                 }
                 IOP_STORE => {
-                    builder.ins().store(MemFlags::new(), arg!(1), arg!(0), 0);
+                    builder
+                        .ins()
+                        .store(MemFlagsData::new(), arg!(1), arg!(0), 0);
                     let unit = builder.ins().iconst(types::I32, 0);
                     set_val!(iid, unit);
                 }
@@ -2520,19 +2522,20 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         let idx = dv;
                         let base = arg!(0);
                         let offset = (idx as i32) * 8;
-                        let raw = builder
-                            .ins()
-                            .load(types::I64, MemFlags::trusted(), base, offset);
+                        let raw =
+                            builder
+                                .ins()
+                                .load(types::I64, MemFlagsData::trusted(), base, offset);
                         let result = match ity_to_cranelift(ity) {
                             Some(types::I64) | None => raw,
                             Some(types::I32) => builder.ins().ireduce(types::I32, raw),
                             Some(types::I8) => builder.ins().ireduce(types::I8, raw),
                             Some(types::F64) => {
-                                builder.ins().bitcast(types::F64, MemFlags::new(), raw)
+                                builder.ins().bitcast(types::F64, MemFlagsData::new(), raw)
                             }
                             Some(types::F32) => {
                                 let i32v = builder.ins().ireduce(types::I32, raw);
-                                builder.ins().bitcast(types::F32, MemFlags::new(), i32v)
+                                builder.ins().bitcast(types::F32, MemFlagsData::new(), i32v)
                             }
                             Some(other) => builder.ins().ireduce(other, raw),
                         };
@@ -2551,17 +2554,21 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             types::I8 => builder.ins().uextend(types::I64, new_val),
                             types::F32 => {
                                 let bits =
-                                    builder.ins().bitcast(types::I32, MemFlags::new(), new_val);
+                                    builder
+                                        .ins()
+                                        .bitcast(types::I32, MemFlagsData::new(), new_val);
                                 builder.ins().uextend(types::I64, bits)
                             }
                             types::F64 => {
-                                builder.ins().bitcast(types::I64, MemFlags::new(), new_val)
+                                builder
+                                    .ins()
+                                    .bitcast(types::I64, MemFlagsData::new(), new_val)
                             }
                             _ => new_val,
                         };
                         builder
                             .ins()
-                            .store(MemFlags::trusted(), store_val, base, offset);
+                            .store(MemFlagsData::trusted(), store_val, base, offset);
                         let unit = builder.ins().iconst(types::I32, 0);
                         set_val!(iid, unit);
                     }
@@ -2894,10 +2901,14 @@ fn emit_vow_check(
                     ITY_I32 => builder.ins().sextend(types::I64, *cl_val),
                     ITY_I64 => *cl_val,
                     ITY_F32 => {
-                        let bits = builder.ins().bitcast(types::I32, MemFlags::new(), *cl_val);
+                        let bits = builder
+                            .ins()
+                            .bitcast(types::I32, MemFlagsData::new(), *cl_val);
                         builder.ins().uextend(types::I64, bits)
                     }
-                    ITY_F64 => builder.ins().bitcast(types::I64, MemFlags::new(), *cl_val),
+                    ITY_F64 => builder
+                        .ins()
+                        .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     ITY_BOOL => *cl_val,
                     _ => builder.ins().iconst(types::I64, 0),
                 };

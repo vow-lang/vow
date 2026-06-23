@@ -1,8 +1,8 @@
 use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    AbiParam, Block, BlockArg, FuncRef, GlobalValue, InstBuilder, MemFlags, Signature, StackSlot,
-    StackSlotData, StackSlotKind, TrapCode, Value, types,
+    AbiParam, Block, BlockArg, FuncRef, GlobalValue, InstBuilder, MemFlagsData, Signature,
+    StackSlot, StackSlotData, StackSlotKind, TrapCode, Value, types,
 };
 use cranelift_codegen::isa::{self, TargetIsa};
 use cranelift_codegen::settings::{self, Configurable};
@@ -1137,11 +1137,13 @@ fn lower_inst(
         // ------------------------------------------------------------------
         Opcode::Load => {
             let cl_ty = ir_ty_to_cranelift(inst.ty).unwrap_or(types::I64);
-            let val = builder.ins().load(cl_ty, MemFlags::new(), arg!(0), 0);
+            let val = builder.ins().load(cl_ty, MemFlagsData::new(), arg!(0), 0);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::Store => {
-            builder.ins().store(MemFlags::new(), arg!(1), arg!(0), 0);
+            builder
+                .ins()
+                .store(MemFlagsData::new(), arg!(1), arg!(0), 0);
             let unit = builder.ins().iconst(types::I32, 0);
             ctx.value_map.insert(inst.id, unit);
         }
@@ -1624,15 +1626,15 @@ fn lower_inst(
                 let offset = (idx as i32) * 8;
                 let raw = builder
                     .ins()
-                    .load(types::I64, MemFlags::trusted(), base, offset);
+                    .load(types::I64, MemFlagsData::trusted(), base, offset);
                 let result = match ir_ty_to_cranelift(inst.ty) {
                     Some(types::I64) | None => raw,
                     Some(types::I32) => builder.ins().ireduce(types::I32, raw),
                     Some(types::I8) => builder.ins().ireduce(types::I8, raw),
-                    Some(types::F64) => builder.ins().bitcast(types::F64, MemFlags::new(), raw),
+                    Some(types::F64) => builder.ins().bitcast(types::F64, MemFlagsData::new(), raw),
                     Some(types::F32) => {
                         let i32v = builder.ins().ireduce(types::I32, raw);
-                        builder.ins().bitcast(types::F32, MemFlags::new(), i32v)
+                        builder.ins().bitcast(types::F32, MemFlagsData::new(), i32v)
                     }
                     Some(other) => builder.ins().ireduce(other, raw),
                 };
@@ -1649,15 +1651,19 @@ fn lower_inst(
                     types::I32 => builder.ins().sextend(types::I64, new_val),
                     types::I8 => builder.ins().uextend(types::I64, new_val),
                     types::F32 => {
-                        let bits = builder.ins().bitcast(types::I32, MemFlags::new(), new_val);
+                        let bits = builder
+                            .ins()
+                            .bitcast(types::I32, MemFlagsData::new(), new_val);
                         builder.ins().uextend(types::I64, bits)
                     }
-                    types::F64 => builder.ins().bitcast(types::I64, MemFlags::new(), new_val),
+                    types::F64 => builder
+                        .ins()
+                        .bitcast(types::I64, MemFlagsData::new(), new_val),
                     _ => new_val,
                 };
                 builder
                     .ins()
-                    .store(MemFlags::trusted(), store_val, base, offset);
+                    .store(MemFlagsData::trusted(), store_val, base, offset);
                 let unit = builder.ins().iconst(types::I32, 0);
                 ctx.value_map.insert(inst.id, unit);
             }
@@ -1802,10 +1808,14 @@ fn emit_vow_violation_body(
                     IrTy::I32 => builder.ins().sextend(types::I64, *cl_val),
                     IrTy::I64 => *cl_val,
                     IrTy::F32 => {
-                        let bits = builder.ins().bitcast(types::I32, MemFlags::new(), *cl_val);
+                        let bits = builder
+                            .ins()
+                            .bitcast(types::I32, MemFlagsData::new(), *cl_val);
                         builder.ins().uextend(types::I64, bits)
                     }
-                    IrTy::F64 => builder.ins().bitcast(types::I64, MemFlags::new(), *cl_val),
+                    IrTy::F64 => builder
+                        .ins()
+                        .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     IrTy::Bool => *cl_val,
                     _ => builder.ins().iconst(types::I64, 0),
                 };
