@@ -174,7 +174,7 @@ fn get_subcommand(argv: Vec<String>) -> i64 {
     CMD_NONE()
 }
 
-fn frontend_path_from_argv(argv: Vec<String>, sub: bool) -> String [io] {
+fn frontend_path_from_argv(argv: Vec<String>, sub: bool, cmd: String) -> String [io] {
     let path: String = {
         if sub {
             get_source_path_sub(argv)
@@ -183,7 +183,7 @@ fn frontend_path_from_argv(argv: Vec<String>, sub: bool) -> String [io] {
         }
     };
     if path.len() == 0 {
-        eprintln_str("usage: vowc <command> [options] <file.vow>");
+        eprintln_str(str3(String::from("vow "), cmd, String::from(": source file required (try --help)")));
         process_exit(1);
     }
     path
@@ -1311,7 +1311,7 @@ fn verify_collect_and_report(
 }
 
 fn run_verify(argv: Vec<String>) -> i32 [io] {
-    let path: String = frontend_path_from_argv(argv, true);
+    let path: String = frontend_path_from_argv(argv, true, String::from("verify"));
     let tctx: TraceCtx = {
         if has_flag(argv, "--perfetto") { trace_new(get_flag_arg(argv, "--perfetto")) }
         else { trace_off() }
@@ -1497,7 +1497,7 @@ fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, dct
 }
 
 fn run_build(argv: Vec<String>) -> i32 [io] {
-    let path: String = frontend_path_from_argv(argv, true);
+    let path: String = frontend_path_from_argv(argv, true, String::from("build"));
     let tctx: TraceCtx = {
         if has_flag(argv, "--perfetto") { trace_new(get_flag_arg(argv, "--perfetto")) }
         else { trace_off() }
@@ -3185,6 +3185,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)\n"));
     r.push_str(String::from("  vow test [OPTIONS] [<path>]          Run tests with JSON results\n"));
     r.push_str(String::from("  vow contracts [OPTIONS] <source.vow> List all contracts\n"));
+    r.push_str(String::from("  vow complexity [OPTIONS] <source.vow> Report per-function complexity metrics (JSON)\n"));
     r.push_str(String::from("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)\n"));
     r.push_str(String::from("  vow skill [print [--bundle]|install [--local|--global]]\n"));
     r.push_str(String::from("                                        Generate or install Claude Code skill\n"));
@@ -3231,6 +3232,13 @@ fn skill_human() -> String {
     r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)\n"));
     r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)\n"));
     r.push_str(String::from("  --verify-jobs <N>       Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("COMPLEXITY OPTIONS\n"));
+    r.push_str(String::from("  --cog-anchor <N>        Cognitive-complexity value mapped to sub-score 0.800 (SonarQube's default flag line). (default: 15)\n"));
+    r.push_str(String::from("  --nloc-anchor <N>       NLOC value mapped to sub-score 0.800 (~50–60 line guidance). (default: 60)\n"));
+    r.push_str(String::from("  --max-score <N>         CI gate: exit nonzero if any function's complexity_score exceeds N. The recommended line is 80, but gating is opt-in only. (default: (unset))\n"));
+    r.push_str(String::from("  --max-cognitive <N>     CI gate: exit nonzero if any function's cognitive exceeds N. (default: (unset))\n"));
+    r.push_str(String::from("  --max-cyclomatic <N>    CI gate: exit nonzero if any function's cyclomatic exceeds N. (default: (unset))\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("DECL OPTIONS\n"));
     r.push_str(String::from("  -o, --output <path>     Output declaration file path (default: <source>.vow.d)\n"));
@@ -12757,7 +12765,7 @@ fn cq_classify(kind: String, desc: String) -> String {
 }
 
 fn run_contracts(argv: Vec<String>) -> i32 [io] {
-    let path: String = frontend_path_from_argv(argv, true);
+    let path: String = frontend_path_from_argv(argv, true, String::from("contracts"));
     let fr: LoweredFrontend = frontend_lower_path(path);
     let checked: CheckedFrontend = fr.checked;
     let dctx: DiagCtx = checked.dctx;
@@ -13081,7 +13089,7 @@ fn main() -> i32 [io, read, write] {
         return 0;
     }
     if argv.len() <= 1 {
-        eprintln_str("usage: vowc <command> [options] <file.vow>");
+        eprintln_str("vow: source file required (try --help or use a subcommand)");
         return 1;
     }
     let cmd: i64 = get_subcommand(argv);
