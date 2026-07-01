@@ -18,10 +18,6 @@ struct BigNum {
     sign: i64,
 }
 
-fn bignum_mask() -> u64 {
-    4294967295u64
-}
-
 fn bignum_zero() -> BigNum {
     let d: Vec<u64> = Vec::new();
     d.push(0u64);
