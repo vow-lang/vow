@@ -1,0 +1,83 @@
+// TEST: stdout "4\n2\n4\n1\n1\n"
+module Issue840
+
+// Regression for #840: a loop-carried `mut u64` must keep unsigned semantics
+// across the loop back-edge / merge phi. Before the fix the self-hosted compiler
+// hardcoded the phi/upsilon type to i64, so `>`/`<` compared and `>>` shifted a
+// bit-63-set u64 as signed, silently producing wrong results.
+
+fn main() -> i32 [io] {
+    // (1) while comparison: v = 2^63 has bit 63 set; the loop must run (v > 0).
+    let mut v: u64 = 9223372036854775808u64;
+    let mut n: i64 = 0;
+    while v > 0u64 {
+        v = v - 1u64;
+        n = n + 1;
+        if n > 3 {
+            break;
+        }
+    }
+    print_i64(n);
+    print_str("\n");
+
+    // (2) while shift: `w >> 32` must be logical, so u64::MAX reaches 0 in 2 steps.
+    let mut w: u64 = 18446744073709551615u64;
+    let mut steps: i64 = 0;
+    while w != 0u64 {
+        w = w >> 32;
+        steps = steps + 1;
+        if steps > 10 {
+            break;
+        }
+    }
+    print_i64(steps);
+    print_str("\n");
+
+    // (3) loop construct with a loop-carried mut u64.
+    let mut lv: u64 = 9223372036854775808u64;
+    let mut ln: i64 = 0;
+    loop {
+        if lv > 0u64 {
+            lv = lv - 1u64;
+            ln = ln + 1;
+            if ln > 3 {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    print_i64(ln);
+    print_str("\n");
+
+    // (4) for-each mutating a bit-63-set u64 accumulator.
+    let xs: Vec<i64> = Vec::new();
+    xs.push(1);
+    xs.push(2);
+    let mut acc: u64 = 9223372036854775808u64;
+    for e in xs {
+        if acc > 0u64 {
+            acc = acc - 1u64;
+        }
+    }
+    if acc > 0u64 {
+        print_str("1\n");
+    } else {
+        print_str("0\n");
+    }
+
+    // (5) if-merge of a bit-63-set u64 compared within the same function.
+    let c: bool = true;
+    let mut x: u64 = 0u64;
+    if c {
+        x = 9223372036854775808u64;
+    } else {
+        x = 1u64;
+    }
+    if x > 0u64 {
+        print_str("1\n");
+    } else {
+        print_str("0\n");
+    }
+    0
+}

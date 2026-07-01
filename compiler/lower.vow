@@ -1292,8 +1292,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut mi3: i64 = 0;
         while mi3 < nmut {
             let mname: String = mutations[mi3];
+            let mphi_ty: i64 = lctx_inst_ty(ctx, saved_mut_vals[mi3]);
             let phi_args: Vec<i64> = Vec::new();
-            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
             backpatch_upsilon(ctx, then_exit_block, mut_up_then[mi3], phi_id);
             backpatch_upsilon(ctx, else_exit_block, mut_up_else[mi3], phi_id);
             lctx_assign(ctx, mname, phi_id);
@@ -1346,7 +1347,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         while ai < nassigned {
             let vname: String = assigned[ai];
             let cur_val: i64 = lctx_lookup(ctx, vname);
-            let val_ty: i64 = ITY_I64();
+            let val_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let up_args: Vec<i64> = Vec::new();
             up_args.push(cur_val);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
@@ -1362,8 +1363,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai2: i64 = 0;
         while ai2 < nassigned {
             let vname: String = assigned[ai2];
+            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
-            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
             phi_ids.push(phi_id);
             lctx_assign(ctx, vname, phi_id);
             ai2 = ai2 + 1;
@@ -1383,7 +1386,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut epi: i64 = 0;
         while epi < nassigned {
             let ep_args: Vec<i64> = Vec::new();
-            let ep_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), ep_args, IDATA_NONE(), 0, 0, String::from(""));
+            let ep_ty: i64 = lctx_inst_ty(ctx, phi_ids[epi]);
+            let ep_id: i64 = lctx_emit(ctx, IOP_PHI(), ep_ty, ep_args, IDATA_NONE(), 0, 0, String::from(""));
             exit_phi_ids.push(ep_id);
             exit_phi_names.push(assigned[epi]);
             epi = epi + 1;
@@ -1395,7 +1399,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         while eui < nassigned {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(phi_ids[eui]);
-            lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), up_args, IDATA_PHI_TARGET(), exit_phi_ids[eui], 0, String::from(""));
+            let up_ty: i64 = lctx_inst_ty(ctx, phi_ids[eui]);
+            lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), exit_phi_ids[eui], 0, String::from(""));
             eui = eui + 1;
         }
 
@@ -1449,7 +1454,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             while ai3 < nassigned {
                 let vname: String = assigned[ai3];
                 let new_val: i64 = lctx_lookup(ctx, vname);
-                let val_ty: i64 = ITY_I64();
+                let val_ty: i64 = lctx_inst_ty(ctx, new_val);
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(new_val);
                 lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
@@ -1495,7 +1500,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         while ai < nassigned {
             let vname: String = assigned[ai];
             let cur_val: i64 = lctx_lookup(ctx, vname);
-            let val_ty: i64 = ITY_I64();
+            let val_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let up_args: Vec<i64> = Vec::new();
             up_args.push(cur_val);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
@@ -1511,8 +1516,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai2: i64 = 0;
         while ai2 < nassigned {
             let vname: String = assigned[ai2];
+            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
-            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
             phi_ids.push(phi_id);
             lctx_assign(ctx, vname, phi_id);
             ai2 = ai2 + 1;
@@ -1535,7 +1542,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut lepi: i64 = 0;
         while lepi < nassigned {
             let lep_args: Vec<i64> = Vec::new();
-            let lep_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), lep_args, IDATA_NONE(), 0, 0, String::from(""));
+            let lep_ty: i64 = lctx_inst_ty(ctx, phi_ids[lepi]);
+            let lep_id: i64 = lctx_emit(ctx, IOP_PHI(), lep_ty, lep_args, IDATA_NONE(), 0, 0, String::from(""));
             l_exit_phi_ids.push(lep_id);
             l_exit_phi_names.push(assigned[lepi]);
             lepi = lepi + 1;
@@ -1584,7 +1592,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             while ai3 < nassigned {
                 let vname: String = assigned[ai3];
                 let new_val: i64 = lctx_lookup(ctx, vname);
-                let val_ty: i64 = ITY_I64();
+                let val_ty: i64 = lctx_inst_ty(ctx, new_val);
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(new_val);
                 lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
@@ -1668,7 +1676,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         while ai < nassigned {
             let vname: String = assigned[ai];
             let cur_val: i64 = lctx_lookup(ctx, vname);
-            let val_ty: i64 = ITY_I64();
+            let val_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let up_args: Vec<i64> = Vec::new();
             up_args.push(cur_val);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
@@ -1686,8 +1694,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai2: i64 = 0;
         while ai2 < nassigned {
             let vname: String = assigned[ai2];
+            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let phi_ty: i64 = lctx_inst_ty(ctx, cur_val);
             let phi_args: Vec<i64> = Vec::new();
-            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), phi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
             phi_ids.push(phi_id);
             lctx_assign(ctx, vname, phi_id);
             ai2 = ai2 + 1;
@@ -1709,7 +1719,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut fepi: i64 = 0;
         while fepi < nassigned {
             let fep_args: Vec<i64> = Vec::new();
-            let fep_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), fep_args, IDATA_NONE(), 0, 0, String::from(""));
+            let fep_ty: i64 = lctx_inst_ty(ctx, phi_ids[fepi]);
+            let fep_id: i64 = lctx_emit(ctx, IOP_PHI(), fep_ty, fep_args, IDATA_NONE(), 0, 0, String::from(""));
             f_exit_phi_ids.push(fep_id);
             f_exit_phi_names.push(assigned[fepi]);
             fepi = fepi + 1;
@@ -1721,7 +1732,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         while feui < nassigned {
             let up_args: Vec<i64> = Vec::new();
             up_args.push(phi_ids[feui]);
-            lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), up_args, IDATA_PHI_TARGET(), f_exit_phi_ids[feui], 0, String::from(""));
+            let up_ty: i64 = lctx_inst_ty(ctx, phi_ids[feui]);
+            lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), f_exit_phi_ids[feui], 0, String::from(""));
             feui = feui + 1;
         }
 
@@ -1801,7 +1813,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             while ai3 < nassigned {
                 let vname: String = assigned[ai3];
                 let new_val: i64 = lctx_lookup(ctx, vname);
-                let val_ty: i64 = ITY_I64();
+                let val_ty: i64 = lctx_inst_ty(ctx, new_val);
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(new_val);
                 lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
@@ -2698,7 +2710,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut mpi: i64 = 0;
         while mpi < nmut {
             let mphi_args: Vec<i64> = Vec::new();
-            let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), mphi_args, IDATA_NONE(), 0, 0, String::from(""));
+            let mphi_ty: i64 = lctx_inst_ty(ctx, saved_mut_vals[mpi]);
+            let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, mphi_args, IDATA_NONE(), 0, 0, String::from(""));
             let mut bpi: i64 = 0;
             while bpi < n_arms {
                 backpatch_upsilon(ctx, arm_exit_blocks[bpi], arm_mut_ups[bpi * nmut + mpi], mphi_id);
@@ -2804,7 +2817,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     if cur_val != -1 {
                         let up_args: Vec<i64> = Vec::new();
                         up_args.push(cur_val);
-                        lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), up_args, IDATA_PHI_TARGET(), ep_ids[epi], 0, String::from(""));
+                        let up_ty: i64 = lctx_inst_ty(ctx, cur_val);
+                        lctx_emit(ctx, IOP_UPSILON(), up_ty, up_args, IDATA_PHI_TARGET(), ep_ids[epi], 0, String::from(""));
                     }
                     epi = epi + 1;
                 }
@@ -2830,7 +2844,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             while pi < nphis {
                 let vname: String = phi_names[pi];
                 let cur_val: i64 = lctx_lookup_at_depth(ctx, vname, scope_depth);
-                let val_ty: i64 = ITY_I64();
+                let val_ty: i64 = lctx_inst_ty(ctx, cur_val);
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(cur_val);
                 lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids2[pi], 0, String::from(""));
