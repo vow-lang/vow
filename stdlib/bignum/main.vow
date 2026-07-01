@@ -49,6 +49,13 @@ fn bn_str(b: BigNum) -> String {
     bignum_to_string(b)
 }
 
+fn to_u64_str(b: BigNum) -> String {
+    match bignum_to_u64(b) {
+        Option::Some(v) => bignum_to_string(bignum_from_u64(v)),
+        Option::None => String::from("NONE"),
+    }
+}
+
 fn main() -> i32 [io] {
     test_construction();
     test_comparison();
@@ -60,6 +67,12 @@ fn main() -> i32 [io] {
     test_gcd();
     test_factorial();
     test_large_numbers();
+    test_from_u64();
+    test_to_u64();
+    test_monus();
+    test_bitwise();
+    test_shifts();
+    test_kernel_repro();
     0
 }
 
@@ -257,4 +270,61 @@ fn test_large_numbers() [io] {
     let product: BigNum = bignum_mul(e, f);
     let back: BigNum = bignum_div(product, e);
     assert_eq_str(String::from("(a*b)/a == b"), bn_str(back), String::from("987654321"));
+}
+
+fn test_from_u64() [io] {
+    assert_eq_str(String::from("from_u64(0)"), bn_str(bignum_from_u64(0u64)), String::from("0"));
+    assert_eq_str(String::from("from_u64(42)"), bn_str(bignum_from_u64(42u64)), String::from("42"));
+    assert_eq_str(String::from("from_u64(2^32)"), bn_str(bignum_from_u64(4294967296u64)), String::from("4294967296"));
+    assert_eq_str(String::from("from_u64(2^63)"), bn_str(bignum_from_u64(9223372036854775808u64)), String::from("9223372036854775808"));
+    assert_eq_str(String::from("from_u64(u64::MAX)"), bn_str(bignum_from_u64(18446744073709551615u64)), String::from("18446744073709551615"));
+}
+
+fn test_to_u64() [io] {
+    assert_eq_str(String::from("to_u64(0)"), to_u64_str(bignum_from_u64(0u64)), String::from("0"));
+    assert_eq_str(String::from("to_u64(u64::MAX)"), to_u64_str(bignum_from_u64(18446744073709551615u64)), String::from("18446744073709551615"));
+    assert_eq_str(String::from("to_u64(2^64)=NONE"), to_u64_str(bignum_pow(bignum_from_i64(2), 64)), String::from("NONE"));
+    assert_eq_str(String::from("to_u64(-5)=NONE"), to_u64_str(bignum_from_i64(-5)), String::from("NONE"));
+}
+
+fn test_monus() [io] {
+    assert_eq_str(String::from("monus(5,3)"), bn_str(bignum_monus(bignum_from_i64(5), bignum_from_i64(3))), String::from("2"));
+    assert_eq_str(String::from("monus(3,5)"), bn_str(bignum_monus(bignum_from_i64(3), bignum_from_i64(5))), String::from("0"));
+    assert_eq_str(String::from("monus(5,5)"), bn_str(bignum_monus(bignum_from_i64(5), bignum_from_i64(5))), String::from("0"));
+    let two64: BigNum = bignum_pow(bignum_from_i64(2), 64);
+    assert_eq_str(String::from("monus(2^64,1)"), bn_str(bignum_monus(two64, bignum_from_i64(1))), String::from("18446744073709551615"));
+}
+
+fn test_bitwise() [io] {
+    assert_eq_str(String::from("12 & 10"), bn_str(bignum_and(bignum_from_i64(12), bignum_from_i64(10))), String::from("8"));
+    assert_eq_str(String::from("12 | 10"), bn_str(bignum_or(bignum_from_i64(12), bignum_from_i64(10))), String::from("14"));
+    assert_eq_str(String::from("12 ^ 10"), bn_str(bignum_xor(bignum_from_i64(12), bignum_from_i64(10))), String::from("6"));
+
+    let lo: BigNum = bignum_from_u64(4294967295u64);
+    let hi: BigNum = bignum_from_u64(18446744069414584320u64);
+    assert_eq_str(String::from("lo & hi"), bn_str(bignum_and(lo, hi)), String::from("0"));
+    assert_eq_str(String::from("lo | hi"), bn_str(bignum_or(lo, hi)), String::from("18446744073709551615"));
+    assert_eq_str(String::from("lo ^ hi"), bn_str(bignum_xor(lo, hi)), String::from("18446744073709551615"));
+    assert_eq_str(String::from("x & 0"), bn_str(bignum_and(lo, bignum_zero())), String::from("0"));
+}
+
+fn test_shifts() [io] {
+    assert_eq_str(String::from("1 << 64"), bn_str(bignum_shl(bignum_from_i64(1), 64)), String::from("18446744073709551616"));
+    assert_eq_str(String::from("1 << 100"), bn_str(bignum_shl(bignum_from_i64(1), 100)), String::from("1267650600228229401496703205376"));
+    assert_eq_str(String::from("3 << 40"), bn_str(bignum_shl(bignum_from_i64(3), 40)), String::from("3298534883328"));
+    assert_eq_str(String::from("2^64 >> 64"), bn_str(bignum_shr(bignum_from_string(String::from("18446744073709551616")), 64)), String::from("1"));
+    assert_eq_str(String::from("u64::MAX >> 4"), bn_str(bignum_shr(bignum_from_u64(18446744073709551615u64), 4)), String::from("1152921504606846975"));
+    assert_eq_str(String::from("5 >> 10"), bn_str(bignum_shr(bignum_from_i64(5), 10)), String::from("0"));
+    assert_eq_str(String::from("0 << 5"), bn_str(bignum_shl(bignum_zero(), 5)), String::from("0"));
+    assert_true(String::from("shl==pow"), bignum_eq(bignum_shl(bignum_from_i64(1), 64), bignum_pow(bignum_from_i64(2), 64)));
+}
+
+fn test_kernel_repro() [io] {
+    assert_eq_str(String::from("Int64.maxValue=2^63-1"), bn_str(bignum_from_string(String::from("9223372036854775807"))), String::from("9223372036854775807"));
+    assert_eq_str(String::from("2^63-1 via u64"), bn_str(bignum_from_u64(9223372036854775807u64)), String::from("9223372036854775807"));
+    let two64: BigNum = bignum_pow(bignum_from_i64(2), 64);
+    assert_eq_str(String::from("2^64 reduces"), bn_str(two64), String::from("18446744073709551616"));
+    assert_eq_str(String::from("2^64 not u64"), to_u64_str(two64), String::from("NONE"));
+    assert_true(String::from("2^64 via shl==pow"), bignum_eq(bignum_shl(bignum_from_i64(1), 64), two64));
+    assert_eq_str(String::from("2^64 / 256"), bn_str(bignum_div(two64, bignum_from_i64(256))), String::from("72057594037927936"));
 }

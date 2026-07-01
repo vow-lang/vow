@@ -4744,32 +4744,44 @@ guard; `shape_at` is a demo artifact, not a real API.
 
 ## bignum
 
-`stdlib/bignum/bignum.vow` — arbitrary-precision **signed** integers in base 10⁹
-sign-magnitude form (`struct BigNum { digits: Vec<i64>, sign: i64 }`). Pure core
-language; no builtins beyond `Vec`/`String`/`i64`.
+`stdlib/bignum/bignum.vow` — arbitrary-precision **signed** integers in base 2³²
+sign-magnitude form (`struct BigNum { limbs: Vec<u64>, sign: i64 }`). Pure core
+language; no builtins beyond `Vec`/`String`/`u64`/`i64`. A non-negative `BigNum`
+is the natural number (`Nat`) an arbitrary-precision `Nat` consumer needs; the
+binary limb base makes the bitwise operations trivial limb-wise ops, which is why
+this module can back a proof kernel's `Nat` / `BitVec` reductions past the 2⁶⁴
+ceiling (issue #838).
 
 **Public API (selected):**
-- Construct: `bignum_zero`, `bignum_from_i64`, `bignum_from_string`
-- Convert: `bignum_to_string`
+- Construct: `bignum_zero`, `bignum_from_i64`, `bignum_from_u64`, `bignum_from_string`
+- Convert: `bignum_to_string`, `bignum_to_u64` (`Option<u64>`; `None` if negative or > u64)
 - Predicates: `bignum_is_zero`, `bignum_is_negative`, `bignum_is_positive`
 - Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`
-- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
+- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_monus`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
+- Bitwise (on magnitude): `bignum_and`, `bignum_or`, `bignum_xor`, `bignum_shl`, `bignum_shr`
 - Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`
 
 **Contracts present:** `bignum_sub_abs` requires `bignum_cmp_abs(a, b) >= 0`;
 `bignum_div`/`bignum_mod`/`bignum_divmod` require `!bignum_is_zero(b)`; `bignum_pow`
-requires `exp >= 0`; `bignum_factorial` requires `n >= 0`.
+requires `exp >= 0`; `bignum_shl`/`bignum_shr` require `n >= 0`; `bignum_factorial`
+requires `n >= 0`.
 
 **Semantics to know:**
-- The representation invariant (non-empty `digits`, no leading-zero limbs except the
-  canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`) is maintained internally
-  but **not** stated as a struct invariant or `ensures`.
+- The representation invariant (non-empty `limbs`, no leading-zero limbs except the
+  canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`, every limb `< 2³²`) is
+  maintained internally but **not** stated as a struct invariant or `ensures`.
 - Division truncates toward zero; the remainder's sign matches the dividend.
+- `bignum_monus` is truncated (Nat) subtraction — `max(a − b, 0)`, saturating at 0.
+- `bignum_to_u64` returns `Option::None` when the value is negative or exceeds `u64`.
+- Bitwise `and`/`or`/`xor` act on the **magnitude** (Nat semantics) and return a
+  non-negative result; `shl`/`shr` shift the magnitude and preserve the sign
+  (= multiply / floor-divide by 2ⁿ; a logical bit shift for non-negative operands).
 - `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
 - `bignum_gcd` operates on absolute values; the result is non-negative.
 - Multiplication is O(n·m) schoolbook (no Karatsuba).
 - Helpers prefixed for internal use (`bignum_strip_zeros`, `bignum_shift_limbs`,
-  `i64_to_decimal*`, `bignum_divmod_long`, …) are not part of the public API.
+  `bignum_mul_single`, `bignum_add_small`, `bignum_divmod_small`, `bignum_pow2`,
+  `u64_to_decimal*`, `bignum_divmod_long`, …) are not part of the public API.
 
 **Verification:** `Skipped` — limb arithmetic allocates `Vec`s per call (`RegionAlloc`),
 which the verifier cannot model. Contracts are runtime-enforced in `--mode debug`.
@@ -9240,32 +9252,44 @@ guard; `shape_at` is a demo artifact, not a real API.
 
 ## bignum
 
-`stdlib/bignum/bignum.vow` — arbitrary-precision **signed** integers in base 10⁹
-sign-magnitude form (`struct BigNum { digits: Vec<i64>, sign: i64 }`). Pure core
-language; no builtins beyond `Vec`/`String`/`i64`.
+`stdlib/bignum/bignum.vow` — arbitrary-precision **signed** integers in base 2³²
+sign-magnitude form (`struct BigNum { limbs: Vec<u64>, sign: i64 }`). Pure core
+language; no builtins beyond `Vec`/`String`/`u64`/`i64`. A non-negative `BigNum`
+is the natural number (`Nat`) an arbitrary-precision `Nat` consumer needs; the
+binary limb base makes the bitwise operations trivial limb-wise ops, which is why
+this module can back a proof kernel's `Nat` / `BitVec` reductions past the 2⁶⁴
+ceiling (issue #838).
 
 **Public API (selected):**
-- Construct: `bignum_zero`, `bignum_from_i64`, `bignum_from_string`
-- Convert: `bignum_to_string`
+- Construct: `bignum_zero`, `bignum_from_i64`, `bignum_from_u64`, `bignum_from_string`
+- Convert: `bignum_to_string`, `bignum_to_u64` (`Option<u64>`; `None` if negative or > u64)
 - Predicates: `bignum_is_zero`, `bignum_is_negative`, `bignum_is_positive`
 - Compare: `bignum_cmp`, `bignum_cmp_abs`, `bignum_eq`, `bignum_lt`, `bignum_gt`, `bignum_le`, `bignum_ge`
-- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
+- Arithmetic: `bignum_negate`, `bignum_abs`, `bignum_add`, `bignum_sub`, `bignum_monus`, `bignum_mul`, `bignum_div`, `bignum_mod`, `bignum_divmod`
+- Bitwise (on magnitude): `bignum_and`, `bignum_or`, `bignum_xor`, `bignum_shl`, `bignum_shr`
 - Higher-level: `bignum_pow(base, exp: i64)`, `bignum_gcd`, `bignum_factorial(n: i64)`
 
 **Contracts present:** `bignum_sub_abs` requires `bignum_cmp_abs(a, b) >= 0`;
 `bignum_div`/`bignum_mod`/`bignum_divmod` require `!bignum_is_zero(b)`; `bignum_pow`
-requires `exp >= 0`; `bignum_factorial` requires `n >= 0`.
+requires `exp >= 0`; `bignum_shl`/`bignum_shr` require `n >= 0`; `bignum_factorial`
+requires `n >= 0`.
 
 **Semantics to know:**
-- The representation invariant (non-empty `digits`, no leading-zero limbs except the
-  canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`) is maintained internally
-  but **not** stated as a struct invariant or `ensures`.
+- The representation invariant (non-empty `limbs`, no leading-zero limbs except the
+  canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`, every limb `< 2³²`) is
+  maintained internally but **not** stated as a struct invariant or `ensures`.
 - Division truncates toward zero; the remainder's sign matches the dividend.
+- `bignum_monus` is truncated (Nat) subtraction — `max(a − b, 0)`, saturating at 0.
+- `bignum_to_u64` returns `Option::None` when the value is negative or exceeds `u64`.
+- Bitwise `and`/`or`/`xor` act on the **magnitude** (Nat semantics) and return a
+  non-negative result; `shl`/`shr` shift the magnitude and preserve the sign
+  (= multiply / floor-divide by 2ⁿ; a logical bit shift for non-negative operands).
 - `bignum_pow`/`bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
 - `bignum_gcd` operates on absolute values; the result is non-negative.
 - Multiplication is O(n·m) schoolbook (no Karatsuba).
 - Helpers prefixed for internal use (`bignum_strip_zeros`, `bignum_shift_limbs`,
-  `i64_to_decimal*`, `bignum_divmod_long`, …) are not part of the public API.
+  `bignum_mul_single`, `bignum_add_small`, `bignum_divmod_small`, `bignum_pow2`,
+  `u64_to_decimal*`, `bignum_divmod_long`, …) are not part of the public API.
 
 **Verification:** `Skipped` — limb arithmetic allocates `Vec`s per call (`RegionAlloc`),
 which the verifier cannot model. Contracts are runtime-enforced in `--mode debug`.
