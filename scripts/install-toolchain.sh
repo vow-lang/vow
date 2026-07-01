@@ -5,22 +5,26 @@ cd "$(dirname "$0")/.."
 
 PREFIX="${HOME:?}/.local"
 SKIP_BOOTSTRAP=false
+WITH_RUST_COMPILER=false
 
 usage() {
-    echo "Usage: $0 [--prefix <path>] [--skip-bootstrap] [--help|-h]"
+    echo "Usage: $0 [--prefix <path>] [--with-rust-compiler] [--skip-bootstrap] [--help|-h]"
     echo ""
     echo "Install the self-hosted Vow toolchain into a prefix."
     echo ""
     echo "Installs:"
-    echo "  <prefix>/bin/vowc"
-    echo "  <prefix>/bin/vow"
+    echo "  <prefix>/bin/vow                    (self-hosted compiler)"
     echo "  <prefix>/lib/vow/libvow_runtime.a"
     echo "  <prefix>/lib/vow/libvow_clif_shim.a"
     echo ""
+    echo "With --with-rust-compiler, additionally installs:"
+    echo "  <prefix>/bin/vowr                   (Rust bootstrap compiler)"
+    echo ""
     echo "Options:"
-    echo "  --prefix <path>    Installation prefix (default: \$HOME/.local)"
-    echo "  --skip-bootstrap   Require existing build artifacts; do not run bootstrap"
-    echo "  -h, --help         Show this help"
+    echo "  --prefix <path>        Installation prefix (default: \$HOME/.local)"
+    echo "  --with-rust-compiler   Also install the Rust bootstrap compiler as 'vowr'"
+    echo "  --skip-bootstrap       Require existing build artifacts; do not run bootstrap"
+    echo "  -h, --help             Show this help"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -32,6 +36,10 @@ while [ "$#" -gt 0 ]; do
             fi
             PREFIX="$2"
             shift 2
+            ;;
+        --with-rust-compiler)
+            WITH_RUST_COMPILER=true
+            shift
             ;;
         --skip-bootstrap)
             SKIP_BOOTSTRAP=true
@@ -50,11 +58,16 @@ while [ "$#" -gt 0 ]; do
 done
 
 VOWC="build/vowc"
+RUST_COMPILER="target/release/vow"
 RUNTIME_LIB="target/release/libvow_runtime.a"
 SHIM_LIB="target/release/libvow_clif_shim.a"
 
 artifacts_ready() {
-    [ -x "$VOWC" ] && [ -f "$RUNTIME_LIB" ] && [ -f "$SHIM_LIB" ]
+    [ -x "$VOWC" ] && [ -f "$RUNTIME_LIB" ] && [ -f "$SHIM_LIB" ] || return 1
+    if [ "$WITH_RUST_COMPILER" = true ]; then
+        [ -x "$RUST_COMPILER" ] || return 1
+    fi
+    return 0
 }
 
 if ! artifacts_ready; then
@@ -75,15 +88,18 @@ BIN_DIR="$PREFIX/bin"
 LIB_DIR="$PREFIX/lib/vow"
 mkdir -p "$BIN_DIR" "$LIB_DIR"
 
-install -m 0755 "$VOWC" "$BIN_DIR/vowc"
-if ln -sfn "vowc" "$BIN_DIR/vow" 2>/dev/null; then
-    :
-else
-    install -m 0755 "$VOWC" "$BIN_DIR/vow"
-fi
+install -m 0755 "$VOWC" "$BIN_DIR/vow"
 
 install -m 0644 "$RUNTIME_LIB" "$LIB_DIR/libvow_runtime.a"
 install -m 0644 "$SHIM_LIB" "$LIB_DIR/libvow_clif_shim.a"
 
+if [ "$WITH_RUST_COMPILER" = true ]; then
+    install -m 0755 "$RUST_COMPILER" "$BIN_DIR/vowr"
+fi
+
 echo "Installed Vow toolchain to $PREFIX"
+echo "  vow  -> self-hosted compiler"
+if [ "$WITH_RUST_COMPILER" = true ]; then
+    echo "  vowr -> Rust bootstrap compiler"
+fi
 echo "Add $BIN_DIR to PATH if it is not already present."
