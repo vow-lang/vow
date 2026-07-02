@@ -2583,58 +2583,69 @@ mod tests {
 
     #[test]
     fn emit_function_uses_verifier_private_symbol_for_source_name() {
-        let mut func = make_func(
-            "abs",
-            vec![Ty::I64],
-            Ty::I64,
-            vec![
-                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
-                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
-            ],
-        );
-        func.id = FuncId(7);
+        for (idx, name) in ["abs", "labs", "div", "ldiv"].into_iter().enumerate() {
+            let mut func = make_func(
+                name,
+                vec![Ty::I64],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            let func_id = FuncId(7 + idx as u32);
+            func.id = func_id;
 
-        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
 
-        assert!(
-            c.contains("int64_t vow_user_fn_7("),
-            "mangled signature: {c}"
-        );
-        assert!(!c.contains("int64_t abs("), "raw libc name leaked: {c}");
+            assert!(
+                c.contains(&format!("int64_t vow_user_fn_{}(", func_id.0)),
+                "mangled signature for {name}: {c}"
+            );
+            assert!(
+                !c.contains(&format!("int64_t {name}(")),
+                "raw libc name leaked for {name}: {c}"
+            );
+        }
     }
 
     #[test]
     fn libc_named_user_function_is_modelable() {
-        // A user function named like a libc/ESBMC stdlib symbol (`abs`) must
+        // A user function named like a libc/ESBMC stdlib symbol must
         // still be modeled: it is emitted under a mangled `vow_user_fn_<id>`
         // name, so it cannot collide with ESBMC's C stdlib model. Regression
         // test for the `verify/libc_name_collision` verifier-eval fixture.
-        let func = make_func(
-            "abs",
-            vec![Ty::I64],
-            Ty::I64,
-            vec![
-                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
-                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
-            ],
-        );
-        let module = Module {
-            name: "test".to_string(),
-            functions: vec![func.clone()],
-            strings: vec![],
-            struct_layouts: vec![],
-            enum_layouts: vec![],
-            warnings: vec![],
-        };
-        assert_eq!(
-            non_modelable_reason(&func, &module, &HashMap::new()),
-            None,
-            "a libc-named user function should be modelable, not skipped as reserved"
-        );
+        for name in ["abs", "labs", "div", "ldiv"] {
+            let func = make_func(
+                name,
+                vec![Ty::I64],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            let module = Module {
+                name: "test".to_string(),
+                functions: vec![func.clone()],
+                strings: vec![],
+                struct_layouts: vec![],
+                enum_layouts: vec![],
+                warnings: vec![],
+            };
+            assert_eq!(
+                non_modelable_reason(&func, &module, &HashMap::new()),
+                None,
+                "a libc-named user function should be modelable, not skipped as reserved: {name}"
+            );
+            assert!(
+                !is_reserved_verifier_symbol(name),
+                "ordinary user function should not be reserved: {name}"
+            );
+        }
         // The genuine ESBMC/verifier intrinsic namespaces remain reserved.
         assert!(is_reserved_verifier_symbol("__VERIFIER_nondet_int"));
         assert!(is_reserved_verifier_symbol("__ESBMC_assume"));
-        assert!(!is_reserved_verifier_symbol("abs"));
     }
 
     #[test]

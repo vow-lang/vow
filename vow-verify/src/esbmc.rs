@@ -1146,7 +1146,7 @@ mod tests {
     fn emit_verify_c_source_uses_private_symbols_for_target_and_callees() {
         let callee = Function {
             id: FuncId(5),
-            name: "div".to_string(),
+            name: "ldiv".to_string(),
             params: vec![Ty::I64],
             param_names: vec![],
             return_ty: Ty::I64,
@@ -1165,7 +1165,7 @@ mod tests {
         };
         let target = Function {
             id: FuncId(2),
-            name: "abs".to_string(),
+            name: "labs".to_string(),
             params: vec![Ty::I64],
             param_names: vec![],
             return_ty: Ty::I64,
@@ -1201,7 +1201,11 @@ mod tests {
         let c = emit_verify_c_source(&target, &module, &HashMap::new(), &VerifyLimits::default());
 
         assert!(
-            c.contains("int64_t vow_user_fn_5("),
+            c.contains("int64_t vow_user_fn_5(int64_t p0);"),
+            "callee declaration: {c}"
+        );
+        assert!(
+            c.contains("int64_t vow_user_fn_5(int64_t p0) {"),
             "callee definition: {c}"
         );
         assert!(c.contains("v1 = vow_user_fn_5(v0);"), "callee call: {c}");
@@ -1209,9 +1213,10 @@ mod tests {
             c.contains("int main(void) { vow_user_fn_2(__VERIFIER_nondet_long()); return 0; }"),
             "harness target call: {c}"
         );
-        assert!(!c.contains("int64_t div("), "raw callee definition: {c}");
-        assert!(!c.contains(" div(v0)"), "raw callee call: {c}");
-        assert!(!c.contains(" abs("), "raw target call: {c}");
+        assert!(!c.contains("int64_t ldiv("), "raw callee symbol: {c}");
+        assert!(!c.contains(" ldiv(v0)"), "raw callee call: {c}");
+        assert!(!c.contains("int64_t labs("), "raw target symbol: {c}");
+        assert!(!c.contains(" labs("), "raw target call: {c}");
     }
 
     #[test]
