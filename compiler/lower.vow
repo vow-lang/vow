@@ -8,6 +8,7 @@ struct LowerCtx {
     func: IrFunction,
     current_block: i64,
     next_inst_id: i64,
+    inst_ty_by_id: Vec<i64>,
     scope_vars: Vec<String>,
     scope_vals: Vec<i64>,
     scope_starts: Vec<i64>,
@@ -67,6 +68,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func: f,
         current_block: 0,
         next_inst_id: 0,
+        inst_ty_by_id: Vec::new(),
         scope_vars: Vec::new(),
         scope_vals: Vec::new(),
         scope_starts: Vec::new(),
@@ -138,22 +140,27 @@ fn lctx_block_terminated(ctx: LowerCtx, block_id: i64) -> bool {
 }
 
 fn lctx_inst_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
-    let nb: i64 = ctx.func.blocks.len();
-    let mut bi: i64 = 0;
-    while bi < nb {
-        let blk: IrBlock = ctx.func.blocks[bi];
-        let ni: i64 = blk.insts.len();
-        let mut ii: i64 = 0;
-        while ii < ni {
-            let inst: IrInst = blk.insts[ii];
-            if inst.id == inst_id {
-                return inst.ty;
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
+    if inst_id < 0 {
+        return ITY_I64();
     }
-    ITY_I64()
+    if inst_id >= ctx.inst_ty_by_id.len() {
+        return ITY_I64();
+    }
+    ctx.inst_ty_by_id[inst_id]
+}
+
+fn lctx_record_inst_ty(ctx: LowerCtx, inst_id: i64, ty: i64) {
+    if inst_id < 0 {
+        return;
+    }
+    while ctx.inst_ty_by_id.len() < inst_id {
+        ctx.inst_ty_by_id.push(ITY_I64());
+    }
+    if ctx.inst_ty_by_id.len() == inst_id {
+        ctx.inst_ty_by_id.push(ty);
+    } else {
+        ctx.inst_ty_by_id[inst_id] = ty;
+    }
 }
 
 fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2: i64, ds: String) -> i64 {
@@ -165,6 +172,7 @@ fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, 
     let inst: IrInst = ir_inst_new(id, op, ty, args, dk, dv, dv2, ds);
     let blk: IrBlock = ctx.func.blocks[ctx.current_block];
     blk.insts.push(inst);
+    lctx_record_inst_ty(ctx, id, ty);
     id
 }
 
@@ -3310,6 +3318,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.func = func;
     ctx.current_block = 0;
     ctx.next_inst_id = 0;
+    ctx.inst_ty_by_id = Vec::new();
     ctx.scope_vars = Vec::new();
     ctx.scope_vals = Vec::new();
     ctx.scope_starts = Vec::new();

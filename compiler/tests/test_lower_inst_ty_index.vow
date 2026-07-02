@@ -1,0 +1,39 @@
+module TestLowerInstTyIndex
+
+fn check_lower_uses_inst_ty_index() -> i64 [read] {
+    let src: String = fs_read(String::from("compiler/lower.vow"));
+    if src.len() == 0 { return 1; }
+
+    if !src.contains(String::from("inst_ty_by_id: Vec<i64>,")) { return 2; }
+    if !src.contains(String::from("inst_ty_by_id: Vec::new(),")) { return 3; }
+    if !src.contains(String::from("if inst_id >= ctx.inst_ty_by_id.len()")) { return 4; }
+    if !src.contains(String::from("ctx.inst_ty_by_id[inst_id]")) { return 5; }
+    if !src.contains(String::from("fn lctx_record_inst_ty(ctx: LowerCtx, inst_id: i64, ty: i64)")) { return 6; }
+    if !src.contains(String::from("lctx_record_inst_ty(ctx, id, ty);")) { return 7; }
+    if !src.contains(String::from("ctx.inst_ty_by_id = Vec::new();")) { return 8; }
+    if !src.contains(String::from("blk.insts.push(inst);\n    lctx_record_inst_ty(ctx, id, ty);\n    id")) { return 9; }
+    if src.contains(String::from("fn lctx_inst_ty(ctx: LowerCtx, inst_id: i64) -> i64 {\n    let nb: i64 = ctx.func.blocks.len();")) { return 10; }
+
+    0
+}
+
+fn i64_result_to_i32(r: i64) -> i32 {
+    if r == 1 { return 1; }
+    if r == 2 { return 2; }
+    if r == 3 { return 3; }
+    if r == 4 { return 4; }
+    if r == 5 { return 5; }
+    if r == 6 { return 6; }
+    if r == 7 { return 7; }
+    if r == 8 { return 8; }
+    if r == 9 { return 9; }
+    if r == 10 { return 10; }
+    if r != 0 { return 99; }
+    0
+}
+
+fn main() -> i32 [read] {
+    let r: i64 = check_lower_uses_inst_ty_index();
+    if r != 0 { return i64_result_to_i32(r); }
+    0
+}
