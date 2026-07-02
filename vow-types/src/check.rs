@@ -696,12 +696,13 @@ impl<'e> Checker<'e> {
 
     fn check_block(&mut self, block: &Block) -> Ty {
         self.env.push_scope();
+        let mut stmt_ty = Ty::Unit;
         for stmt in &block.stmts {
-            self.check_stmt(stmt);
+            stmt_ty = self.check_stmt(stmt);
         }
         let ty = match &block.trailing_expr {
             Some(expr) => self.check_expr(expr),
-            None => Ty::Unit,
+            None => stmt_ty,
         };
         self.exit_scope();
         ty
@@ -720,7 +721,7 @@ impl<'e> Checker<'e> {
         }
     }
 
-    fn check_stmt(&mut self, stmt: &Stmt) {
+    fn check_stmt(&mut self, stmt: &Stmt) -> Ty {
         match stmt {
             Stmt::Let {
                 pattern, ty, init, ..
@@ -768,9 +769,85 @@ impl<'e> Checker<'e> {
                     init_ty
                 };
                 self.bind_pattern(pattern, &binding_ty);
+                Ty::Unit
             }
-            Stmt::Expr { expr, .. } => {
-                self.check_expr(expr);
+            Stmt::Expr {
+                expr,
+                has_semicolon,
+                ..
+            } => {
+                let expr_ty = self.check_expr(expr);
+                if expr_ty == Ty::Never && Self::expr_diverges(expr) {
+                    Ty::Never
+                } else if *has_semicolon {
+                    Ty::Unit
+                } else {
+                    expr_ty
+                }
+            }
+        }
+    }
+
+    fn stmt_diverges(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Let { .. } => false,
+            Stmt::Expr { expr, .. } => Self::expr_diverges(expr),
+        }
+    }
+
+    fn block_diverges(block: &Block) -> bool {
+        if let Some(expr) = &block.trailing_expr {
+            return Self::expr_diverges(expr);
+        }
+        block.stmts.last().is_some_and(Self::stmt_diverges)
+    }
+
+    fn expr_diverges(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Break { .. } | ExprKind::Continue | ExprKind::Return { .. } => true,
+            ExprKind::Block(block) => Self::block_diverges(block),
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                Self::expr_diverges(condition)
+                    || else_branch.as_deref().is_some_and(|else_expr| {
+                        Self::block_diverges(then_branch) && Self::expr_diverges(else_expr)
+                    })
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                Self::expr_diverges(scrutinee)
+                    || (!arms.is_empty() && arms.iter().all(|arm| Self::expr_diverges(&arm.body)))
+            }
+            ExprKind::BinaryOp { op, lhs, rhs } => {
+                Self::expr_diverges(lhs)
+                    || (!matches!(op, BinOp::And | BinOp::Or) && Self::expr_diverges(rhs))
+            }
+            ExprKind::UnaryOp { operand, .. }
+            | ExprKind::Borrow { expr: operand }
+            | ExprKind::Question { expr: operand }
+            | ExprKind::Cast { expr: operand, .. } => Self::expr_diverges(operand),
+            ExprKind::Call { callee, args } => {
+                Self::expr_diverges(callee) || args.iter().any(Self::expr_diverges)
+            }
+            ExprKind::MethodCall { receiver, args, .. } => {
+                Self::expr_diverges(receiver) || args.iter().any(Self::expr_diverges)
+            }
+            ExprKind::FieldAccess { base, .. } => Self::expr_diverges(base),
+            ExprKind::Index { base, index } => {
+                Self::expr_diverges(base) || Self::expr_diverges(index)
+            }
+            ExprKind::While { condition, .. } => Self::expr_diverges(condition),
+            ExprKind::ForEach { iterable, .. } => Self::expr_diverges(iterable),
+            ExprKind::Assign { lhs, rhs } => Self::expr_diverges(lhs) || Self::expr_diverges(rhs),
+            ExprKind::Tuple(exprs) => exprs.iter().any(Self::expr_diverges),
+            ExprKind::StructLiteral { fields, .. } => {
+                fields.iter().any(|(_, expr)| Self::expr_diverges(expr))
+            }
+            ExprKind::EnumConstruct { fields, .. } => fields.iter().any(Self::expr_diverges),
+            ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Loop { .. } | ExprKind::Result => {
+                false
             }
         }
     }
@@ -2169,7 +2246,7 @@ mod tests {
     use super::*;
     use vow_diag::Diagnostic;
     use vow_syntax::ast::{
-        BinOp, Block, Expr, ExprKind, FnDef, Item, Lit, Module, Param, Type, Visibility,
+        BinOp, Block, Expr, ExprKind, FnDef, Item, Lit, Module, Param, Stmt, Type, Visibility,
     };
     use vow_syntax::span::Span;
 
@@ -3114,6 +3191,26 @@ mod tests {
         let mut checker = new_checker(&mut emitter);
         let ty = checker.check_expr(&make_expr(ExprKind::Block(Box::new(make_block(int_lit())))));
         assert_eq!(ty, Ty::I32);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn block_expr_trailing_return_stmt_returns_never_type() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.current_return_ty = Ty::I32;
+        let ty = checker.check_expr(&make_expr(ExprKind::Block(Box::new(Block {
+            stmts: vec![Stmt::Expr {
+                expr: make_expr(ExprKind::Return {
+                    value: Some(Box::new(int_lit())),
+                }),
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: None,
+            span: dummy_span(),
+        }))));
+        assert_eq!(ty, Ty::Never);
         assert!(!checker.has_errors());
     }
 
