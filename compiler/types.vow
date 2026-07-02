@@ -225,7 +225,10 @@ fn is_coercible(ts: TyStore, from_tid: i64, to_tid: i64) -> bool {
     if to_tag == CTY_UNKNOWN() {
         return true;
     }
-    if from_tag == CTY_I64() && ty_is_integer(ts, to_tid) {
+    // Only the unsuffixed-integer-literal marker (CTY_I32, mirroring the Rust
+    // checker's Ty::I32) context-coerces to any integer type. A genuine i64
+    // value does NOT coerce to another integer — closing the u64/i64 hole.
+    if from_tag == CTY_I32() && ty_is_integer(ts, to_tid) {
         return true;
     }
     tids_equal(ts, from_tid, to_tid)

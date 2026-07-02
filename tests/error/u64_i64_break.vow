@@ -1,0 +1,18 @@
+// TEST: stderr "break type mismatch in loop"
+// TEST: error-code TypeMismatch
+// The loop's result type is fixed to u64 by the first `break u`; a later
+// `break v.len()` yields a genuine i64, which must not coerce to it.
+module U64I64Break
+
+fn pick(c: bool) -> u64 {
+  let v: Vec<u64> = Vec::new();
+  let u: u64 = 5;
+  loop {
+    if c { break u; }
+    break v.len();
+  }
+}
+
+fn main() -> i32 {
+  0
+}

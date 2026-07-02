@@ -1013,7 +1013,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     let tag: i64 = expr_tag(a, eid);
 
     if tag == EXPR_LIT_INT() {
-        return CTY_I64();
+        // Unsuffixed integer literals carry the coercible-literal marker
+        // (CTY_I32, mirroring the Rust checker's Ty::I32). The marker propagates
+        // through if/match/binop and context-coerces to any integer at a typed
+        // site; a genuine i64 value does not. (u64-suffixed literals are already
+        // desugared to a cast by the parser.)
+        return CTY_I32();
     }
     if tag == EXPR_LIT_BOOL() {
         return CTY_BOOL();
@@ -1064,11 +1069,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
                 return CTY_I64();
             }
-            // CTY_I64 + literal-constant expression = unsuffixed literal; coerce to the other operand's integer type.
-            if lhs_tid == CTY_I64() && expr_is_lit_int_const(a, lhs_eid) {
+            // An unsuffixed-literal marker (CTY_I32) coerces to the other
+            // operand's integer type; two markers stay a marker.
+            if lhs_tid == CTY_I32() && ty_is_integer(e.ts, rhs_tid) {
                 return rhs_tid;
             }
-            if rhs_tid == CTY_I64() && expr_is_lit_int_const(a, rhs_eid) {
+            if rhs_tid == CTY_I32() && ty_is_integer(e.ts, lhs_tid) {
                 return lhs_tid;
             }
             if lhs_tid != rhs_tid {
@@ -1081,12 +1087,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             env_emit_error(e, String::from("arithmetic operands have different types"), expr_span(a, eid));
             return CTY_I64();
         }
-        // The non-literal operand fixes the result type; an unsuffixed literal
-        // coerces to it (mirrors the bitwise branch above and check_same_numeric).
-        if lhs_tid == CTY_I64() && expr_is_lit_int_const(a, lhs_eid) {
+        // The concrete operand fixes the result type; an unsuffixed-literal
+        // marker (CTY_I32) coerces to it. Two markers stay a marker (mirrors
+        // check_same_numeric in the Rust checker).
+        if lhs_tid == CTY_I32() && ty_is_integer(e.ts, rhs_tid) {
             return rhs_tid;
         }
-        if rhs_tid == CTY_I64() && expr_is_lit_int_const(a, rhs_eid) {
+        if rhs_tid == CTY_I32() && ty_is_integer(e.ts, lhs_tid) {
             return lhs_tid;
         }
         if ty_is_numeric(e.ts, lhs_tid) {
@@ -1413,6 +1420,15 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if is_opaque(else_tid) {
             return then_tid;
         }
+        // A literal-marker branch (CTY_I32) is absorbed by a concrete-integer
+        // branch, so the if-expression takes the concrete type — otherwise a
+        // genuine i64 branch could masquerade as the coercible marker.
+        if ty_tag(e.ts, then_tid) == CTY_I32() && ty_is_integer(e.ts, else_tid) {
+            return else_tid;
+        }
+        if ty_tag(e.ts, else_tid) == CTY_I32() && ty_is_integer(e.ts, then_tid) {
+            return then_tid;
+        }
         return then_tid;
     }
 
@@ -1452,9 +1468,18 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if is_opaque(loop_tid) {
                     loop_tid = btid;
                 } else {
-                    if !is_coercible(e.ts, btid, loop_tid) {
+                    // Either the break value or the running result may be the
+                    // coercible literal marker (CTY_I32); a concrete-integer
+                    // break value absorbs a marker result.
+                    let ok: bool = tids_equal(e.ts, btid, loop_tid)
+                        || (ty_tag(e.ts, btid) == CTY_I32() && ty_is_integer(e.ts, loop_tid))
+                        || (ty_tag(e.ts, loop_tid) == CTY_I32() && ty_is_integer(e.ts, btid));
+                    if !ok {
                         env_emit_error(e, String::from("break type mismatch in loop"), expr_span(a, eid));
                         break;
+                    }
+                    if ty_tag(e.ts, loop_tid) == CTY_I32() && ty_is_integer(e.ts, btid) {
+                        loop_tid = btid;
                     }
                 }
             }
