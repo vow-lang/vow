@@ -1,18 +1,72 @@
 module TestLowerInstTyIndex
 
-fn check_lower_uses_inst_ty_index() -> i64 [read] {
-    let src: String = fs_read(String::from("compiler/lower.vow"));
-    if src.len() == 0 { return 1; }
+use ast
+use ir
+use lower
 
-    if !src.contains(String::from("inst_ty_by_id: Vec<i64>,")) { return 2; }
-    if !src.contains(String::from("inst_ty_by_id: Vec::new(),")) { return 3; }
-    if !src.contains(String::from("if inst_id >= ctx.inst_ty_by_id.len()")) { return 4; }
-    if !src.contains(String::from("ctx.inst_ty_by_id[inst_id]")) { return 5; }
-    if !src.contains(String::from("fn lctx_record_inst_ty(ctx: LowerCtx, inst_id: i64, ty: i64)")) { return 6; }
-    if !src.contains(String::from("lctx_record_inst_ty(ctx, id, ty);")) { return 7; }
-    if !src.contains(String::from("ctx.inst_ty_by_id = Vec::new();")) { return 8; }
-    if !src.contains(String::from("blk.insts.push(inst);\n    lctx_record_inst_ty(ctx, id, ty);\n    id")) { return 9; }
-    if src.contains(String::from("fn lctx_inst_ty(ctx: LowerCtx, inst_id: i64) -> i64 {\n    let nb: i64 = ctx.func.blocks.len();")) { return 10; }
+fn new_test_ctx() -> LowerCtx {
+    lctx_new(String::from("test"), ITY_UNIT(), 0, arena_new(), Vec::new())
+}
+
+fn check_emit_records_inst_types() -> i64 {
+    let ctx: LowerCtx = new_test_ctx();
+    if lctx_inst_ty(ctx, -1) != ITY_I64() { return 1; }
+    if lctx_inst_ty(ctx, 0) != ITY_I64() { return 2; }
+    if ctx.inst_ty_by_id.len() != 0 { return 3; }
+
+    let first_id: i64 = lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), 1, 0, String::from(""));
+    if first_id != 0 { return 4; }
+    if ctx.inst_ty_by_id.len() != 1 { return 5; }
+    if ctx.inst_ty_by_id[first_id] != ITY_BOOL() { return 6; }
+    if lctx_inst_ty(ctx, first_id) != ITY_BOOL() { return 7; }
+
+    let second_id: i64 = lctx_emit(ctx, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F64(), 0, 0, String::from(""));
+    if second_id != 1 { return 8; }
+    if ctx.inst_ty_by_id.len() != 2 { return 9; }
+    if ctx.inst_ty_by_id[second_id] != ITY_F64() { return 10; }
+    if lctx_inst_ty(ctx, second_id) != ITY_F64() { return 11; }
+    if lctx_inst_ty(ctx, second_id + 1) != ITY_I64() { return 12; }
+
+    0
+}
+
+fn check_cross_block_lookup() -> i64 {
+    let ctx: LowerCtx = new_test_ctx();
+    let first_id: i64 = lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), Vec::new(), IDATA_CONST_BOOL(), 1, 0, String::from(""));
+    let next_block: i64 = lctx_new_block(ctx);
+    lctx_switch_to_block(ctx, next_block);
+    let second_id: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 42, 0, String::from(""));
+
+    if first_id != 0 { return 13; }
+    if second_id != 1 { return 14; }
+    if ctx.inst_ty_by_id.len() != 2 { return 15; }
+    if ctx.inst_ty_by_id[first_id] != ITY_BOOL() { return 16; }
+    if ctx.inst_ty_by_id[second_id] != ITY_U64() { return 17; }
+    if lctx_inst_ty(ctx, first_id) != ITY_BOOL() { return 18; }
+    if lctx_inst_ty(ctx, second_id) != ITY_U64() { return 19; }
+
+    0
+}
+
+fn check_terminated_emit_does_not_poison_index() -> i64 {
+    let ctx: LowerCtx = new_test_ctx();
+    let ret_id: i64 = lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""));
+    if ret_id != 0 { return 20; }
+    if ctx.inst_ty_by_id.len() != 1 { return 21; }
+    if lctx_inst_ty(ctx, ret_id) != ITY_UNIT() { return 22; }
+
+    let skipped_id: i64 = lctx_emit(ctx, IOP_CONST_F64(), ITY_F64(), Vec::new(), IDATA_CONST_F64(), 0, 0, String::from(""));
+    if skipped_id != 1 { return 23; }
+    if ctx.inst_ty_by_id.len() != 1 { return 24; }
+    if lctx_inst_ty(ctx, skipped_id) != ITY_I64() { return 25; }
+
+    let next_block: i64 = lctx_new_block(ctx);
+    lctx_switch_to_block(ctx, next_block);
+    let real_id: i64 = lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 7, 0, String::from(""));
+    if real_id != skipped_id { return 26; }
+    if ctx.inst_ty_by_id.len() != 2 { return 27; }
+    if ctx.inst_ty_by_id[real_id] != ITY_U64() { return 28; }
+    if lctx_inst_ty(ctx, real_id) != ITY_U64() { return 29; }
 
     0
 }
@@ -28,12 +82,35 @@ fn i64_result_to_i32(r: i64) -> i32 {
     if r == 8 { return 8; }
     if r == 9 { return 9; }
     if r == 10 { return 10; }
+    if r == 11 { return 11; }
+    if r == 12 { return 12; }
+    if r == 13 { return 13; }
+    if r == 14 { return 14; }
+    if r == 15 { return 15; }
+    if r == 16 { return 16; }
+    if r == 17 { return 17; }
+    if r == 18 { return 18; }
+    if r == 19 { return 19; }
+    if r == 20 { return 20; }
+    if r == 21 { return 21; }
+    if r == 22 { return 22; }
+    if r == 23 { return 23; }
+    if r == 24 { return 24; }
+    if r == 25 { return 25; }
+    if r == 26 { return 26; }
+    if r == 27 { return 27; }
+    if r == 28 { return 28; }
+    if r == 29 { return 29; }
     if r != 0 { return 99; }
     0
 }
 
-fn main() -> i32 [read] {
-    let r: i64 = check_lower_uses_inst_ty_index();
-    if r != 0 { return i64_result_to_i32(r); }
+fn main() -> i32 {
+    let r1: i64 = check_emit_records_inst_types();
+    if r1 != 0 { return i64_result_to_i32(r1); }
+    let r2: i64 = check_cross_block_lookup();
+    if r2 != 0 { return i64_result_to_i32(r2); }
+    let r3: i64 = check_terminated_emit_does_not_poison_index();
+    if r3 != 0 { return i64_result_to_i32(r3); }
     0
 }
