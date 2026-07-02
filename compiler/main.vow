@@ -4763,6 +4763,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("and `vow_id`, and includes the caller expression in `call_sites`. When the\n"));
     r.push_str(String::from("callee precondition binds a parameter, `violating_args` names the callee\n"));
     r.push_str(String::from("parameter, the counterexample value when available, and the caller argument span.\n"));
+    r.push_str(String::from("If `violating_args[].value` is `\"\"`, Vow could not statically recover the\n"));
+    r.push_str(String::from("caller argument value; `arg_offset` and `arg_length` still identify the\n"));
+    r.push_str(String::from("argument expression.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
@@ -5340,7 +5343,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("When caller code violates a callee's `requires` clause, `violation` and\n"));
     r.push_str(String::from("`vow_id` identify the callee clause. `call_sites` points back to the caller\n"));
     r.push_str(String::from("expression, and `violating_args` identifies the callee parameter and caller\n"));
-    r.push_str(String::from("argument span when Vow can recover it.\n"));
+    r.push_str(String::from("argument span when Vow can recover it. If `violating_args[].value` is `\"\"`,\n"));
+    r.push_str(String::from("Vow could not statically recover the caller argument value; `arg_offset` and\n"));
+    r.push_str(String::from("`arg_length` still identify the argument expression.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.\n"));
     r.push_str(String::from("\n"));
@@ -7597,7 +7602,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"required\": [\"param\", \"value\", \"arg_offset\", \"arg_length\"],\n"));
     r.push_str(String::from("        \"properties\": {\n"));
     r.push_str(String::from("          \"param\": { \"type\": \"string\" },\n"));
-    r.push_str(String::from("          \"value\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"value\": {\n"));
+    r.push_str(String::from("            \"type\": \"string\",\n"));
+    r.push_str(String::from("            \"description\": \"Counterexample value for the caller argument. The empty string means the value could not be statically recovered; arg_offset and arg_length still identify the caller argument.\"\n"));
+    r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"arg_offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
     r.push_str(String::from("          \"arg_length\": { \"type\": \"integer\", \"minimum\": 0 }\n"));
     r.push_str(String::from("        },\n"));
@@ -9302,6 +9310,9 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("and `vow_id`, and includes the caller expression in `call_sites`. When the\n"));
     r.push_str(String::from("callee precondition binds a parameter, `violating_args` names the callee\n"));
     r.push_str(String::from("parameter, the counterexample value when available, and the caller argument span.\n"));
+    r.push_str(String::from("If `violating_args[].value` is `\"\"`, Vow could not statically recover the\n"));
+    r.push_str(String::from("caller argument value; `arg_offset` and `arg_length` still identify the\n"));
+    r.push_str(String::from("argument expression.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
@@ -9881,7 +9892,9 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("When caller code violates a callee's `requires` clause, `violation` and\n"));
     r.push_str(String::from("`vow_id` identify the callee clause. `call_sites` points back to the caller\n"));
     r.push_str(String::from("expression, and `violating_args` identifies the callee parameter and caller\n"));
-    r.push_str(String::from("argument span when Vow can recover it.\n"));
+    r.push_str(String::from("argument span when Vow can recover it. If `violating_args[].value` is `\"\"`,\n"));
+    r.push_str(String::from("Vow could not statically recover the caller argument value; `arg_offset` and\n"));
+    r.push_str(String::from("`arg_length` still identify the argument expression.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.\n"));
     r.push_str(String::from("\n"));
@@ -12143,7 +12156,10 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("        \"required\": [\"param\", \"value\", \"arg_offset\", \"arg_length\"],\n"));
     r.push_str(String::from("        \"properties\": {\n"));
     r.push_str(String::from("          \"param\": { \"type\": \"string\" },\n"));
-    r.push_str(String::from("          \"value\": { \"type\": \"string\" },\n"));
+    r.push_str(String::from("          \"value\": {\n"));
+    r.push_str(String::from("            \"type\": \"string\",\n"));
+    r.push_str(String::from("            \"description\": \"Counterexample value for the caller argument. The empty string means the value could not be statically recovered; arg_offset and arg_length still identify the caller argument.\"\n"));
+    r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"arg_offset\": { \"type\": \"integer\", \"minimum\": 0 },\n"));
     r.push_str(String::from("          \"arg_length\": { \"type\": \"integer\", \"minimum\": 0 }\n"));
     r.push_str(String::from("        },\n"));

@@ -69,7 +69,10 @@
         "required": ["param", "value", "arg_offset", "arg_length"],
         "properties": {
           "param": { "type": "string" },
-          "value": { "type": "string" },
+          "value": {
+            "type": "string",
+            "description": "Counterexample value for the caller argument. The empty string means the value could not be statically recovered; arg_offset and arg_length still identify the caller argument."
+          },
           "arg_offset": { "type": "integer", "minimum": 0 },
           "arg_length": { "type": "integer", "minimum": 0 }
         },

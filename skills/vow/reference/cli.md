@@ -336,6 +336,9 @@ For caller-blame failures where a verified function violates a callee's
 and `vow_id`, and includes the caller expression in `call_sites`. When the
 callee precondition binds a parameter, `violating_args` names the callee
 parameter, the counterexample value when available, and the caller argument span.
+If `violating_args[].value` is `""`, Vow could not statically recover the
+caller argument value; `arg_offset` and `arg_length` still identify the
+argument expression.
 
 ### Fields Reference
 

@@ -2904,6 +2904,9 @@ For caller-blame failures where a verified function violates a callee's
 and `vow_id`, and includes the caller expression in `call_sites`. When the
 callee precondition binds a parameter, `violating_args` names the callee
 parameter, the counterexample value when available, and the caller argument span.
+If `violating_args[].value` is `""`, Vow could not statically recover the
+caller argument value; `arg_offset` and `arg_length` still identify the
+argument expression.
 
 ### Fields Reference
 
@@ -3481,7 +3484,9 @@ A counterexample in the JSON output:
 When caller code violates a callee's `requires` clause, `violation` and
 `vow_id` identify the callee clause. `call_sites` points back to the caller
 expression, and `violating_args` identifies the callee parameter and caller
-argument span when Vow can recover it.
+argument span when Vow can recover it. If `violating_args[].value` is `""`,
+Vow could not statically recover the caller argument value; `arg_offset` and
+`arg_length` still identify the argument expression.
 
 Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
 
@@ -5738,7 +5743,10 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "required": ["param", "value", "arg_offset", "arg_length"],
         "properties": {
           "param": { "type": "string" },
-          "value": { "type": "string" },
+          "value": {
+            "type": "string",
+            "description": "Counterexample value for the caller argument. The empty string means the value could not be statically recovered; arg_offset and arg_length still identify the caller argument."
+          },
           "arg_offset": { "type": "integer", "minimum": 0 },
           "arg_length": { "type": "integer", "minimum": 0 }
         },
@@ -7420,6 +7428,9 @@ For caller-blame failures where a verified function violates a callee's
 and `vow_id`, and includes the caller expression in `call_sites`. When the
 callee precondition binds a parameter, `violating_args` names the callee
 parameter, the counterexample value when available, and the caller argument span.
+If `violating_args[].value` is `""`, Vow could not statically recover the
+caller argument value; `arg_offset` and `arg_length` still identify the
+argument expression.
 
 ### Fields Reference
 
@@ -7998,7 +8009,9 @@ A counterexample in the JSON output:
 When caller code violates a callee's `requires` clause, `violation` and
 `vow_id` identify the callee clause. `call_sites` points back to the caller
 expression, and `violating_args` identifies the callee parameter and caller
-argument span when Vow can recover it.
+argument span when Vow can recover it. If `violating_args[].value` is `""`,
+Vow could not statically recover the caller argument value; `arg_offset` and
+`arg_length` still identify the argument expression.
 
 Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
 
@@ -10252,7 +10265,10 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "required": ["param", "value", "arg_offset", "arg_length"],
         "properties": {
           "param": { "type": "string" },
-          "value": { "type": "string" },
+          "value": {
+            "type": "string",
+            "description": "Counterexample value for the caller argument. The empty string means the value could not be statically recovered; arg_offset and arg_length still identify the caller argument."
+          },
           "arg_offset": { "type": "integer", "minimum": 0 },
           "arg_length": { "type": "integer", "minimum": 0 }
         },
@@ -16515,6 +16531,22 @@ fn main() -> i32 {
         assert!(
             json.contains("\"counterexamples\":[]"),
             "empty counterexamples: {json}"
+        );
+    }
+
+    #[test]
+    fn counterexample_schema_documents_violating_arg_empty_value_sentinel() {
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../docs/spec/schemas/counterexample.schema.json"
+        ))
+        .unwrap();
+        let value_schema = &schema["properties"]["violating_args"]["items"]["properties"]["value"];
+
+        assert_eq!(value_schema["type"], "string");
+        let description = value_schema["description"].as_str().unwrap_or("");
+        assert!(
+            description.contains("could not be statically recovered"),
+            "violating_args[].value description: {description:?}"
         );
     }
 

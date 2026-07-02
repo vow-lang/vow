@@ -345,7 +345,9 @@ A counterexample in the JSON output:
 When caller code violates a callee's `requires` clause, `violation` and
 `vow_id` identify the callee clause. `call_sites` points back to the caller
 expression, and `violating_args` identifies the callee parameter and caller
-argument span when Vow can recover it.
+argument span when Vow can recover it. If `violating_args[].value` is `""`,
+Vow could not statically recover the caller argument value; `arg_offset` and
+`arg_length` still identify the argument expression.
 
 Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
 
