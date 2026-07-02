@@ -21,7 +21,8 @@ fn cx_ir_fan_in_counts(entry_file: String, source_files: Vec<String>, callee_set
             while ci < callees.len() {
                 let callee: i64 = callees[ci];
                 if callee >= 0 && callee < fn_count {
-                    counts.insert(callee, cx_ir_fan_in_lookup(counts, callee) + 1);
+                    let old: i64 = cx_ir_fan_in_lookup(counts, callee);
+                    counts.insert(callee, old + 1);
                 }
                 ci = ci + 1;
             }
