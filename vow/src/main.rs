@@ -15285,6 +15285,47 @@ fn main() -> i32 [io] {
         }
     }
 
+    fn generated_skill_support_count(source: &str) -> usize {
+        let body = generated_vow_function_lines(source, "fn skill_support_count() -> i64 {");
+        let mut literal_lines = body
+            .iter()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty());
+        let literal = literal_lines
+            .next()
+            .expect("skill_support_count() must return an integer literal");
+        assert!(
+            literal_lines.next().is_none(),
+            "skill_support_count() should contain only the generated count literal"
+        );
+        literal
+            .parse::<usize>()
+            .expect("skill_support_count() must return a non-negative integer literal")
+    }
+
+    fn generated_skill_support_branch_count(source: &str, signature: &str) -> usize {
+        generated_vow_function_lines(source, signature)
+            .into_iter()
+            .filter(|line| line.trim_start().starts_with("if index =="))
+            .count()
+    }
+
+    fn generated_vow_function_lines<'a>(source: &'a str, signature: &str) -> Vec<&'a str> {
+        let mut lines = source.lines().skip_while(|line| line.trim() != signature);
+        lines
+            .next()
+            .unwrap_or_else(|| panic!("generated Vow function `{signature}` must exist"));
+
+        let mut body = Vec::new();
+        for line in lines {
+            if line.trim() == "}" {
+                return body;
+            }
+            body.push(line);
+        }
+        panic!("generated Vow function `{signature}` must close with a standalone `}}`");
+    }
+
     #[test]
     fn generated_vow_skill_support_uses_indexed_lookup() {
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -15304,6 +15345,25 @@ fn main() -> i32 [io] {
                 .count(),
             2,
             "indexed support lookup contracts should guard path lookup and content access"
+        );
+        let support_count = generated_skill_support_count(&source);
+        let path_branch_count = generated_skill_support_branch_count(
+            &source,
+            "fn skill_support_path(index: i64) -> String vow {",
+        );
+        let content_branch_count = generated_skill_support_branch_count(
+            &source,
+            "fn skill_support_content(index: i64) -> String {",
+        );
+        assert_eq!(
+            path_branch_count, support_count,
+            "skill_support_count() returned {support_count}, \
+             but skill_support_path has {path_branch_count} generated index branches"
+        );
+        assert_eq!(
+            content_branch_count, support_count,
+            "skill_support_count() returned {support_count}, \
+             but skill_support_content has {content_branch_count} generated index branches"
         );
         assert!(
             !source.contains("fn skill_support_paths() -> Vec<String>"),
