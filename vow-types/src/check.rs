@@ -3422,6 +3422,32 @@ mod tests {
         assert!(checker.has_errors());
     }
 
+    #[test]
+    fn bind_arm_pattern_builtin_option_u64_payload() {
+        use vow_syntax::ast::{Pat, PatKind};
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let pat = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Option".to_string(), "Some".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Ident {
+                        name: "n".to_string(),
+                        is_mut: false,
+                    },
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+        let scrutinee_ty = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::U64]);
+
+        checker.bind_arm_pattern(&pat, &scrutinee_ty);
+
+        assert_eq!(checker.env.lookup("n"), Some(&Ty::U64));
+        assert!(!checker.has_errors());
+    }
+
     // --- Float literal ---
 
     #[test]
