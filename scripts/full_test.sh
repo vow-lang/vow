@@ -964,6 +964,23 @@ if uv run python scripts/generate_help.py --check >/dev/null 2>&1; then
 else
     fail "help/skills-dir-drift" "skills/vow/ drifted from generated content; run 'uv run python scripts/generate_help.py'"
 fi
+echo ""
+
+# ─── Section 8b: Installer Script ─────────────────────────────────
+
+section_begin "Section 8b: Installer Script"
+
+install_toolchain_log="$TMPDIR/install_toolchain_tests.log"
+if bash tests/install_toolchain/tests.sh >"$install_toolchain_log" 2>&1; then
+    pass "install-toolchain/smoke"
+else
+    fail "install-toolchain/smoke" "$(tail -20 "$install_toolchain_log")"
+fi
+echo ""
+
+# ─── Section 8c: Contract Quality ─────────────────────────────────
+
+section_begin "Section 8c: Contract Quality"
 
 # contract-quality/weak-gate: ratchet on static contract quality across the
 # self-hosted compiler — fail if the weak/tautological contract count exceeds the
