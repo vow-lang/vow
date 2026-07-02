@@ -3499,8 +3499,8 @@ pub fn lower_module(
 mod tests {
     use super::*;
     use vow_syntax::ast::{
-        Block, Effect, Expr, ExprKind, FnDef, Lit, Pat, PatKind, Stmt, Type, Visibility, VowBlock,
-        VowClause,
+        Block, Effect, Expr, ExprKind, FnDef, Lit, MatchArm, Pat, PatKind, Stmt, Type, Visibility,
+        VowBlock, VowClause,
     };
     use vow_syntax::span::Span;
 
@@ -3515,6 +3515,13 @@ mod tests {
     fn i64_ty() -> Type {
         Type::Named {
             name: "i64".to_string(),
+            span: sp(),
+        }
+    }
+
+    fn u64_ty() -> Type {
+        Type::Named {
+            name: "u64".to_string(),
             span: sp(),
         }
     }
@@ -4112,6 +4119,85 @@ mod tests {
                 "Upsilon should target the Phi"
             );
         }
+    }
+
+    #[test]
+    fn match_expression_u64_result_phi_uses_arm_type() {
+        let u64_cast = |v| Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(int_expr(v)),
+                target_ty: Box::new(u64_ty()),
+            },
+            span: sp(),
+        };
+        let enum_pat = |variant: &str| Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Pick".to_string(), variant.to_string()],
+                inner: vec![],
+            },
+            span: sp(),
+        };
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("p")),
+                arms: vec![
+                    MatchArm {
+                        pattern: enum_pat("Big"),
+                        body: u64_cast(9223372036854775808),
+                        span: sp(),
+                    },
+                    MatchArm {
+                        pattern: enum_pat("Zero"),
+                        body: u64_cast(0),
+                        span: sp(),
+                    },
+                ],
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(match_expr)),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "pick",
+            vec![make_param(
+                "p",
+                Type::Named {
+                    name: "Pick".to_string(),
+                    span: sp(),
+                },
+            )],
+            u64_ty(),
+            body,
+            vec![],
+        );
+        let enum_variant_map = HashMap::from([(
+            "Pick".to_string(),
+            vec!["Big".to_string(), "Zero".to_string()],
+        )]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            enum_variant_map,
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let phis: Vec<_> = func
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .filter(|inst| inst.opcode == Opcode::Phi)
+            .collect();
+        assert_eq!(phis.len(), 1, "expected only the match result Phi");
+        assert_eq!(phis[0].ty, Ty::U64);
     }
 
     #[test]
