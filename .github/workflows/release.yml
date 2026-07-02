@@ -172,12 +172,12 @@ jobs:
               0
           }
           EOF
-          "$prefix/bin/vowc" --help > /dev/null
+          "$prefix/bin/vow" --help > /dev/null
           (
             cd "$tmp"
             VOW_RUNTIME_PATH="$runtime_lib" \
               VOW_CLIF_SHIM_PATH="$shim_lib" \
-              "$prefix/bin/vowc" build --no-verify hello.vow -o hello
+              "$prefix/bin/vow" build --no-verify hello.vow -o hello
             ./hello
           )
 
