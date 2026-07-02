@@ -85,7 +85,11 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: vow-lang/vow
           files: lcov.info
-          fail_ci_if_error: true
+          # CODECOV_TOKEN is not exposed to Dependabot or fork PRs, and Codecov
+          # rejects tokenless uploads on a protected branch. Only hard-fail CI
+          # when a token is actually available, so those PRs are not blocked by
+          # an upload they can never authenticate.
+          fail_ci_if_error: ${{ secrets.CODECOV_TOKEN != '' }}
 
   bootstrap:
     # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression
