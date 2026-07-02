@@ -88,6 +88,7 @@ BIN_DIR="$PREFIX/bin"
 LIB_DIR="$PREFIX/lib/vow"
 mkdir -p "$BIN_DIR" "$LIB_DIR"
 
+rm -f "$BIN_DIR/vow" "$BIN_DIR/vowc"
 install -m 0755 "$VOWC" "$BIN_DIR/vow"
 
 install -m 0644 "$RUNTIME_LIB" "$LIB_DIR/libvow_runtime.a"
