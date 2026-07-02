@@ -2536,7 +2536,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let arm_exit_blocks: Vec<i64> = Vec::new();
         let arm_up_ids: Vec<i64> = Vec::new();
-        let arm_result_tys: Vec<i64> = Vec::new();
+        let reachable_result_tys: Vec<i64> = Vec::new();
         let arm_mut_ups: Vec<i64> = Vec::new();
 
         let mut ai: i64 = 0;
@@ -2633,7 +2633,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                     arm_exit_blocks.push(ctx.current_block);
                     arm_up_ids.push(up_id);
-                    arm_result_tys.push(arm_result_ty);
+                    reachable_result_tys.push(arm_result_ty);
                 }
 
                 lctx_restore(ctx, snap);
@@ -2684,7 +2684,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                     arm_exit_blocks.push(ctx.current_block);
                     arm_up_ids.push(up_id);
-                    arm_result_tys.push(arm_result_ty2);
+                    reachable_result_tys.push(arm_result_ty2);
                 }
 
                 lctx_restore(ctx, snap);
@@ -2714,7 +2714,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                 arm_exit_blocks.push(ctx.current_block);
                 arm_up_ids.push(up_id);
-                arm_result_tys.push(ITY_UNIT());
+                reachable_result_tys.push(ITY_UNIT());
             }
 
             ai = ai + 1;
@@ -2742,7 +2742,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         let phi_args: Vec<i64> = Vec::new();
-        let result_ty: i64 = if arm_result_tys.len() > 0 { arm_result_tys[0] } else { ITY_I64() };
+        // Exiting arms do not push here; the first entry is the first arm that reaches the merge.
+        let result_ty: i64 = if reachable_result_tys.len() > 0 { reachable_result_tys[0] } else { ITY_I64() };
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
 
         let n_results: i64 = arm_up_ids.len();
