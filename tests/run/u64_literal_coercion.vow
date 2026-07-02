@@ -1,0 +1,28 @@
+// TEST: stdout "52\n105\n107\nge\n"
+// Unsuffixed integer literals still coerce to u64 in comparison, arithmetic,
+// and call arguments after the u64/i64 soundness fix (#848). Only genuine
+// non-literal i64 values (e.g. Vec::len()) are rejected against u64.
+module U64LiteralCoercion
+
+fn add_u64(a: u64, b: u64) -> u64 {
+    a + b
+}
+
+fn main() -> i32 [io] {
+    let x: u64 = 100;
+    let y: u64 = x - 48;
+    let z: u64 = x + 5;
+    let a: u64 = add_u64(x, 7);
+    print_u64(y);
+    print_str("\n");
+    print_u64(z);
+    print_str("\n");
+    print_u64(a);
+    print_str("\n");
+    if x < 50 {
+        print_str("lt\n");
+    } else {
+        print_str("ge\n");
+    };
+    0
+}

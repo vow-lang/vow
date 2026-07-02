@@ -1,0 +1,10 @@
+// TEST: stderr "arithmetic operands have different types"
+// TEST: error-code TypeMismatch
+module U64I64Arith
+
+fn main() -> i32 {
+  let v: Vec<u64> = Vec::new();
+  let a: u64 = 5;
+  let s: u64 = a + v.len();
+  0
+}

@@ -960,6 +960,46 @@ fn expr_is_lit_int_const(a: AstArena, eid: i64) -> bool {
     false
 }
 
+// True when a value of type `from_tid` may appear where `to_tid` is expected,
+// honoring the coercions the Rust checker performs: an unsuffixed integer
+// literal (typed i64 by check_expr, recognized syntactically) and a genuine i32
+// both coerce to any integer type; Never/Unknown coerce to anything. A genuine
+// non-literal i64 does NOT coerce to another integer type — that is the u64/i64
+// soundness hole this closes.
+fn operand_coercible(ts: TyStore, a: AstArena, from_tid: i64, to_tid: i64, from_eid: i64) -> bool {
+    if from_tid == to_tid {
+        return true;
+    }
+    if tids_equal(ts, from_tid, to_tid) {
+        return true;
+    }
+    let from_tag: i64 = ty_tag(ts, from_tid);
+    if from_tag == CTY_NEVER() || from_tag == CTY_UNKNOWN() {
+        return true;
+    }
+    let to_tag: i64 = ty_tag(ts, to_tid);
+    if to_tag == CTY_NEVER() || to_tag == CTY_UNKNOWN() {
+        return true;
+    }
+    if from_tag == CTY_I64() && expr_is_lit_int_const(a, from_eid) && ty_is_integer(ts, to_tid) {
+        return true;
+    }
+    if from_tag == CTY_I32() && ty_is_integer(ts, to_tid) {
+        return true;
+    }
+    false
+}
+
+// Symmetric operand compatibility for comparison and arithmetic: either side may
+// be the coercible one (a literal on the left or right). Call sites gate this on
+// both operands being numeric: the #848 hole is numeric (u64/i64) confusion, and
+// restricting to numeric types avoids false positives on values the checker
+// under-resolves (e.g. a match payload it types as Unit), preserving the
+// self-hosted compiler's historically lenient handling of non-numeric operands.
+fn bin_operands_compatible(ts: TyStore, a: AstArena, lhs_tid: i64, rhs_tid: i64, lhs_eid: i64, rhs_eid: i64) -> bool {
+    operand_coercible(ts, a, lhs_tid, rhs_tid, lhs_eid) || operand_coercible(ts, a, rhs_tid, lhs_tid, rhs_eid)
+}
+
 fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     let tid: i64 = check_expr_inner(e, m, eid);
     if tid == CTY_STR() {
@@ -1010,6 +1050,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             return CTY_BOOL();
         }
         if op == BINOP_EQ() || op == BINOP_NE() || op == BINOP_LT() || op == BINOP_LE() || op == BINOP_GT() || op == BINOP_GE() {
+            if ty_is_numeric(e.ts, lhs_tid) && ty_is_numeric(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, a, lhs_tid, rhs_tid, lhs_eid, rhs_eid) {
+                env_emit_error(e, String::from("comparison operands have different types"), expr_span(a, eid));
+            }
             return CTY_BOOL();
         }
         if op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR() || op == BINOP_SHL() || op == BINOP_SHR() {
@@ -1032,6 +1075,18 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 env_emit_error(e, String::from("bitwise operator requires matching integer types"), expr_span(a, eid));
                 return CTY_I64();
             }
+            return lhs_tid;
+        }
+        if ty_is_numeric(e.ts, lhs_tid) && ty_is_numeric(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, a, lhs_tid, rhs_tid, lhs_eid, rhs_eid) {
+            env_emit_error(e, String::from("arithmetic operands have different types"), expr_span(a, eid));
+            return CTY_I64();
+        }
+        // The non-literal operand fixes the result type; an unsuffixed literal
+        // coerces to it (mirrors the bitwise branch above and check_same_numeric).
+        if lhs_tid == CTY_I64() && expr_is_lit_int_const(a, lhs_eid) {
+            return rhs_tid;
+        }
+        if rhs_tid == CTY_I64() && expr_is_lit_int_const(a, rhs_eid) {
             return lhs_tid;
         }
         if ty_is_numeric(e.ts, lhs_tid) {
@@ -1059,9 +1114,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let callee_tag: i64 = expr_tag(a, callee_eid);
         let n_args: i64 = list_len(a, args_lid);
         let mut i: i64 = 0;
+        let arg_tids: Vec<i64> = Vec::new();
         while i < n_args {
             let arg_eid: i64 = list_get(a, args_lid, i);
-            let _arg_tid: i64 = check_expr(e, m, arg_eid);
+            let arg_tid: i64 = check_expr(e, m, arg_eid);
+            arg_tids.push(arg_tid);
             i = i + 1;
         }
         if callee_tag == EXPR_IDENT() {
@@ -1119,6 +1176,18 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             if e.fn_param_count[fidx] != n_args {
                 env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
+            } else {
+                let plid: i64 = e.fn_param_lids[fidx];
+                let mut ai: i64 = 0;
+                while ai < n_args {
+                    let ptid: i64 = ts_arg_get(e.ts, plid, ai);
+                    let atid: i64 = arg_tids[ai];
+                    let aeid: i64 = list_get(a, args_lid, ai);
+                    if ty_is_numeric(e.ts, atid) && ty_is_numeric(e.ts, ptid) && !operand_coercible(e.ts, a, atid, ptid, aeid) {
+                        env_emit_error(e, String::from("argument has wrong type"), expr_span(a, aeid));
+                    }
+                    ai = ai + 1;
+                }
             }
             return e.fn_ret_tids[fidx];
         }
