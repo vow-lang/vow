@@ -1,32 +1,48 @@
 module Bignum
 
-// Arbitrary-precision integer arithmetic.
+// Arbitrary-precision integer arithmetic with a small-int fast path.
 //
-// Representation: sign-magnitude with base 2^32 limbs stored in Vec<u64>.
-// - limbs: least-significant limb first, each limb in [0, 2^32).
-// - sign: 1 for non-negative, -1 for negative.
-// - Zero is represented as sign=1, limbs=[0].
-// - Non-zero values have no leading zero limbs (limbs[len-1] != 0).
+// Public value: enum BigNum { Small(i64), Big(BigMag) }.
+// - Small(v) holds any value that fits in i64 with NO heap Vec allocation.
+// - Big(m)   holds a BigMag magnitude for |value| > i64::MAX.
 //
-// The binary limb base makes bitwise operations (and/or/xor/shl/shr) trivial
-// limb-wise operations; decimal is only materialised at the from_string /
-// to_string boundary. A non-negative BigNum is the natural-number (Nat) that
-// the Lean kernel needs; bitwise ops act on the magnitude (Nat semantics).
+// Canonicalization invariant (load-bearing): a value fits i64  <=>  it is Small.
+// Every result-producing op returns through `bignum_normalize`, which demotes a
+// Big magnitude back to Small when it fits, so cmp/eq/to_string never see two
+// encodings of the same value.
+//
+// BigMag is the internal magnitude: sign-magnitude, base 2^32 limbs (Vec<u64>),
+// least-significant first, no leading-zero limbs (zero = sign=1, limbs=[0]). The
+// binary base makes bitwise ops trivial limb-wise operations; decimal is only
+// materialised at the from_string / to_string boundary. A non-negative BigMag is
+// a Nat; bitwise ops act on the magnitude. All bigmag_* functions are internal.
 
-struct BigNum {
+struct BigMag {
     limbs: Vec<u64>,
     sign: i64,
 }
 
-fn bignum_zero() -> BigNum {
-    let d: Vec<u64> = Vec::new();
-    d.push(0u64);
-    BigNum { limbs: d, sign: 1 }
+enum BigNum {
+    Small(i64),
+    Big(BigMag),
 }
 
-fn bignum_from_u64(val: u64) -> BigNum {
+// Public division result. The internal limb divmod returns BigMagDivResult; this
+// holds the normalized BigNum quotient/remainder.
+struct DivResult {
+    quotient: BigNum,
+    remainder: BigNum,
+}
+
+fn bigmag_zero() -> BigMag {
+    let d: Vec<u64> = Vec::new();
+    d.push(0u64);
+    BigMag { limbs: d, sign: 1 }
+}
+
+fn bigmag_from_u64(val: u64) -> BigMag {
     if val == 0u64 {
-        bignum_zero()
+        bigmag_zero()
     } else {
         // A u64 is at most two base-2^32 limbs. Extract them from the immutable
         // parameter directly: a loop-carried `mut u64` would lose its unsigned
@@ -40,27 +56,27 @@ fn bignum_from_u64(val: u64) -> BigNum {
         if hi != 0u64 {
             d.push(hi);
         }
-        BigNum { limbs: d, sign: 1 }
+        BigMag { limbs: d, sign: 1 }
     }
 }
 
-fn bignum_from_i64(val: i64) -> BigNum {
+fn bigmag_from_i64(val: i64) -> BigMag {
     if val == 0 {
-        bignum_zero()
+        bigmag_zero()
     } else {
         let sign: i64 = if val < 0 { -1 } else { 1 };
         // 0u64 - (val as u64) wraps to the magnitude for every negative val,
         // including i64::MIN (whose negation would overflow in i64).
         let mag: u64 = if val < 0 { 0u64 - (val as u64) } else { val as u64 };
-        let b: BigNum = bignum_from_u64(mag);
-        BigNum { limbs: b.limbs, sign: sign }
+        let b: BigMag = bigmag_from_u64(mag);
+        BigMag { limbs: b.limbs, sign: sign }
     }
 }
 
-fn bignum_from_string(s: String) -> BigNum {
+fn bigmag_from_string(s: String) -> BigMag {
     let slen: i64 = s.len();
     if slen == 0 {
-        bignum_zero()
+        bigmag_zero()
     } else {
         let mut start: i64 = 0;
         let mut sign: i64 = 1;
@@ -81,9 +97,9 @@ fn bignum_from_string(s: String) -> BigNum {
             nz = nz + 1;
         }
         if nz == slen {
-            bignum_zero()
+            bigmag_zero()
         } else {
-            let mut result: BigNum = bignum_zero();
+            let mut result: BigMag = bigmag_zero();
             let mut pos: i64 = nz;
             while pos < slen {
                 let end: i64 = if pos + 9 < slen { pos + 9 } else { slen };
@@ -96,14 +112,14 @@ fn bignum_from_string(s: String) -> BigNum {
                     mult = mult * 10u64;
                     k = k + 1;
                 }
-                result = bignum_mul_single(result, mult);
-                result = bignum_add_small(result, chunk);
+                result = bigmag_mul_single(result, mult);
+                result = bigmag_add_small(result, chunk);
                 pos = end;
             }
             // `result` is a loop-reassigned var, so a direct `result.limbs`
             // FieldGet is untagged; apply the sign through a parameter instead.
             if sign < 0 {
-                bignum_negate(result)
+                bigmag_negate(result)
             } else {
                 result
             }
@@ -111,14 +127,14 @@ fn bignum_from_string(s: String) -> BigNum {
     }
 }
 
-fn bignum_to_string(b: BigNum) -> String {
-    if bignum_is_zero(b) {
+fn bigmag_to_string(b: BigMag) -> String {
+    if bigmag_is_zero(b) {
         String::from("0")
     } else {
         let chunks: Vec<u64> = Vec::new();
-        let mut cur: BigNum = bignum_abs(b);
-        while !bignum_is_zero(cur) {
-            let dr: SmallDivResult = bignum_divmod_small(cur, 1000000000u64);
+        let mut cur: BigMag = bigmag_abs(b);
+        while !bigmag_is_zero(cur) {
+            let dr: SmallDivResult = bigmag_divmod_small(cur, 1000000000u64);
             chunks.push(dr.remainder);
             cur = dr.quotient;
         }
@@ -138,8 +154,8 @@ fn bignum_to_string(b: BigNum) -> String {
 }
 
 // Returns Option::None when b is negative or does not fit in u64 (> 2 limbs).
-fn bignum_to_u64(b: BigNum) -> Option<u64> {
-    if bignum_is_zero(b) {
+fn bigmag_to_u64(b: BigMag) -> Option<u64> {
+    if bigmag_is_zero(b) {
         Option::Some(0u64)
     } else {
         if b.sign < 0 {
@@ -160,35 +176,35 @@ fn bignum_to_u64(b: BigNum) -> Option<u64> {
     }
 }
 
-fn bignum_is_zero(b: BigNum) -> bool {
+fn bigmag_is_zero(b: BigMag) -> bool {
     let d: Vec<u64> = b.limbs;
     d.len() == 1 && d[0] == 0u64
 }
 
-fn bignum_is_negative(b: BigNum) -> bool {
-    b.sign < 0 && !bignum_is_zero(b)
+fn bigmag_is_negative(b: BigMag) -> bool {
+    b.sign < 0 && !bigmag_is_zero(b)
 }
 
-fn bignum_is_positive(b: BigNum) -> bool {
-    b.sign > 0 && !bignum_is_zero(b)
+fn bigmag_is_positive(b: BigMag) -> bool {
+    b.sign > 0 && !bigmag_is_zero(b)
 }
 
-fn bignum_negate(b: BigNum) -> BigNum {
-    if bignum_is_zero(b) {
+fn bigmag_negate(b: BigMag) -> BigMag {
+    if bigmag_is_zero(b) {
         b
     } else {
-        BigNum { limbs: b.limbs, sign: 0 - b.sign }
+        BigMag { limbs: b.limbs, sign: 0 - b.sign }
     }
 }
 
-fn bignum_abs(b: BigNum) -> BigNum {
-    BigNum { limbs: b.limbs, sign: 1 }
+fn bigmag_abs(b: BigMag) -> BigMag {
+    BigMag { limbs: b.limbs, sign: 1 }
 }
 
 // Returns -1, 0, or 1.
-fn bignum_cmp(a: BigNum, b: BigNum) -> i64 {
-    let az: bool = bignum_is_zero(a);
-    let bz: bool = bignum_is_zero(b);
+fn bigmag_cmp(a: BigMag, b: BigMag) -> i64 {
+    let az: bool = bigmag_is_zero(a);
+    let bz: bool = bigmag_is_zero(b);
     if az && bz {
         0
     } else {
@@ -199,16 +215,16 @@ fn bignum_cmp(a: BigNum, b: BigNum) -> i64 {
                 -1
             } else {
                 if a.sign > 0 {
-                    bignum_cmp_abs(a, b)
+                    bigmag_cmp_abs(a, b)
                 } else {
-                    bignum_cmp_abs(b, a)
+                    bigmag_cmp_abs(b, a)
                 }
             }
         }
     }
 }
 
-fn bignum_cmp_abs(a: BigNum, b: BigNum) -> i64 {
+fn bigmag_cmp_abs(a: BigMag, b: BigMag) -> i64 {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
     let alen: i64 = ad.len();
@@ -234,47 +250,47 @@ fn bignum_cmp_abs(a: BigNum, b: BigNum) -> i64 {
     }
 }
 
-fn bignum_eq(a: BigNum, b: BigNum) -> bool {
-    bignum_cmp(a, b) == 0
+fn bigmag_eq(a: BigMag, b: BigMag) -> bool {
+    bigmag_cmp(a, b) == 0
 }
 
-fn bignum_lt(a: BigNum, b: BigNum) -> bool {
-    bignum_cmp(a, b) < 0
+fn bigmag_lt(a: BigMag, b: BigMag) -> bool {
+    bigmag_cmp(a, b) < 0
 }
 
-fn bignum_gt(a: BigNum, b: BigNum) -> bool {
-    bignum_cmp(a, b) > 0
+fn bigmag_gt(a: BigMag, b: BigMag) -> bool {
+    bigmag_cmp(a, b) > 0
 }
 
-fn bignum_le(a: BigNum, b: BigNum) -> bool {
-    bignum_cmp(a, b) <= 0
+fn bigmag_le(a: BigMag, b: BigMag) -> bool {
+    bigmag_cmp(a, b) <= 0
 }
 
-fn bignum_ge(a: BigNum, b: BigNum) -> bool {
-    bignum_cmp(a, b) >= 0
+fn bigmag_ge(a: BigMag, b: BigMag) -> bool {
+    bigmag_cmp(a, b) >= 0
 }
 
-fn bignum_add(a: BigNum, b: BigNum) -> BigNum {
+fn bigmag_add(a: BigMag, b: BigMag) -> BigMag {
     if a.sign == b.sign {
-        let r: BigNum = bignum_add_abs(a, b);
-        BigNum { limbs: r.limbs, sign: a.sign }
+        let r: BigMag = bigmag_add_abs(a, b);
+        BigMag { limbs: r.limbs, sign: a.sign }
     } else {
-        let c: i64 = bignum_cmp_abs(a, b);
+        let c: i64 = bigmag_cmp_abs(a, b);
         if c == 0 {
-            bignum_zero()
+            bigmag_zero()
         } else {
             if c > 0 {
-                let r: BigNum = bignum_sub_abs(a, b);
-                BigNum { limbs: r.limbs, sign: a.sign }
+                let r: BigMag = bigmag_sub_abs(a, b);
+                BigMag { limbs: r.limbs, sign: a.sign }
             } else {
-                let r: BigNum = bignum_sub_abs(b, a);
-                BigNum { limbs: r.limbs, sign: b.sign }
+                let r: BigMag = bigmag_sub_abs(b, a);
+                BigMag { limbs: r.limbs, sign: b.sign }
             }
         }
     }
 }
 
-fn bignum_add_abs(a: BigNum, b: BigNum) -> BigNum {
+fn bigmag_add_abs(a: BigMag, b: BigMag) -> BigMag {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
     let alen: i64 = ad.len();
@@ -294,25 +310,25 @@ fn bignum_add_abs(a: BigNum, b: BigNum) -> BigNum {
     if carry > 0u64 {
         result.push(carry);
     }
-    BigNum { limbs: result, sign: 1 }
+    BigMag { limbs: result, sign: 1 }
 }
 
-fn bignum_sub(a: BigNum, b: BigNum) -> BigNum {
-    bignum_add(a, bignum_negate(b))
+fn bigmag_sub(a: BigMag, b: BigMag) -> BigMag {
+    bigmag_add(a, bigmag_negate(b))
 }
 
 // Truncated (Nat) subtraction: max(a - b, 0). This is the monus (a ∸ b) the
 // Lean kernel needs; on non-negative operands it saturates at zero.
-fn bignum_monus(a: BigNum, b: BigNum) -> BigNum {
-    if bignum_cmp(a, b) <= 0 {
-        bignum_zero()
+fn bigmag_monus(a: BigMag, b: BigMag) -> BigMag {
+    if bigmag_cmp(a, b) <= 0 {
+        bigmag_zero()
     } else {
-        bignum_sub(a, b)
+        bigmag_sub(a, b)
     }
 }
 
-fn bignum_sub_abs(a: BigNum, b: BigNum) -> BigNum vow {
-    requires: bignum_cmp_abs(a, b) >= 0
+fn bigmag_sub_abs(a: BigMag, b: BigMag) -> BigMag vow {
+    requires: bigmag_cmp_abs(a, b) >= 0
 } {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
@@ -334,12 +350,12 @@ fn bignum_sub_abs(a: BigNum, b: BigNum) -> BigNum vow {
         }
         i = i + 1;
     }
-    bignum_strip_zeros(BigNum { limbs: result, sign: 1 })
+    bigmag_strip_zeros(BigMag { limbs: result, sign: 1 })
 }
 
-fn bignum_mul(a: BigNum, b: BigNum) -> BigNum {
-    if bignum_is_zero(a) || bignum_is_zero(b) {
-        bignum_zero()
+fn bigmag_mul(a: BigMag, b: BigMag) -> BigMag {
+    if bigmag_is_zero(a) || bigmag_is_zero(b) {
+        bigmag_zero()
     } else {
         let ad: Vec<u64> = a.limbs;
         let bd: Vec<u64> = b.limbs;
@@ -375,14 +391,14 @@ fn bignum_mul(a: BigNum, b: BigNum) -> BigNum {
             i = i + 1;
         }
         let sign: i64 = a.sign * b.sign;
-        bignum_strip_zeros(BigNum { limbs: result, sign: sign })
+        bigmag_strip_zeros(BigMag { limbs: result, sign: sign })
     }
 }
 
 // Multiply magnitude by a single limb v in [0, 2^32); sign is preserved.
-fn bignum_mul_single(a: BigNum, v: u64) -> BigNum {
-    if v == 0u64 || bignum_is_zero(a) {
-        bignum_zero()
+fn bigmag_mul_single(a: BigMag, v: u64) -> BigMag {
+    if v == 0u64 || bigmag_is_zero(a) {
+        bigmag_zero()
     } else {
         let ad: Vec<u64> = a.limbs;
         let alen: i64 = ad.len();
@@ -398,12 +414,12 @@ fn bignum_mul_single(a: BigNum, v: u64) -> BigNum {
         if carry > 0u64 {
             result.push(carry);
         }
-        BigNum { limbs: result, sign: a.sign }
+        BigMag { limbs: result, sign: a.sign }
     }
 }
 
 // Add a single limb c in [0, 2^32) to a non-negative magnitude.
-fn bignum_add_small(a: BigNum, c: u64) -> BigNum {
+fn bigmag_add_small(a: BigMag, c: u64) -> BigMag {
     if c == 0u64 {
         a
     } else {
@@ -422,74 +438,74 @@ fn bignum_add_small(a: BigNum, c: u64) -> BigNum {
             result.push(carry & 4294967295u64);
             carry = carry >> 32;
         }
-        bignum_strip_zeros(BigNum { limbs: result, sign: 1 })
+        bigmag_strip_zeros(BigMag { limbs: result, sign: 1 })
     }
 }
 
-struct DivResult {
-    quotient: BigNum,
-    remainder: BigNum,
+struct BigMagDivResult {
+    quotient: BigMag,
+    remainder: BigMag,
 }
 
 struct SmallDivResult {
-    quotient: BigNum,
+    quotient: BigMag,
     remainder: u64,
 }
 
 // Integer division with remainder. Truncates toward zero.
-fn bignum_divmod(a: BigNum, b: BigNum) -> DivResult vow {
-    requires: !bignum_is_zero(b)
+fn bigmag_divmod(a: BigMag, b: BigMag) -> BigMagDivResult vow {
+    requires: !bigmag_is_zero(b)
 } {
-    if bignum_is_zero(a) {
-        DivResult { quotient: bignum_zero(), remainder: bignum_zero() }
+    if bigmag_is_zero(a) {
+        BigMagDivResult { quotient: bigmag_zero(), remainder: bigmag_zero() }
     } else {
-        let cmp: i64 = bignum_cmp_abs(a, b);
+        let cmp: i64 = bigmag_cmp_abs(a, b);
         if cmp < 0 {
-            DivResult { quotient: bignum_zero(), remainder: a }
+            BigMagDivResult { quotient: bigmag_zero(), remainder: a }
         } else {
             if cmp == 0 {
                 let sign: i64 = a.sign * b.sign;
-                DivResult { quotient: BigNum { limbs: bignum_one_limbs(), sign: sign }, remainder: bignum_zero() }
+                BigMagDivResult { quotient: BigMag { limbs: bigmag_one_limbs(), sign: sign }, remainder: bigmag_zero() }
             } else {
-                let dr: DivResult = bignum_divmod_abs(a, b);
+                let dr: BigMagDivResult = bigmag_divmod_abs(a, b);
                 let qsign: i64 = a.sign * b.sign;
-                let q: BigNum = dr.quotient;
-                let r: BigNum = dr.remainder;
-                DivResult {
-                    quotient: if bignum_is_zero(q) { bignum_zero() } else { BigNum { limbs: q.limbs, sign: qsign } },
-                    remainder: if bignum_is_zero(r) { bignum_zero() } else { BigNum { limbs: r.limbs, sign: a.sign } },
+                let q: BigMag = dr.quotient;
+                let r: BigMag = dr.remainder;
+                BigMagDivResult {
+                    quotient: if bigmag_is_zero(q) { bigmag_zero() } else { BigMag { limbs: q.limbs, sign: qsign } },
+                    remainder: if bigmag_is_zero(r) { bigmag_zero() } else { BigMag { limbs: r.limbs, sign: a.sign } },
                 }
             }
         }
     }
 }
 
-fn bignum_div(a: BigNum, b: BigNum) -> BigNum vow {
-    requires: !bignum_is_zero(b)
+fn bigmag_div(a: BigMag, b: BigMag) -> BigMag vow {
+    requires: !bigmag_is_zero(b)
 } {
-    let dr: DivResult = bignum_divmod(a, b);
+    let dr: BigMagDivResult = bigmag_divmod(a, b);
     dr.quotient
 }
 
-fn bignum_mod(a: BigNum, b: BigNum) -> BigNum vow {
-    requires: !bignum_is_zero(b)
+fn bigmag_mod(a: BigMag, b: BigMag) -> BigMag vow {
+    requires: !bigmag_is_zero(b)
 } {
-    let dr: DivResult = bignum_divmod(a, b);
+    let dr: BigMagDivResult = bigmag_divmod(a, b);
     dr.remainder
 }
 
-fn bignum_divmod_abs(a: BigNum, b: BigNum) -> DivResult {
+fn bigmag_divmod_abs(a: BigMag, b: BigMag) -> BigMagDivResult {
     let bd: Vec<u64> = b.limbs;
     let blen: i64 = bd.len();
     if blen == 1 {
-        bignum_divmod_single(a, bd[0])
+        bigmag_divmod_single(a, bd[0])
     } else {
-        bignum_divmod_long(a, b)
+        bigmag_divmod_long(a, b)
     }
 }
 
 // Divide a non-negative magnitude by a single limb d in [1, 2^32).
-fn bignum_divmod_small(a: BigNum, d: u64) -> SmallDivResult {
+fn bigmag_divmod_small(a: BigMag, d: u64) -> SmallDivResult {
     let ad: Vec<u64> = a.limbs;
     let alen: i64 = ad.len();
     let q: Vec<u64> = Vec::new();
@@ -508,18 +524,18 @@ fn bignum_divmod_small(a: BigNum, d: u64) -> SmallDivResult {
         i = i - 1;
     }
     SmallDivResult {
-        quotient: bignum_strip_zeros(BigNum { limbs: q, sign: 1 }),
+        quotient: bigmag_strip_zeros(BigMag { limbs: q, sign: 1 }),
         remainder: rem,
     }
 }
 
-fn bignum_divmod_single(a: BigNum, d: u64) -> DivResult {
-    let sr: SmallDivResult = bignum_divmod_small(a, d);
-    DivResult { quotient: sr.quotient, remainder: bignum_from_u64(sr.remainder) }
+fn bigmag_divmod_single(a: BigMag, d: u64) -> BigMagDivResult {
+    let sr: SmallDivResult = bigmag_divmod_small(a, d);
+    BigMagDivResult { quotient: sr.quotient, remainder: bigmag_from_u64(sr.remainder) }
 }
 
 // Long division for multi-limb divisor using binary search for each quotient limb.
-fn bignum_divmod_long(a: BigNum, b: BigNum) -> DivResult {
+fn bigmag_divmod_long(a: BigMag, b: BigMag) -> BigMagDivResult {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
     let alen: i64 = ad.len();
@@ -533,18 +549,18 @@ fn bignum_divmod_long(a: BigNum, b: BigNum) -> DivResult {
         k = k + 1;
     }
 
-    let mut remainder: BigNum = bignum_abs(a);
-    let divisor: BigNum = bignum_abs(b);
+    let mut remainder: BigMag = bigmag_abs(a);
+    let divisor: BigMag = bigmag_abs(b);
 
     let mut i: i64 = qlen - 1;
     while i >= 0 {
-        let shifted_divisor: BigNum = bignum_shift_limbs(divisor, i);
+        let shifted_divisor: BigMag = bigmag_shift_limbs(divisor, i);
         let mut lo: u64 = 0u64;
         let mut hi: u64 = 4294967295u64;
         while lo < hi {
             let mid: u64 = (lo + hi + 1u64) / 2u64;
-            let trial: BigNum = bignum_mul_single(shifted_divisor, mid);
-            if bignum_cmp_abs(trial, remainder) <= 0 {
+            let trial: BigMag = bigmag_mul_single(shifted_divisor, mid);
+            if bigmag_cmp_abs(trial, remainder) <= 0 {
                 lo = mid;
             } else {
                 hi = mid - 1u64;
@@ -552,62 +568,62 @@ fn bignum_divmod_long(a: BigNum, b: BigNum) -> DivResult {
         }
         q[i] = lo;
         if lo > 0u64 {
-            let sub_val: BigNum = bignum_mul_single(shifted_divisor, lo);
-            remainder = bignum_sub_abs(remainder, sub_val);
+            let sub_val: BigMag = bigmag_mul_single(shifted_divisor, lo);
+            remainder = bigmag_sub_abs(remainder, sub_val);
         }
         i = i - 1;
     }
-    DivResult {
-        quotient: bignum_strip_zeros(BigNum { limbs: q, sign: 1 }),
-        remainder: bignum_strip_zeros(remainder),
+    BigMagDivResult {
+        quotient: bigmag_strip_zeros(BigMag { limbs: q, sign: 1 }),
+        remainder: bigmag_strip_zeros(remainder),
     }
 }
 
-fn bignum_pow(base_val: BigNum, exp: i64) -> BigNum vow {
+fn bigmag_pow(base_val: BigMag, exp: i64) -> BigMag vow {
     requires: exp >= 0
 } {
     if exp == 0 {
-        bignum_from_i64(1)
+        bigmag_from_i64(1)
     } else {
-        let mut result: BigNum = bignum_from_i64(1);
-        let mut b: BigNum = base_val;
+        let mut result: BigMag = bigmag_from_i64(1);
+        let mut b: BigMag = base_val;
         let mut e: i64 = exp;
         while e > 0 {
             if e - (e / 2) * 2 == 1 {
-                result = bignum_mul(result, b);
+                result = bigmag_mul(result, b);
             }
-            b = bignum_mul(b, b);
+            b = bigmag_mul(b, b);
             e = e / 2;
         }
         result
     }
 }
 
-fn bignum_gcd(a: BigNum, b: BigNum) -> BigNum {
-    let mut x: BigNum = bignum_abs(a);
-    let mut y: BigNum = bignum_abs(b);
-    while !bignum_is_zero(y) {
-        let t: BigNum = bignum_mod(x, y);
+fn bigmag_gcd(a: BigMag, b: BigMag) -> BigMag {
+    let mut x: BigMag = bigmag_abs(a);
+    let mut y: BigMag = bigmag_abs(b);
+    while !bigmag_is_zero(y) {
+        let t: BigMag = bigmag_mod(x, y);
         x = y;
         y = t;
     }
     x
 }
 
-fn bignum_factorial(n: i64) -> BigNum vow {
+fn bigmag_factorial(n: i64) -> BigMag vow {
     requires: n >= 0
 } {
-    let mut result: BigNum = bignum_from_i64(1);
+    let mut result: BigMag = bigmag_from_i64(1);
     let mut i: i64 = 2;
     while i <= n {
-        result = bignum_mul(result, bignum_from_i64(i));
+        result = bigmag_mul(result, bigmag_from_i64(i));
         i = i + 1;
     }
     result
 }
 
 // Bitwise AND on the magnitudes (Nat semantics); result is non-negative.
-fn bignum_and(a: BigNum, b: BigNum) -> BigNum {
+fn bigmag_and(a: BigMag, b: BigMag) -> BigMag {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
     let alen: i64 = ad.len();
@@ -619,11 +635,11 @@ fn bignum_and(a: BigNum, b: BigNum) -> BigNum {
         result.push(ad[i] & bd[i]);
         i = i + 1;
     }
-    bignum_strip_zeros(BigNum { limbs: result, sign: 1 })
+    bigmag_strip_zeros(BigMag { limbs: result, sign: 1 })
 }
 
 // Bitwise OR on the magnitudes (Nat semantics); result is non-negative.
-fn bignum_or(a: BigNum, b: BigNum) -> BigNum {
+fn bigmag_or(a: BigMag, b: BigMag) -> BigMag {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
     let alen: i64 = ad.len();
@@ -637,11 +653,11 @@ fn bignum_or(a: BigNum, b: BigNum) -> BigNum {
         result.push(av | bv);
         i = i + 1;
     }
-    bignum_strip_zeros(BigNum { limbs: result, sign: 1 })
+    bigmag_strip_zeros(BigMag { limbs: result, sign: 1 })
 }
 
 // Bitwise XOR on the magnitudes (Nat semantics); result is non-negative.
-fn bignum_xor(a: BigNum, b: BigNum) -> BigNum {
+fn bigmag_xor(a: BigMag, b: BigMag) -> BigMag {
     let ad: Vec<u64> = a.limbs;
     let bd: Vec<u64> = b.limbs;
     let alen: i64 = ad.len();
@@ -655,14 +671,14 @@ fn bignum_xor(a: BigNum, b: BigNum) -> BigNum {
         result.push(av ^ bv);
         i = i + 1;
     }
-    bignum_strip_zeros(BigNum { limbs: result, sign: 1 })
+    bigmag_strip_zeros(BigMag { limbs: result, sign: 1 })
 }
 
 // Shift the magnitude left by n bits (= multiply by 2^n); sign is preserved.
-fn bignum_shl(a: BigNum, n: i64) -> BigNum vow {
+fn bigmag_shl(a: BigMag, n: i64) -> BigMag vow {
     requires: n >= 0
 } {
-    if n == 0 || bignum_is_zero(a) {
+    if n == 0 || bigmag_is_zero(a) {
         a
     } else {
         let limb_shift: i64 = n / 32;
@@ -682,7 +698,7 @@ fn bignum_shl(a: BigNum, n: i64) -> BigNum vow {
                 i = i + 1;
             }
         } else {
-            let pow2: u64 = bignum_pow2(bit_shift);
+            let pow2: u64 = bigmag_pow2(bit_shift);
             let mut carry: u64 = 0u64;
             let mut i: i64 = 0;
             while i < alen {
@@ -695,16 +711,16 @@ fn bignum_shl(a: BigNum, n: i64) -> BigNum vow {
                 result.push(carry);
             }
         }
-        bignum_strip_zeros(BigNum { limbs: result, sign: a.sign })
+        bigmag_strip_zeros(BigMag { limbs: result, sign: a.sign })
     }
 }
 
 // Shift the magnitude right by n bits (= floor-divide magnitude by 2^n);
 // sign is preserved (truncation toward zero for negative operands).
-fn bignum_shr(a: BigNum, n: i64) -> BigNum vow {
+fn bigmag_shr(a: BigMag, n: i64) -> BigMag vow {
     requires: n >= 0
 } {
-    if n == 0 || bignum_is_zero(a) {
+    if n == 0 || bigmag_is_zero(a) {
         a
     } else {
         let limb_shift: i64 = n / 32;
@@ -712,7 +728,7 @@ fn bignum_shr(a: BigNum, n: i64) -> BigNum vow {
         let ad: Vec<u64> = a.limbs;
         let alen: i64 = ad.len();
         if limb_shift >= alen {
-            bignum_zero()
+            bigmag_zero()
         } else {
             let result: Vec<u64> = Vec::new();
             if bit_shift == 0 {
@@ -722,8 +738,8 @@ fn bignum_shr(a: BigNum, n: i64) -> BigNum vow {
                     i = i + 1;
                 }
             } else {
-                let pow2: u64 = bignum_pow2(bit_shift);
-                let inv: u64 = bignum_pow2(32 - bit_shift);
+                let pow2: u64 = bigmag_pow2(bit_shift);
+                let inv: u64 = bigmag_pow2(32 - bit_shift);
                 let mut i: i64 = limb_shift;
                 while i < alen {
                     let low: u64 = ad[i] / pow2;
@@ -732,13 +748,13 @@ fn bignum_shr(a: BigNum, n: i64) -> BigNum vow {
                     i = i + 1;
                 }
             }
-            bignum_strip_zeros(BigNum { limbs: result, sign: a.sign })
+            bigmag_strip_zeros(BigMag { limbs: result, sign: a.sign })
         }
     }
 }
 
 // 2^k for k in [0, 32], computed without a dynamic shift count.
-fn bignum_pow2(k: i64) -> u64 {
+fn bigmag_pow2(k: i64) -> u64 {
     let mut r: u64 = 1u64;
     let mut i: i64 = 0;
     while i < k {
@@ -748,14 +764,14 @@ fn bignum_pow2(k: i64) -> u64 {
     r
 }
 
-fn bignum_one_limbs() -> Vec<u64> {
+fn bigmag_one_limbs() -> Vec<u64> {
     let d: Vec<u64> = Vec::new();
     d.push(1u64);
     d
 }
 
 // Remove leading zero limbs, preserving at least one limb.
-fn bignum_strip_zeros(b: BigNum) -> BigNum {
+fn bigmag_strip_zeros(b: BigMag) -> BigMag {
     let d: Vec<u64> = b.limbs;
     let mut dlen: i64 = d.len();
     while dlen > 1 && d[dlen - 1] == 0u64 {
@@ -763,15 +779,15 @@ fn bignum_strip_zeros(b: BigNum) -> BigNum {
         dlen = dlen - 1;
     }
     let s: i64 = if dlen == 1 && d[0] == 0u64 { 1 } else { b.sign };
-    BigNum { limbs: d, sign: s }
+    BigMag { limbs: d, sign: s }
 }
 
 // Shift left by n whole limbs (multiply by 2^(32n)).
-fn bignum_shift_limbs(b: BigNum, n: i64) -> BigNum {
+fn bigmag_shift_limbs(b: BigMag, n: i64) -> BigMag {
     if n == 0 {
         b
     } else {
-        if bignum_is_zero(b) {
+        if bigmag_is_zero(b) {
             b
         } else {
             let d: Vec<u64> = Vec::new();
@@ -787,7 +803,7 @@ fn bignum_shift_limbs(b: BigNum, n: i64) -> BigNum {
                 d.push(bd[j]);
                 j = j + 1;
             }
-            BigNum { limbs: d, sign: b.sign }
+            BigMag { limbs: d, sign: b.sign }
         }
     }
 }
@@ -830,4 +846,389 @@ fn u64_to_decimal_padded(v: u64, w: i64) -> String {
         s.push_str(raw);
         s
     }
+}
+
+// =====================================================================
+// Small-int fast path: bridges + public BigNum API (wrappers over bigmag_*).
+// =====================================================================
+
+fn bignum_is_small(x: BigNum) -> bool {
+    match x {
+        BigNum::Small(_) => true,
+        BigNum::Big(_) => false,
+    }
+}
+
+fn bignum_small_val(x: BigNum) -> i64 {
+    match x {
+        BigNum::Small(v) => v,
+        BigNum::Big(_) => 0,
+    }
+}
+
+// Magnitude of a small value as u64 (handles i64::MIN without overflow).
+fn bignum_small_mag(v: i64) -> u64 {
+    if v < 0 {
+        0u64 - (v as u64)
+    } else {
+        v as u64
+    }
+}
+
+// The ONLY site that destructures Big: the struct payload is re-bound through an
+// annotated `let` (a bare `m.limbs` on a match-bound non-scalar payload reads 0).
+fn bignum_to_bigmag(x: BigNum) -> BigMag {
+    match x {
+        BigNum::Small(v) => bigmag_from_i64(v),
+        BigNum::Big(m) => {
+            let mag: BigMag = m;
+            mag
+        },
+    }
+}
+
+// Canonicalization chokepoint: demote a magnitude to Small when it fits i64, else
+// keep it Big. Establishes the invariant: fits i64 <=> Small.
+fn bignum_normalize(m: BigMag) -> BigNum {
+    let s: BigMag = bigmag_strip_zeros(m);
+    let d: Vec<u64> = s.limbs;
+    let n: i64 = d.len();
+    if n > 2 {
+        BigNum::Big(s)
+    } else {
+        if n == 2 && d[1] >= 2147483648u64 {
+            // magnitude >= 2^63: only i64::MIN (exactly 2^63, negative) fits Small.
+            if d[1] == 2147483648u64 && d[0] == 0u64 && s.sign < 0 {
+                let mu: u64 = d[0] | (d[1] << 32);
+                BigNum::Small(mu as i64)
+            } else {
+                BigNum::Big(s)
+            }
+        } else {
+            let mu: u64 = if n == 1 { d[0] } else { d[0] | (d[1] << 32) };
+            if s.sign < 0 {
+                BigNum::Small(0 - (mu as i64))
+            } else {
+                BigNum::Small(mu as i64)
+            }
+        }
+    }
+}
+
+// Format a small signed i64. i64::MIN's magnitude is 2^63 (bit 63 set), which
+// u64_to_decimal cannot format (its loop-carried `mut u64` compares as signed);
+// route that one value through the limb formatter, whose 10^9 chunks stay < 2^63.
+fn bignum_small_to_string(v: i64) -> String {
+    let i64min: i64 = 9223372036854775808u64 as i64;
+    if v == i64min {
+        bigmag_to_string(bigmag_from_i64(v))
+    } else {
+        if v == 0 {
+            String::from("0")
+        } else {
+            if v < 0 {
+                let s: String = String::new();
+                s.push_byte(45);
+                s.push_str(u64_to_decimal(0u64 - (v as u64)));
+                s
+            } else {
+                u64_to_decimal(v as u64)
+            }
+        }
+    }
+}
+
+// Conservative fast-path bounds (avoid exact overflow math / i128).
+// add/sub: |v| <= 2^62-1 so |a +- b| <= 2^63-2 < i64::MAX.
+fn bignum_fits_addsub(v: i64) -> bool {
+    v <= 4611686018427387903 && v >= 0 - 4611686018427387903
+}
+
+// mul: |v| <= 2^31 so |a*b| <= 2^62 < i64::MAX.
+fn bignum_fits_mul(v: i64) -> bool {
+    v <= 2147483648 && v >= 0 - 2147483648
+}
+
+// ---- Construct ----
+
+fn bignum_zero() -> BigNum {
+    BigNum::Small(0)
+}
+
+fn bignum_from_i64(val: i64) -> BigNum {
+    BigNum::Small(val)
+}
+
+fn bignum_from_u64(val: u64) -> BigNum {
+    if val <= 9223372036854775807u64 {
+        BigNum::Small(val as i64)
+    } else {
+        bignum_normalize(bigmag_from_u64(val))
+    }
+}
+
+fn bignum_from_string(s: String) -> BigNum {
+    bignum_normalize(bigmag_from_string(s))
+}
+
+// ---- Convert ----
+
+fn bignum_to_string(x: BigNum) -> String {
+    if bignum_is_small(x) {
+        bignum_small_to_string(bignum_small_val(x))
+    } else {
+        let m: BigMag = bignum_to_bigmag(x);
+        bigmag_to_string(m)
+    }
+}
+
+fn bignum_to_u64(x: BigNum) -> Option<u64> {
+    if bignum_is_small(x) {
+        let v: i64 = bignum_small_val(x);
+        if v >= 0 {
+            Option::Some(v as u64)
+        } else {
+            Option::None
+        }
+    } else {
+        let m: BigMag = bignum_to_bigmag(x);
+        bigmag_to_u64(m)
+    }
+}
+
+// ---- Predicates ----
+
+fn bignum_is_zero(x: BigNum) -> bool {
+    if bignum_is_small(x) {
+        bignum_small_val(x) == 0
+    } else {
+        false
+    }
+}
+
+fn bignum_is_negative(x: BigNum) -> bool {
+    if bignum_is_small(x) {
+        bignum_small_val(x) < 0
+    } else {
+        let m: BigMag = bignum_to_bigmag(x);
+        bigmag_is_negative(m)
+    }
+}
+
+fn bignum_is_positive(x: BigNum) -> bool {
+    if bignum_is_small(x) {
+        bignum_small_val(x) > 0
+    } else {
+        let m: BigMag = bignum_to_bigmag(x);
+        bigmag_is_positive(m)
+    }
+}
+
+// ---- Compare ----
+
+fn bignum_cmp(a: BigNum, b: BigNum) -> i64 {
+    if bignum_is_small(a) && bignum_is_small(b) {
+        let av: i64 = bignum_small_val(a);
+        let bv: i64 = bignum_small_val(b);
+        if av < bv {
+            -1
+        } else {
+            if av > bv { 1 } else { 0 }
+        }
+    } else {
+        bigmag_cmp(bignum_to_bigmag(a), bignum_to_bigmag(b))
+    }
+}
+
+fn bignum_cmp_abs(a: BigNum, b: BigNum) -> i64 {
+    if bignum_is_small(a) && bignum_is_small(b) {
+        let am: u64 = bignum_small_mag(bignum_small_val(a));
+        let bm: u64 = bignum_small_mag(bignum_small_val(b));
+        if am < bm {
+            -1
+        } else {
+            if am > bm { 1 } else { 0 }
+        }
+    } else {
+        bigmag_cmp_abs(bignum_to_bigmag(a), bignum_to_bigmag(b))
+    }
+}
+
+fn bignum_eq(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) == 0
+}
+
+fn bignum_lt(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) < 0
+}
+
+fn bignum_gt(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) > 0
+}
+
+fn bignum_le(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) <= 0
+}
+
+fn bignum_ge(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) >= 0
+}
+
+// ---- Arithmetic ----
+
+fn bignum_negate(x: BigNum) -> BigNum {
+    if bignum_is_small(x) {
+        let v: i64 = bignum_small_val(x);
+        let i64min: i64 = 9223372036854775808u64 as i64;
+        if v == i64min {
+            bignum_normalize(bigmag_negate(bignum_to_bigmag(x)))
+        } else {
+            BigNum::Small(0 - v)
+        }
+    } else {
+        bignum_normalize(bigmag_negate(bignum_to_bigmag(x)))
+    }
+}
+
+fn bignum_abs(x: BigNum) -> BigNum {
+    if bignum_is_small(x) {
+        let v: i64 = bignum_small_val(x);
+        let i64min: i64 = 9223372036854775808u64 as i64;
+        if v == i64min {
+            bignum_normalize(bigmag_abs(bignum_to_bigmag(x)))
+        } else {
+            if v < 0 {
+                BigNum::Small(0 - v)
+            } else {
+                BigNum::Small(v)
+            }
+        }
+    } else {
+        bignum_normalize(bigmag_abs(bignum_to_bigmag(x)))
+    }
+}
+
+fn bignum_add(a: BigNum, b: BigNum) -> BigNum {
+    if bignum_is_small(a) && bignum_is_small(b) {
+        let av: i64 = bignum_small_val(a);
+        let bv: i64 = bignum_small_val(b);
+        if bignum_fits_addsub(av) && bignum_fits_addsub(bv) {
+            BigNum::Small(av + bv)
+        } else {
+            bignum_normalize(bigmag_add(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+        }
+    } else {
+        bignum_normalize(bigmag_add(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+    }
+}
+
+fn bignum_sub(a: BigNum, b: BigNum) -> BigNum {
+    if bignum_is_small(a) && bignum_is_small(b) {
+        let av: i64 = bignum_small_val(a);
+        let bv: i64 = bignum_small_val(b);
+        if bignum_fits_addsub(av) && bignum_fits_addsub(bv) {
+            BigNum::Small(av - bv)
+        } else {
+            bignum_normalize(bigmag_sub(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+        }
+    } else {
+        bignum_normalize(bigmag_sub(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+    }
+}
+
+fn bignum_monus(a: BigNum, b: BigNum) -> BigNum {
+    if bignum_is_small(a) && bignum_is_small(b) {
+        let av: i64 = bignum_small_val(a);
+        let bv: i64 = bignum_small_val(b);
+        if bignum_fits_addsub(av) && bignum_fits_addsub(bv) {
+            let r: i64 = av - bv;
+            if r < 0 {
+                BigNum::Small(0)
+            } else {
+                BigNum::Small(r)
+            }
+        } else {
+            bignum_normalize(bigmag_monus(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+        }
+    } else {
+        bignum_normalize(bigmag_monus(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+    }
+}
+
+fn bignum_mul(a: BigNum, b: BigNum) -> BigNum {
+    if bignum_is_small(a) && bignum_is_small(b) {
+        let av: i64 = bignum_small_val(a);
+        let bv: i64 = bignum_small_val(b);
+        if bignum_fits_mul(av) && bignum_fits_mul(bv) {
+            BigNum::Small(av * bv)
+        } else {
+            bignum_normalize(bigmag_mul(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+        }
+    } else {
+        bignum_normalize(bigmag_mul(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+    }
+}
+
+fn bignum_div(a: BigNum, b: BigNum) -> BigNum vow {
+    requires: !bignum_is_zero(b)
+} {
+    bignum_normalize(bigmag_div(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+}
+
+fn bignum_mod(a: BigNum, b: BigNum) -> BigNum vow {
+    requires: !bignum_is_zero(b)
+} {
+    bignum_normalize(bigmag_mod(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+}
+
+fn bignum_divmod(a: BigNum, b: BigNum) -> DivResult vow {
+    requires: !bignum_is_zero(b)
+} {
+    let r: BigMagDivResult = bigmag_divmod(bignum_to_bigmag(a), bignum_to_bigmag(b));
+    DivResult {
+        quotient: bignum_normalize(r.quotient),
+        remainder: bignum_normalize(r.remainder),
+    }
+}
+
+fn bignum_pow(base_val: BigNum, exp: i64) -> BigNum vow {
+    requires: exp >= 0
+} {
+    bignum_normalize(bigmag_pow(bignum_to_bigmag(base_val), exp))
+}
+
+fn bignum_gcd(a: BigNum, b: BigNum) -> BigNum {
+    bignum_normalize(bigmag_gcd(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+}
+
+fn bignum_factorial(n: i64) -> BigNum vow {
+    requires: n >= 0
+} {
+    bignum_normalize(bigmag_factorial(n))
+}
+
+// ---- Bitwise (on magnitude) ----
+
+fn bignum_and(a: BigNum, b: BigNum) -> BigNum {
+    bignum_normalize(bigmag_and(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+}
+
+fn bignum_or(a: BigNum, b: BigNum) -> BigNum {
+    bignum_normalize(bigmag_or(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+}
+
+fn bignum_xor(a: BigNum, b: BigNum) -> BigNum {
+    bignum_normalize(bigmag_xor(bignum_to_bigmag(a), bignum_to_bigmag(b)))
+}
+
+fn bignum_shl(a: BigNum, n: i64) -> BigNum vow {
+    requires: n >= 0
+} {
+    bignum_normalize(bigmag_shl(bignum_to_bigmag(a), n))
+}
+
+fn bignum_shr(a: BigNum, n: i64) -> BigNum vow {
+    requires: n >= 0
+} {
+    bignum_normalize(bigmag_shr(bignum_to_bigmag(a), n))
 }

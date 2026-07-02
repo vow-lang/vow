@@ -1,13 +1,20 @@
 # stdlib/bignum
 
-Arbitrary-precision **signed** integers in base 2³² sign-magnitude form
-(`struct BigNum { limbs: Vec<u64>, sign: i64 }`). Pure core language — no builtins
-beyond `Vec`/`String`/`u64`/`i64`. Single file: copy `bignum.vow`.
+Arbitrary-precision **signed** integers with a small-int fast path
+(`enum BigNum { Small(i64), Big(BigMag) }`). `Small(v)` holds any value fitting in
+`i64` with **no heap allocation**; `Big(m)` holds a `BigMag` magnitude (base 2³²
+limbs, `Vec<u64>`, sign-magnitude) for `|value| > i64::MAX`. Pure core language — no
+builtins beyond `Vec`/`String`/`u64`/`i64`. Single file: copy `bignum.vow`.
 
 A non-negative `BigNum` is the natural number (`Nat`) an arbitrary-precision `Nat`
 consumer needs. The binary limb base makes `and`/`or`/`xor`/`shl`/`shr` trivial
 limb-wise operations — the reason this module can back a proof kernel's `Nat` /
-`BitVec` reductions past the 2⁶⁴ ceiling (see issue #838).
+`BitVec` reductions past the 2⁶⁴ ceiling (see issue #838). The fast path measured
+~3–5× faster and ~40× less peak memory on small-op-heavy loops.
+
+**Invariant:** a value fits `i64` ⟺ it is `Small`. Every op returns through
+`bignum_normalize` (demotes `Big`→`Small` when it fits), so `cmp`/`eq`/`to_string`
+never see two encodings of one value.
 
 Public API (selected):
 - Construct: `bignum_zero`, `bignum_from_i64`, `bignum_from_u64`, `bignum_from_string`
@@ -28,9 +35,12 @@ ulimit -v 2000000; build/vowc build --no-verify stdlib/bignum/main.vow -o /tmp/b
 
 ## Gotchas
 
-- The representation invariant (non-empty `limbs`, no leading-zero limbs except the
-  canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`, every limb `< 2³²`) is
+- The `BigMag` magnitude invariant (non-empty `limbs`, no leading-zero limbs except
+  the canonical zero `[0]` with `sign == 1`, `sign ∈ {-1, 1}`, every limb `< 2³²`) is
   maintained internally but **not** stated as a struct invariant or `ensures`.
+- The `Small`/`Small` fast path uses conservative bounds (`2⁶²−1` for add/sub/monus,
+  `2³¹` for mul) so it never overflows `i64`; out-of-bound operands fall to the limb
+  path. Results are identical to the all-`Big` representation.
 - Division truncates toward zero; the remainder's sign matches the dividend.
 - `bignum_monus` is truncated (Nat) subtraction — `max(a − b, 0)`, saturating at 0.
 - Bitwise `and`/`or`/`xor` operate on the **magnitude** (Nat semantics) and return a
@@ -41,9 +51,10 @@ ulimit -v 2000000; build/vowc build --no-verify stdlib/bignum/main.vow -o /tmp/b
 - `bignum_pow` / `bignum_factorial` take a native `i64` exponent/argument, not a BigNum.
 - `bignum_gcd` works on absolute values; the result is non-negative.
 - Multiplication is O(n·m) schoolbook (no Karatsuba).
-- Functions prefixed for internal use (`bignum_strip_zeros`, `bignum_shift_limbs`,
-  `bignum_mul_single`, `bignum_add_small`, `bignum_divmod_small`, `bignum_pow2`,
-  `u64_to_decimal*`, `bignum_divmod_long`, …) are not part of the public API.
+- The limb algorithms are internal `bigmag_*` functions over the `BigMag` magnitude
+  (`bigmag_add`, `bigmag_mul`, `bigmag_divmod`, `bigmag_strip_zeros`, …); the public
+  `bignum_*` API wraps them with the fast path + `bignum_normalize`. Those, plus
+  `bignum_to_bigmag` / `bignum_normalize` / `u64_to_decimal*`, are not public API.
 
 ## Verification
 

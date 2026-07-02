@@ -73,6 +73,7 @@ fn main() -> i32 [io] {
     test_bitwise();
     test_shifts();
     test_kernel_repro();
+    test_smallint_boundary();
     0
 }
 
@@ -327,4 +328,51 @@ fn test_kernel_repro() [io] {
     assert_eq_str(String::from("2^64 not u64"), to_u64_str(two64), String::from("NONE"));
     assert_true(String::from("2^64 via shl==pow"), bignum_eq(bignum_shl(bignum_from_i64(1), 64), two64));
     assert_eq_str(String::from("2^64 / 256"), bn_str(bignum_div(two64, bignum_from_i64(256))), String::from("72057594037927936"));
+}
+
+fn test_smallint_boundary() [io] {
+    // Demotion: a Big op that shrinks into i64 range must become the canonical Small.
+    let two64: BigNum = bignum_from_string(String::from("18446744073709551616"));
+    let two64m5: BigNum = bignum_from_string(String::from("18446744073709551611"));
+    let diff: BigNum = bignum_sub(two64, two64m5);
+    assert_eq_str(String::from("2^64-(2^64-5)"), bn_str(diff), String::from("5"));
+    assert_eq_str(String::from("2^64-(2^64-5) u64"), to_u64_str(diff), String::from("5"));
+    assert_true(String::from("demoted==Small(5)"), bignum_eq(diff, bignum_from_i64(5)));
+
+    // Big / Big -> Small: 25!/24! == 25.
+    let f25: BigNum = bignum_factorial(25);
+    let f24: BigNum = bignum_factorial(24);
+    assert_eq_str(String::from("25!/24!"), bn_str(bignum_div(f25, f24)), String::from("25"));
+
+    // Promotion at the add fast-path bound: 2^62 + 2^62 = 2^63 (leaves i64 range).
+    let two62: BigNum = bignum_from_i64(4611686018427387904);
+    assert_eq_str(String::from("2^62+2^62"), bn_str(bignum_add(two62, two62)), String::from("9223372036854775808"));
+
+    // Mul fast-path bound (inclusive): 2^31 * 2^31 = 2^62 (stays Small).
+    let two31: BigNum = bignum_from_i64(2147483648);
+    assert_eq_str(String::from("2^31*2^31"), bn_str(bignum_mul(two31, two31)), String::from("4611686018427387904"));
+    // Just past the bound uses the slow path: (2^31+1)^2.
+    let two31p1: BigNum = bignum_from_i64(2147483649);
+    assert_eq_str(String::from("(2^31+1)^2"), bn_str(bignum_mul(two31p1, two31p1)), String::from("4611686022722355201"));
+
+    // Cross-representation equality: same value via a Big path vs a Small literal.
+    let big_path: BigNum = bignum_sub(
+        bignum_from_string(String::from("1000000000000000000000000000042")),
+        bignum_from_string(String::from("1000000000000000000000000000000"))
+    );
+    assert_eq_str(String::from("big-path str"), bn_str(big_path), String::from("42"));
+    assert_true(String::from("big-path==Small(42)"), bignum_eq(bignum_from_i64(42), big_path));
+
+    // i64::MIN handling (magnitude 2^63 does not fit Small -> promotes).
+    let i64min: i64 = 9223372036854775808u64 as i64;
+    let bmin: BigNum = bignum_from_i64(i64min);
+    assert_eq_str(String::from("from_i64(i64::MIN)"), bn_str(bmin), String::from("-9223372036854775808"));
+    assert_eq_str(String::from("negate(i64::MIN)"), bn_str(bignum_negate(bmin)), String::from("9223372036854775808"));
+    assert_eq_str(String::from("abs(i64::MIN)"), bn_str(bignum_abs(bmin)), String::from("9223372036854775808"));
+    assert_eq_str(String::from("-1*i64::MIN"), bn_str(bignum_mul(bignum_from_i64(-1), bmin)), String::from("9223372036854775808"));
+
+    // from_u64(u64::MAX) stays Big; round-trips.
+    let umax: BigNum = bignum_from_u64(18446744073709551615u64);
+    assert_eq_str(String::from("from_u64(u64::MAX)"), bn_str(umax), String::from("18446744073709551615"));
+    assert_eq_str(String::from("to_u64(u64::MAX)"), to_u64_str(umax), String::from("18446744073709551615"));
 }

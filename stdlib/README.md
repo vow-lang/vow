@@ -19,7 +19,7 @@ the human-facing map.
 | [heap](heap/README.md) | `min_heap`, `max_heap` | Binary heaps over `i64` (size-shadow invariant) | Partial / blocked |
 | [stack](stack/README.md) | `stack` (+ vestigial `node`) | Vec-backed LIFO stack over `i64` | Skipped (documentary) |
 | [geometry](geometry/README.md) | `point`, `shape` | 2D points; circle/rectangle area & perimeter | **Verified** |
-| [bignum](bignum/README.md) | `bignum` | Arbitrary-precision signed integers (base 2³², bitwise + u64 interop) | Skipped (documentary) |
+| [bignum](bignum/README.md) | `bignum` | Arbitrary-precision signed integers (small-int fast path; base 2³², bitwise + u64 interop) | Skipped (documentary) |
 | [gc](gc/README.md) | `gc` | Mark-and-sweep GC over `i64` slots | VerifyFailed (#764) |
 
 Only `geometry` currently passes `vow verify` — and that proves the *vowed* checks
