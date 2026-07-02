@@ -1,0 +1,13 @@
+// TEST: stderr "return type mismatch"
+// TEST: error-code TypeMismatch
+// A genuine i64 value in an explicit `return` must not coerce to the declared
+// u64 return type.
+module U64I64Return
+
+fn count(v: Vec<u64>) -> u64 {
+  return v.len();
+}
+
+fn main() -> i32 {
+  0
+}
