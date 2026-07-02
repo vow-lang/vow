@@ -1,4 +1,11 @@
 // TEST: stdout "PASS zero\nPASS from_i64(0)\nPASS from_i64(1)\nPASS from_i64(-1)\nPASS from_i64(42)\nPASS from_i64(-999)\nPASS from_i64(1000000000)\nPASS from_i64(1234567890)\nPASS from_i64(9999999999)\nPASS from_string(42)\nPASS from_string(-123)\nPASS from_string(0)\nPASS from_string(00042)\nPASS from_string(large)\nPASS 100 == 100\nPASS 100 < 200\nPASS 200 > 100\nPASS 100 <= 100\nPASS 100 >= 100\nPASS -50 < 100\nPASS 100 > -50\nPASS cmp(100,200)\nPASS cmp(200,100)\nPASS cmp(100,100)\nPASS is_zero(0)\nPASS !is_zero(1)\nPASS is_negative(-50)\nPASS is_positive(100)\nPASS 0+0\nPASS 1+2\nPASS 100+200\nPASS -5+5\nPASS -3+-7\nPASS 10+-3\nPASS 999999999+1\nPASS 18-digit carry\nPASS 5-3\nPASS 3-5\nPASS 0-0\nPASS 100-100\nPASS -3-(-7)\nPASS 1000000000-1\nPASS 0*5\nPASS 1*1\nPASS 6*7\nPASS (-3)*4\nPASS (-3)*(-4)\nPASS 1000000000*1000000000\nPASS 123456789*987654321\nPASS 10/3\nPASS 10%3\nPASS 42/6\nPASS 42%6\nPASS 0/5\nPASS (-10)/3\nPASS (-10)%3\nPASS 7/1\nPASS 10^18/10^9\nPASS large/medium q\nPASS large/medium r\nPASS 2^0\nPASS 2^1\nPASS 2^10\nPASS 2^32\nPASS 10^18\nPASS (-2)^3\nPASS (-2)^4\nPASS gcd(12,8)\nPASS gcd(100,75)\nPASS gcd(17,13)\nPASS gcd(0,5)\nPASS gcd(-12,8)\nPASS 0!\nPASS 1!\nPASS 5!\nPASS 10!\nPASS 20!\nPASS 25!\nPASS 2^64\nPASS 2^128\nPASS 29-digit + 1\nPASS 20-digit * 20-digit\nPASS (a*b)/a == b"
+// Standalone multi-module fixture — NOT stdlib/bignum.
+//
+// A deliberately-frozen, self-contained base-10^9 bignum program. Its
+// `use bignum` below resolves to the SIBLING bignum.vow in this directory, not
+// to stdlib/bignum (the canonical base-2^32 implementation). Its only role is
+// Section 6b coverage: multi-module `use`-loading plus Rust/self-hosted output
+// parity over a large program. Do NOT resync it to stdlib/bignum — issue #841.
 module Main
 use bignum
 

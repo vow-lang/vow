@@ -1,3 +1,9 @@
+// Frozen base-10^9 bignum — test fixture only, NOT stdlib/bignum.
+//
+// A self-contained copy of the OLD base-10^9 stdlib bignum, kept solely so
+// tests/multi/bignum_legacy exercises multi-module `use`-loading and Rust/
+// self-hosted parity over a substantial program. The canonical bignum is
+// stdlib/bignum (base-2^32). Do NOT resync this file to it — issue #841.
 module Bignum
 
 // Arbitrary-precision integer arithmetic.
