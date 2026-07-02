@@ -16,10 +16,10 @@ For project design details, see [docs/vow_design.md](docs/vow_design.md).
 cargo build --all --release
 scripts/bootstrap.sh --skip-cargo
 
-# Install the self-hosted toolchain to a user prefix
+# Install the self-hosted toolchain to a user prefix (add --with-rust-compiler to also install vowr)
 scripts/install-toolchain.sh --prefix "$HOME/.local"
 export PATH="$HOME/.local/bin:$PATH"
-vowc build --no-verify examples/hello.vow -o /tmp/vow_hello
+vow build --no-verify examples/hello.vow -o /tmp/vow_hello
 
 # Day-to-day usage
 build/vowc build examples/divide.vow              # compile + verify
