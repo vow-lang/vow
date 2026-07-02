@@ -2158,7 +2158,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             let scope_snap = ctx.snapshot_scope();
 
-            // Per-arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
+            // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
             let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
 
             let mut arm_iter = arms.iter().peekable();
@@ -2217,30 +2217,33 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             }
                         }
                         let arm_result = lower_expr(ctx, &arm.body);
-                        let arm_ty = ctx.inst_ty(arm_result);
+                        let arm_reaches_merge = !ctx.is_terminated();
                         ctx.pop_scope();
 
-                        let arm_mut_vals: Vec<InstId> = mutations
-                            .iter()
-                            .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
-                            .collect();
+                        if arm_reaches_merge {
+                            let arm_ty = ctx.inst_ty(arm_result);
+                            let arm_mut_vals: Vec<InstId> = mutations
+                                .iter()
+                                .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
+                                .collect();
 
-                        let up_id = ctx.emit(
-                            Opcode::Upsilon,
-                            Ty::Unit,
-                            vec![arm_result],
-                            InstData::PhiTarget(InstId(u32::MAX)),
-                            span,
-                        );
-                        ctx.emit(
-                            Opcode::Jump,
-                            Ty::Unit,
-                            vec![],
-                            InstData::JumpTarget(merge_block),
-                            span,
-                        );
-                        let exit_block = ctx.current_block;
-                        arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+                            let up_id = ctx.emit(
+                                Opcode::Upsilon,
+                                Ty::Unit,
+                                vec![arm_result],
+                                InstData::PhiTarget(InstId(u32::MAX)),
+                                span,
+                            );
+                            ctx.emit(
+                                Opcode::Jump,
+                                Ty::Unit,
+                                vec![],
+                                InstData::JumpTarget(merge_block),
+                                span,
+                            );
+                            let exit_block = ctx.current_block;
+                            arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+                        }
 
                         ctx.restore_scope(scope_snap.clone());
 
@@ -2249,7 +2252,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         }
                     }
                     PatKind::Wildcard | PatKind::Ident { .. } => {
-                        let arm_block = ctx.current_block;
                         if let PatKind::Ident { name, .. } = &arm.pattern.kind {
                             ctx.push_scope();
                             ctx.define(name.clone(), ptr_id);
@@ -2257,29 +2259,33 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             ctx.push_scope();
                         }
                         let arm_result = lower_expr(ctx, &arm.body);
-                        let arm_ty = ctx.inst_ty(arm_result);
+                        let arm_reaches_merge = !ctx.is_terminated();
                         ctx.pop_scope();
 
-                        let arm_mut_vals: Vec<InstId> = mutations
-                            .iter()
-                            .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
-                            .collect();
+                        if arm_reaches_merge {
+                            let arm_ty = ctx.inst_ty(arm_result);
+                            let arm_mut_vals: Vec<InstId> = mutations
+                                .iter()
+                                .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
+                                .collect();
 
-                        let up_id = ctx.emit(
-                            Opcode::Upsilon,
-                            Ty::Unit,
-                            vec![arm_result],
-                            InstData::PhiTarget(InstId(u32::MAX)),
-                            span,
-                        );
-                        ctx.emit(
-                            Opcode::Jump,
-                            Ty::Unit,
-                            vec![],
-                            InstData::JumpTarget(merge_block),
-                            span,
-                        );
-                        arm_results.push((arm_block, up_id, arm_ty, arm_mut_vals));
+                            let up_id = ctx.emit(
+                                Opcode::Upsilon,
+                                Ty::Unit,
+                                vec![arm_result],
+                                InstData::PhiTarget(InstId(u32::MAX)),
+                                span,
+                            );
+                            ctx.emit(
+                                Opcode::Jump,
+                                Ty::Unit,
+                                vec![],
+                                InstData::JumpTarget(merge_block),
+                                span,
+                            );
+                            let exit_block = ctx.current_block;
+                            arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+                        }
 
                         ctx.restore_scope(scope_snap.clone());
                     }
@@ -2312,6 +2318,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             ctx.restore_scope(scope_snap);
             ctx.switch_to_block(merge_block);
+
+            if arm_results.is_empty() {
+                return ctx.emit(Opcode::Unreachable, Ty::Unit, vec![], InstData::None, span);
+            }
 
             // Create Phis for mutated variables.
             for (i, (name, pre_id)) in mutations.iter().enumerate() {
@@ -4198,6 +4208,112 @@ mod tests {
             .collect();
         assert_eq!(phis.len(), 1, "expected only the match result Phi");
         assert_eq!(phis[0].ty, Ty::U64);
+    }
+
+    #[test]
+    fn match_expression_u64_result_phi_skips_exiting_first_arm() {
+        let u64_cast = |v| Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(int_expr(v)),
+                target_ty: Box::new(u64_ty()),
+            },
+            span: sp(),
+        };
+        let enum_pat = |variant: &str| Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Pick".to_string(), variant.to_string()],
+                inner: vec![],
+            },
+            span: sp(),
+        };
+        let return_zero = Expr {
+            kind: ExprKind::Return {
+                value: Some(Box::new(u64_cast(0))),
+            },
+            span: sp(),
+        };
+        let exiting_body = Expr {
+            kind: ExprKind::Block(Box::new(Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(return_zero)),
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("p")),
+                arms: vec![
+                    MatchArm {
+                        pattern: enum_pat("Big"),
+                        body: exiting_body,
+                        span: sp(),
+                    },
+                    MatchArm {
+                        pattern: enum_pat("Zero"),
+                        body: u64_cast(9223372036854775808),
+                        span: sp(),
+                    },
+                ],
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(match_expr)),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "pick",
+            vec![make_param(
+                "p",
+                Type::Named {
+                    name: "Pick".to_string(),
+                    span: sp(),
+                },
+            )],
+            u64_ty(),
+            body,
+            vec![],
+        );
+        let enum_variant_map = HashMap::from([(
+            "Pick".to_string(),
+            vec!["Big".to_string(), "Zero".to_string()],
+        )]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            enum_variant_map,
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let phis: Vec<_> = func
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .filter(|inst| inst.opcode == Opcode::Phi)
+            .collect();
+        assert_eq!(phis.len(), 1, "expected only the match result Phi");
+        let phi_id = phis[0].id;
+        assert_eq!(phis[0].ty, Ty::U64);
+
+        let result_upsilons: Vec<_> = func
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .filter(|inst| inst.data == InstData::PhiTarget(phi_id))
+            .collect();
+        assert_eq!(
+            result_upsilons.len(),
+            1,
+            "only the arm that reaches the match merge should feed the result Phi"
+        );
     }
 
     #[test]

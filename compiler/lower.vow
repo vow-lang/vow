@@ -2603,34 +2603,38 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
 
                 let arm_result: i64 = lower_expr(ctx, body_eid);
-                let arm_result_ty: i64 = lctx_inst_ty(ctx, arm_result);
+                let arm_reaches_merge: bool = !lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
-                // Collect mutation values before restoring the pre-match scope.
-                let arm_mut_vals: Vec<i64> = Vec::new();
-                let mut ami: i64 = 0;
-                while ami < nmut {
-                    arm_mut_vals.push(lctx_lookup(ctx, match_muts[ami]));
-                    ami = ami + 1;
-                }
-                let mut mci: i64 = 0;
-                while mci < nmut {
-                    let mu_args: Vec<i64> = Vec::new();
-                    mu_args.push(arm_mut_vals[mci]);
-                    let mu_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
-                    arm_mut_ups.push(mu_id);
-                    mci = mci + 1;
-                }
+                if arm_reaches_merge {
+                    let arm_result_ty: i64 = lctx_inst_ty(ctx, arm_result);
 
-                let up_args: Vec<i64> = Vec::new();
-                up_args.push(arm_result);
-                let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
-                let jmp_args: Vec<i64> = Vec::new();
-                lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+                    // Collect mutation values before restoring the pre-match scope.
+                    let arm_mut_vals: Vec<i64> = Vec::new();
+                    let mut ami: i64 = 0;
+                    while ami < nmut {
+                        arm_mut_vals.push(lctx_lookup(ctx, match_muts[ami]));
+                        ami = ami + 1;
+                    }
+                    let mut mci: i64 = 0;
+                    while mci < nmut {
+                        let mu_args: Vec<i64> = Vec::new();
+                        mu_args.push(arm_mut_vals[mci]);
+                        let mu_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                        arm_mut_ups.push(mu_id);
+                        mci = mci + 1;
+                    }
 
-                arm_exit_blocks.push(ctx.current_block);
-                arm_up_ids.push(up_id);
-                arm_result_tys.push(arm_result_ty);
+                    let up_args: Vec<i64> = Vec::new();
+                    up_args.push(arm_result);
+                    let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    let jmp_args: Vec<i64> = Vec::new();
+                    lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+
+                    arm_exit_blocks.push(ctx.current_block);
+                    arm_up_ids.push(up_id);
+                    arm_result_tys.push(arm_result_ty);
+                }
 
                 lctx_restore(ctx, snap);
                 let mut rmi: i64 = 0;
@@ -2650,34 +2654,38 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     lctx_define(ctx, pname, ptr_id);
                 }
                 let arm_result: i64 = lower_expr(ctx, body_eid);
-                let arm_result_ty: i64 = lctx_inst_ty(ctx, arm_result);
+                let arm_reaches_merge2: bool = !lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
-                // Collect mutation values before restoring the pre-match scope.
-                let arm_mut_vals2: Vec<i64> = Vec::new();
-                let mut ami2: i64 = 0;
-                while ami2 < nmut {
-                    arm_mut_vals2.push(lctx_lookup(ctx, match_muts[ami2]));
-                    ami2 = ami2 + 1;
-                }
-                let mut mci2: i64 = 0;
-                while mci2 < nmut {
-                    let mu2_args: Vec<i64> = Vec::new();
-                    mu2_args.push(arm_mut_vals2[mci2]);
-                    let mu2_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu2_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
-                    arm_mut_ups.push(mu2_id);
-                    mci2 = mci2 + 1;
-                }
+                if arm_reaches_merge2 {
+                    let arm_result_ty2: i64 = lctx_inst_ty(ctx, arm_result);
 
-                let up_args: Vec<i64> = Vec::new();
-                up_args.push(arm_result);
-                let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
-                let jmp_args: Vec<i64> = Vec::new();
-                lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+                    // Collect mutation values before restoring the pre-match scope.
+                    let arm_mut_vals2: Vec<i64> = Vec::new();
+                    let mut ami2: i64 = 0;
+                    while ami2 < nmut {
+                        arm_mut_vals2.push(lctx_lookup(ctx, match_muts[ami2]));
+                        ami2 = ami2 + 1;
+                    }
+                    let mut mci2: i64 = 0;
+                    while mci2 < nmut {
+                        let mu2_args: Vec<i64> = Vec::new();
+                        mu2_args.push(arm_mut_vals2[mci2]);
+                        let mu2_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu2_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                        arm_mut_ups.push(mu2_id);
+                        mci2 = mci2 + 1;
+                    }
 
-                arm_exit_blocks.push(ctx.current_block);
-                arm_up_ids.push(up_id);
-                arm_result_tys.push(arm_result_ty);
+                    let up_args: Vec<i64> = Vec::new();
+                    up_args.push(arm_result);
+                    let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    let jmp_args: Vec<i64> = Vec::new();
+                    lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+
+                    arm_exit_blocks.push(ctx.current_block);
+                    arm_up_ids.push(up_id);
+                    arm_result_tys.push(arm_result_ty2);
+                }
 
                 lctx_restore(ctx, snap);
                 let mut rmi2: i64 = 0;
@@ -2713,13 +2721,19 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         lctx_switch_to_block(ctx, merge_block);
 
+        let n_merge_arms: i64 = arm_exit_blocks.len();
+        if n_merge_arms == 0 {
+            let u_args: Vec<i64> = Vec::new();
+            return lctx_emit(ctx, IOP_UNREACHABLE(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
+        }
+
         let mut mpi: i64 = 0;
         while mpi < nmut {
             let mphi_args: Vec<i64> = Vec::new();
             let mphi_ty: i64 = lctx_inst_ty(ctx, saved_mut_vals[mpi]);
             let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, mphi_args, IDATA_NONE(), 0, 0, String::from(""));
             let mut bpi: i64 = 0;
-            while bpi < n_arms {
+            while bpi < n_merge_arms {
                 backpatch_upsilon(ctx, arm_exit_blocks[bpi], arm_mut_ups[bpi * nmut + mpi], mphi_id);
                 bpi = bpi + 1;
             }

@@ -1,12 +1,32 @@
-// TEST: stdout "1\n0\n1\n"
+// TEST: stdout "1\n0\n1\n1\n1\n"
 module Issue843
 
 // Regression for #843: a u64-producing match expression must keep its unsigned
-// result type when consumed directly, without an annotated `let: u64` in between.
+// result type in unsigned operations, without an annotated `let: u64` in between.
 
 enum Pick {
     Big,
     Zero,
+}
+
+fn exiting_first_arm_compare(p: Pick) -> i64 {
+    let value = match p {
+        Pick::Big => { return 0 },
+        Pick::Zero => { 9223372036854775808u64 },
+    };
+    if value > 0u64 {
+        1
+    } else {
+        0
+    }
+}
+
+fn exiting_first_arm_shift(p: Pick) -> u64 {
+    let value = match p {
+        Pick::Big => { return 0u64 },
+        Pick::Zero => { 9223372036854775808u64 },
+    };
+    value >> 63
 }
 
 fn main() -> i32 [io] {
@@ -34,6 +54,12 @@ fn main() -> i32 [io] {
     }
 
     print_u64(high >> 63);
+    print_str("\n");
+
+    print_i64(exiting_first_arm_compare(zero));
+    print_str("\n");
+
+    print_u64(exiting_first_arm_shift(zero));
     print_str("\n");
 
     0
