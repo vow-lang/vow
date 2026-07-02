@@ -7,7 +7,19 @@ fn abs(x: i64) -> i64 vow {
   x
 }
 
+fn labs(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  x
+}
+
 fn div(x: i64) -> i64 vow {
+  ensures: result == x
+} {
+  x
+}
+
+fn ldiv(x: i64) -> i64 vow {
   ensures: result == x
 } {
   x
@@ -22,7 +34,7 @@ fn exit(x: i64) -> i64 vow {
 fn round_trip(x: i64) -> i64 vow {
   ensures: result == x
 } {
-  exit(div(abs(x)))
+  exit(ldiv(div(labs(abs(x)))))
 }
 
 fn main() -> i32 [io] {

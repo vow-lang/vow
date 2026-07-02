@@ -1,0 +1,146 @@
+module TestCEmitter
+
+use ir
+use c_emitter
+use tests.builders
+
+fn identity_function(id: i64, name: String) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    insts.push(mk_inst_return(1, 0));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_I64());
+    mk_function(id, name, params, ITY_I64(), blocks)
+}
+
+fn raw_i64_signature(name: String) -> String {
+    let s: String = String::from("int64_t ");
+    s.push_str(name);
+    s.push_str(String::from("("));
+    s
+}
+
+fn mangled_i64_signature(id: i64) -> String {
+    let s: String = String::from("int64_t vow_user_fn_");
+    s.push_str(i64_to_string(id));
+    s.push_str(String::from("("));
+    s
+}
+
+fn check_name_modelable_and_mangled(name: String, id: i64, base_code: i64) -> i64 {
+    let f: IrFunction = identity_function(id, name);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    let const_fn_indices: Vec<i64> = Vec::new();
+
+    let reason: String = non_modelable_reason(f, m, const_fn_indices);
+    if reason != String::from("") {
+        return base_code;
+    }
+
+    let c: String = emit_c_module(m, 16, 16, 16, 16);
+    if !c.contains(mangled_i64_signature(id)) {
+        return base_code + 1;
+    }
+    if c.contains(raw_i64_signature(name)) {
+        return base_code + 2;
+    }
+    0
+}
+
+fn check_modelable_call_target_is_mangled() -> i64 {
+    let callee: IrFunction = identity_function(5, String::from("ldiv"));
+
+    let target_insts: Vec<IrInst> = Vec::new();
+    target_insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(0);
+    target_insts.push(mk_inst_call_target(1, ITY_I64(), call_args, 5));
+    target_insts.push(mk_inst_return(2, 1));
+
+    let target_blocks: Vec<IrBlock> = Vec::new();
+    target_blocks.push(mk_block(0, target_insts));
+    let target_params: Vec<i64> = Vec::new();
+    target_params.push(ITY_I64());
+    let target: IrFunction = mk_function(2, String::from("labs"), target_params, ITY_I64(), target_blocks);
+
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(target);
+    funcs.push(callee);
+    let m: IrModule = mk_module(funcs);
+
+    let const_fn_indices: Vec<i64> = Vec::new();
+    let reason: String = non_modelable_reason(target, m, const_fn_indices);
+    if reason != String::from("") {
+        return 20;
+    }
+
+    let callee_fis: Vec<i64> = Vec::new();
+    callee_fis.push(5);
+    let modelable_fis: Vec<i64> = Vec::new();
+    modelable_fis.push(5);
+    let c: String = emit_c_module_with_callees(m, 2, callee_fis, modelable_fis, 16, 16, 16, 16, false, false);
+
+    if !c.contains(String::from("int64_t vow_user_fn_5(int64_t p0);")) {
+        return 21;
+    }
+    if !c.contains(String::from("int64_t vow_user_fn_5(int64_t p0) {")) {
+        return 22;
+    }
+    if !c.contains(String::from("v1 = vow_user_fn_5(v0);")) {
+        return 23;
+    }
+    if c.contains(String::from("int64_t ldiv(")) {
+        return 24;
+    }
+    if c.contains(String::from(" ldiv(v0)")) {
+        return 25;
+    }
+    if c.contains(String::from("int64_t labs(")) {
+        return 26;
+    }
+    0
+}
+
+fn i64_result_to_i32(r: i64) -> i32 {
+    if r == 1 { return 1; }
+    if r == 2 { return 2; }
+    if r == 3 { return 3; }
+    if r == 4 { return 4; }
+    if r == 5 { return 5; }
+    if r == 6 { return 6; }
+    if r == 7 { return 7; }
+    if r == 8 { return 8; }
+    if r == 9 { return 9; }
+    if r == 10 { return 10; }
+    if r == 11 { return 11; }
+    if r == 12 { return 12; }
+    if r == 20 { return 20; }
+    if r == 21 { return 21; }
+    if r == 22 { return 22; }
+    if r == 23 { return 23; }
+    if r == 24 { return 24; }
+    if r == 25 { return 25; }
+    if r == 26 { return 26; }
+    if r != 0 { return 99; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_name_modelable_and_mangled(String::from("abs"), 7, 1);
+    if r1 != 0 { return i64_result_to_i32(r1); }
+    let r2: i64 = check_name_modelable_and_mangled(String::from("labs"), 8, 4);
+    if r2 != 0 { return i64_result_to_i32(r2); }
+    let r3: i64 = check_name_modelable_and_mangled(String::from("div"), 9, 7);
+    if r3 != 0 { return i64_result_to_i32(r3); }
+    let r4: i64 = check_name_modelable_and_mangled(String::from("ldiv"), 10, 10);
+    if r4 != 0 { return i64_result_to_i32(r4); }
+    let r5: i64 = check_modelable_call_target_is_mangled();
+    if r5 != 0 { return i64_result_to_i32(r5); }
+    0
+}
