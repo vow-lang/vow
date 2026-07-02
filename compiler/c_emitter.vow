@@ -888,13 +888,14 @@ fn unsupported_op_vow_id_str() -> String {
 // Legacy sentinel vow_id reported by older verifier output when a co-emitted
 // callee's `requires` is violated by its caller. New verifier labels use
 // `vow:pre:<callee-func-id>:<callee-vow-id>` so diagnostics can resolve the
-// exact callee clause without colliding with function-local vow ids.
+// exact callee clause without colliding with function-local vow ids. Single
+// source of truth for the self-hosted side lives in `verifier_ids`.
 fn caller_precondition_vow_id() -> i64 {
-    4294967294
+    verifier_caller_precondition_vow_id()
 }
 
 fn caller_precondition_vow_id_str() -> String {
-    i64_to_str(caller_precondition_vow_id())
+    verifier_caller_precondition_vow_id_str()
 }
 
 // Fail-closed marker for opcodes that have side effects but no verifier model.
