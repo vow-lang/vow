@@ -1086,6 +1086,22 @@ else
     else
         fail "test/filter" "expected 1 test with --filter arith, got $filter_total"
     fi
+
+    # test_complexity_io must not depend on the caller's working directory.
+    repo_root=$(pwd -P)
+    temp_cwd="$TMPDIR/test_complexity_io_cwd"
+    mkdir -p "$temp_cwd"
+    rust_abs="$repo_root/target/release/vow"
+    rust_cwd_json=$(cd "$temp_cwd" && "$rust_abs" test "$repo_root/compiler" --filter test_complexity_io 2>/dev/null) || true
+    self_cwd_json=$(cd "$temp_cwd" && run_self test "$repo_root/compiler" --filter test_complexity_io 2>/dev/null) || true
+    rust_cwd_status=$(echo "$rust_cwd_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || rust_cwd_status=""
+    self_cwd_status=$(echo "$self_cwd_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || self_cwd_status=""
+
+    if [ "$rust_cwd_status" = "TestsPassed" ] && [ "$self_cwd_status" = "TestsPassed" ]; then
+        pass "test/complexity-io-path-independent"
+    else
+        fail "test/complexity-io-path-independent" "rust=$rust_cwd_status self=$self_cwd_status"
+    fi
 fi
 echo ""
 
