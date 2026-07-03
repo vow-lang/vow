@@ -1,0 +1,12 @@
+// TEST: stderr "function body type mismatch"
+// TEST: error-code TypeMismatch
+// Placeholder `!` values such as Option::None are not control-flow divergence.
+module NonDivergingNeverPlaceholderReturn
+
+fn f() -> u64 {
+  Option::None;
+}
+
+fn main() -> i32 {
+  0
+}

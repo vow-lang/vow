@@ -753,6 +753,158 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     e.cur_effects = save_eff;
 }
 
+fn call_returns_never(e: CheckEnv, m: Module, eid: i64) -> bool {
+    let a: AstArena = m.arena;
+    if expr_tag(a, eid) != EXPR_CALL() {
+        return false;
+    }
+    let callee_eid: i64 = expr_a(a, eid);
+    if expr_tag(a, callee_eid) != EXPR_IDENT() {
+        return false;
+    }
+    let name_sid: i64 = expr_a(a, callee_eid);
+    let name: String = arena_str(a, name_sid);
+    let fidx: i64 = env_lookup_fn(e, name);
+    if fidx == -1 {
+        return false;
+    }
+    ty_tag(e.ts, e.fn_ret_tids[fidx]) == CTY_NEVER()
+}
+
+fn stmt_diverges(e: CheckEnv, m: Module, sid: i64) -> bool {
+    let a: AstArena = m.arena;
+    if stmt_tag(a, sid) != STMT_EXPR() {
+        return false;
+    }
+    expr_diverges(e, m, stmt_a(a, sid))
+}
+
+fn block_diverges(e: CheckEnv, m: Module, bid: i64) -> bool {
+    let a: AstArena = m.arena;
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 {
+        return expr_diverges(e, m, trail);
+    }
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    if n == 0 {
+        return false;
+    }
+    stmt_diverges(e, m, list_get(a, stmts_lid, n - 1))
+}
+
+fn expr_list_diverges(e: CheckEnv, m: Module, lid: i64) -> bool {
+    let a: AstArena = m.arena;
+    let n: i64 = list_len(a, lid);
+    let mut i: i64 = 0;
+    while i < n {
+        if expr_diverges(e, m, list_get(a, lid, i)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn expr_pair_value_list_diverges(e: CheckEnv, m: Module, lid: i64) -> bool {
+    let a: AstArena = m.arena;
+    let n_pairs: i64 = list_len(a, lid);
+    let n: i64 = n_pairs / 2;
+    let mut i: i64 = 0;
+    while i < n {
+        if expr_diverges(e, m, list_get(a, lid, i * 2 + 1)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn expr_diverges(e: CheckEnv, m: Module, eid: i64) -> bool {
+    let a: AstArena = m.arena;
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_RETURN() || tag == EXPR_BREAK() || tag == EXPR_CONTINUE() {
+        return true;
+    }
+    if tag == EXPR_BLOCK() {
+        return block_diverges(e, m, expr_a(a, eid));
+    }
+    if tag == EXPR_IF() {
+        if expr_diverges(e, m, expr_a(a, eid)) {
+            return true;
+        }
+        let else_eid: i64 = expr_c(a, eid);
+        return else_eid != -1 && block_diverges(e, m, expr_b(a, eid)) && expr_diverges(e, m, else_eid);
+    }
+    if tag == EXPR_MATCH() {
+        if expr_diverges(e, m, expr_a(a, eid)) {
+            return true;
+        }
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_pairs: i64 = list_len(a, arms_lid);
+        let n: i64 = n_pairs / 2;
+        if n == 0 {
+            return false;
+        }
+        let mut i: i64 = 0;
+        while i < n {
+            if !expr_diverges(e, m, list_get(a, arms_lid, i * 2 + 1)) {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    if tag == EXPR_BINOP() {
+        if expr_diverges(e, m, expr_b(a, eid)) {
+            return true;
+        }
+        let op: i64 = expr_a(a, eid);
+        if op != BINOP_AND() && op != BINOP_OR() && expr_diverges(e, m, expr_c(a, eid)) {
+            return true;
+        }
+        return false;
+    }
+    if tag == EXPR_UNOP() {
+        return expr_diverges(e, m, expr_b(a, eid));
+    }
+    if tag == EXPR_CALL() {
+        if expr_diverges(e, m, expr_a(a, eid)) {
+            return true;
+        }
+        if expr_list_diverges(e, m, expr_b(a, eid)) {
+            return true;
+        }
+        return call_returns_never(e, m, eid);
+    }
+    if tag == EXPR_METHOD() {
+        if expr_diverges(e, m, expr_a(a, eid)) {
+            return true;
+        }
+        return expr_list_diverges(e, m, expr_c(a, eid));
+    }
+    if tag == EXPR_FIELD() || tag == EXPR_QUESTION() || tag == EXPR_CAST() || tag == EXPR_FOR() {
+        return expr_diverges(e, m, expr_a(a, eid));
+    }
+    if tag == EXPR_INDEX() || tag == EXPR_ASSIGN() {
+        return expr_diverges(e, m, expr_a(a, eid)) || expr_diverges(e, m, expr_b(a, eid));
+    }
+    if tag == EXPR_WHILE() {
+        return expr_diverges(e, m, expr_a(a, eid));
+    }
+    if tag == EXPR_TUPLE() {
+        return expr_list_diverges(e, m, expr_a(a, eid));
+    }
+    if tag == EXPR_SLIT() {
+        return expr_pair_value_list_diverges(e, m, expr_b(a, eid));
+    }
+    if tag == EXPR_ECTOR() {
+        return expr_list_diverges(e, m, expr_b(a, eid));
+    }
+    false
+}
+
 fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
     let a: AstArena = m.arena;
     env_push_scope(e);
@@ -788,8 +940,8 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
             let etid: i64 = check_expr(e, m, eid);
             if has_semi == 0 && i == n - 1 {
                 result_tid = etid;
-            } else if is_opaque(etid) {
-                result_tid = etid;
+            } else if expr_diverges(e, m, eid) {
+                result_tid = CTY_NEVER();
             } else {
                 result_tid = CTY_UNIT();
             }
@@ -1217,7 +1369,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             return e.fn_ret_tids[fidx];
         }
         let _callee_tid: i64 = check_expr(e, m, callee_eid);
-        return CTY_NEVER();
+        env_emit_error(e, String::from("function call callee must be an identifier"), expr_span(a, callee_eid));
+        return CTY_UNIT();
     }
 
     if tag == EXPR_METHOD() {

@@ -1,0 +1,12 @@
+// TEST: stderr "function body type mismatch"
+// TEST: error-code TypeMismatch
+// Generic placeholder `!` values are not control-flow divergence.
+module NonDivergingVecPlaceholderReturn
+
+fn f() -> u64 {
+  Vec::from_raw_parts_copy(0, 0);
+}
+
+fn main() -> i32 {
+  0
+}

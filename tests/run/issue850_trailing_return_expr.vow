@@ -1,0 +1,19 @@
+// TEST: stdout "5 6\n"
+module Issue850TrailingReturnExpr
+
+fn direct() -> u64 {
+    return 5u64;
+}
+
+fn after_let() -> u64 {
+    let x: u64 = 6u64;
+    return x;
+}
+
+fn main() -> i32 [io] {
+    print_u64(direct());
+    print_str(" ");
+    print_u64(after_let());
+    print_str("\n");
+    0
+}

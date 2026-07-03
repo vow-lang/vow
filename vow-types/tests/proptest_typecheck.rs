@@ -41,6 +41,96 @@ fn typecheck_source(src: &str) -> Vec<Diagnostic> {
     emitter.diagnostics
 }
 
+#[test]
+fn trailing_return_expr_statement_satisfies_declared_return_type() {
+    let diags = typecheck_source(
+        r#"module Test
+
+fn f() -> u64 {
+    return 5u64;
+}
+
+fn g() -> u64 {
+    let x: u64 = 6u64;
+    return x;
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+}
+
+#[test]
+fn trailing_never_call_statement_satisfies_declared_return_type() {
+    let diags = typecheck_source(
+        r#"module Test
+
+fn abort_with(code: i64) -> i32 [io] {
+    process_exit(code);
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+}
+
+#[test]
+fn non_diverging_never_placeholder_statement_does_not_satisfy_declared_return_type() {
+    let diags = typecheck_source(
+        r#"module Test
+
+fn f() -> u64 {
+    Option::None;
+}
+"#,
+    );
+
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("function body has type `()`")),
+        "expected unit body mismatch, got diagnostics: {diags:#?}"
+    );
+}
+
+#[test]
+fn non_diverging_vec_placeholder_statement_does_not_satisfy_declared_return_type() {
+    let diags = typecheck_source(
+        r#"module Test
+
+fn f() -> u64 {
+    Vec::from_raw_parts_copy(0, 0);
+}
+"#,
+    );
+
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("function body has type `()`")),
+        "expected unit body mismatch, got diagnostics: {diags:#?}"
+    );
+}
+
+#[test]
+fn divergent_subexpression_in_invalid_call_does_not_satisfy_declared_return_type() {
+    let diags = typecheck_source(
+        r#"module Test
+
+fn f() -> u64 {
+    (return 5u64)();
+}
+"#,
+    );
+
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("callee must be an identifier")),
+        "expected non-identifier callee diagnostic, got diagnostics: {diags:#?}"
+    );
+}
+
 fn arb_welltyped_program() -> impl Strategy<Value = String> {
     let arb_int_body = (0i64..1000).prop_map(|n| format!("{}", n));
     let arb_arith = (0i64..100, 1i64..100, prop::sample::select(&["+", "-", "*"]))
