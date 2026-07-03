@@ -9,3 +9,14 @@ fn verifier_unsupported_op_vow_id() -> i64 {
 fn verifier_unsupported_op_vow_id_str() -> String {
     i64_to_string(verifier_unsupported_op_vow_id())
 }
+
+// Legacy sentinel vow_id reported by older verifier output when a co-emitted
+// callee's `requires` is violated by its caller.
+// Mirrors `vow_verify::c_emitter::CALLER_PRECONDITION_VOW_ID = u32::MAX - 1`.
+fn verifier_caller_precondition_vow_id() -> i64 {
+    4294967294
+}
+
+fn verifier_caller_precondition_vow_id_str() -> String {
+    i64_to_string(verifier_caller_precondition_vow_id())
+}

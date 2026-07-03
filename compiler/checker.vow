@@ -197,6 +197,24 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
             arg_tids.push(resolve_ast_ty(e, m, arg_ast_tid));
             i = i + 1;
         }
+        if name == String::from("Option") {
+            if arg_tids.len() == 1 {
+                return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+            }
+            env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                String::from("Option requires one type argument"),
+                type_span(a, ast_tid));
+            return CTY_UNKNOWN();
+        }
+        if name == String::from("Result") {
+            if arg_tids.len() == 2 {
+                return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+            }
+            env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                String::from("Result requires two type arguments"),
+                type_span(a, ast_tid));
+            return CTY_UNKNOWN();
+        }
         let base_ptid: i64 = primitive_tid(e.ts, name);
         if base_ptid != -1 {
             return ts_make_applied(e.ts, base_ptid, arg_tids);
@@ -751,6 +769,158 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     e.cur_effects = save_eff;
 }
 
+fn call_returns_never(e: CheckEnv, m: Module, eid: i64) -> bool {
+    let a: AstArena = m.arena;
+    if expr_tag(a, eid) != EXPR_CALL() {
+        return false;
+    }
+    let callee_eid: i64 = expr_a(a, eid);
+    if expr_tag(a, callee_eid) != EXPR_IDENT() {
+        return false;
+    }
+    let name_sid: i64 = expr_a(a, callee_eid);
+    let name: String = arena_str(a, name_sid);
+    let fidx: i64 = env_lookup_fn(e, name);
+    if fidx == -1 {
+        return false;
+    }
+    ty_tag(e.ts, e.fn_ret_tids[fidx]) == CTY_NEVER()
+}
+
+fn stmt_diverges(e: CheckEnv, m: Module, sid: i64) -> bool {
+    let a: AstArena = m.arena;
+    if stmt_tag(a, sid) != STMT_EXPR() {
+        return false;
+    }
+    expr_diverges(e, m, stmt_a(a, sid))
+}
+
+fn block_diverges(e: CheckEnv, m: Module, bid: i64) -> bool {
+    let a: AstArena = m.arena;
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 {
+        return expr_diverges(e, m, trail);
+    }
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    if n == 0 {
+        return false;
+    }
+    stmt_diverges(e, m, list_get(a, stmts_lid, n - 1))
+}
+
+fn expr_list_diverges(e: CheckEnv, m: Module, lid: i64) -> bool {
+    let a: AstArena = m.arena;
+    let n: i64 = list_len(a, lid);
+    let mut i: i64 = 0;
+    while i < n {
+        if expr_diverges(e, m, list_get(a, lid, i)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn expr_pair_value_list_diverges(e: CheckEnv, m: Module, lid: i64) -> bool {
+    let a: AstArena = m.arena;
+    let n_pairs: i64 = list_len(a, lid);
+    let n: i64 = n_pairs / 2;
+    let mut i: i64 = 0;
+    while i < n {
+        if expr_diverges(e, m, list_get(a, lid, i * 2 + 1)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn expr_diverges(e: CheckEnv, m: Module, eid: i64) -> bool {
+    let a: AstArena = m.arena;
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_RETURN() || tag == EXPR_BREAK() || tag == EXPR_CONTINUE() {
+        return true;
+    }
+    if tag == EXPR_BLOCK() {
+        return block_diverges(e, m, expr_a(a, eid));
+    }
+    if tag == EXPR_IF() {
+        if expr_diverges(e, m, expr_a(a, eid)) {
+            return true;
+        }
+        let else_eid: i64 = expr_c(a, eid);
+        return else_eid != -1 && block_diverges(e, m, expr_b(a, eid)) && expr_diverges(e, m, else_eid);
+    }
+    if tag == EXPR_MATCH() {
+        if expr_diverges(e, m, expr_a(a, eid)) {
+            return true;
+        }
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_pairs: i64 = list_len(a, arms_lid);
+        let n: i64 = n_pairs / 2;
+        if n == 0 {
+            return false;
+        }
+        let mut i: i64 = 0;
+        while i < n {
+            if !expr_diverges(e, m, list_get(a, arms_lid, i * 2 + 1)) {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    if tag == EXPR_BINOP() {
+        if expr_diverges(e, m, expr_b(a, eid)) {
+            return true;
+        }
+        let op: i64 = expr_a(a, eid);
+        if op != BINOP_AND() && op != BINOP_OR() && expr_diverges(e, m, expr_c(a, eid)) {
+            return true;
+        }
+        return false;
+    }
+    if tag == EXPR_UNOP() {
+        return expr_diverges(e, m, expr_b(a, eid));
+    }
+    if tag == EXPR_CALL() {
+        if expr_diverges(e, m, expr_a(a, eid)) {
+            return true;
+        }
+        if expr_list_diverges(e, m, expr_b(a, eid)) {
+            return true;
+        }
+        return call_returns_never(e, m, eid);
+    }
+    if tag == EXPR_METHOD() {
+        if expr_diverges(e, m, expr_a(a, eid)) {
+            return true;
+        }
+        return expr_list_diverges(e, m, expr_c(a, eid));
+    }
+    if tag == EXPR_FIELD() || tag == EXPR_QUESTION() || tag == EXPR_CAST() || tag == EXPR_FOR() {
+        return expr_diverges(e, m, expr_a(a, eid));
+    }
+    if tag == EXPR_INDEX() || tag == EXPR_ASSIGN() {
+        return expr_diverges(e, m, expr_a(a, eid)) || expr_diverges(e, m, expr_b(a, eid));
+    }
+    if tag == EXPR_WHILE() {
+        return expr_diverges(e, m, expr_a(a, eid));
+    }
+    if tag == EXPR_TUPLE() {
+        return expr_list_diverges(e, m, expr_a(a, eid));
+    }
+    if tag == EXPR_SLIT() {
+        return expr_pair_value_list_diverges(e, m, expr_b(a, eid));
+    }
+    if tag == EXPR_ECTOR() {
+        return expr_list_diverges(e, m, expr_b(a, eid));
+    }
+    false
+}
+
 fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
     let a: AstArena = m.arena;
     env_push_scope(e);
@@ -786,8 +956,8 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
             let etid: i64 = check_expr(e, m, eid);
             if has_semi == 0 && i == n - 1 {
                 result_tid = etid;
-            } else if is_opaque(etid) {
-                result_tid = etid;
+            } else if expr_diverges(e, m, eid) {
+                result_tid = CTY_NEVER();
             } else {
                 result_tid = CTY_UNIT();
             }
@@ -1187,7 +1357,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             return e.fn_ret_tids[fidx];
         }
         let _callee_tid: i64 = check_expr(e, m, callee_eid);
-        return CTY_NEVER();
+        env_emit_error(e, String::from("function call callee must be an identifier"), expr_span(a, callee_eid));
+        return CTY_UNIT();
     }
 
     if tag == EXPR_METHOD() {
@@ -1669,14 +1840,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let n_path: i64 = list_len(a, path_lid);
         let first_sid: i64 = list_get(a, path_lid, 0);
         let first_name: String = arena_str(a, first_sid);
-        let mut second_name: String = String::from("");
-        if n_path > 1 {
-            let second_sid0: i64 = list_get(a, path_lid, 1);
-            second_name = arena_str(a, second_sid0);
-        }
         let n_args: i64 = list_len(a, args_lid);
         let mut i: i64 = 0;
-        let mut first_arg_tid: i64 = CTY_UNIT();
+        let mut first_arg_tid: i64 = CTY_UNKNOWN();
         while i < n_args {
             let arg_eid: i64 = list_get(a, args_lid, i);
             let arg_tid: i64 = check_expr(e, m, arg_eid);
@@ -1686,29 +1852,40 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             i = i + 1;
         }
         if first_name == String::from("Option") {
-            let opt_base_tid: i64 = ts_make_enum(e.ts, String::from("Option"));
-            if second_name == String::from("Some") {
-                let opt_args: Vec<i64> = Vec::new();
-                opt_args.push(first_arg_tid);
-                return ts_make_applied(e.ts, opt_base_tid, opt_args);
+            if n_path > 1 {
+                let second_sid: i64 = list_get(a, path_lid, 1);
+                let second_name: String = arena_str(a, second_sid);
+                if second_name == String::from("None") {
+                    return CTY_NEVER();
+                }
+                if second_name == String::from("Some") {
+                    let payload_tid: i64 = if n_args > 0 { first_arg_tid } else { CTY_UNIT() };
+                    let opt_args: Vec<i64> = Vec::new();
+                    opt_args.push(payload_tid);
+                    return ts_make_applied(e.ts, ts_make_enum(e.ts, String::from("Option")), opt_args);
+                }
             }
-            return CTY_NEVER();
+            return ts_make_enum(e.ts, String::from("Option"));
         }
         if first_name == String::from("Result") {
-            let result_base_tid: i64 = ts_make_enum(e.ts, String::from("Result"));
-            if second_name == String::from("Ok") {
-                let ok_args: Vec<i64> = Vec::new();
-                ok_args.push(first_arg_tid);
-                ok_args.push(CTY_UNIT());
-                return ts_make_applied(e.ts, result_base_tid, ok_args);
+            if n_path > 1 {
+                let second_sid: i64 = list_get(a, path_lid, 1);
+                let second_name: String = arena_str(a, second_sid);
+                let payload_tid: i64 = if n_args > 0 { first_arg_tid } else { CTY_UNIT() };
+                if second_name == String::from("Ok") {
+                    let result_args: Vec<i64> = Vec::new();
+                    result_args.push(payload_tid);
+                    result_args.push(CTY_UNIT());
+                    return ts_make_applied(e.ts, ts_make_enum(e.ts, String::from("Result")), result_args);
+                }
+                if second_name == String::from("Err") {
+                    let result_args: Vec<i64> = Vec::new();
+                    result_args.push(CTY_NEVER());
+                    result_args.push(payload_tid);
+                    return ts_make_applied(e.ts, ts_make_enum(e.ts, String::from("Result")), result_args);
+                }
             }
-            if second_name == String::from("Err") {
-                let err_args: Vec<i64> = Vec::new();
-                err_args.push(CTY_NEVER());
-                err_args.push(first_arg_tid);
-                return ts_make_applied(e.ts, result_base_tid, err_args);
-            }
-            return result_base_tid;
+            return ts_make_enum(e.ts, String::from("Result"));
         }
         if first_name == String::from("Vec") {
             if n_path > 1 {
@@ -1763,19 +1940,30 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         }
         if ty_tag(e.ts, inner_tid) == CTY_APPLIED() {
             let base_tid: i64 = ty_a(e.ts, inner_tid);
-            let base_tag: i64 = ty_tag(e.ts, base_tid);
-            if base_tag == CTY_ENUM() {
+            if ty_tag(e.ts, base_tid) == CTY_ENUM() {
                 let base_name: String = ty_struct_name(e.ts, base_tid);
-                if base_name == String::from("Option") || base_name == String::from("Result") {
+                if base_name == String::from("Option") {
+                    if ty_tag(e.ts, e.cur_ret_tid) != CTY_APPLIED() || enum_name_from_tid(e.ts, e.cur_ret_tid) != String::from("Option") {
+                        env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                            String::from("the `?` operator on Option requires the caller to return `Option`"),
+                            expr_span(a, eid));
+                        return CTY_UNIT();
+                    }
                     let args_lid: i64 = ty_b(e.ts, inner_tid);
                     if ts_arg_len(e.ts, args_lid) > 0 {
                         return ts_arg_get(e.ts, args_lid, 0);
                     }
                     return CTY_UNIT();
                 }
+                if base_name == String::from("Result") {
+                    env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                        String::from("Result propagation with `?` is not lowered yet"),
+                        expr_span(a, eid));
+                    return CTY_UNIT();
+                }
             }
         }
-        env_emit_error(e, String::from("the `?` operator requires Option<T> or Result<T,E>"), expr_span(a, inner_eid));
+        env_emit_error(e, String::from("the `?` operator requires `Option<T>` or `Result<T,E>`"), expr_span(a, eid));
         return CTY_UNIT();
     }
 

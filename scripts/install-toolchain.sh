@@ -88,6 +88,11 @@ BIN_DIR="$PREFIX/bin"
 LIB_DIR="$PREFIX/lib/vow"
 mkdir -p "$BIN_DIR" "$LIB_DIR"
 
+LEGACY_INSTALL=false
+if [ -L "$BIN_DIR/vow" ] || [ -e "$BIN_DIR/vowc" ] || [ -L "$BIN_DIR/vowc" ]; then
+    LEGACY_INSTALL=true
+fi
+
 rm -f "$BIN_DIR/vow" "$BIN_DIR/vowc"
 install -m 0755 "$VOWC" "$BIN_DIR/vow"
 
@@ -104,3 +109,6 @@ if [ "$WITH_RUST_COMPILER" = true ]; then
     echo "  vowr -> Rust bootstrap compiler"
 fi
 echo "Add $BIN_DIR to PATH if it is not already present."
+if [ "$LEGACY_INSTALL" = true ]; then
+    echo "Legacy in-place upgrade note: 'vow' is now the installed command; the legacy 'vowc' name is no longer installed. If this same shell behaves as though old command paths are cached, refresh command lookup (bash: hash -r; zsh: rehash)."
+fi

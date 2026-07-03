@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "Result requires two type arguments"
+module result_arity
+
+fn main() -> i32 {
+    let r: Result<u64> = Result::Ok(1u64);
+    0
+}

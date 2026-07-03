@@ -764,12 +764,13 @@ impl<'e> Checker<'e> {
 
     fn check_block(&mut self, block: &Block) -> Ty {
         self.env.push_scope();
+        let mut stmt_ty = Ty::Unit;
         for stmt in &block.stmts {
-            self.check_stmt(stmt);
+            stmt_ty = self.check_stmt(stmt);
         }
         let ty = match &block.trailing_expr {
             Some(expr) => self.check_expr(expr),
-            None => Ty::Unit,
+            None => stmt_ty,
         };
         self.exit_scope();
         ty
@@ -788,7 +789,7 @@ impl<'e> Checker<'e> {
         }
     }
 
-    fn check_stmt(&mut self, stmt: &Stmt) {
+    fn check_stmt(&mut self, stmt: &Stmt) -> Ty {
         match stmt {
             Stmt::Let {
                 pattern, ty, init, ..
@@ -833,11 +834,103 @@ impl<'e> Checker<'e> {
                     init_ty
                 };
                 self.bind_pattern(pattern, &binding_ty);
+                Ty::Unit
             }
-            Stmt::Expr { expr, .. } => {
-                self.check_expr(expr);
+            Stmt::Expr {
+                expr,
+                has_semicolon,
+                ..
+            } => {
+                let expr_ty = self.check_expr(expr);
+                if self.expr_diverges(expr) {
+                    Ty::Never
+                } else if *has_semicolon {
+                    Ty::Unit
+                } else {
+                    expr_ty
+                }
             }
         }
+    }
+
+    fn stmt_diverges(&self, stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Let { .. } => false,
+            Stmt::Expr { expr, .. } => self.expr_diverges(expr),
+        }
+    }
+
+    fn block_diverges(&self, block: &Block) -> bool {
+        if let Some(expr) = &block.trailing_expr {
+            return self.expr_diverges(expr);
+        }
+        block
+            .stmts
+            .last()
+            .is_some_and(|stmt| self.stmt_diverges(stmt))
+    }
+
+    fn expr_diverges(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Break { .. } | ExprKind::Continue | ExprKind::Return { .. } => true,
+            ExprKind::Block(block) => self.block_diverges(block),
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.expr_diverges(condition)
+                    || else_branch.as_deref().is_some_and(|else_expr| {
+                        self.block_diverges(then_branch) && self.expr_diverges(else_expr)
+                    })
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.expr_diverges(scrutinee)
+                    || (!arms.is_empty() && arms.iter().all(|arm| self.expr_diverges(&arm.body)))
+            }
+            ExprKind::BinaryOp { op, lhs, rhs } => {
+                self.expr_diverges(lhs)
+                    || (!matches!(op, BinOp::And | BinOp::Or) && self.expr_diverges(rhs))
+            }
+            ExprKind::UnaryOp { operand, .. }
+            | ExprKind::Borrow { expr: operand }
+            | ExprKind::Question { expr: operand }
+            | ExprKind::Cast { expr: operand, .. } => self.expr_diverges(operand),
+            ExprKind::Call { callee, args } => {
+                self.expr_diverges(callee)
+                    || args.iter().any(|arg| self.expr_diverges(arg))
+                    || self.call_returns_never(callee)
+            }
+            ExprKind::MethodCall { receiver, args, .. } => {
+                self.expr_diverges(receiver) || args.iter().any(|arg| self.expr_diverges(arg))
+            }
+            ExprKind::FieldAccess { base, .. } => self.expr_diverges(base),
+            ExprKind::Index { base, index } => {
+                self.expr_diverges(base) || self.expr_diverges(index)
+            }
+            ExprKind::While { condition, .. } => self.expr_diverges(condition),
+            ExprKind::ForEach { iterable, .. } => self.expr_diverges(iterable),
+            ExprKind::Assign { lhs, rhs } => self.expr_diverges(lhs) || self.expr_diverges(rhs),
+            ExprKind::Tuple(exprs) => exprs.iter().any(|expr| self.expr_diverges(expr)),
+            ExprKind::StructLiteral { fields, .. } => {
+                fields.iter().any(|(_, expr)| self.expr_diverges(expr))
+            }
+            ExprKind::EnumConstruct { fields, .. } => {
+                fields.iter().any(|expr| self.expr_diverges(expr))
+            }
+            ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Loop { .. } | ExprKind::Result => {
+                false
+            }
+        }
+    }
+
+    fn call_returns_never(&self, callee: &Expr) -> bool {
+        let ExprKind::Ident(name) = &callee.kind else {
+            return false;
+        };
+        self.env
+            .lookup_fn(name)
+            .is_some_and(|sig| sig.return_ty == Ty::Never)
     }
 
     fn bind_pattern(&mut self, pat: &Pat, ty: &Ty) {
@@ -996,9 +1089,15 @@ impl<'e> Checker<'e> {
                 let name = match &callee.kind {
                     ExprKind::Ident(n) => n.as_str(),
                     _ => {
+                        self.check_expr(callee);
                         for arg in args {
                             self.check_expr(arg);
                         }
+                        self.emit_error(
+                            ErrorCode::TypeMismatch,
+                            "function call callee must be an identifier",
+                            callee.span,
+                        );
                         return Ty::Unit;
                     }
                 };
@@ -1591,11 +1690,35 @@ impl<'e> Checker<'e> {
             ExprKind::Question { expr: inner } => {
                 let inner_ty = self.check_expr(inner);
                 match &inner_ty {
-                    Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option") => {
+                    Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option") =>
+                    {
+                        if !matches!(
+                            &self.current_return_ty,
+                            Ty::Applied(ret_base, _) if matches!(ret_base.as_ref(), Ty::Enum(n) if n == "Option")
+                        ) {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                "the `?` operator on Option requires the caller to return `Option`"
+                                    .to_string(),
+                                inner.span,
+                                vec!["`?` on Option propagates None to the caller".to_string()],
+                            );
+                            return Ty::Unit;
+                        }
                         args.first().cloned().unwrap_or(Ty::Unit)
                     }
-                    Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result") => {
-                        args.first().cloned().unwrap_or(Ty::Unit)
+                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result") =>
+                    {
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            "Result propagation with `?` is not lowered yet".to_string(),
+                            inner.span,
+                            vec![
+                                "use an explicit `match` on Result until Err propagation is lowered"
+                                    .to_string(),
+                            ],
+                        );
+                        Ty::Unit
                     }
                     Ty::Never => Ty::Never,
                     _ => {
@@ -2177,7 +2300,7 @@ mod tests {
     use super::*;
     use vow_diag::Diagnostic;
     use vow_syntax::ast::{
-        BinOp, Block, Expr, ExprKind, FnDef, Item, Lit, Module, Param, Type, Visibility,
+        BinOp, Block, Expr, ExprKind, FnDef, Item, Lit, Module, Param, Stmt, Type, Visibility,
     };
     use vow_syntax::span::Span;
 
@@ -2637,6 +2760,29 @@ mod tests {
         }));
         assert!(checker.has_errors());
         assert!(emitter.0[0].message.contains("undefined function"));
+    }
+
+    #[test]
+    fn call_non_identifier_callee_error() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.current_return_ty = Ty::I32;
+        let ty = checker.check_expr(&make_expr(ExprKind::Call {
+            callee: Box::new(make_expr(ExprKind::Return {
+                value: Some(Box::new(int_lit())),
+            })),
+            args: vec![],
+        }));
+        assert_eq!(ty, Ty::Unit);
+        assert!(checker.has_errors());
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|diag| diag.message.contains("callee must be an identifier")),
+            "expected non-identifier callee diagnostic, got {:#?}",
+            emitter.0
+        );
     }
 
     #[test]
@@ -3136,6 +3282,56 @@ mod tests {
         assert!(!checker.has_errors());
     }
 
+    #[test]
+    fn block_expr_trailing_return_stmt_returns_never_type() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.current_return_ty = Ty::I32;
+        let ty = checker.check_expr(&make_expr(ExprKind::Block(Box::new(Block {
+            stmts: vec![Stmt::Expr {
+                expr: make_expr(ExprKind::Return {
+                    value: Some(Box::new(int_lit())),
+                }),
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: None,
+            span: dummy_span(),
+        }))));
+        assert_eq!(ty, Ty::Never);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn block_expr_trailing_never_call_stmt_returns_never_type() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        use crate::env::FnSig;
+        use std::collections::BTreeSet;
+        checker.env.define_fn(
+            "abort",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::Never,
+                effects: BTreeSet::new(),
+            },
+        );
+        let ty = checker.check_expr(&make_expr(ExprKind::Block(Box::new(Block {
+            stmts: vec![Stmt::Expr {
+                expr: make_expr(ExprKind::Call {
+                    callee: Box::new(ident("abort")),
+                    args: vec![],
+                }),
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: None,
+            span: dummy_span(),
+        }))));
+        assert_eq!(ty, Ty::Never);
+        assert!(!checker.has_errors());
+    }
+
     // --- Question operator ---
 
     #[test]
@@ -3143,6 +3339,7 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         let opt_i32 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
+        checker.current_return_ty = opt_i32.clone();
         checker.env.define("v", opt_i32);
         let ty = checker.check_expr(&make_expr(ExprKind::Question {
             expr: Box::new(ident("v")),
@@ -3152,19 +3349,36 @@ mod tests {
     }
 
     #[test]
-    fn question_on_result_unwraps() {
+    fn question_on_option_requires_option_return() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let opt_i32 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
+        checker.current_return_ty = Ty::I32;
+        checker.env.define("v", opt_i32);
+        let ty = checker.check_expr(&make_expr(ExprKind::Question {
+            expr: Box::new(ident("v")),
+        }));
+        assert_eq!(ty, Ty::Unit);
+        assert!(checker.has_errors());
+        assert!(emitter.0[0].message.contains("return `Option`"));
+    }
+
+    #[test]
+    fn question_on_result_rejected_until_lowered() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         let res_i32_str = Ty::Applied(
             Box::new(Ty::Enum("Result".to_string())),
             vec![Ty::I32, Ty::Str],
         );
+        checker.current_return_ty = res_i32_str.clone();
         checker.env.define("v", res_i32_str);
         let ty = checker.check_expr(&make_expr(ExprKind::Question {
             expr: Box::new(ident("v")),
         }));
-        assert_eq!(ty, Ty::I32);
-        assert!(!checker.has_errors());
+        assert_eq!(ty, Ty::Unit);
+        assert!(checker.has_errors());
+        assert!(emitter.0[0].message.contains("Result propagation"));
     }
 
     #[test]
@@ -3439,6 +3653,32 @@ mod tests {
         });
         checker.check_expr(&expr);
         assert!(checker.has_errors());
+    }
+
+    #[test]
+    fn bind_arm_pattern_builtin_option_u64_payload() {
+        use vow_syntax::ast::{Pat, PatKind};
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let pat = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Option".to_string(), "Some".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Ident {
+                        name: "n".to_string(),
+                        is_mut: false,
+                    },
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+        let scrutinee_ty = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::U64]);
+
+        checker.bind_arm_pattern(&pat, &scrutinee_ty);
+
+        assert_eq!(checker.env.lookup("n"), Some(&Ty::U64));
+        assert!(!checker.has_errors());
     }
 
     // --- Float literal ---

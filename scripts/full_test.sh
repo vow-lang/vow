@@ -964,6 +964,23 @@ if uv run python scripts/generate_help.py --check >/dev/null 2>&1; then
 else
     fail "help/skills-dir-drift" "skills/vow/ drifted from generated content; run 'uv run python scripts/generate_help.py'"
 fi
+echo ""
+
+# ─── Section 8b: Installer Script ─────────────────────────────────
+
+section_begin "Section 8b: Installer Script"
+
+install_toolchain_log="$TMPDIR/install_toolchain_tests.log"
+if bash tests/install_toolchain/tests.sh >"$install_toolchain_log" 2>&1; then
+    pass "install-toolchain/smoke"
+else
+    fail "install-toolchain/smoke" "$(tail -20 "$install_toolchain_log")"
+fi
+echo ""
+
+# ─── Section 8c: Contract Quality ─────────────────────────────────
+
+section_begin "Section 8c: Contract Quality"
 
 # contract-quality/weak-gate: ratchet on static contract quality across the
 # self-hosted compiler — fail if the weak/tautological contract count exceeds the
@@ -1246,6 +1263,20 @@ for subcmd in build verify contracts; do
         fail "${subcmd}/no-source-message" "rust=$r_sub self=$s_sub (expected nonzero + 'vow ${subcmd}: source file required')"
     fi
 done
+# Legacy flag-only invocations also have no source path, but they bypass
+# frontend_path_from_argv. Keep that fallback aligned with Rust instead of
+# regressing to the old generic `usage: main ...` text.
+r_legacy=0; "$RUST" --no-verify >/dev/null 2>"$TMPDIR/r_legacy_nosrc.err" || r_legacy=$?
+s_legacy=0; run_self --no-verify >/dev/null 2>"$TMPDIR/s_legacy_nosrc.err" || s_legacy=$?
+if [ "$r_legacy" != "0" ] && [ "$s_legacy" != "0" ] \
+   && grep -q "vow: source file required (try --help or use a subcommand)" "$TMPDIR/r_legacy_nosrc.err" \
+   && grep -q "vow: source file required (try --help or use a subcommand)" "$TMPDIR/s_legacy_nosrc.err" \
+   && ! grep -q "usage: main" "$TMPDIR/r_legacy_nosrc.err" \
+   && ! grep -q "usage: main" "$TMPDIR/s_legacy_nosrc.err"; then
+    pass "legacy/no-source-message (fallback-specific, both nonzero)"
+else
+    fail "legacy/no-source-message" "rust=$r_legacy self=$s_legacy (expected nonzero + legacy source-required message, no 'usage: main')"
+fi
 # `--help --human` must document the complexity command in BOTH compilers. The JSON
 # --help always listed it; the legacy human help previously omitted it.
 if "$RUST" --help --human 2>/dev/null | grep -q "vow complexity \[OPTIONS\]" \

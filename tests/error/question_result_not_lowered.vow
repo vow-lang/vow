@@ -1,0 +1,13 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "Result propagation with `?` is not lowered yet"
+module question_result_not_lowered
+
+fn f(r: Result<u64, ()>) -> Result<u64, ()> {
+    let v: u64 = r?;
+    Result::Ok(v)
+}
+
+fn main() -> i32 {
+    let r: Result<u64, ()> = f(Result::Ok(1u64));
+    0
+}

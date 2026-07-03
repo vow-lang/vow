@@ -161,6 +161,153 @@ fn compile_success() {
     assert_eq!(run.status.code(), Some(0), "compiled binary should exit 0");
 }
 
+#[test]
+fn build_accepts_function_body_ending_in_return_expr_statement() {
+    build_support_libs();
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let src_path = dir.path().join("trailing_return_expr.vow");
+    let out_path = dir.path().join("trailing_return_expr");
+    let src = r#"module TrailingReturnExpr
+
+fn f() -> u64 {
+    return 5u64;
+}
+
+fn g() -> u64 {
+    let x: u64 = 6u64;
+    return x;
+}
+
+fn main() -> i32 [io] {
+    print_u64(f());
+    print_str("\n");
+    print_u64(g());
+    print_str("\n");
+    0
+}
+"#;
+    std::fs::write(&src_path, src).unwrap();
+
+    let result = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            src_path.to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "expected build success\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(json["status"], "Unverified");
+    assert!(out_path.exists(), "expected executable at {out_path:?}");
+
+    let run = Command::new(&out_path)
+        .output()
+        .expect("failed to run compiled binary");
+    assert_eq!(run.status.code(), Some(0), "compiled binary should exit 0");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n6\n");
+}
+
+#[test]
+fn build_accepts_function_body_ending_in_never_call_statement() {
+    build_support_libs();
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let src_path = dir.path().join("trailing_never_call.vow");
+    let out_path = dir.path().join("trailing_never_call");
+    let src = r#"module TrailingNeverCall
+
+fn abort_with(code: i64) -> i32 [io] {
+    process_exit(code);
+}
+
+fn main() -> i32 {
+    0
+}
+"#;
+    std::fs::write(&src_path, src).unwrap();
+
+    let result = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            src_path.to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "expected build success\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(json["status"], "Unverified");
+    assert!(out_path.exists(), "expected executable at {out_path:?}");
+}
+
+#[test]
+fn build_rejects_divergent_subexpression_in_invalid_call() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let src_path = dir.path().join("invalid_divergent_call.vow");
+    let src = r#"module InvalidDivergentCall
+
+fn f() -> u64 {
+    (return 5u64)();
+}
+
+fn main() -> i32 {
+    0
+}
+"#;
+    std::fs::write(&src_path, src).unwrap();
+
+    let result = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            src_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "expected compile failure\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(json["status"], "CompileFailed");
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("callee must be an identifier"),
+        "expected non-identifier callee diagnostic\nstdout: {}\nstderr: {}",
+        stdout,
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn stdin_read_line_processes_large_stream_under_memory_cap() {
