@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "Option requires one type argument"
+module option_arity
+
+fn main() -> i32 {
+    let o: Option<u64, i32> = Option::Some(1u64);
+    0
+}

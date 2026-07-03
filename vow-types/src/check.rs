@@ -1562,11 +1562,35 @@ impl<'e> Checker<'e> {
             ExprKind::Question { expr: inner } => {
                 let inner_ty = self.check_expr(inner);
                 match &inner_ty {
-                    Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option") => {
+                    Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option") =>
+                    {
+                        if !matches!(
+                            &self.current_return_ty,
+                            Ty::Applied(ret_base, _) if matches!(ret_base.as_ref(), Ty::Enum(n) if n == "Option")
+                        ) {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                "the `?` operator on Option requires the caller to return `Option`"
+                                    .to_string(),
+                                inner.span,
+                                vec!["`?` on Option propagates None to the caller".to_string()],
+                            );
+                            return Ty::Unit;
+                        }
                         args.first().cloned().unwrap_or(Ty::Unit)
                     }
-                    Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result") => {
-                        args.first().cloned().unwrap_or(Ty::Unit)
+                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result") =>
+                    {
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            "Result propagation with `?` is not lowered yet".to_string(),
+                            inner.span,
+                            vec![
+                                "use an explicit `match` on Result until Err propagation is lowered"
+                                    .to_string(),
+                            ],
+                        );
+                        Ty::Unit
                     }
                     Ty::Never => Ty::Never,
                     _ => {
@@ -3124,6 +3148,7 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         let opt_i32 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
+        checker.current_return_ty = opt_i32.clone();
         checker.env.define("v", opt_i32);
         let ty = checker.check_expr(&make_expr(ExprKind::Question {
             expr: Box::new(ident("v")),
@@ -3133,19 +3158,36 @@ mod tests {
     }
 
     #[test]
-    fn question_on_result_unwraps() {
+    fn question_on_option_requires_option_return() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let opt_i32 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
+        checker.current_return_ty = Ty::I32;
+        checker.env.define("v", opt_i32);
+        let ty = checker.check_expr(&make_expr(ExprKind::Question {
+            expr: Box::new(ident("v")),
+        }));
+        assert_eq!(ty, Ty::Unit);
+        assert!(checker.has_errors());
+        assert!(emitter.0[0].message.contains("return `Option`"));
+    }
+
+    #[test]
+    fn question_on_result_rejected_until_lowered() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         let res_i32_str = Ty::Applied(
             Box::new(Ty::Enum("Result".to_string())),
             vec![Ty::I32, Ty::Str],
         );
+        checker.current_return_ty = res_i32_str.clone();
         checker.env.define("v", res_i32_str);
         let ty = checker.check_expr(&make_expr(ExprKind::Question {
             expr: Box::new(ident("v")),
         }));
-        assert_eq!(ty, Ty::I32);
-        assert!(!checker.has_errors());
+        assert_eq!(ty, Ty::Unit);
+        assert!(checker.has_errors());
+        assert!(emitter.0[0].message.contains("Result propagation"));
     }
 
     #[test]

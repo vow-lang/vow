@@ -1,0 +1,13 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "the `?` operator on Option requires the caller to return `Option`"
+module question_option_scalar_return
+
+fn f(o: Option<u64>) -> u64 {
+    let v: u64 = o?;
+    v
+}
+
+fn main() -> i32 {
+    let x: u64 = f(Option::Some(1u64));
+    0
+}
