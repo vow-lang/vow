@@ -1351,7 +1351,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             return e.fn_ret_tids[fidx];
         }
         let _callee_tid: i64 = check_expr(e, m, callee_eid);
-        return CTY_NEVER();
+        env_emit_error(e, String::from("function call callee must be an identifier"), expr_span(a, callee_eid));
+        return CTY_UNIT();
     }
 
     if tag == EXPR_METHOD() {

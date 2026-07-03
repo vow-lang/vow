@@ -264,6 +264,50 @@ fn main() -> i32 {
     assert!(out_path.exists(), "expected executable at {out_path:?}");
 }
 
+#[test]
+fn build_rejects_divergent_subexpression_in_invalid_call() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let src_path = dir.path().join("invalid_divergent_call.vow");
+    let src = r#"module InvalidDivergentCall
+
+fn f() -> u64 {
+    (return 5u64)();
+}
+
+fn main() -> i32 {
+    0
+}
+"#;
+    std::fs::write(&src_path, src).unwrap();
+
+    let result = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            src_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "expected compile failure\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(json["status"], "CompileFailed");
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("callee must be an identifier"),
+        "expected non-identifier callee diagnostic\nstdout: {}\nstderr: {}",
+        stdout,
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn stdin_read_line_processes_large_stream_under_memory_cap() {

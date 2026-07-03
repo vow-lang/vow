@@ -1,0 +1,12 @@
+// TEST: stderr "callee must be an identifier"
+// TEST: error-code TypeMismatch
+// A divergent subexpression inside an invalid call is not a checked diverging call.
+module DivergentSubexpressionInvalidCallReturn
+
+fn f() -> u64 {
+  (return 5u64)();
+}
+
+fn main() -> i32 {
+  0
+}

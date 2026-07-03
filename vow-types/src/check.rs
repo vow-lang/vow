@@ -1026,9 +1026,15 @@ impl<'e> Checker<'e> {
                 let name = match &callee.kind {
                     ExprKind::Ident(n) => n.as_str(),
                     _ => {
+                        self.check_expr(callee);
                         for arg in args {
                             self.check_expr(arg);
                         }
+                        self.emit_error(
+                            ErrorCode::TypeMismatch,
+                            "function call callee must be an identifier",
+                            callee.span,
+                        );
                         return Ty::Unit;
                     }
                 };
@@ -2711,6 +2717,29 @@ mod tests {
         }));
         assert!(checker.has_errors());
         assert!(emitter.0[0].message.contains("undefined function"));
+    }
+
+    #[test]
+    fn call_non_identifier_callee_error() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.current_return_ty = Ty::I32;
+        let ty = checker.check_expr(&make_expr(ExprKind::Call {
+            callee: Box::new(make_expr(ExprKind::Return {
+                value: Some(Box::new(int_lit())),
+            })),
+            args: vec![],
+        }));
+        assert_eq!(ty, Ty::Unit);
+        assert!(checker.has_errors());
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|diag| diag.message.contains("callee must be an identifier")),
+            "expected non-identifier callee diagnostic, got {:#?}",
+            emitter.0
+        );
     }
 
     #[test]
