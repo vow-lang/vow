@@ -572,6 +572,80 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
     }
 }
 
+fn ir_ty_is_integer(ty: Ty) -> bool {
+    matches!(ty, Ty::I32 | Ty::I64 | Ty::U64)
+}
+
+fn expr_is_coercible_int_marker(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Int(_)) => true,
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => expr_is_coercible_int_marker(operand),
+        ExprKind::BinaryOp {
+            op:
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Rem
+                | BinOp::AddChecked
+                | BinOp::SubChecked
+                | BinOp::MulChecked
+                | BinOp::DivChecked
+                | BinOp::RemChecked
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Shl
+                | BinOp::Shr,
+            lhs,
+            rhs,
+        } => expr_is_coercible_int_marker(lhs) && expr_is_coercible_int_marker(rhs),
+        ExprKind::Block(block) => block_result_is_coercible_int_marker(block),
+        _ => false,
+    }
+}
+
+fn block_result_is_coercible_int_marker(block: &Block) -> bool {
+    if let Some(expr) = &block.trailing_expr {
+        return expr_is_coercible_int_marker(expr);
+    }
+    if let Some(Stmt::Expr {
+        expr,
+        has_semicolon: false,
+        ..
+    }) = block.stmts.last()
+    {
+        return expr_is_coercible_int_marker(expr);
+    }
+    false
+}
+
+fn choose_match_result_ty(
+    arm_results: &[(BlockId, InstId, Ty, Vec<InstId>)],
+    arm_result_markers: &[bool],
+) -> Ty {
+    let Some((_, _, first_ty, _)) = arm_results.first() else {
+        return Ty::I64;
+    };
+    let mut result_ty = *first_ty;
+    let mut result_is_marker = arm_result_markers.first().copied().unwrap_or(false);
+
+    for (i, (_, _, arm_ty, _)) in arm_results.iter().enumerate().skip(1) {
+        let arm_is_marker = arm_result_markers.get(i).copied().unwrap_or(false);
+        if result_is_marker && ir_ty_is_integer(*arm_ty) {
+            result_ty = *arm_ty;
+            result_is_marker = arm_is_marker && *arm_ty == Ty::I64;
+        } else if !(arm_is_marker && ir_ty_is_integer(result_ty)) {
+            result_is_marker = false;
+        }
+    }
+
+    result_ty
+}
+
 /// Return variables that are assigned in `then_branch` or `else_branch` AND
 /// currently exist in scope (so they're live across the branch).
 fn collect_if_mutations(
@@ -2160,6 +2234,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
             let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
+            let mut arm_result_markers: Vec<bool> = Vec::new();
 
             let mut arm_iter = arms.iter().peekable();
             while let Some(arm) = arm_iter.next() {
@@ -2243,6 +2318,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             );
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+                            arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
                         }
 
                         ctx.restore_scope(scope_snap.clone());
@@ -2285,6 +2361,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             );
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+                            arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
                         }
 
                         ctx.restore_scope(scope_snap.clone());
@@ -2312,6 +2389,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             span,
                         );
                         arm_results.push((arm_block, up_id, Ty::Unit, arm_mut_vals));
+                        arm_result_markers.push(false);
                     }
                 }
             }
@@ -2345,10 +2423,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.assign(name, phi_id);
             }
 
-            let phi_ty = arm_results
-                .first()
-                .map(|(_, _, ty, _)| *ty)
-                .unwrap_or(Ty::I64);
+            let phi_ty = choose_match_result_ty(&arm_results, &arm_result_markers);
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
 
             for (arm_block, up_id, _, _) in &arm_results {
@@ -4314,6 +4389,85 @@ mod tests {
             1,
             "only the arm that reaches the match merge should feed the result Phi"
         );
+    }
+
+    #[test]
+    fn match_expression_u64_result_phi_uses_later_u64_for_literal_first_arm() {
+        let u64_cast = |v| Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(int_expr(v)),
+                target_ty: Box::new(u64_ty()),
+            },
+            span: sp(),
+        };
+        let enum_pat = |variant: &str| Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Pick".to_string(), variant.to_string()],
+                inner: vec![],
+            },
+            span: sp(),
+        };
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("p")),
+                arms: vec![
+                    MatchArm {
+                        pattern: enum_pat("Big"),
+                        body: int_expr(0),
+                        span: sp(),
+                    },
+                    MatchArm {
+                        pattern: enum_pat("Zero"),
+                        body: u64_cast(9223372036854775808),
+                        span: sp(),
+                    },
+                ],
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(match_expr)),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "pick",
+            vec![make_param(
+                "p",
+                Type::Named {
+                    name: "Pick".to_string(),
+                    span: sp(),
+                },
+            )],
+            u64_ty(),
+            body,
+            vec![],
+        );
+        let enum_variant_map = HashMap::from([(
+            "Pick".to_string(),
+            vec!["Big".to_string(), "Zero".to_string()],
+        )]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            enum_variant_map,
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let phis: Vec<_> = func
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .filter(|inst| inst.opcode == Opcode::Phi)
+            .collect();
+        assert_eq!(phis.len(), 1, "expected only the match result Phi");
+        assert_eq!(phis[0].ty, Ty::U64);
     }
 
     #[test]
