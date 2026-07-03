@@ -2112,7 +2112,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
     let has_output: bool = has_flag(argv, "-o");
     let path: String = get_source_path(argv);
     if path.len() == 0 {
-        eprintln_str("usage: main [-o <output>] <file.vow>");
+        eprintln_str("vow: source file required (try --help or use a subcommand)");
         return 1;
     }
     let fr: LoweredFrontend = frontend_lower_path(path);
