@@ -1,0 +1,15 @@
+// TEST: stderr "argument has wrong type"
+// TEST: error-code TypeMismatch
+// A genuine i32 payload inside Option must not widen when passed to an
+// Option<u64> parameter.
+module I32U64OptionCall
+
+fn takes_option_u64(x: Option<u64>) -> i32 {
+  0
+}
+
+fn main() -> i32 {
+  let x: i32 = 42;
+  takes_option_u64(Option::Some(x));
+  0
+}

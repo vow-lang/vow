@@ -1,0 +1,28 @@
+// TEST: stdout "42\n99\n"
+// Unsuffixed integer literals nested inside Option::Some must context-coerce
+// through the typed Option<T> annotation without making real i32 values widen.
+module OptionLiteralContextCoercion
+
+fn unwrap_i32(o: Option<i32>) -> i32 {
+    match o {
+        Option::Some(v) => { v },
+        Option::None => { 0 },
+    }
+}
+
+fn unwrap_u64(o: Option<u64>) -> u64 {
+    match o {
+        Option::Some(v) => { v },
+        Option::None => { 0 },
+    }
+}
+
+fn main() -> i32 [io] {
+    let a: Option<i32> = Option::Some(42);
+    let b: Option<u64> = Option::Some(99);
+    print_i64(unwrap_i32(a) as i64);
+    print_str("\n");
+    print_u64(unwrap_u64(b));
+    print_str("\n");
+    0
+}

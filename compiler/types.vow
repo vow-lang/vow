@@ -244,5 +244,40 @@ fn is_coercible(ts: TyStore, from_tid: i64, to_tid: i64) -> bool {
     if from_tag == CTY_LIT_INT() && ty_is_integer(ts, to_tid) {
         return true;
     }
+    if from_tag == CTY_APPLIED() && to_tag == CTY_APPLIED() {
+        if !tids_equal(ts, ty_a(ts, from_tid), ty_a(ts, to_tid)) {
+            return false;
+        }
+        let from_lid: i64 = ty_b(ts, from_tid);
+        let to_lid: i64 = ty_b(ts, to_tid);
+        let n: i64 = ts_arg_len(ts, from_lid);
+        if n != ts_arg_len(ts, to_lid) {
+            return false;
+        }
+        let mut i: i64 = 0;
+        while i < n {
+            if !is_coercible(ts, ts_arg_get(ts, from_lid, i), ts_arg_get(ts, to_lid, i)) {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    if from_tag == CTY_TUPLE() && to_tag == CTY_TUPLE() {
+        let from_lid2: i64 = ty_a(ts, from_tid);
+        let to_lid2: i64 = ty_a(ts, to_tid);
+        let n2: i64 = ts_arg_len(ts, from_lid2);
+        if n2 != ts_arg_len(ts, to_lid2) {
+            return false;
+        }
+        let mut j: i64 = 0;
+        while j < n2 {
+            if !is_coercible(ts, ts_arg_get(ts, from_lid2, j), ts_arg_get(ts, to_lid2, j)) {
+                return false;
+            }
+            j = j + 1;
+        }
+        return true;
+    }
     tids_equal(ts, from_tid, to_tid)
 }

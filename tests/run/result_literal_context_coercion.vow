@@ -1,0 +1,28 @@
+// TEST: stdout "42\n7\n"
+// Result::Ok/Err payload literals keep their marker inside Result<T, E> until
+// a typed context chooses the concrete integer slot.
+module ResultLiteralContextCoercion
+
+fn ok_value(r: Result<i32, ()>) -> i32 {
+    match r {
+        Result::Ok(v) => { v },
+        Result::Err(_) => { 0 },
+    }
+}
+
+fn err_value(r: Result<(), i32>) -> i32 {
+    match r {
+        Result::Ok(_) => { 0 },
+        Result::Err(v) => { v },
+    }
+}
+
+fn main() -> i32 [io] {
+    let ok: Result<i32, ()> = Result::Ok(42);
+    let err: Result<(), i32> = Result::Err(7);
+    print_i64(ok_value(ok) as i64);
+    print_str("\n");
+    print_i64(err_value(err) as i64);
+    print_str("\n");
+    0
+}

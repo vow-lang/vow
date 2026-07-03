@@ -1,0 +1,11 @@
+// TEST: stderr "let binding type mismatch"
+// TEST: error-code TypeMismatch
+// Recursive contextual coercion may consume nested literal markers, but must
+// not reopen the old hole for genuine i32 payloads inside Option.
+module I32U64OptionArg
+
+fn main() -> i32 {
+  let x: i32 = 42;
+  let y: Option<u64> = Option::Some(x);
+  0
+}

@@ -204,6 +204,22 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         if name == String::from("Vec") {
             return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
         }
+        if name == String::from("Option") {
+            if arg_tids.len() != 1 {
+                env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                    String::from("Option requires one type argument"),
+                    type_span(a, ast_tid));
+            }
+            return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+        }
+        if name == String::from("Result") {
+            if arg_tids.len() != 2 {
+                env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                    String::from("Result requires two type arguments"),
+                    type_span(a, ast_tid));
+            }
+            return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+        }
         if name == String::from("HashMap") || name == String::from("BTreeMap") {
             // Mirrors Rust env.rs: BTreeMap requires exactly two type arguments,
             // K must be i64, V must be non-linear (linear V rejected because
@@ -965,13 +981,11 @@ fn bin_operands_compatible(ts: TyStore, lhs_tid: i64, rhs_tid: i64) -> bool {
 }
 
 fn result_tids_compatible(ts: TyStore, a_tid: i64, b_tid: i64) -> bool {
-    tids_equal(ts, a_tid, b_tid)
-        || (ty_is_lit_int(ts, a_tid) && ty_is_integer(ts, b_tid))
-        || (ty_is_lit_int(ts, b_tid) && ty_is_integer(ts, a_tid))
+    is_coercible(ts, a_tid, b_tid) || is_coercible(ts, b_tid, a_tid)
 }
 
 fn merge_result_tid(ts: TyStore, current_tid: i64, incoming_tid: i64) -> i64 {
-    if ty_is_lit_int(ts, current_tid) && ty_is_integer(ts, incoming_tid) {
+    if is_coercible(ts, current_tid, incoming_tid) {
         return incoming_tid;
     }
     current_tid
@@ -1164,7 +1178,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let ptid: i64 = ts_arg_get(e.ts, plid, ai);
                     let atid: i64 = arg_tids[ai];
                     let aeid: i64 = list_get(a, args_lid, ai);
-                    if ty_is_numeric_or_lit_int(e.ts, atid) && ty_is_numeric_or_lit_int(e.ts, ptid) && !operand_coercible(e.ts, atid, ptid) {
+                    if !is_coercible(e.ts, atid, ptid) {
                         env_emit_error(e, String::from("argument has wrong type"), expr_span(a, aeid));
                     }
                     ai = ai + 1;
@@ -1655,9 +1669,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let n_path: i64 = list_len(a, path_lid);
         let first_sid: i64 = list_get(a, path_lid, 0);
         let first_name: String = arena_str(a, first_sid);
+        let mut second_name: String = String::from("");
+        if n_path > 1 {
+            let second_sid0: i64 = list_get(a, path_lid, 1);
+            second_name = arena_str(a, second_sid0);
+        }
         let n_args: i64 = list_len(a, args_lid);
         let mut i: i64 = 0;
-        let mut first_arg_tid: i64 = CTY_UNKNOWN();
+        let mut first_arg_tid: i64 = CTY_UNIT();
         while i < n_args {
             let arg_eid: i64 = list_get(a, args_lid, i);
             let arg_tid: i64 = check_expr(e, m, arg_eid);
@@ -1667,10 +1686,29 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             i = i + 1;
         }
         if first_name == String::from("Option") {
-            return ts_make_enum(e.ts, String::from("Option"));
+            let opt_base_tid: i64 = ts_make_enum(e.ts, String::from("Option"));
+            if second_name == String::from("Some") {
+                let opt_args: Vec<i64> = Vec::new();
+                opt_args.push(first_arg_tid);
+                return ts_make_applied(e.ts, opt_base_tid, opt_args);
+            }
+            return CTY_NEVER();
         }
         if first_name == String::from("Result") {
-            return ts_make_enum(e.ts, String::from("Result"));
+            let result_base_tid: i64 = ts_make_enum(e.ts, String::from("Result"));
+            if second_name == String::from("Ok") {
+                let ok_args: Vec<i64> = Vec::new();
+                ok_args.push(first_arg_tid);
+                ok_args.push(CTY_UNIT());
+                return ts_make_applied(e.ts, result_base_tid, ok_args);
+            }
+            if second_name == String::from("Err") {
+                let err_args: Vec<i64> = Vec::new();
+                err_args.push(CTY_NEVER());
+                err_args.push(first_arg_tid);
+                return ts_make_applied(e.ts, result_base_tid, err_args);
+            }
+            return result_base_tid;
         }
         if first_name == String::from("Vec") {
             if n_path > 1 {
@@ -1723,6 +1761,21 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if is_opaque(inner_tid) {
             return inner_tid;
         }
+        if ty_tag(e.ts, inner_tid) == CTY_APPLIED() {
+            let base_tid: i64 = ty_a(e.ts, inner_tid);
+            let base_tag: i64 = ty_tag(e.ts, base_tid);
+            if base_tag == CTY_ENUM() {
+                let base_name: String = ty_struct_name(e.ts, base_tid);
+                if base_name == String::from("Option") || base_name == String::from("Result") {
+                    let args_lid: i64 = ty_b(e.ts, inner_tid);
+                    if ts_arg_len(e.ts, args_lid) > 0 {
+                        return ts_arg_get(e.ts, args_lid, 0);
+                    }
+                    return CTY_UNIT();
+                }
+            }
+        }
+        env_emit_error(e, String::from("the `?` operator requires Option<T> or Result<T,E>"), expr_span(a, inner_eid));
         return CTY_UNIT();
     }
 

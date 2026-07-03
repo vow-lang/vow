@@ -102,7 +102,28 @@ fn is_vec_raw_parts_copy_expr(expr: &vow_syntax::ast::Expr) -> bool {
 }
 
 fn can_context_coerce(from: &Ty, to: &Ty) -> bool {
-    from == to || *from == Ty::Never || (from.is_lit_int() && to.is_integer())
+    if from == to || *from == Ty::Never || (from.is_lit_int() && to.is_integer()) {
+        return true;
+    }
+
+    match (from, to) {
+        (Ty::Applied(from_base, from_args), Ty::Applied(to_base, to_args)) => {
+            from_base == to_base
+                && from_args.len() == to_args.len()
+                && from_args
+                    .iter()
+                    .zip(to_args.iter())
+                    .all(|(from_arg, to_arg)| can_context_coerce(from_arg, to_arg))
+        }
+        (Ty::Tuple(from_elems), Ty::Tuple(to_elems)) => {
+            from_elems.len() == to_elems.len()
+                && from_elems
+                    .iter()
+                    .zip(to_elems.iter())
+                    .all(|(from_elem, to_elem)| can_context_coerce(from_elem, to_elem))
+        }
+        _ => false,
+    }
 }
 
 fn can_assignment_coerce(from: &Ty, to: &Ty) -> bool {
@@ -124,9 +145,9 @@ fn merge_result_ty(current: &Ty, incoming: &Ty) -> Option<Ty> {
         Some(incoming.clone())
     } else if *incoming == Ty::Never {
         Some(current.clone())
-    } else if current.is_lit_int() && incoming.is_integer() {
+    } else if can_context_coerce(current, incoming) {
         Some(incoming.clone())
-    } else if incoming.is_lit_int() && current.is_integer() {
+    } else if can_context_coerce(incoming, current) {
         Some(current.clone())
     } else {
         None
@@ -3533,6 +3554,32 @@ mod tests {
             Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::LitInt])
         );
         assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn context_coercion_recurses_through_applied_literal_args() {
+        let opt_lit = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::LitInt]);
+        let opt_i32 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
+        let opt_u64 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::U64]);
+        let vec_i32 = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I32]);
+
+        assert!(can_context_coerce(&opt_lit, &opt_i32));
+        assert!(can_context_coerce(&opt_lit, &opt_u64));
+        assert!(!can_context_coerce(&opt_i32, &opt_u64));
+        assert!(!can_context_coerce(&opt_lit, &vec_i32));
+    }
+
+    #[test]
+    fn context_coercion_recurses_through_tuple_literal_elements() {
+        let tuple_lit = Ty::Tuple(vec![Ty::LitInt, Ty::Bool]);
+        let tuple_i32 = Ty::Tuple(vec![Ty::I32, Ty::Bool]);
+        let tuple_u64 = Ty::Tuple(vec![Ty::U64, Ty::Bool]);
+        let tuple_wrong_shape = Ty::Tuple(vec![Ty::I32]);
+
+        assert!(can_context_coerce(&tuple_lit, &tuple_i32));
+        assert!(can_context_coerce(&tuple_lit, &tuple_u64));
+        assert!(!can_context_coerce(&tuple_i32, &tuple_u64));
+        assert!(!can_context_coerce(&tuple_lit, &tuple_wrong_shape));
     }
 
     #[test]
