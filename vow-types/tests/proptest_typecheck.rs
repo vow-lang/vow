@@ -61,12 +61,45 @@ fn g() -> u64 {
 }
 
 #[test]
+fn trailing_never_call_statement_satisfies_declared_return_type() {
+    let diags = typecheck_source(
+        r#"module Test
+
+fn abort_with(code: i64) -> i32 [io] {
+    process_exit(code);
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:#?}");
+}
+
+#[test]
 fn non_diverging_never_placeholder_statement_does_not_satisfy_declared_return_type() {
     let diags = typecheck_source(
         r#"module Test
 
 fn f() -> u64 {
     Option::None;
+}
+"#,
+    );
+
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("function body has type `()`")),
+        "expected unit body mismatch, got diagnostics: {diags:#?}"
+    );
+}
+
+#[test]
+fn non_diverging_vec_placeholder_statement_does_not_satisfy_declared_return_type() {
+    let diags = typecheck_source(
+        r#"module Test
+
+fn f() -> u64 {
+    Vec::from_raw_parts_copy(0, 0);
 }
 "#,
     );

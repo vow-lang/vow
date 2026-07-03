@@ -220,6 +220,50 @@ fn main() -> i32 [io] {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n6\n");
 }
 
+#[test]
+fn build_accepts_function_body_ending_in_never_call_statement() {
+    build_support_libs();
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let src_path = dir.path().join("trailing_never_call.vow");
+    let out_path = dir.path().join("trailing_never_call");
+    let src = r#"module TrailingNeverCall
+
+fn abort_with(code: i64) -> i32 [io] {
+    process_exit(code);
+}
+
+fn main() -> i32 {
+    0
+}
+"#;
+    std::fs::write(&src_path, src).unwrap();
+
+    let result = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            src_path.to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "expected build success\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(json["status"], "Unverified");
+    assert!(out_path.exists(), "expected executable at {out_path:?}");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn stdin_read_line_processes_large_stream_under_memory_cap() {
