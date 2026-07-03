@@ -812,6 +812,76 @@ fn vec_contains_str(v: Vec<String>, s: String) -> bool {
     false
 }
 
+fn ir_ty_is_integer(ty: i64) -> bool {
+    ty == ITY_I32() || ty == ITY_I64() || ty == ITY_U64()
+}
+
+fn block_result_is_coercible_int_marker(a: AstArena, bid: i64) -> bool {
+    let trail_eid: i64 = blk_trail(a, bid);
+    if trail_eid != -1 {
+        return expr_is_coercible_int_marker(a, trail_eid);
+    }
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    if n == 0 { return false; }
+    let last_sid: i64 = list_get(a, stmts_lid, n - 1);
+    if stmt_tag(a, last_sid) != STMT_EXPR() { return false; }
+    if stmt_b(a, last_sid) != 0 { return false; }
+    expr_is_coercible_int_marker(a, stmt_a(a, last_sid))
+}
+
+fn expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() {
+        return true;
+    }
+    if tag == EXPR_UNOP() {
+        let op: i64 = expr_a(a, eid);
+        if op == UNOP_NEG() {
+            return expr_is_coercible_int_marker(a, expr_b(a, eid));
+        }
+        return false;
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        let marker_op: bool = op == BINOP_ADD() || op == BINOP_SUB()
+            || op == BINOP_MUL() || op == BINOP_DIV() || op == BINOP_REM()
+            || op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK()
+            || op == BINOP_MUL_CHK() || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK()
+            || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
+            || op == BINOP_SHL() || op == BINOP_SHR();
+        if marker_op {
+            return expr_is_coercible_int_marker(a, expr_b(a, eid)) && expr_is_coercible_int_marker(a, expr_c(a, eid));
+        }
+        return false;
+    }
+    if tag == EXPR_BLOCK() {
+        return block_result_is_coercible_int_marker(a, expr_a(a, eid));
+    }
+    false
+}
+
+fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i64 {
+    if result_tys.len() == 0 {
+        return ITY_I64();
+    }
+    let mut result_ty: i64 = result_tys[0];
+    let mut result_is_marker: bool = result_markers[0];
+    let mut i: i64 = 1;
+    while i < result_tys.len() {
+        let arm_ty: i64 = result_tys[i];
+        let arm_is_marker: bool = result_markers[i];
+        if result_is_marker && ir_ty_is_integer(arm_ty) {
+            result_ty = arm_ty;
+            result_is_marker = arm_is_marker && arm_ty == ITY_I64();
+        } else if !(arm_is_marker && ir_ty_is_integer(result_ty)) {
+            result_is_marker = false;
+        }
+        i = i + 1;
+    }
+    result_ty
+}
+
 fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64) {
     let blk: IrBlock = ctx.func.blocks[block_id];
     let n: i64 = blk.insts.len();
@@ -2536,6 +2606,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let arm_exit_blocks: Vec<i64> = Vec::new();
         let arm_up_ids: Vec<i64> = Vec::new();
+        let reachable_result_tys: Vec<i64> = Vec::new();
+        let reachable_result_markers: Vec<bool> = Vec::new();
         let arm_mut_ups: Vec<i64> = Vec::new();
 
         let mut ai: i64 = 0;
@@ -2602,32 +2674,39 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
 
                 let arm_result: i64 = lower_expr(ctx, body_eid);
+                let arm_reaches_merge: bool = !lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
-                // Collect mutation values before restoring the pre-match scope.
-                let arm_mut_vals: Vec<i64> = Vec::new();
-                let mut ami: i64 = 0;
-                while ami < nmut {
-                    arm_mut_vals.push(lctx_lookup(ctx, match_muts[ami]));
-                    ami = ami + 1;
-                }
-                let mut mci: i64 = 0;
-                while mci < nmut {
-                    let mu_args: Vec<i64> = Vec::new();
-                    mu_args.push(arm_mut_vals[mci]);
-                    let mu_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
-                    arm_mut_ups.push(mu_id);
-                    mci = mci + 1;
-                }
+                if arm_reaches_merge {
+                    let arm_result_ty: i64 = lctx_inst_ty(ctx, arm_result);
 
-                let up_args: Vec<i64> = Vec::new();
-                up_args.push(arm_result);
-                let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
-                let jmp_args: Vec<i64> = Vec::new();
-                lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+                    // Collect mutation values before restoring the pre-match scope.
+                    let arm_mut_vals: Vec<i64> = Vec::new();
+                    let mut ami: i64 = 0;
+                    while ami < nmut {
+                        arm_mut_vals.push(lctx_lookup(ctx, match_muts[ami]));
+                        ami = ami + 1;
+                    }
+                    let mut mci: i64 = 0;
+                    while mci < nmut {
+                        let mu_args: Vec<i64> = Vec::new();
+                        mu_args.push(arm_mut_vals[mci]);
+                        let mu_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                        arm_mut_ups.push(mu_id);
+                        mci = mci + 1;
+                    }
 
-                arm_exit_blocks.push(ctx.current_block);
-                arm_up_ids.push(up_id);
+                    let up_args: Vec<i64> = Vec::new();
+                    up_args.push(arm_result);
+                    let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    let jmp_args: Vec<i64> = Vec::new();
+                    lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+
+                    arm_exit_blocks.push(ctx.current_block);
+                    arm_up_ids.push(up_id);
+                    reachable_result_tys.push(arm_result_ty);
+                    reachable_result_markers.push(expr_is_coercible_int_marker(a, body_eid));
+                }
 
                 lctx_restore(ctx, snap);
                 let mut rmi: i64 = 0;
@@ -2647,32 +2726,39 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     lctx_define(ctx, pname, ptr_id);
                 }
                 let arm_result: i64 = lower_expr(ctx, body_eid);
+                let arm_reaches_merge2: bool = !lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
-                // Collect mutation values before restoring the pre-match scope.
-                let arm_mut_vals2: Vec<i64> = Vec::new();
-                let mut ami2: i64 = 0;
-                while ami2 < nmut {
-                    arm_mut_vals2.push(lctx_lookup(ctx, match_muts[ami2]));
-                    ami2 = ami2 + 1;
-                }
-                let mut mci2: i64 = 0;
-                while mci2 < nmut {
-                    let mu2_args: Vec<i64> = Vec::new();
-                    mu2_args.push(arm_mut_vals2[mci2]);
-                    let mu2_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu2_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
-                    arm_mut_ups.push(mu2_id);
-                    mci2 = mci2 + 1;
-                }
+                if arm_reaches_merge2 {
+                    let arm_result_ty2: i64 = lctx_inst_ty(ctx, arm_result);
 
-                let up_args: Vec<i64> = Vec::new();
-                up_args.push(arm_result);
-                let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
-                let jmp_args: Vec<i64> = Vec::new();
-                lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+                    // Collect mutation values before restoring the pre-match scope.
+                    let arm_mut_vals2: Vec<i64> = Vec::new();
+                    let mut ami2: i64 = 0;
+                    while ami2 < nmut {
+                        arm_mut_vals2.push(lctx_lookup(ctx, match_muts[ami2]));
+                        ami2 = ami2 + 1;
+                    }
+                    let mut mci2: i64 = 0;
+                    while mci2 < nmut {
+                        let mu2_args: Vec<i64> = Vec::new();
+                        mu2_args.push(arm_mut_vals2[mci2]);
+                        let mu2_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu2_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                        arm_mut_ups.push(mu2_id);
+                        mci2 = mci2 + 1;
+                    }
 
-                arm_exit_blocks.push(ctx.current_block);
-                arm_up_ids.push(up_id);
+                    let up_args: Vec<i64> = Vec::new();
+                    up_args.push(arm_result);
+                    let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    let jmp_args: Vec<i64> = Vec::new();
+                    lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+
+                    arm_exit_blocks.push(ctx.current_block);
+                    arm_up_ids.push(up_id);
+                    reachable_result_tys.push(arm_result_ty2);
+                    reachable_result_markers.push(expr_is_coercible_int_marker(a, body_eid));
+                }
 
                 lctx_restore(ctx, snap);
                 let mut rmi2: i64 = 0;
@@ -2701,11 +2787,19 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                 arm_exit_blocks.push(ctx.current_block);
                 arm_up_ids.push(up_id);
+                reachable_result_tys.push(ITY_UNIT());
+                reachable_result_markers.push(false);
             }
 
             ai = ai + 1;
         }
         lctx_switch_to_block(ctx, merge_block);
+
+        let n_merge_arms: i64 = arm_exit_blocks.len();
+        if n_merge_arms == 0 {
+            let u_args: Vec<i64> = Vec::new();
+            return lctx_emit(ctx, IOP_UNREACHABLE(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
+        }
 
         let mut mpi: i64 = 0;
         while mpi < nmut {
@@ -2713,7 +2807,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let mphi_ty: i64 = lctx_inst_ty(ctx, saved_mut_vals[mpi]);
             let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, mphi_args, IDATA_NONE(), 0, 0, String::from(""));
             let mut bpi: i64 = 0;
-            while bpi < n_arms {
+            while bpi < n_merge_arms {
                 backpatch_upsilon(ctx, arm_exit_blocks[bpi], arm_mut_ups[bpi * nmut + mpi], mphi_id);
                 bpi = bpi + 1;
             }
@@ -2722,7 +2816,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         let phi_args: Vec<i64> = Vec::new();
-        let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+        // Exiting arms do not push here; literal-marker arms coerce to the checked integer result.
+        let result_ty: i64 = choose_match_result_ty(reachable_result_tys, reachable_result_markers);
+        let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
 
         let n_results: i64 = arm_up_ids.len();
         let mut ri: i64 = 0;
