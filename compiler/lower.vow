@@ -598,6 +598,8 @@ fn is_comparison_binop(op: i64) -> bool {
     op == BINOP_GT() || op == BINOP_GE() || op == BINOP_AND() || op == BINOP_OR()
 }
 
+// Keep this helper out of the postcondition expression: importing lower.vow
+// into compiler tests trips a latent Cranelift bug on the equivalent inline OR chain.
 fn is_binop_result_ty(ty: i64) -> bool {
     if ty == ITY_BOOL() { return true; }
     if ty == ITY_U64() { return true; }
