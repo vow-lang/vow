@@ -935,9 +935,10 @@ impl TypeEnv {
                 // Builtin generic types
                 match name.as_str() {
                     "Option" => {
-                        let arg = args
-                            .first()
-                            .ok_or_else(|| "Option requires one type argument".to_string())?;
+                        if args.len() != 1 {
+                            return Err("Option requires one type argument".to_string());
+                        }
+                        let arg = &args[0];
                         let t = self.resolve(arg)?;
                         return Ok(Ty::Applied(
                             Box::new(Ty::Enum("Option".to_string())),
@@ -945,12 +946,11 @@ impl TypeEnv {
                         ));
                     }
                     "Result" => {
-                        let t = args
-                            .first()
-                            .ok_or_else(|| "Result requires two type arguments".to_string())?;
-                        let e = args
-                            .get(1)
-                            .ok_or_else(|| "Result requires two type arguments".to_string())?;
+                        if args.len() != 2 {
+                            return Err("Result requires two type arguments".to_string());
+                        }
+                        let t = &args[0];
+                        let e = &args[1];
                         return Ok(Ty::Applied(
                             Box::new(Ty::Enum("Result".to_string())),
                             vec![self.resolve(t)?, self.resolve(e)?],
@@ -1242,6 +1242,39 @@ mod tests {
     }
 
     #[test]
+    fn resolve_option_generic_rejects_wrong_arity() {
+        let env = TypeEnv::new();
+        let no_args = AstType::Generic {
+            name: "Option".to_string(),
+            args: vec![],
+            span: dummy_span(),
+        };
+        assert_eq!(
+            env.resolve(&no_args),
+            Err("Option requires one type argument".to_string())
+        );
+
+        let too_many_args = AstType::Generic {
+            name: "Option".to_string(),
+            args: vec![
+                AstType::Named {
+                    name: "i64".to_string(),
+                    span: dummy_span(),
+                },
+                AstType::Named {
+                    name: "bool".to_string(),
+                    span: dummy_span(),
+                },
+            ],
+            span: dummy_span(),
+        };
+        assert_eq!(
+            env.resolve(&too_many_args),
+            Err("Option requires one type argument".to_string())
+        );
+    }
+
+    #[test]
     fn resolve_result_generic() {
         let env = TypeEnv::new();
         let ast_ty = AstType::Generic {
@@ -1264,6 +1297,46 @@ mod tests {
                 Box::new(Ty::Enum("Result".to_string())),
                 vec![Ty::I64, Ty::Bool]
             ))
+        );
+    }
+
+    #[test]
+    fn resolve_result_generic_rejects_wrong_arity() {
+        let env = TypeEnv::new();
+        let one_arg = AstType::Generic {
+            name: "Result".to_string(),
+            args: vec![AstType::Named {
+                name: "i64".to_string(),
+                span: dummy_span(),
+            }],
+            span: dummy_span(),
+        };
+        assert_eq!(
+            env.resolve(&one_arg),
+            Err("Result requires two type arguments".to_string())
+        );
+
+        let too_many_args = AstType::Generic {
+            name: "Result".to_string(),
+            args: vec![
+                AstType::Named {
+                    name: "i64".to_string(),
+                    span: dummy_span(),
+                },
+                AstType::Named {
+                    name: "bool".to_string(),
+                    span: dummy_span(),
+                },
+                AstType::Named {
+                    name: "i32".to_string(),
+                    span: dummy_span(),
+                },
+            ],
+            span: dummy_span(),
+        };
+        assert_eq!(
+            env.resolve(&too_many_args),
+            Err("Result requires two type arguments".to_string())
         );
     }
 

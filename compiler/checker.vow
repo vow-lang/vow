@@ -197,6 +197,24 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
             arg_tids.push(resolve_ast_ty(e, m, arg_ast_tid));
             i = i + 1;
         }
+        if name == String::from("Option") {
+            if arg_tids.len() == 1 {
+                return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+            }
+            env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                String::from("Option requires one type argument"),
+                type_span(a, ast_tid));
+            return CTY_UNKNOWN();
+        }
+        if name == String::from("Result") {
+            if arg_tids.len() == 2 {
+                return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+            }
+            env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                String::from("Result requires two type arguments"),
+                type_span(a, ast_tid));
+            return CTY_UNKNOWN();
+        }
         let base_ptid: i64 = primitive_tid(e.ts, name);
         if base_ptid != -1 {
             return ts_make_applied(e.ts, base_ptid, arg_tids);
@@ -1698,9 +1716,39 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             i = i + 1;
         }
         if first_name == String::from("Option") {
+            if n_path > 1 {
+                let second_sid: i64 = list_get(a, path_lid, 1);
+                let second_name: String = arena_str(a, second_sid);
+                if second_name == String::from("None") {
+                    return CTY_NEVER();
+                }
+                if second_name == String::from("Some") {
+                    let payload_tid: i64 = if n_args > 0 { first_arg_tid } else { CTY_UNIT() };
+                    let opt_args: Vec<i64> = Vec::new();
+                    opt_args.push(payload_tid);
+                    return ts_make_applied(e.ts, ts_make_enum(e.ts, String::from("Option")), opt_args);
+                }
+            }
             return ts_make_enum(e.ts, String::from("Option"));
         }
         if first_name == String::from("Result") {
+            if n_path > 1 {
+                let second_sid: i64 = list_get(a, path_lid, 1);
+                let second_name: String = arena_str(a, second_sid);
+                let payload_tid: i64 = if n_args > 0 { first_arg_tid } else { CTY_UNIT() };
+                if second_name == String::from("Ok") {
+                    let result_args: Vec<i64> = Vec::new();
+                    result_args.push(payload_tid);
+                    result_args.push(CTY_UNIT());
+                    return ts_make_applied(e.ts, ts_make_enum(e.ts, String::from("Result")), result_args);
+                }
+                if second_name == String::from("Err") {
+                    let result_args: Vec<i64> = Vec::new();
+                    result_args.push(CTY_NEVER());
+                    result_args.push(payload_tid);
+                    return ts_make_applied(e.ts, ts_make_enum(e.ts, String::from("Result")), result_args);
+                }
+            }
             return ts_make_enum(e.ts, String::from("Result"));
         }
         if first_name == String::from("Vec") {
@@ -1754,6 +1802,32 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if is_opaque(inner_tid) {
             return inner_tid;
         }
+        if ty_tag(e.ts, inner_tid) == CTY_APPLIED() {
+            let base_tid: i64 = ty_a(e.ts, inner_tid);
+            if ty_tag(e.ts, base_tid) == CTY_ENUM() {
+                let base_name: String = ty_struct_name(e.ts, base_tid);
+                if base_name == String::from("Option") {
+                    if ty_tag(e.ts, e.cur_ret_tid) != CTY_APPLIED() || enum_name_from_tid(e.ts, e.cur_ret_tid) != String::from("Option") {
+                        env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                            String::from("the `?` operator on Option requires the caller to return `Option`"),
+                            expr_span(a, eid));
+                        return CTY_UNIT();
+                    }
+                    let args_lid: i64 = ty_b(e.ts, inner_tid);
+                    if ts_arg_len(e.ts, args_lid) > 0 {
+                        return ts_arg_get(e.ts, args_lid, 0);
+                    }
+                    return CTY_UNIT();
+                }
+                if base_name == String::from("Result") {
+                    env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                        String::from("Result propagation with `?` is not lowered yet"),
+                        expr_span(a, eid));
+                    return CTY_UNIT();
+                }
+            }
+        }
+        env_emit_error(e, String::from("the `?` operator requires `Option<T>` or `Result<T,E>`"), expr_span(a, eid));
         return CTY_UNIT();
     }
 

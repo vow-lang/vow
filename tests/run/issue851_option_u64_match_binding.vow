@@ -1,0 +1,30 @@
+// TEST: stdout "42\n42\n42\n"
+module issue851_option_u64_match_binding
+
+fn from_question(o: Option<u64>) -> Option<u64> {
+    let v: u64 = o?;
+    Option::Some(v)
+}
+
+fn main() -> i32 [io] {
+    let o: Option<u64> = Option::Some(42u64);
+    match o {
+        Option::Some(n) => {
+            let m: u64 = n;
+            print_u64(m);
+            print_str("\n");
+            let r: i64 = n as i64;
+            print_i64(r);
+            print_str("\n");
+        },
+        Option::None => {},
+    }
+    match from_question(Option::Some(42u64)) {
+        Option::Some(q) => {
+            print_u64(q);
+            print_str("\n");
+        },
+        Option::None => {},
+    }
+    0
+}
