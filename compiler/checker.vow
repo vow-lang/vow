@@ -190,16 +190,12 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         let name: String = arena_str(a, name_sid);
         let args_lid: i64 = type_b(a, ast_tid);
         let n: i64 = list_len(a, args_lid);
-        let arg_tids: Vec<i64> = Vec::new();
-        let mut i: i64 = 0;
-        while i < n {
-            let arg_ast_tid: i64 = list_get(a, args_lid, i);
-            arg_tids.push(resolve_ast_ty(e, m, arg_ast_tid));
-            i = i + 1;
-        }
         if name == String::from("Option") {
-            if arg_tids.len() == 1 {
-                return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+            if n == 1 {
+                let option_args: Vec<i64> = Vec::new();
+                let option_arg_ast_tid: i64 = list_get(a, args_lid, 0);
+                option_args.push(resolve_ast_ty(e, m, option_arg_ast_tid));
+                return ts_make_applied(e.ts, ts_make_enum(e.ts, name), option_args);
             }
             env_emit_error_code(e, EC_TYPE_MISMATCH(),
                 String::from("Option requires one type argument"),
@@ -207,13 +203,25 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
             return CTY_UNKNOWN();
         }
         if name == String::from("Result") {
-            if arg_tids.len() == 2 {
-                return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+            if n == 2 {
+                let result_args: Vec<i64> = Vec::new();
+                let ok_arg_ast_tid: i64 = list_get(a, args_lid, 0);
+                let err_arg_ast_tid: i64 = list_get(a, args_lid, 1);
+                result_args.push(resolve_ast_ty(e, m, ok_arg_ast_tid));
+                result_args.push(resolve_ast_ty(e, m, err_arg_ast_tid));
+                return ts_make_applied(e.ts, ts_make_enum(e.ts, name), result_args);
             }
             env_emit_error_code(e, EC_TYPE_MISMATCH(),
                 String::from("Result requires two type arguments"),
                 type_span(a, ast_tid));
             return CTY_UNKNOWN();
+        }
+        let arg_tids: Vec<i64> = Vec::new();
+        let mut i: i64 = 0;
+        while i < n {
+            let arg_ast_tid: i64 = list_get(a, args_lid, i);
+            arg_tids.push(resolve_ast_ty(e, m, arg_ast_tid));
+            i = i + 1;
         }
         let base_ptid: i64 = primitive_tid(e.ts, name);
         if base_ptid != -1 {
@@ -1739,7 +1747,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if second_name == String::from("Ok") {
                     let result_args: Vec<i64> = Vec::new();
                     result_args.push(payload_tid);
-                    result_args.push(CTY_UNIT());
+                    result_args.push(CTY_NEVER());
                     return ts_make_applied(e.ts, ts_make_enum(e.ts, String::from("Result")), result_args);
                 }
                 if second_name == String::from("Err") {

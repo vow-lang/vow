@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "Option requires one type argument"
+// TEST: build-json len([d for d in xs if d.get('severity', 'error') == 'error']) == 1 and 'Option requires one type argument' in x.get('message', '')
+module option_arity_unknown_extra
+
+fn main() -> i32 {
+    let o: Option<u64, NotAType> = Option::Some(1u64);
+    0
+}

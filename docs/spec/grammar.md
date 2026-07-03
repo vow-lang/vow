@@ -703,7 +703,10 @@ prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler ou
 |-------------|----------------------------------------|
 | `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |
 
-The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).
+The `?` operator on `Option<T>` propagates `None` to the caller, and the
+calling function must return `Option`. `Result<T, E>?` is reserved for future
+`Err` propagation and is currently rejected; use an explicit `match` on
+`Result` until that lowering exists.
 
 ## Indexing
 

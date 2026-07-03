@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "Result requires two type arguments"
+// TEST: build-json len([d for d in xs if d.get('severity', 'error') == 'error']) == 1 and 'Result requires two type arguments' in x.get('message', '')
+module result_arity_unknown_extra
+
+fn main() -> i32 {
+    let r: Result<u64, String, NotAType> = Result::Ok(1u64);
+    0
+}

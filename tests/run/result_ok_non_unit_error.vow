@@ -1,0 +1,26 @@
+// TEST: stdout "42\n"
+module result_ok_non_unit_error
+
+fn make_ok() -> Result<u64, String> {
+    Result::Ok(42u64)
+}
+
+fn main() -> i32 [io] {
+    let r: Result<u64, String> = Result::Ok(42u64);
+    match r {
+        Result::Ok(n) => {
+            print_u64(n);
+            print_str("\n");
+        },
+        Result::Err(e) => {
+            print_str(e);
+        },
+    }
+    match make_ok() {
+        Result::Ok(_) => {},
+        Result::Err(e) => {
+            print_str(e);
+        },
+    }
+    0
+}

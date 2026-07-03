@@ -606,7 +606,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "BTreeMap<K,V>": btreemap_methods,
                 "Option<T>": option_methods,
             },
-            "error_propagation": "? on Option<T> or Result<T, E> propagates None/Err to the caller",
+            "error_propagation": "? on Option<T> propagates None to an Option-returning caller; Result<T, E>? is currently rejected until Err propagation is lowered",
             "indexing": {
                 "read": "v[i] \u2014 Vec index access",
                 "write": "v[i] = val \u2014 Vec index assignment",

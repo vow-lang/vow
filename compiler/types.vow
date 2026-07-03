@@ -231,5 +231,43 @@ fn is_coercible(ts: TyStore, from_tid: i64, to_tid: i64) -> bool {
     if from_tag == CTY_I32() && ty_is_integer(ts, to_tid) {
         return true;
     }
+    if from_tag == CTY_APPLIED() && to_tag == CTY_APPLIED() {
+        if !is_coercible(ts, ty_a(ts, from_tid), ty_a(ts, to_tid)) {
+            return false;
+        }
+        let from_args: i64 = ty_b(ts, from_tid);
+        let to_args: i64 = ty_b(ts, to_tid);
+        let n: i64 = ts_arg_len(ts, from_args);
+        if n != ts_arg_len(ts, to_args) {
+            return false;
+        }
+        let mut i: i64 = 0;
+        while i < n {
+            if !is_coercible(ts, ts_arg_get(ts, from_args, i), ts_arg_get(ts, to_args, i)) {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    if from_tag == CTY_REF() && to_tag == CTY_REF() {
+        return is_coercible(ts, ty_a(ts, from_tid), ty_a(ts, to_tid));
+    }
+    if from_tag == CTY_TUPLE() && to_tag == CTY_TUPLE() {
+        let from_items: i64 = ty_a(ts, from_tid);
+        let to_items: i64 = ty_a(ts, to_tid);
+        let n_items: i64 = ts_arg_len(ts, from_items);
+        if n_items != ts_arg_len(ts, to_items) {
+            return false;
+        }
+        let mut j: i64 = 0;
+        while j < n_items {
+            if !is_coercible(ts, ts_arg_get(ts, from_items, j), ts_arg_get(ts, to_items, j)) {
+                return false;
+            }
+            j = j + 1;
+        }
+        return true;
+    }
     tids_equal(ts, from_tid, to_tid)
 }

@@ -92,6 +92,36 @@ fn is_supported_pin_ty(ty: &Ty) -> bool {
     matches!(ty, Ty::Str) || is_flat_vec_ty(ty)
 }
 
+fn is_coercible_ty(from: &Ty, to: &Ty) -> bool {
+    if from == to || *from == Ty::Never {
+        return true;
+    }
+    if *from == Ty::I32 && to.is_integer() {
+        return true;
+    }
+    match (from, to) {
+        (Ty::Applied(from_base, from_args), Ty::Applied(to_base, to_args)) => {
+            from_args.len() == to_args.len()
+                && is_coercible_ty(from_base, to_base)
+                && from_args
+                    .iter()
+                    .zip(to_args.iter())
+                    .all(|(from_arg, to_arg)| is_coercible_ty(from_arg, to_arg))
+        }
+        (Ty::Tuple(from_items), Ty::Tuple(to_items)) => {
+            from_items.len() == to_items.len()
+                && from_items
+                    .iter()
+                    .zip(to_items.iter())
+                    .all(|(from_item, to_item)| is_coercible_ty(from_item, to_item))
+        }
+        (Ty::Reference(from_inner), Ty::Reference(to_inner)) => {
+            is_coercible_ty(from_inner, to_inner)
+        }
+        _ => false,
+    }
+}
+
 fn is_vec_raw_parts_copy_expr(expr: &vow_syntax::ast::Expr) -> bool {
     matches!(
         &expr.kind,
@@ -642,10 +672,7 @@ impl<'e> Checker<'e> {
         let body_ty = self.check_block(&fn_def.body);
 
         let expected = self.current_return_ty.clone();
-        let coercible = body_ty == expected
-            || body_ty == Ty::Never
-            || (body_ty == Ty::I32 && expected.is_integer());
-        if !coercible {
+        if !is_coercible_ty(&body_ty, &expected) {
             self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
                 format!(
@@ -730,10 +757,7 @@ impl<'e> Checker<'e> {
                     match self.env.resolve(ann) {
                         Ok(ann_ty) => {
                             self.check_btreemap_key_in_ty(&ann_ty, ann.span());
-                            let coercible = init_ty == Ty::Never
-                                || ann_ty == init_ty
-                                || (init_ty == Ty::I32 && ann_ty.is_integer());
-                            if !coercible {
+                            if !is_coercible_ty(&init_ty, &ann_ty) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
                                     format!(
@@ -1052,9 +1076,7 @@ impl<'e> Checker<'e> {
                 }
                 for (arg, expected_ty) in args.iter().zip(param_tys.iter()) {
                     let arg_ty = self.check_expr(arg);
-                    let coercible =
-                        arg_ty == Ty::I32 && expected_ty.is_integer() && *expected_ty != Ty::I32;
-                    if arg_ty != *expected_ty && arg_ty != Ty::Never && !coercible {
+                    if !is_coercible_ty(&arg_ty, expected_ty) {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!(
@@ -1539,10 +1561,7 @@ impl<'e> Checker<'e> {
                     None => Ty::Unit,
                 };
                 let expected = self.current_return_ty.clone();
-                let coercible = val_ty == expected
-                    || val_ty == Ty::Never
-                    || (val_ty == Ty::I32 && expected.is_integer());
-                if !coercible {
+                if !is_coercible_ty(&val_ty, &expected) {
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!(
@@ -1818,7 +1837,7 @@ impl<'e> Checker<'e> {
                             .unwrap_or(Ty::Unit);
                         return Ty::Applied(
                             Box::new(Ty::Enum("Result".to_string())),
-                            vec![payload_ty, Ty::Unit],
+                            vec![payload_ty, Ty::Never],
                         );
                     }
                     ("Result", "Err") => {
@@ -3596,10 +3615,23 @@ mod tests {
             ty,
             Ty::Applied(
                 Box::new(Ty::Enum("Result".to_string())),
-                vec![Ty::I32, Ty::Unit]
+                vec![Ty::I32, Ty::Never]
             )
         );
         assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn result_ok_coerces_to_non_unit_error_type() {
+        let ok_ty = Ty::Applied(
+            Box::new(Ty::Enum("Result".to_string())),
+            vec![Ty::U64, Ty::Never],
+        );
+        let target_ty = Ty::Applied(
+            Box::new(Ty::Enum("Result".to_string())),
+            vec![Ty::U64, Ty::Str],
+        );
+        assert!(is_coercible_ty(&ok_ty, &target_ty));
     }
 
     #[test]

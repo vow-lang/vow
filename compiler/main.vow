@@ -3138,7 +3138,7 @@ fn skill_json() -> String {
     r.push_str(String::from("        \"? operator\"\n"));
     r.push_str(String::from("      ]\n"));
     r.push_str(String::from("    },\n"));
-    r.push_str(String::from("    \"error_propagation\": \"? on Option<T> or Result<T, E> propagates None/Err to the caller\",\n"));
+    r.push_str(String::from("    \"error_propagation\": \"? on Option<T> propagates None to an Option-returning caller; Result<T, E>? is currently rejected until Err propagation is lowered\",\n"));
     r.push_str(String::from("    \"indexing\": {\n"));
     r.push_str(String::from("      \"read\": \"v[i] \\u2014 Vec index access\",\n"));
     r.push_str(String::from("      \"write\": \"v[i] = val \\u2014 Vec index assignment\"\n"));
@@ -4126,7 +4126,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("|-------------|----------------------------------------|\n"));
     r.push_str(String::from("| `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).\n"));
+    r.push_str(String::from("The `?` operator on `Option<T>` propagates `None` to the caller, and the\n"));
+    r.push_str(String::from("calling function must return `Option`. `Result<T, E>?` is reserved for future\n"));
+    r.push_str(String::from("`Err` propagation and is currently rejected; use an explicit `match` on\n"));
+    r.push_str(String::from("`Result` until that lowering exists.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Indexing\n"));
     r.push_str(String::from("\n"));
@@ -8671,7 +8674,10 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("|-------------|----------------------------------------|\n"));
     r.push_str(String::from("| `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).\n"));
+    r.push_str(String::from("The `?` operator on `Option<T>` propagates `None` to the caller, and the\n"));
+    r.push_str(String::from("calling function must return `Option`. `Result<T, E>?` is reserved for future\n"));
+    r.push_str(String::from("`Err` propagation and is currently rejected; use an explicit `match` on\n"));
+    r.push_str(String::from("`Result` until that lowering exists.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Indexing\n"));
     r.push_str(String::from("\n"));

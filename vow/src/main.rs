@@ -1279,7 +1279,7 @@ fn skill_json() -> String {
         "? operator"
       ]
     },
-    "error_propagation": "? on Option<T> or Result<T, E> propagates None/Err to the caller",
+    "error_propagation": "? on Option<T> propagates None to an Option-returning caller; Result<T, E>? is currently rejected until Err propagation is lowered",
     "indexing": {
       "read": "v[i] \u2014 Vec index access",
       "write": "v[i] = val \u2014 Vec index assignment"
@@ -2267,7 +2267,10 @@ prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler ou
 |-------------|----------------------------------------|
 | `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |
 
-The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).
+The `?` operator on `Option<T>` propagates `None` to the caller, and the
+calling function must return `Option`. `Result<T, E>?` is reserved for future
+`Err` propagation and is currently rejected; use an explicit `match` on
+`Result` until that lowering exists.
 
 ## Indexing
 
@@ -6790,7 +6793,10 @@ prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler ou
 |-------------|----------------------------------------|
 | `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |
 
-The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).
+The `?` operator on `Option<T>` propagates `None` to the caller, and the
+calling function must return `Option`. `Result<T, E>?` is reserved for future
+`Err` propagation and is currently rejected; use an explicit `match` on
+`Result` until that lowering exists.
 
 ## Indexing
 
