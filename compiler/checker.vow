@@ -930,43 +930,10 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     }
 }
 
-// Recursive: pure i64 constant expressions coerce like bare literals, avoiding a new type-system axis.
-fn expr_is_lit_int_const(a: AstArena, eid: i64) -> bool {
-    let tag: i64 = expr_tag(a, eid);
-    if tag == EXPR_LIT_INT() {
-        return true;
-    }
-    if tag == EXPR_UNOP() {
-        let op: i64 = expr_a(a, eid);
-        if op == UNOP_NEG() {
-            let operand_eid: i64 = expr_b(a, eid);
-            return expr_is_lit_int_const(a, operand_eid);
-        }
-        return false;
-    }
-    if tag == EXPR_BINOP() {
-        let op: i64 = expr_a(a, eid);
-        let is_const_op: bool = op == BINOP_ADD() || op == BINOP_SUB()
-            || op == BINOP_MUL() || op == BINOP_DIV() || op == BINOP_REM()
-            || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
-            || op == BINOP_SHL() || op == BINOP_SHR();
-        if is_const_op {
-            let lhs_eid: i64 = expr_b(a, eid);
-            let rhs_eid: i64 = expr_c(a, eid);
-            return expr_is_lit_int_const(a, lhs_eid) && expr_is_lit_int_const(a, rhs_eid);
-        }
-        return false;
-    }
-    false
-}
-
-// True when a value of type `from_tid` may appear where `to_tid` is expected,
-// honoring the coercions the Rust checker performs: an unsuffixed integer
-// literal (typed i64 by check_expr, recognized syntactically) and a genuine i32
-// both coerce to any integer type; Never/Unknown coerce to anything. A genuine
-// non-literal i64 does NOT coerce to another integer type — that is the u64/i64
-// soundness hole this closes.
-fn operand_coercible(ts: TyStore, a: AstArena, from_tid: i64, to_tid: i64, from_eid: i64) -> bool {
+// True when a value of type `from_tid` may appear where `to_tid` is expected.
+// Only the dedicated unsuffixed integer literal marker may coerce across
+// integer types; genuine integer values must already match.
+fn operand_coercible(ts: TyStore, from_tid: i64, to_tid: i64) -> bool {
     if from_tid == to_tid {
         return true;
     }
@@ -981,10 +948,7 @@ fn operand_coercible(ts: TyStore, a: AstArena, from_tid: i64, to_tid: i64, from_
     if to_tag == CTY_NEVER() || to_tag == CTY_UNKNOWN() {
         return true;
     }
-    if from_tag == CTY_I64() && expr_is_lit_int_const(a, from_eid) && ty_is_integer(ts, to_tid) {
-        return true;
-    }
-    if from_tag == CTY_I32() && ty_is_integer(ts, to_tid) {
+    if from_tag == CTY_LIT_INT() && ty_is_integer(ts, to_tid) {
         return true;
     }
     false
@@ -996,8 +960,21 @@ fn operand_coercible(ts: TyStore, a: AstArena, from_tid: i64, to_tid: i64, from_
 // restricting to numeric types avoids false positives on values the checker
 // under-resolves (e.g. a match payload it types as Unit), preserving the
 // self-hosted compiler's historically lenient handling of non-numeric operands.
-fn bin_operands_compatible(ts: TyStore, a: AstArena, lhs_tid: i64, rhs_tid: i64, lhs_eid: i64, rhs_eid: i64) -> bool {
-    operand_coercible(ts, a, lhs_tid, rhs_tid, lhs_eid) || operand_coercible(ts, a, rhs_tid, lhs_tid, rhs_eid)
+fn bin_operands_compatible(ts: TyStore, lhs_tid: i64, rhs_tid: i64) -> bool {
+    operand_coercible(ts, lhs_tid, rhs_tid) || operand_coercible(ts, rhs_tid, lhs_tid)
+}
+
+fn result_tids_compatible(ts: TyStore, a_tid: i64, b_tid: i64) -> bool {
+    tids_equal(ts, a_tid, b_tid)
+        || (ty_is_lit_int(ts, a_tid) && ty_is_integer(ts, b_tid))
+        || (ty_is_lit_int(ts, b_tid) && ty_is_integer(ts, a_tid))
+}
+
+fn merge_result_tid(ts: TyStore, current_tid: i64, incoming_tid: i64) -> i64 {
+    if ty_is_lit_int(ts, current_tid) && ty_is_integer(ts, incoming_tid) {
+        return incoming_tid;
+    }
+    current_tid
 }
 
 fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
@@ -1013,12 +990,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     let tag: i64 = expr_tag(a, eid);
 
     if tag == EXPR_LIT_INT() {
-        // Unsuffixed integer literals carry the coercible-literal marker
-        // (CTY_I32, mirroring the Rust checker's Ty::I32). The marker propagates
-        // through if/match/binop and context-coerces to any integer at a typed
-        // site; a genuine i64 value does not. (u64-suffixed literals are already
-        // desugared to a cast by the parser.)
-        return CTY_I32();
+        // Unsuffixed integer literals carry a marker that context-coerces to
+        // integer types. Genuine i32 values keep CTY_I32 and do not widen.
+        return CTY_LIT_INT();
     }
     if tag == EXPR_LIT_BOOL() {
         return CTY_BOOL();
@@ -1055,26 +1029,26 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             return CTY_BOOL();
         }
         if op == BINOP_EQ() || op == BINOP_NE() || op == BINOP_LT() || op == BINOP_LE() || op == BINOP_GT() || op == BINOP_GE() {
-            if ty_is_numeric(e.ts, lhs_tid) && ty_is_numeric(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, a, lhs_tid, rhs_tid, lhs_eid, rhs_eid) {
+            if ty_is_numeric_or_lit_int(e.ts, lhs_tid) && ty_is_numeric_or_lit_int(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, lhs_tid, rhs_tid) {
                 env_emit_error(e, String::from("comparison operands have different types"), expr_span(a, eid));
             }
             return CTY_BOOL();
         }
         if op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR() || op == BINOP_SHL() || op == BINOP_SHR() {
-            if !ty_is_integer(e.ts, lhs_tid) {
+            if !ty_is_integer_or_lit_int(e.ts, lhs_tid) {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
                 return CTY_I64();
             }
-            if !ty_is_integer(e.ts, rhs_tid) {
+            if !ty_is_integer_or_lit_int(e.ts, rhs_tid) {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
                 return CTY_I64();
             }
-            // An unsuffixed-literal marker (CTY_I32) coerces to the other
+            // An unsuffixed-literal marker coerces to the other
             // operand's integer type; two markers stay a marker.
-            if lhs_tid == CTY_I32() && ty_is_integer(e.ts, rhs_tid) {
+            if ty_is_lit_int(e.ts, lhs_tid) && ty_is_integer(e.ts, rhs_tid) {
                 return rhs_tid;
             }
-            if rhs_tid == CTY_I32() && ty_is_integer(e.ts, lhs_tid) {
+            if ty_is_lit_int(e.ts, rhs_tid) && ty_is_integer(e.ts, lhs_tid) {
                 return lhs_tid;
             }
             if lhs_tid != rhs_tid {
@@ -1083,20 +1057,20 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             return lhs_tid;
         }
-        if ty_is_numeric(e.ts, lhs_tid) && ty_is_numeric(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, a, lhs_tid, rhs_tid, lhs_eid, rhs_eid) {
+        if ty_is_numeric_or_lit_int(e.ts, lhs_tid) && ty_is_numeric_or_lit_int(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, lhs_tid, rhs_tid) {
             env_emit_error(e, String::from("arithmetic operands have different types"), expr_span(a, eid));
             return CTY_I64();
         }
         // The concrete operand fixes the result type; an unsuffixed-literal
-        // marker (CTY_I32) coerces to it. Two markers stay a marker (mirrors
+        // marker coerces to it. Two markers stay a marker (mirrors
         // check_same_numeric in the Rust checker).
-        if lhs_tid == CTY_I32() && ty_is_integer(e.ts, rhs_tid) {
+        if ty_is_lit_int(e.ts, lhs_tid) && ty_is_integer(e.ts, rhs_tid) {
             return rhs_tid;
         }
-        if rhs_tid == CTY_I32() && ty_is_integer(e.ts, lhs_tid) {
+        if ty_is_lit_int(e.ts, rhs_tid) && ty_is_integer(e.ts, lhs_tid) {
             return lhs_tid;
         }
-        if ty_is_numeric(e.ts, lhs_tid) {
+        if ty_is_numeric_or_lit_int(e.ts, lhs_tid) {
             return lhs_tid;
         }
         return CTY_I64();
@@ -1190,7 +1164,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let ptid: i64 = ts_arg_get(e.ts, plid, ai);
                     let atid: i64 = arg_tids[ai];
                     let aeid: i64 = list_get(a, args_lid, ai);
-                    if ty_is_numeric(e.ts, atid) && ty_is_numeric(e.ts, ptid) && !operand_coercible(e.ts, a, atid, ptid, aeid) {
+                    if ty_is_numeric_or_lit_int(e.ts, atid) && ty_is_numeric_or_lit_int(e.ts, ptid) && !operand_coercible(e.ts, atid, ptid) {
                         env_emit_error(e, String::from("argument has wrong type"), expr_span(a, aeid));
                     }
                     ai = ai + 1;
@@ -1420,13 +1394,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if is_opaque(else_tid) {
             return then_tid;
         }
-        // A literal-marker branch (CTY_I32) is absorbed by a concrete-integer
+        // A literal-marker branch is absorbed by a concrete-integer
         // branch, so the if-expression takes the concrete type — otherwise a
-        // genuine i64 branch could masquerade as the coercible marker.
-        if ty_tag(e.ts, then_tid) == CTY_I32() && ty_is_integer(e.ts, else_tid) {
+        // genuine integer branch could masquerade as the coercible marker.
+        if !result_tids_compatible(e.ts, then_tid, else_tid) {
+            env_emit_error(e, String::from("if branches have different types"), expr_span(a, eid));
+            return then_tid;
+        }
+        if ty_is_lit_int(e.ts, then_tid) && ty_is_integer(e.ts, else_tid) {
             return else_tid;
         }
-        if ty_tag(e.ts, else_tid) == CTY_I32() && ty_is_integer(e.ts, then_tid) {
+        if ty_is_lit_int(e.ts, else_tid) && ty_is_integer(e.ts, then_tid) {
             return then_tid;
         }
         return then_tid;
@@ -1469,18 +1447,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     loop_tid = btid;
                 } else {
                     // Either the break value or the running result may be the
-                    // coercible literal marker (CTY_I32); a concrete-integer
-                    // break value absorbs a marker result.
-                    let ok: bool = tids_equal(e.ts, btid, loop_tid)
-                        || (ty_tag(e.ts, btid) == CTY_I32() && ty_is_integer(e.ts, loop_tid))
-                        || (ty_tag(e.ts, loop_tid) == CTY_I32() && ty_is_integer(e.ts, btid));
+                    // coercible literal marker; a concrete-integer break value
+                    // absorbs a marker result.
+                    let ok: bool = result_tids_compatible(e.ts, btid, loop_tid);
                     if !ok {
                         env_emit_error(e, String::from("break type mismatch in loop"), expr_span(a, eid));
                         break;
                     }
-                    if ty_tag(e.ts, loop_tid) == CTY_I32() && ty_is_integer(e.ts, btid) {
-                        loop_tid = btid;
-                    }
+                    loop_tid = merge_result_tid(e.ts, loop_tid, btid);
                 }
             }
             bi = bi + 1;
@@ -1569,14 +1543,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             if is_opaque(result_tid) {
                 result_tid = arm_tid;
             } else if !tids_equal(ts, arm_tid, result_tid) && !is_opaque(arm_tid) {
-                let arm_tag: i64 = ty_tag(ts, arm_tid);
-                let res_tag: i64 = ty_tag(ts, result_tid);
-                let coercible: bool = (arm_tag == CTY_I32() && ty_is_integer(ts, result_tid))
-                    || (res_tag == CTY_I32() && ty_is_integer(ts, arm_tid));
+                let coercible: bool = result_tids_compatible(ts, arm_tid, result_tid);
                 if coercible {
-                    if res_tag == CTY_I32() && ty_is_integer(ts, arm_tid) {
-                        result_tid = arm_tid;
-                    }
+                    result_tid = merge_result_tid(ts, result_tid, arm_tid);
                 } else {
                     env_emit_error(e, String::from("match arm type mismatch"), expr_span(a, body_eid));
                 }
@@ -1771,7 +1740,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let valid: bool = (src_tag == CTY_I64() && tgt_tag == CTY_U64())
             || (src_tag == CTY_U64() && tgt_tag == CTY_I64())
             || (src_tag == CTY_I32() && tgt_tag == CTY_U64())
-            || (src_tag == CTY_I32() && tgt_tag == CTY_I64());
+            || (src_tag == CTY_I32() && tgt_tag == CTY_I64())
+            || (src_tag == CTY_LIT_INT() && ty_is_integer(e.ts, tgt_tid));
         if !valid && !is_opaque(src_tid) {
             env_emit_error(e, String::from("invalid cast"), expr_span(a, eid));
         }

@@ -22,6 +22,7 @@ fn CTY_APPLIED() -> i64 { 18 }
 fn CTY_REF() -> i64 { 19 }
 fn CTY_TUPLE() -> i64 { 20 }
 fn CTY_UNKNOWN() -> i64 { 21 }
+fn CTY_LIT_INT() -> i64 { 22 }
 
 struct TyStore {
     data: Vec<i64>,
@@ -40,7 +41,7 @@ fn ty_store_new() -> TyStore {
         arg_size: Vec::new(),
     };
     let mut i: i64 = 0;
-    while i < 22 {
+    while i < 23 {
         ts.data.push(i);
         ts.data.push(0);
         ts.data.push(0);
@@ -195,12 +196,21 @@ fn ty_tag_name(tag: i64) -> String {
     if tag == CTY_ENUM() { return String::from("enum"); }
     if tag == CTY_APPLIED() { return String::from("applied"); }
     if tag == CTY_REF() { return String::from("ref"); }
+    if tag == CTY_LIT_INT() { return String::from("integer literal"); }
     String::from("?")
+}
+
+fn ty_is_lit_int(ts: TyStore, tid: i64) -> bool {
+    ty_tag(ts, tid) == CTY_LIT_INT()
 }
 
 fn ty_is_integer(ts: TyStore, tid: i64) -> bool {
     let tag: i64 = ty_tag(ts, tid);
     tag >= CTY_I8() && tag <= CTY_U128()
+}
+
+fn ty_is_integer_or_lit_int(ts: TyStore, tid: i64) -> bool {
+    ty_is_integer(ts, tid) || ty_is_lit_int(ts, tid)
 }
 
 fn ty_is_unsigned(ts: TyStore, tid: i64) -> bool {
@@ -211,6 +221,10 @@ fn ty_is_unsigned(ts: TyStore, tid: i64) -> bool {
 fn ty_is_numeric(ts: TyStore, tid: i64) -> bool {
     let tag: i64 = ty_tag(ts, tid);
     tag >= CTY_I8() && tag <= CTY_F64()
+}
+
+fn ty_is_numeric_or_lit_int(ts: TyStore, tid: i64) -> bool {
+    ty_is_numeric(ts, tid) || ty_is_lit_int(ts, tid)
 }
 
 fn is_coercible(ts: TyStore, from_tid: i64, to_tid: i64) -> bool {
@@ -225,10 +239,9 @@ fn is_coercible(ts: TyStore, from_tid: i64, to_tid: i64) -> bool {
     if to_tag == CTY_UNKNOWN() {
         return true;
     }
-    // Only the unsuffixed-integer-literal marker (CTY_I32, mirroring the Rust
-    // checker's Ty::I32) context-coerces to any integer type. A genuine i64
-    // value does NOT coerce to another integer — closing the u64/i64 hole.
-    if from_tag == CTY_I32() && ty_is_integer(ts, to_tid) {
+    // Only the unsuffixed-integer-literal marker context-coerces to any integer
+    // type. Genuine integer values do not implicitly widen.
+    if from_tag == CTY_LIT_INT() && ty_is_integer(ts, to_tid) {
         return true;
     }
     tids_equal(ts, from_tid, to_tid)

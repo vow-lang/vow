@@ -1,0 +1,14 @@
+// TEST: stderr "match arm"
+// TEST: error-code TypeMismatch
+module I32U64Match
+
+fn pick(c: bool, x: i32, y: u64) -> u64 {
+  match c {
+    true => y,
+    false => x,
+  }
+}
+
+fn main() -> i32 {
+  0
+}

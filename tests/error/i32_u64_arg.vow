@@ -1,0 +1,13 @@
+// TEST: stderr "argument has wrong type"
+// TEST: error-code TypeMismatch
+module I32U64Arg
+
+fn takes_u64(x: u64) -> u64 {
+  x
+}
+
+fn main() -> i32 {
+  let x: i32 = 5;
+  let y: u64 = takes_u64(x);
+  0
+}
