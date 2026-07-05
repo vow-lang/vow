@@ -1,0 +1,11 @@
+// TEST: stderr "let binding type mismatch"
+// TEST: error-code TypeMismatch
+// Only unsuffixed integer literals coerce across integer types; a real i32
+// binding must not silently widen at an annotated let.
+module I32I64Let
+
+fn main() -> i32 {
+  let x: i32 = 5;
+  let y: i64 = x;
+  0
+}

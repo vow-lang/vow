@@ -1,0 +1,10 @@
+// TEST: stderr "comparison operands have different types"
+// TEST: error-code TypeMismatch
+module I32U64Compare
+
+fn main() -> i32 {
+  let x: i32 = 5;
+  let y: u64 = 7;
+  let b: bool = y < x;
+  0
+}

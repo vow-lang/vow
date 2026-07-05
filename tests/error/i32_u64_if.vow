@@ -1,0 +1,11 @@
+// TEST: stderr "if branches have different types"
+// TEST: error-code TypeMismatch
+module I32U64If
+
+fn pick(c: bool, x: i32, y: u64) -> u64 {
+  if c { y } else { x }
+}
+
+fn main() -> i32 {
+  0
+}

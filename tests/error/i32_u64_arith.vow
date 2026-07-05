@@ -1,0 +1,10 @@
+// TEST: stderr "arithmetic operands have different types"
+// TEST: error-code TypeMismatch
+module I32U64Arith
+
+fn main() -> i32 {
+  let x: i32 = 5;
+  let y: u64 = 7;
+  let z: u64 = y + x;
+  0
+}

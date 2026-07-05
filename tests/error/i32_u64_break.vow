@@ -1,0 +1,15 @@
+// TEST: stderr "break type mismatch in loop"
+// TEST: error-code TypeMismatch
+module I32U64Break
+
+fn pick(c: bool, x: i32) -> u64 {
+  let y: u64 = 7;
+  loop {
+    if c { break y; }
+    break x;
+  }
+}
+
+fn main() -> i32 {
+  0
+}

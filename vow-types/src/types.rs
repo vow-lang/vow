@@ -3,6 +3,9 @@ use std::fmt;
 /// Normalized type representation used by the type checker.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Ty {
+    // Frontend-only marker for unsuffixed integer literals. This is not a
+    // runtime integer type and must be consumed before IR lowering.
+    LitInt,
     // Signed integers
     I8,
     I16,
@@ -38,6 +41,10 @@ pub enum Ty {
 impl Ty {
     pub fn is_numeric(&self) -> bool {
         self.is_integer() || self.is_float()
+    }
+
+    pub fn is_lit_int(&self) -> bool {
+        matches!(self, Ty::LitInt)
     }
 
     pub fn is_integer(&self) -> bool {
@@ -88,6 +95,7 @@ impl Ty {
 impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Ty::LitInt => write!(f, "integer literal"),
             Ty::I8 => write!(f, "i8"),
             Ty::I16 => write!(f, "i16"),
             Ty::I32 => write!(f, "i32"),
@@ -166,6 +174,7 @@ mod tests {
 
         assert!(Ty::I8.is_integer());
         assert!(Ty::U128.is_integer());
+        assert!(!Ty::LitInt.is_integer());
         assert!(!Ty::F64.is_integer());
         assert!(!Ty::Bool.is_integer());
 
@@ -182,6 +191,7 @@ mod tests {
     #[test]
     fn display_primitives() {
         assert_eq!(Ty::I32.to_string(), "i32");
+        assert_eq!(Ty::LitInt.to_string(), "integer literal");
         assert_eq!(Ty::U64.to_string(), "u64");
         assert_eq!(Ty::F32.to_string(), "f32");
         assert_eq!(Ty::Bool.to_string(), "bool");

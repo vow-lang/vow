@@ -101,6 +101,77 @@ fn is_vec_raw_parts_copy_expr(expr: &vow_syntax::ast::Expr) -> bool {
     )
 }
 
+fn can_context_coerce(from: &Ty, to: &Ty) -> bool {
+    if from == to || *from == Ty::Never || (from.is_lit_int() && to.is_integer()) {
+        return true;
+    }
+
+    match (from, to) {
+        (Ty::Applied(from_base, from_args), Ty::Applied(to_base, to_args)) => {
+            from_base == to_base
+                && from_args.len() == to_args.len()
+                && from_args
+                    .iter()
+                    .zip(to_args.iter())
+                    .all(|(from_arg, to_arg)| can_context_coerce(from_arg, to_arg))
+        }
+        (Ty::Tuple(from_elems), Ty::Tuple(to_elems)) => {
+            from_elems.len() == to_elems.len()
+                && from_elems
+                    .iter()
+                    .zip(to_elems.iter())
+                    .all(|(from_elem, to_elem)| can_context_coerce(from_elem, to_elem))
+        }
+        _ => false,
+    }
+}
+
+fn can_assignment_coerce(from: &Ty, to: &Ty) -> bool {
+    can_context_coerce(from, to) || *to == Ty::Never
+}
+
+fn can_operand_coerce(from: &Ty, to: &Ty) -> bool {
+    can_context_coerce(from, to)
+}
+
+fn operands_compatible(lhs: &Ty, rhs: &Ty) -> bool {
+    can_operand_coerce(lhs, rhs) || can_operand_coerce(rhs, lhs)
+}
+
+fn merge_result_ty(current: &Ty, incoming: &Ty) -> Option<Ty> {
+    if current == incoming {
+        Some(current.clone())
+    } else if *current == Ty::Never {
+        Some(incoming.clone())
+    } else if *incoming == Ty::Never {
+        Some(current.clone())
+    } else if can_context_coerce(current, incoming) {
+        Some(incoming.clone())
+    } else if can_context_coerce(incoming, current) {
+        Some(current.clone())
+    } else {
+        None
+    }
+}
+
+fn is_numeric_or_lit_int(ty: &Ty) -> bool {
+    ty.is_numeric() || ty.is_lit_int()
+}
+
+fn is_integer_or_lit_int(ty: &Ty) -> bool {
+    ty.is_integer() || ty.is_lit_int()
+}
+
+fn absorb_lit_int_operand(lhs: Ty, rhs: Ty) -> (Ty, Ty) {
+    if lhs.is_lit_int() && rhs.is_integer() {
+        (rhs.clone(), rhs)
+    } else if rhs.is_lit_int() && lhs.is_integer() {
+        (lhs.clone(), lhs)
+    } else {
+        (lhs, rhs)
+    }
+}
+
 pub struct Checker<'e> {
     pub(crate) env: TypeEnv,
     pub(crate) current_return_ty: Ty,
@@ -642,10 +713,7 @@ impl<'e> Checker<'e> {
         let body_ty = self.check_block(&fn_def.body);
 
         let expected = self.current_return_ty.clone();
-        let coercible = body_ty == expected
-            || body_ty == Ty::Never
-            || (body_ty == Ty::I32 && expected.is_integer());
-        if !coercible {
+        if !can_context_coerce(&body_ty, &expected) {
             self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
                 format!(
@@ -731,10 +799,7 @@ impl<'e> Checker<'e> {
                     match self.env.resolve(ann) {
                         Ok(ann_ty) => {
                             self.check_btreemap_key_in_ty(&ann_ty, ann.span());
-                            let coercible = init_ty == Ty::Never
-                                || ann_ty == init_ty
-                                || (init_ty == Ty::I32 && ann_ty.is_integer());
-                            if !coercible {
+                            if !can_context_coerce(&init_ty, &ann_ty) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
                                     format!(
@@ -898,7 +963,7 @@ impl<'e> Checker<'e> {
     fn check_expr_inner(&mut self, expr: &Expr) -> Ty {
         match &expr.kind {
             ExprKind::Lit(lit) => match lit {
-                Lit::Int(_) => Ty::I32,
+                Lit::Int(_) => Ty::LitInt,
                 Lit::Float(_) => Ty::F64,
                 Lit::Bool(_) => Ty::Bool,
                 Lit::String(_) => Ty::Str,
@@ -940,12 +1005,10 @@ impl<'e> Checker<'e> {
                     | BinOp::DivChecked
                     | BinOp::RemChecked => self.check_same_numeric(lhs_ty, rhs_ty, expr.span),
                     BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                        let coercible = (lhs_ty == Ty::I32 && rhs_ty.is_integer())
-                            || (rhs_ty == Ty::I32 && lhs_ty.is_integer());
                         if lhs_ty != rhs_ty
                             && lhs_ty != Ty::Never
                             && rhs_ty != Ty::Never
-                            && !coercible
+                            && !operands_compatible(&lhs_ty, &rhs_ty)
                         {
                             self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
@@ -997,7 +1060,7 @@ impl<'e> Checker<'e> {
                                 operand.span,
                             );
                             Ty::Unit
-                        } else if !operand_ty.is_numeric() && operand_ty != Ty::Never {
+                        } else if !is_numeric_or_lit_int(&operand_ty) && operand_ty != Ty::Never {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
                                 format!(
@@ -1082,10 +1145,7 @@ impl<'e> Checker<'e> {
                     }
                     for (arg, expected_ty) in args.iter().zip(expected.iter()) {
                         let arg_ty = self.check_expr(arg);
-                        let coercible = arg_ty == Ty::I32
-                            && expected_ty.is_integer()
-                            && *expected_ty != Ty::I32;
-                        if arg_ty != *expected_ty && arg_ty != Ty::Never && !coercible {
+                        if !can_context_coerce(&arg_ty, expected_ty) {
                             self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
                                 format!(
@@ -1151,9 +1211,7 @@ impl<'e> Checker<'e> {
                 }
                 for (arg, expected_ty) in args.iter().zip(param_tys.iter()) {
                     let arg_ty = self.check_expr(arg);
-                    let coercible =
-                        arg_ty == Ty::I32 && expected_ty.is_integer() && *expected_ty != Ty::I32;
-                    if arg_ty != *expected_ty && arg_ty != Ty::Never && !coercible {
+                    if !can_context_coerce(&arg_ty, expected_ty) {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!(
@@ -1432,25 +1490,16 @@ impl<'e> Checker<'e> {
                     self.exit_scope();
                     if i == 0 {
                         result_ty = arm_ty.clone();
-                    } else if arm_ty != result_ty && arm_ty != Ty::Never && result_ty != Ty::Never {
-                        let coercible = (arm_ty == Ty::I32 && result_ty.is_integer())
-                            || (result_ty == Ty::I32 && arm_ty.is_integer());
-                        if coercible {
-                            if result_ty == Ty::I32 && arm_ty.is_integer() {
-                                result_ty = arm_ty.clone();
-                            }
-                        } else {
-                            self.emit_error(
+                    } else if let Some(merged_ty) = merge_result_ty(&result_ty, &arm_ty) {
+                        result_ty = merged_ty;
+                    } else {
+                        self.emit_error(
                                 ErrorCode::TypeMismatch,
                                 format!(
                                     "match arm has type `{arm_ty}` but previous arms have type `{result_ty}`"
                                 ),
                                 arm.span,
                             );
-                        }
-                    }
-                    if result_ty == Ty::Never && arm_ty != Ty::Never {
-                        result_ty = arm_ty;
                     }
                 }
                 result_ty
@@ -1473,12 +1522,8 @@ impl<'e> Checker<'e> {
                 match else_branch {
                     Some(else_expr) => {
                         let else_ty = self.check_expr(else_expr);
-                        let compatible = then_ty == else_ty
-                            || then_ty == Ty::Never
-                            || else_ty == Ty::Never
-                            || (then_ty == Ty::I32 && else_ty.is_integer())
-                            || (else_ty == Ty::I32 && then_ty.is_integer());
-                        if !compatible {
+                        let merged_ty = merge_result_ty(&then_ty, &else_ty);
+                        if merged_ty.is_none() {
                             self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
                                 format!(
@@ -1490,17 +1535,7 @@ impl<'e> Checker<'e> {
                                 )],
                             );
                         }
-                        if then_ty == Ty::Never {
-                            else_ty
-                        } else if else_ty == Ty::Never {
-                            then_ty.clone()
-                        } else if then_ty == Ty::I32 && else_ty.is_integer() {
-                            else_ty
-                        } else if else_ty == Ty::I32 && then_ty.is_integer() {
-                            then_ty.clone()
-                        } else {
-                            then_ty
-                        }
+                        merged_ty.unwrap_or(then_ty)
                     }
                     None => Ty::Unit,
                 }
@@ -1572,20 +1607,17 @@ impl<'e> Checker<'e> {
                         if !found {
                             result_ty = ty.clone();
                             found = true;
+                        } else if let Some(merged_ty) = merge_result_ty(&result_ty, ty) {
+                            result_ty = merged_ty;
                         } else {
-                            let ok = *ty == result_ty
-                                || (*ty == Ty::I32 && result_ty.is_integer())
-                                || (result_ty == Ty::I32 && ty.is_integer());
-                            if !ok {
-                                self.emit_error(
-                                    ErrorCode::TypeMismatch,
-                                    format!(
-                                        "break type mismatch: expected `{result_ty}`, found `{ty}`"
-                                    ),
-                                    expr.span,
-                                );
-                                break;
-                            }
+                            self.emit_error(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "break type mismatch: expected `{result_ty}`, found `{ty}`"
+                                ),
+                                expr.span,
+                            );
+                            break;
                         }
                     }
                     result_ty
@@ -1638,10 +1670,7 @@ impl<'e> Checker<'e> {
                     None => Ty::Unit,
                 };
                 let expected = self.current_return_ty.clone();
-                let coercible = val_ty == expected
-                    || val_ty == Ty::Never
-                    || (val_ty == Ty::I32 && expected.is_integer());
-                if !coercible {
+                if !can_context_coerce(&val_ty, &expected) {
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!(
@@ -1711,11 +1740,7 @@ impl<'e> Checker<'e> {
             ExprKind::Assign { lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);
                 let rhs_ty = self.check_expr(rhs);
-                let coercible = (rhs_ty == Ty::I32 && lhs_ty.is_integer())
-                    || lhs_ty == rhs_ty
-                    || lhs_ty == Ty::Never
-                    || rhs_ty == Ty::Never;
-                if !coercible {
+                if !can_assignment_coerce(&rhs_ty, &lhs_ty) {
                     self.emit_error(
                         ErrorCode::TypeMismatch,
                         format!(
@@ -1773,10 +1798,7 @@ impl<'e> Checker<'e> {
                             if let Some((_, expected_ty)) =
                                 info.fields.iter().find(|(n, _)| n == field_name)
                             {
-                                if actual_ty != *expected_ty
-                                    && actual_ty != Ty::Never
-                                    && actual_ty != Ty::I32
-                                {
+                                if !can_context_coerce(&actual_ty, expected_ty) {
                                     self.emit_error(
                                         ErrorCode::TypeMismatch,
                                         format!(
@@ -1805,13 +1827,14 @@ impl<'e> Checker<'e> {
                     }
                     _ => Ty::Unit,
                 };
-                let valid = matches!(
-                    (&src_ty, &tgt_ty),
-                    (Ty::I64, Ty::U64)
-                        | (Ty::U64, Ty::I64)
-                        | (Ty::I32, Ty::U64)
-                        | (Ty::I32, Ty::I64)
-                );
+                let valid = (src_ty.is_lit_int() && tgt_ty.is_integer())
+                    || matches!(
+                        (&src_ty, &tgt_ty),
+                        (Ty::I64, Ty::U64)
+                            | (Ty::U64, Ty::I64)
+                            | (Ty::I32, Ty::U64)
+                            | (Ty::I32, Ty::I64)
+                    );
                 if !valid && src_ty != Ty::Never {
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
@@ -1871,7 +1894,7 @@ impl<'e> Checker<'e> {
                         }
                         for field in fields {
                             let arg_ty = self.check_expr(field);
-                            if arg_ty != Ty::I64 && arg_ty != Ty::I32 && arg_ty != Ty::Never {
+                            if !can_context_coerce(&arg_ty, &Ty::I64) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
                                     format!(
@@ -1952,7 +1975,7 @@ impl<'e> Checker<'e> {
                         }
                         for field in fields {
                             let arg_ty = self.check_expr(field);
-                            if arg_ty != Ty::I64 && arg_ty != Ty::I32 && arg_ty != Ty::Never {
+                            if !can_context_coerce(&arg_ty, &Ty::I64) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
                                     format!(
@@ -2012,9 +2035,7 @@ impl<'e> Checker<'e> {
                                 for (i, field_expr) in fields.iter().enumerate() {
                                     let actual_ty = self.check_expr(field_expr);
                                     if let Some(expected_ty) = expected_tys.get(i)
-                                        && actual_ty != *expected_ty
-                                        && actual_ty != Ty::Never
-                                        && actual_ty != Ty::I32
+                                        && !can_context_coerce(&actual_ty, expected_ty)
                                     {
                                         self.emit_error(
                                             ErrorCode::TypeMismatch,
@@ -2041,15 +2062,8 @@ impl<'e> Checker<'e> {
         if rhs == Ty::Never {
             return lhs;
         }
-        // Integer literal (I32) coerces to the other integer type
-        let (lhs, rhs) = if lhs == Ty::I32 && rhs.is_integer() {
-            (rhs.clone(), rhs)
-        } else if rhs == Ty::I32 && lhs.is_integer() {
-            (lhs.clone(), lhs)
-        } else {
-            (lhs, rhs)
-        };
-        if !lhs.is_numeric() {
+        let (lhs, rhs) = absorb_lit_int_operand(lhs, rhs);
+        if !is_numeric_or_lit_int(&lhs) {
             self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
                 format!("arithmetic operator requires a numeric type, found `{lhs}`"),
@@ -2077,14 +2091,8 @@ impl<'e> Checker<'e> {
         if rhs == Ty::Never {
             return lhs;
         }
-        let (lhs, rhs) = if lhs == Ty::I32 && rhs.is_integer() {
-            (rhs.clone(), rhs)
-        } else if rhs == Ty::I32 && lhs.is_integer() {
-            (lhs.clone(), lhs)
-        } else {
-            (lhs, rhs)
-        };
-        if !lhs.is_integer() {
+        let (lhs, rhs) = absorb_lit_int_operand(lhs, rhs);
+        if !is_integer_or_lit_int(&lhs) {
             self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
                 format!("bitwise operator requires an integer type, found `{lhs}`"),
@@ -2373,11 +2381,22 @@ mod tests {
     }
 
     #[test]
-    fn type_check_i32_literal() {
+    fn type_check_unsuffixed_int_literal_marker() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = Checker::new("test.vow", &mut emitter);
         checker.env.push_scope();
         let ty = checker.check_expr(&make_expr(ExprKind::Lit(Lit::Int(42))));
+        assert_eq!(ty, Ty::LitInt);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn type_check_named_i32_binding_is_real_i32() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.push_scope();
+        checker.env.define("x", Ty::I32);
+        let ty = checker.check_expr(&make_expr(ExprKind::Ident("x".to_string())));
         assert_eq!(ty, Ty::I32);
         assert!(!checker.has_errors());
     }
@@ -2415,7 +2434,7 @@ mod tests {
             rhs: Box::new(make_expr(ExprKind::Lit(Lit::Int(2)))),
         });
         let ty = checker.check_expr(&expr);
-        assert_eq!(ty, Ty::I32);
+        assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
     }
 
@@ -2585,7 +2604,7 @@ mod tests {
             op: vow_syntax::ast::UnOp::Neg,
             operand: Box::new(int_lit()),
         }));
-        assert_eq!(ty, Ty::I32);
+        assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
     }
 
@@ -2685,7 +2704,7 @@ mod tests {
             lhs: Box::new(int_lit()),
             rhs: Box::new(int_lit()),
         }));
-        assert_eq!(ty, Ty::I32);
+        assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
     }
 
@@ -2710,7 +2729,7 @@ mod tests {
             lhs: Box::new(int_lit()),
             rhs: Box::new(int_lit()),
         }));
-        assert_eq!(ty, Ty::I32);
+        assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
     }
 
@@ -2725,7 +2744,7 @@ mod tests {
             lhs: Box::new(int_lit()),
             rhs: Box::new(int_lit()),
         }));
-        assert_eq!(ty, Ty::I32);
+        assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
     }
 
@@ -2954,7 +2973,7 @@ mod tests {
         let ty = checker.check_expr(&make_expr(ExprKind::Borrow {
             expr: Box::new(int_lit()),
         }));
-        assert_eq!(ty, Ty::Reference(Box::new(Ty::I32)));
+        assert_eq!(ty, Ty::Reference(Box::new(Ty::LitInt)));
         assert!(!checker.has_errors());
     }
 
@@ -3086,7 +3105,7 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         let ty = checker.check_expr(&make_expr(ExprKind::Tuple(vec![int_lit(), bool_lit()])));
-        assert_eq!(ty, Ty::Tuple(vec![Ty::I32, Ty::Bool]));
+        assert_eq!(ty, Ty::Tuple(vec![Ty::LitInt, Ty::Bool]));
         assert!(!checker.has_errors());
     }
 
@@ -3172,7 +3191,7 @@ mod tests {
                 span: dummy_span(),
             }),
         }));
-        assert_eq!(ty, Ty::I32);
+        assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
     }
 
@@ -3259,7 +3278,7 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         let ty = checker.check_expr(&make_expr(ExprKind::Block(Box::new(make_block(int_lit())))));
-        assert_eq!(ty, Ty::I32);
+        assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
     }
 
@@ -3409,7 +3428,7 @@ mod tests {
             then_branch: Box::new(make_block(int_lit())),
             else_branch: Some(Box::new(int_lit())),
         }));
-        assert_eq!(ty, Ty::I32);
+        assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
     }
 
@@ -3446,7 +3465,7 @@ mod tests {
             span: dummy_span(),
         };
         checker.check_stmt(&stmt);
-        assert_eq!(checker.env.lookup("x"), Some(&Ty::I32));
+        assert_eq!(checker.env.lookup("x"), Some(&Ty::LitInt));
         assert!(!checker.has_errors());
     }
 
@@ -3602,7 +3621,7 @@ mod tests {
             ],
         });
         let ty = checker.check_expr(&expr);
-        assert_eq!(ty, Ty::I32);
+        assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
     }
 
@@ -3727,6 +3746,27 @@ mod tests {
         assert!(checker.has_errors());
     }
 
+    #[test]
+    fn struct_literal_rejects_real_i32_for_i64_field() {
+        use crate::env::StructInfo;
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Counter",
+            StructInfo {
+                fields: vec![("value".to_string(), Ty::I64)],
+                is_linear: false,
+            },
+        );
+        checker.env.push_scope();
+        checker.env.define("x", Ty::I32);
+        checker.check_expr(&make_expr(ExprKind::StructLiteral {
+            name: "Counter".to_string(),
+            fields: vec![("value".to_string(), ident("x"))],
+        }));
+        assert!(checker.has_errors());
+    }
+
     // --- EnumConstruct builtins ---
 
     #[test]
@@ -3751,9 +3791,35 @@ mod tests {
         }));
         assert_eq!(
             ty,
-            Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32])
+            Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::LitInt])
         );
         assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn context_coercion_recurses_through_applied_literal_args() {
+        let opt_lit = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::LitInt]);
+        let opt_i32 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
+        let opt_u64 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::U64]);
+        let vec_i32 = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I32]);
+
+        assert!(can_context_coerce(&opt_lit, &opt_i32));
+        assert!(can_context_coerce(&opt_lit, &opt_u64));
+        assert!(!can_context_coerce(&opt_i32, &opt_u64));
+        assert!(!can_context_coerce(&opt_lit, &vec_i32));
+    }
+
+    #[test]
+    fn context_coercion_recurses_through_tuple_literal_elements() {
+        let tuple_lit = Ty::Tuple(vec![Ty::LitInt, Ty::Bool]);
+        let tuple_i32 = Ty::Tuple(vec![Ty::I32, Ty::Bool]);
+        let tuple_u64 = Ty::Tuple(vec![Ty::U64, Ty::Bool]);
+        let tuple_wrong_shape = Ty::Tuple(vec![Ty::I32]);
+
+        assert!(can_context_coerce(&tuple_lit, &tuple_i32));
+        assert!(can_context_coerce(&tuple_lit, &tuple_u64));
+        assert!(!can_context_coerce(&tuple_i32, &tuple_u64));
+        assert!(!can_context_coerce(&tuple_lit, &tuple_wrong_shape));
     }
 
     #[test]
@@ -3768,10 +3834,31 @@ mod tests {
             ty,
             Ty::Applied(
                 Box::new(Ty::Enum("Result".to_string())),
-                vec![Ty::I32, Ty::Unit]
+                vec![Ty::LitInt, Ty::Unit]
             )
         );
         assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn enum_construct_rejects_real_i32_for_i64_payload() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Value".to_string(),
+                    kind: VariantKind::Tuple(vec![Ty::I64]),
+                }],
+            },
+        );
+        checker.env.define("x", Ty::I32);
+        checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["Payload".to_string(), "Value".to_string()],
+            fields: vec![ident("x")],
+        }));
+        assert!(checker.has_errors());
     }
 
     #[test]
@@ -3816,6 +3903,18 @@ mod tests {
         assert!(checker.has_errors());
         assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
         assert!(emitter.0[0].message.contains("String::from"));
+    }
+
+    #[test]
+    fn vec_raw_parts_copy_rejects_real_i32_arg() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.env.define("ptr", Ty::I32);
+        checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["Vec".to_string(), "from_raw_parts_copy".to_string()],
+            fields: vec![ident("ptr"), int_lit()],
+        }));
+        assert!(checker.has_errors());
     }
 
     #[test]
