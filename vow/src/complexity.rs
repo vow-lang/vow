@@ -638,6 +638,89 @@ fn cx_emit_fn(out: &mut String, r: &CxEmit, thr: i64) {
     out.push_str("}}");
 }
 
+// Compute the full per-function complexity record from a function's AST, the
+// source text (for line numbers), and its optional IR-derived info. Pure: no
+// I/O, no shared state — every metric is a function of these inputs, so the
+// command shell is left with orchestration (frontend, IR indexing, aggregation,
+// emission) and this owns the metric assembly.
+fn analyze_function(
+    f: &FnDef,
+    src: &str,
+    info: Option<&IrInfo>,
+    linear_structs: &HashSet<String>,
+    cog_anchor: i64,
+    nloc_anchor: i64,
+) -> CxEmit {
+    let start = f.span.start as usize;
+    let end = (f.span.start + f.span.len) as usize;
+    let first_line = line_at(src, start);
+    let nloc = line_at(src, end) - first_line + 1;
+    let mut acc = Acc::default();
+    walk_block(&f.body, &mut acc);
+    let cyclomatic = acc.decisions + 1;
+    let cyclomatic_ir = info.map(|x| x.cyclomatic).unwrap_or(-1);
+    let effect_fanout = info.map(|x| x.effect_fanout).unwrap_or(0);
+    let linear_consumes = info.map(|x| x.consumes).unwrap_or(0);
+    let linear_borrows = info.map(|x| x.borrows).unwrap_or(0);
+    let eff = f.effects.iter().fold(0i64, |acc, e| acc | effect_bit(e));
+    let linear_values = lv_block(&f.body, linear_structs);
+    let mut cacc = CogAcc::default();
+    cog_block(&f.body, 0, &f.name, &mut cacc);
+    let cognitive = cacc.cog + if cacc.self_calls > 0 { 1 } else { 0 };
+    let mut hacc = HalAcc::default();
+    hal_block(&f.body, &mut hacc);
+    let h_n1 = cx_popcount(hacc.mask);
+    let h_n2 = hacc.seen.len() as i64;
+    let h_vocab = h_n1 + h_n2;
+    let h_length = hacc.bign1 + hacc.bign2;
+    let h_volume_s = cx_sat(h_length.wrapping_mul(cx_log2_milli(h_vocab)));
+    let h_difficulty_s = if h_n2 > 0 {
+        cx_sat(h_n1.wrapping_mul(hacc.bign2).wrapping_mul(500) / h_n2)
+    } else {
+        0
+    };
+    let h_effort_s = cx_sat(h_difficulty_s.wrapping_mul(h_volume_s) / 1000);
+    let contract = analyze_contract(f);
+    let pcost = contract_predicate_cost(&contract);
+    let verif = analyze_verif(f, pcost);
+    let effect_breadth = cx_popcount_bits(eff);
+    let v = cx_vow_bump(effect_breadth, linear_consumes, pcost);
+    let sc = cx_score(cognitive, nloc, cog_anchor, nloc_anchor, v);
+    CxEmit {
+        name: f.name.clone(),
+        line: first_line,
+        nloc,
+        tokens: h_length,
+        stmts: acc.stmts,
+        params: f.params.len() as i64,
+        cyclomatic,
+        cyclomatic_ir,
+        cognitive,
+        max_nesting: cacc.max_nesting,
+        h_n1,
+        h_n2,
+        h_bign1: hacc.bign1,
+        h_bign2: hacc.bign2,
+        h_vocab,
+        h_length,
+        h_volume_s,
+        h_difficulty_s,
+        h_effort_s,
+        eff,
+        effect_fanout,
+        linear_values,
+        linear_consumes,
+        linear_borrows,
+        score: sc.score,
+        cog_sub_s: sc.cog_sub_s,
+        size_sub_s: sc.size_sub_s,
+        base_s: sc.base_s,
+        vow_bump_s: sc.vow_bump_s,
+        contract,
+        verif,
+    }
+}
+
 pub(crate) fn run_complexity_command(
     source: &Path,
     cog_anchor: i64,
@@ -744,75 +827,14 @@ pub(crate) fn run_complexity_command(
             if item_files.get(idx).map(String::as_str) != Some(entry_file.as_str()) {
                 continue;
             }
-            let start = f.span.start as usize;
-            let end = (f.span.start + f.span.len) as usize;
-            let first_line = line_at(&src, start);
-            let nloc = line_at(&src, end) - first_line + 1;
-            let mut acc = Acc::default();
-            walk_block(&f.body, &mut acc);
-            let cyclomatic = acc.decisions + 1;
-            let info = ir_info.get(&f.name);
-            let cyclomatic_ir = info.map(|x| x.cyclomatic).unwrap_or(-1);
-            let effect_fanout = info.map(|x| x.effect_fanout).unwrap_or(0);
-            let linear_consumes = info.map(|x| x.consumes).unwrap_or(0);
-            let linear_borrows = info.map(|x| x.borrows).unwrap_or(0);
-            let eff = f.effects.iter().fold(0i64, |acc, e| acc | effect_bit(e));
-            let linear_values = lv_block(&f.body, &linear_structs);
-            let mut cacc = CogAcc::default();
-            cog_block(&f.body, 0, &f.name, &mut cacc);
-            let cognitive = cacc.cog + if cacc.self_calls > 0 { 1 } else { 0 };
-            let mut hacc = HalAcc::default();
-            hal_block(&f.body, &mut hacc);
-            let h_n1 = cx_popcount(hacc.mask);
-            let h_n2 = hacc.seen.len() as i64;
-            let h_vocab = h_n1 + h_n2;
-            let h_length = hacc.bign1 + hacc.bign2;
-            let h_volume_s = cx_sat(h_length.wrapping_mul(cx_log2_milli(h_vocab)));
-            let h_difficulty_s = if h_n2 > 0 {
-                cx_sat(h_n1.wrapping_mul(hacc.bign2).wrapping_mul(500) / h_n2)
-            } else {
-                0
-            };
-            let h_effort_s = cx_sat(h_difficulty_s.wrapping_mul(h_volume_s) / 1000);
-            let contract = analyze_contract(f);
-            let pcost = contract_predicate_cost(&contract);
-            let verif = analyze_verif(f, pcost);
-            let effect_breadth = cx_popcount_bits(eff);
-            let v = cx_vow_bump(effect_breadth, linear_consumes, pcost);
-            let sc = cx_score(cognitive, nloc, cog_anchor, nloc_anchor, v);
-            recs.push(CxEmit {
-                name: f.name.clone(),
-                line: first_line,
-                nloc,
-                tokens: h_length,
-                stmts: acc.stmts,
-                params: f.params.len() as i64,
-                cyclomatic,
-                cyclomatic_ir,
-                cognitive,
-                max_nesting: cacc.max_nesting,
-                h_n1,
-                h_n2,
-                h_bign1: hacc.bign1,
-                h_bign2: hacc.bign2,
-                h_vocab,
-                h_length,
-                h_volume_s,
-                h_difficulty_s,
-                h_effort_s,
-                eff,
-                effect_fanout,
-                linear_values,
-                linear_consumes,
-                linear_borrows,
-                score: sc.score,
-                cog_sub_s: sc.cog_sub_s,
-                size_sub_s: sc.size_sub_s,
-                base_s: sc.base_s,
-                vow_bump_s: sc.vow_bump_s,
-                contract,
-                verif,
-            });
+            recs.push(analyze_function(
+                f,
+                &src,
+                ir_info.get(&f.name),
+                &linear_structs,
+                cog_anchor,
+                nloc_anchor,
+            ));
         }
     }
 
@@ -1857,6 +1879,33 @@ mod tests {
         }
     }
 
+    fn i64_param(name: &str) -> Param {
+        Param {
+            name: name.to_string(),
+            ty: i64_ty(),
+            refinement: None,
+            span: sp(),
+        }
+    }
+
+    fn simple_fn(name: &str, params: Vec<Param>, span: Span) -> FnDef {
+        FnDef {
+            vis: Visibility::Private,
+            name: name.to_string(),
+            params,
+            return_ty: i64_ty(),
+            effects: vec![],
+            vow: None,
+            body: Block {
+                stmts: vec![],
+                trailing_expr: None,
+                span: sp(),
+            },
+            span,
+            is_declaration: false,
+        }
+    }
+
     #[test]
     fn analyze_contract_counts_param_refinement_requires() {
         let fn_def = FnDef {
@@ -1897,6 +1946,84 @@ mod tests {
         assert_eq!(contract.free_vars, 1);
         assert!(!contract.has_vec_quant);
         assert_eq!(contract_predicate_cost(&contract), 4);
+    }
+
+    #[test]
+    fn analyze_function_reports_name_params_and_line_span() {
+        // "aaa\nbbb\nccc\nddd\n": a span starting at offset 4 (line 2) and ending
+        // inside line 3 spans lines 2-3, so line == 2 and nloc == 2.
+        let src = "aaa\nbbb\nccc\nddd\n";
+        let f = simple_fn("add", vec![i64_param("a"), i64_param("b")], Span::new(4, 5));
+
+        let rec = analyze_function(&f, src, None, &HashSet::new(), 15, 40);
+
+        assert_eq!(rec.name, "add");
+        assert_eq!(rec.params, 2);
+        assert_eq!(rec.line, 2);
+        assert_eq!(rec.nloc, 2);
+        // An empty body has no decision points: cyclomatic = decisions + 1.
+        assert_eq!(rec.cyclomatic, 1);
+        // No declared effects → empty effect mask.
+        assert_eq!(rec.eff, 0);
+    }
+
+    #[test]
+    fn analyze_function_defaults_ir_fields_when_no_ir_info() {
+        let f = simple_fn("noir", vec![], sp());
+
+        let rec = analyze_function(&f, "", None, &HashSet::new(), 15, 40);
+
+        // Absent IR info: cyclomatic_ir carries the -1 sentinel, the rest 0.
+        assert_eq!(rec.cyclomatic_ir, -1);
+        assert_eq!(rec.effect_fanout, 0);
+        assert_eq!(rec.linear_consumes, 0);
+        assert_eq!(rec.linear_borrows, 0);
+    }
+
+    #[test]
+    fn analyze_function_threads_ir_info_into_record() {
+        let f = simple_fn("withir", vec![], sp());
+        let info = IrInfo {
+            cyclomatic: 9,
+            consumes: 3,
+            borrows: 2,
+            fan_in: 5,
+            fan_out: 4,
+            effect_fanout: 7,
+        };
+
+        let rec = analyze_function(&f, "", Some(&info), &HashSet::new(), 15, 40);
+
+        assert_eq!(rec.cyclomatic_ir, 9);
+        assert_eq!(rec.effect_fanout, 7);
+        assert_eq!(rec.linear_consumes, 3);
+        assert_eq!(rec.linear_borrows, 2);
+        // fan_in / fan_out feed file-level aggregation, not the per-fn record.
+    }
+
+    #[test]
+    fn analyze_function_counts_param_refinement_as_requires() {
+        let param = Param {
+            name: "x".to_string(),
+            ty: i64_ty(),
+            refinement: Some(Box::new(Expr {
+                kind: ExprKind::BinaryOp {
+                    op: BinOp::Gt,
+                    lhs: Box::new(ident("x")),
+                    rhs: Box::new(int(0)),
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let f = simple_fn("positive", vec![param], sp());
+
+        let rec = analyze_function(&f, "", None, &HashSet::new(), 15, 40);
+
+        // One param refinement → one `requires`, and its predicate cost (4, see
+        // analyze_contract_counts_param_refinement_requires) flows into verif.
+        assert_eq!(rec.contract.requires, 1);
+        assert_eq!(rec.verif.contract_predicate_cost, 4);
     }
 
     #[test]
