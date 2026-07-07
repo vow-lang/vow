@@ -13820,11 +13820,29 @@ fn run_test_command(
         });
     }
 
+    let test_result = build_test_result(entries, total_density);
+
+    let json = serde_json::to_string(&test_result).expect("TestResult must be serializable");
+    println!("{json}");
+
+    if test_result.failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+/// Assemble the final [`TestResult`] from the collected per-file `entries` and
+/// the accumulated contract `density`. Pure: no IO, no process exit — the
+/// orchestration in [`run_test_command`] handles printing and the exit code.
+///
+/// Finalizes `density_pct` (integer math matching the self-hosted compiler),
+/// tallies pass/fail/skip, and gates the overall status. A file counts as
+/// `failed` when its status is any of `failed`, `compile_error`,
+/// `verify_failed`, or `contract_skipped` — all fail-closed (#386).
+fn build_test_result(entries: Vec<TestEntry>, mut density: ContractDensity) -> TestResult {
     // Compute final density (integer math matching self-hosted compiler)
-    if let Some(tenths) =
-        (total_density.functions_with_vows * 1000).checked_div(total_density.functions_total)
+    if let Some(tenths) = (density.functions_with_vows * 1000).checked_div(density.functions_total)
     {
-        total_density.density_pct = (tenths / 10) as f64 + (tenths % 10) as f64 / 10.0;
+        density.density_pct = (tenths / 10) as f64 + (tenths % 10) as f64 / 10.0;
     }
 
     let passed = entries.iter().filter(|e| e.status == "passed").count();
@@ -13845,21 +13863,14 @@ fn run_test_command(
         "TestsPassed"
     };
 
-    let test_result = TestResult {
+    TestResult {
         status: status.to_string(),
         total: entries.len(),
         passed,
         failed,
         skipped,
         tests: entries,
-        contract_density: total_density,
-    };
-
-    let json = serde_json::to_string(&test_result).expect("TestResult must be serializable");
-    println!("{json}");
-
-    if failed > 0 {
-        std::process::exit(1);
+        contract_density: density,
     }
 }
 
@@ -19016,6 +19027,112 @@ fn main() -> i32 {
         ] {
             assert!(contracts_summary_has_failure(&failing));
         }
+    }
+
+    // ---- Test-run result assembly (build_test_result) ----
+
+    fn test_entry(status: &str) -> TestEntry {
+        TestEntry {
+            file: "t.vow".to_string(),
+            name: "t".to_string(),
+            status: status.to_string(),
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            duration_ms: 0,
+            diagnostics: vec![],
+            counterexamples: vec![],
+        }
+    }
+
+    fn density(functions_total: usize, functions_with_vows: usize) -> ContractDensity {
+        ContractDensity {
+            functions_total,
+            functions_with_vows,
+            density_pct: 0.0,
+        }
+    }
+
+    #[test]
+    fn build_test_result_tallies_passed_and_skipped() {
+        let result = build_test_result(
+            vec![
+                test_entry("passed"),
+                test_entry("passed"),
+                test_entry("skipped"),
+            ],
+            density(0, 0),
+        );
+        assert_eq!(result.status, "TestsPassed");
+        assert_eq!(result.total, 3);
+        assert_eq!(result.passed, 2);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.skipped, 1);
+    }
+
+    #[test]
+    fn build_test_result_fails_closed_on_each_failure_status() {
+        // Every one of these per-file statuses must count as a failure and flip
+        // the overall status to TestsFailed (fail-closed, #386). `skipped` and
+        // `passed` must NOT count toward `failed`.
+        for status in [
+            "failed",
+            "compile_error",
+            "verify_failed",
+            "contract_skipped",
+        ] {
+            let result = build_test_result(
+                vec![test_entry("passed"), test_entry(status)],
+                density(0, 0),
+            );
+            assert_eq!(result.status, "TestsFailed", "status={status}");
+            assert_eq!(result.failed, 1, "status={status}");
+            assert_eq!(result.passed, 1, "status={status}");
+            assert_eq!(result.skipped, 0, "status={status}");
+        }
+    }
+
+    #[test]
+    fn build_test_result_finalizes_density_pct() {
+        // Percentage truncated to one decimal via integer math. Expected values
+        // are hand-derived from the ratio, independent of the implementation.
+        let close =
+            |got: f64, want: f64| assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
+        // 1/3 = 33.33..% -> 33.3
+        close(
+            build_test_result(vec![], density(3, 1))
+                .contract_density
+                .density_pct,
+            33.3,
+        );
+        // 2/3 = 66.66..% -> 66.6
+        close(
+            build_test_result(vec![], density(3, 2))
+                .contract_density
+                .density_pct,
+            66.6,
+        );
+        // 1/2 = 50.0%
+        close(
+            build_test_result(vec![], density(2, 1))
+                .contract_density
+                .density_pct,
+            50.0,
+        );
+        // All vowed -> 100.0%
+        close(
+            build_test_result(vec![], density(4, 4))
+                .contract_density
+                .density_pct,
+            100.0,
+        );
+        // No functions -> 0.0 (no divide-by-zero).
+        close(
+            build_test_result(vec![], density(0, 0))
+                .contract_density
+                .density_pct,
+            0.0,
+        );
     }
 
     #[test]
