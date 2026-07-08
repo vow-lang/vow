@@ -22,7 +22,7 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | ------------- | -------------------------------------------------------------------- |
 | `uci`         | Reports `id name Vow Chess UCI` and `uciok`.                          |
 | `isready`     | Replies `readyok`.                                                    |
-| `ucinewgame`  | Resets to the start position.                                         |
+| `ucinewgame`  | Full per-game reset (start position today; all per-game state).       |
 | `position`    | `startpos` optionally followed by `moves <uci> ...`.                  |
 | `go`          | Accepts `depth`, `movetime`, and `wtime`/`btime` time controls.      |
 | `stop`        | Accepted (search is synchronous, so it is a no-op).                   |
