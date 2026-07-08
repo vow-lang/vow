@@ -43,7 +43,7 @@ enforced at runtime in `--mode debug` while static verifiability is improved. Se
 [docs/spec/stdlib.md](docs/spec/stdlib.md) (full API + verification reference).
 
 `examples/` keeps the language demos (contracts, blame, CEGIS, IO) and the larger
-showcases (`sat/`, `chess_uci.vow`).
+showcases (`sat/`, `chess/`).
 
 ## Agent Setup (Claude Code Skill)
 

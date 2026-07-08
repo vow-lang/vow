@@ -5,8 +5,8 @@ UCI option passthrough, validator-based evaluation, and match scoring.
 Example usage:
 
   # 10 games, alternating colors, Stockfish limited to ~1350 Elo
-  python scripts/play_uci_match.py \
-      --white ./build/chess_uci \
+  python examples/chess/play_uci_match.py \
+      --white examples/chess/.local/chess \
       --black stockfish \
       --black-option "UCI_LimitStrength=true" \
       --black-option "UCI_Elo=1350" \
@@ -16,7 +16,7 @@ Example usage:
       --log match.log
 
   # Quick single game (backwards-compatible with the old interface)
-  python scripts/play_uci_match.py --white ./build/chess_uci --black stockfish
+  python examples/chess/play_uci_match.py --white examples/chess/.local/chess --black stockfish
 """
 from __future__ import annotations
 
