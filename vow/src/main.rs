@@ -14292,24 +14292,15 @@ fn contracts_summary_has_failure(summary: &ContractsSummaryJson) -> bool {
         || summary.vacuous > 0
 }
 
-fn run_contracts_command(
-    source: &Path,
-    verify: bool,
-    no_cache: bool,
-    limits: &VerifyLimits,
-    config: &SolverConfig,
-) {
-    let frontend = match compile_frontend(source, None) {
-        Ok(f) => f,
-        Err(output) => {
-            output.emit_json();
-            std::process::exit(1);
-        }
-    };
-    let ir_module = frontend
-        .ir()
-        .expect("LoweredIr goal must produce IR for contracts");
-
+/// Assemble the per-clause `ContractEntryJson` records for `vow contracts` from
+/// a lowered IR module: one entry per vow on each function, in function-then-vow
+/// order (unlike contract *density*, this includes `main`). Each entry starts in
+/// its pre-verification state — `status` is `"not_verified"` and
+/// `trivially_satisfiable` is `false` — which the optional `--verify` pass
+/// (`update_contract_statuses`) later mutates in place. `kind` and `quality` are
+/// the static, no-ESBMC classifications; `blame` is the capitalized
+/// `Caller`/`Callee`/`None` form the JSON exposes.
+fn build_contract_entries(ir_module: &vow_ir::Module) -> Vec<ContractEntryJson> {
     let mut entries: Vec<ContractEntryJson> = Vec::new();
     for func in &ir_module.functions {
         for vow in &func.vows {
@@ -14337,6 +14328,28 @@ fn run_contracts_command(
             });
         }
     }
+    entries
+}
+
+fn run_contracts_command(
+    source: &Path,
+    verify: bool,
+    no_cache: bool,
+    limits: &VerifyLimits,
+    config: &SolverConfig,
+) {
+    let frontend = match compile_frontend(source, None) {
+        Ok(f) => f,
+        Err(output) => {
+            output.emit_json();
+            std::process::exit(1);
+        }
+    };
+    let ir_module = frontend
+        .ir()
+        .expect("LoweredIr goal must produce IR for contracts");
+
+    let mut entries = build_contract_entries(ir_module);
 
     let mut exit_code = 0;
     if verify {
@@ -19027,6 +19040,156 @@ fn main() -> i32 {
         ] {
             assert!(contracts_summary_has_failure(&failing));
         }
+    }
+
+    // ---- Contract-entry assembly (build_contract_entries) ----
+
+    fn contract_vow(
+        id: u32,
+        description: &str,
+        blame: vow_diag::Blame,
+        offset: u32,
+    ) -> vow_ir::VowEntry {
+        vow_ir::VowEntry {
+            id: vow_ir::VowId(id),
+            description: description.to_string(),
+            blame,
+            bindings: vec![],
+            file: "c.vow".to_string(),
+            offset,
+        }
+    }
+
+    fn contract_fn(id: u32, name: &str, vows: Vec<vow_ir::VowEntry>) -> vow_ir::Function {
+        vow_ir::Function {
+            id: vow_ir::FuncId(id),
+            name: name.to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: vow_ir::Ty::Unit,
+            effects: vec![],
+            vows,
+            blocks: vec![vow_ir::BasicBlock {
+                id: vow_ir::BlockId(0),
+                insts: vec![],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: vow_ir::RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    fn contract_module(functions: Vec<vow_ir::Function>) -> vow_ir::Module {
+        vow_ir::Module {
+            name: "Contracts".to_string(),
+            functions,
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn build_contract_entries_maps_kind_blame_source_and_defaults() {
+        // One function carrying a Caller-blamed `requires` and a Callee-blamed
+        // `ensures`. Pins the per-vow field mapping independently of the loop:
+        // kind from the description keyword, the *capitalized* blame the JSON
+        // exposes, source file/offset threading, and the pre-verification
+        // defaults (`not_verified`, `trivially_satisfiable == false`).
+        let module = contract_module(vec![contract_fn(
+            7,
+            "safe_div",
+            vec![
+                contract_vow(3, "requires: y != 0", vow_diag::Blame::Caller, 11),
+                contract_vow(4, "ensures: result == x", vow_diag::Blame::Callee, 42),
+            ],
+        )]);
+
+        let entries = build_contract_entries(&module);
+
+        assert_eq!(entries.len(), 2);
+
+        let req = &entries[0];
+        assert_eq!(req.vow_id, 3);
+        assert_eq!(req.function, "safe_div");
+        assert_eq!(req.function_id, 7);
+        assert_eq!(req.kind, "requires");
+        assert_eq!(req.blame, "Caller");
+        assert_eq!(req.source.file, "c.vow");
+        assert_eq!(req.source.offset, 11);
+        assert_eq!(req.status, "not_verified");
+        assert!(!req.trivially_satisfiable);
+
+        let ens = &entries[1];
+        assert_eq!(ens.vow_id, 4);
+        assert_eq!(ens.kind, "ensures");
+        assert_eq!(ens.blame, "Callee");
+        assert_eq!(ens.source.offset, 42);
+        assert_eq!(ens.status, "not_verified");
+    }
+
+    #[test]
+    fn build_contract_entries_flattens_functions_and_vows_in_order() {
+        // Two contracted functions plus one with no vows. Entries appear in
+        // function-then-vow order, the vow-less function contributes nothing,
+        // and — unlike contract *density* — `main`'s vows are included.
+        let module = contract_module(vec![
+            contract_fn(
+                0,
+                "main",
+                vec![contract_vow(
+                    0,
+                    "requires: n >= 0",
+                    vow_diag::Blame::Caller,
+                    0,
+                )],
+            ),
+            contract_fn(1, "helper", vec![]),
+            contract_fn(
+                2,
+                "clamp",
+                vec![
+                    contract_vow(1, "ensures: result <= hi", vow_diag::Blame::Callee, 0),
+                    contract_vow(2, "invariant: lo <= hi", vow_diag::Blame::None, 0),
+                ],
+            ),
+        ]);
+
+        let entries = build_contract_entries(&module);
+
+        let trace: Vec<(&str, &str, &str)> = entries
+            .iter()
+            .map(|e| (e.function.as_str(), e.kind.as_str(), e.blame.as_str()))
+            .collect();
+        assert_eq!(
+            trace,
+            vec![
+                ("main", "requires", "Caller"),
+                ("clamp", "ensures", "Callee"),
+                ("clamp", "invariant", "None"),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_contract_entries_classifies_clause_quality() {
+        // The static, no-ESBMC quality classifier is wired through per entry:
+        // a bare `result` bound is weak, an equality is substantive, and a
+        // constant clause is tautological.
+        let module = contract_module(vec![contract_fn(
+            0,
+            "f",
+            vec![
+                contract_vow(0, "ensures: result >= 0", vow_diag::Blame::Callee, 0),
+                contract_vow(1, "ensures: result == x", vow_diag::Blame::Callee, 0),
+                contract_vow(2, "invariant: true", vow_diag::Blame::Callee, 0),
+            ],
+        )]);
+
+        let entries = build_contract_entries(&module);
+        let quality: Vec<&str> = entries.iter().map(|e| e.quality.as_str()).collect();
+        assert_eq!(quality, vec!["weak", "substantive", "tautological"]);
     }
 
     // ---- Test-run result assembly (build_test_result) ----
