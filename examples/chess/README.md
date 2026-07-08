@@ -1,0 +1,83 @@
+# Chess UCI Demo
+
+`examples/chess/` is a self-contained [UCI](https://en.wikipedia.org/wiki/Universal_Chess_Interface)
+chess engine written in Vow. It is a real, playable engine — full legal move
+generation and an alpha-beta search — not a move-list toy.
+
+## Scope
+
+The engine (`main.vow`) implements:
+
+- **Board & rules** — full legal move generation for all pieces, including
+  castling, en passant, pawn double-pushes, and under-promotions.
+- **Search** — negamax with alpha-beta pruning, quiescence search, and
+  iterative deepening.
+- **Evaluation** — material (piece values) driving the search.
+
+### UCI protocol
+
+The engine speaks enough of UCI to play in standard GUIs and match runners:
+
+| Command       | Behavior                                                              |
+| ------------- | -------------------------------------------------------------------- |
+| `uci`         | Reports `id name Vow Chess UCI` and `uciok`.                          |
+| `isready`     | Replies `readyok`.                                                    |
+| `ucinewgame`  | Resets to the start position.                                         |
+| `position`    | `startpos` optionally followed by `moves <uci> ...`.                  |
+| `go`          | Accepts `depth`, `movetime`, and `wtime`/`btime` time controls.      |
+| `stop`        | Accepted (search is synchronous, so it is a no-op).                   |
+| `setoption`   | Accepted and ignored (no configurable options yet).                  |
+| `quit`        | Exits.                                                                 |
+
+Moves are read and emitted in long algebraic form (`e2e4`, `e7e8q`).
+
+## Build And Run
+
+Use the self-hosted compiler directly:
+
+```sh
+TMPDIR=/dev/shm build/vowc build --no-verify examples/chess/main.vow -o examples/chess/.local/chess
+```
+
+The engine reads UCI commands on `stdin`:
+
+```sh
+printf 'uci\nposition startpos\ngo depth 4\nquit\n' | examples/chess/.local/chess
+```
+
+If your environment has a tight `/tmp` quota, keep `TMPDIR=/dev/shm` for builds.
+
+## Playing A Match
+
+`play_uci_match.py` drives two UCI engines against each other, alternates
+colors, and (optionally) uses a Stockfish-compatible validator to confirm
+moves and adjudicate unfinished games.
+
+```sh
+# Quick single game against Stockfish
+python examples/chess/play_uci_match.py \
+    --white examples/chess/.local/chess --black stockfish
+
+# 10 games, alternating colors, Stockfish capped near 1350 Elo
+python examples/chess/play_uci_match.py \
+    --white examples/chess/.local/chess \
+    --black stockfish \
+    --black-option "UCI_LimitStrength=true" \
+    --black-option "UCI_Elo=1350" \
+    --games 10 --alternate-colors \
+    --plies 200 \
+    --validator stockfish \
+    --log match.log
+```
+
+The `--validator` engine must support the Stockfish-specific `d` (display)
+command; it is used to fetch FENs and evaluate positions and is optional.
+
+## Notes
+
+- **Memory grows per game.** The engine does not yet free per-move search
+  state (this is part of the `#400` region-model family). A single game is
+  fine, but a long tournament in one process leaks steadily. When running
+  under a match harness such as `cutechess-cli` that reuses one engine
+  process across games, pass `restart=on` for the Vow engine so each game
+  gets a fresh process.
