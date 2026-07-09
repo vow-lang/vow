@@ -75,9 +75,8 @@ command; it is used to fetch FENs and evaluate positions and is optional.
 
 ## Notes
 
-- **Memory grows per game.** The engine does not yet free per-move search
-  state (this is part of the `#400` region-model family). A single game is
-  fine, but a long tournament in one process leaks steadily. When running
-  under a match harness such as `cutechess-cli` that reuses one engine
-  process across games, pass `restart=on` for the Vow engine so each game
-  gets a fresh process.
+- **Search memory is bounded.** Per-node move-list allocations are freed as the
+  search unwinds, so memory stays flat across a long game or a multi-game match
+  in a single reused process (`#871`). This relies on the region inference
+  placing per-node `Vec<ChessMove>` allocations in freeable frame arenas rather
+  than the root arena.
