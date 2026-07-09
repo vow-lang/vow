@@ -1513,11 +1513,11 @@ fn analyze_function(
     };
     summary.return_may_be_rodata = compute_return_may_be_rodata(func, &rodata_trace);
 
-    // Pre-rewrite `Caller(_)` regions for the `RegionRootEscape` note pass.
-    // The rewrite below collapses internal-call results from `Caller(_)` to
-    // `Root` for codegen conservatism, but the note pass needs to surface the
-    // pre-rewrite state so that internal `Call` heap producers routed through
-    // a hidden caller slot still emit a note (issue #320).
+    // `Caller(_)` snapshot for the `RegionRootEscape` note pass. The former
+    // `Caller(_) -> Root` collapse below was dropped in #871, so this map now
+    // records the same region the canonical `region_map` does for these
+    // internal-call heap producers; the note pass still consults it first so
+    // hidden-caller-slot producers keep emitting a note (issue #320).
     let mut note_region_map: BTreeMap<InstId, RegionId> = BTreeMap::new();
 
     // Compute LUB-derived RegionId for every heap-producing inst.
@@ -1698,11 +1698,11 @@ fn emit_root_escape_notes(
     }
     for block in &func.blocks {
         for inst in &block.insts {
-            // `note_region_map` carries the pre-rewrite `Caller(_)` for
-            // internal-call heap producers that `analyze_function` collapsed
-            // to `Root` (issue #320). Consult it first; fall back to the
-            // post-rewrite `region_map` for everything else (the canonical
-            // direct-`RegionAlloc{Caller(_)}` path).
+            // `note_region_map` records the `Caller(_)` of internal-call heap
+            // producers (issue #320). Since #871 dropped the `Caller(_) -> Root`
+            // collapse, its entries now match the canonical `region_map` for
+            // those producers; it is still consulted first, then `region_map`
+            // for everything else (the direct-`RegionAlloc{Caller(_)}` path).
             let rgn = match note_region_map.get(&inst.id) {
                 Some(r) => r,
                 None => match region_map.get(&inst.id) {
@@ -3328,7 +3328,7 @@ fn underlying_caller_via_aliases_inner(
                 let mut merged: Option<Option<RegionId>> = None;
                 let mut diverged = false;
                 let mut any_caller_arm: Option<RegionId> = None;
-                for (_, (_, candidate)) in inst_lookup.iter() {
+                for (_, candidate) in inst_lookup.values() {
                     if candidate.opcode == Opcode::Upsilon
                         && matches!(candidate.data, InstData::PhiTarget(t) if t == phi_id)
                         && let Some(&arm_id) = candidate.args.first()

@@ -77,12 +77,12 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // since we'll consume them once at the end.
     let region_keys: Vec<Vec<i64>> = Vec::new();
     let region_vals: Vec<Vec<i64>> = Vec::new();
-    // Pre-rewrite Caller(_) snapshots for the `RegionRootEscape` note pass.
-    // `analyze_function` collapses internal-call results from Caller(_) to
-    // Root in `region_keys/vals` for codegen conservatism; capturing the
-    // original Caller(_) here keeps the note pass visible to issue #320's
-    // case where the rewrite would otherwise silence a real root-region
-    // placement. Mirrors the Rust pass's local `note_region_map`; the
+    // Caller(_) snapshot for the `RegionRootEscape` note pass. The former
+    // Caller(_) -> Root collapse in `analyze_function` was dropped in #871, so
+    // this snapshot now records the same region `region_keys/vals` does for
+    // these internal-call heap producers; the note pass still consults it first
+    // (issue #320) so hidden-caller-slot producers keep emitting a note.
+    // Mirrors the Rust pass's local `note_region_map`; the
     // per-fn slot is reset at the top of each `analyze_function` call so
     // only the convergence iteration's captures contribute (matching
     // `let mut note_region_map = BTreeMap::new()` in the Rust mirror).
@@ -1235,11 +1235,11 @@ fn emit_root_escape_notes_module(
             let mut ii: i64 = 0;
             while ii < blk.insts.len() {
                 let inst: IrInst = blk.insts[ii];
-                // Issue #320: prefer the pre-rewrite Caller(_) snapshot when
-                // present (set by `analyze_function` for internal-call heap
-                // producers whose region was conservatively rewritten to
-                // Root). Fall back to the committed `region_keys/vals` for
-                // the canonical direct-`RegionAlloc{Caller(_)}` path.
+                // Issue #320: prefer the Caller(_) snapshot when present (set by
+                // `analyze_function` for internal-call heap producers). Since
+                // #871 dropped the Caller(_) -> Root collapse the snapshot now
+                // matches `region_keys/vals` for those producers; fall back to
+                // `region_keys/vals` for the direct-`RegionAlloc{Caller(_)}` path.
                 let mut rgn: i64 = lookup_inst_region(note_rkeys, note_rvals, inst.id);
                 if rgn < 0 {
                     rgn = lookup_inst_region(rkeys, rvals, inst.id);
@@ -2226,16 +2226,14 @@ fn analyze_function(
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux,
                 );
-                // Issue #320: capture the pre-rewrite Caller(_) so the note
-                // pass can still surface internal-call heap producers routed
-                // through a hidden caller slot. The rewrite below collapses
-                // them to Root for codegen conservatism, which would otherwise
-                // silence the diagnostic. Mirrors the nested structure at
-                // vow-ir/src/region.rs:1437-1455.
-                // Issue #400: only internal-call results that escape to a
-                // hidden caller arena (Caller(_)) are still collapsed to Root.
-                // Block(_) results are kept local — loop-carried escape (the
-                // hazard the old blanket collapse masked) is handled by the
+                // Issue #320: record the Caller(_) region so the note pass can
+                // surface internal-call heap producers routed through a hidden
+                // caller slot. The former Caller(_) -> Root collapse below was
+                // dropped in #871 (hidden-arena threading places the result in
+                // the caller's arena instead of leaking to root), so this
+                // snapshot now matches the committed region for these producers.
+                // Block(_) results were already kept local — loop-carried escape
+                // (the hazard the old blanket collapse masked) is handled by the
                 // loop-header Upsilon lifting in direct_markers_collect_regions.
                 if rinst.op == IOP_CALL() && rinst.dk != IDATA_CALL_EXTERN() {
                     let rk: i64 = region_kind(rgn);

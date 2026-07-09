@@ -4315,11 +4315,14 @@ fn add(a: i64, b: i64) -> i64 vow {
 > propagation, where `N` is the precise slot index implied by the
 > destination (issue #317 slot-aware inference). Such single-slot routings
 > satisfy the constraint and are accepted. Allocations whose caller-region
-> markers require more than one hidden caller-arena slot resolve to
-> `Caller(HiddenRegionIdx::AMBIGUOUS)` and are rejected when the directly
-> fresh heap value is stored into a parameter-rooted target; allocations
-> whose inferred region is a strictly narrower block also fire
-> `RegionConflict`.
+> markers require more than one hidden caller-arena slot (for example, the
+> value is stored into two distinct parameter targets, or returned and also
+> stored into a parameter) have no single caller arena that outlives every
+> destination, so their inferred region widens to the root region (`Root`) —
+> a strictly wider placement than any one escaped pointer requires, hence
+> sound (leak-but-safe) — and they compile without a diagnostic (issue #871).
+> `RegionConflict` therefore fires only when a value's inferred region is a
+> concrete block strictly narrower than the target container's region.
 
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {
@@ -8842,11 +8845,14 @@ fn add(a: i64, b: i64) -> i64 vow {
 > propagation, where `N` is the precise slot index implied by the
 > destination (issue #317 slot-aware inference). Such single-slot routings
 > satisfy the constraint and are accepted. Allocations whose caller-region
-> markers require more than one hidden caller-arena slot resolve to
-> `Caller(HiddenRegionIdx::AMBIGUOUS)` and are rejected when the directly
-> fresh heap value is stored into a parameter-rooted target; allocations
-> whose inferred region is a strictly narrower block also fire
-> `RegionConflict`.
+> markers require more than one hidden caller-arena slot (for example, the
+> value is stored into two distinct parameter targets, or returned and also
+> stored into a parameter) have no single caller arena that outlives every
+> destination, so their inferred region widens to the root region (`Root`) —
+> a strictly wider placement than any one escaped pointer requires, hence
+> sound (leak-but-safe) — and they compile without a diagnostic (issue #871).
+> `RegionConflict` therefore fires only when a value's inferred region is a
+> concrete block strictly narrower than the target container's region.
 
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {
