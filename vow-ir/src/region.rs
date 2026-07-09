@@ -1527,7 +1527,7 @@ fn analyze_function(
                 continue;
             }
             let markers = must_outlive.get(&inst.id).cloned().unwrap_or_default();
-            let mut region_id = lub_to_region_id(&markers, block.id, &block_tree, &summary);
+            let region_id = lub_to_region_id(&markers, block.id, &block_tree, &summary);
             if inst.opcode == Opcode::Call
                 && !matches!(&inst.data, InstData::CallExtern(sym) if heap_producing_extern(sym))
             {
@@ -3057,6 +3057,7 @@ fn target_region_marker(
 /// swap-mutated in place). A leaf whose container traces to a parameter is
 /// routed to that parameter's hidden caller arena (`CallerStoreTarget`), not
 /// Root (issue #875).
+#[allow(clippy::too_many_arguments)]
 fn add_store_target_markers(
     must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
     source_id: InstId,
