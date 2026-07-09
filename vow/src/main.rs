@@ -15080,7 +15080,7 @@ fn main() -> i32 [io] {
     }
 
     #[test]
-    fn vow_violation_blame_caller_exit_code_1() {
+    fn vow_violation_blame_caller_exit_code_134() {
         let dir = TempDir::new().unwrap();
         let src = r#"module Divide
 fn divide(x: i64, y: i64) -> i64 vow {
@@ -15124,8 +15124,8 @@ fn main() -> i32 [io] {
             .expect("failed to run divide");
         assert_eq!(
             output.status.code(),
-            Some(1),
-            "expected exit code 1 (vow violation)"
+            Some(134),
+            "expected reserved runtime-abort exit code 134 (vow violation, #877)"
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
