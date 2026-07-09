@@ -862,11 +862,17 @@ that destination's slot precisely; codegen routes the alloc into the
 correct hidden arena. Allocations whose marker set spans more than one
 hidden caller-arena slot (for example, the same allocation is both
 returned through `FreshInCaller` and stored into a parameter target, or
-stored into two distinct parameter targets) resolve to the sentinel
-`Caller(HiddenRegionIdx::AMBIGUOUS)`. Any subsequent parameter-rooted
-store of that directly fresh heap value MUST be rejected with
-`RegionConflict`; choosing an arbitrary slot would route at least one
-escaped pointer into the wrong arena lifetime.
+stored into two distinct parameter targets) have no single caller arena
+that outlives every destination, so their LUB widens to the root region
+(`Root`). This is a strictly wider placement than any one escaped pointer
+requires — hence sound (leak-but-safe) — and the program compiles without
+a `RegionConflict` (issue #871). Widening is the conservative resolution:
+choosing an arbitrary slot would route at least one escaped pointer into
+the wrong arena lifetime, and rejecting would refuse valid code. The
+leak-vs-signal trade is surfaced instead by `RegionRootEscape` (below)
+when the widened region bottoms out at the root region. (The
+`Caller(HiddenRegionIdx::AMBIGUOUS)` sentinel and its reject path are
+retained defensively but are no longer produced by this pass.)
 
 **Visibility** (`RegionRootEscape`, severity Note, non-blocking).
 When `region(I)` resolves through caller-region routing to a chain

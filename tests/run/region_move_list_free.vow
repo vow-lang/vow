@@ -1,0 +1,95 @@
+// TEST: stdout "48212"
+// Regression for #871/#875: a struct value pushed into a *parameter* Vec by a
+// callee, a Vec returned and filtered element-by-element, and a `mut` Vec
+// merged across branches then swap-mutated in place must all route to freeable
+// arenas (not the root arena) while producing correct results. Before the fix
+// these patterns leaked one record per generated move at every search node.
+module RegionMoveListFree
+
+struct Mv { from: i64, to: i64, tag: i64 }
+
+fn add_move(moves: Vec<Mv>, from: i64, to: i64) {
+    let m: Mv = Mv { from: from, to: to, tag: from + to };
+    moves.push(m);
+}
+
+fn gen_pseudo(base: i64) -> Vec<Mv> {
+    let moves: Vec<Mv> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 8 {
+        add_move(moves, base + i, base + i + 1);
+        i = i + 1;
+    }
+    moves
+}
+
+fn gen_legal(base: i64) -> Vec<Mv> {
+    let pseudo: Vec<Mv> = gen_pseudo(base);
+    let legal: Vec<Mv> = Vec::new();
+    let mut i: i64 = 0;
+    while i < pseudo.len() {
+        let mv: Mv = pseudo[i];
+        if mv.from % 2 == 0 {
+            legal.push(mv);
+        }
+        i = i + 1;
+    }
+    legal
+}
+
+fn gen_tactical(base: i64) -> Vec<Mv> {
+    let legal: Vec<Mv> = gen_legal(base);
+    let tactical: Vec<Mv> = Vec::new();
+    let mut i: i64 = 0;
+    while i < legal.len() {
+        let mv: Mv = legal[i];
+        if mv.tag % 3 == 0 {
+            tactical.push(mv);
+        }
+        i = i + 1;
+    }
+    tactical
+}
+
+fn swap_moves(moves: Vec<Mv>, a: i64, b: i64) {
+    let ta: Mv = moves[a];
+    let tb: Mv = moves[b];
+    moves[a] = tb;
+    moves[b] = ta;
+}
+
+fn search(base: i64, depth: i64) -> i64 {
+    // `mut moves` reassigned from a call result on each branch: a Phi target,
+    // then swap-mutated in place (the quiesce shape).
+    let mut moves: Vec<Mv> = Vec::new();
+    if base % 2 == 0 {
+        moves = gen_legal(base);
+    } else {
+        moves = gen_tactical(base);
+    }
+    let mut sum: i64 = 0;
+    let mut i: i64 = 0;
+    while i < moves.len() {
+        if i > 0 {
+            swap_moves(moves, i, 0);
+        }
+        let mv: Mv = moves[i];
+        sum = sum + mv.from + mv.to;
+        i = i + 1;
+    }
+    if depth <= 0 {
+        return sum;
+    }
+    sum + search(base + 1, depth - 1)
+}
+
+fn main() [io] {
+    let mut total: i64 = 0;
+    let mut k: i64 = 0;
+    while k < 64 {
+        total = total + search(k, 3);
+        k = k + 1;
+    }
+    print_i64(total);
+    print_str(String::from("\n"));
+}
