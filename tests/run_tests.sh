@@ -794,7 +794,9 @@ for f in "$SCRIPT_DIR"/debug/*.vow; do
     continue
   fi
 
-  local_exit="${TEST_EXIT:-1}"
+  # A tripped runtime check aborts with the reserved runtime-abort exit code
+  # (134), not a plain 1, so it cannot be confused with an application result (#877).
+  local_exit="${TEST_EXIT:-134}"
 
   # Build in debug mode
   out="$TMPDIR/debug_$name"

@@ -694,7 +694,8 @@ echo ""
 
 section_begin "Section 5: Debug Mode"
 
-# divide.vow: VowViolation at runtime
+# divide.vow: VowViolation at runtime — aborts with the reserved runtime-abort
+# exit code 134, not a plain 1 (#877)
 $RUST build --mode debug --no-verify examples/divide.vow -o "$TMPDIR/rust_divide_debug" >/dev/null 2>/dev/null
 run_self build --mode debug --no-verify examples/divide.vow -o "$TMPDIR/self_divide_debug" >/dev/null 2>/dev/null
 
@@ -705,8 +706,8 @@ rust_err=$(cat "$TMPDIR/rust_dbg_err")
 self_err=$(cat "$TMPDIR/self_dbg_err")
 
 errors=()
-if [ "$rust_exit" -ne 1 ]; then errors+=("rust exit=$rust_exit, expected 1"); fi
-if [ "$self_exit" -ne 1 ]; then errors+=("self exit=$self_exit, expected 1"); fi
+if [ "$rust_exit" -ne 134 ]; then errors+=("rust exit=$rust_exit, expected 134"); fi
+if [ "$self_exit" -ne 134 ]; then errors+=("self exit=$self_exit, expected 134"); fi
 for pattern in VowViolation Caller "y != 0"; do
     if ! echo "$rust_err" | grep -q "$pattern"; then errors+=("rust stderr missing '$pattern'"); fi
     if ! echo "$self_err" | grep -q "$pattern"; then errors+=("self stderr missing '$pattern'"); fi
@@ -851,7 +852,9 @@ for dir in tests/multi/*/; do
         fi
     fi
 
-    # Validate // TEST: exit directive (the vmod reject fixtures expect 1).
+    # Validate // TEST: exit directive (the vmod reject fixtures expect 134,
+    # the reserved runtime-abort code: they reject via an index-out-of-bounds
+    # trap, which now exits 134 rather than colliding with a plain 1 — see #877).
     expected_exit=$(sed -n 's|^// TEST: exit \([0-9]*\)$|\1|p' "$main_file" | head -1)
     if [ -n "$expected_exit" ]; then
         actual_exit=0

@@ -56,6 +56,18 @@ const TAG_F64: u8 = 3;
 const TAG_BOOL: u8 = 4;
 const TAG_U64: u8 = 5;
 
+/// Reserved process exit status for any runtime abort — a contract
+/// violation, checked-arithmetic overflow, unwrap-on-None, index-out-of-bounds,
+/// region-literal mutation, runtime-invariant violation, sanitizer trap, stack
+/// overflow, or out-of-memory. A runtime abort is an environment/soundness
+/// failure, never an application result, so it must terminate with a status
+/// that cannot be confused with an application's own `return N` from `main`
+/// (issue #877). 134 = 128 + SIGABRT, the conventional "aborted" status; it is
+/// what the stack-overflow handler and `__vow_malloc` failure already use, so
+/// this unifies every runtime abort on one reserved code. The structured JSON
+/// envelope written to stderr still identifies which abort occurred.
+const VOW_RUNTIME_ABORT_EXIT: i32 = 134;
+
 #[repr(C)]
 pub struct VowBinding {
     pub name: *const c_char,
@@ -128,7 +140,7 @@ pub unsafe extern "C" fn __vow_violation(
     );
     let _ = writeln!(std::io::stderr(), "{json}");
     let _ = writeln!(std::io::stderr(), "{human}");
-    std::process::exit(1);
+    std::process::exit(VOW_RUNTIME_ABORT_EXIT);
 }
 
 #[unsafe(no_mangle)]
@@ -180,7 +192,7 @@ pub extern "C" fn __vow_arithmetic_overflow() {
     let json = r#"{"error":"ArithmeticOverflow"}"#;
     let _ = writeln!(std::io::stderr(), "{json}");
     let _ = writeln!(std::io::stderr(), "arithmetic overflow");
-    std::process::exit(1);
+    std::process::exit(VOW_RUNTIME_ABORT_EXIT);
 }
 
 #[unsafe(no_mangle)]
@@ -188,11 +200,12 @@ pub unsafe extern "C" fn __vow_unwrap_panic() {
     let json = r#"{"error":"UnwrapOnNone"}"#;
     let _ = writeln!(std::io::stderr(), "{json}");
     let _ = writeln!(std::io::stderr(), "unwrap on None");
-    std::process::exit(1);
+    std::process::exit(VOW_RUNTIME_ABORT_EXIT);
 }
 
 // Arena / rodata runtime-error emitters. Both print a JSON envelope to stderr
-// then exit(1). Not routed through vow-diag (see docs/design/arena_memory.md §13.3).
+// then exit with VOW_RUNTIME_ABORT_EXIT. Not routed through vow-diag (see
+// docs/design/arena_memory.md §13.3).
 //
 // Both helpers are **non-allocating**. They take &'static str operation names
 // and emit to stderr via direct byte writes. oom_trap is called on allocation
@@ -205,7 +218,7 @@ fn oom_trap(operation: &'static str) -> ! {
     let _ = lock.write_all(b"{\"error\":\"OutOfMemory\",\"operation\":\"");
     let _ = lock.write_all(operation.as_bytes());
     let _ = lock.write_all(b"\"}\n");
-    std::process::exit(1);
+    std::process::exit(VOW_RUNTIME_ABORT_EXIT);
 }
 
 fn region_literal_mutation_trap(operation: &'static str) -> ! {
@@ -227,7 +240,7 @@ fn region_literal_mutation_trap(operation: &'static str) -> ! {
     let _ = lock.write_all(operation.as_bytes());
     let _ = lock.write_all(b"\",\"origin\":\"rodata\"}\n");
     let _ = lock.write_all(hint);
-    std::process::exit(1);
+    std::process::exit(VOW_RUNTIME_ABORT_EXIT);
 }
 
 fn runtime_invariant_trap(operation: &'static str, reason: &'static str) -> ! {
@@ -239,7 +252,7 @@ fn runtime_invariant_trap(operation: &'static str, reason: &'static str) -> ! {
     let _ = lock.write_all(b"\",\"reason\":\"");
     let _ = lock.write_all(reason.as_bytes());
     let _ = lock.write_all(b"\"}\n");
-    std::process::exit(1);
+    std::process::exit(VOW_RUNTIME_ABORT_EXIT);
 }
 
 fn null_arena_trap(operation: &'static str) -> ! {
@@ -580,7 +593,7 @@ unsafe extern "C" fn stack_overflow_handler(
     }
 
     unsafe {
-        libc::_exit(134);
+        libc::_exit(VOW_RUNTIME_ABORT_EXIT);
     }
 }
 
@@ -1487,7 +1500,7 @@ pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i6
         let json = r#"{"error":"IndexOutOfBounds"}"#;
         let _ = writeln!(std::io::stderr(), "{json}");
         let _ = writeln!(std::io::stderr(), "index out of bounds");
-        std::process::exit(1);
+        std::process::exit(VOW_RUNTIME_ABORT_EXIT);
     }
     let elem_ptr = unsafe { v.ptr.add(index * 8) as *mut i64 };
     unsafe { *elem_ptr = value };
@@ -1505,7 +1518,7 @@ pub unsafe extern "C" fn __vow_vec_get_ptr(
         let json = r#"{"error":"IndexOutOfBounds"}"#;
         let _ = writeln!(std::io::stderr(), "{json}");
         let _ = writeln!(std::io::stderr(), "index out of bounds");
-        std::process::exit(1);
+        std::process::exit(VOW_RUNTIME_ABORT_EXIT);
     }
     unsafe { v.ptr.add(index * elem_size) as *const u8 }
 }
@@ -3611,7 +3624,7 @@ fn sanitize_is_enabled() -> bool {
 fn sanitize_emit_error(error_type: &str, details: &str) {
     let _ = writeln!(std::io::stderr(), r#"{{"error":"{error_type}",{details}}}"#);
     let _ = writeln!(std::io::stderr(), "sanitizer: {error_type}: {details}");
-    std::process::exit(1);
+    std::process::exit(VOW_RUNTIME_ABORT_EXIT);
 }
 
 fn sanitize_on_vec_new(vec_addr: usize) {
@@ -5425,9 +5438,10 @@ mod tests {
 
     fn assert_rodata_trap(op: &str, expected_op_in_json: &str) {
         let (out, stderr) = spawn_trap_worker(op);
-        assert!(
-            !out.status.success(),
-            "worker for {op} should have exited non-zero; stderr:\n{stderr}"
+        assert_eq!(
+            out.status.code(),
+            Some(VOW_RUNTIME_ABORT_EXIT),
+            "worker for {op} should exit with the reserved runtime-abort code (#877); stderr:\n{stderr}"
         );
         assert!(
             stderr.contains(r#""error":"RegionLiteralMutation""#),
@@ -5457,9 +5471,10 @@ mod tests {
 
     fn assert_runtime_invariant_null_arena(op: &str, expected_op_in_json: &str) {
         let (out, stderr) = spawn_trap_worker(op);
-        assert!(
-            !out.status.success(),
-            "worker for {op} should have exited non-zero; stderr:\n{stderr}"
+        assert_eq!(
+            out.status.code(),
+            Some(VOW_RUNTIME_ABORT_EXIT),
+            "worker for {op} should exit with the reserved runtime-abort code (#877); stderr:\n{stderr}"
         );
         assert!(
             stderr.contains(r#""error":"RuntimeInvariantViolation""#),
@@ -5481,9 +5496,10 @@ mod tests {
         // must trap OutOfMemory rather than wrap and return a garbage
         // pointer.
         let (out, stderr) = spawn_trap_worker("arena_alloc_overflow");
-        assert!(
-            !out.status.success(),
-            "worker should have exited non-zero; stderr:\n{stderr}"
+        assert_eq!(
+            out.status.code(),
+            Some(VOW_RUNTIME_ABORT_EXIT),
+            "worker should exit with the reserved runtime-abort code (#877); stderr:\n{stderr}"
         );
         assert!(
             stderr.contains(r#""error":"OutOfMemory""#),
@@ -5500,9 +5516,10 @@ mod tests {
         // reintroduced the infinite loop surfaces as a timeout, not a hang
         // of the whole suite.
         let (out, stderr) = spawn_trap_worker("vec_reserve_overflow");
-        assert!(
-            !out.status.success(),
-            "worker should have exited non-zero; stderr:\n{stderr}"
+        assert_eq!(
+            out.status.code(),
+            Some(VOW_RUNTIME_ABORT_EXIT),
+            "worker should exit with the reserved runtime-abort code (#877); stderr:\n{stderr}"
         );
         assert!(
             stderr.contains(r#""error":"OutOfMemory""#),

@@ -3239,7 +3239,7 @@ fn underlying_caller_via_aliases_inner(
                 let mut merged: Option<Option<RegionId>> = None;
                 let mut diverged = false;
                 let mut any_caller_arm: Option<RegionId> = None;
-                for (_, (_, candidate)) in inst_lookup.iter() {
+                for (_, candidate) in inst_lookup.values() {
                     if candidate.opcode == Opcode::Upsilon
                         && matches!(candidate.data, InstData::PhiTarget(t) if t == phi_id)
                         && let Some(&arm_id) = candidate.args.first()

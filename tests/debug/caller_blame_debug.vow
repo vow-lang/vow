@@ -1,4 +1,4 @@
-// TEST: exit 1
+// TEST: exit 134
 // TEST: stderr "blame=Caller"
 //
 // Runtime caller-blame anchor for the verifier-evaluation suite (#334). A

@@ -110,7 +110,7 @@ fn debug_executable_exits_with_correct_code() {
 }
 
 #[test]
-fn vow_violation_exits_with_code_1_and_blames_caller() {
+fn vow_violation_exits_with_reserved_abort_code_and_blames_caller() {
     // fn divide(x: i64, y: i64) -> i64
     //   vow requires: y != 0  (blame = Caller)
     //   ...
@@ -228,8 +228,8 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
     let out = run_exe(&exe);
     assert_eq!(
         out.status.code(),
-        Some(1),
-        "expected exit code 1 (vow violation), got {:?}",
+        Some(134),
+        "expected reserved runtime-abort exit code 134 (vow violation, #877), got {:?}",
         out.status.code()
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -349,8 +349,8 @@ fn vow_violation_reports_variable_values() {
     let out = run_exe(&exe);
     assert_eq!(
         out.status.code(),
-        Some(1),
-        "expected exit code 1 (vow violation), got {:?}",
+        Some(134),
+        "expected reserved runtime-abort exit code 134 (vow violation, #877), got {:?}",
         out.status.code()
     );
     let stderr = String::from_utf8_lossy(&out.stderr);

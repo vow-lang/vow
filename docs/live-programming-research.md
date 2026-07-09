@@ -165,7 +165,7 @@ fundamental redesign:
 
 - Static linking (vow-runtime and vow-clif-shim are linked into the binary).
 - Direct calls only (no function pointer indirection layer).
-- Violations call `exit(1)` — no recovery path.
+- Violations call `exit(134)` (the reserved runtime-abort code) — no recovery path.
 - Module merging flattens the namespace — no scoped imports.
 - No actor or process model.
 
