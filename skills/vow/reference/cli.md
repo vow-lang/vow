@@ -255,6 +255,13 @@ function but the verifier could not model the function body, the contract was no
 proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification —
 that path produces `Unverified` (exit 0).
 
+The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits
+with whatever its `main` returns, with one reserved exception: any runtime abort — out-of-memory,
+contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal
+mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`** so it
+can never be confused with an application result. See the *Exit status* note under Runtime Errors in
+[`errors.md`](errors.md) for the full list and rationale.
+
 ## Build Output JSON
 
 `vow build` and `vow verify` emit a single JSON object to stdout. Schema: [`schemas/build-result.schema.json`](schemas/build-result.schema.json).

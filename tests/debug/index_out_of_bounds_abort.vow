@@ -1,0 +1,15 @@
+// TEST: exit 134
+// TEST: stderr "IndexOutOfBounds"
+//
+// A runtime abort (here an out-of-bounds Vec index) terminates with the
+// reserved runtime-abort exit code 134, never a plain 1, so it cannot be
+// mistaken for an application's own `return N` from main (#877). Complements
+// divide_violation.vow (VowViolation) with a non-vow-check trap.
+module IndexOutOfBoundsAbort
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    let x: i64 = v[0];
+    print_i64(x);
+    0
+}

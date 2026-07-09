@@ -4682,6 +4682,13 @@ fn skill_bundle() -> String {
     r.push_str(String::from("proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification --\n"));
     r.push_str(String::from("that path produces `Unverified` (exit 0).\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits\n"));
+    r.push_str(String::from("with whatever its `main` returns, with one reserved exception: any runtime abort -- out-of-memory,\n"));
+    r.push_str(String::from("contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal\n"));
+    r.push_str(String::from("mutation, stack overflow, or a sanitizer trap -- terminates with the reserved status **`134`** so it\n"));
+    r.push_str(String::from("can never be confused with an application result. See the *Exit status* note under Runtime Errors in\n"));
+    r.push_str(String::from("[`errors.md`](errors.md) for the full list and rationale.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Build Output JSON\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`vow build` and `vow verify` emit a single JSON object to stdout. Schema: [`schemas/build-result.schema.json`](schemas/build-result.schema.json).\n"));
@@ -6235,6 +6242,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("**Exit status.** Every runtime abort below terminates the process with the reserved exit status **`134`** (128 + `SIGABRT`, the conventional \"aborted\" status), never a plain `1`. A runtime abort is an environment or soundness failure, not an application result, so a program can always distinguish it from its own `return N` from `main`: a checker that returns `0`/`1`/`2` for accepted/rejected/declined will never mistake an out-of-memory or a contract violation for a genuine \"rejected\". The JSON envelope on stderr still names the specific abort. This is separate from the *compiler* exit codes in [`cli.md`](cli.md), which describe `vowc build`/`vowc verify`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### VowViolation\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**When:** Debug mode only (`--mode debug`). A `requires`, `ensures`, or `invariant` predicate evaluates to false at runtime.\n"));
@@ -6326,6 +6335,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `operation` field is `arena_open` for the initial chunk allocation or `arena_alloc` for a later fallback chunk allocation.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Like every runtime abort, an OOM exits with the reserved status **`134`** (see *Exit status* above), so it never masquerades as an application's own `exit 1`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.\n"));
     r.push_str(String::from("\n"));
@@ -9229,6 +9240,13 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification --\n"));
     r.push_str(String::from("that path produces `Unverified` (exit 0).\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits\n"));
+    r.push_str(String::from("with whatever its `main` returns, with one reserved exception: any runtime abort -- out-of-memory,\n"));
+    r.push_str(String::from("contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal\n"));
+    r.push_str(String::from("mutation, stack overflow, or a sanitizer trap -- terminates with the reserved status **`134`** so it\n"));
+    r.push_str(String::from("can never be confused with an application result. See the *Exit status* note under Runtime Errors in\n"));
+    r.push_str(String::from("[`errors.md`](errors.md) for the full list and rationale.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Build Output JSON\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`vow build` and `vow verify` emit a single JSON object to stdout. Schema: [`schemas/build-result.schema.json`](schemas/build-result.schema.json).\n"));
@@ -10788,6 +10806,8 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("**Exit status.** Every runtime abort below terminates the process with the reserved exit status **`134`** (128 + `SIGABRT`, the conventional \"aborted\" status), never a plain `1`. A runtime abort is an environment or soundness failure, not an application result, so a program can always distinguish it from its own `return N` from `main`: a checker that returns `0`/`1`/`2` for accepted/rejected/declined will never mistake an out-of-memory or a contract violation for a genuine \"rejected\". The JSON envelope on stderr still names the specific abort. This is separate from the *compiler* exit codes in [`cli.md`](cli.md), which describe `vowc build`/`vowc verify`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### VowViolation\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**When:** Debug mode only (`--mode debug`). A `requires`, `ensures`, or `invariant` predicate evaluates to false at runtime.\n"));
@@ -10879,6 +10899,8 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `operation` field is `arena_open` for the initial chunk allocation or `arena_alloc` for a later fallback chunk allocation.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Like every runtime abort, an OOM exits with the reserved status **`134`** (see *Exit status* above), so it never masquerades as an application's own `exit 1`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.\n"));
     r.push_str(String::from("\n"));

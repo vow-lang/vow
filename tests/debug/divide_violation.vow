@@ -1,4 +1,4 @@
-// TEST: exit 1
+// TEST: exit 134
 // TEST: stderr "VowViolation"
 module Divide
 
