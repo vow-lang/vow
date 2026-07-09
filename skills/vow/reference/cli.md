@@ -258,8 +258,11 @@ that path produces `Unverified` (exit 0).
 The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits
 with whatever its `main` returns, with one reserved exception: any runtime abort — out-of-memory,
 contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal
-mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`** so it
-can never be confused with an application result. See the *Exit status* note under Runtime Errors in
+mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`**. By
+convention `134` is reserved for aborts: it is never produced *spontaneously* by a normal `main`
+return, so a program that does not itself return or `process_exit(134)` can treat any `134` as a
+runtime abort rather than an application result. The reservation is a convention, not enforced — a
+program that deliberately exits `134` opts out. See the *Exit status* note under Runtime Errors in
 [`errors.md`](errors.md) for the full list and rationale.
 
 ## Build Output JSON

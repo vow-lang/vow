@@ -2826,8 +2826,11 @@ that path produces `Unverified` (exit 0).
 The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits
 with whatever its `main` returns, with one reserved exception: any runtime abort — out-of-memory,
 contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal
-mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`** so it
-can never be confused with an application result. See the *Exit status* note under Runtime Errors in
+mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`**. By
+convention `134` is reserved for aborts: it is never produced *spontaneously* by a normal `main`
+return, so a program that does not itself return or `process_exit(134)` can treat any `134` as a
+runtime abort rather than an application result. The reservation is a convention, not enforced — a
+program that deliberately exits `134` opts out. See the *Exit status* note under Runtime Errors in
 [`errors.md`](errors.md) for the full list and rationale.
 
 ## Build Output JSON
@@ -4383,7 +4386,7 @@ The note is conservative — it fires for any `Caller`-region allocation in a fu
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
 
-**Exit status.** Every runtime abort below terminates the process with the reserved exit status **`134`** (128 + `SIGABRT`, the conventional "aborted" status), never a plain `1`. A runtime abort is an environment or soundness failure, not an application result, so a program can always distinguish it from its own `return N` from `main`: a checker that returns `0`/`1`/`2` for accepted/rejected/declined will never mistake an out-of-memory or a contract violation for a genuine "rejected". The JSON envelope on stderr still names the specific abort. This is separate from the *compiler* exit codes in [`cli.md`](cli.md), which describe `vowc build`/`vowc verify`.
+**Exit status.** Every runtime abort below terminates the process with the reserved exit status **`134`** (128 + `SIGABRT`, the conventional "aborted" status), never a plain `1`. A runtime abort is an environment or soundness failure, not an application result. `134` is **reserved for aborts by convention**: a runtime abort never *spontaneously* collides with an application's own `return N` from `main`, so a program that does not itself return — or `process_exit` — `134` can treat any `134` exit as a runtime abort (a checker that returns `0`/`1`/`2` for accepted/rejected/declined will never mistake an out-of-memory or a contract violation for a genuine "rejected"). The runtime does not *enforce* the reservation — `process_exit(134)` and `return 134i32` still exit `134` — so a program that deliberately uses `134` opts out of the distinction; applications that care should reserve around it. The JSON envelope on stderr still names the specific abort. This is separate from the *compiler* exit codes in [`cli.md`](cli.md), which describe `vowc build`/`vowc verify`.
 
 ### VowViolation
 
@@ -4477,7 +4480,7 @@ The signal handler is installed in **all** build modes. The `depth` and `functio
 
 The `operation` field is `arena_open` for the initial chunk allocation or `arena_alloc` for a later fallback chunk allocation.
 
-Like every runtime abort, an OOM exits with the reserved status **`134`** (see *Exit status* above), so it never masquerades as an application's own `exit 1`.
+Like every runtime abort, an OOM exits with the reserved status **`134`** (see *Exit status* above), so it is distinguishable from an application's own `exit 1`.
 
 **Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.
 
@@ -7361,8 +7364,11 @@ that path produces `Unverified` (exit 0).
 The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits
 with whatever its `main` returns, with one reserved exception: any runtime abort — out-of-memory,
 contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal
-mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`** so it
-can never be confused with an application result. See the *Exit status* note under Runtime Errors in
+mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`**. By
+convention `134` is reserved for aborts: it is never produced *spontaneously* by a normal `main`
+return, so a program that does not itself return or `process_exit(134)` can treat any `134` as a
+runtime abort rather than an application result. The reservation is a convention, not enforced — a
+program that deliberately exits `134` opts out. See the *Exit status* note under Runtime Errors in
 [`errors.md`](errors.md) for the full list and rationale.
 
 ## Build Output JSON
@@ -8921,7 +8927,7 @@ The note is conservative — it fires for any `Caller`-region allocation in a fu
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
 
-**Exit status.** Every runtime abort below terminates the process with the reserved exit status **`134`** (128 + `SIGABRT`, the conventional "aborted" status), never a plain `1`. A runtime abort is an environment or soundness failure, not an application result, so a program can always distinguish it from its own `return N` from `main`: a checker that returns `0`/`1`/`2` for accepted/rejected/declined will never mistake an out-of-memory or a contract violation for a genuine "rejected". The JSON envelope on stderr still names the specific abort. This is separate from the *compiler* exit codes in [`cli.md`](cli.md), which describe `vowc build`/`vowc verify`.
+**Exit status.** Every runtime abort below terminates the process with the reserved exit status **`134`** (128 + `SIGABRT`, the conventional "aborted" status), never a plain `1`. A runtime abort is an environment or soundness failure, not an application result. `134` is **reserved for aborts by convention**: a runtime abort never *spontaneously* collides with an application's own `return N` from `main`, so a program that does not itself return — or `process_exit` — `134` can treat any `134` exit as a runtime abort (a checker that returns `0`/`1`/`2` for accepted/rejected/declined will never mistake an out-of-memory or a contract violation for a genuine "rejected"). The runtime does not *enforce* the reservation — `process_exit(134)` and `return 134i32` still exit `134` — so a program that deliberately uses `134` opts out of the distinction; applications that care should reserve around it. The JSON envelope on stderr still names the specific abort. This is separate from the *compiler* exit codes in [`cli.md`](cli.md), which describe `vowc build`/`vowc verify`.
 
 ### VowViolation
 
@@ -9015,7 +9021,7 @@ The signal handler is installed in **all** build modes. The `depth` and `functio
 
 The `operation` field is `arena_open` for the initial chunk allocation or `arena_alloc` for a later fallback chunk allocation.
 
-Like every runtime abort, an OOM exits with the reserved status **`134`** (see *Exit status* above), so it never masquerades as an application's own `exit 1`.
+Like every runtime abort, an OOM exits with the reserved status **`134`** (see *Exit status* above), so it is distinguishable from an application's own `exit 1`.
 
 **Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.
 
