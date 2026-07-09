@@ -13551,6 +13551,27 @@ fn collect_test_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Narrow a list of discovered test files to those selected by `vow test
+/// --filter <pat>`. `None` (no `--filter`) is the identity — every file passes
+/// through in the order [`discover_test_files`] produced. `Some(pat)` keeps a
+/// file when its `file_stem` (the final path component minus its extension)
+/// contains `pat` as a substring; files whose stem is absent or not valid UTF-8
+/// are dropped. Pure companion to [`discover_test_files`]: no IO, so the
+/// selection rule is unit-testable without touching the filesystem.
+fn filter_test_files(files: Vec<PathBuf>, filter: Option<&str>) -> Vec<PathBuf> {
+    match filter {
+        Some(pat) => files
+            .into_iter()
+            .filter(|f| {
+                f.file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| name.contains(pat))
+            })
+            .collect(),
+        None => files,
+    }
+}
+
 fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
     let mut total = 0usize;
     let mut with_vows = 0usize;
@@ -13603,17 +13624,7 @@ fn run_test_command(
     }
 
     let test_files = discover_test_files(path);
-    let test_files: Vec<PathBuf> = match filter {
-        Some(pat) => test_files
-            .into_iter()
-            .filter(|f| {
-                f.file_stem()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|name| name.contains(pat))
-            })
-            .collect(),
-        None => test_files,
-    };
+    let test_files = filter_test_files(test_files, filter);
 
     let mut entries = Vec::new();
     let mut total_density = ContractDensity {
@@ -18915,6 +18926,61 @@ fn main() -> i32 {
 
         let files = discover_test_files(dir.path());
         assert_eq!(files, vec![real_test]);
+    }
+
+    #[test]
+    fn filter_test_files_none_returns_all_unchanged() {
+        // No `--filter` is the identity: every discovered file passes through in
+        // the order `discover_test_files` produced them.
+        let files = vec![
+            PathBuf::from("a/test_alpha.vow"),
+            PathBuf::from("b/test_beta.vow"),
+        ];
+        assert_eq!(filter_test_files(files.clone(), None), files);
+    }
+
+    #[test]
+    fn filter_test_files_keeps_substring_matches_on_stem() {
+        // `--filter lex` keeps files whose stem *contains* "lex" (substring, not
+        // exact), so both `test_lexer` and `test_lexer_extra` survive while
+        // `test_parser` is dropped.
+        let files = vec![
+            PathBuf::from("test_lexer.vow"),
+            PathBuf::from("test_parser.vow"),
+            PathBuf::from("test_lexer_extra.vow"),
+        ];
+        assert_eq!(
+            filter_test_files(files, Some("lex")),
+            vec![
+                PathBuf::from("test_lexer.vow"),
+                PathBuf::from("test_lexer_extra.vow"),
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_test_files_matches_stem_not_extension_or_parent_dir() {
+        // The match is against `file_stem` only. "vow" appears in every file's
+        // extension and "suite" in the parent directory, yet neither is part of
+        // the stem, so both select nothing — while a real stem substring does.
+        let files = vec![
+            PathBuf::from("suite/test_alpha.vow"),
+            PathBuf::from("suite/test_beta.vow"),
+        ];
+        assert!(filter_test_files(files.clone(), Some("vow")).is_empty());
+        assert!(filter_test_files(files.clone(), Some("suite")).is_empty());
+        assert_eq!(
+            filter_test_files(files, Some("alpha")),
+            vec![PathBuf::from("suite/test_alpha.vow")]
+        );
+    }
+
+    #[test]
+    fn filter_test_files_empty_pattern_keeps_everything() {
+        // `String::contains("")` is true for every string, so an empty `--filter`
+        // argument degenerates to the no-filter case rather than dropping all.
+        let files = vec![PathBuf::from("test_a.vow"), PathBuf::from("keep_test.vow")];
+        assert_eq!(filter_test_files(files.clone(), Some("")), files);
     }
 
     #[test]
