@@ -1492,6 +1492,7 @@ fn analyze_function(
                 &mut summary,
                 &loop_headers,
                 &block_tree,
+                &phi_arms,
             );
         }
     }
@@ -1531,18 +1532,17 @@ fn analyze_function(
                 && !matches!(&inst.data, InstData::CallExtern(sym) if heap_producing_extern(sym))
             {
                 // Internal `Call` heap results that escape to a hidden caller
-                // arena (`Caller(_)`) are still collapsed to `Root` for codegen
-                // conservatism. `Block(_)` results are now safe to keep local:
-                // loop-carried escape — the hazard the previous blanket collapse
-                // masked (issue #400) — is handled in `must_outlive` via the
-                // loop-header Upsilon lifting above, so a genuinely block-local
-                // internal-call Vec/String/Map is freed at its block's close
-                // instead of leaking into the root arena.
+                // arena (`Caller(_)`) are placed in that arena and freed with
+                // the owning frame. The former `Caller(_) -> Root` collapse is
+                // dropped: hidden-arena threading for store targets means these
+                // results no longer need pinning to the never-freed root arena
+                // (issue #871). `Block(_)` results already stay local (issue
+                // #400 loop-carry is handled by the Upsilon lifting above). We
+                // still record the `Caller(_)` region so the `RegionRootEscape`
+                // note pass can flag allocations that may resolve to root up
+                // the caller chain.
                 if matches!(region_id, RegionId::Caller(_)) {
-                    // Stash the pre-rewrite Caller(_) so the note pass can see
-                    // it; only Caller(_) ever fires `RegionRootEscape`.
                     note_region_map.insert(inst.id, region_id);
-                    region_id = RegionId::Root;
                 }
             }
             region_map.insert(inst.id, region_id);
@@ -1875,6 +1875,7 @@ fn handle_inst(
     summary: &mut InternalSummary,
     loop_headers: &BTreeSet<BlockId>,
     block_tree: &BlockTree,
+    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
 ) {
     match inst.opcode {
         Opcode::Return => {
@@ -1908,10 +1909,15 @@ fn handle_inst(
                 // source (value being stored).
                 let target_id = inst.args[0];
                 let source_id = inst.args[1];
-                add_marker(
+                add_store_target_markers(
                     must_outlive,
                     source_id,
-                    target_region_marker(target_id, inst_lookup, summaries),
+                    target_id,
+                    inst_lookup,
+                    summaries,
+                    phi_arms,
+                    false,
+                    &mut BTreeSet::new(),
                 );
                 // If the target traces to a parameter, record a store_effect.
                 if let Some(target_param) = trace_param(target_id, inst_lookup) {
@@ -1949,12 +1955,25 @@ fn handle_inst(
         Opcode::Call => {
             if let InstData::CallExtern(sym) = &inst.data {
                 for_each_extern_store_edge(sym, &inst.args, |target_id, source_id| {
-                    let marker = if trace_param(target_id, inst_lookup).is_some() {
-                        MustOutliveMarker::Root
-                    } else {
-                        target_region_marker(target_id, inst_lookup, summaries)
-                    };
-                    add_marker(must_outlive, source_id, marker);
+                    // A value stored (by copy or by pointer) into a Vec must
+                    // outlive that Vec's container — but only as long as the
+                    // container itself. Route it to the container's arena
+                    // (`CallerStoreTarget` for a parameter Vec's hidden caller
+                    // arena; the Phi arms' regions for a `mut` Vec merged across
+                    // branches) instead of pinning it to the never-freed root
+                    // arena (issue #875: a struct literal built in a callee and
+                    // pushed into a `Vec<Struct>` param leaked one record per
+                    // call; issue #871: quiesce's swap-mutated `mut moves`).
+                    add_store_target_markers(
+                        must_outlive,
+                        source_id,
+                        target_id,
+                        inst_lookup,
+                        summaries,
+                        phi_arms,
+                        false,
+                        &mut BTreeSet::new(),
+                    );
                     if let Some(target_param) = trace_param(target_id, inst_lookup) {
                         add_store_effect_source_constraints(
                             summary,
@@ -2016,10 +2035,15 @@ fn handle_inst(
                             let p_idx = *p as usize;
                             if p_idx < inst.args.len() {
                                 let source_arg_id = inst.args[p_idx];
-                                add_marker(
+                                add_store_target_markers(
                                     must_outlive,
                                     source_arg_id,
-                                    target_region_marker(target_arg_id, inst_lookup, summaries),
+                                    target_arg_id,
+                                    inst_lookup,
+                                    summaries,
+                                    phi_arms,
+                                    false,
+                                    &mut BTreeSet::new(),
                                 );
                             }
                         }
@@ -2698,16 +2722,16 @@ fn lub_to_region_id(
     }
     if has_caller {
         // Slot-aware: a single distinct hidden caller slot resolves cleanly.
-        // Legacy slot-less caller evidence cannot be safely combined with a
-        // concrete slot, and multiple concrete slots cannot share one arena;
-        // both cases mint AMBIGUOUS so the post-inference store-conflict
-        // check rejects any store that would otherwise route through one
-        // arbitrary hidden arena.
-        if has_legacy_caller && !caller_slots.is_empty() {
-            return RegionId::Caller(HiddenRegionIdx::AMBIGUOUS);
-        }
-        if caller_slots.len() > 1 {
-            return RegionId::Caller(HiddenRegionIdx::AMBIGUOUS);
+        // A value that must satisfy more than one hidden caller slot — multiple
+        // distinct store targets, or slot-less return evidence mixed with a
+        // concrete slot — has no single caller arena that outlives every
+        // destination. Its true LUB in the region lattice is the root arena, so
+        // widen to Root (sound, leak-but-safe). This matches the pre-#875
+        // behavior, where a value stored into any parameter container routed
+        // unconditionally to Root; the #875 refinement only tightens the
+        // single-target case (which now frees with the owning frame).
+        if (has_legacy_caller && !caller_slots.is_empty()) || caller_slots.len() > 1 {
+            return RegionId::Root;
         }
         if let Some(slot) = caller_slots.iter().next() {
             return RegionId::Caller(*slot);
@@ -3018,6 +3042,70 @@ fn target_region_marker(
         _ if is_heap_producing(inst, summaries) => MustOutliveMarker::Block(*block_id),
         _ => MustOutliveMarker::Root,
     }
+}
+
+/// Add must-outlive markers so `source_id` outlives the store target
+/// `target_id`'s region.
+///
+/// Traces through Phi merges: a `mut` container reassigned across branches
+/// (e.g. `let mut moves = Vec::new(); if .. { moves = f() } else { moves = g() }`)
+/// lowers to a Phi, and a store into it must make the source outlive *every*
+/// merge arm. Without the arm walk a Phi target resolves to `Root` (the
+/// `target_region_marker` fallback), which pins the source — and, via alias
+/// propagation, the Phi's arms — to the never-freed root arena (issue #871:
+/// quiesce merges two move-list calls into a `mut moves` that is then
+/// swap-mutated in place). A leaf whose container traces to a parameter is
+/// routed to that parameter's hidden caller arena (`CallerStoreTarget`), not
+/// Root (issue #875).
+fn add_store_target_markers(
+    must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
+    source_id: InstId,
+    target_id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    summaries: &[InternalSummary],
+    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    via_phi: bool,
+    seen: &mut BTreeSet<InstId>,
+) {
+    if !seen.insert(target_id) {
+        return;
+    }
+    if let Some(arms) = phi_arms.get(&target_id) {
+        for &arm in arms {
+            add_store_target_markers(
+                must_outlive,
+                source_id,
+                arm,
+                inst_lookup,
+                summaries,
+                phi_arms,
+                true,
+                seen,
+            );
+        }
+        return;
+    }
+    let marker = match trace_param(target_id, inst_lookup) {
+        Some(p) => MustOutliveMarker::CallerStoreTarget(p),
+        None => target_region_marker(target_id, inst_lookup, summaries),
+    };
+    // A container reached through a Phi merge cannot commit to a single hidden
+    // caller slot: distinct arms may bind distinct slots, which the LUB rejects
+    // as a multi-slot conflict. Widen caller markers to Root (safe, the pre-Phi
+    // behavior) when reached via a Phi; block-local arms keep their precise
+    // marker so the common `mut` case (all arms block-local) still frees.
+    let marker = if via_phi
+        && matches!(
+            marker,
+            MustOutliveMarker::CallerStoreTarget(_)
+                | MustOutliveMarker::CallerReturn
+                | MustOutliveMarker::VirtualCaller
+        ) {
+        MustOutliveMarker::Root
+    } else {
+        marker
+    };
+    add_marker(must_outlive, source_id, marker);
 }
 
 fn trace_param(id: InstId, inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>) -> Option<u32> {
@@ -4804,11 +4892,13 @@ mod tests {
     }
 
     #[test]
-    fn phi_with_distinct_target_slots_becomes_ambiguous() {
+    fn distinct_target_slots_widen_to_root() {
         // A marker set carrying two distinct `CallerStoreTarget(p)` markers
-        // resolves to two different hidden caller slots. The LUB must not
-        // pick either slot because codegen would allocate in only that arena;
-        // instead it mints AMBIGUOUS for the post-inference reject path.
+        // resolves to two different hidden caller slots. No single caller arena
+        // outlives both destinations, so the LUB widens to Root (sound,
+        // leak-but-safe) rather than picking one slot or rejecting the store —
+        // a value legitimately stored into two parameter containers (e.g. on
+        // two branches) must compile, not error.
         let f = function(
             0,
             "two_stores",
@@ -4832,7 +4922,7 @@ mod tests {
         ]);
         assert_eq!(
             lub_to_region_id(&markers, BlockId(0), &tree, &summary),
-            RegionId::Caller(HiddenRegionIdx::AMBIGUOUS),
+            RegionId::Root,
         );
     }
 
@@ -4871,10 +4961,10 @@ mod tests {
     #[test]
     fn caller_return_resolves_alias_of_any_to_union_of_store_target_slots() {
         // Issue #369: an `AliasOfAny([p, q])` return that flows into a
-        // `CallerReturn` marker must contribute both `store_target_slot(p)`
-        // and `store_target_slot(q)`. With two distinct recorded store
-        // targets the slot set has cardinality two, so the LUB picks the
-        // lowest (until AMBIGUOUS minting is enabled in PR #342).
+        // `CallerReturn` marker contributes both `store_target_slot(p)` and
+        // `store_target_slot(q)`. With two distinct recorded store targets the
+        // slot set has cardinality two; no single caller arena outlives both,
+        // so the LUB widens to Root (sound) rather than picking a slot.
         let f = function(
             0,
             "ret_alias_of_any_two_params",
@@ -4896,13 +4986,13 @@ mod tests {
         ));
         // store_target_slot layout (return is not FreshInCaller, so no
         // return-arena slot): slot 0 = param 0's store target,
-        // slot 1 = param 1's store target. AliasOfAny spans both slots, so
-        // the caller return marker is ambiguous rather than arbitrarily
-        // choosing either slot.
+        // slot 1 = param 1's store target. AliasOfAny spans both slots, so the
+        // value must outlive both — its LUB widens to Root rather than
+        // arbitrarily choosing either slot.
         let markers = marker_set(&[MustOutliveMarker::CallerReturn]);
         assert_eq!(
             lub_to_region_id(&markers, BlockId(0), &tree, &summary),
-            RegionId::Caller(HiddenRegionIdx::AMBIGUOUS),
+            RegionId::Root,
         );
     }
 
@@ -6026,7 +6116,7 @@ mod tests {
     }
 
     #[test]
-    fn vec_push_val_into_param_vector_routes_source_to_root_without_conflict() {
+    fn vec_push_val_into_param_vector_routes_source_to_param_arena_without_conflict() {
         let insts = vec![
             inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
             inst(
@@ -6055,12 +6145,19 @@ mod tests {
         let mut m = module(vec![f]);
         infer_regions(&mut m);
 
-        assert_eq!(m.functions[0].blocks[0].insts[1].region, RegionId::Root);
+        // Issue #875: the pushed value must land in the param vector's own
+        // hidden caller arena (freed when the owning frame closes), not the
+        // never-freed root arena. Still must not raise a RegionConflict.
+        assert_eq!(
+            m.functions[0].blocks[0].insts[1].region,
+            RegionId::Caller(HiddenRegionIdx(0))
+        );
         assert!(
             m.warnings
                 .iter()
                 .all(|d| d.code != ErrorCode::RegionConflict),
-            "extern vector stores into parameter vectors should widen to Root, not reject"
+            "extern vector stores into parameter vectors should route to the \
+             param's caller arena, not reject"
         );
     }
 
@@ -7473,12 +7570,13 @@ mod tests {
         }
     }
 
-    /// A single fresh allocation cannot satisfy two distinct hidden caller
-    /// store-target slots. Choosing either slot would place a pointer into
-    /// the other target's container with the wrong arena lifetime, so the
-    /// allocation is marked AMBIGUOUS and the store-conflict pass rejects it.
+    /// A single fresh allocation that flows to two distinct hidden caller
+    /// store-target slots cannot commit to either slot (that would give the
+    /// pointer in the other target's container the wrong arena lifetime). Its
+    /// LUB widens to Root — which safely outlives both containers — so the
+    /// store-conflict pass accepts it rather than rejecting valid code.
     #[test]
-    fn region_conflict_when_one_alloc_flows_to_two_hidden_slots() {
+    fn alloc_flowing_to_two_hidden_slots_widens_to_root() {
         let callee_insts = vec![
             inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
             inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
@@ -7529,8 +7627,8 @@ mod tests {
 
         assert_eq!(
             m.functions[1].blocks[0].insts[2].region,
-            RegionId::Caller(HiddenRegionIdx::AMBIGUOUS),
-            "shared allocation must not collapse to either concrete slot"
+            RegionId::Root,
+            "shared allocation flowing to two slots widens to Root, not either concrete slot"
         );
         let conflicts: Vec<_> = m
             .warnings
@@ -7539,8 +7637,8 @@ mod tests {
             .collect();
         assert_eq!(
             conflicts.len(),
-            2,
-            "both stores of the ambiguous allocation should be rejected; warnings: {:?}",
+            0,
+            "a Root-placed allocation outlives both containers; no conflict; warnings: {:?}",
             m.warnings
         );
     }

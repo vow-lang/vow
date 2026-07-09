@@ -2219,8 +2219,8 @@ fn analyze_function(
         while rii < rb.insts.len() {
             let rinst: IrInst = rb.insts[rii];
             if is_heap_producing_for_region(rinst, int_kinds) {
-                let mut rgn: i64 = value_lub_region(
-                    f, rinst.id, rb.id, fidx, id_to_inst, id_to_block,
+                let rgn: i64 = value_lub_region(
+                    f, rinst.id, rb.id, fidx, id_to_inst, id_to_block, phi_arms,
                     block_parent, block_depth, loop_headers,
                     is_scalar_ity(f.return_ty),
                     int_kinds, int_auxs, int_aliases_list,
@@ -2240,8 +2240,12 @@ fn analyze_function(
                 if rinst.op == IOP_CALL() && rinst.dk != IDATA_CALL_EXTERN() {
                     let rk: i64 = region_kind(rgn);
                     if rk == REGION_KIND_CALLER() {
+                        // Stash the pre-rewrite Caller(_) for the RegionRootEscape
+                        // note pass. The former `rgn = region_root()` collapse is
+                        // dropped: with hidden-arena threading for store targets,
+                        // a Caller(_) internal-call result is placed in the
+                        // caller's arena instead of leaking to root (issue #871).
                         put_inst_region(note_region_keys[fidx], note_region_vals[fidx], rinst.id, rgn);
-                        rgn = region_root();
                     }
                 }
                 put_inst_region(region_keys[fidx], region_vals[fidx], rinst.id, rgn);
@@ -2461,7 +2465,7 @@ fn lookup_inst_block(id_to_block: Vec<i64>, id: i64) -> i64 {
 
 fn value_lub_region(
     f: IrFunction, id: i64, defining_block: i64, fi: i64,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
     block_parent: Vec<i64>, block_depth: Vec<i64>, loop_headers: Vec<i64>,
     return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
@@ -2484,6 +2488,7 @@ fn value_lub_region(
             cur,
             id_to_inst,
             id_to_block,
+            phi_arms,
             block_parent,
             loop_headers,
             markers,
@@ -2582,16 +2587,14 @@ fn region_lub_from_markers(
     }
     let has_caller: bool = has_legacy_caller || caller_slots.len() > 0;
     if has_caller {
-        // Slot-aware: exactly one concrete hidden slot resolves cleanly.
-        // Legacy slot-less caller evidence mixed with concrete slots, or
-        // multiple distinct concrete slots, cannot be routed through one
-        // allocation arena; mint AMBIGUOUS so the post-inference conflict
-        // check rejects stores of the value.
-        if has_legacy_caller && caller_slots.len() > 0 {
-            return region_caller_ambiguous();
-        }
-        if caller_slots.len() > 1 {
-            return region_caller_ambiguous();
+        // Slot-aware: exactly one concrete hidden slot resolves cleanly. A
+        // value that must satisfy more than one hidden caller slot — multiple
+        // distinct store targets, or slot-less return evidence mixed with a
+        // concrete slot — has no single caller arena that outlives every
+        // destination, so its true LUB is the root arena. Widen to Root (sound,
+        // leak-but-safe) rather than reject; mirrors vow-ir/src/region.rs.
+        if (has_legacy_caller && caller_slots.len() > 0) || caller_slots.len() > 1 {
+            return region_root();
         }
         if caller_slots.len() == 1 {
             return region_pack(REGION_KIND_CALLER(), caller_slots[0]);
@@ -2609,7 +2612,7 @@ fn region_lub_from_markers(
 
 fn direct_markers_collect_regions(
     f: IrFunction, id: i64,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
     block_parent: Vec<i64>, loop_headers: Vec<i64>,
     markers: Vec<i64>,
     return_is_scalar: bool,
@@ -2633,14 +2636,11 @@ fn direct_markers_collect_regions(
                         linear_insert_i64(markers, region_caller0());
                     }
                     if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
-                        let target_marker: i64 = target_marker_region(
-                            id_to_inst,
-                            id_to_block,
-                            inst.args[0],
-                            int_kinds
+                        add_store_target_markers_vow(
+                            id_to_inst, id_to_block, phi_arms,
+                            inst.args[0], int_kinds,
+                            markers, work, seen, Vec::new(), false
                         );
-                        linear_insert_i64(markers, target_marker);
-                        push_region_work(work, seen, inst.args[0]);
                     }
                     if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
                         let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
@@ -2679,6 +2679,7 @@ fn direct_markers_collect_regions(
                             ai,
                             id_to_inst,
                             id_to_block,
+                            phi_arms,
                             int_kinds,
                             markers,
                             int_se_targets,
@@ -2708,18 +2709,11 @@ fn direct_markers_collect_regions(
                     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                         let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
                         if target_pos2 >= 0 && target_pos2 < inst.args.len() {
-                            let target_marker2: i64 = if trace_param(id_to_inst, inst.args[target_pos2]) >= 0 {
-                                region_root()
-                            } else {
-                                target_marker_region(
-                                    id_to_inst,
-                                    id_to_block,
-                                    inst.args[target_pos2],
-                                    int_kinds
-                                )
-                            };
-                            linear_insert_i64(markers, target_marker2);
-                            push_region_work(work, seen, inst.args[target_pos2]);
+                            add_store_target_markers_vow(
+                                id_to_inst, id_to_block, phi_arms,
+                                inst.args[target_pos2], int_kinds,
+                                markers, work, seen, Vec::new(), false
+                            );
                         }
                         if (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
                             && ai == 0
@@ -2953,9 +2947,59 @@ fn target_marker_region(
     region_root()
 }
 
+// Insert must-outlive markers so a value stored into `target_id` outlives the
+// container's region. Traces through Phi merges (a `mut` container reassigned
+// across branches) so each merge arm contributes its own marker instead of the
+// whole Phi resolving to Root; and routes a store into a parameter container to
+// that parameter's hidden caller arena (`marker_caller_store`) rather than Root.
+// Mirrors `add_store_target_markers` in vow-ir/src/region.rs (issues #871/#875).
+fn add_store_target_markers_vow(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    target_id: i64, int_kinds: Vec<i64>,
+    markers: Vec<i64>, work: Vec<i64>, seen: Vec<i64>, trace_seen: Vec<i64>,
+    via_phi: bool
+) {
+    if region_vec_contains_i64(trace_seen, target_id) {
+        return;
+    }
+    trace_seen.push(target_id);
+    if target_id >= 0 && target_id < phi_arms.len() {
+        let arms: Vec<i64> = phi_arms[target_id];
+        if arms.len() > 0 {
+            let mut ai: i64 = 0;
+            while ai < arms.len() {
+                add_store_target_markers_vow(
+                    id_to_inst, id_to_block, phi_arms, arms[ai], int_kinds,
+                    markers, work, seen, trace_seen, true
+                );
+                ai = ai + 1;
+            }
+            return;
+        }
+    }
+    let tp: i64 = trace_param(id_to_inst, target_id);
+    let base_marker: i64 = if tp >= 0 {
+        marker_caller_store(tp)
+    } else {
+        target_marker_region(id_to_inst, id_to_block, target_id, int_kinds)
+    };
+    // A container reached through a Phi merge cannot commit to a single hidden
+    // caller slot: distinct arms may bind distinct slots, which the LUB rejects
+    // as a multi-slot conflict. Widen caller markers to Root (safe, the pre-Phi
+    // behavior) when reached via a Phi; block-local arms keep their precise
+    // marker so the common `mut` case (all arms block-local) still frees.
+    let marker: i64 = if via_phi && region_kind(base_marker) == REGION_KIND_CALLER() {
+        region_root()
+    } else {
+        base_marker
+    };
+    linear_insert_i64(markers, marker);
+    push_region_work(work, seen, target_id);
+}
+
 fn call_store_effects_collect_regions(
     call_inst: IrInst, source_arg_pos: i64,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, int_kinds: Vec<i64>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>, int_kinds: Vec<i64>,
     markers: Vec<i64>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
     work: Vec<i64>, seen: Vec<i64>
@@ -2972,14 +3016,11 @@ fn call_store_effects_collect_regions(
         if kinds[i] == RSUM_KIND_ALIAS_OF() && auxs[i] == source_arg_pos {
             let target_param: i64 = targets[i];
             if target_param >= 0 && target_param < call_inst.args.len() {
-                let target_marker: i64 = target_marker_region(
-                    id_to_inst,
-                    id_to_block,
-                    call_inst.args[target_param],
-                    int_kinds
+                add_store_target_markers_vow(
+                    id_to_inst, id_to_block, phi_arms,
+                    call_inst.args[target_param], int_kinds,
+                    markers, work, seen, Vec::new(), false
                 );
-                linear_insert_i64(markers, target_marker);
-                push_region_work(work, seen, call_inst.args[target_param]);
             }
         } else if kinds[i] == RSUM_KIND_ALIAS_OF_ANY() {
             linear_insert_i64(markers, region_root());
