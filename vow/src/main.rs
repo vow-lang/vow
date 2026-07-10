@@ -3939,10 +3939,10 @@ contract. Their correctness is established where it matters — at use sites: th
 dispatch-totality contracts above prove every valid tag is handled, the IR
 validator and serializer round-trips exercise every kind, and the binary
 fixed-point bootstrap miscompiles if any two tags collide. Removing the
-contracts cut the compiler's `weak` count from 408 to 11; the remaining 11 — the
-region/span bit-packers and friends (`region_pack`/`region_kind`/`region_val`,
-`span_pack`, `item_kind`, `AMBIGUOUS_SLOT`, `marker_caller_store`,
-`region_caller_ambiguous`, `suffix_len`) — were then hardened with exact functional
+contracts cut the compiler's `weak` count from 408 to 11; the remaining bit-packers — the
+region/span packers and friends (`region_pack`/`region_kind`/`region_val`,
+`span_pack`, `item_kind`, `marker_caller_store`, `suffix_len`) — were then hardened
+with exact functional
 postconditions: `item_kind` with `result == v / 4294967296`, and `suffix_len` with a
 per-suffix conditional mapping (`(suffix != tok_suffix_i64() || result == 3) && …`, one
 conjunct per suffix plus an unknown-suffix → `0` clause), bringing `weak` to **0** (#81).
@@ -8482,10 +8482,10 @@ contract. Their correctness is established where it matters — at use sites: th
 dispatch-totality contracts above prove every valid tag is handled, the IR
 validator and serializer round-trips exercise every kind, and the binary
 fixed-point bootstrap miscompiles if any two tags collide. Removing the
-contracts cut the compiler's `weak` count from 408 to 11; the remaining 11 — the
-region/span bit-packers and friends (`region_pack`/`region_kind`/`region_val`,
-`span_pack`, `item_kind`, `AMBIGUOUS_SLOT`, `marker_caller_store`,
-`region_caller_ambiguous`, `suffix_len`) — were then hardened with exact functional
+contracts cut the compiler's `weak` count from 408 to 11; the remaining bit-packers — the
+region/span packers and friends (`region_pack`/`region_kind`/`region_val`,
+`span_pack`, `item_kind`, `marker_caller_store`, `suffix_len`) — were then hardened
+with exact functional
 postconditions: `item_kind` with `result == v / 4294967296`, and `suffix_len` with a
 per-suffix conditional mapping (`(suffix != tok_suffix_i64() || result == 3) && …`, one
 conjunct per suffix plus an unknown-suffix → `0` clause), bringing `weak` to **0** (#81).

@@ -21,8 +21,8 @@ import sys
 # The count must not EXCEED these. Ratchet DOWN as contracts harden; never up.
 # 408 -> 11 once #81 PR-E removed the meaningless `ensures result >= 0` from the
 # tag-constant families (IOP_*, ITY_*, EXPR_*, …). 11 -> 0 once the remaining
-# parametric bit-packers (region_pack/kind/val, span_pack, item_kind, AMBIGUOUS_SLOT,
-# marker_caller_store, region_caller_ambiguous, suffix_len) were hardened with exact
+# parametric bit-packers (region_pack/kind/val, span_pack, item_kind,
+# marker_caller_store, suffix_len) were hardened with exact
 # functional / enumerated postconditions (#81). The baseline is now 0: no weak
 # contract may enter the self-hosted compiler.
 WEAK_MAX = 0

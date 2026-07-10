@@ -71,7 +71,7 @@ reliable*. Everything else waits.
 | **Harness is unsound** — wrapped-pointer bound; alignment never asserted; oversized-classifier edges unchecked; addr-cap should be `<` not `<=` | `arena.c` `alloc_chunk`/`align_up` assumptions | #437, #430, #422–#426, #480 |
 | **Harness is intractable** — `--incremental-bmc --max-k-step 10` = 20 independent BMC runs, fresh symex+SMT per k, symbolic malloc in over-unwound loops → **~30 GB RSS / ~1.5 h**, OOM under the 2 GB CI ulimit | `verify/Makefile`, `full_test.sh` | #516, #546 |
 | **RegionAlloc is unverifiable** — any vowed function whose body emits `RegionAlloc` (e.g. a functional struct update) is `SkippedNonModelable`, so bootstrap can't reach overall `Verified` without a script tolerance | `c_emitter.rs` `first_unsupported_opcode` | #397 |
-| **Region inference is fragile & huge** — 8 k-line pass with a lattice fixed-point, alias-aware LUB, root-escape rewrite, AMBIGUOUS conflict gating, and a Vec-indexed lookup-table perf workaround; a steady drip of corner-case fixes (#400/#407, #372, #366–#368, #351) | `region.rs` / `region.vow` | #407, #372, #366–#368, #351 |
+| **Region inference is fragile & huge** — 8 k-line pass with a lattice fixed-point, alias-aware LUB, root-escape rewrite, multi-slot widen-to-Root (#871; the earlier AMBIGUOUS conflict gating was removed), and a Vec-indexed lookup-table perf workaround; a steady drip of corner-case fixes (#400/#407, #372, #366/#367, #351; #368 closed by #871) | `region.rs` / `region.vow` | #407, #372, #366/#367, #351 |
 | **try_extend contract gaps** — frame condition / no-mutation / success postconditions claimed but not actually asserted; reserve arithmetic can wrap | `arena.c`, runtime | #431, #432, #433, #435 |
 
 ### 2.3 The core tension

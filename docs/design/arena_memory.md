@@ -870,9 +870,7 @@ a `RegionConflict` (issue #871). Widening is the conservative resolution:
 choosing an arbitrary slot would route at least one escaped pointer into
 the wrong arena lifetime, and rejecting would refuse valid code. The
 leak-vs-signal trade is surfaced instead by `RegionRootEscape` (below)
-when the widened region bottoms out at the root region. (The
-`Caller(HiddenRegionIdx::AMBIGUOUS)` sentinel and its reject path are
-retained defensively but are no longer produced by this pass.)
+when the widened region bottoms out at the root region.
 
 **Visibility** (`RegionRootEscape`, severity Note, non-blocking).
 When `region(I)` resolves through caller-region routing to a chain
