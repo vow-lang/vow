@@ -1,0 +1,40 @@
+// TEST: stdout ""
+// Multi-slot widen-to-Root reproducer (#871, supersedes #342/#368).
+// `item` is a single allocation stored into TWO distinct parameter arenas
+// (`short` and `long`), so its marker set spans two distinct hidden caller
+// slots. There is no single caller arena that outlives both destinations,
+// so region inference widens `item` to the root region (sound, leak-but-
+// safe) instead of rejecting the program. PR #342's `Caller(AMBIGUOUS)`
+// conservative reject blocked this pattern; #871's widen-to-Root unblocks
+// it — the pointer lives program-long, so no store mis-routes and there is
+// no use-after-free at runtime.
+module RegionMultiSlotWidenRoot
+
+pub struct Item {
+    name: String,
+}
+
+pub struct Arena {
+    entries: Vec<Item>,
+}
+
+fn push_to_arena(arena: Arena, item: Item) {
+    arena.entries.push(item);
+}
+
+fn put_both(short: Arena, long: Arena) {
+    let item: Item = Item { name: String::from("SHARED") };
+    push_to_arena(short, item);
+    push_to_arena(long, item);
+}
+
+fn inner(long: Arena) {
+    let short: Arena = Arena { entries: Vec::new() };
+    put_both(short, long);
+}
+
+fn main() -> i32 {
+    let long: Arena = Arena { entries: Vec::new() };
+    inner(long);
+    0
+}
