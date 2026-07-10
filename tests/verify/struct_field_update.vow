@@ -1,0 +1,22 @@
+// TEST: category callee-blame
+// #397: a vowed struct builder that functionally updates one field
+// (RegionAlloc + FieldSet + FieldGet) is modeled by the verifier's user-struct
+// heap model and proves its field postcondition, instead of being
+// SkippedNonModelable. This is the exact shape of `ir_inst_set_region`.
+module StructFieldUpdate
+
+struct Thing { a: i64, b: i64, c: i64 }
+
+fn set_c(t: Thing, c: i64) -> Thing vow {
+  requires: c >= 0,
+  ensures: result.c == c
+} {
+  Thing { a: t.a, b: t.b, c: c }
+}
+
+fn main() -> i32 [io] {
+  let t: Thing = Thing { a: 1, b: 2, c: 3 };
+  let t2: Thing = set_c(t, 5);
+  print_i64(t2.c);
+  0
+}

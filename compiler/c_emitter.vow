@@ -14,6 +14,7 @@ fn VOW_VEC_MAX() -> i64 { 128 }
 fn VOW_STRING_MAX() -> i64 { 256 }
 fn VOW_HASHMAP_MAX() -> i64 { 64 }
 fn VOW_BTREEMAP_MAX() -> i64 { 64 }
+fn VOW_HEAP_MAX() -> i64 { 1024 }
 
 fn cemit_str2(a: String, b: String) -> String {
     let r: String = String::from("");
@@ -314,18 +315,12 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                         false
                     }
                 } else if op == IOP_FIELD_GET() {
-                    let iid: i64 = inst.id;
-                    let iargs: Vec<i64> = inst.args;
-                    vec_contains_i64(vec_vars, iid)
-                    || vec_contains_i64(string_vars, iid)
-                    || vec_contains_i64(hashmap_vars, iid)
-                    || vec_contains_i64(btreemap_vars, iid)
-                    || (iargs.len() > 0 && vec_contains_i64(option_vars, iargs[0]))
+                    true
+                } else if op == IOP_REGION_ALLOC() || op == IOP_FIELD_SET() {
+                    true
                 } else if op == IOP_REM_F32() || op == IOP_REM_F64()
                    || op == IOP_LOAD() || op == IOP_STORE()
-                   || op == IOP_REGION_ALLOC()
-                   || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
-                   || op == IOP_FIELD_SET() {
+                   || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() {
                     false
                 } else {
                     false
@@ -359,12 +354,10 @@ fn iop_unsupported_name(op: i64) -> String {
     if op == IOP_REM_F64() { return String::from("RemF64"); }
     if op == IOP_LOAD() { return String::from("Load"); }
     if op == IOP_STORE() { return String::from("Store"); }
-    if op == IOP_REGION_ALLOC() { return String::from("RegionAlloc"); }
     if op == IOP_REGION_OPEN() { return String::from("RegionOpen"); }
     if op == IOP_REGION_CLOSE() { return String::from("RegionClose"); }
     if op == IOP_LINEAR_CONSUME() { return String::from("LinearConsume"); }
     if op == IOP_LINEAR_BORROW() { return String::from("LinearBorrow"); }
-    if op == IOP_FIELD_SET() { return String::from("FieldSet"); }
     String::from("")
 }
 
@@ -1312,6 +1305,15 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
             }
             return;
         }
+        if iargs.len() > 0 && inst.dk == IDATA_FIELD() {
+            // User-struct heap model: load base's field slot.
+            let ids: String = i64_to_str(id);
+            out.push_str(str6(String::from("  v"), ids,
+                String::from(" = __vow_heap[v"), i64_to_str(iargs[0]),
+                str3(String::from(" + "), i64_to_str(inst.dv), String::from("]")),
+                String::from(";\n")));
+            return;
+        }
         emit_unmodelled(out, inst);
         return;
     }
@@ -1321,8 +1323,31 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
         return;
     }
 
-    if op == IOP_LOAD() || op == IOP_STORE() || op == IOP_REGION_ALLOC()
-       || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() || op == IOP_FIELD_SET() {
+    if op == IOP_REGION_ALLOC() {
+        // User-struct heap model: bump-allocate `size/8` int64 slots.
+        let ids: String = i64_to_str(id);
+        let raw_slots: i64 = inst.dv / 8;
+        let slots: i64 = { if raw_slots < 1 { 1 } else { raw_slots } };
+        out.push_str(str5(String::from("  v"), ids,
+            String::from(" = __vow_heap_top;\n  __vow_heap_top += "),
+            i64_to_str(slots), String::from(";\n")));
+        out.push_str(str3(String::from("  __ESBMC_assume(__vow_heap_top <= "),
+            i64_to_str(VOW_HEAP_MAX()), String::from(");\n")));
+        return;
+    }
+
+    if op == IOP_FIELD_SET() {
+        // User-struct heap model: store into base's field slot.
+        let base: i64 = iargs[0];
+        let val: i64 = iargs[1];
+        out.push_str(str6(String::from("  __vow_heap[v"), i64_to_str(base),
+            String::from(" + "), i64_to_str(inst.dv),
+            String::from("] = v"), str2(i64_to_str(val), String::from(";\n"))));
+        return;
+    }
+
+    if op == IOP_LOAD() || op == IOP_STORE()
+       || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() {
         emit_unsupported_for_verification(out, inst);
         return;
     }
@@ -2165,6 +2190,42 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
             }
         }
         bi = bi + 1;
+    }
+
+    // User-struct heap model: a per-function slot array + bump pointer, emitted
+    // only when the body has struct allocation/field ops. Pointers are int64
+    // slot indices, so equal addresses alias the same slots (sound aliasing).
+    let mut needs_heap: bool = false;
+    bi = 0;
+    while bi < n_blocks {
+        let hblk: IrBlock = blocks[bi];
+        let hinsts: Vec<IrInst> = hblk.insts;
+        let mut hi: i64 = 0;
+        while hi < hinsts.len() {
+            let hinst: IrInst = hinsts[hi];
+            let hop: i64 = hinst.op;
+            if hop == IOP_REGION_ALLOC() || hop == IOP_FIELD_SET() {
+                needs_heap = true;
+            } else if hop == IOP_FIELD_GET() {
+                let hid: i64 = hinst.id;
+                let hargs: Vec<i64> = hinst.args;
+                let is_coll: bool = vec_contains_i64(vec_vars, hid)
+                    || vec_contains_i64(string_vars, hid)
+                    || vec_contains_i64(hashmap_vars, hid)
+                    || vec_contains_i64(btreemap_vars, hid)
+                    || (hargs.len() > 0 && vec_contains_i64(option_vars, hargs[0]));
+                if !is_coll {
+                    needs_heap = true;
+                }
+            }
+            hi = hi + 1;
+        }
+        bi = bi + 1;
+    }
+    if needs_heap {
+        out.push_str(str3(String::from("  int64_t __vow_heap["),
+            i64_to_str(VOW_HEAP_MAX()), String::from("];\n")));
+        out.push_str(String::from("  int64_t __vow_heap_top = 0;\n"));
     }
 
     let ups_sources: Vec<i64> = Vec::new();
