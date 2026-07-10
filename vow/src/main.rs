@@ -2845,7 +2845,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 |-----------------|---------------------------------------------|
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
@@ -3017,7 +3017,7 @@ For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inpu
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `Linear*` consume/borrow, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
 | `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline — the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.
@@ -7388,7 +7388,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 |-----------------|---------------------------------------------|
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
@@ -7560,7 +7560,7 @@ For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inpu
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
+| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `Load`/`Store`, `Linear*` consume/borrow, `RemF*`) or the function has effects. (Struct construction and field ops are modelled — see the `Skipped` build-status row.) Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
 | `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously — ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |
 
 The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline — the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.
@@ -11136,7 +11136,15 @@ impl CounterexampleJson {
     fn from_structured(ce: &StructuredCounterexample) -> Self {
         Self {
             function: ce.function.clone(),
-            values: ce.values.iter().cloned().collect(),
+            // Drop internal user-struct heap-model storage (`__vow_heap[]` / bump
+            // pointer): a verifier artifact, not a source free variable, so
+            // struct counterexamples don't dump the whole slot array to agents.
+            values: ce
+                .values
+                .iter()
+                .filter(|(name, _)| !name.contains("__vow_heap"))
+                .cloned()
+                .collect(),
             violation: ce.violation.clone(),
             vow_id: ce.vow_id,
             source: ce.source.as_ref().map(|s| SpanJson {
@@ -17622,7 +17630,12 @@ fn main() -> i32 {
     }
 
     #[test]
-    fn vowed_struct_builder_is_skipped_not_failed() {
+    // #397 regression: a vowed struct builder (`requires: rgn >= 0`, no `ensures`
+    // — the exact `ir_inst_set_region` shape) is modeled via the user-struct heap
+    // model and now VERIFIES. Previously its `RegionAlloc`/`FieldSet` body made it
+    // `SkippedNonModelable`, lifting the overall status to `Skipped` (exit 1) and
+    // blocking `scripts/bootstrap.sh` from reaching `Verified`.
+    fn vowed_struct_builder_now_verifies() {
         let dir = TempDir::new().unwrap();
         let src = r#"module SkipDemo
 struct Foo { x: i64, rgn: i64 }
@@ -17645,24 +17658,14 @@ fn main() -> i32 {
             None,
         );
         match &result.status {
-            BuildStatus::Skipped => {
-                assert!(
-                    result
-                        .diagnostics
-                        .iter()
-                        .any(|d| matches!(d.severity, vow_diag::Severity::Warning)
-                            && d.message.contains("make_foo")),
-                    "expected a Warning diagnostic naming `make_foo`, got: {:?}",
-                    result.diagnostics
-                );
-            }
+            BuildStatus::Verified => {}
             status if esbmc_not_found(status) => {
                 eprintln!("SKIP: esbmc not found");
             }
             BuildStatus::CompileFailed { message } => {
                 panic!("unexpected compile failure: {message}");
             }
-            other => panic!("expected Skipped for non-modelable vowed fn, got {other:?}"),
+            other => panic!("expected Verified for modelable struct builder, got {other:?}"),
         }
     }
 

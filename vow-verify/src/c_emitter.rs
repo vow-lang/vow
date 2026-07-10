@@ -70,6 +70,12 @@ pub const HASHMAP_MODEL_CAP: usize = 64;
 /// Safe default model capacity for `BTreeMap<K, V>` under bounded model checking.
 pub const BTREEMAP_MODEL_CAP: usize = 64;
 
+/// Safe default slot capacity for the user-struct heap model under bounded model
+/// checking. Each `RegionAlloc` bump-allocates `(n_fields + 1)` int64 slots; this
+/// caps total live struct slots per verified function. Model artifact, not a
+/// contract bound (mirrors `vec_max` et al.).
+pub const HEAP_MODEL_CAP: usize = 1024;
+
 // A capacity of zero would emit a zero-length C array and an unsatisfiable
 // `len < CAP` assertion, silently breaking all collection verification. Pin the
 // positivity invariant the (now-removed) CLI `validate_limits` used to enforce.
@@ -85,6 +91,7 @@ pub struct VerifyLimits {
     pub string_max: usize,
     pub hashmap_max: usize,
     pub btreemap_max: usize,
+    pub heap_max: usize,
 }
 
 impl Default for VerifyLimits {
@@ -95,6 +102,7 @@ impl Default for VerifyLimits {
             string_max: STRING_MODEL_CAP,
             hashmap_max: HASHMAP_MODEL_CAP,
             btreemap_max: BTREEMAP_MODEL_CAP,
+            heap_max: HEAP_MODEL_CAP,
         }
     }
 }
@@ -636,23 +644,19 @@ pub fn is_modelable(
                     _ => false,
                 },
 
-                Opcode::FieldGet => {
-                    let iid = inst.id.0;
-                    vec_vars.contains(&iid)
-                        || string_vars.contains(&iid)
-                        || hashmap_vars.contains(&iid)
-                        || btreemap_vars.contains(&iid)
-                        || option_vars.contains(&inst.args.first().map_or(u32::MAX, |a| a.0))
-                }
+                // Collection/Option field reads have dedicated models; all other
+                // FieldGets are user-struct slot reads under the heap model.
+                Opcode::FieldGet => true,
+
+                // User-struct heap model: allocation and field writes are slot ops.
+                Opcode::RegionAlloc | Opcode::FieldSet => true,
 
                 Opcode::RemF32
                 | Opcode::RemF64
                 | Opcode::Load
                 | Opcode::Store
-                | Opcode::RegionAlloc
                 | Opcode::LinearConsume
-                | Opcode::LinearBorrow
-                | Opcode::FieldSet => false,
+                | Opcode::LinearBorrow => false,
 
                 Opcode::DebugCall => true,
             };
@@ -716,10 +720,8 @@ fn first_unsupported_opcode(
                 | Opcode::RemF64
                 | Opcode::Load
                 | Opcode::Store
-                | Opcode::RegionAlloc
                 | Opcode::LinearConsume
-                | Opcode::LinearBorrow
-                | Opcode::FieldSet => return Some(format!("{:?}", inst.opcode)),
+                | Opcode::LinearBorrow => return Some(format!("{:?}", inst.opcode)),
                 Opcode::Call => match &inst.data {
                     InstData::CallExtern(name) => {
                         if !is_known_builtin(name) {
@@ -1626,15 +1628,37 @@ fn emit_inst(
             out.push_str("  /* verifier no-op: region scope marker */\n");
         }
 
-        // Other calls, memory, region/linear/field ops — not yet supported for verification
+        // Other calls, memory, linear ops — not yet supported for verification
         Opcode::Call
         | Opcode::Load
         | Opcode::Store
-        | Opcode::RegionAlloc
         | Opcode::LinearConsume
-        | Opcode::LinearBorrow
-        | Opcode::FieldSet => {
+        | Opcode::LinearBorrow => {
             emit_unsupported_for_verification(inst, out);
+        }
+
+        // User-struct heap model: bump-allocate `size/8` int64 slots.
+        Opcode::RegionAlloc => {
+            let slots = match inst.data {
+                InstData::AllocSize { size, .. } => (size / 8).max(1),
+                _ => 1,
+            };
+            let heap_max = limits.heap_max;
+            out.push_str(&format!(
+                "  v{id} = __vow_heap_top;\n  __vow_heap_top += {slots};\n\
+                 \x20 __ESBMC_assume(__vow_heap_top <= {heap_max});\n"
+            ));
+        }
+
+        // User-struct heap model: store into base's field slot.
+        Opcode::FieldSet => {
+            let idx = match inst.data {
+                InstData::FieldIndex(i) => i,
+                _ => 0,
+            };
+            let base = inst.args.first().map_or(0, |a| a.0);
+            let val = inst.args.get(1).map_or(0, |a| a.0);
+            out.push_str(&format!("  __vow_heap[v{base} + {idx}] = v{val};\n"));
         }
         Opcode::FieldGet => {
             if vec_vars.contains(&id) {
@@ -1675,6 +1699,9 @@ fn emit_inst(
                     } else {
                         emit_unmodelled(inst, out);
                     }
+                } else if let InstData::FieldIndex(idx) = inst.data {
+                    // User-struct heap model: load base's field slot.
+                    out.push_str(&format!("  v{id} = __vow_heap[v{} + {idx}];\n", src_id.0));
                 } else {
                     emit_unmodelled(inst, out);
                 }
@@ -2025,6 +2052,26 @@ pub fn emit_c_function_full(
                 out.push_str(&format!("  {} v{};\n", c_ty, id));
             }
         }
+    }
+
+    // User-struct heap model: a per-function slot array + bump pointer, emitted
+    // only when the body has struct allocation/field ops. Pointers are int64
+    // slot indices, so equal addresses alias the same slots (sound aliasing);
+    // each RegionAlloc bumps to a fresh region (distinct objects).
+    let needs_heap = func.blocks.iter().flat_map(|b| &b.insts).any(|i| {
+        matches!(i.opcode, Opcode::RegionAlloc | Opcode::FieldSet)
+            || (i.opcode == Opcode::FieldGet
+                && !vec_vars.contains(&i.id.0)
+                && !string_vars.contains(&i.id.0)
+                && !hashmap_vars.contains(&i.id.0)
+                && !btreemap_vars.contains(&i.id.0)
+                && !option_vars.contains(&i.args.first().map_or(u32::MAX, |a| a.0)))
+    });
+    if needs_heap {
+        out.push_str(&format!(
+            "  int64_t __vow_heap[{heap}];\n  int64_t __vow_heap_top = 0;\n",
+            heap = limits.heap_max
+        ));
     }
 
     // Pre-declare Upsilon temporaries at function scope
