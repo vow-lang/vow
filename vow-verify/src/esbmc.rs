@@ -2469,8 +2469,13 @@ VERIFICATION FAILED";
         }
     }
 
+    // #397 regression: a vowed function whose body emits `RegionAlloc` (a struct
+    // allocation) is modeled via the user-struct heap model instead of being
+    // skipped. `alloc_thing` has only a `requires` (assumed) and no `ensures`, so
+    // once modelable it verifies cleanly. Previously this returned `Skipped`,
+    // which lifted bootstrap to overall `Skipped` (exit 1).
     #[test]
-    fn vowed_function_with_region_alloc_returns_skipped() {
+    fn vowed_function_with_region_alloc_now_verifies() {
         let func = vowed_with_region_alloc();
         let module = Module {
             name: "test".to_string(),
@@ -2489,15 +2494,11 @@ VERIFICATION FAILED";
             &VerifyLimits::default(),
         );
         match result {
-            VerificationResult::Skipped { reason } => {
-                assert!(
-                    reason.contains("RegionAlloc")
-                        || reason.contains("not modelable")
-                        || reason.contains("unsupported"),
-                    "skip reason should mention the cause: {reason}"
-                );
-            }
-            other => panic!("expected Skipped (gate must run before find_esbmc), got {other:?}"),
+            // ToolNotFound: esbmc absent from the test env (e.g. macOS CI unit
+            // tests) — the point of the test is that the gate no longer rejects
+            // RegionAlloc, so reaching esbmc at all (or proving) is success.
+            VerificationResult::Proven | VerificationResult::ToolNotFound => {}
+            other => panic!("expected Proven (RegionAlloc is now modelable), got {other:?}"),
         }
     }
 

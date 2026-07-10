@@ -1,0 +1,24 @@
+// TEST: category callee-blame
+// TEST: counterexample-vow-id 1
+// TEST: counterexample-fn "set_c"
+// TEST: counterexample-blame callee
+// #397 precision guard: the user-struct heap model is not vacuous. A WRONG
+// field postcondition (result.c == c + 1) is refuted with a callee-blamed
+// counterexample — proving FieldSet then FieldGet read the same heap slot.
+module StructFieldUpdateWrong
+
+struct Thing { a: i64, b: i64, c: i64 }
+
+fn set_c(t: Thing, c: i64) -> Thing vow {
+  requires: c >= 0,
+  ensures: result.c == c + 1
+} {
+  Thing { a: t.a, b: t.b, c: c }
+}
+
+fn main() -> i32 [io] {
+  let t: Thing = Thing { a: 1, b: 2, c: 3 };
+  let t2: Thing = set_c(t, 5);
+  print_i64(t2.c);
+  0
+}

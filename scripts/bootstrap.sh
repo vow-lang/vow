@@ -60,43 +60,18 @@ run_logged() {
     )
 }
 
-# Like run_logged but accepts `vow build`'s `Skipped` overall status as success.
-# Skipped happens when a vowed function's body uses an opcode the verifier
-# cannot model (currently RegionAlloc, see #397). ESBMC still runs over every
-# modelable function; only the unverifiable-by-design ones are skipped. The
-# script surfaces a one-line note per skipped function so the warning is not
-# silently buried.
+# Verify-aware stage runner. Since #397 (the verifier models `RegionAlloc` /
+# struct field ops), overall `Skipped` is no longer expected during bootstrap:
+# every vowed function in `compiler/*.vow` is modelable. A `Skipped` (or any
+# non-zero) status now fails the bootstrap, fail-closed, matching `vow build`'s
+# exit semantics. Kept distinct from run_logged so the verify vs --no-verify
+# dispatch in run_rust_stage / run_self_stage stays explicit.
 run_verify_logged() {
     local cmd="$1"
     (
         log=$(mktemp)
         trap 'rm -f "$log"' EXIT INT TERM HUP
         if bash -c "$cmd" >"$log" 2>&1; then
-            exit 0
-        fi
-        # `head -1` is safe: in the compact JSON, the top-level "status"
-        # is emitted first; per-function VerificationSkipped diagnostics use
-        # "error_code", not "status", so they cannot displace the top match.
-        local status
-        status=$(grep -aoE '"status":"[A-Za-z]+"' "$log" | head -1 \
-                 | sed -E 's/.*"status":"(.*)"/\1/')
-        if [ "$status" = "Skipped" ]; then
-            printf "  note: overall Skipped — verifier cannot model these vowed functions (#397):\n" >&2
-            # `[^}]*` between "error_code" and "message" assumes the
-            # intervening diagnostic fields (severity, span, etc.) contain
-            # no `}` characters. Current schema matches; revisit if a
-            # nested object is ever added between those two fields.
-            #
-            # `|| printf …` is load-bearing: with `set -euo pipefail` (top
-            # of script), grep exits 1 on no-match, the whole pipeline
-            # exits 1, and the subshell would otherwise abort before the
-            # `exit 0` below — silently turning a tolerated Skipped into a
-            # bootstrap failure. The fallback also gives the user a hint to
-            # consult the raw log on extractor breakage.
-            grep -aoE '"VerificationSkipped"[^}]*"message":"[^"]+"' "$log" \
-              | sed -E 's/.*"message":"([^"]+)".*/    - \1/' \
-              | sort -u >&2 \
-              || printf "    (could not extract function names — see full log above)\n" >&2
             exit 0
         fi
         cat "$log"
@@ -153,12 +128,10 @@ fi
 
 # Stage 1 runs the Rust compiler (well-behaved release binary) — no vmem cap.
 # Stages 2+3 run the self-hosted compiler under VOW_BOOTSTRAP_VMEM_KB if set.
-# With --no-verify ESBMC never runs, so the "Skipped" handling in
-# run_verify_* is dead code but harmless. The Stage 1/2/3 call sites
-# always invoke run_rust_stage / run_self_stage; these wrappers do the
-# conditional dispatch (verify-aware vs plain logger), so the stage
-# invocation code itself is identical in both modes — only the wrappers
-# differ.
+# The Stage 1/2/3 call sites always invoke run_rust_stage / run_self_stage;
+# these wrappers do the conditional dispatch (verify-aware vs plain logger),
+# so the stage invocation code itself is identical in both modes — only the
+# wrappers differ.
 run_rust_stage() {
     local cmd="$1"
     if [ "$NO_VERIFY" = true ]; then
