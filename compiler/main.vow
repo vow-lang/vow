@@ -4879,6 +4879,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
     r.push_str(String::from("| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously -- ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline -- the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Quality Values\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`quality` is a static classification of each clause's *shape*, computed without ESBMC and independent of `status`. It surfaces the \"proven but trivial\" problem: a `weak` contract can be `proven` while constraining almost nothing. See `docs/spec/contracts-methodology.md` for the full taxonomy.\n"));
@@ -9442,6 +9444,8 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) -- use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |\n"));
     r.push_str(String::from("| `vacuous`       | The containing function's `requires` clauses are contradictory, so every `ensures` is satisfied vacuously -- ESBMC proved nothing of substance (antecedent failure). Detected by a second ESBMC run with `--error-label`: a `vow_reach` label planted after the `requires` assumes is unreachable. All of the function's clauses are reported `vacuous` (fail-closed, exit 1). See `docs/spec/contracts-methodology.md`. |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g. the BV→IR fallback) may never report a weakened check as `proven` are the verifier's soundness discipline -- the safe-vs-unsafe retry rules are specified in `docs/verifier-discipline.md`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Quality Values\n"));
     r.push_str(String::from("\n"));

@@ -1179,6 +1179,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     };
     let status: i64 = {
         // Pass raw IR status through: distinguishing callers (verify_collect_and_report) surface the original BV outcome for IR FAILED; non-distinguishing callers (run_test) treat any non-PROVEN as failure.
+        // Verifier discipline (docs/verifier-discipline.md): an IR proof is the weaker encoding, so relabel PROVEN -> PROVEN_IR here. A resource-limited retry must never surface a bare PROVEN.
         if raw_status == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
         else { raw_status }
     };
