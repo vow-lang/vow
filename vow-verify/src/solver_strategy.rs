@@ -293,9 +293,13 @@ pub fn run_with_fallback(
         };
         // The IR retry must run the SAME unwind bound as the BV attempt.
         // Reducing the unwind on retry ("halve unwind on timeout") would prove a
-        // strictly weaker obligation and is forbidden — see
-        // docs/verifier-discipline.md. Bind it here so any future edit that
-        // shrinks the bound trips this assertion.
+        // strictly weaker obligation and is forbidden — see docs/verifier-discipline.md.
+        //
+        // `ir_max_k_step` is deliberately just `max_k_step`, so the assertion below is
+        // a tautology *today* — that is intentional. It is a trip wire, not a check of
+        // current behaviour: it exists so a future edit that derives a smaller bound
+        // (e.g. `max_k_step / 2`) fails loudly here instead of silently proving the
+        // weaker obligation.
         let ir_max_k_step = max_k_step;
         assert!(
             ir_max_k_step >= max_k_step,
