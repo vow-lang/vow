@@ -17,19 +17,6 @@ pub struct AbstractRegionId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HiddenRegionIdx(pub u32);
 
-impl HiddenRegionIdx {
-    /// Sentinel for slot-disagreement: a value's marker set resolves to
-    /// multiple distinct slots (e.g., a Phi merging allocs destined for
-    /// different store targets). The post-inference conflict check
-    /// converts this into a `RegionConflict` diagnostic; codegen must
-    /// never see it (`region_to_arena_value` asserts).
-    pub const AMBIGUOUS: HiddenRegionIdx = HiddenRegionIdx(u32::MAX);
-
-    pub fn is_ambiguous(self) -> bool {
-        self.0 == u32::MAX
-    }
-}
-
 /// Compile-time region tag on heap-producing instructions (spec §12.1).
 /// Distinct from [`AbstractRegionId`], which is the pre-arena effects-tracking
 /// handle. Phase 2 defaults every heap allocation to [`RegionId::Root`];
