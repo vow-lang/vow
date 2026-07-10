@@ -205,6 +205,26 @@ pub fn classify_function(func: &Function) -> SolverConfig {
 // Fallback orchestration (Phase D)
 // ---------------------------------------------------------------------------
 
+/// Soundness guard for the adaptive-retry ladder (see docs/verifier-discipline.md).
+///
+/// A resource-limited retry runs the *weaker* IR encoding, which does not model
+/// integer overflow. If that retry proves the property it MUST be surfaced as
+/// `ProvenIr`, never as a bare `Proven`: the label keeps a weaker-encoding proof
+/// distinguishable from a full bit-vector proof so downstream tooling can route
+/// on it. Returning `Proven` here would launder the weaker result into an
+/// unqualified proof — the verifier-side mirror of the contract rule that
+/// artificial bounds must not enter a proof obligation. A violation is a
+/// verifier bug and fails closed: the panic surfaces as `verify_status:
+/// "panicked"`, never `Verified`.
+fn enforce_retry_never_launders_proof(retry: &VerificationResult) {
+    assert!(
+        !matches!(retry, VerificationResult::Proven),
+        "verifier-discipline violation: resource-limited IR retry returned bare \
+         `Proven`; a proof found under the weaker IR encoding must be labeled \
+         `ProvenIr` (see docs/verifier-discipline.md)"
+    );
+}
+
 /// Run ESBMC with fallback: if BV times out in auto mode, retry with --ir --z3.
 /// Returns the result and the config that produced it.
 pub fn run_with_fallback(
@@ -271,15 +291,30 @@ pub fn run_with_fallback(
             timeout_secs: ir_timeout,
             memlimit_mb: config.memlimit_mb,
         };
-        let ir_result = run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &ir_config);
-        match ir_result {
+        // The IR retry must run the SAME unwind bound as the BV attempt.
+        // Reducing the unwind on retry ("halve unwind on timeout") would prove a
+        // strictly weaker obligation and is forbidden — see
+        // docs/verifier-discipline.md. Bind it here so any future edit that
+        // shrinks the bound trips this assertion.
+        let ir_max_k_step = max_k_step;
+        assert!(
+            ir_max_k_step >= max_k_step,
+            "verifier-discipline violation: IR retry unwind {ir_max_k_step} is below \
+             the BV unwind {max_k_step}; a retry must never reduce the unwind bound \
+             (see docs/verifier-discipline.md)"
+        );
+        let ir_result =
+            run_esbmc_with_max_k_step(esbmc, c_src, ir_max_k_step, func_name, &ir_config);
+        let retry = match ir_result {
             VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
             // IR returned a counterexample, but IR does not model overflow —
             // a CE found only under IR can be infeasible under BV. Report the
             // original resource-limited result rather than an unsound Failed.
             VerificationResult::Failed(_) => (result, ir_config),
             other => (other, ir_config),
-        }
+        };
+        enforce_retry_never_launders_proof(&retry.0);
+        retry
     } else {
         (result, bv_config)
     }
@@ -898,5 +933,93 @@ exit 6
             }
             other => panic!("unexpected result: {other:?}"),
         }
+    }
+
+    /// Issue #337 discipline: a forced timeout must never surface as a proof.
+    /// Both the BV attempt and the IR retry time out (the fake emits output
+    /// containing "timeout", which `classify_esbmc_output` maps to `Timeout`),
+    /// so the fallback must return `Timeout` — never `Proven`/`ProvenIr`.
+    /// Deterministic: no real wall-clock timeout, so no race with the poll.
+    #[cfg(unix)]
+    #[test]
+    fn fallback_forced_timeout_never_verified() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let esbmc = dir.path().join("fake-esbmc");
+        std::fs::write(
+            &esbmc,
+            r#"#!/bin/sh
+echo "esbmc: timeout reached"
+exit 0
+"#,
+        )
+        .expect("write fake esbmc");
+        let mut perms = std::fs::metadata(&esbmc).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&esbmc, perms).expect("chmod fake esbmc");
+
+        let cfg = SolverConfig {
+            solver: Solver::Auto,
+            encoding: Encoding::Auto,
+            timeout_secs: Some(5),
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
+        };
+        let (result, _resolved) =
+            run_with_fallback(&esbmc, "int main(void) { return 0; }", 5, "main", &cfg);
+
+        match result {
+            VerificationResult::Timeout => {}
+            VerificationResult::Proven | VerificationResult::ProvenIr => {
+                panic!("a forced timeout must never produce a proof: {result:?}");
+            }
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+    }
+
+    /// Issue #337 discipline: when the BV attempt times out and the IR retry
+    /// proves the property, the proof MUST be labeled `ProvenIr` (weaker
+    /// encoding), never a bare `Proven`. Exercises the relabel and the
+    /// `enforce_retry_never_launders_proof` guard's happy path.
+    #[cfg(unix)]
+    #[test]
+    fn fallback_forced_timeout_ir_proof_is_labeled_proven_ir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let esbmc = dir.path().join("fake-esbmc");
+        std::fs::write(
+            &esbmc,
+            r#"#!/bin/sh
+for arg in "$@"; do
+    if [ "$arg" = "--ir" ]; then
+        echo "VERIFICATION SUCCESSFUL"
+        exit 0
+    fi
+done
+echo "esbmc: timeout reached"
+exit 0
+"#,
+        )
+        .expect("write fake esbmc");
+        let mut perms = std::fs::metadata(&esbmc).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&esbmc, perms).expect("chmod fake esbmc");
+
+        let cfg = SolverConfig {
+            solver: Solver::Auto,
+            encoding: Encoding::Auto,
+            timeout_secs: Some(5),
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
+        };
+        let (result, resolved) =
+            run_with_fallback(&esbmc, "int main(void) { return 0; }", 5, "main", &cfg);
+
+        assert!(
+            matches!(result, VerificationResult::ProvenIr),
+            "IR retry proof must be labeled ProvenIr, got {result:?}"
+        );
+        assert_eq!(resolved.solver, Solver::Z3);
+        assert_eq!(resolved.encoding, Encoding::Ir);
     }
 }
