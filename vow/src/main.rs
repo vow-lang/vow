@@ -1,5 +1,6 @@
 mod cache;
 mod complexity;
+mod contract_quality;
 mod frontend;
 mod module_loader;
 mod perfetto;
@@ -14104,97 +14105,9 @@ fn run_verify_command(
 // Contracts listing (vow contracts)
 // ---------------------------------------------------------------------------
 
-fn vow_kind_from_description(desc: &str) -> &'static str {
-    if desc.starts_with("requires") {
-        "requires"
-    } else if desc.starts_with("ensures") {
-        "ensures"
-    } else if desc.starts_with("invariant") {
-        "invariant"
-    } else {
-        "unknown"
-    }
-}
-
-/// Strip the leading `requires`/`ensures`/`invariant` keyword from a clause
-/// description, leaving the predicate text. `clause_description` formats every
-/// vow as `"{kind} {printed_expr}"`, so the predicate is everything after the
-/// first space.
-fn contract_predicate_text(description: &str) -> &str {
-    match description.split_once(' ') {
-        Some((_, rest)) => rest.trim(),
-        None => "",
-    }
-}
-
-/// Static, no-ESBMC quality classification of a contract clause by shape.
-/// See docs/spec/contracts-methodology.md for the methodology this implements.
-///
-/// - `tautological`: the predicate is the constant `true` or references no
-///   program value at all (e.g. `0 >= 0`) — it constrains nothing. A `false`
-///   predicate is a contradiction, not a tautology, so it is left `substantive`
-///   here; flagging it as vacuous is the deferred `false` re-check.
-/// - `weak`: an `ensures` that only bounds `result` by an integer literal on
-///   one side (e.g. `result >= 0`, `result > 0`, `result <= 3`). Satisfiable by
-///   almost any implementation — the 354-contract trap #81 was filed over.
-/// - `substantive`: everything else (equality, relational, inverse, calls).
-///
-/// The classifier is deliberately conservative: anything it cannot prove weak
-/// is reported `substantive`, so it never over-flags a meaningful contract.
-fn classify_contract_quality(kind: &str, description: &str) -> &'static str {
-    let p = contract_predicate_text(description);
-    if p.is_empty() || p == "true" || !p.chars().any(|c| c.is_ascii_alphabetic()) {
-        return "tautological";
-    }
-    if kind == "ensures" && is_weak_result_bound(p) {
-        return "weak";
-    }
-    "substantive"
-}
-
-/// True when `pred` is a single ordering comparison between `result` and an
-/// integer literal — the weak postcondition shape. Compound predicates,
-/// equalities, and calls are excluded (they are potentially substantive).
-fn is_weak_result_bound(pred: &str) -> bool {
-    if pred.contains("&&")
-        || pred.contains("||")
-        || pred.contains("==")
-        || pred.contains("!=")
-        || pred.contains('(')
-    {
-        return false;
-    }
-    for op in ["<=", ">="] {
-        if let Some((lhs, rhs)) = pred.split_once(op) {
-            return is_weak_result_comparison(lhs, rhs);
-        }
-    }
-    for op in ['<', '>'] {
-        if let Some((lhs, rhs)) = pred.split_once(op) {
-            return is_weak_result_comparison(lhs, rhs);
-        }
-    }
-    false
-}
-
-fn is_weak_result_comparison(lhs: &str, rhs: &str) -> bool {
-    let lhs = lhs.trim();
-    let rhs = rhs.trim();
-    // Reject anything with a second comparison operator on either side.
-    if has_ordering_op(lhs) || has_ordering_op(rhs) {
-        return false;
-    }
-    (lhs == "result" && is_int_literal(rhs)) || (rhs == "result" && is_int_literal(lhs))
-}
-
-fn has_ordering_op(s: &str) -> bool {
-    s.contains('<') || s.contains('>')
-}
-
-fn is_int_literal(s: &str) -> bool {
-    let digits = s.strip_prefix('-').unwrap_or(s);
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
-}
+// The static, no-ESBMC clause-shape classification (`tautological`/`weak`/
+// `substantive`) and clause-kind detection live in the `contract_quality`
+// module: see `VowKind` and `ContractQuality`.
 
 fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJson {
     let mut summary = ContractsSummaryJson {
@@ -14358,21 +14271,22 @@ fn contracts_summary_has_failure(summary: &ContractsSummaryJson) -> bool {
 /// the static, no-ESBMC classifications; `blame` is the capitalized
 /// `Caller`/`Callee`/`None` form the JSON exposes.
 fn build_contract_entries(ir_module: &vow_ir::Module) -> Vec<ContractEntryJson> {
+    use crate::contract_quality::{ContractQuality, VowKind};
     let mut entries: Vec<ContractEntryJson> = Vec::new();
     for func in &ir_module.functions {
         for vow in &func.vows {
-            let kind = vow_kind_from_description(&vow.description);
+            let kind = VowKind::from_description(&vow.description);
             let blame = match vow.blame {
                 vow_diag::Blame::Caller => "Caller",
                 vow_diag::Blame::Callee => "Callee",
                 vow_diag::Blame::None => "None",
             };
-            let quality = classify_contract_quality(kind, &vow.description);
+            let quality = ContractQuality::classify(kind, &vow.description);
             entries.push(ContractEntryJson {
                 vow_id: vow.id.0,
                 function: func.name.clone(),
                 function_id: func.id.0,
-                kind: kind.to_string(),
+                kind: kind.as_str().to_string(),
                 description: vow.description.clone(),
                 blame: blame.to_string(),
                 source: ContractSourceJson {
@@ -14380,7 +14294,7 @@ fn build_contract_entries(ir_module: &vow_ir::Module) -> Vec<ContractEntryJson> 
                     offset: vow.offset,
                 },
                 status: "not_verified".to_string(),
-                quality: quality.to_string(),
+                quality: quality.as_str().to_string(),
                 trivially_satisfiable: false,
             });
         }
@@ -19405,77 +19319,10 @@ fn main() -> i32 {
         );
     }
 
-    #[test]
-    fn classify_contract_quality_flags_weak_result_bounds() {
-        // The 354-contract trap: an ensures that only bounds result by a constant.
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures result >= 0"),
-            "weak"
-        );
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures result > 0"),
-            "weak"
-        );
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures result <= 3"),
-            "weak"
-        );
-        // result vs negative literal is still a constant bound.
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures result >= -1"),
-            "weak"
-        );
-        // Strict single-char operator path (`<`, not `<=`).
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures result < 3"),
-            "weak"
-        );
-    }
-
-    #[test]
-    fn classify_contract_quality_keeps_substantive_clauses() {
-        // Equality, relational, inverse, totality, and call shapes are not weak.
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures result == val * 4 + kind"),
-            "substantive"
-        );
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures result != -1"),
-            "substantive"
-        );
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures result >= a"),
-            "substantive"
-        );
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures item_kind(result) == kind"),
-            "substantive"
-        );
-        // A one-sided bound is a legitimate precondition, not a weak postcondition.
-        assert_eq!(
-            classify_contract_quality("requires", "requires v <= 255"),
-            "substantive"
-        );
-        // A `false` predicate is a contradiction, not a tautology; the static
-        // classifier leaves it substantive (vacuity detection is a follow-up).
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures false"),
-            "substantive"
-        );
-    }
-
-    #[test]
-    fn classify_contract_quality_flags_tautologies() {
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures true"),
-            "tautological"
-        );
-        // No reference to any program value — constant comparison.
-        assert_eq!(
-            classify_contract_quality("ensures", "ensures 0 >= 0"),
-            "tautological"
-        );
-    }
+    // The static clause-quality classifier moved to `contract_quality`; its
+    // tests (weak/substantive/tautological shapes, kind detection, predicate
+    // extraction, and compound-predicate rejection) now live beside it in
+    // `contract_quality::tests`.
 
     #[test]
     fn verification_limits_are_configurable_in_help() {
