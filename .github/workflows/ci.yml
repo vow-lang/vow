@@ -13,6 +13,12 @@ env:
   # a fresh download + verify even if the version is unchanged.
   ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
 
+# Every job here is read-only: checkout + build/test, plus a Codecov upload
+# that authenticates with its own CODECOV_TOKEN (not GITHUB_TOKEN). Default the
+# GITHUB_TOKEN to the minimum scope so no job gets more than it uses.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest

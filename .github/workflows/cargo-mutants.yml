@@ -10,6 +10,12 @@ env:
   ESBMC_VERSION: "8.1"
   ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
 
+# The job is read-only: checkout + build/test, plus upload-artifact (which uses
+# the Actions runtime token, not GITHUB_TOKEN). Default GITHUB_TOKEN to the
+# minimum scope.
+permissions:
+  contents: read
+
 jobs:
   cargo-mutants:
     name: shard ${{ matrix.shard }}/8
