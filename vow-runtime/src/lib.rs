@@ -774,7 +774,7 @@ fn memory_note_alloc_request() {
 unsafe fn alloc_chunk(total: usize, oversized: bool) -> *mut u8 {
     let base = unsafe { libc::malloc(total) } as *mut u8;
     if !base.is_null() {
-        unsafe { *(base as *mut *mut u8) = core::ptr::null_mut() };
+        unsafe { set_next_chunk(base, core::ptr::null_mut()) };
         let flag = if oversized { CHUNK_OVERSIZED_FLAG } else { 0 };
         unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *mut usize) = total | flag };
     }
@@ -793,6 +793,31 @@ unsafe fn chunk_total(base: *const u8) -> usize {
 // single-resident and safe to free.
 unsafe fn chunk_is_oversized(base: *const u8) -> bool {
     unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *const usize) & CHUNK_OVERSIZED_FLAG != 0 }
+}
+
+// Intrusive chunk-link accessors. Every chunk's first word (offset 0, within
+// the CHUNK_LINK_BYTES header) holds a `*mut u8` link to the next chunk in the
+// arena's chain — null at the tail — written by `alloc_chunk` at allocation
+// time. These two functions are the ONLY places that reinterpret that word as
+// a `*mut *mut u8`; every chain walk, link, and unlink in the allocator and its
+// tests goes through them. Centralizing the cast keeps the single `unsafe`
+// reinterpretation documented in one place and gives static analysers one
+// narrow site to reason about instead of nine (issue #894).
+//
+// Safety: `chunk` must be a base pointer returned by `alloc_chunk` — a live
+// `libc::malloc(total)` block with `total >= CHUNK_LINK_BYTES` (16) — and not
+// yet freed. The 8-byte link word at offset 0 is therefore fully in-bounds and
+// was initialized by `alloc_chunk`. The C ESBMC mirror in
+// `vow-runtime/verify/arena.c` performs the identical `*(void**)chunk` access
+// under the same invariant, so the model check exercises this exact reasoning.
+#[inline]
+unsafe fn next_chunk(chunk: *mut u8) -> *mut u8 {
+    unsafe { *(chunk as *mut *mut u8) }
+}
+
+#[inline]
+unsafe fn set_next_chunk(chunk: *mut u8, next: *mut u8) {
+    unsafe { *(chunk as *mut *mut u8) = next };
 }
 
 // Align a raw address up to `align` (power of two).
@@ -848,7 +873,7 @@ pub unsafe extern "C" fn __vow_arena_close(a: *mut VowArena) {
     let retained_bytes = arena.retained_bytes;
     let mut chunk = arena.first_chunk;
     while !chunk.is_null() {
-        let next = unsafe { *(chunk as *mut *mut u8) };
+        let next = unsafe { next_chunk(chunk) };
         unsafe { libc::free(chunk as *mut libc::c_void) };
         chunk = next;
     }
@@ -905,7 +930,7 @@ pub unsafe extern "C" fn __vow_arena_alloc(
         oom_trap("arena_alloc");
     }
     // Link new chunk as the tail.
-    unsafe { *(arena.current_chunk as *mut *mut u8) = new_base };
+    unsafe { set_next_chunk(arena.current_chunk, new_base) };
     arena.current_chunk = new_base;
     let start = unsafe { chunk_usable_start(new_base, align) };
     let chunk_end = new_base as usize + total;
@@ -1016,11 +1041,11 @@ unsafe fn arena_try_free_oversized_chunk(a: *mut VowArena, ptr: *const u8) -> bo
             if chunk == arena.current_chunk {
                 return false;
             }
-            let next = unsafe { *(chunk as *mut *mut u8) };
+            let next = unsafe { next_chunk(chunk) };
             if prev.is_null() {
                 arena.first_chunk = next;
             } else {
-                unsafe { *(prev as *mut *mut u8) = next };
+                unsafe { set_next_chunk(prev, next) };
             }
             // Saturating by design: a violated `retained_bytes >= total`
             // invariant must not panic in production. The C ESBMC mirror in
@@ -1032,7 +1057,7 @@ unsafe fn arena_try_free_oversized_chunk(a: *mut VowArena, ptr: *const u8) -> bo
             return true;
         }
         prev = chunk;
-        chunk = unsafe { *(chunk as *mut *mut u8) };
+        chunk = unsafe { next_chunk(chunk) };
     }
     false
 }
@@ -4304,7 +4329,7 @@ mod tests {
                 found_old = true;
                 break;
             }
-            chunk = unsafe { *(chunk as *mut *mut u8) };
+            chunk = unsafe { next_chunk(chunk) };
         }
         assert!(
             !found_old,
@@ -4316,7 +4341,7 @@ mod tests {
         let mut chunk = a.first_chunk;
         while !chunk.is_null() {
             walked += unsafe { chunk_total(chunk) };
-            chunk = unsafe { *(chunk as *mut *mut u8) };
+            chunk = unsafe { next_chunk(chunk) };
         }
         assert_eq!(
             a.retained_bytes, walked,
@@ -4369,7 +4394,7 @@ mod tests {
                 chunk, oversized_chunk,
                 "mid-size oversized chunk must be unlinked despite total ≤ normal_chunk_total()"
             );
-            chunk = unsafe { *(chunk as *mut *mut u8) };
+            chunk = unsafe { next_chunk(chunk) };
         }
 
         unsafe { __vow_arena_close(&mut a) };
