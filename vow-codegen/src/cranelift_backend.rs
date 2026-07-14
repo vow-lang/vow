@@ -390,21 +390,12 @@ fn region_to_arena_value(
     match region {
         RegionId::Root => Ok(builder.ins().global_value(types::I64, root_arena_gv)),
         RegionId::Caller(idx) => {
-            // Issue #317: AMBIGUOUS is the slot-aware-inference sentinel
-            // for "this value's marker set resolves to multiple distinct
-            // slots". The post-inference store-conflict check rejects
-            // any store whose source has this region — that's the
-            // soundness gate. Codegen still has to lower the alloc itself
-            // (which may sit on an unrelated path that never reaches a
-            // store), so fall back to slot 0 as a safe placeholder. If
-            // the value is actually used at a store, the build has
-            // already been rejected.
-            let resolved_idx = if idx.is_ambiguous() {
-                0
-            } else {
-                idx.0 as usize
-            };
-            let Some(&arena) = hidden_region_values.get(resolved_idx) else {
+            // Route to the value's hidden caller-arena slot. A value whose
+            // marker set spanned multiple slots widened to `Root` during
+            // region inference, so a `Caller(idx)` reaching codegen always
+            // names one concrete slot. An out-of-range idx is a compiler
+            // bug and fails closed here rather than mis-routing.
+            let Some(&arena) = hidden_region_values.get(idx.0 as usize) else {
                 return Err(CodegenError::UnsupportedOpcode(format!(
                     "missing hidden arena parameter {:?}",
                     idx

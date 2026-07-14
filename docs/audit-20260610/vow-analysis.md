@@ -67,7 +67,7 @@ Columns: design area · the status `docs/vow_design.md` §8 claims · what the a
 | Quantifiers in contracts | **Target** | `is_modelable` gate admits functions the C emitter then models with unconstrained nondet stubs rather than failing closed (#572). | high | L2-quantifiers-loops |
 | Parameter `where` refinements | **Implemented** | Lowered to `requires`, but the `where`/refinement predicate expression is **never type-checked** — a non-bool or ill-typed predicate is accepted. | high | L1-transition-debt |
 | Canonical form (parse→print→parse idempotent) | (implied Implemented) | Multiple printer bugs break idempotence: `&(a+b)`→`&a+b`, `(a+b)?`→`a+b?`, nested unary `-!x` is unparseable, all block bodies printed at indent 0. | high | L1-syntax-canonical, L3-printer-rust |
-| Arena-per-scope memory model | **In Progress** | AMBIGUOUS-region allocation can escape via a direct `FieldSet`/`Store`/extern store without the rewrite that guards `Call` results (`region.rs:3314`). (#437's arena-bound issue is already fixed.) | high | L3-ir-region-rust |
+| Arena-per-scope memory model | **Resolved (#871)** | AMBIGUOUS-region allocation can escape via a direct `FieldSet`/`Store`/extern store without the rewrite that guards `Call` results (`region.rs:3314`). (#437's arena-bound issue is already fixed.) **Resolved by #871**: multi-slot allocations widen to `Root` (sound); AMBIGUOUS sentinel removed. | high | L3-ir-region-rust |
 | Debug-mode contract/boundary traces | **Partial** | `VowViolation` JSON is assembled with no escaping / no finite-number handling (#436); `u64` captures emit the `i32` tag + zero payload (#439) in both backends. | high/medium | L3-runtime, L2-debug-runtime |
 | `u64` contracts (cli.md promise) | — | Self-hosted verifier checks them only at input `0` (see top-5 #2). | critical | L2-soundness-skip |
 | Verification status reporting (fail-closed, §6.4 / cli.md) | — | Verifier-thread panic → `Unverified` + exit 0 (#413); `vow contracts --verify` exits 0 on failed contracts (#479); self-hosted `verify_collect` ignores ESBMC exit code. | critical/high | L3-vsec, L3-driver-rust |
@@ -1129,7 +1129,7 @@ Why this miscompiles: the clif shim reloads a cross-block Phi value using the Ph
 
 **Proposed fix:** Replace the hardcoded ITY_I64 on every mutation/loop/match Phi and its feeding Upsilons with the real type of the incoming value, mirroring the Rust lowerer: compute `let ty = lctx_inst_ty(ctx, pre_val_or_mut_val);` and use it for both the Phi and each Upsilon. Apply at lower.vow:1215,1260,1286 (if-else), 1339-1356/1376-1388 (while), 1488-1528 (loop), 1655-1702 (for), 2596-2603/2641-2648/2669-2676 and 2691/2702 (match). Add tests/run cases that mutate an f64/f32 (and i32) variable across an if-else, a while/for/loop, and a match, asserting runtime values (extends the spirit of issue #471).
 
-#### L3.21 AMBIGUOUS-region allocation escaping via a direct FieldSet/Store/extern-push into a parameter container is never rejected (use-after-free) — `HIGH` · ✅ survived cross-check · **Duplicate of #368**
+#### L3.21 AMBIGUOUS-region allocation escaping via a direct FieldSet/Store/extern-push into a parameter container is never rejected (use-after-free) — `HIGH` · ✅ survived cross-check · **Duplicate of #368** · **RESOLVED by #871**: the LUB now widens multi-slot allocations to `Root` (sound, leak-but-safe) instead of minting an AMBIGUOUS sentinel, so no store kind can mis-route; #368 closed not-planned and the dead AMBIGUOUS machinery removed.
 **finder:** `L3-ir-region-rust` · **kind:** soundness · **verdicts:** 1  
 **Files:** `vow-ir/src/region.rs:3314-3363`, `vow-ir/src/region.rs:3395-3417`, `vow-codegen/src/cranelift_backend.rs:392-414`  
 **Design ref:** §4.4 ('Any subsequent parameter-rooted store of that directly fresh heap value MUST be rejected with RegionConflict') and §5.1 representation promise  
@@ -2699,7 +2699,7 @@ Every surviving finding was filed on milestone **0.4.0 - Tighten** (or linked to
 |---|---|---|---|
 | #413 | critical | Verifier-thread panic is silently reported as Unverified (exit 0 + linked binary) on the default verify path _(+1 merged)_ | pre-existing |
 | #587 | critical | Method-call arguments are never type- or arity-checked (type confusion into flat slots) | **new** |
-| #368 | high | AMBIGUOUS-region allocation escaping via a direct FieldSet/Store/extern-push into a parameter container is … | pre-existing |
+| #368 | high | AMBIGUOUS-region allocation escaping via a direct FieldSet/Store/extern-push into a parameter container is … | pre-existing · **RESOLVED by #871** (widen-to-Root; #368 closed) |
 | #435 | high | Vec reserve capacity arithmetic overflows: silent under-reserve (OOB write) and non-terminating doubling be… _(+1 merged)_ | pre-existing |
 | #436 | high | VowViolation JSON assembled without escaping desc/file/binding-names; non-finite floats emit invalid JSON _(+1 merged)_ | pre-existing |
 | #479 | high | `vow contracts --verify` exits 0 even when ESBMC reports failed/timeout/unknown/error contracts (both drivers) _(+2 merged)_ | pre-existing |

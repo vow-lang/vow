@@ -3254,181 +3254,17 @@ fn emit_region_literal_mutation(
     });
 }
 
-/// Trace alias chain (FieldGet/Load/vec-get/Phi/CallTarget-AliasOf) for
-/// Issue #317: kept (with `dead_code` tolerance) for the future
-/// AMBIGUOUS-reject revival path. Slot-aware inference now mints precise
-/// slots so the post-inference check never needs to walk aliases — but a
-/// follow-up enhancement that detects unsafe multi-slot routings will
-/// reuse this walker.
-#[allow(dead_code)]
-fn underlying_caller_via_aliases(
-    source_arg_id: InstId,
-    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    region_map: &BTreeMap<InstId, RegionId>,
-    summaries: &[InternalSummary],
-) -> Option<RegionId> {
-    let mut seen: BTreeSet<InstId> = BTreeSet::new();
-    underlying_caller_via_aliases_inner(
-        source_arg_id,
-        inst_lookup,
-        region_map,
-        summaries,
-        &mut seen,
-    )
-}
-
-#[allow(dead_code)]
-fn underlying_caller_via_aliases_inner(
-    source_arg_id: InstId,
-    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    region_map: &BTreeMap<InstId, RegionId>,
-    summaries: &[InternalSummary],
-    seen: &mut BTreeSet<InstId>,
-) -> Option<RegionId> {
-    let mut current = source_arg_id;
-    loop {
-        if !seen.insert(current) {
-            return None;
-        }
-        if let Some(rgn) = region_map.get(&current).copied() {
-            return Some(rgn);
-        }
-        let (_, inst) = inst_lookup.get(&current)?;
-        match (&inst.opcode, &inst.data) {
-            (Opcode::FieldGet | Opcode::Load, _) => {
-                current = *inst.args.first()?;
-            }
-            (Opcode::Call, InstData::CallExtern(sym))
-                if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
-            {
-                current = *inst.args.first()?;
-            }
-            (Opcode::Phi, _) => {
-                // Mirror codegen's `source_value_region` Phi semantics for
-                // the all-arms-agree case: if every arm resolves to the
-                // same region, return that. For divergent arms, codegen's
-                // `source_value_region` falls back to the Phi's own
-                // (default) region — but that fallback only governs how
-                // *future re-allocations* would route. It does NOT undo a
-                // `RegionAlloc{Caller(_)}` that already executed in some
-                // arm at runtime. Hidden caller slots have asymmetric
-                // lifetimes (each slot's arena is chosen independently by
-                // the parent's `arg_region` per store-effect target —
-                // possibly a block stack-slot arena, an inherited
-                // `Caller(idx)`, or root). Under slot-aware inference
-                // (issue #317), the Phi result itself is region-tagged
-                // with `Caller(AMBIGUOUS)` whenever its arms resolve to
-                // distinct hidden slots — so the post-inference conflict
-                // check catches genuine slot disagreement at the Phi
-                // node directly. This walk covers the indirect case where
-                // the source is an aliasing wrapper (FieldGet/Load/vec-get)
-                // over a Phi; reporting `Some(Caller(_))` for any caller-
-                // carrying arm preserves rejection on the alias chain.
-                let phi_id = inst.id;
-                let mut merged: Option<Option<RegionId>> = None;
-                let mut diverged = false;
-                let mut any_caller_arm: Option<RegionId> = None;
-                for (_, candidate) in inst_lookup.values() {
-                    if candidate.opcode == Opcode::Upsilon
-                        && matches!(candidate.data, InstData::PhiTarget(t) if t == phi_id)
-                        && let Some(&arm_id) = candidate.args.first()
-                    {
-                        let mut arm_seen = seen.clone();
-                        let arm_rgn = underlying_caller_via_aliases_inner(
-                            arm_id,
-                            inst_lookup,
-                            region_map,
-                            summaries,
-                            &mut arm_seen,
-                        );
-                        if let Some(rgn @ RegionId::Caller(_)) = arm_rgn
-                            && any_caller_arm.is_none()
-                        {
-                            any_caller_arm = Some(rgn);
-                        }
-                        match merged {
-                            Some(prev) if prev != arm_rgn => diverged = true,
-                            Some(_) => {}
-                            None => merged = Some(arm_rgn),
-                        }
-                    }
-                }
-                if diverged {
-                    return any_caller_arm;
-                }
-                return merged.flatten();
-            }
-            (Opcode::Call, InstData::CallTarget(callee_id)) => {
-                // The callee returns a value derived from its parameters
-                // (AliasOf / AliasOfAny). `propagate_alias_markers` adds an
-                // alias edge from the call result to those args, which back-
-                // propagates VirtualCaller markers to the underlying allocs
-                // (vow-ir/src/region.rs propagate_alias_markers, AliasOf/
-                // AliasOfAny return arms). The call result itself is NOT
-                // heap-producing for AliasOf-returning callees (see
-                // `is_heap_producing`), so `region_map` has no entry for it
-                // and we get here. Trace through to those arg(s) — same as
-                // FieldGet/Load semantically. AliasOfAny: any-caller-arm
-                // wins (mirror Phi pattern); divergence-without-Caller
-                // doesn't matter for the ambiguous-slot reject.
-                let summary = summaries.get(callee_id.0 as usize)?;
-                match &summary.return_region {
-                    InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => {
-                        let j_idx = *j as usize;
-                        let &arg_id = inst.args.get(j_idx)?;
-                        current = arg_id;
-                    }
-                    InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => {
-                        let mut any_caller: Option<RegionId> = None;
-                        for j in js {
-                            let j_idx = *j as usize;
-                            let Some(&arg_id) = inst.args.get(j_idx) else {
-                                continue;
-                            };
-                            let mut arm_seen = seen.clone();
-                            if let Some(rgn @ RegionId::Caller(_)) =
-                                underlying_caller_via_aliases_inner(
-                                    arg_id,
-                                    inst_lookup,
-                                    region_map,
-                                    summaries,
-                                    &mut arm_seen,
-                                )
-                            {
-                                any_caller = Some(rgn);
-                                break;
-                            }
-                        }
-                        return any_caller;
-                    }
-                    // FreshInCaller is heap-producing → has a region_map entry
-                    // and would have been resolved above. ConstantGlobal /
-                    // Uninit / unpublished returns can't carry a Caller(_)
-                    // hazard.
-                    _ => return None,
-                }
-            }
-            _ => return None,
-        }
-    }
-}
-
 /// Semantic post-inference store-conflict check (spec §4.4).
 ///
 /// Walks every `CallTarget` instruction; for each callee store-effect of
 /// kind `AliasOf(p)`, looks up the inferred region of the corresponding
-/// caller-side argument and rejects when:
-///   * the source's region is a concrete `Block(_)` strictly narrower
-///     than the parameter target — always a conflict; or
-///   * the source's region is `Caller(HiddenRegionIdx::AMBIGUOUS)` —
-///     slot-aware inference (issue #317) determined the value's marker
-///     set resolves to multiple distinct hidden slots, so codegen cannot
-///     pick a single arena.
-///
-/// Every other `Caller(N)` has a precise slot index that codegen routes
-/// correctly via `hidden_region_idx_for_store_target`. The self-hosted
-/// `compiler/region.vow` mirrors this check; both compilers keep the
-/// same accept/reject decisions to preserve binary-fixed-point bootstrap.
+/// caller-side argument and rejects when the source's region is a concrete
+/// `Block(_)` strictly narrower than the parameter target — always a
+/// conflict. `Caller(N)`/`Root`/`Rodata` sources all outlive the target
+/// (a value whose marker set spans multiple hidden slots widens to `Root`,
+/// never a single arbitrary slot), so those are accepted. The self-hosted
+/// `compiler/region.vow` mirrors this check; both compilers keep the same
+/// accept/reject decisions to preserve binary-fixed-point bootstrap.
 #[allow(clippy::too_many_arguments)]
 fn check_store_conflicts_post_inference(
     func: &Function,
@@ -3472,7 +3308,6 @@ fn check_store_conflicts_post_inference(
                         inst,
                         inst_lookup,
                         region_map,
-                        summaries,
                         diagnostics,
                     );
                 }
@@ -3489,7 +3324,6 @@ fn check_store_conflict_semantic(
     call_inst: &Inst,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     region_map: &BTreeMap<InstId, RegionId>,
-    summaries: &[InternalSummary],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Inline case: target is not parameter-rooted; the inline path handles
@@ -3511,29 +3345,15 @@ fn check_store_conflict_semantic(
         return;
     }
 
-    let source_region = region_map.get(&source_arg_id).copied();
-    let ambiguous_multi_slot = match source_region {
-        Some(RegionId::Caller(idx)) if idx.is_ambiguous() => {
-            let source_is_fresh_heap = inst_lookup
-                .get(&source_arg_id)
-                .is_some_and(|(_, inst)| is_heap_producing(inst, summaries));
-            if !source_is_fresh_heap {
-                return;
-            }
-            // Ambiguous caller evidence means the fresh heap value must
-            // satisfy more than one hidden caller arena slot. Codegen cannot
-            // route one allocation to multiple caller arenas, so reject the
-            // store.
-            true
-        }
-        Some(RegionId::Caller(_) | RegionId::Root | RegionId::Rodata) => return,
-        Some(RegionId::Block(_)) => {
-            // Concrete block source, parameter target — strictly narrower,
-            // always a conflict; drop through to emission.
-            false
-        }
-        None => return,
-    };
+    // Only a concrete `Block(_)` source is strictly narrower than the
+    // parameter target — always a conflict; drop through to emission.
+    // `Caller(_)`/`Root`/`Rodata` sources all outlive the target (a value
+    // whose marker set spans multiple hidden slots widens to `Root`, never
+    // a single arbitrary slot), so those are accepted.
+    match region_map.get(&source_arg_id).copied() {
+        Some(RegionId::Block(_)) => {}
+        _ => return,
+    }
 
     let source_span = inst_lookup
         .get(&source_arg_id)
@@ -3544,24 +3364,13 @@ fn check_store_conflict_semantic(
         .map(|(_, i)| i.origin)
         .unwrap_or(call_inst.origin);
 
-    let (message, hint) = if ambiguous_multi_slot {
-        (
-            "value's region cannot satisfy target container's region: \
-             allocation routes to multiple distinct caller arena slots",
-            "split the allocation so each target container receives its own \
-             fresh value, or copy the value into the matching arena per \
-             destination — a single allocation cannot live in more than one \
-             hidden caller arena",
-        )
-    } else {
-        (
-            "value's region cannot satisfy target container's region: \
-             block-local allocation stored into a parameter region",
-            "hoist the allocation to a wider scope, copy the value into the \
-             outer arena, or restructure the return flow so the value \
-             escapes to the caller",
-        )
-    };
+    let (message, hint) = (
+        "value's region cannot satisfy target container's region: \
+         block-local allocation stored into a parameter region",
+        "hoist the allocation to a wider scope, copy the value into the \
+         outer arena, or restructure the return flow so the value \
+         escapes to the caller",
+    );
 
     diagnostics.push(Diagnostic {
         severity: Severity::Error,
@@ -8080,8 +7889,8 @@ mod tests {
         //     propagates `CallerStoreTarget(0)` to fresh1 → slot 0.
         //   * arg 3 (direct fresh alloc): tagged `CallerStoreTarget(1)` by
         //     the helper's second store-effect → slot 1.
-        // Each marker set has exactly one slot, so neither becomes
-        // AMBIGUOUS. No conflict fires.
+        // Each marker set has exactly one slot, so each resolves to a
+        // single `Caller(slot)` and is accepted. No conflict fires.
         let conflicts: Vec<_> = m
             .warnings
             .iter()
