@@ -15,7 +15,9 @@
 
 use crate::cranelift_backend::build_inst_index;
 use std::collections::{HashMap, HashSet};
-use vow_ir::{Function as IrFunction, Inst, InstData, InstId, Opcode, RegionConstraint, Ty as IrTy};
+use vow_ir::{
+    Function as IrFunction, Inst, InstData, InstId, Opcode, RegionConstraint, Ty as IrTy,
+};
 
 /// True when the function may emit a return-materialisation clone call —
 /// i.e. it has `return_region == FreshInCaller` and at least one `Return`
@@ -179,7 +181,13 @@ mod tests {
     /// the two instruction ids; the call is the clone-safe leaf.
     fn descriptor_call(cstr_id: u32, call_id: u32) -> Vec<Inst> {
         vec![
-            inst(cstr_id, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                cstr_id,
+                Opcode::ConstStr,
+                Ty::Ptr,
+                vec![],
+                InstData::ConstStr(0),
+            ),
             inst(
                 call_id,
                 Opcode::Call,
@@ -220,7 +228,11 @@ mod tests {
 
     #[test]
     fn descriptor_call_leaf_needs_materialization() {
-        let f = func(Ty::Ptr, RegionConstraint::FreshInCaller, descriptor_call(1, 2));
+        let f = func(
+            Ty::Ptr,
+            RegionConstraint::FreshInCaller,
+            descriptor_call(1, 2),
+        );
         let index = build_inst_index(&f);
         assert!(return_source_needs_materialization(&f, &index, InstId(2)));
     }
@@ -232,7 +244,13 @@ mod tests {
         let f = func(
             Ty::Ptr,
             RegionConstraint::FreshInCaller,
-            vec![inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0))],
+            vec![inst(
+                1,
+                Opcode::ConstStr,
+                Ty::Ptr,
+                vec![],
+                InstData::ConstStr(0),
+            )],
         );
         let index = build_inst_index(&f);
         assert!(!return_source_needs_materialization(&f, &index, InstId(1)));
@@ -272,8 +290,20 @@ mod tests {
         let mut insts = descriptor_call(1, 2);
         insts.extend(descriptor_call(3, 4));
         insts.push(inst(10, Opcode::Phi, Ty::Ptr, vec![], InstData::None));
-        insts.push(inst(20, Opcode::Upsilon, Ty::Unit, vec![2], InstData::PhiTarget(InstId(10))));
-        insts.push(inst(21, Opcode::Upsilon, Ty::Unit, vec![4], InstData::PhiTarget(InstId(10))));
+        insts.push(inst(
+            20,
+            Opcode::Upsilon,
+            Ty::Unit,
+            vec![2],
+            InstData::PhiTarget(InstId(10)),
+        ));
+        insts.push(inst(
+            21,
+            Opcode::Upsilon,
+            Ty::Unit,
+            vec![4],
+            InstData::PhiTarget(InstId(10)),
+        ));
         let f = func(Ty::Ptr, RegionConstraint::FreshInCaller, insts);
         let index = build_inst_index(&f);
         assert!(return_source_needs_materialization(&f, &index, InstId(10)));
@@ -284,10 +314,28 @@ mod tests {
     #[test]
     fn phi_mixed_arms_rejected() {
         let mut insts = descriptor_call(1, 2);
-        insts.push(inst(3, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)));
+        insts.push(inst(
+            3,
+            Opcode::ConstStr,
+            Ty::Ptr,
+            vec![],
+            InstData::ConstStr(0),
+        ));
         insts.push(inst(10, Opcode::Phi, Ty::Ptr, vec![], InstData::None));
-        insts.push(inst(20, Opcode::Upsilon, Ty::Unit, vec![2], InstData::PhiTarget(InstId(10))));
-        insts.push(inst(21, Opcode::Upsilon, Ty::Unit, vec![3], InstData::PhiTarget(InstId(10))));
+        insts.push(inst(
+            20,
+            Opcode::Upsilon,
+            Ty::Unit,
+            vec![2],
+            InstData::PhiTarget(InstId(10)),
+        ));
+        insts.push(inst(
+            21,
+            Opcode::Upsilon,
+            Ty::Unit,
+            vec![3],
+            InstData::PhiTarget(InstId(10)),
+        ));
         let f = func(Ty::Ptr, RegionConstraint::FreshInCaller, insts);
         let index = build_inst_index(&f);
         assert!(!return_source_needs_materialization(&f, &index, InstId(10)));
@@ -299,7 +347,13 @@ mod tests {
     fn self_referential_phi_terminates_and_is_rejected() {
         let insts = vec![
             inst(10, Opcode::Phi, Ty::Ptr, vec![], InstData::None),
-            inst(20, Opcode::Upsilon, Ty::Unit, vec![10], InstData::PhiTarget(InstId(10))),
+            inst(
+                20,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![10],
+                InstData::PhiTarget(InstId(10)),
+            ),
         ];
         let f = func(Ty::Ptr, RegionConstraint::FreshInCaller, insts);
         let index = build_inst_index(&f);
