@@ -281,19 +281,37 @@ fn parse_assignment_line(line: &str) -> Option<(String, String)> {
 // Debug: save C source and command for ESBMC debugging
 // ---------------------------------------------------------------------------
 
+/// Canonical ESBMC argument list (everything after the C source path), in
+/// invocation order: the fixed base flags, then any per-run `extra_args`
+/// (e.g. `--multi-property`, `--error-label vow_reach`), then the
+/// solver/encoding/memlimit args derived from `config`. This is the single
+/// source of truth for the ESBMC command line so the real invocation and the
+/// `VOW_VERIFY_DEBUG` reproduction `.cmd` can never drift.
+fn esbmc_cli_args(max_k_step: u32, config: &SolverConfig, extra_args: &[&str]) -> Vec<String> {
+    let mut args = vec![
+        "--no-bounds-check".to_string(),
+        "--no-pointer-check".to_string(),
+        "--incremental-bmc".to_string(),
+        "--max-k-step".to_string(),
+        max_k_step.to_string(),
+        "--64".to_string(),
+    ];
+    for arg in extra_args {
+        args.push((*arg).to_string());
+    }
+    args.extend(config.esbmc_args());
+    args
+}
+
 fn esbmc_debug_command(
     esbmc: &Path,
     c_name: &str,
     max_k_step: u32,
     config: &SolverConfig,
+    extra_args: &[&str],
 ) -> String {
-    let mut cmd = format!(
-        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step {} --64",
-        esbmc.display(),
-        c_name,
-        max_k_step,
-    );
-    for arg in config.esbmc_args() {
+    let mut cmd = format!("{} /tmp/vow-verify-debug/{}", esbmc.display(), c_name);
+    for arg in esbmc_cli_args(max_k_step, config, extra_args) {
         cmd.push(' ');
         cmd.push_str(&arg);
     }
@@ -307,6 +325,7 @@ fn save_esbmc_debug(
     func_name: &str,
     max_k_step: u32,
     config: &SolverConfig,
+    extra_args: &[&str],
 ) {
     if std::env::var("VOW_VERIFY_DEBUG").is_err() {
         return;
@@ -320,7 +339,7 @@ fn save_esbmc_debug(
 
     let _ = std::fs::write(debug_dir.join(&c_name), c_src);
 
-    let cmd = esbmc_debug_command(esbmc, &c_name, max_k_step, config);
+    let cmd = esbmc_debug_command(esbmc, &c_name, max_k_step, config, extra_args);
     let _ = std::fs::write(debug_dir.join(&cmd_name), cmd);
 }
 
@@ -627,21 +646,11 @@ fn run_esbmc_capture(
         return Err(VerificationResult::ToolError(e.to_string()));
     }
 
-    save_esbmc_debug(esbmc, c_src, func_name, max_k_step, config);
+    save_esbmc_debug(esbmc, c_src, func_name, max_k_step, config, extra_args);
 
     let mut cmd = Command::new(esbmc);
-    cmd.arg(tmp.path())
-        .arg("--no-bounds-check")
-        .arg("--no-pointer-check")
-        .arg("--incremental-bmc")
-        .arg("--max-k-step")
-        .arg(max_k_step.to_string())
-        .arg("--64");
-
-    for arg in extra_args {
-        cmd.arg(arg);
-    }
-    for arg in config.esbmc_args() {
+    cmd.arg(tmp.path());
+    for arg in esbmc_cli_args(max_k_step, config, extra_args) {
         cmd.arg(arg);
     }
 
@@ -1526,6 +1535,34 @@ VERIFICATION SUCCESSFUL";
     }
 
     #[test]
+    fn esbmc_cli_args_orders_base_extra_then_solver_config() {
+        let config = SolverConfig {
+            solver: crate::solver_strategy::Solver::Z3,
+            encoding: crate::solver_strategy::Encoding::Ir,
+            timeout_secs: None,
+            memlimit_mb: Some(1024),
+        };
+        let args = esbmc_cli_args(7, &config, &["--multi-property"]);
+
+        assert_eq!(
+            args,
+            vec![
+                "--no-bounds-check",
+                "--no-pointer-check",
+                "--incremental-bmc",
+                "--max-k-step",
+                "7",
+                "--64",
+                "--multi-property",
+                "--z3",
+                "--ir",
+                "--memlimit",
+                "1024m",
+            ]
+        );
+    }
+
+    #[test]
     fn esbmc_debug_command_includes_solver_config_args() {
         let config = SolverConfig {
             solver: crate::solver_strategy::Solver::Z3,
@@ -1533,11 +1570,41 @@ VERIFICATION SUCCESSFUL";
             timeout_secs: None,
             memlimit_mb: Some(1024),
         };
-        let cmd = esbmc_debug_command(std::path::Path::new("/usr/bin/esbmc"), "main.c", 7, &config);
+        let cmd = esbmc_debug_command(
+            std::path::Path::new("/usr/bin/esbmc"),
+            "main.c",
+            7,
+            &config,
+            &[],
+        );
 
         assert_eq!(
             cmd,
             "/usr/bin/esbmc /tmp/vow-verify-debug/main.c --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step 7 --64 --z3 --ir --memlimit 1024m\n"
+        );
+    }
+
+    #[test]
+    fn esbmc_debug_command_includes_extra_args() {
+        let config = SolverConfig {
+            solver: crate::solver_strategy::Solver::Z3,
+            encoding: crate::solver_strategy::Encoding::Ir,
+            timeout_secs: None,
+            memlimit_mb: Some(1024),
+        };
+        let cmd = esbmc_debug_command(
+            std::path::Path::new("/usr/bin/esbmc"),
+            "main.c",
+            7,
+            &config,
+            &["--error-label", "vow_reach"],
+        );
+
+        // The reproduction command must be identical to the real invocation:
+        // base flags, then extra_args, then solver config.
+        assert_eq!(
+            cmd,
+            "/usr/bin/esbmc /tmp/vow-verify-debug/main.c --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step 7 --64 --error-label vow_reach --z3 --ir --memlimit 1024m\n"
         );
     }
 
@@ -1549,7 +1616,13 @@ VERIFICATION SUCCESSFUL";
             timeout_secs: None,
             memlimit_mb: None,
         };
-        let cmd = esbmc_debug_command(std::path::Path::new("/usr/bin/esbmc"), "main.c", 7, &config);
+        let cmd = esbmc_debug_command(
+            std::path::Path::new("/usr/bin/esbmc"),
+            "main.c",
+            7,
+            &config,
+            &[],
+        );
 
         assert!(!cmd.contains("--memlimit"));
         assert_eq!(
