@@ -19,6 +19,9 @@ use vow_ir::{
     Module as IrModule, Opcode, RegionConstraint, RegionId, RegionSummary, Ty as IrTy,
 };
 
+use crate::return_materialization::{
+    module_uses_return_materialization, return_source_needs_materialization,
+};
 use crate::{Backend, BuildMode, CodegenError, CompiledObject, TraceMode};
 
 pub struct CraneliftBackend;
@@ -618,39 +621,13 @@ fn routed_vec_extern<'a>(
     }
 }
 
-/// True when the function may emit a return-materialisation clone call —
-/// i.e. it has `return_region == FreshInCaller` and at least one `Return`
-/// inst whose source path reaches a `.rodata` literal or a heap-typed
-/// parameter alias. Used at module-load time to decide whether to import
-/// `__vow_string_clone_into_arena`.
-fn module_uses_return_materialization(func: &IrFunction) -> bool {
-    if func.summary.return_region != RegionConstraint::FreshInCaller {
-        return false;
-    }
-    if func.return_ty != IrTy::Ptr {
-        return false;
-    }
-    let inst_index = build_inst_index(func);
-    for block in &func.blocks {
-        for inst in &block.insts {
-            if inst.opcode == Opcode::Return
-                && let Some(&val_id) = inst.args.first()
-                && return_source_needs_materialization(func, &inst_index, val_id)
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Build an `InstId → &Inst` lookup for a function. Used by
-/// `return_source_needs_materialization` (and its module-level scan) to
-/// avoid an O(insts) `find` per visited value: the materialization walk
-/// is called both at module-load time and per `Return` during lowering,
-/// so the linear-scan version was O(n²) in functions with many
-/// `Return`-reachable Phi arms.
-fn build_inst_index(func: &IrFunction) -> HashMap<InstId, &Inst> {
+/// Build an `InstId → &Inst` lookup for a function. Used by the
+/// return-materialization analysis (`return_materialization` module) and
+/// by per-function lowering to avoid an O(insts) `find` per visited value:
+/// the materialization walk is called both at module-load time and per
+/// `Return` during lowering, so the linear-scan version was O(n²) in
+/// functions with many `Return`-reachable Phi arms.
+pub(crate) fn build_inst_index(func: &IrFunction) -> HashMap<InstId, &Inst> {
     let mut index: HashMap<InstId, &Inst> = HashMap::new();
     for block in &func.blocks {
         for inst in &block.insts {
@@ -658,114 +635,6 @@ fn build_inst_index(func: &IrFunction) -> HashMap<InstId, &Inst> {
         }
     }
     index
-}
-
-fn is_string_literal_descriptor_call(inst: &Inst, inst_index: &HashMap<InstId, &Inst>) -> bool {
-    if !matches!(
-        &inst.data,
-        InstData::CallExtern(sym) if sym == "__vow_string_literal"
-    ) {
-        return false;
-    }
-    let Some(cstr_id) = inst.args.first() else {
-        return false;
-    };
-    inst_index
-        .get(cstr_id)
-        .is_some_and(|arg| arg.opcode == Opcode::ConstStr)
-}
-
-/// Decide whether a `FreshInCaller` function's return value needs to be
-/// deep-copied into `target_region` to satisfy the §5.1 representation
-/// promise.
-///
-/// Walks the value's source transitively through `Phi` (via `Upsilon`
-/// arms). Returns true iff at least one reachable leaf is a
-/// `__vow_string_literal(literal)` call AND every reachable leaf is
-/// the same shape (a known-safe `VowString` / `Vec<u8>` descriptor
-/// producer).
-///
-/// **Why `__vow_string_literal`, not `ConstStr` directly.**
-/// `ConstStr` lowers to a pointer to a NUL-terminated byte blob in a
-/// `.rodata` data section — it is *not* a `VowVec` descriptor.
-/// `__vow_string_clone_into_arena` reads `(ptr, len, cap)` from its
-/// source and copies `len` bytes; firing it on a raw `ConstStr` would
-/// reinterpret arbitrary literal bytes as `{ptr, len, cap}` and corrupt
-/// memory. The Vow lowerer wraps every `String` literal in
-/// `Call __vow_string_literal(ConstStr)` (`vow-ir/src/lower/mod.rs`
-/// `Lit::String`), and codegen turns that synthetic call into a static
-/// `VowVec` descriptor — that's the shape we recognise here.
-///
-/// **Why the all-leaves rule still applies.** A Phi mixing a
-/// `__vow_string_literal` arm with any other leaf shape (a
-/// `RegionAlloc`, a `GetArg` of a heap-typed param, a generic call,
-/// …) cannot be safely cloned via the `VowString`-typed primitive: at
-/// runtime the Phi-selected value might not have descriptor layout.
-/// Mixed Phis fall back to no-clone; correctness over §5.1
-/// compliance for those paths. A generic deep-clone intrinsic in
-/// Phase 7 / #202 lifts the restriction.
-///
-/// `GetArg`, `RegionAlloc`, plain `Call`s, and other leaves disqualify
-/// the walk for the same reason — their layout isn't statically
-/// known to be `VowString`-shaped.
-fn return_source_needs_materialization(
-    func: &IrFunction,
-    inst_index: &HashMap<InstId, &Inst>,
-    return_val: InstId,
-) -> bool {
-    let mut visited: HashSet<InstId> = HashSet::new();
-    let mut stack: Vec<InstId> = vec![return_val];
-    let mut saw_safe_leaf = false;
-    while let Some(id) = stack.pop() {
-        if !visited.insert(id) {
-            continue;
-        }
-        let Some(&src) = inst_index.get(&id) else {
-            // Unknown source — be conservative.
-            return false;
-        };
-        match src.opcode {
-            Opcode::Call if is_string_literal_descriptor_call(src, inst_index) => {
-                saw_safe_leaf = true;
-            }
-            Opcode::Phi => {
-                // Walk every Upsilon arm that targets this Phi. Upsilons
-                // can live in any block, so we iterate the whole function
-                // looking for matching `PhiTarget(id)` writes.
-                //
-                // Complexity: O(n_insts) per visited Phi. `inst_index`
-                // doesn't help (it's keyed by InstId, not by PhiTarget),
-                // and the existing `PhiUpsilonData` pre-pass indexes
-                // Upsilons by source block, not by Phi ID, so it can't
-                // be reused either. Phase 7 / #202 — when materialisation
-                // becomes load-bearing on synthesised functions with
-                // deeper Phi chains — should add a `phi_id → [arm_ids]`
-                // inverted index (either inside `PhiUpsilonData` or as a
-                // standalone helper) to bring this to O(k_arms) per Phi.
-                // For Phase 4 this scan rarely fires (materialisation
-                // requires a `FreshInCaller` summary AND a
-                // `__vow_string_literal` leaf, which only String-literal
-                // returns produce).
-                for block in &func.blocks {
-                    for inst in &block.insts {
-                        if inst.opcode == Opcode::Upsilon
-                            && let InstData::PhiTarget(target) = inst.data
-                            && target == id
-                            && let Some(&arm_id) = inst.args.first()
-                        {
-                            stack.push(arm_id);
-                        }
-                    }
-                }
-            }
-            // Any other leaf shape disqualifies the walk. This includes
-            // raw `ConstStr` (a `.rodata` byte blob, NOT a `VowVec`
-            // descriptor — running the clone runtime on it would
-            // corrupt memory).
-            _ => return false,
-        }
-    }
-    saw_safe_leaf
 }
 
 fn lower_inst(

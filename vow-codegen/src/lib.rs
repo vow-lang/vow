@@ -1,5 +1,6 @@
 pub mod cranelift_backend;
 pub mod linker;
+mod return_materialization;
 
 use vow_ir::Module;
 
