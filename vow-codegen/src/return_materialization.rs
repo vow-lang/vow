@@ -281,6 +281,46 @@ mod tests {
         assert!(!return_source_needs_materialization(&f, &index, InstId(99)));
     }
 
+    #[test]
+    fn non_string_literal_call_leaf_rejected() {
+        // A `Call` leaf that is NOT `__vow_string_literal` (a generic
+        // extern call result) is not a statically-known VowString
+        // descriptor, so it cannot be safely arena-cloned — reject.
+        let f = func(
+            Ty::Ptr,
+            RegionConstraint::FreshInCaller,
+            vec![inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("some_other_fn".to_string()),
+            )],
+        );
+        let index = build_inst_index(&f);
+        assert!(!return_source_needs_materialization(&f, &index, InstId(1)));
+    }
+
+    #[test]
+    fn string_literal_call_without_args_rejected() {
+        // Malformed IR: a `__vow_string_literal` call with no argument
+        // (the lowerer always emits exactly one ConstStr operand). The
+        // arg-less guard rejects rather than indexing a missing operand.
+        let f = func(
+            Ty::Ptr,
+            RegionConstraint::FreshInCaller,
+            vec![inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            )],
+        );
+        let index = build_inst_index(&f);
+        assert!(!return_source_needs_materialization(&f, &index, InstId(1)));
+    }
+
     // -- return_source_needs_materialization: Phi walk ----------------
 
     /// Phi(id=10) fed by two Upsilon arms (ids 20/21) writing the two
