@@ -1,4 +1,5 @@
 mod cache;
+mod cex_eval;
 mod complexity;
 mod contract_quality;
 mod frontend;
@@ -11358,150 +11359,6 @@ fn callee_precondition_predicate_inst_id(
     None
 }
 
-fn eval_callee_i64_for_call_site(
-    inst_id: u32,
-    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
-    call_site: &CallSiteInfo,
-) -> Option<i64> {
-    use vow_ir::{InstData, Opcode};
-    let inst = *inst_by_id.get(&inst_id)?;
-    match inst.opcode {
-        Opcode::ConstI32 => {
-            if let InstData::ConstI32(v) = inst.data {
-                Some(v as i64)
-            } else {
-                None
-            }
-        }
-        Opcode::ConstI64 => {
-            if let InstData::ConstI64(v) = inst.data {
-                Some(v)
-            } else {
-                None
-            }
-        }
-        Opcode::ConstU64 => {
-            if let InstData::ConstU64(v) = inst.data {
-                i64::try_from(v).ok()
-            } else {
-                None
-            }
-        }
-        Opcode::GetArg => {
-            if let InstData::ArgIndex(idx) = inst.data {
-                call_site
-                    .arg_values
-                    .get(idx as usize)?
-                    .as_ref()?
-                    .parse::<i64>()
-                    .ok()
-            } else {
-                None
-            }
-        }
-        Opcode::WrappingAddI32
-        | Opcode::CheckedAddI32
-        | Opcode::WrappingAddI64
-        | Opcode::CheckedAddI64 => {
-            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs.wrapping_add(rhs))
-        }
-        Opcode::WrappingSubI32
-        | Opcode::CheckedSubI32
-        | Opcode::WrappingSubI64
-        | Opcode::CheckedSubI64 => {
-            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs.wrapping_sub(rhs))
-        }
-        Opcode::WrappingMulI32
-        | Opcode::CheckedMulI32
-        | Opcode::WrappingMulI64
-        | Opcode::CheckedMulI64 => {
-            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs.wrapping_mul(rhs))
-        }
-        _ => None,
-    }
-}
-
-fn eval_callee_bool_for_call_site(
-    inst_id: u32,
-    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
-    call_site: &CallSiteInfo,
-) -> Option<bool> {
-    use vow_ir::{InstData, Opcode};
-    let inst = *inst_by_id.get(&inst_id)?;
-    match inst.opcode {
-        Opcode::ConstBool => {
-            if let InstData::ConstBool(v) = inst.data {
-                Some(v)
-            } else {
-                None
-            }
-        }
-        Opcode::GetArg => {
-            if let InstData::ArgIndex(idx) = inst.data {
-                match call_site.arg_values.get(idx as usize)?.as_deref()? {
-                    "true" => Some(true),
-                    "false" => Some(false),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        }
-        Opcode::EqI32 | Opcode::EqI64 => {
-            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs == rhs)
-        }
-        Opcode::NeI32 | Opcode::NeI64 => {
-            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs != rhs)
-        }
-        Opcode::LtI32 | Opcode::LtI64 => {
-            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs < rhs)
-        }
-        Opcode::LeI32 | Opcode::LeI64 => {
-            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs <= rhs)
-        }
-        Opcode::GtI32 | Opcode::GtI64 => {
-            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs > rhs)
-        }
-        Opcode::GeI32 | Opcode::GeI64 => {
-            let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs >= rhs)
-        }
-        Opcode::Not => {
-            let value =
-                eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            Some(!value)
-        }
-        Opcode::And => {
-            let lhs = eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_bool_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs && rhs)
-        }
-        Opcode::Or => {
-            let lhs = eval_callee_bool_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
-            let rhs = eval_callee_bool_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
-            Some(lhs || rhs)
-        }
-        _ => None,
-    }
-}
-
 fn filter_callee_precondition_call_sites(
     candidates: Vec<CallSiteInfo>,
     callee: &vow_ir::Function,
@@ -11520,7 +11377,7 @@ fn filter_callee_precondition_call_sites(
         .filter(|cs| {
             call_site_args_match_counterexample(callee, entry, mapped_values, cs)
                 || predicate_inst_id
-                    .and_then(|id| eval_callee_bool_for_call_site(id, &inst_by_id, cs))
+                    .and_then(|id| cex_eval::eval_callee_bool_for_call_site(id, &inst_by_id, cs))
                     == Some(false)
         })
         .cloned()
@@ -12387,90 +12244,6 @@ struct CallSiteInfo {
     arg_values: Vec<Option<String>>,
 }
 
-fn inst_constant_value_for_counterexample(inst: &vow_ir::Inst) -> Option<String> {
-    use vow_ir::{InstData, Opcode};
-    match inst.opcode {
-        Opcode::ConstI32 => {
-            if let InstData::ConstI32(v) = inst.data {
-                Some(v.to_string())
-            } else {
-                None
-            }
-        }
-        Opcode::ConstI64 => {
-            if let InstData::ConstI64(v) = inst.data {
-                Some(v.to_string())
-            } else {
-                None
-            }
-        }
-        Opcode::ConstU64 => {
-            if let InstData::ConstU64(v) = inst.data {
-                Some(v.to_string())
-            } else {
-                None
-            }
-        }
-        Opcode::ConstBool => {
-            if let InstData::ConstBool(v) = inst.data {
-                Some(v.to_string())
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-fn eval_const_i64_for_counterexample(
-    inst_id: u32,
-    inst_by_id: &std::collections::HashMap<u32, &vow_ir::Inst>,
-) -> Option<i64> {
-    use vow_ir::{InstData, Opcode};
-    let inst = *inst_by_id.get(&inst_id)?;
-    match inst.opcode {
-        Opcode::ConstI32 => {
-            if let InstData::ConstI32(v) = inst.data {
-                Some(v as i64)
-            } else {
-                None
-            }
-        }
-        Opcode::ConstI64 => {
-            if let InstData::ConstI64(v) = inst.data {
-                Some(v)
-            } else {
-                None
-            }
-        }
-        Opcode::WrappingAddI32
-        | Opcode::CheckedAddI32
-        | Opcode::WrappingAddI64
-        | Opcode::CheckedAddI64 => {
-            let lhs = eval_const_i64_for_counterexample(inst.args.first()?.0, inst_by_id)?;
-            let rhs = eval_const_i64_for_counterexample(inst.args.get(1)?.0, inst_by_id)?;
-            Some(lhs.wrapping_add(rhs))
-        }
-        Opcode::WrappingSubI32
-        | Opcode::CheckedSubI32
-        | Opcode::WrappingSubI64
-        | Opcode::CheckedSubI64 => {
-            let lhs = eval_const_i64_for_counterexample(inst.args.first()?.0, inst_by_id)?;
-            let rhs = eval_const_i64_for_counterexample(inst.args.get(1)?.0, inst_by_id)?;
-            Some(lhs.wrapping_sub(rhs))
-        }
-        Opcode::WrappingMulI32
-        | Opcode::CheckedMulI32
-        | Opcode::WrappingMulI64
-        | Opcode::CheckedMulI64 => {
-            let lhs = eval_const_i64_for_counterexample(inst.args.first()?.0, inst_by_id)?;
-            let rhs = eval_const_i64_for_counterexample(inst.args.get(1)?.0, inst_by_id)?;
-            Some(lhs.wrapping_mul(rhs))
-        }
-        _ => None,
-    }
-}
-
 fn build_call_site_index(
     module: &vow_ir::Module,
     file: &str,
@@ -12519,11 +12292,11 @@ fn build_call_site_index(
                         .args
                         .iter()
                         .map(|a| {
-                            eval_const_i64_for_counterexample(a.0, &inst_by_id)
+                            cex_eval::eval_const_i64_for_counterexample(a.0, &inst_by_id)
                                 .map(|v| v.to_string())
                                 .or_else(|| {
                                     inst_by_id.get(&a.0).and_then(|inst| {
-                                        inst_constant_value_for_counterexample(inst)
+                                        cex_eval::inst_constant_value_for_counterexample(inst)
                                     })
                                 })
                         })
