@@ -26,6 +26,7 @@ import select
 import shlex
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 
@@ -73,23 +74,43 @@ class Engine:
             if text == token:
                 return out
 
-    def read_until_prefix(self, prefix: str) -> str:
-        """Blocking read until a line starting with ``prefix`` appears.
+    def read_until_prefix(self, prefix: str, timeout: float = 5.0) -> str:
+        """Read (blocking) until a line starting with ``prefix`` appears, bounded
+        by ``timeout`` seconds.
 
-        Uses blocking ``readline`` (not ``select``) so it is immune to the
+        Reads via blocking ``readline`` so it is immune to the
         buffered-reader/``select`` race where a burst of output is pulled into
-        Python's buffer and ``select`` on the raw fd then reports "not ready"."""
+        Python's buffer and ``select`` on the raw fd then reports "not ready".
+        The blocking read runs in a daemon reader thread joined with a deadline,
+        so a validator that hangs or does not implement the expected command
+        raises instead of blocking the whole match runner forever."""
         if self.proc.stdout is None:
             raise RuntimeError(f"{self.name}: stdout unavailable")
-        while True:
-            line = self.proc.stdout.readline()
-            if line == "":
-                raise RuntimeError(
-                    f"{self.name}: EOF while waiting for {prefix!r}"
-                )
-            text = line.rstrip("\n")
-            if text.startswith(prefix):
-                return text
+
+        box: list[str | None] = []
+
+        def _reader() -> None:
+            while True:
+                line = self.proc.stdout.readline()
+                if line == "":
+                    box.append(None)  # EOF
+                    return
+                text = line.rstrip("\n")
+                if text.startswith(prefix):
+                    box.append(text)
+                    return
+
+        reader = threading.Thread(target=_reader, daemon=True)
+        reader.start()
+        reader.join(timeout)
+        if reader.is_alive():
+            raise RuntimeError(
+                f"{self.name}: timed out after {timeout}s waiting for {prefix!r} "
+                f"line (does this engine implement the expected command?)"
+            )
+        if not box or box[0] is None:
+            raise RuntimeError(f"{self.name}: EOF while waiting for {prefix!r}")
+        return box[0]
 
     def read_bestmove(self) -> tuple[str, list[str]]:
         if self.proc.stdout is None:
@@ -171,7 +192,7 @@ def fen_for_moves(engine: Engine, moves: list[str], timeout: float = 5.0) -> str
     or another engine that implements ``d``."""
     engine.send(position_command(moves))
     engine.send("d")
-    text = engine.read_until_prefix("Fen: ")
+    text = engine.read_until_prefix("Fen: ", timeout)
     fen = text[5:]
     # Drain remaining ``d`` output via the standard UCI sync barrier.
     engine.send("isready")
