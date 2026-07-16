@@ -2219,9 +2219,20 @@ fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
 
 fn reset_for_new_game(us: UciState) {
     // Canonical per-game reset point: cutechess-cli reuses one engine process
-    // across a match, so ucinewgame is the only per-game teardown signal. Reset
-    // all per-game state here (board today; search/TT/history/repetition as they
-    // are added), and hook per-game arena reclamation here once #407 lands.
+    // across a match, so ucinewgame is the only per-game teardown signal. The
+    // killer/history/repetition tables are rebuilt fresh per `go`, so only the
+    // board needs resetting here.
+    //
+    // The transposition table is intentionally left WARM across games. It is a
+    // persistent root-arena Vec aliased into every search; entries store the full
+    // 64-bit Zobrist key and are only reused on an exact key match, so a previous
+    // game's entries cannot be misapplied to a different position. Clearing it in
+    // place (writing struct literals across all ~1M slots from this scope) is not
+    // free in the region model — those writes root fresh allocations and leak the
+    // table on every `ucinewgame` — so we keep it warm. The one residual risk is a
+    // stale, ply-relative mate score reused across games; that is closed by the
+    // mate-score ply-adjustment tracked in #912 (which fixes it for both the
+    // cross-game and within-game transposition cases at once).
     us.board = start_board();
 }
 
