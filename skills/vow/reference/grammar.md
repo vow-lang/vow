@@ -623,7 +623,8 @@ return the same type. Patterns must be exhaustive.
 | Qualified enum variant (tuple payload)      | `Option::Some(value)` |
 
 Tuple-variant payloads may contain only `_` or immutable identifier bindings.
-Nested payload destructuring is not implemented.
+Nested payload destructuring is not implemented. A catchall `_` or immutable
+identifier arm must be the final arm because it matches every enum value.
 
 Mutable identifier, literal (integer, boolean, or string), tuple, struct,
 enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns

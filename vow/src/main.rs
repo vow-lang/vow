@@ -2184,7 +2184,8 @@ return the same type. Patterns must be exhaustive.
 | Qualified enum variant (tuple payload)      | `Option::Some(value)` |
 
 Tuple-variant payloads may contain only `_` or immutable identifier bindings.
-Nested payload destructuring is not implemented.
+Nested payload destructuring is not implemented. A catchall `_` or immutable
+identifier arm must be the final arm because it matches every enum value.
 
 Mutable identifier, literal (integer, boolean, or string), tuple, struct,
 enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns
@@ -4167,7 +4168,7 @@ fn f(o: Option<i64>) -> i64 {
 **Meaning:** A parsed `match` pattern or scrutinee is not in the subset that
 the compiler can lower safely. Match currently accepts enum-valued scrutinees,
 qualified unit variants, qualified tuple variants with `_` or immutable
-identifier payloads, and catchall `_` or immutable identifier arms.
+identifier payloads, and final catchall `_` or immutable identifier arms.
 
 ```vow
 fn f(n: i64) -> i64 {
@@ -6765,7 +6766,8 @@ return the same type. Patterns must be exhaustive.
 | Qualified enum variant (tuple payload)      | `Option::Some(value)` |
 
 Tuple-variant payloads may contain only `_` or immutable identifier bindings.
-Nested payload destructuring is not implemented.
+Nested payload destructuring is not implemented. A catchall `_` or immutable
+identifier arm must be the final arm because it matches every enum value.
 
 Mutable identifier, literal (integer, boolean, or string), tuple, struct,
 enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns
@@ -8752,7 +8754,7 @@ fn f(o: Option<i64>) -> i64 {
 **Meaning:** A parsed `match` pattern or scrutinee is not in the subset that
 the compiler can lower safely. Match currently accepts enum-valued scrutinees,
 qualified unit variants, qualified tuple variants with `_` or immutable
-identifier payloads, and catchall `_` or immutable identifier arms.
+identifier payloads, and final catchall `_` or immutable identifier arms.
 
 ```vow
 fn f(n: i64) -> i64 {

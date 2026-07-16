@@ -1,0 +1,25 @@
+// TEST: error-code UnsupportedPattern
+module MatchNonFinalCatchallPattern
+
+enum E {
+    A,
+    B,
+}
+
+fn binding(value: E) -> i64 {
+    match value {
+        whole => 1,
+        E::A => 2,
+    }
+}
+
+fn wildcard(value: E) -> i64 {
+    match value {
+        _ => 3,
+        E::B => 4,
+    }
+}
+
+fn main() -> i32 {
+    0
+}

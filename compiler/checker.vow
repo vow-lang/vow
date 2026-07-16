@@ -1042,14 +1042,22 @@ fn builtin_variant_payload(ts: TyStore, scrutinee_tid: i64, enum_name: String, v
     CTY_UNIT()
 }
 
-fn validate_arm_pattern(e: CheckEnv, m: Module, pid: i64) -> bool [io] {
+fn validate_arm_pattern(e: CheckEnv, m: Module, pid: i64, is_last: bool) -> bool [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
     if tag == PAT_WILD() {
+        if !is_last {
+            env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("catchall match patterns must be the final arm; move the catchall pattern to the final match arm"), pat_span(a, pid));
+            return false;
+        }
         return true;
     }
     if tag == PAT_IDENT() {
         if pat_b(a, pid) == 0 {
+            if !is_last {
+                env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("catchall match patterns must be the final arm; move the catchall pattern to the final match arm"), pat_span(a, pid));
+                return false;
+            }
             return true;
         }
         env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("mutable identifier patterns are not supported; remove `mut` from the binding"), pat_span(a, pid));
@@ -1780,7 +1788,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let mut validation_i: i64 = 0;
         while validation_i < n_arms {
             let validation_pid: i64 = list_get(a, arms_lid, validation_i * 2);
-            let arm_supported: bool = validate_arm_pattern(e, m, validation_pid);
+            let arm_supported: bool = validate_arm_pattern(e, m, validation_pid, validation_i == n_arms - 1);
             supported_arms.push(arm_supported);
             if !arm_supported {
                 all_arms_supported = false;

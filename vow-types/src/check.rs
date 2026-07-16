@@ -1476,7 +1476,8 @@ impl<'e> Checker<'e> {
                 let scrutinee_ty = self.check_expr(scrutinee);
                 let supported_arms: Vec<bool> = arms
                     .iter()
-                    .map(|arm| self.validate_arm_pattern(&arm.pattern))
+                    .enumerate()
+                    .map(|(i, arm)| self.validate_arm_pattern(&arm.pattern, i + 1 == arms.len()))
                     .collect();
                 let all_arms_supported = supported_arms.iter().all(|supported| *supported);
                 let scrutinee_supported = Self::is_enum_match_scrutinee(&scrutinee_ty);
@@ -2104,8 +2105,12 @@ impl<'e> Checker<'e> {
         lhs
     }
 
-    fn validate_arm_pattern(&mut self, pat: &Pat) -> bool {
+    fn validate_arm_pattern(&mut self, pat: &Pat, is_last: bool) -> bool {
         let unsupported = match &pat.kind {
+            PatKind::Wildcard | PatKind::Ident { is_mut: false, .. } if !is_last => Some((
+                "catchall match patterns must be the final arm",
+                "move the catchall pattern to the final match arm",
+            )),
             PatKind::Wildcard | PatKind::Ident { is_mut: false, .. } => None,
             PatKind::Ident { is_mut: true, .. } => Some((
                 "mutable identifier patterns are not supported",
@@ -3765,7 +3770,7 @@ mod tests {
                 kind,
                 span: dummy_span(),
             };
-            assert!(!checker.validate_arm_pattern(&pattern));
+            assert!(!checker.validate_arm_pattern(&pattern, true));
             assert_eq!(emitter.0.len(), 1);
             assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
         }

@@ -66,3 +66,8 @@ fn parsed_unsupported_patterns_fail_closed() {
 fn scalar_catchall_patterns_fail_closed() {
     assert_unsupported_pattern("match_scalar_catchall_pattern.vow");
 }
+
+#[test]
+fn non_final_catchall_patterns_fail_closed() {
+    assert_unsupported_pattern("match_non_final_catchall_pattern.vow");
+}

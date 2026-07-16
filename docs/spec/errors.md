@@ -199,7 +199,7 @@ fn f(o: Option<i64>) -> i64 {
 **Meaning:** A parsed `match` pattern or scrutinee is not in the subset that
 the compiler can lower safely. Match currently accepts enum-valued scrutinees,
 qualified unit variants, qualified tuple variants with `_` or immutable
-identifier payloads, and catchall `_` or immutable identifier arms.
+identifier payloads, and final catchall `_` or immutable identifier arms.
 
 ```vow
 fn f(n: i64) -> i64 {
