@@ -996,6 +996,8 @@ fn parse_match_expr(p: Parser) -> i64 {
         arm_items.push(body);
         if at(p, tok_comma()) {
             let _c: Token = advance(p);
+        } else {
+            break;
         }
     }
     let _rb: bool = expect(p, tok_rbrace());
