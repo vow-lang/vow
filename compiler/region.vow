@@ -672,9 +672,7 @@ fn put_inst_region(keys: Vec<i64>, vals: Vec<i64>, id: i64, rgn: i64) {
 //   per effect: target_u32, constraint_kind, (aux_u32)?, (alias_count, alias_u32...)?
 //
 // Sort invariant: the produced flat array is sorted by ascending target.
-// Adjacency-dedup consumers depend on this — see
-// `unique_store_target_count` (called from `check_region_store_conflicts_module`
-// and `emit_root_escape_notes_module`). If the sort order ever changes,
+// Adjacency-dedup consumers depend on this. If the sort order ever changes,
 // switch those consumers to an explicit set or update them in lockstep.
 fn canonicalize_store_effects(
     targets: Vec<i64>, kinds: Vec<i64>, aux: Vec<i64>, aliases: Vec<Vec<i64>>
@@ -945,53 +943,6 @@ fn underlying_caller_via_aliases_inner(
     result
 }
 
-// Counts unique store-effect target indices in the pre-sorted canonical
-// flat array produced by `canonicalize_store_effects` (sort key: target,
-// then kind, then payload). Layout is `target, kind, (aux)?,
-// (alias_count, alias...)?` per effect; ALIAS_OF carries one aux,
-// ALIAS_OF_ANY carries an alias-count plus that many indices, the others
-// carry no payload.
-//
-// Adjacency dedup via `have_last`/`last` is ONLY correct because the
-// flat array is target-sorted; if the canonical layout ever changes,
-// switch to an explicit set. Rust's mirror uses BTreeSet which is
-// ordering-independent. The sort invariant is enforced by
-// `canonicalize_store_effects` (insertion sort at line ~637); both
-// `add_store_effect` (insertion-with-dedup) and `canonicalize_store_effects`
-// are the only writers to `rsum_store_effects`.
-fn unique_store_target_count(flat: Vec<i64>) -> i64 {
-    let mut count: i64 = 0;
-    let mut last: i64 = -1;
-    let mut have_last: bool = false;
-    let mut i: i64 = 0;
-    while i < flat.len() {
-        let target: i64 = flat[i];
-        i = i + 1;
-        if i >= flat.len() { break; }
-        let kind: i64 = flat[i];
-        i = i + 1;
-        if !have_last || target != last {
-            count = count + 1;
-            last = target;
-            have_last = true;
-        }
-        if kind == RSUM_KIND_ALIAS_OF() {
-            if i >= flat.len() { break; }
-            i = i + 1;
-        } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
-            if i >= flat.len() { break; }
-            let n: i64 = flat[i];
-            i = i + 1;
-            let mut a: i64 = 0;
-            while a < n && i < flat.len() {
-                i = i + 1;
-                a = a + 1;
-            }
-        }
-    }
-    count
-}
-
 // Mirrors Rust's `any_published_store` filter at vow-ir/src/region.rs:1481-1484.
 // Returns true if the parallel `int_se_src_kinds[fi]` array contains any
 // kind other than RSUM_INTERNAL_UNINIT(). This is exact (not merely
@@ -1195,23 +1146,11 @@ fn emit_root_escape_notes_module(
             fi = fi + 1;
             continue;
         }
-        // Skip the note pass when this function would also trigger
-        // `ambiguous_caller_slot` rejection — the routed allocs already
-        // carry a hard `RegionConflict`, and the note's "no action
-        // needed if intentional" hint is misleading at a location with
-        // an actual error. Same predicate as in
-        // `check_region_store_conflicts_module`.
-        let returns_fresh: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER();
-        // Precondition: `f.rsum_store_effects` must be target-sorted
-        // (see `canonicalize_store_effects`). Same dedup-correctness
-        // contract as in `check_region_store_conflicts_module`.
-        let unique_st: i64 = unique_store_target_count(f.rsum_store_effects);
-        let return_slot_n: i64 = if returns_fresh { 1 } else { 0 };
-        let total_slots: i64 = return_slot_n + unique_st;
-        if total_slots > 1 {
-            fi = fi + 1;
-            continue;
-        }
+        // Issue #366: the multi-slot skip gate (`total_slots > 1`) is lifted so
+        // functions that widen allocations to Root across several distinct
+        // hidden arenas also emit RegionRootEscape notes. The inner walk still
+        // only flags allocations that resolve to root, and the note is non-
+        // blocking. Mirrors vow-ir/src/region.rs (gate lifted there too).
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
         let note_rkeys: Vec<i64> = note_region_keys[fi];

@@ -1565,25 +1565,25 @@ fn analyze_function(
     // over-approximation: emit per-instruction without full call-graph
     // reachability; severity `Note` keeps it informational.
     //
-    // Skip the pass for multi-slot functions (legacy: same gate that
-    // PR #315's `ambiguous_caller_slot` reject used). With slot-aware
-    // inference (#317) the gate is conservative — most multi-slot
-    // functions no longer emit `RegionConflict`, but keeping the skip
-    // preserves the original signal-to-noise on programs that route
-    // through several distinct hidden arenas. Revisit if user feedback
-    // wants notes on multi-slot routings.
+    // Surface `RegionRootEscape` notes whenever the function can propagate an
+    // allocation to a caller. This pass was previously gated to single-hidden-
+    // slot functions (`total_hidden_slots <= 1`, the legacy PR #315
+    // `ambiguous_caller_slot` gate). That gate silently hid the multi-slot
+    // widen-to-Root case: a value stored into several distinct hidden arenas
+    // widens to `Root` (sound, but a permanent process-lifetime leak — the
+    // long-running-service scenario, e.g. ~11 GB/game in vowchess). The note is
+    // informational and non-blocking, and `emit_root_escape_notes` still only
+    // flags allocations that actually resolve to root, so lifting the gate adds
+    // visibility without false positives (issue #366).
     let returns_fresh = matches!(
         summary.return_region,
         InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
     );
-    let unique_store_targets: BTreeSet<u32> =
-        summary.store_effects.iter().map(|(t, _)| *t).collect();
-    let total_hidden_slots = (returns_fresh as usize) + unique_store_targets.len();
     let any_published_store = summary
         .store_effects
         .iter()
         .any(|(_, c)| matches!(c, InternalReturnRegion::Published(_)));
-    if (returns_fresh || any_published_store) && total_hidden_slots <= 1 {
+    if returns_fresh || any_published_store {
         emit_root_escape_notes(func, region_map, &note_region_map, diagnostics);
     }
 
@@ -7453,11 +7453,92 @@ mod tests {
         );
     }
 
+    /// `RegionRootEscape` positive coverage (issue #366): a multi-slot
+    /// function — one that routes allocations into two distinct hidden
+    /// caller arenas — now emits the note. Before the gate was lifted,
+    /// `total_hidden_slots > 1` suppressed it, silently hiding the
+    /// multi-slot widen-to-Root leak.
+    #[test]
+    fn region_root_escape_note_emitted_for_multi_slot_routed_allocs() {
+        // Callee stores arg[1] into arg[0]: one store target.
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let callee = function(
+            0,
+            "store_into",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+        // Caller routes one alloc into param `a` and another into param `b`
+        // — two distinct store targets → two hidden slots (multi-slot).
+        let caller_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(11, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                12,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                13,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 12],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(
+                14,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                15,
+                Opcode::Call,
+                Ty::Unit,
+                vec![11, 14],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(16, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let caller = function(
+            1,
+            "publishes_two_stores",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, caller_insts)],
+        );
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        // With the multi-slot gate lifted, the routed Caller(_) allocs now
+        // surface RegionRootEscape notes (there were none before).
+        let notes = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionRootEscape)
+            .count();
+        assert!(
+            notes >= 1,
+            "a multi-slot routing function should now emit RegionRootEscape \
+             notes (gate lifted); warnings: {:?}",
+            m.warnings
+        );
+    }
+
     /// `RegionRootEscape` positive coverage: a function with exactly one
     /// hidden caller slot (one store target, no FreshInCaller return).
     /// The routed `Caller(_)` alloc is accepted by the conflict check AND
-    /// the note fires. The note is suppressed for multi-slot functions
-    /// (legacy gate); single-slot keeps the signal clean.
+    /// the note fires. (Multi-slot functions now emit the note too — see
+    /// `region_root_escape_note_emitted_for_multi_slot_routed_allocs`.)
     #[test]
     fn region_root_escape_note_emitted_for_single_slot_routed_alloc() {
         // Callee: stores arg[1] into arg[0]. One target → one hidden slot
