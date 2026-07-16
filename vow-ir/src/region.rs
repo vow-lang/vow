@@ -1519,6 +1519,12 @@ fn analyze_function(
     // internal-call heap producers; the note pass still consults it first so
     // hidden-caller-slot producers keep emitting a note (issue #320).
     let mut note_region_map: BTreeMap<InstId, RegionId> = BTreeMap::new();
+    // Set when an alloc widens to Root without an intrinsic `Root` marker (a
+    // leak the note pass should surface). Drives the emit gate below so the
+    // note fires even for functions that neither return fresh nor publish a
+    // store effect — e.g. a container reached through a Phi, whose target does
+    // not `trace_param` to a single slot (issue #366).
+    let mut any_widened_root = false;
 
     // Compute LUB-derived RegionId for every heap-producing inst.
     for block in &func.blocks {
@@ -1528,15 +1534,18 @@ fn analyze_function(
             }
             let markers = must_outlive.get(&inst.id).cloned().unwrap_or_default();
             let region_id = lub_to_region_id(&markers, block.id, &block_tree, &summary);
-            // Issue #366: an alloc that resolves to `Root` WITHOUT a `Root`
-            // marker widened across multiple hidden caller slots (the multi-slot
-            // widen-to-Root leak). `lub_to_region_id` yields `Root` only via a
-            // `Root` marker (`pin_to_root`/literal — intrinsic program-lifetime)
-            // or this widen, so `Root && no Root marker` isolates the leak.
+            // Issue #366: an alloc that resolves to `Root` WITHOUT an intrinsic
+            // `Root` marker widened to the never-freed arena — either across
+            // multiple hidden caller slots (the multi-slot leak) or through a
+            // Phi over caller containers (`WidenedCallerRoot`). `lub_to_region_id`
+            // yields `Root` only via an intrinsic `Root` marker
+            // (`pin_to_root`/literal — genuine program-lifetime) or one of these
+            // widens, so `Root && no intrinsic-Root marker` isolates the leak.
             // Record it in `note_region_map` so the note pass surfaces it — it
             // otherwise skips every non-`Caller` region.
             if region_id == RegionId::Root && !markers.contains(&MustOutliveMarker::Root) {
                 note_region_map.insert(inst.id, region_id);
+                any_widened_root = true;
             }
             if inst.opcode == Opcode::Call
                 && !matches!(&inst.data, InstData::CallExtern(sym) if heap_producing_extern(sym))
@@ -1593,7 +1602,7 @@ fn analyze_function(
         .store_effects
         .iter()
         .any(|(_, c)| matches!(c, InternalReturnRegion::Published(_)));
-    if returns_fresh || any_published_store {
+    if returns_fresh || any_published_store || any_widened_root {
         emit_root_escape_notes(func, region_map, &note_region_map, diagnostics);
     }
 
@@ -1727,7 +1736,13 @@ fn emit_root_escape_notes(
             if !matches!(rgn, RegionId::Caller(_)) && !note_region_map.contains_key(&inst.id) {
                 continue;
             }
-            if returned_ids.contains(&inst.id) {
+            // The return path normally exempts an alloc: the caller owns its
+            // lifetime, so it isn't a root leak here. But a widen-to-Root alloc
+            // (recorded in `note_region_map` as `Root`) genuinely resolved to the
+            // never-freed arena — being returned as well does not undo that, so
+            // it stays flagged (#366, P2).
+            let is_widened_root = matches!(note_region_map.get(&inst.id), Some(RegionId::Root));
+            if returned_ids.contains(&inst.id) && !is_widened_root {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -2664,6 +2679,12 @@ enum MustOutliveMarker {
     /// the function's published store-effects layout.
     CallerStoreTarget(u32),
     Root,
+    /// Issue #366: a caller store-target reached through a Phi over caller
+    /// containers. It resolves to `Root` (a store-effect-chain widen, the same
+    /// region an intrinsic `Root` marker yields), but is kept DISTINCT from an
+    /// intrinsic `Root` (`pin_to_root` / literal) so the `RegionRootEscape`
+    /// note can flag it as a widen-to-Root leak while still excluding pins.
+    WidenedCallerRoot,
     Rodata,
 }
 
@@ -2719,6 +2740,10 @@ fn lub_to_region_id(
                 }
             }
             MustOutliveMarker::Root => has_root = true,
+            // #366: resolves to Root identically to an intrinsic `Root` (keeps
+            // region assignment — and the binary fixed point — unchanged); the
+            // distinct variant only lets the note flag it (see emit_root_escape_notes).
+            MustOutliveMarker::WidenedCallerRoot => has_root = true,
             MustOutliveMarker::Rodata => has_rodata = true,
         }
     }
@@ -3109,6 +3134,8 @@ fn add_store_target_markers(
     // as a multi-slot conflict. Widen caller markers to Root (safe, the pre-Phi
     // behavior) when reached via a Phi; block-local arms keep their precise
     // marker so the common `mut` case (all arms block-local) still frees.
+    // Use `WidenedCallerRoot`, not the intrinsic `Root`, so the `RegionRootEscape`
+    // note can distinguish this leak-widen from a genuine pin (#366).
     let marker = if via_phi
         && matches!(
             marker,
@@ -3116,7 +3143,7 @@ fn add_store_target_markers(
                 | MustOutliveMarker::CallerReturn
                 | MustOutliveMarker::VirtualCaller
         ) {
-        MustOutliveMarker::Root
+        MustOutliveMarker::WidenedCallerRoot
     } else {
         marker
     };
@@ -7546,6 +7573,102 @@ mod tests {
             notes >= 1,
             "a multi-slot widen-to-Root alloc should now emit a RegionRootEscape \
              note; warnings: {:?}",
+            m.warnings
+        );
+    }
+
+    #[test]
+    fn region_root_escape_note_emitted_for_phi_widened_root_alloc() {
+        // Callee stores arg[1] into arg[0]: param 0 is the store target.
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let callee = function(
+            0,
+            "store_into",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+        // Caller stores ONE fresh alloc into a container reached through a Phi
+        // that merges two DISTINCT caller params. The store target cannot commit
+        // to a single hidden slot, so the alloc widens to Root via the Phi path
+        // (`WidenedCallerRoot`) — distinct from an intrinsic `pin_to_root`. Before
+        // the marker distinction this synthesized a plain `Root` marker, which the
+        // note discriminator excluded, leaving the leak silent.
+        let phi = 30u32;
+        let b0 = vec![
+            inst(20, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(21, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                22,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            branch_inst(23, 1, 2),
+        ];
+        let b1 = vec![
+            inst(
+                24,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![20],
+                InstData::PhiTarget(InstId(phi)),
+            ),
+            jump_inst(25, 3),
+        ];
+        let b2 = vec![
+            inst(
+                26,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![21],
+                InstData::PhiTarget(InstId(phi)),
+            ),
+            jump_inst(27, 3),
+        ];
+        let b3 = vec![
+            inst(phi, Opcode::Phi, Ty::Ptr, vec![], InstData::None),
+            inst(
+                28,
+                Opcode::Call,
+                Ty::Unit,
+                vec![phi, 22],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(29, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let caller = function(
+            1,
+            "publishes_via_phi",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, b0), block(1, b1), block(2, b2), block(3, b3)],
+        );
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        // The alloc (block 0, index 2) widened to Root through the Phi...
+        assert_eq!(
+            m.functions[1].blocks[0].insts[2].region,
+            RegionId::Root,
+            "an alloc stored into a Phi over two caller containers should widen to Root"
+        );
+        // ...and the WidenedCallerRoot marker lets the note fire (silent before).
+        let notes = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionRootEscape)
+            .count();
+        assert!(
+            notes >= 1,
+            "a Phi-widened-to-Root alloc should now emit a RegionRootEscape note; \
+             warnings: {:?}",
             m.warnings
         );
     }
