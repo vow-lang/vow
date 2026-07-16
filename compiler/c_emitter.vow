@@ -1342,7 +1342,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
         let val: i64 = iargs[1];
         out.push_str(str6(String::from("  __vow_heap[v"), i64_to_str(base),
             String::from(" + "), i64_to_str(inst.dv),
-            String::from("] = v"), str2(i64_to_str(val), String::from(";\n"))));
+            String::from("] = v"), cemit_str2(i64_to_str(val), String::from(";\n"))));
         return;
     }
 
