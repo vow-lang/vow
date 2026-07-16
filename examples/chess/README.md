@@ -9,10 +9,20 @@ generation and an alpha-beta search — not a move-list toy.
 The engine (`main.vow`) implements:
 
 - **Board & rules** — full legal move generation for all pieces, including
-  castling, en passant, pawn double-pushes, and under-promotions.
-- **Search** — negamax with alpha-beta pruning, quiescence search, and
-  iterative deepening.
-- **Evaluation** — material (piece values) driving the search.
+  castling, en passant, pawn double-pushes, and under-promotions. Validated by
+  `perft` against known node counts (startpos, Kiwipete, and two edge-case
+  positions) through the depths that exercise en passant, castling legality,
+  promotions, and pins.
+- **Search** — negamax with alpha-beta, quiescence (captures/promotions only),
+  and time-managed iterative deepening. A Zobrist-keyed transposition table
+  provides cutoffs and best-move ordering across iterations. Move ordering uses
+  the TT move, MVV/LVA captures, killer moves, and a history heuristic; the tree
+  is pruned with null-move pruning, late move reductions (LMR), a
+  principal-variation search, and check extensions.
+- **Evaluation** — phase-tapered PeSTO piece-square tables (separate midgame and
+  endgame tables blended by material phase) for material and placement, plus
+  bishop pair, development/castling, pawn structure (passed / doubled /
+  isolated), and rook activity (open & semi-open files, 7th rank).
 
 ### UCI protocol
 
@@ -23,9 +33,11 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `uci`         | Reports `id name Vow Chess UCI` and `uciok`.                          |
 | `isready`     | Replies `readyok`.                                                    |
 | `ucinewgame`  | Full per-game reset (start position today; all per-game state).       |
-| `position`    | `startpos` optionally followed by `moves <uci> ...`.                  |
-| `go`          | Accepts `depth`, `movetime`, and `wtime`/`btime` time controls.      |
-| `stop`        | Accepted (search is synchronous, so it is a no-op).                   |
+| `position`    | `startpos` or `fen <FEN>`, optionally followed by `moves <uci> ...`.   |
+| `go`          | `depth N`, `movetime MS`, or `wtime`/`btime` (+`winc`/`binc`/`movestogo`) real time management. Emits `info depth/score/nodes/nps/pv`. |
+| `perft N`     | Node-count divide to depth `N` (move-generation self-test).           |
+| `captest N`   | Differential gate: asserts the quiescence capture generator equals the tactical subset of legal moves, to depth `N` (prints mismatch count). |
+| `stop`        | Polled during search (checked every 1024 nodes) and honored.          |
 | `setoption`   | Accepted and ignored (no configurable options yet).                  |
 | `quit`        | Exits.                                                                 |
 
@@ -38,6 +50,12 @@ Use the self-hosted compiler directly:
 ```sh
 TMPDIR=/dev/shm build/vowc build --no-verify examples/chess/main.vow -o examples/chess/.local/chess
 ```
+
+> **Compiler freshness matters.** The engine relies on the region inference from
+> PR #879 to keep per-node search allocations bounded. A `build/vowc` built from a
+> tree *predating* #879 will place those allocations in the root region and
+> exhaust memory during deep search (OOM around depth 7). Build with a compiler
+> from the current tree — re-run `scripts/bootstrap.sh` if `build/vowc` is stale.
 
 The engine reads UCI commands on `stdin`:
 
@@ -72,6 +90,22 @@ python examples/chess/play_uci_match.py \
 
 The `--validator` engine must support the Stockfish-specific `d` (display)
 command; it is used to fetch FENs and evaluate positions and is optional.
+
+## Strength
+
+At **1 second per move**, the engine performs at roughly **~2110 Elo** measured
+against Stockfish's `UCI_LimitStrength` ladder (alternating colours). The headline
+comes from the rung nearest the 50% crossover — the most reliable data point (see
+`DEVELOPMENT.md`, "anchor near the 50% crossover"): **65% over 50 games vs
+`UCI_Elo=2000`** (1σ band ~2058–2162). The flanking rungs are consistent — 77% vs
+1900 (~2115) and 58% vs 2100 (~2158) — but sit further from 50% and so carry less
+weight. Strength scales strongly with time control; at very short controls the
+engine reaches only shallow depths and plays materially weaker.
+
+`UCI_Elo` is a rough, self-referential yardstick (it weakens Stockfish by
+injecting blunders rather than by playing like a rated human), so treat this as
+an operational figure on that ladder, not a calibrated CCRL/FIDE rating. Numbers
+also carry wide error bars at a few dozen games per data point.
 
 ## Notes
 
