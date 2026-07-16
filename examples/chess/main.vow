@@ -1364,20 +1364,6 @@ fn is_tactical_move(b: Board, mv: ChessMove) -> bool {
     mv.promote != 0 || captured_piece_value(b, mv) > 0
 }
 
-fn generate_tactical_moves(b: Board) -> Vec<ChessMove> {
-    let legal: Vec<ChessMove> = generate_legal_moves(b);
-    let tactical: Vec<ChessMove> = Vec::new();
-    let mut i: i64 = 0;
-    while i < legal.len() {
-        let mv: ChessMove = legal[i];
-        if is_tactical_move(b, mv) {
-            tactical.push(mv);
-        }
-        i = i + 1;
-    }
-    tactical
-}
-
 // Quiescence capture generator: filters pseudo-moves to tacticals (captures +
 // promotions) FIRST, then runs the expensive make/in-check legality test only
 // on those few moves — instead of legality-checking every quiet move via
@@ -1568,9 +1554,12 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         }
     }
 
-    // Check extension: search one ply deeper when in check (forcing lines).
+    // Check extension: search one ply deeper when in check (forcing lines). The
+    // extension is disabled past MAX_DEPTH*2 plies so a pathological forced-check
+    // line (which the 50-move rule already bounds in practice) can never sustain
+    // the recursion indefinitely — defence in depth against stack exhaustion.
     let mut d: i64 = depth;
-    if in_chk {
+    if in_chk && ply < MAX_DEPTH * 2 {
         d = d + 1;
     }
 
