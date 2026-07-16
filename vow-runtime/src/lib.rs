@@ -1965,7 +1965,9 @@ pub unsafe extern "C" fn __vow_string_substring_in_arena(
     let clamped_end = end.clamp(clamped_start as i64, slen) as usize;
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let len = clamped_end - clamped_start;
-    unsafe { __vow_string_new_in_arena(arena, bytes[clamped_start..].as_ptr() as *const c_char, len) }
+    unsafe {
+        __vow_string_new_in_arena(arena, bytes[clamped_start..].as_ptr() as *const c_char, len)
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1997,7 +1999,8 @@ pub unsafe extern "C" fn __vow_string_split_in_arena(
 
     if s.is_empty() {
         let str_vec =
-            unsafe { __vow_string_new_in_arena(arena, h.as_ptr() as *const c_char, h.len()) } as i64;
+            unsafe { __vow_string_new_in_arena(arena, h.as_ptr() as *const c_char, h.len()) }
+                as i64;
         unsafe { __vow_vec_push_val_in_arena(arena, result_vec, str_vec) };
         return result_vec;
     }
@@ -2005,14 +2008,18 @@ pub unsafe extern "C" fn __vow_string_split_in_arena(
     let mut start = 0;
     while start <= h.len() {
         if let Some(pos) = h[start..].windows(s.len()).position(|w| w == s) {
-            let piece =
-                unsafe { __vow_string_new_in_arena(arena, h[start..].as_ptr() as *const c_char, pos) }
-                    as i64;
+            let piece = unsafe {
+                __vow_string_new_in_arena(arena, h[start..].as_ptr() as *const c_char, pos)
+            } as i64;
             unsafe { __vow_vec_push_val_in_arena(arena, result_vec, piece) };
             start += pos + s.len();
         } else {
             let piece = unsafe {
-                __vow_string_new_in_arena(arena, h[start..].as_ptr() as *const c_char, h.len() - start)
+                __vow_string_new_in_arena(
+                    arena,
+                    h[start..].as_ptr() as *const c_char,
+                    h.len() - start,
+                )
             } as i64;
             unsafe { __vow_vec_push_val_in_arena(arena, result_vec, piece) };
             break;
@@ -2688,7 +2695,12 @@ pub extern "C" fn __vow_fs_read_line(handle: i64) -> *mut u8 {
         }
         Ok(_) => {
             state.status = 0;
-            unsafe { __vow_string_new(state.line_buf.as_ptr() as *const c_char, state.line_buf.len()) }
+            unsafe {
+                __vow_string_new(
+                    state.line_buf.as_ptr() as *const c_char,
+                    state.line_buf.len(),
+                )
+            }
         }
         Err(_) => {
             state.status = -1;
