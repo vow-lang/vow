@@ -92,10 +92,10 @@ fn fmt_payload(tag: u8, payload: u64) -> String {
 pub unsafe extern "C" fn __vow_violation(
     vow_id: u32,
     blame: u8,
-    desc_ptr: *const i8,
+    desc_ptr: *const c_char,
     bindings_ptr: *const VowBinding,
     binding_count: u32,
-    file_ptr: *const i8,
+    file_ptr: *const c_char,
     offset: u32,
 ) {
     let blame_str = if blame == 0 { "Caller" } else { "Callee" };
@@ -264,7 +264,7 @@ fn null_arena_trap(operation: &'static str) -> ! {
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_trace_enter(fn_name_ptr: *const i8) {
+pub unsafe extern "C" fn __vow_trace_enter(fn_name_ptr: *const c_char) {
     if fn_name_ptr.is_null() {
         return;
     }
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn __vow_trace_enter(fn_name_ptr: *const i8) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_trace_exit(fn_name_ptr: *const i8) {
+pub unsafe extern "C" fn __vow_trace_exit(fn_name_ptr: *const c_char) {
     if fn_name_ptr.is_null() {
         return;
     }
@@ -282,7 +282,7 @@ pub unsafe extern "C" fn __vow_trace_exit(fn_name_ptr: *const i8) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_trace_vow(fn_name_ptr: *const i8, vow_id: i64, passed: i64) {
+pub unsafe extern "C" fn __vow_trace_vow(fn_name_ptr: *const c_char, vow_id: i64, passed: i64) {
     if fn_name_ptr.is_null() {
         return;
     }
@@ -307,7 +307,7 @@ fn profile_counters_init<'a>(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_profile_enter(fn_name_ptr: *const i8) {
+pub unsafe extern "C" fn __vow_profile_enter(fn_name_ptr: *const c_char) {
     if fn_name_ptr.is_null() {
         return;
     }
@@ -395,7 +395,7 @@ static STACK_TOP: AtomicU64 = AtomicU64::new(0);
 // "last known function" at overflow time, which is the deepest frame — exactly
 // the function whose entry pushed the stack past the limit.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_stack_enter(fn_name_ptr: *const i8) {
+pub unsafe extern "C" fn __vow_stack_enter(fn_name_ptr: *const c_char) {
     STACK_DEPTH.fetch_add(1, Ordering::Relaxed);
     STACK_FN_NAME.store(fn_name_ptr as u64, Ordering::Relaxed);
 }
@@ -509,7 +509,7 @@ unsafe extern "C" fn stack_overflow_handler(
 
     // Read depth and function name (best-effort in signal context)
     let depth = STACK_DEPTH.load(Ordering::Relaxed);
-    let fn_ptr = STACK_FN_NAME.load(Ordering::Relaxed) as *const i8;
+    let fn_ptr = STACK_FN_NAME.load(Ordering::Relaxed) as *const c_char;
 
     let mut buf = [0u8; 512];
     let mut pos = 0;
@@ -1555,7 +1555,7 @@ pub unsafe extern "C" fn __vow_vec_get_ptr(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_new_in_arena(
     arena: *mut VowArena,
-    ptr: *const i8,
+    ptr: *const c_char,
     len: usize,
 ) -> *mut u8 {
     if arena.is_null() {
@@ -1572,7 +1572,7 @@ pub unsafe extern "C" fn __vow_string_new_in_arena(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_new(ptr: *const i8, len: usize) -> *mut u8 {
+pub unsafe extern "C" fn __vow_string_new(ptr: *const c_char, len: usize) -> *mut u8 {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
     unsafe { __vow_string_new_in_arena(&raw mut __vow_root_arena, ptr, len) }
@@ -1581,7 +1581,7 @@ pub unsafe extern "C" fn __vow_string_new(ptr: *const i8, len: usize) -> *mut u8
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_from_cstr_in_arena(
     arena: *mut VowArena,
-    ptr: *const i8,
+    ptr: *const c_char,
 ) -> *mut u8 {
     if arena.is_null() {
         null_arena_trap("String::from_cstr");
@@ -1595,7 +1595,7 @@ pub unsafe extern "C" fn __vow_string_from_cstr_in_arena(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_from_cstr(ptr: *const i8) -> *mut u8 {
+pub unsafe extern "C" fn __vow_string_from_cstr(ptr: *const c_char) -> *mut u8 {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
     unsafe { __vow_string_from_cstr_in_arena(&raw mut __vow_root_arena, ptr) }
@@ -1851,7 +1851,7 @@ pub unsafe extern "C" fn __vow_string_from_i64_in_arena(arena: *mut VowArena, v:
         null_arena_trap("String::from_i64");
     }
     let s = v.to_string();
-    unsafe { __vow_string_new_in_arena(arena, s.as_ptr() as *const i8, s.len()) }
+    unsafe { __vow_string_new_in_arena(arena, s.as_ptr() as *const c_char, s.len()) }
 }
 
 #[unsafe(no_mangle)]
@@ -1932,7 +1932,7 @@ pub unsafe extern "C" fn __vow_string_substr_in_arena(
     unsafe {
         __vow_string_new_in_arena(
             arena,
-            bytes[clamped_start..].as_ptr() as *const i8,
+            bytes[clamped_start..].as_ptr() as *const c_char,
             clamped_len,
         )
     }
@@ -1965,7 +1965,7 @@ pub unsafe extern "C" fn __vow_string_substring_in_arena(
     let clamped_end = end.clamp(clamped_start as i64, slen) as usize;
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let len = clamped_end - clamped_start;
-    unsafe { __vow_string_new_in_arena(arena, bytes[clamped_start..].as_ptr() as *const i8, len) }
+    unsafe { __vow_string_new_in_arena(arena, bytes[clamped_start..].as_ptr() as *const c_char, len) }
 }
 
 #[unsafe(no_mangle)]
@@ -1997,7 +1997,7 @@ pub unsafe extern "C" fn __vow_string_split_in_arena(
 
     if s.is_empty() {
         let str_vec =
-            unsafe { __vow_string_new_in_arena(arena, h.as_ptr() as *const i8, h.len()) } as i64;
+            unsafe { __vow_string_new_in_arena(arena, h.as_ptr() as *const c_char, h.len()) } as i64;
         unsafe { __vow_vec_push_val_in_arena(arena, result_vec, str_vec) };
         return result_vec;
     }
@@ -2006,13 +2006,13 @@ pub unsafe extern "C" fn __vow_string_split_in_arena(
     while start <= h.len() {
         if let Some(pos) = h[start..].windows(s.len()).position(|w| w == s) {
             let piece =
-                unsafe { __vow_string_new_in_arena(arena, h[start..].as_ptr() as *const i8, pos) }
+                unsafe { __vow_string_new_in_arena(arena, h[start..].as_ptr() as *const c_char, pos) }
                     as i64;
             unsafe { __vow_vec_push_val_in_arena(arena, result_vec, piece) };
             start += pos + s.len();
         } else {
             let piece = unsafe {
-                __vow_string_new_in_arena(arena, h[start..].as_ptr() as *const i8, h.len() - start)
+                __vow_string_new_in_arena(arena, h[start..].as_ptr() as *const c_char, h.len() - start)
             } as i64;
             unsafe { __vow_vec_push_val_in_arena(arena, result_vec, piece) };
             break;
@@ -2071,7 +2071,7 @@ pub unsafe extern "C" fn __vow_string_trim_in_arena(arena: *mut VowArena, s: *co
         Ok(s) => s.trim(),
         Err(_) => return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) },
     };
-    unsafe { __vow_string_new_in_arena(arena, trimmed.as_ptr() as *const i8, trimmed.len()) }
+    unsafe { __vow_string_new_in_arena(arena, trimmed.as_ptr() as *const c_char, trimmed.len()) }
 }
 
 #[unsafe(no_mangle)]
@@ -2099,7 +2099,7 @@ pub unsafe extern "C" fn __vow_string_to_upper_in_arena(
         Ok(s) => s.to_uppercase(),
         Err(_) => return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) },
     };
-    unsafe { __vow_string_new_in_arena(arena, upper.as_ptr() as *const i8, upper.len()) }
+    unsafe { __vow_string_new_in_arena(arena, upper.as_ptr() as *const c_char, upper.len()) }
 }
 
 #[unsafe(no_mangle)]
@@ -2127,7 +2127,7 @@ pub unsafe extern "C" fn __vow_string_to_lower_in_arena(
         Ok(s) => s.to_lowercase(),
         Err(_) => return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) },
     };
-    unsafe { __vow_string_new_in_arena(arena, lower.as_ptr() as *const i8, lower.len()) }
+    unsafe { __vow_string_new_in_arena(arena, lower.as_ptr() as *const c_char, lower.len()) }
 }
 
 #[unsafe(no_mangle)]
@@ -2168,7 +2168,7 @@ pub unsafe extern "C" fn __vow_string_replace_in_arena(
         _ => return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) },
     };
     let result = ss_str.replace(sf_str, st_str);
-    unsafe { __vow_string_new_in_arena(arena, result.as_ptr() as *const i8, result.len()) }
+    unsafe { __vow_string_new_in_arena(arena, result.as_ptr() as *const c_char, result.len()) }
 }
 
 #[unsafe(no_mangle)]
@@ -2535,7 +2535,7 @@ pub extern "C" fn __vow_proc_sample() -> *mut u8 {
             smp.group, smp.rss_kb as i64, smp.cpu_pct as i64
         ));
     }
-    unsafe { __vow_string_new(s.as_ptr() as *const i8, s.len()) }
+    unsafe { __vow_string_new(s.as_ptr() as *const c_char, s.len()) }
 }
 
 /// Gzip-compress `data` and write it to `path` (both Vow Strings). Returns 0 on
@@ -2584,7 +2584,7 @@ pub unsafe extern "C" fn __vow_hex_encode(vec: *const u8) -> *mut u8 {
     for &val in vals {
         hex.push_str(&format!("{:02x}", (val & 0xff) as u8));
     }
-    unsafe { __vow_string_new(hex.as_ptr() as *const i8, hex.len()) }
+    unsafe { __vow_string_new(hex.as_ptr() as *const c_char, hex.len()) }
 }
 
 #[unsafe(no_mangle)]
@@ -2631,7 +2631,7 @@ pub unsafe extern "C" fn __vow_fs_read(path_ptr: *const u8) -> *mut u8 {
         Err(_) => return __vow_vec_new(1, 1),
     };
     match std::fs::read(path) {
-        Ok(bytes) => unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) },
+        Ok(bytes) => unsafe { __vow_string_new(bytes.as_ptr() as *const c_char, bytes.len()) },
         Err(_) => __vow_vec_new(1, 1),
     }
 }
@@ -2688,7 +2688,7 @@ pub extern "C" fn __vow_fs_read_line(handle: i64) -> *mut u8 {
         }
         Ok(_) => {
             state.status = 0;
-            unsafe { __vow_string_new(state.line_buf.as_ptr() as *const i8, state.line_buf.len()) }
+            unsafe { __vow_string_new(state.line_buf.as_ptr() as *const c_char, state.line_buf.len()) }
         }
         Err(_) => {
             state.status = -1;
@@ -2800,7 +2800,7 @@ pub unsafe extern "C" fn __vow_fs_listdir(path_ptr: *const u8) -> *mut u8 {
     names.sort();
     for name_str in &names {
         let str_vec =
-            unsafe { __vow_string_new(name_str.as_ptr() as *const i8, name_str.len()) } as i64;
+            unsafe { __vow_string_new(name_str.as_ptr() as *const c_char, name_str.len()) } as i64;
         unsafe { __vow_vec_push_val(result_vec, str_vec) };
     }
     result_vec
@@ -2931,7 +2931,7 @@ pub extern "C" fn __vow_stdin_read() -> *mut u8 {
     use std::io::Read;
     let mut buf = Vec::new();
     let _ = std::io::stdin().read_to_end(&mut buf);
-    unsafe { __vow_string_new(buf.as_ptr() as *const i8, buf.len()) }
+    unsafe { __vow_string_new(buf.as_ptr() as *const c_char, buf.len()) }
 }
 
 #[unsafe(no_mangle)]
@@ -2965,7 +2965,7 @@ pub extern "C" fn __vow_stdin_ready() -> i64 {
 pub extern "C" fn __vow_args() -> *mut u8 {
     let result_vec = __vow_vec_new(8, 8);
     for arg in std::env::args() {
-        let str_vec = unsafe { __vow_string_new(arg.as_ptr() as *const i8, arg.len()) } as i64;
+        let str_vec = unsafe { __vow_string_new(arg.as_ptr() as *const c_char, arg.len()) } as i64;
         unsafe { __vow_vec_push_val(result_vec, str_vec) };
     }
     result_vec
@@ -3013,7 +3013,7 @@ pub unsafe extern "C" fn __vow_process_run(cmd_ptr: i64, args_ptr: i64) -> i64 {
 pub extern "C" fn __vow_process_get_stdout() -> *mut u8 {
     LAST_STDOUT.with(|cell| {
         let bytes = cell.borrow();
-        unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) }
+        unsafe { __vow_string_new(bytes.as_ptr() as *const c_char, bytes.len()) }
     })
 }
 
@@ -3021,7 +3021,7 @@ pub extern "C" fn __vow_process_get_stdout() -> *mut u8 {
 pub extern "C" fn __vow_process_get_stderr() -> *mut u8 {
     LAST_STDERR.with(|cell| {
         let bytes = cell.borrow();
-        unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) }
+        unsafe { __vow_string_new(bytes.as_ptr() as *const c_char, bytes.len()) }
     })
 }
 
@@ -3106,7 +3106,7 @@ pub extern "C" fn __vow_process_stdout_for(handle: i64) -> *mut u8 {
     if let Some(Some(ProcessState::Completed { stdout, .. })) =
         guard.as_ref().map(|m| m.get(&handle))
     {
-        unsafe { __vow_string_new(stdout.as_ptr() as *const i8, stdout.len()) }
+        unsafe { __vow_string_new(stdout.as_ptr() as *const c_char, stdout.len()) }
     } else {
         unsafe { __vow_string_new(std::ptr::null(), 0) }
     }
@@ -3118,7 +3118,7 @@ pub extern "C" fn __vow_process_stderr_for(handle: i64) -> *mut u8 {
     if let Some(Some(ProcessState::Completed { stderr, .. })) =
         guard.as_ref().map(|m| m.get(&handle))
     {
-        unsafe { __vow_string_new(stderr.as_ptr() as *const i8, stderr.len()) }
+        unsafe { __vow_string_new(stderr.as_ptr() as *const c_char, stderr.len()) }
     } else {
         unsafe { __vow_string_new(std::ptr::null(), 0) }
     }
@@ -3972,8 +3972,8 @@ mod tests {
         let payload = r#"{"traceEvents":[{"ph":"X","name":"parse"}],"displayTimeUnit":"ms"}"#;
 
         let path_s = path.to_string_lossy().into_owned();
-        let path_v = unsafe { __vow_string_new(path_s.as_ptr() as *const i8, path_s.len()) };
-        let data_v = unsafe { __vow_string_new(payload.as_ptr() as *const i8, payload.len()) };
+        let path_v = unsafe { __vow_string_new(path_s.as_ptr() as *const c_char, path_s.len()) };
+        let data_v = unsafe { __vow_string_new(payload.as_ptr() as *const c_char, payload.len()) };
         let rc = unsafe { __vow_gzip_write_file(path_v, data_v) };
         assert_eq!(rc, 0, "gzip write should succeed");
 
@@ -4047,7 +4047,7 @@ mod tests {
     #[test]
     fn string_from_nonempty_allocates() {
         let data = b"hello";
-        let s = unsafe { __vow_string_new(data.as_ptr() as *const i8, 5) };
+        let s = unsafe { __vow_string_new(data.as_ptr() as *const c_char, 5) };
         let vec = unsafe { &*(s as *const VowVec) };
         assert_eq!(vec.len, 5);
         assert!(vec.cap >= 5);
@@ -4652,7 +4652,7 @@ mod tests {
         // change touches either piece.
         let payload = vec![b'a'; 5000];
         let s = unsafe {
-            __vow_string_new_in_arena(&mut a, payload.as_ptr() as *const i8, payload.len())
+            __vow_string_new_in_arena(&mut a, payload.as_ptr() as *const c_char, payload.len())
         };
         // Sanity: the backing is in a path-oversized chunk.
         let header_before = unsafe { &*(s as *const VowVec) };
