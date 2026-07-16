@@ -1528,6 +1528,16 @@ fn analyze_function(
             }
             let markers = must_outlive.get(&inst.id).cloned().unwrap_or_default();
             let region_id = lub_to_region_id(&markers, block.id, &block_tree, &summary);
+            // Issue #366: an alloc that resolves to `Root` WITHOUT a `Root`
+            // marker widened across multiple hidden caller slots (the multi-slot
+            // widen-to-Root leak). `lub_to_region_id` yields `Root` only via a
+            // `Root` marker (`pin_to_root`/literal — intrinsic program-lifetime)
+            // or this widen, so `Root && no Root marker` isolates the leak.
+            // Record it in `note_region_map` so the note pass surfaces it — it
+            // otherwise skips every non-`Caller` region.
+            if region_id == RegionId::Root && !markers.contains(&MustOutliveMarker::Root) {
+                note_region_map.insert(inst.id, region_id);
+            }
             if inst.opcode == Opcode::Call
                 && !matches!(&inst.data, InstData::CallExtern(sym) if heap_producing_extern(sym))
             {
@@ -1659,12 +1669,13 @@ fn collect_return_value_sources(
 }
 
 /// Emit a `RegionRootEscape` Note for each heap-producing instruction whose
-/// inferred region is `Caller(_)`. Only invoked from `analyze_function` for
-/// functions that may propagate the allocation to a caller (FreshInCaller
-/// return or any published store effect). Conservative over-approximation —
-/// false positives are acceptable for a Note severity, false negatives
-/// would silently miss program-lifetime placements that §4.4's rationale
-/// targets.
+/// inferred region is `Caller(_)`, or that `note_region_map` records as a
+/// multi-slot widen-to-Root alloc (issue #366). Only invoked from
+/// `analyze_function` for functions that may propagate the allocation to a
+/// caller (FreshInCaller return or any published store effect). Conservative
+/// over-approximation — false positives are acceptable for a Note severity,
+/// false negatives would silently miss program-lifetime placements that
+/// §4.4's rationale targets.
 fn emit_root_escape_notes(
     func: &Function,
     region_map: &BTreeMap<InstId, RegionId>,
@@ -1710,7 +1721,10 @@ fn emit_root_escape_notes(
                     None => continue,
                 },
             };
-            if !matches!(rgn, RegionId::Caller(_)) {
+            // Flag `Caller(_)` allocs and anything `note_region_map` recorded
+            // (Caller internal-call results and multi-slot widen-to-Root allocs
+            // — issue #366); skip everything else.
+            if !matches!(rgn, RegionId::Caller(_)) && !note_region_map.contains_key(&inst.id) {
                 continue;
             }
             if returned_ids.contains(&inst.id) {
@@ -7453,11 +7467,12 @@ mod tests {
         );
     }
 
-    /// `RegionRootEscape` positive coverage (issue #366): a multi-slot
-    /// function — one that routes allocations into two distinct hidden
-    /// caller arenas — now emits the note. Before the gate was lifted,
-    /// `total_hidden_slots > 1` suppressed it, silently hiding the
-    /// multi-slot widen-to-Root leak.
+    /// `RegionRootEscape` positive coverage (issue #366): a single allocation
+    /// stored into two distinct hidden caller arenas widens to `Root`, and now
+    /// emits the note. Two things had to change: lifting the multi-slot gate
+    /// (`total_hidden_slots > 1` used to skip the pass entirely), AND teaching
+    /// the emitter to flag widened-`Root` allocs (it previously flagged only
+    /// `Caller(_)`), so the widen-to-Root leak is no longer silent.
     #[test]
     fn region_root_escape_note_emitted_for_multi_slot_routed_allocs() {
         // Callee stores arg[1] into arg[0]: one store target.
@@ -7474,8 +7489,10 @@ mod tests {
             Ty::Unit,
             vec![block(0, callee_insts)],
         );
-        // Caller routes one alloc into param `a` and another into param `b`
-        // — two distinct store targets → two hidden slots (multi-slot).
+        // Caller stores a SINGLE alloc into two distinct parameter containers
+        // → the alloc's marker set spans two hidden slots and widens to Root
+        // (the multi-slot widen-to-Root leak). This is exactly the case the
+        // note pass left silent even after the gate was lifted.
         let caller_insts = vec![
             inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
             inst(11, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
@@ -7495,19 +7512,12 @@ mod tests {
             ),
             inst(
                 14,
-                Opcode::RegionAlloc,
-                Ty::Ptr,
-                vec![],
-                InstData::AllocSize { size: 16, align: 8 },
-            ),
-            inst(
-                15,
                 Opcode::Call,
                 Ty::Unit,
-                vec![11, 14],
+                vec![11, 12],
                 InstData::CallTarget(FuncId(0)),
             ),
-            inst(16, Opcode::Return, Ty::Unit, vec![], InstData::None),
+            inst(15, Opcode::Return, Ty::Unit, vec![], InstData::None),
         ];
         let caller = function(
             1,
@@ -7519,8 +7529,14 @@ mod tests {
         let mut m = module(vec![callee, caller]);
         infer_regions(&mut m);
 
-        // With the multi-slot gate lifted, the routed Caller(_) allocs now
-        // surface RegionRootEscape notes (there were none before).
+        // The single alloc widened to Root across the two hidden slots...
+        assert_eq!(
+            m.functions[1].blocks[0].insts[2].region,
+            RegionId::Root,
+            "an alloc stored into two distinct containers should widen to Root"
+        );
+        // ...and with the gate lifted AND the emitter flagging widened-Root
+        // allocs, it now surfaces a RegionRootEscape note (silent before).
         let notes = m
             .warnings
             .iter()
@@ -7528,8 +7544,8 @@ mod tests {
             .count();
         assert!(
             notes >= 1,
-            "a multi-slot routing function should now emit RegionRootEscape \
-             notes (gate lifted); warnings: {:?}",
+            "a multi-slot widen-to-Root alloc should now emit a RegionRootEscape \
+             note; warnings: {:?}",
             m.warnings
         );
     }
