@@ -1474,18 +1474,38 @@ impl<'e> Checker<'e> {
             }
             ExprKind::Match { scrutinee, arms } => {
                 let scrutinee_ty = self.check_expr(scrutinee);
-                crate::exhaustiveness::check_exhaustive(
-                    &scrutinee_ty,
-                    arms,
-                    &self.env,
-                    expr.span,
-                    &self.file,
-                    self.emitter,
-                );
+                let supported_arms: Vec<bool> = arms
+                    .iter()
+                    .map(|arm| self.validate_arm_pattern(&arm.pattern))
+                    .collect();
+                let all_arms_supported = supported_arms.iter().all(|supported| *supported);
+                let scrutinee_supported = Self::is_enum_match_scrutinee(&scrutinee_ty);
+                if all_arms_supported && !scrutinee_supported {
+                    self.emit_error_with_hints(
+                        ErrorCode::UnsupportedPattern,
+                        format!("match scrutinee must be an enum, found `{scrutinee_ty}`"),
+                        scrutinee.span,
+                        vec!["use `if`/`else` comparisons for scalar values".to_string()],
+                    );
+                }
+                if all_arms_supported && scrutinee_supported {
+                    crate::exhaustiveness::check_exhaustive(
+                        &scrutinee_ty,
+                        arms,
+                        &self.env,
+                        expr.span,
+                        &self.file,
+                        self.emitter,
+                    );
+                }
                 let mut result_ty = Ty::Unit;
-                for (i, arm) in arms.iter().enumerate() {
+                for (i, (arm, pattern_supported)) in
+                    arms.iter().zip(supported_arms.iter()).enumerate()
+                {
                     self.env.push_scope();
-                    self.bind_arm_pattern(&arm.pattern, &scrutinee_ty);
+                    if *pattern_supported && scrutinee_supported {
+                        self.bind_arm_pattern(&arm.pattern, &scrutinee_ty);
+                    }
                     let arm_ty = self.check_expr(&arm.body);
                     self.exit_scope();
                     if i == 0 {
@@ -2082,6 +2102,70 @@ impl<'e> Checker<'e> {
             return Ty::Unit;
         }
         lhs
+    }
+
+    fn validate_arm_pattern(&mut self, pat: &Pat) -> bool {
+        let unsupported = match &pat.kind {
+            PatKind::Wildcard | PatKind::Ident { is_mut: false, .. } => None,
+            PatKind::Ident { is_mut: true, .. } => Some((
+                "mutable identifier patterns are not supported",
+                "remove `mut` from the identifier binding",
+            )),
+            PatKind::Lit(_) => Some((
+                "literal match patterns are not supported",
+                "use `if`/`else` comparisons for literal values",
+            )),
+            PatKind::Tuple(_) => Some((
+                "tuple match patterns are not supported",
+                "access tuple elements explicitly instead of destructuring in `match`",
+            )),
+            PatKind::Struct { .. } => Some((
+                "struct match patterns are not supported",
+                "access struct fields explicitly instead of destructuring in `match`",
+            )),
+            PatKind::Or(_) => Some((
+                "or-patterns are not supported",
+                "write a separate match arm for each enum variant",
+            )),
+            PatKind::EnumVariant { path, inner } if path.len() != 2 => Some((
+                "enum variant patterns must use a qualified `Enum::Variant` path",
+                "qualify the variant with its enum name",
+            )),
+            PatKind::EnumVariant { inner, .. }
+                if inner.iter().any(|pat| {
+                    !matches!(
+                        pat.kind,
+                        PatKind::Wildcard | PatKind::Ident { is_mut: false, .. }
+                    )
+                }) =>
+            {
+                Some((
+                    "nested enum payload patterns are not supported",
+                    "bind each payload to an immutable identifier and inspect it separately",
+                ))
+            }
+            PatKind::EnumVariant { .. } => None,
+        };
+
+        if let Some((message, hint)) = unsupported {
+            self.emit_error_with_hints(
+                ErrorCode::UnsupportedPattern,
+                message,
+                pat.span,
+                vec![hint.to_string()],
+            );
+            false
+        } else {
+            true
+        }
+    }
+
+    fn is_enum_match_scrutinee(ty: &Ty) -> bool {
+        match ty {
+            Ty::Enum(_) => true,
+            Ty::Applied(base, _) => matches!(base.as_ref(), Ty::Enum(_)),
+            _ => false,
+        }
     }
 
     fn check_same_integer(&mut self, lhs: Ty, rhs: Ty, op_span: Span) -> Ty {
@@ -3595,7 +3679,7 @@ mod tests {
     // --- Match expression ---
 
     #[test]
-    fn match_expr_all_arms_same_type_ok() {
+    fn match_expr_literal_patterns_are_unsupported() {
         use vow_syntax::ast::{MatchArm, Pat, PatKind};
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
@@ -3622,7 +3706,69 @@ mod tests {
         });
         let ty = checker.check_expr(&expr);
         assert_eq!(ty, Ty::LitInt);
-        assert!(!checker.has_errors());
+        assert!(checker.has_errors());
+        assert_eq!(
+            emitter
+                .0
+                .iter()
+                .filter(|diagnostic| diagnostic.code == ErrorCode::UnsupportedPattern)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn unsupported_arm_pattern_kinds_are_rejected() {
+        use vow_syntax::ast::{Pat, PatKind};
+
+        let ident = || Pat {
+            kind: PatKind::Ident {
+                name: "x".to_string(),
+                is_mut: false,
+            },
+            span: dummy_span(),
+        };
+        let patterns = vec![
+            PatKind::Lit(Lit::Int(0)),
+            PatKind::Lit(Lit::Bool(true)),
+            PatKind::Lit(Lit::String("hello".to_string())),
+            PatKind::Ident {
+                name: "x".to_string(),
+                is_mut: true,
+            },
+            PatKind::Tuple(vec![ident()]),
+            PatKind::Struct {
+                name: "Point".to_string(),
+                fields: vec![("x".to_string(), ident())],
+            },
+            PatKind::Or(vec![ident(), ident()]),
+            PatKind::EnumVariant {
+                path: vec!["Some".to_string()],
+                inner: vec![ident()],
+            },
+            PatKind::EnumVariant {
+                path: vec!["Outer".to_string(), "Inner".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::EnumVariant {
+                        path: vec!["Nested".to_string(), "Value".to_string()],
+                        inner: vec![],
+                    },
+                    span: dummy_span(),
+                }],
+            },
+        ];
+
+        for kind in patterns {
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            let pattern = Pat {
+                kind,
+                span: dummy_span(),
+            };
+            assert!(!checker.validate_arm_pattern(&pattern));
+            assert_eq!(emitter.0.len(), 1);
+            assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+        }
     }
 
     #[test]

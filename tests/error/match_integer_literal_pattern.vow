@@ -1,0 +1,16 @@
+// TEST: error-code UnsupportedPattern
+// TEST: build-json x['span']['offset'] > 0 and x['span']['length'] > 0
+module MatchIntegerLiteralPattern
+
+fn f(n: i64) -> i64 {
+    match n {
+        0 => 5,
+        _ => 9,
+    }
+}
+
+fn main() -> i32 [io] {
+    print_i64(f(0));
+    print_i64(f(7));
+    0
+}
