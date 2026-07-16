@@ -13,6 +13,22 @@ const KING: i64 = 6;
 
 const INF: i64 = 100000000;
 const MATE: i64 = 1000000;
+const MATE_THRESHOLD: i64 = 999000;
+const MAX_DEPTH: i64 = 64;
+const KILLER_SLOTS: i64 = 132;
+const HISTORY_SIZE: i64 = 4096;
+const HISTORY_ORDER_CAP: i64 = 60000;
+const KILLER1_BONUS: i64 = 90000;
+const KILLER2_BONUS: i64 = 80000;
+const TT_MOVE_BONUS: i64 = 3000000;
+
+const ZOB_SIZE: i64 = 781;
+const TT_SIZE: i64 = 1048576;
+const TT_MASK: i64 = 1048575;
+const TT_EXACT: i64 = 1;
+const TT_LOWER: i64 = 2;
+const TT_UPPER: i64 = 3;
+const REP_SIZE: i64 = 512;
 
 struct ChessMove {
     from: i64,
@@ -31,6 +47,9 @@ struct Board {
     wq: i64,
     bk: i64,
     bq: i64,
+    wk_sq: i64,
+    bk_sq: i64,
+    halfmove: i64,
 }
 
 struct UndoInfo {
@@ -48,17 +67,44 @@ struct UndoInfo {
     castle_rook_to: i64,
     castle_rook_piece: i64,
     placed: i64,
+    old_halfmove: i64,
+}
+
+struct TTEntry {
+    key: i64,
+    depth: i64,
+    score: i64,
+    flag: i64,
+    movekey: i64,
 }
 
 struct SearchState {
     stopped: i64,
     nodes: i64,
+    deadline: i64,
+    killers: Vec<i64>,
+    history: Vec<i64>,
+    ztab: Vec<i64>,
+    tt: Vec<TTEntry>,
+    pst: Vec<i64>,
+    rep: Vec<i64>,
     pending: Vec<String>,
 }
 
 struct UciState {
     board: Board,
     running: i64,
+    ztab: Vec<i64>,
+    tt: Vec<TTEntry>,
+    pst: Vec<i64>,
+}
+
+// Parsed `go` limits. If fixed_depth > 0, search exactly that depth with no
+// clock. Otherwise search until budget_ms of wall-clock elapse (iterative
+// deepening up to MAX_DEPTH).
+struct GoLimits {
+    fixed_depth: i64,
+    budget_ms: i64,
 }
 
 fn abs_i64(x: i64) -> i64 {
@@ -171,6 +217,9 @@ fn start_board() -> Board {
         wq: 1,
         bk: 1,
         bq: 1,
+        wk_sq: 4,
+        bk_sq: 60,
+        halfmove: 0,
     };
     let sqs: Vec<i64> = b.squares;
     let mut i: i64 = 0;
@@ -218,56 +267,33 @@ fn start_board() -> Board {
 }
 
 fn find_king(b: Board, color: i64) -> i64 {
-    let target: i64 = color * KING;
-    let sqs: Vec<i64> = b.squares;
-    let mut sq: i64 = 0;
-    while sq < 64 {
-        if sqs[sq] == target {
-            return sq;
-        }
-        sq = sq + 1;
+    if color == WHITE {
+        b.wk_sq
+    } else {
+        b.bk_sq
     }
-    -1
 }
 
-// Check if a slider piece (piece1 or piece2) attacks along any direction in dirs.
-// dirs is a flat Vec of (df, dr) pairs: [df0, dr0, df1, dr1, ...].
-fn slider_attacks_from(sqs: Vec<i64>, file: i64, rank: i64, dirs: Vec<i64>, piece1: i64, piece2: i64) -> bool {
-    let mut d: i64 = 0;
-    while d < dirs.len() {
-        let df: i64 = dirs[d];
-        let dr: i64 = dirs[d + 1];
-        let mut f: i64 = file + df;
-        let mut r: i64 = rank + dr;
-        while on_board(f, r) {
-            let p: i64 = sqs[make_sq(f, r)];
-            if p != 0 {
-                if p == piece1 || p == piece2 {
-                    return true;
-                }
-                break;
-            }
-            f = f + df;
-            r = r + dr;
+// Walk a ray from (file,rank) in direction (df,dr); return true if the first
+// piece hit is piece1 or piece2. Allocation-free (scalar, no direction Vecs).
+fn ray_hits(sqs: Vec<i64>, file: i64, rank: i64, df: i64, dr: i64, piece1: i64, piece2: i64) -> bool {
+    let mut f: i64 = file + df;
+    let mut r: i64 = rank + dr;
+    while on_board(f, r) {
+        let p: i64 = sqs[make_sq(f, r)];
+        if p != 0 {
+            return p == piece1 || p == piece2;
         }
-        d = d + 2;
+        f = f + df;
+        r = r + dr;
     }
     false
 }
 
-// Check if target piece is at any of the step offsets from (file, rank).
-// offsets is a flat Vec of (df, dr) pairs.
-fn step_attacks_from(sqs: Vec<i64>, file: i64, rank: i64, offsets: Vec<i64>, target: i64) -> bool {
-    let mut d: i64 = 0;
-    while d < offsets.len() {
-        let f: i64 = file + offsets[d];
-        let r: i64 = rank + offsets[d + 1];
-        if on_board(f, r) && sqs[make_sq(f, r)] == target {
-            return true;
-        }
-        d = d + 2;
-    }
-    false
+fn step_hits(sqs: Vec<i64>, file: i64, rank: i64, df: i64, dr: i64, target: i64) -> bool {
+    let f: i64 = file + df;
+    let r: i64 = rank + dr;
+    on_board(f, r) && sqs[make_sq(f, r)] == target
 }
 
 fn square_attacked(b: Board, sq: i64, by_color: i64) -> bool {
@@ -293,37 +319,34 @@ fn square_attacked(b: Board, sq: i64, by_color: i64) -> bool {
     }
 
     // Knight
-    let nk: Vec<i64> = Vec::new();
-    nk.push(1);  nk.push(2);   nk.push(2);  nk.push(1);
-    nk.push(-1); nk.push(2);   nk.push(-2); nk.push(1);
-    nk.push(1);  nk.push(-2);  nk.push(2);  nk.push(-1);
-    nk.push(-1); nk.push(-2);  nk.push(-2); nk.push(-1);
-    if step_attacks_from(sqs, file, rank, nk, by_color * KNIGHT) {
+    let n: i64 = by_color * KNIGHT;
+    if step_hits(sqs, file, rank, 1, 2, n) || step_hits(sqs, file, rank, 2, 1, n)
+        || step_hits(sqs, file, rank, -1, 2, n) || step_hits(sqs, file, rank, -2, 1, n)
+        || step_hits(sqs, file, rank, 1, -2, n) || step_hits(sqs, file, rank, 2, -1, n)
+        || step_hits(sqs, file, rank, -1, -2, n) || step_hits(sqs, file, rank, -2, -1, n) {
         return true;
     }
 
     // Bishop/Queen (diagonals)
-    let diag: Vec<i64> = Vec::new();
-    diag.push(1);  diag.push(1);   diag.push(-1); diag.push(1);
-    diag.push(1);  diag.push(-1);  diag.push(-1); diag.push(-1);
-    if slider_attacks_from(sqs, file, rank, diag, by_color * BISHOP, by_color * QUEEN) {
+    let bshp: i64 = by_color * BISHOP;
+    let q: i64 = by_color * QUEEN;
+    if ray_hits(sqs, file, rank, 1, 1, bshp, q) || ray_hits(sqs, file, rank, -1, 1, bshp, q)
+        || ray_hits(sqs, file, rank, 1, -1, bshp, q) || ray_hits(sqs, file, rank, -1, -1, bshp, q) {
         return true;
     }
 
     // Rook/Queen (straights)
-    let straight: Vec<i64> = Vec::new();
-    straight.push(1);  straight.push(0);   straight.push(-1); straight.push(0);
-    straight.push(0);  straight.push(1);   straight.push(0);  straight.push(-1);
-    if slider_attacks_from(sqs, file, rank, straight, by_color * ROOK, by_color * QUEEN) {
+    let rk: i64 = by_color * ROOK;
+    if ray_hits(sqs, file, rank, 1, 0, rk, q) || ray_hits(sqs, file, rank, -1, 0, rk, q)
+        || ray_hits(sqs, file, rank, 0, 1, rk, q) || ray_hits(sqs, file, rank, 0, -1, rk, q) {
         return true;
     }
 
     // King
-    let kg: Vec<i64> = Vec::new();
-    kg.push(-1); kg.push(-1);  kg.push(0); kg.push(-1);  kg.push(1); kg.push(-1);
-    kg.push(-1); kg.push(0);   kg.push(1); kg.push(0);
-    kg.push(-1); kg.push(1);   kg.push(0); kg.push(1);   kg.push(1); kg.push(1);
-    step_attacks_from(sqs, file, rank, kg, by_color * KING)
+    let k: i64 = by_color * KING;
+    step_hits(sqs, file, rank, -1, -1, k) || step_hits(sqs, file, rank, 0, -1, k) || step_hits(sqs, file, rank, 1, -1, k)
+        || step_hits(sqs, file, rank, -1, 0, k) || step_hits(sqs, file, rank, 1, 0, k)
+        || step_hits(sqs, file, rank, -1, 1, k) || step_hits(sqs, file, rank, 0, 1, k) || step_hits(sqs, file, rank, 1, 1, k)
 }
 
 fn in_check(b: Board, color: i64) -> bool {
@@ -588,6 +611,14 @@ fn make_move(b: Board, mv: ChessMove) -> UndoInfo {
     let old_wq: i64 = b.wq;
     let old_bk: i64 = b.bk;
     let old_bq: i64 = b.bq;
+    let old_halfmove: i64 = b.halfmove;
+
+    // Halfmove clock: reset on a pawn move or any capture (irreversible), else +1.
+    if piece_kind(moving) == 1 || captured != 0 || mv.en_passant == 1 {
+        b.halfmove = 0;
+    } else {
+        b.halfmove = old_halfmove + 1;
+    }
 
     let mut ep_capture_sq: i64 = -1;
     let mut ep_capture_piece: i64 = 0;
@@ -653,10 +684,12 @@ fn make_move(b: Board, mv: ChessMove) -> UndoInfo {
     if moving == 6 {
         b.wk = 0;
         b.wq = 0;
+        b.wk_sq = mv.to;
     }
     if moving == -6 {
         b.bk = 0;
         b.bq = 0;
+        b.bk_sq = mv.to;
     }
 
     if moving == 4 && mv.from == 0 {
@@ -709,6 +742,7 @@ fn make_move(b: Board, mv: ChessMove) -> UndoInfo {
         castle_rook_to: castle_rook_to,
         castle_rook_piece: castle_rook_piece,
         placed: placed,
+        old_halfmove: old_halfmove,
     }
 }
 
@@ -733,6 +767,13 @@ fn unmake_move(b: Board, mv: ChessMove, u: UndoInfo) {
     b.wq = u.old_wq;
     b.bk = u.old_bk;
     b.bq = u.old_bq;
+    if u.from_sq == 6 {
+        b.wk_sq = mv.from;
+    }
+    if u.from_sq == -6 {
+        b.bk_sq = mv.from;
+    }
+    b.halfmove = u.old_halfmove;
 }
 
 fn generate_legal_moves(b: Board) -> Vec<ChessMove> {
@@ -753,6 +794,26 @@ fn generate_legal_moves(b: Board) -> Vec<ChessMove> {
     legal
 }
 
+fn perft(b: Board, depth: i64) -> i64 {
+    if depth <= 0 {
+        return 1;
+    }
+    let moves: Vec<ChessMove> = generate_legal_moves(b);
+    if depth == 1 {
+        return moves.len();
+    }
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < moves.len() {
+        let mv: ChessMove = moves[i];
+        let undo: UndoInfo = make_move(b, mv);
+        total = total + perft(b, depth - 1);
+        unmake_move(b, mv, undo);
+        i = i + 1;
+    }
+    total
+}
+
 fn center_distance(file: i64, rank: i64) -> i64 {
     let file_dist: i64 = min_i64(abs_i64(file - 3), abs_i64(file - 4));
     let rank_dist: i64 = min_i64(abs_i64(rank - 3), abs_i64(rank - 4));
@@ -762,54 +823,6 @@ fn center_distance(file: i64, rank: i64) -> i64 {
 fn center_bonus(file: i64, rank: i64) -> i64 {
     let score: i64 = 6 - 2 * center_distance(file, rank);
     max_i64(score, 0)
-}
-
-fn piece_eval(piece: i64, sq: i64) -> i64 {
-    let kind: i64 = piece_kind(piece);
-    let file: i64 = file_of(sq);
-    let rank: i64 = rank_of(sq);
-    let advance: i64 = if piece > 0 { rank } else { 7 - rank };
-    let center: i64 = center_bonus(file, rank);
-    let mut score: i64 = piece_value(kind);
-
-    if kind == 1 {
-        score = score + advance * 12 + center * 6;
-        if file == 3 || file == 4 {
-            score = score + 14;
-        }
-        if advance >= 4 {
-            score = score + 10;
-        }
-    } else {
-        if kind == 2 {
-            score = score + center * 18 + advance * 4;
-            if file == 0 || file == 7 {
-                score = score - 18;
-            }
-        } else {
-            if kind == 3 {
-                score = score + center * 12 + advance * 3;
-            } else {
-                if kind == 4 {
-                    if advance >= 5 {
-                        score = score + 24;
-                    }
-                } else {
-                    if kind == 5 {
-                        score = score + center * 4;
-                    } else {
-                        score = score - center * 10;
-                    }
-                }
-            }
-        }
-    }
-
-    if piece > 0 {
-        score
-    } else {
-        -score
-    }
 }
 
 fn side_structure_score(b: Board, color: i64) -> i64 {
@@ -883,18 +896,155 @@ fn side_structure_score(b: Board, color: i64) -> i64 {
     score
 }
 
-fn evaluate_board(b: Board) -> i64 {
+// Positional terms beyond the PeSTO tables: pawn structure
+// (doubled/isolated/passed), rook activity (open/semi-open files, 7th rank),
+// and tapered king safety. Returned white-positive.
+fn positional_score(b: Board) -> i64 {
     let sqs: Vec<i64> = b.squares;
-    let mut score: i64 = 0;
+    let wfile: Vec<i64> = make_zeros(8);
+    let bfile: Vec<i64> = make_zeros(8);
+    let wmin: Vec<i64> = make_zeros(8);
+    let bmax: Vec<i64> = make_zeros(8);
+    let mut f: i64 = 0;
+    while f < 8 {
+        wmin[f] = 8;
+        bmax[f] = -1;
+        f = f + 1;
+    }
+
     let mut sq: i64 = 0;
     while sq < 64 {
-        let piece: i64 = sqs[sq];
-        if piece != 0 {
-            score = score + piece_eval(piece, sq);
+        let p: i64 = sqs[sq];
+        if p == 1 {
+            let ff: i64 = file_of(sq);
+            let rr: i64 = rank_of(sq);
+            wfile[ff] = wfile[ff] + 1;
+            if rr < wmin[ff] {
+                wmin[ff] = rr;
+            }
+        } else if p == -1 {
+            let ff: i64 = file_of(sq);
+            let rr: i64 = rank_of(sq);
+            bfile[ff] = bfile[ff] + 1;
+            if rr > bmax[ff] {
+                bmax[ff] = rr;
+            }
         }
         sq = sq + 1;
     }
-    score + side_structure_score(b, 1) - side_structure_score(b, -1)
+
+    let mut score: i64 = 0;
+    sq = 0;
+    while sq < 64 {
+        let p: i64 = sqs[sq];
+        if p == 1 {
+            let ff: i64 = file_of(sq);
+            let rr: i64 = rank_of(sq);
+            if wfile[ff] >= 2 {
+                score = score - 12;
+            }
+            let wl: i64 = if ff > 0 { wfile[ff - 1] } else { 0 };
+            let wr: i64 = if ff < 7 { wfile[ff + 1] } else { 0 };
+            if wl == 0 && wr == 0 {
+                score = score - 16;
+            }
+            let bl: i64 = if ff > 0 { bmax[ff - 1] } else { -1 };
+            let br: i64 = if ff < 7 { bmax[ff + 1] } else { -1 };
+            if bl <= rr && bmax[ff] <= rr && br <= rr {
+                score = score + rr * rr * 3 + 10;
+            }
+        } else if p == -1 {
+            let ff: i64 = file_of(sq);
+            let rr: i64 = rank_of(sq);
+            if bfile[ff] >= 2 {
+                score = score + 12;
+            }
+            let bl2: i64 = if ff > 0 { bfile[ff - 1] } else { 0 };
+            let br2: i64 = if ff < 7 { bfile[ff + 1] } else { 0 };
+            if bl2 == 0 && br2 == 0 {
+                score = score + 16;
+            }
+            let wl2: i64 = if ff > 0 { wmin[ff - 1] } else { 8 };
+            let wr2: i64 = if ff < 7 { wmin[ff + 1] } else { 8 };
+            if wl2 >= rr && wmin[ff] >= rr && wr2 >= rr {
+                let adv: i64 = 7 - rr;
+                score = score - (adv * adv * 3 + 10);
+            }
+        }
+        sq = sq + 1;
+    }
+
+    sq = 0;
+    while sq < 64 {
+        let p: i64 = sqs[sq];
+        let ff: i64 = file_of(sq);
+        let rr: i64 = rank_of(sq);
+        if p == 4 {
+            if wfile[ff] == 0 {
+                if bfile[ff] == 0 {
+                    score = score + 20;
+                } else {
+                    score = score + 10;
+                }
+            }
+            if rr == 6 {
+                score = score + 20;
+            }
+        } else if p == -4 {
+            if bfile[ff] == 0 {
+                if wfile[ff] == 0 {
+                    score = score - 20;
+                } else {
+                    score = score - 10;
+                }
+            }
+            if rr == 1 {
+                score = score - 20;
+            }
+        }
+        sq = sq + 1;
+    }
+
+    score
+}
+
+// PeSTO tapered piece-square evaluation. Each side's material+placement is
+// accumulated for midgame and endgame from the pst tables, then blended by the
+// game phase. White uses pst[sq]; black mirrors the rank (sq ^ 56) and negates.
+fn evaluate_board(b: Board, pst: Vec<i64>) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    let mut mg: i64 = 0;
+    let mut eg: i64 = 0;
+    let mut phase: i64 = 0;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let p: i64 = sqs[sq];
+        if p != 0 {
+            let kind: i64 = piece_kind(p);
+            if kind == 2 || kind == 3 {
+                phase = phase + 1;
+            } else if kind == 4 {
+                phase = phase + 2;
+            } else if kind == 5 {
+                phase = phase + 4;
+            }
+            if p > 0 {
+                mg = mg + pst[(kind - 1) * 64 + sq];
+                eg = eg + pst[(6 + kind - 1) * 64 + sq];
+            } else {
+                let msq: i64 = sq ^ 56;
+                mg = mg - pst[(kind - 1) * 64 + msq];
+                eg = eg - pst[(6 + kind - 1) * 64 + msq];
+            }
+        }
+        sq = sq + 1;
+    }
+    if phase > 24 {
+        phase = 24;
+    }
+    let mut score: i64 = (mg * phase + eg * (24 - phase)) / 24;
+    score = score + side_structure_score(b, 1) - side_structure_score(b, -1) + positional_score(b);
+    score
 }
 
 fn captured_piece_value(b: Board, mv: ChessMove) -> i64 {
@@ -910,6 +1060,193 @@ fn captured_piece_value(b: Board, mv: ChessMove) -> i64 {
     }
 }
 
+fn move_key(mv: ChessMove) -> i64 {
+    mv.from + mv.to * 64 + mv.promote * 4096
+}
+
+fn make_zeros(n: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        v.push(0);
+        i = i + 1;
+    }
+    v
+}
+
+// Deterministic Zobrist table (splitmix64, fixed seed). Layout: [0..768) piece
+// x square, [768] side-to-move, [769..773) castling, [773..781) ep file.
+fn build_ztab() -> Vec<i64> {
+    let t: Vec<i64> = Vec::new();
+    let mut state: u64 = 8378711321616135283u64;
+    let mut i: i64 = 0;
+    while i < ZOB_SIZE {
+        state = state + 11400714819323198485u64;
+        let mut z: u64 = state;
+        z = (z ^ (z >> 30u32)) * 13787848793156543929u64;
+        z = (z ^ (z >> 27u32)) * 10723151780598845931u64;
+        z = z ^ (z >> 31u32);
+        t.push(z as i64);
+        i = i + 1;
+    }
+    t
+}
+
+fn build_tt() -> Vec<TTEntry> {
+    let tt: Vec<TTEntry> = Vec::new();
+    let mut i: i64 = 0;
+    while i < TT_SIZE {
+        tt.push(TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 });
+        i = i + 1;
+    }
+    tt
+}
+
+fn build_pst() -> Vec<i64> {
+    let t: Vec<i64> = Vec::new();
+    t.push(82);t.push(82);t.push(82);t.push(82);t.push(82);t.push(82);t.push(82);t.push(82);
+    t.push(47);t.push(81);t.push(62);t.push(59);t.push(67);t.push(106);t.push(120);t.push(60);
+    t.push(56);t.push(78);t.push(78);t.push(72);t.push(85);t.push(85);t.push(115);t.push(70);
+    t.push(55);t.push(80);t.push(77);t.push(94);t.push(99);t.push(88);t.push(92);t.push(57);
+    t.push(68);t.push(95);t.push(88);t.push(103);t.push(105);t.push(94);t.push(99);t.push(59);
+    t.push(76);t.push(89);t.push(108);t.push(113);t.push(147);t.push(138);t.push(107);t.push(62);
+    t.push(180);t.push(216);t.push(143);t.push(177);t.push(150);t.push(208);t.push(116);t.push(71);
+    t.push(82);t.push(82);t.push(82);t.push(82);t.push(82);t.push(82);t.push(82);t.push(82);
+    t.push(232);t.push(316);t.push(279);t.push(304);t.push(320);t.push(309);t.push(318);t.push(314);
+    t.push(308);t.push(284);t.push(325);t.push(334);t.push(336);t.push(355);t.push(323);t.push(318);
+    t.push(314);t.push(328);t.push(349);t.push(347);t.push(356);t.push(354);t.push(362);t.push(321);
+    t.push(324);t.push(341);t.push(353);t.push(350);t.push(365);t.push(356);t.push(358);t.push(329);
+    t.push(328);t.push(354);t.push(356);t.push(390);t.push(374);t.push(406);t.push(355);t.push(359);
+    t.push(290);t.push(397);t.push(374);t.push(402);t.push(421);t.push(466);t.push(410);t.push(381);
+    t.push(264);t.push(296);t.push(409);t.push(373);t.push(360);t.push(399);t.push(344);t.push(320);
+    t.push(170);t.push(248);t.push(303);t.push(288);t.push(398);t.push(240);t.push(322);t.push(230);
+    t.push(332);t.push(362);t.push(351);t.push(344);t.push(352);t.push(353);t.push(326);t.push(344);
+    t.push(369);t.push(380);t.push(381);t.push(365);t.push(372);t.push(386);t.push(398);t.push(366);
+    t.push(365);t.push(380);t.push(380);t.push(380);t.push(379);t.push(392);t.push(383);t.push(375);
+    t.push(359);t.push(378);t.push(378);t.push(391);t.push(399);t.push(377);t.push(375);t.push(369);
+    t.push(361);t.push(370);t.push(384);t.push(415);t.push(402);t.push(402);t.push(372);t.push(363);
+    t.push(349);t.push(402);t.push(408);t.push(405);t.push(400);t.push(415);t.push(402);t.push(363);
+    t.push(339);t.push(381);t.push(347);t.push(352);t.push(395);t.push(424);t.push(383);t.push(318);
+    t.push(336);t.push(369);t.push(283);t.push(328);t.push(340);t.push(323);t.push(372);t.push(357);
+    t.push(458);t.push(464);t.push(478);t.push(494);t.push(493);t.push(484);t.push(440);t.push(451);
+    t.push(433);t.push(461);t.push(457);t.push(468);t.push(476);t.push(488);t.push(471);t.push(406);
+    t.push(432);t.push(452);t.push(461);t.push(460);t.push(480);t.push(477);t.push(472);t.push(444);
+    t.push(441);t.push(451);t.push(465);t.push(476);t.push(486);t.push(470);t.push(483);t.push(454);
+    t.push(453);t.push(466);t.push(484);t.push(503);t.push(501);t.push(512);t.push(469);t.push(457);
+    t.push(472);t.push(496);t.push(503);t.push(513);t.push(494);t.push(522);t.push(538);t.push(493);
+    t.push(504);t.push(509);t.push(535);t.push(539);t.push(557);t.push(544);t.push(503);t.push(521);
+    t.push(509);t.push(519);t.push(509);t.push(528);t.push(540);t.push(486);t.push(508);t.push(520);
+    t.push(1024);t.push(1007);t.push(1016);t.push(1035);t.push(1010);t.push(1000);t.push(994);t.push(975);
+    t.push(990);t.push(1017);t.push(1036);t.push(1027);t.push(1033);t.push(1040);t.push(1022);t.push(1026);
+    t.push(1011);t.push(1027);t.push(1014);t.push(1023);t.push(1020);t.push(1027);t.push(1039);t.push(1030);
+    t.push(1016);t.push(999);t.push(1016);t.push(1015);t.push(1023);t.push(1021);t.push(1028);t.push(1022);
+    t.push(998);t.push(998);t.push(1009);t.push(1009);t.push(1024);t.push(1042);t.push(1023);t.push(1026);
+    t.push(1012);t.push(1008);t.push(1032);t.push(1033);t.push(1054);t.push(1081);t.push(1072);t.push(1082);
+    t.push(1001);t.push(986);t.push(1020);t.push(1026);t.push(1009);t.push(1082);t.push(1053);t.push(1079);
+    t.push(997);t.push(1025);t.push(1054);t.push(1037);t.push(1084);t.push(1069);t.push(1068);t.push(1070);
+    t.push(-15);t.push(36);t.push(12);t.push(-54);t.push(8);t.push(-28);t.push(24);t.push(14);
+    t.push(1);t.push(7);t.push(-8);t.push(-64);t.push(-43);t.push(-16);t.push(9);t.push(8);
+    t.push(-14);t.push(-14);t.push(-22);t.push(-46);t.push(-44);t.push(-30);t.push(-15);t.push(-27);
+    t.push(-49);t.push(-1);t.push(-27);t.push(-39);t.push(-46);t.push(-44);t.push(-33);t.push(-51);
+    t.push(-17);t.push(-20);t.push(-12);t.push(-27);t.push(-30);t.push(-25);t.push(-14);t.push(-36);
+    t.push(-9);t.push(24);t.push(2);t.push(-16);t.push(-20);t.push(6);t.push(22);t.push(-22);
+    t.push(29);t.push(-1);t.push(-20);t.push(-7);t.push(-8);t.push(-4);t.push(-38);t.push(-29);
+    t.push(-65);t.push(23);t.push(16);t.push(-15);t.push(-56);t.push(-34);t.push(2);t.push(13);
+    t.push(94);t.push(94);t.push(94);t.push(94);t.push(94);t.push(94);t.push(94);t.push(94);
+    t.push(107);t.push(102);t.push(102);t.push(104);t.push(107);t.push(94);t.push(96);t.push(87);
+    t.push(98);t.push(101);t.push(88);t.push(95);t.push(94);t.push(89);t.push(93);t.push(86);
+    t.push(107);t.push(103);t.push(91);t.push(87);t.push(87);t.push(86);t.push(97);t.push(93);
+    t.push(126);t.push(118);t.push(107);t.push(99);t.push(92);t.push(98);t.push(111);t.push(111);
+    t.push(188);t.push(194);t.push(179);t.push(161);t.push(150);t.push(147);t.push(176);t.push(178);
+    t.push(272);t.push(267);t.push(252);t.push(228);t.push(241);t.push(226);t.push(259);t.push(281);
+    t.push(94);t.push(94);t.push(94);t.push(94);t.push(94);t.push(94);t.push(94);t.push(94);
+    t.push(252);t.push(230);t.push(258);t.push(266);t.push(259);t.push(263);t.push(231);t.push(217);
+    t.push(239);t.push(261);t.push(271);t.push(276);t.push(279);t.push(261);t.push(258);t.push(237);
+    t.push(258);t.push(278);t.push(280);t.push(296);t.push(291);t.push(278);t.push(261);t.push(259);
+    t.push(263);t.push(275);t.push(297);t.push(306);t.push(297);t.push(298);t.push(285);t.push(263);
+    t.push(264);t.push(284);t.push(303);t.push(303);t.push(303);t.push(292);t.push(289);t.push(263);
+    t.push(257);t.push(261);t.push(291);t.push(290);t.push(280);t.push(272);t.push(262);t.push(240);
+    t.push(256);t.push(273);t.push(256);t.push(279);t.push(272);t.push(256);t.push(257);t.push(229);
+    t.push(223);t.push(243);t.push(268);t.push(253);t.push(250);t.push(254);t.push(218);t.push(182);
+    t.push(274);t.push(288);t.push(274);t.push(292);t.push(288);t.push(281);t.push(292);t.push(280);
+    t.push(283);t.push(279);t.push(290);t.push(296);t.push(301);t.push(288);t.push(282);t.push(270);
+    t.push(285);t.push(294);t.push(305);t.push(307);t.push(310);t.push(300);t.push(290);t.push(282);
+    t.push(291);t.push(300);t.push(310);t.push(316);t.push(304);t.push(307);t.push(294);t.push(288);
+    t.push(294);t.push(306);t.push(309);t.push(306);t.push(311);t.push(307);t.push(300);t.push(299);
+    t.push(299);t.push(289);t.push(297);t.push(296);t.push(295);t.push(303);t.push(297);t.push(301);
+    t.push(289);t.push(293);t.push(304);t.push(285);t.push(294);t.push(284);t.push(293);t.push(283);
+    t.push(283);t.push(276);t.push(286);t.push(289);t.push(290);t.push(288);t.push(280);t.push(273);
+    t.push(503);t.push(514);t.push(515);t.push(511);t.push(507);t.push(499);t.push(516);t.push(492);
+    t.push(506);t.push(506);t.push(512);t.push(514);t.push(503);t.push(503);t.push(501);t.push(509);
+    t.push(508);t.push(512);t.push(507);t.push(511);t.push(505);t.push(500);t.push(504);t.push(496);
+    t.push(515);t.push(517);t.push(520);t.push(516);t.push(507);t.push(506);t.push(504);t.push(501);
+    t.push(516);t.push(515);t.push(525);t.push(513);t.push(514);t.push(513);t.push(511);t.push(514);
+    t.push(519);t.push(519);t.push(519);t.push(517);t.push(516);t.push(509);t.push(507);t.push(509);
+    t.push(523);t.push(525);t.push(525);t.push(523);t.push(509);t.push(515);t.push(520);t.push(515);
+    t.push(525);t.push(522);t.push(530);t.push(527);t.push(524);t.push(524);t.push(520);t.push(517);
+    t.push(903);t.push(908);t.push(914);t.push(893);t.push(931);t.push(904);t.push(916);t.push(895);
+    t.push(914);t.push(913);t.push(906);t.push(920);t.push(920);t.push(913);t.push(900);t.push(904);
+    t.push(920);t.push(909);t.push(951);t.push(942);t.push(945);t.push(953);t.push(946);t.push(941);
+    t.push(918);t.push(964);t.push(955);t.push(983);t.push(967);t.push(970);t.push(975);t.push(959);
+    t.push(939);t.push(958);t.push(960);t.push(981);t.push(993);t.push(976);t.push(993);t.push(972);
+    t.push(916);t.push(942);t.push(945);t.push(985);t.push(983);t.push(971);t.push(955);t.push(945);
+    t.push(919);t.push(956);t.push(968);t.push(977);t.push(994);t.push(961);t.push(966);t.push(936);
+    t.push(927);t.push(958);t.push(958);t.push(963);t.push(963);t.push(955);t.push(946);t.push(956);
+    t.push(-53);t.push(-34);t.push(-21);t.push(-11);t.push(-28);t.push(-14);t.push(-24);t.push(-43);
+    t.push(-27);t.push(-11);t.push(4);t.push(13);t.push(14);t.push(4);t.push(-5);t.push(-17);
+    t.push(-19);t.push(-3);t.push(11);t.push(21);t.push(23);t.push(16);t.push(7);t.push(-9);
+    t.push(-18);t.push(-4);t.push(21);t.push(24);t.push(27);t.push(23);t.push(9);t.push(-11);
+    t.push(-8);t.push(22);t.push(24);t.push(27);t.push(26);t.push(33);t.push(26);t.push(3);
+    t.push(10);t.push(17);t.push(23);t.push(15);t.push(20);t.push(45);t.push(44);t.push(13);
+    t.push(-12);t.push(17);t.push(14);t.push(17);t.push(17);t.push(38);t.push(23);t.push(11);
+    t.push(-74);t.push(-35);t.push(-18);t.push(-18);t.push(-11);t.push(15);t.push(4);t.push(-17);
+    t
+}
+
+fn zob_piece_index(piece: i64) -> i64 {
+    if piece > 0 {
+        piece - 1
+    } else {
+        5 + (-piece)
+    }
+}
+
+fn compute_zkey(b: Board, ztab: Vec<i64>) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    let mut key: i64 = 0;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let p: i64 = sqs[sq];
+        if p != 0 {
+            key = key ^ ztab[zob_piece_index(p) * 64 + sq];
+        }
+        sq = sq + 1;
+    }
+    if b.side == -1 {
+        key = key ^ ztab[768];
+    }
+    if b.wk == 1 {
+        key = key ^ ztab[769];
+    }
+    if b.wq == 1 {
+        key = key ^ ztab[770];
+    }
+    if b.bk == 1 {
+        key = key ^ ztab[771];
+    }
+    if b.bq == 1 {
+        key = key ^ ztab[772];
+    }
+    if b.ep >= 0 {
+        key = key ^ ztab[773 + file_of(b.ep)];
+    }
+    key
+}
+
+// Ordering score. Tacticals (captures, promotions) occupy bands far above any
+// quiet move so that killer/history bonuses on quiets can never overtake a real
+// capture. Relative order within tacticals is unchanged from the original
+// scheme (a constant offset preserves it), so quiescence ordering is identical.
 fn move_order_score(b: Board, mv: ChessMove) -> i64 {
     let sqs: Vec<i64> = b.squares;
     let moving: i64 = sqs[mv.from];
@@ -918,10 +1255,10 @@ fn move_order_score(b: Board, mv: ChessMove) -> i64 {
     let mut score: i64 = 4 * center_bonus(file_of(mv.to), rank_of(mv.to));
 
     if capture_value > 0 {
-        score = score + 5000 + 12 * capture_value - moving_value;
+        score = score + 1000000 + 12 * capture_value - moving_value;
     }
     if mv.promote != 0 {
-        score = score + 9000 + piece_value(mv.promote);
+        score = score + 2000000 + piece_value(mv.promote);
     }
     if mv.castle != 0 {
         score = score + 1200;
@@ -935,19 +1272,84 @@ fn move_order_score(b: Board, mv: ChessMove) -> i64 {
     score
 }
 
-fn best_ordered_index(b: Board, moves: Vec<ChessMove>, start: i64) -> i64 {
+// Negamax move scoring: base ordering plus killer and history bonuses for quiet
+// moves. Quiet bonuses live below the capture band so tacticals stay first.
+fn score_moves_ns(b: Board, moves: Vec<ChessMove>, ss: SearchState, ply: i64, tt_move_key: i64) -> Vec<i64> {
+    let scores: Vec<i64> = Vec::new();
+    let k0: i64 = if ply >= 0 && ply < KILLER_SLOTS / 2 { ss.killers[ply * 2] } else { 0 };
+    let k1: i64 = if ply >= 0 && ply < KILLER_SLOTS / 2 { ss.killers[ply * 2 + 1] } else { 0 };
+    let mut i: i64 = 0;
+    while i < moves.len() {
+        let mv: ChessMove = moves[i];
+        let mut s: i64 = move_order_score(b, mv);
+        if tt_move_key != 0 && move_key(mv) == tt_move_key {
+            s = s + TT_MOVE_BONUS;
+        }
+        if mv.promote == 0 && captured_piece_value(b, mv) == 0 {
+            let key: i64 = move_key(mv);
+            if key == k0 {
+                s = s + KILLER1_BONUS;
+            } else if key == k1 {
+                s = s + KILLER2_BONUS;
+            }
+            let h: i64 = ss.history[mv.from * 64 + mv.to];
+            if h > HISTORY_ORDER_CAP {
+                s = s + HISTORY_ORDER_CAP;
+            } else {
+                s = s + h;
+            }
+        }
+        scores.push(s);
+        i = i + 1;
+    }
+    scores
+}
+
+fn record_cutoff(ss: SearchState, b: Board, mv: ChessMove, depth: i64, ply: i64) {
+    if mv.promote != 0 || captured_piece_value(b, mv) > 0 {
+        return;
+    }
+    if ply >= 0 && ply < KILLER_SLOTS / 2 {
+        let key: i64 = move_key(mv);
+        if ss.killers[ply * 2] != key {
+            ss.killers[ply * 2 + 1] = ss.killers[ply * 2];
+            ss.killers[ply * 2] = key;
+        }
+    }
+    ss.history[mv.from * 64 + mv.to] = ss.history[mv.from * 64 + mv.to] + depth * depth;
+}
+
+// Score every move once. Ordering is applied lazily via pick_best_to_front,
+// which selects the current best from the precomputed scores without rescoring
+// (the board is unchanged across a node's move loop, so scores are constant).
+// This turns per-node ordering from O(n^2) scoring into O(n) scoring.
+fn score_moves(b: Board, moves: Vec<ChessMove>) -> Vec<i64> {
+    let scores: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < moves.len() {
+        scores.push(move_order_score(b, moves[i]));
+        i = i + 1;
+    }
+    scores
+}
+
+fn pick_best_to_front(moves: Vec<ChessMove>, scores: Vec<i64>, start: i64) {
     let mut best_idx: i64 = start;
-    let mut best_score: i64 = move_order_score(b, moves[start]);
+    let mut best_score: i64 = scores[start];
     let mut i: i64 = start + 1;
     while i < moves.len() {
-        let score: i64 = move_order_score(b, moves[i]);
-        if score > best_score {
-            best_score = score;
+        if scores[i] > best_score {
+            best_score = scores[i];
             best_idx = i;
         }
         i = i + 1;
     }
-    best_idx
+    if best_idx != start {
+        swap_moves(moves, start, best_idx);
+        let tmp: i64 = scores[start];
+        scores[start] = scores[best_idx];
+        scores[best_idx] = tmp;
+    }
 }
 
 fn swap_moves(moves: Vec<ChessMove>, a: i64, b: i64) {
@@ -976,9 +1378,96 @@ fn generate_tactical_moves(b: Board) -> Vec<ChessMove> {
     tactical
 }
 
-fn check_stop(ss: SearchState) [read] {
+// Quiescence capture generator: filters pseudo-moves to tacticals (captures +
+// promotions) FIRST, then runs the expensive make/in-check legality test only
+// on those few moves — instead of legality-checking every quiet move via
+// generate_legal_moves and discarding them. Produces the same set as
+// { m in generate_legal_moves(b) : is_tactical_move(b, m) } (see `captest`).
+fn generate_captures(b: Board) -> Vec<ChessMove> {
+    let pseudo: Vec<ChessMove> = generate_pseudo_moves(b);
+    let result: Vec<ChessMove> = Vec::new();
+    let mover: i64 = b.side;
+    let mut i: i64 = 0;
+    while i < pseudo.len() {
+        let mv: ChessMove = pseudo[i];
+        if is_tactical_move(b, mv) {
+            let undo: UndoInfo = make_move(b, mv);
+            let chk: bool = in_check(b, mover);
+            unmake_move(b, mv, undo);
+            if !chk {
+                result.push(mv);
+            }
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn move_full_eq(a: ChessMove, b: ChessMove) -> bool {
+    a.from == b.from && a.to == b.to && a.promote == b.promote && a.en_passant == b.en_passant && a.castle == b.castle
+}
+
+fn move_in_list(mv: ChessMove, list: Vec<ChessMove>) -> bool {
+    let mut i: i64 = 0;
+    while i < list.len() {
+        if move_full_eq(mv, list[i]) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// Differential check: generate_captures(b) must equal, as a set, the tactical
+// subset of generate_legal_moves(b). Returns 1 if they diverge, else 0.
+fn captures_mismatch(b: Board) -> i64 {
+    let caps: Vec<ChessMove> = generate_captures(b);
+    let legal: Vec<ChessMove> = generate_legal_moves(b);
+    let tac: Vec<ChessMove> = Vec::new();
+    let mut i: i64 = 0;
+    while i < legal.len() {
+        let mv: ChessMove = legal[i];
+        if is_tactical_move(b, mv) {
+            tac.push(mv);
+        }
+        i = i + 1;
+    }
+    if caps.len() != tac.len() {
+        return 1;
+    }
+    let mut j: i64 = 0;
+    while j < caps.len() {
+        if !move_in_list(caps[j], tac) {
+            return 1;
+        }
+        j = j + 1;
+    }
+    0
+}
+
+fn captest(b: Board, depth: i64) -> i64 {
+    let mut bad: i64 = captures_mismatch(b);
+    if depth <= 1 {
+        return bad;
+    }
+    let moves: Vec<ChessMove> = generate_legal_moves(b);
+    let mut i: i64 = 0;
+    while i < moves.len() {
+        let mv: ChessMove = moves[i];
+        let undo: UndoInfo = make_move(b, mv);
+        bad = bad + captest(b, depth - 1);
+        unmake_move(b, mv, undo);
+        i = i + 1;
+    }
+    bad
+}
+
+fn check_stop(ss: SearchState) [io, read] {
     ss.nodes = ss.nodes + 1;
     if ss.stopped == 0 && ss.nodes % 1024 == 0 {
+        if ss.deadline > 0 && time_unix_ms() >= ss.deadline {
+            ss.stopped = 1;
+        }
         if stdin_ready() {
             let line: String = stdin_read_line();
             let trimmed: String = trim_line(line);
@@ -993,7 +1482,7 @@ fn check_stop(ss: SearchState) [read] {
     }
 }
 
-fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) -> i64 [read] {
+fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) -> i64 [io, read] {
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
     let mut moves: Vec<ChessMove> = Vec::new();
@@ -1009,14 +1498,14 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) 
             return -MATE;
         }
     } else {
-        let stand_pat: i64 = b.side * evaluate_board(b);
+        let stand_pat: i64 = b.side * evaluate_board(b, ss.pst);
         if stand_pat >= beta {
             return stand_pat;
         }
         if stand_pat > alpha {
             alpha = stand_pat;
         }
-        moves = generate_tactical_moves(b);
+        moves = generate_captures(b);
         if moves.len() == 0 {
             return stand_pat;
         }
@@ -1026,14 +1515,14 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) 
     if is_in_check == 0 {
         best = alpha;
     }
+    let scores: Vec<i64> = score_moves(b, moves);
     let mut i: i64 = 0;
     while i < moves.len() {
         check_stop(ss);
         if ss.stopped == 1 {
             break;
         }
-        let best_idx: i64 = best_ordered_index(b, moves, i);
-        swap_moves(moves, i, best_idx);
+        pick_best_to_front(moves, scores, i);
         let mv: ChessMove = moves[i];
         let undo: UndoInfo = make_move(b, mv);
         let score: i64 = -quiesce(b, -beta, -alpha, qdepth - 1, ss);
@@ -1052,45 +1541,166 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) 
     best
 }
 
-fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [read] {
+fn has_non_pawn_material(b: Board, color: i64) -> bool {
+    let sqs: Vec<i64> = b.squares;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let p: i64 = sqs[sq];
+        if piece_color(p) == color {
+            let k: i64 = piece_kind(p);
+            if k == 2 || k == 3 || k == 4 || k == 5 {
+                return true;
+            }
+        }
+        sq = sq + 1;
+    }
+    false
+}
+
+fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [io, read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
+    let in_chk: bool = in_check(b, b.side);
     if legal.len() == 0 {
-        if in_check(b, b.side) {
+        if in_chk {
             return -MATE + ply;
         } else {
             return 0;
         }
     }
 
-    if depth <= 0 {
+    // Check extension: search one ply deeper when in check (forcing lines).
+    let mut d: i64 = depth;
+    if in_chk {
+        d = d + 1;
+    }
+
+    if d <= 0 {
         return quiesce(b, alpha_in, beta_in, 6, ss);
     }
 
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
+
+    let zkey: i64 = compute_zkey(b, ss.ztab);
+
+    // Draw detection: 50-move rule and repetition of a position earlier on the
+    // current line (same side to move => an even number of plies back, bounded by
+    // the halfmove clock since the last irreversible move).
+    if ply >= 1 {
+        if b.halfmove >= 100 {
+            return 0;
+        }
+        if ply < REP_SIZE {
+            let mut lim: i64 = ply - b.halfmove;
+            if lim < 0 {
+                lim = 0;
+            }
+            let mut back: i64 = ply - 2;
+            while back >= lim {
+                if ss.rep[back] == zkey {
+                    return 0;
+                }
+                back = back - 2;
+            }
+            ss.rep[ply] = zkey;
+        }
+    }
+
+    // Transposition table probe. The full key is stored, so an index collision
+    // from a different position is rejected by the key check.
+    let tt_idx: i64 = zkey & TT_MASK;
+    let ttv: Vec<TTEntry> = ss.tt;
+    let e: TTEntry = ttv[tt_idx];
+    let mut tt_move_key: i64 = 0;
+    if e.flag != 0 && e.key == zkey {
+        tt_move_key = e.movekey;
+        if e.depth >= d {
+            if e.flag == TT_EXACT {
+                return e.score;
+            }
+            if e.flag == TT_LOWER && e.score >= beta {
+                return e.score;
+            }
+            if e.flag == TT_UPPER && e.score <= alpha {
+                return e.score;
+            }
+        }
+    }
+
+    // Null-move pruning: if we can pass and still fail high, the position is so
+    // good that we prune. Skipped in check and when the side to move has only
+    // pawns (zugzwang risk).
+    if d >= 3 && !in_chk && beta < MATE_THRESHOLD && beta > -MATE_THRESHOLD && has_non_pawn_material(b, b.side) {
+        let r_null: i64 = 2;
+        let saved_ep: i64 = b.ep;
+        b.ep = -1;
+        b.side = -b.side;
+        let nscore: i64 = -negamax(b, d - 1 - r_null, ply + 1, -beta, -beta + 1, ss);
+        b.side = -b.side;
+        b.ep = saved_ep;
+        if ss.stopped == 0 && nscore >= beta {
+            return beta;
+        }
+    }
+
     let mut best: i64 = -INF;
+    let mut best_move_key: i64 = 0;
+    let scores: Vec<i64> = score_moves_ns(b, legal, ss, ply, tt_move_key);
     let mut i: i64 = 0;
+    let mut searched: i64 = 0;
     while i < legal.len() {
         check_stop(ss);
         if ss.stopped == 1 {
             break;
         }
-        let best_idx: i64 = best_ordered_index(b, legal, i);
-        swap_moves(legal, i, best_idx);
+        pick_best_to_front(legal, scores, i);
         let mv: ChessMove = legal[i];
+        let quiet: bool = mv.promote == 0 && captured_piece_value(b, mv) == 0;
         let undo: UndoInfo = make_move(b, mv);
-        let score: i64 = -negamax(b, depth - 1, ply + 1, -beta, -alpha, ss);
+        let mut score: i64 = 0;
+        if searched == 0 {
+            score = -negamax(b, d - 1, ply + 1, -beta, -alpha, ss);
+        } else {
+            let mut red: i64 = 0;
+            if d >= 3 && searched >= 4 && quiet && !in_chk {
+                red = 1;
+                if searched >= 8 {
+                    red = 2;
+                }
+            }
+            score = -negamax(b, d - 1 - red, ply + 1, -alpha - 1, -alpha, ss);
+            if score > alpha && red > 0 {
+                score = -negamax(b, d - 1, ply + 1, -alpha - 1, -alpha, ss);
+            }
+            if score > alpha && score < beta {
+                score = -negamax(b, d - 1, ply + 1, -beta, -alpha, ss);
+            }
+        }
         unmake_move(b, mv, undo);
         if score > best {
             best = score;
+            best_move_key = move_key(mv);
         }
         if score > alpha {
             alpha = score;
         }
         if alpha >= beta {
+            record_cutoff(ss, b, mv, d, ply);
+            if ss.stopped == 0 {
+                ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key };
+            }
             return best;
         }
+        searched = searched + 1;
         i = i + 1;
+    }
+
+    if ss.stopped == 0 {
+        let mut flag: i64 = TT_EXACT;
+        if best <= alpha_in {
+            flag = TT_UPPER;
+        }
+        ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: flag, movekey: best_move_key };
     }
     best
 }
@@ -1101,28 +1711,65 @@ fn moves_equal(a: ChessMove, b: ChessMove) -> bool {
 
 // Iterative deepening: search depth 1, 2, ..., max_depth. The best move from
 // each iteration is tried first in the next (PV move ordering).
-fn search_best_move(b: Board, depth_in: i64, ss: SearchState) -> ChessMove [read] {
+fn print_info(depth: i64, score: i64, nodes: i64, elapsed_ms: i64, mv: ChessMove) [io] {
+    let out: String = String::from("info depth ");
+    out.push_str(i64_to_string(depth));
+    out.push_str(String::from(" score "));
+    if score >= MATE_THRESHOLD {
+        out.push_str(String::from("mate "));
+        out.push_str(i64_to_string((MATE - score + 1) / 2));
+    } else if score <= -MATE_THRESHOLD {
+        out.push_str(String::from("mate -"));
+        out.push_str(i64_to_string((MATE + score + 1) / 2));
+    } else {
+        out.push_str(String::from("cp "));
+        out.push_str(i64_to_string(score));
+    }
+    out.push_str(String::from(" nodes "));
+    out.push_str(i64_to_string(nodes));
+    out.push_str(String::from(" time "));
+    out.push_str(i64_to_string(elapsed_ms));
+    let mut nps: i64 = 0;
+    if elapsed_ms > 0 {
+        nps = nodes * 1000 / elapsed_ms;
+    }
+    out.push_str(String::from(" nps "));
+    out.push_str(i64_to_string(nps));
+    out.push_str(String::from(" pv "));
+    out.push_str(move_to_uci(mv));
+    print_line(out);
+}
+
+// Iterative deepening bounded by ss.deadline (wall clock) and max_depth. The
+// best move is only committed from a fully completed depth: an iteration cut
+// short by the deadline is discarded, so best_mv never regresses to a partial
+// (unreliable) result. Root moves are re-ordered PV-first each iteration.
+fn search_best_move(b: Board, max_depth_in: i64, ss: SearchState) -> ChessMove [io, read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
         return null_move();
     }
 
-    let mut max_depth: i64 = depth_in;
+    let mut max_depth: i64 = max_depth_in;
     if max_depth < 1 {
         max_depth = 1;
+    }
+    if max_depth > MAX_DEPTH {
+        max_depth = MAX_DEPTH;
     }
 
     ss.stopped = 0;
     ss.nodes = 0;
+    // Seed the repetition stack with the root position (ply 0). Search lines that
+    // return to it are detected as draws by negamax.
+    ss.rep[0] = compute_zkey(b, ss.ztab);
+    let start_ms: i64 = time_unix_ms();
     let mut best_mv: ChessMove = legal[0];
     let mut d: i64 = 1;
     while d <= max_depth {
         if ss.stopped == 1 {
             break;
         }
-        let mut best_score: i64 = -INF;
-        let mut alpha: i64 = -INF;
-        let beta: i64 = INF;
 
         if d > 1 {
             let mut j: i64 = 0;
@@ -1135,6 +1782,13 @@ fn search_best_move(b: Board, depth_in: i64, ss: SearchState) -> ChessMove [read
             }
         }
 
+        let mut best_score: i64 = -INF;
+        let mut alpha: i64 = -INF;
+        let beta: i64 = INF;
+        let mut iter_best: ChessMove = legal[0];
+        let mut done_moves: i64 = 0;
+
+        let scores: Vec<i64> = score_moves(b, legal);
         let mut i: i64 = 0;
         while i < legal.len() {
             check_stop(ss);
@@ -1142,21 +1796,41 @@ fn search_best_move(b: Board, depth_in: i64, ss: SearchState) -> ChessMove [read
                 break;
             }
             if d <= 1 || i > 0 {
-                let best_idx: i64 = best_ordered_index(b, legal, i);
-                swap_moves(legal, i, best_idx);
+                pick_best_to_front(legal, scores, i);
             }
             let mv: ChessMove = legal[i];
             let undo: UndoInfo = make_move(b, mv);
             let score: i64 = -negamax(b, d - 1, 1, -beta, -alpha, ss);
             unmake_move(b, mv, undo);
+            // Discard a move whose search was aborted by the deadline: its score
+            // is unreliable. Moves completed before the abort are still valid.
+            if ss.stopped == 1 {
+                break;
+            }
             if score > best_score {
                 best_score = score;
-                best_mv = mv;
+                iter_best = mv;
             }
             if score > alpha {
                 alpha = score;
             }
+            done_moves = done_moves + 1;
             i = i + 1;
+        }
+
+        // Commit the best move found this iteration as long as at least the PV
+        // move completed. Root searches PV-first, so best-so-far never regresses
+        // below the previous depth's choice — capturing partial deeper searches
+        // instead of wasting the time spent on an unfinished iteration.
+        if done_moves >= 1 {
+            best_mv = iter_best;
+        }
+        if i >= legal.len() {
+            let now_ms: i64 = time_unix_ms();
+            print_info(d, best_score, ss.nodes, now_ms - start_ms, best_mv);
+            if best_score >= MATE_THRESHOLD || best_score <= -MATE_THRESHOLD {
+                break;
+            }
         }
         d = d + 1;
     }
@@ -1262,46 +1936,31 @@ fn parse_i64_or(s: String, fallback: i64) -> i64 {
     sign * value
 }
 
-fn movetime_to_depth(ms: i64) -> i64 {
-    if ms <= 50 {
-        return 1;
-    }
-    if ms <= 250 {
-        return 2;
-    }
-    if ms <= 1000 {
-        return 3;
-    }
-    if ms <= 5000 {
-        return 4;
-    }
-    5
-}
-
-fn parse_go_depth(tokens: Vec<String>, side: i64) -> i64 {
+fn find_go_int(tokens: Vec<String>, key: String) -> i64 {
     let mut i: i64 = 1;
     while i + 1 < tokens.len() {
-        let key: String = tokens[i];
-        if key.eq(String::from("depth")) {
-            let value: String = tokens[i + 1];
-            let depth: i64 = parse_i64_or(value, 1);
-            if depth < 1 {
-                return 1;
-            }
-            return depth;
+        let k: String = tokens[i];
+        if k.eq(key) {
+            return parse_i64_or(tokens[i + 1], -1);
         }
         i = i + 1;
     }
+    -1
+}
 
-    i = 1;
-    while i + 1 < tokens.len() {
-        let key2: String = tokens[i];
-        if key2.eq(String::from("movetime")) {
-            let value2: String = tokens[i + 1];
-            let ms: i64 = parse_i64_or(value2, 100);
-            return movetime_to_depth(ms);
+fn parse_go_limits(tokens: Vec<String>, side: i64) -> GoLimits {
+    let depth: i64 = find_go_int(tokens, String::from("depth"));
+    if depth >= 1 {
+        return GoLimits { fixed_depth: depth, budget_ms: 0 };
+    }
+
+    let mt: i64 = find_go_int(tokens, String::from("movetime"));
+    if mt >= 0 {
+        let mut budget: i64 = mt;
+        if budget < 5 {
+            budget = 5;
         }
-        i = i + 1;
+        return GoLimits { fixed_depth: 0, budget_ms: budget };
     }
 
     let time_key: String = if side == 1 {
@@ -1309,19 +1968,36 @@ fn parse_go_depth(tokens: Vec<String>, side: i64) -> i64 {
     } else {
         String::from("btime")
     };
-    i = 1;
-    while i + 1 < tokens.len() {
-        let key3: String = tokens[i];
-        if key3.eq(time_key) {
-            let remaining: i64 = parse_i64_or(tokens[i + 1], 0);
-            if remaining > 0 {
-                return movetime_to_depth(remaining / 30);
-            }
+    let inc_key: String = if side == 1 {
+        String::from("winc")
+    } else {
+        String::from("binc")
+    };
+    let remaining: i64 = find_go_int(tokens, time_key);
+    if remaining >= 0 {
+        let mut inc: i64 = find_go_int(tokens, inc_key);
+        if inc < 0 {
+            inc = 0;
         }
-        i = i + 1;
+        let mut mtg: i64 = find_go_int(tokens, String::from("movestogo"));
+        if mtg < 1 {
+            mtg = 30;
+        }
+        // Allocate a slice of the remaining time plus most of the increment,
+        // never more than half of what is left on the clock.
+        let mut budget: i64 = remaining / mtg + (inc * 3) / 4;
+        let cap: i64 = remaining / 2;
+        if budget > cap {
+            budget = cap;
+        }
+        if budget < 5 {
+            budget = 5;
+        }
+        return GoLimits { fixed_depth: 0, budget_ms: budget };
     }
 
-    2
+    // `go` with no recognised limits (e.g. `go infinite`): default think time.
+    GoLimits { fixed_depth: 0, budget_ms: 1000 }
 }
 
 fn find_legal_move(b: Board, uci: String) -> ChessMove {
@@ -1474,6 +2150,23 @@ fn parse_fen(tokens: Vec<String>, start_idx: i64) -> Board {
         ep = parse_fen_ep(ep_str);
     }
 
+    let mut wksq: i64 = -1;
+    let mut bksq: i64 = -1;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        if sqs[sq] == KING {
+            wksq = sq;
+        } else if sqs[sq] == -KING {
+            bksq = sq;
+        }
+        sq = sq + 1;
+    }
+
+    let mut halfmove: i64 = 0;
+    if start_idx + 4 < tokens.len() {
+        halfmove = parse_i64_or(tokens[start_idx + 4], 0);
+    }
+
     Board {
         squares: sqs,
         side: side,
@@ -1482,6 +2175,9 @@ fn parse_fen(tokens: Vec<String>, start_idx: i64) -> Board {
         wq: wq,
         bk: bk,
         bq: bq,
+        wk_sq: wksq,
+        bk_sq: bksq,
+        halfmove: halfmove,
     }
 }
 
@@ -1529,6 +2225,31 @@ fn reset_for_new_game(us: UciState) {
     us.board = start_board();
 }
 
+fn handle_perft(tokens: Vec<String>, b: Board) [io] {
+    let mut depth: i64 = 1;
+    if tokens.len() >= 2 {
+        depth = parse_i64_or(tokens[1], 1);
+    }
+    let moves: Vec<ChessMove> = generate_legal_moves(b);
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < moves.len() {
+        let mv: ChessMove = moves[i];
+        let undo: UndoInfo = make_move(b, mv);
+        let sub: i64 = perft(b, depth - 1);
+        unmake_move(b, mv, undo);
+        total = total + sub;
+        let line: String = move_to_uci(mv);
+        line.push_str(String::from(": "));
+        line.push_str(i64_to_string(sub));
+        print_line(line);
+        i = i + 1;
+    }
+    let summary: String = String::from("Nodes searched: ");
+    summary.push_str(i64_to_string(total));
+    print_line(summary);
+}
+
 fn dispatch_command(us: UciState, line: String) [io, read] {
     let tokens: Vec<String> = split_words(line);
     if tokens.len() == 0 {
@@ -1549,11 +2270,40 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
             } else {
                 if cmd.eq(String::from("position")) {
                     us.board = handle_position(tokens, us.board);
+                } else if cmd.eq(String::from("perft")) {
+                    handle_perft(tokens, us.board);
+                } else if cmd.eq(String::from("captest")) {
+                    let cdepth: i64 = if tokens.len() >= 2 { parse_i64_or(tokens[1], 3) } else { 3 };
+                    let bad: i64 = captest(us.board, cdepth);
+                    let msg: String = String::from("captest mismatches: ");
+                    msg.push_str(i64_to_string(bad));
+                    print_line(msg);
                 } else {
                     if cmd.eq(String::from("go")) {
-                        let depth: i64 = parse_go_depth(tokens, us.board.side);
-                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, pending: Vec::new() };
-                        let best: ChessMove = search_best_move(us.board, depth, ss);
+                        let limits: GoLimits = parse_go_limits(tokens, us.board.side);
+                        let fd: i64 = limits.fixed_depth;
+                        let budget: i64 = limits.budget_ms;
+                        let mut deadline: i64 = 0;
+                        let mut max_depth: i64 = MAX_DEPTH;
+                        if fd > 0 {
+                            max_depth = fd;
+                        } else {
+                            let now: i64 = time_unix_ms();
+                            let mut margin: i64 = budget / 20;
+                            if margin > 50 {
+                                margin = 50;
+                            }
+                            if margin < 1 {
+                                margin = 1;
+                            }
+                            let mut think: i64 = budget - margin;
+                            if think < 1 {
+                                think = 1;
+                            }
+                            deadline = now + think;
+                        }
+                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
+                        let best: ChessMove = search_best_move(us.board, max_depth, ss);
                         let out: String = String::from("bestmove ");
                         out.push_str(move_to_uci(best));
                         print_line(out);
@@ -1580,7 +2330,7 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
 }
 
 fn main() [io, read] {
-    let us: UciState = UciState { board: start_board(), running: 1 };
+    let us: UciState = UciState { board: start_board(), running: 1, ztab: build_ztab(), tt: build_tt(), pst: build_pst() };
 
     while us.running == 1 {
         let raw: String = stdin_read_line();

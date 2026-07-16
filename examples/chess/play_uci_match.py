@@ -73,6 +73,24 @@ class Engine:
             if text == token:
                 return out
 
+    def read_until_prefix(self, prefix: str) -> str:
+        """Blocking read until a line starting with ``prefix`` appears.
+
+        Uses blocking ``readline`` (not ``select``) so it is immune to the
+        buffered-reader/``select`` race where a burst of output is pulled into
+        Python's buffer and ``select`` on the raw fd then reports "not ready"."""
+        if self.proc.stdout is None:
+            raise RuntimeError(f"{self.name}: stdout unavailable")
+        while True:
+            line = self.proc.stdout.readline()
+            if line == "":
+                raise RuntimeError(
+                    f"{self.name}: EOF while waiting for {prefix!r}"
+                )
+            text = line.rstrip("\n")
+            if text.startswith(prefix):
+                return text
+
     def read_bestmove(self) -> tuple[str, list[str]]:
         if self.proc.stdout is None:
             raise RuntimeError(f"{self.name}: stdout unavailable")
@@ -153,21 +171,11 @@ def fen_for_moves(engine: Engine, moves: list[str], timeout: float = 5.0) -> str
     or another engine that implements ``d``."""
     engine.send(position_command(moves))
     engine.send("d")
-    fen: str | None = None
-    while True:
-        text = engine.read_line_timeout(timeout)
-        if text is None:
-            raise RuntimeError(
-                f"{engine.name}: timed out after {timeout}s waiting for 'Fen:' line "
-                f"(does this engine support the Stockfish-specific 'd' command?)"
-            )
-        if text.startswith("Fen: "):
-            fen = text[5:]
-            break
+    text = engine.read_until_prefix("Fen: ")
+    fen = text[5:]
     # Drain remaining ``d`` output via the standard UCI sync barrier.
     engine.send("isready")
     engine.read_until("readyok")
-    assert fen is not None
     return fen
 
 
