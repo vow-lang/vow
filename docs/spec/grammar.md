@@ -609,22 +609,28 @@ match value {
 }
 ```
 
-Match is an expression. All arms must return the same type. Patterns must be exhaustive.
+Match is an expression. The scrutinee must have an enum type, including an
+applied built-in enum such as `Option<T>` or `Result<T, E>`. All arms must
+return the same type. Patterns must be exhaustive.
 
 ### Pattern Kinds
 
-| Pattern                      | Example                          |
-|------------------------------|----------------------------------|
-| Wildcard                     | `_`                              |
-| Identifier binding           | `x`                              |
-| Mutable identifier           | `mut x`                          |
-| Literal                      | `0`, `true`, `"hello"`           |
-| Tuple                        | `(a, b)`                         |
-| Enum variant (unit)          | `Option::None`                   |
-| Enum variant (tuple)         | `Option::Some(x)`                |
-| Enum variant (struct)        | `Shape::Named { x, y }`         |
-| Or pattern                   | `0 \| 1 \| 2`                   |
-| Struct pattern               | `Point { x, y }`                |
+| Implemented pattern                         | Example              |
+|---------------------------------------------|----------------------|
+| Wildcard                                    | `_`                  |
+| Immutable identifier binding                | `value`              |
+| Qualified enum variant (unit)               | `Option::None`       |
+| Qualified enum variant (tuple payload)      | `Option::Some(value)` |
+
+Tuple-variant payloads may contain only `_` or immutable identifier bindings.
+Nested payload destructuring is not implemented.
+
+Mutable identifier, literal (integer, boolean, or string), tuple, struct,
+enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns
+are not implemented. Parsed unsupported forms produce
+`error[UnsupportedPattern]`; forms that the parser cannot represent produce
+`error[UnexpectedToken]`. Both are compile-time failures and no executable is
+produced.
 
 ## Method Calls
 

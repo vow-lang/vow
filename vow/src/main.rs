@@ -1208,15 +1208,9 @@ fn skill_json() -> String {
       "syntax": "match value { Pattern => expr, ... }",
       "patterns": [
         "Wildcard (_)",
-        "Identifier binding (x)",
-        "Mutable identifier (mut x)",
-        "Literal (0, true, \"hello\")",
-        "Tuple ((a, b))",
-        "Enum variant (unit) (Option::None)",
-        "Enum variant (tuple) (Option::Some(x))",
-        "Enum variant (struct) (Shape::Named { x, y })",
-        "Or pattern (0 | 1 | 2)",
-        "Struct pattern (Point { x, y })"
+        "Immutable identifier binding (value)",
+        "Qualified enum variant (unit) (Option::None)",
+        "Qualified enum variant (tuple payload) (Option::Some(value))"
       ]
     },
     "control_flow": {
@@ -2176,22 +2170,28 @@ match value {
 }
 ```
 
-Match is an expression. All arms must return the same type. Patterns must be exhaustive.
+Match is an expression. The scrutinee must have an enum type, including an
+applied built-in enum such as `Option<T>` or `Result<T, E>`. All arms must
+return the same type. Patterns must be exhaustive.
 
 ### Pattern Kinds
 
-| Pattern                      | Example                          |
-|------------------------------|----------------------------------|
-| Wildcard                     | `_`                              |
-| Identifier binding           | `x`                              |
-| Mutable identifier           | `mut x`                          |
-| Literal                      | `0`, `true`, `"hello"`           |
-| Tuple                        | `(a, b)`                         |
-| Enum variant (unit)          | `Option::None`                   |
-| Enum variant (tuple)         | `Option::Some(x)`                |
-| Enum variant (struct)        | `Shape::Named { x, y }`         |
-| Or pattern                   | `0 \| 1 \| 2`                   |
-| Struct pattern               | `Point { x, y }`                |
+| Implemented pattern                         | Example              |
+|---------------------------------------------|----------------------|
+| Wildcard                                    | `_`                  |
+| Immutable identifier binding                | `value`              |
+| Qualified enum variant (unit)               | `Option::None`       |
+| Qualified enum variant (tuple payload)      | `Option::Some(value)` |
+
+Tuple-variant payloads may contain only `_` or immutable identifier bindings.
+Nested payload destructuring is not implemented.
+
+Mutable identifier, literal (integer, boolean, or string), tuple, struct,
+enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns
+are not implemented. Parsed unsupported forms produce
+`error[UnsupportedPattern]`; forms that the parser cannot represent produce
+`error[UnexpectedToken]`. Both are compile-time failures and no executable is
+produced.
 
 ## Method Calls
 
@@ -4161,6 +4161,30 @@ fn f(o: Option<i64>) -> i64 {
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
 
+### UnsupportedPattern
+
+**Phase:** Type Checker
+**Meaning:** A parsed `match` pattern or scrutinee is not in the subset that
+the compiler can lower safely. Match currently accepts enum-valued scrutinees,
+qualified unit variants, qualified tuple variants with `_` or immutable
+identifier payloads, and catchall `_` or immutable identifier arms.
+
+```vow
+fn f(n: i64) -> i64 {
+    match n {
+        0 => 5,
+        _ => 9,
+    }
+}
+```
+
+**Output:** `literal match patterns are not supported`
+
+**Fix:** Use `if`/`else` comparisons for scalar or literal cases. For enum
+payloads, bind each payload to `_` or an immutable identifier and inspect it
+separately. Unsupported patterns fail before lowering and never produce an
+executable.
+
 ### ImmutableAssignment
 
 **Phase:** Type Checker
@@ -5846,6 +5870,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "EffectViolation",
         "LinearTypeViolation",
         "NonExhaustiveMatch",
+        "UnsupportedPattern",
         "ImmutableAssignment",
         "UnusedMut",
         "VowRequiresViolated",
@@ -6726,22 +6751,28 @@ match value {
 }
 ```
 
-Match is an expression. All arms must return the same type. Patterns must be exhaustive.
+Match is an expression. The scrutinee must have an enum type, including an
+applied built-in enum such as `Option<T>` or `Result<T, E>`. All arms must
+return the same type. Patterns must be exhaustive.
 
 ### Pattern Kinds
 
-| Pattern                      | Example                          |
-|------------------------------|----------------------------------|
-| Wildcard                     | `_`                              |
-| Identifier binding           | `x`                              |
-| Mutable identifier           | `mut x`                          |
-| Literal                      | `0`, `true`, `"hello"`           |
-| Tuple                        | `(a, b)`                         |
-| Enum variant (unit)          | `Option::None`                   |
-| Enum variant (tuple)         | `Option::Some(x)`                |
-| Enum variant (struct)        | `Shape::Named { x, y }`         |
-| Or pattern                   | `0 \| 1 \| 2`                   |
-| Struct pattern               | `Point { x, y }`                |
+| Implemented pattern                         | Example              |
+|---------------------------------------------|----------------------|
+| Wildcard                                    | `_`                  |
+| Immutable identifier binding                | `value`              |
+| Qualified enum variant (unit)               | `Option::None`       |
+| Qualified enum variant (tuple payload)      | `Option::Some(value)` |
+
+Tuple-variant payloads may contain only `_` or immutable identifier bindings.
+Nested payload destructuring is not implemented.
+
+Mutable identifier, literal (integer, boolean, or string), tuple, struct,
+enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns
+are not implemented. Parsed unsupported forms produce
+`error[UnsupportedPattern]`; forms that the parser cannot represent produce
+`error[UnexpectedToken]`. Both are compile-time failures and no executable is
+produced.
 
 ## Method Calls
 
@@ -8715,6 +8746,30 @@ fn f(o: Option<i64>) -> i64 {
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
 
+### UnsupportedPattern
+
+**Phase:** Type Checker
+**Meaning:** A parsed `match` pattern or scrutinee is not in the subset that
+the compiler can lower safely. Match currently accepts enum-valued scrutinees,
+qualified unit variants, qualified tuple variants with `_` or immutable
+identifier payloads, and catchall `_` or immutable identifier arms.
+
+```vow
+fn f(n: i64) -> i64 {
+    match n {
+        0 => 5,
+        _ => 9,
+    }
+}
+```
+
+**Output:** `literal match patterns are not supported`
+
+**Fix:** Use `if`/`else` comparisons for scalar or literal cases. For enum
+payloads, bind each payload to `_` or an immutable identifier and inspect it
+separately. Unsupported patterns fail before lowering and never produce an
+executable.
+
 ### ImmutableAssignment
 
 **Phase:** Type Checker
@@ -10394,6 +10449,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "EffectViolation",
         "LinearTypeViolation",
         "NonExhaustiveMatch",
+        "UnsupportedPattern",
         "ImmutableAssignment",
         "UnusedMut",
         "VowRequiresViolated",
