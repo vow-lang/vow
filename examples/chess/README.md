@@ -92,10 +92,14 @@ command; it is used to fetch FENs and evaluate positions and is optional.
 
 ## Strength
 
-At **1 second per move**, the engine performs at roughly **~2050 Elo** measured
-against Stockfish's `UCI_LimitStrength` ladder (≈57% vs `UCI_Elo=2000`, ≈77% vs
-1900, alternating colours). Strength scales strongly with time control — at very
-short controls it reaches only shallow depths and plays materially weaker.
+At **1 second per move**, the engine performs at roughly **~2110 Elo** measured
+against Stockfish's `UCI_LimitStrength` ladder (alternating colours). The headline
+comes from the rung nearest the 50% crossover — the most reliable data point (see
+`DEVELOPMENT.md`, "anchor near the 50% crossover"): **65% over 50 games vs
+`UCI_Elo=2000`** (1σ band ~2058–2162). The flanking rungs are consistent — 77% vs
+1900 (~2115) and 58% vs 2100 (~2158) — but sit further from 50% and so carry less
+weight. Strength scales strongly with time control; at very short controls the
+engine reaches only shallow depths and plays materially weaker.
 
 `UCI_Elo` is a rough, self-referential yardstick (it weakens Stockfish by
 injecting blunders rather than by playing like a rated human), so treat this as
