@@ -1,0 +1,50 @@
+// TEST: stdout ""
+// Issue #366 — Rust↔self-hosted RegionRootEscape note-emission parity guard
+// for the Phi-widen-to-Root case (the companion to the multi-slot fixture
+// region_multi_slot_widen_root.vow).
+//
+// `target` is a `mut` container reassigned across an `if`, so after the branch
+// it is a Phi merging two DISTINCT parameter arenas (`a` and `b`). Pushing a
+// fresh `item` through `push_to_arena(target, item)` routes the store into a
+// container that cannot commit to a single hidden caller slot, so `item`
+// widens to the never-freed root region. Both compilers must emit the SAME
+// number of RegionRootEscape diagnostics on this fixture; full_test.sh
+// compares total diagnostic counts at lines 110-114. Before the WidenedCaller
+// Root marker distinction both compilers synthesized a plain Root pin here and
+// stayed silent; after it, both flag the widen — either way the counts match,
+// which is what this parity guard protects (the Rust unit test
+// region_root_escape_note_emitted_for_phi_widened_root_alloc asserts the note
+// actually fires on the Rust side).
+module RegionPhiWidenRootParity
+
+pub struct Item {
+    name: String,
+}
+
+pub struct Arena {
+    entries: Vec<Item>,
+}
+
+fn push_to_arena(arena: Arena, item: Item) {
+    arena.entries.push(item);
+}
+
+fn put_via_phi(a: Arena, b: Arena, cond: bool) {
+    let mut target: Arena = a;
+    if cond {
+        target = b;
+    }
+    let item: Item = Item { name: String::from("SHARED") };
+    push_to_arena(target, item);
+}
+
+fn inner(long: Arena, cond: bool) {
+    let short: Arena = Arena { entries: Vec::new() };
+    put_via_phi(short, long, cond);
+}
+
+fn main() -> i32 {
+    let long: Arena = Arena { entries: Vec::new() };
+    inner(long, true);
+    0
+}

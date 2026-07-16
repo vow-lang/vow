@@ -888,6 +888,28 @@ whose inferred region is `Caller` in a function that publishes
 the caller chain to root). False positives are tolerated because
 the diagnostic is non-blocking and informational.
 
+The note MUST also fire for an allocation whose region **widens to
+root** without an intrinsic root pin — the leak-vs-signal case from
+the Resolution paragraph above. Two shapes reach it: a marker set
+spanning more than one hidden caller slot (the multi-slot widen),
+and a container reached through a Phi over caller containers (the
+Phi widen). The two are distinguished from a genuine `pin_to_root`
+placement by their marker: a widen carries no intrinsic root marker
+(the multi-slot case has only per-slot caller markers, and the Phi
+case carries a dedicated widened-caller-root marker), whereas a pin
+carries the intrinsic root marker. Only the pin is exempt from the
+note; both widens are flagged. This distinction is what closes the
+gap issue #366 identified — the earlier gate suppressed the note for
+functions with more than one hidden slot, and for Phi-reached
+containers the widen was indistinguishable from a pin.
+
+Unlike the caller-routing case, a widen-to-root allocation is
+flagged **even when it is also returned**. The return exemption
+below rests on the caller owning the value's lifetime; a widen-to-
+root placement has already committed the value to the never-freed
+root arena, so returning it does not free it and does not suppress
+the note.
+
 The note SHOULD NOT fire for the canonical `FreshInCaller`
 return-value pattern (`fn make_X() -> X`), where the alloc is the
 return value — that's the documented mechanism for producing values

@@ -672,10 +672,9 @@ fn put_inst_region(keys: Vec<i64>, vals: Vec<i64>, id: i64, rgn: i64) {
 //   per effect: target_u32, constraint_kind, (aux_u32)?, (alias_count, alias_u32...)?
 //
 // Sort invariant: the produced flat array is sorted by ascending target.
-// Adjacency-dedup consumers depend on this — see
-// `unique_store_target_count` (called from `check_region_store_conflicts_module`
-// and `emit_root_escape_notes_module`). If the sort order ever changes,
-// switch those consumers to an explicit set or update them in lockstep.
+// No consumer currently relies on adjacency-based dedup of the sorted array
+// (the former `unique_store_target_count` was removed alongside the multi-slot
+// note gate); the ordering is preserved for any future adjacency-dedup use.
 fn canonicalize_store_effects(
     targets: Vec<i64>, kinds: Vec<i64>, aux: Vec<i64>, aliases: Vec<Vec<i64>>
 ) -> Vec<i64> {
@@ -945,53 +944,6 @@ fn underlying_caller_via_aliases_inner(
     result
 }
 
-// Counts unique store-effect target indices in the pre-sorted canonical
-// flat array produced by `canonicalize_store_effects` (sort key: target,
-// then kind, then payload). Layout is `target, kind, (aux)?,
-// (alias_count, alias...)?` per effect; ALIAS_OF carries one aux,
-// ALIAS_OF_ANY carries an alias-count plus that many indices, the others
-// carry no payload.
-//
-// Adjacency dedup via `have_last`/`last` is ONLY correct because the
-// flat array is target-sorted; if the canonical layout ever changes,
-// switch to an explicit set. Rust's mirror uses BTreeSet which is
-// ordering-independent. The sort invariant is enforced by
-// `canonicalize_store_effects` (insertion sort at line ~637); both
-// `add_store_effect` (insertion-with-dedup) and `canonicalize_store_effects`
-// are the only writers to `rsum_store_effects`.
-fn unique_store_target_count(flat: Vec<i64>) -> i64 {
-    let mut count: i64 = 0;
-    let mut last: i64 = -1;
-    let mut have_last: bool = false;
-    let mut i: i64 = 0;
-    while i < flat.len() {
-        let target: i64 = flat[i];
-        i = i + 1;
-        if i >= flat.len() { break; }
-        let kind: i64 = flat[i];
-        i = i + 1;
-        if !have_last || target != last {
-            count = count + 1;
-            last = target;
-            have_last = true;
-        }
-        if kind == RSUM_KIND_ALIAS_OF() {
-            if i >= flat.len() { break; }
-            i = i + 1;
-        } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
-            if i >= flat.len() { break; }
-            let n: i64 = flat[i];
-            i = i + 1;
-            let mut a: i64 = 0;
-            while a < n && i < flat.len() {
-                i = i + 1;
-                a = a + 1;
-            }
-        }
-    }
-    count
-}
-
 // Mirrors Rust's `any_published_store` filter at vow-ir/src/region.rs:1481-1484.
 // Returns true if the parallel `int_se_src_kinds[fi]` array contains any
 // kind other than RSUM_INTERNAL_UNINIT(). This is exact (not merely
@@ -1165,6 +1117,22 @@ fn check_store_effects_at_call(
     }
 }
 
+// True if any note-map value is a Root-kind region — i.e. the function
+// recorded a widen-to-Root alloc (#366). Caller snapshots (#320) carry a
+// Caller-kind region, so they do not trip this. Drives the emit gate so a
+// widen-to-Root leak surfaces even when the function is not otherwise
+// publishable. Mirrors Rust's `any_widened_root`.
+fn note_vals_has_root(vals: Vec<i64>) -> bool {
+    let mut i: i64 = 0;
+    while i < vals.len() {
+        if vals[i] >= 0 && region_kind(vals[i]) == REGION_KIND_ROOT() {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
 // Emit a `RegionRootEscape` Note for each heap-producing instruction whose
 // inferred region is `REGION_KIND_CALLER` in a function that publishes
 // `FreshInCaller` (return) or any store effect. Conservative
@@ -1191,27 +1159,22 @@ fn emit_root_escape_notes_module(
         // in lockstep with `int_se_targets` via `add_store_effect`.
         let has_publishable: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER()
             || any_published_se_kind(int_se_src_kinds[fi]);
-        if !has_publishable {
+        // Issue #366: also emit when the function recorded a widen-to-Root alloc
+        // even if it neither returns fresh nor publishes a store — e.g. a
+        // container reached through a Phi, whose target does not trace to a
+        // single param. Such an alloc is stored in the note map with a Root-kind
+        // region (Caller snapshots carry a Caller-kind region), so a Root-kind
+        // note value isolates it. Mirrors Rust's `any_widened_root` gate term.
+        let has_widened_root: bool = note_vals_has_root(note_region_vals[fi]);
+        if !has_publishable && !has_widened_root {
             fi = fi + 1;
             continue;
         }
-        // Skip the note pass when this function would also trigger
-        // `ambiguous_caller_slot` rejection — the routed allocs already
-        // carry a hard `RegionConflict`, and the note's "no action
-        // needed if intentional" hint is misleading at a location with
-        // an actual error. Same predicate as in
-        // `check_region_store_conflicts_module`.
-        let returns_fresh: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER();
-        // Precondition: `f.rsum_store_effects` must be target-sorted
-        // (see `canonicalize_store_effects`). Same dedup-correctness
-        // contract as in `check_region_store_conflicts_module`.
-        let unique_st: i64 = unique_store_target_count(f.rsum_store_effects);
-        let return_slot_n: i64 = if returns_fresh { 1 } else { 0 };
-        let total_slots: i64 = return_slot_n + unique_st;
-        if total_slots > 1 {
-            fi = fi + 1;
-            continue;
-        }
+        // Issue #366: the multi-slot skip gate (`total_slots > 1`) is lifted so
+        // functions that widen allocations to Root across several distinct
+        // hidden arenas also emit RegionRootEscape notes. The inner walk still
+        // only flags allocations that resolve to root, and the note is non-
+        // blocking. Mirrors vow-ir/src/region.rs (gate lifted there too).
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
         let note_rkeys: Vec<i64> = note_region_keys[fi];
@@ -1239,14 +1202,23 @@ fn emit_root_escape_notes_module(
                 // #871 dropped the Caller(_) -> Root collapse the snapshot now
                 // matches `region_keys/vals` for those producers; fall back to
                 // `region_keys/vals` for the direct-`RegionAlloc{Caller(_)}` path.
-                let mut rgn: i64 = lookup_inst_region(note_rkeys, note_rvals, inst.id);
+                let note_rgn: i64 = lookup_inst_region(note_rkeys, note_rvals, inst.id);
+                let in_note: bool = note_rgn >= 0;
+                let mut rgn: i64 = note_rgn;
                 if rgn < 0 {
                     rgn = lookup_inst_region(rkeys, rvals, inst.id);
                 }
-                if rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER() {
-                    // Skip the value being returned — that's the canonical
-                    // FreshInCaller return path, not a side-effect escape.
-                    if !region_vec_contains_i64(returned_ids, inst.id) {
+                // Issue #366: flag Caller(_) allocs and anything recorded in the
+                // note map (Caller internal-call snapshots + multi-slot widen-to-
+                // Root allocs); skip everything else. Mirrors vow-ir/src/region.rs.
+                if in_note || (rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER()) {
+                    // A widen-to-Root alloc (note entry with a Root-kind region)
+                    // genuinely resolved to the never-freed arena; being returned
+                    // as well does not undo that leak, so it stays flagged (#366,
+                    // P2). Other allocs on the return path are exempt — that's the
+                    // canonical FreshInCaller return, not a side-effect escape.
+                    let is_widened_root: bool = in_note && region_kind(rgn) == REGION_KIND_ROOT();
+                    if is_widened_root || !region_vec_contains_i64(returned_ids, inst.id) {
                         let span_start: i64 = root_escape_span_start(inst, id_to_inst);
                         let span_len: i64 = root_escape_span_len(inst, id_to_inst);
                         let d: Diagnostic = diag_new(
@@ -2195,13 +2167,20 @@ fn analyze_function(
         while rii < rb.insts.len() {
             let rinst: IrInst = rb.insts[rii];
             if is_heap_producing_for_region(rinst, int_kinds) {
+                let widened_flag: Vec<i64> = Vec::new();
                 let rgn: i64 = value_lub_region(
                     f, rinst.id, rb.id, fidx, id_to_inst, id_to_block, phi_arms,
                     block_parent, block_depth, loop_headers,
                     is_scalar_ity(f.return_ty),
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux,
+                    widened_flag,
                 );
+                // Issue #366: record multi-slot widen-to-Root allocs so the
+                // note pass surfaces the leak (mirrors vow-ir/src/region.rs).
+                if widened_flag.len() > 0 {
+                    put_inst_region(note_region_keys[fidx], note_region_vals[fidx], rinst.id, rgn);
+                }
                 // Issue #320: record the Caller(_) region so the note pass can
                 // surface internal-call heap producers routed through a hidden
                 // caller slot. The former Caller(_) -> Root collapse below was
@@ -2437,13 +2416,31 @@ fn lookup_inst_block(id_to_block: Vec<i64>, id: i64) -> i64 {
     -1
 }
 
+// True if `markers` contains an intrinsic Root PIN (ROOT/0, `region_root()` —
+// a program-lifetime placement from pin_to_root / literal / a genuine root
+// store target). The ROOT/1 widen sentinel (a Phi-over-caller-containers
+// widen, #366) packs as REGION_KIND_ROOT too but is deliberately NOT a pin, so
+// the note pass still flags it. Mirrors Rust's
+// `markers.contains(&MustOutliveMarker::Root)` — which excludes `WidenedCallerRoot`.
+fn markers_contains_root(markers: Vec<i64>) -> bool {
+    let mut i: i64 = 0;
+    while i < markers.len() {
+        if markers[i] == region_root() {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
 fn value_lub_region(
     f: IrFunction, id: i64, defining_block: i64, fi: i64,
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
     block_parent: Vec<i64>, block_depth: Vec<i64>, loop_headers: Vec<i64>,
     return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
-    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    widened_out: Vec<i64>
 ) -> i64 {
     let work: Vec<i64> = Vec::new();
     let seen: Vec<i64> = Vec::new();
@@ -2497,10 +2494,19 @@ fn value_lub_region(
     } else {
         Vec::new()
     };
-    region_lub_from_markers(
+    let result: i64 = region_lub_from_markers(
         markers, defining_block, block_parent, block_depth,
         own_return_kind, own_return_aux, own_return_aliases, own_se_targets,
-    )
+    );
+    // Issue #366: an alloc that resolves to Root WITHOUT a Root marker widened
+    // across multiple hidden caller slots (the multi-slot widen-to-Root leak);
+    // the only other Root source is an intrinsic Root marker (pin_to_root /
+    // literal). Signal it so the note pass can surface the leak. Mirrors
+    // vow-ir/src/region.rs.
+    if result == region_root() && !markers_contains_root(markers) {
+        widened_out.push(1);
+    }
+    result
 }
 
 fn region_lub_from_markers(
@@ -2957,8 +2963,11 @@ fn add_store_target_markers_vow(
     // as a multi-slot conflict. Widen caller markers to Root (safe, the pre-Phi
     // behavior) when reached via a Phi; block-local arms keep their precise
     // marker so the common `mut` case (all arms block-local) still frees.
+    // Use the ROOT/1 widen sentinel (not the ROOT/0 pin) so the note pass can
+    // distinguish this leak-widen from a genuine pin_to_root (#366). Both pack
+    // as REGION_KIND_ROOT, so `region_lub_from_markers` still resolves to Root.
     let marker: i64 = if via_phi && region_kind(base_marker) == REGION_KIND_CALLER() {
-        region_root()
+        region_pack(REGION_KIND_ROOT(), 1)
     } else {
         base_marker
     };

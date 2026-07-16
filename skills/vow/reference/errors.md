@@ -367,9 +367,12 @@ fn add(a: i64, b: i64) -> i64 vow {
 > stored into a parameter) have no single caller arena that outlives every
 > destination, so their inferred region widens to the root region (`Root`) —
 > a strictly wider placement than any one escaped pointer requires, hence
-> sound (leak-but-safe) — and they compile without a diagnostic (issue #871).
-> `RegionConflict` therefore fires only when a value's inferred region is a
-> concrete block strictly narrower than the target container's region.
+> sound (leak-but-safe) — and they compile without a blocking error (issue
+> #871). Such a widen-to-root placement is not silent, though: it surfaces a
+> non-blocking `RegionRootEscape` **note** (issue #366; see below), so the
+> permanent root-region placement is still visible. `RegionConflict`
+> therefore fires only when a value's inferred region is a concrete block
+> strictly narrower than the target container's region.
 
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {
@@ -385,9 +388,14 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 
 **Phase:** Region Inference (arena-per-scope, Phase 3)
 **Severity:** Note (informational — does not fail the build)
-**Meaning:** A heap allocation's inferred region is `Caller`, and the surrounding function publishes a `FreshInCaller` return summary or store effect — so the allocation may flow up the caller chain to `main` and ultimately land in the root region (`__vow_root_arena`, never freed). This is a memory-cost decision the compiler surfaces visibly per `docs/design/arena_memory.md` §4.4: silent root-region placement caused growth-with-no-signal in earlier compiler versions, and the note restores that signal without conflating it with unsoundness (`RegionConflict`).
+**Meaning:** A heap allocation may land in the never-freed root region (`__vow_root_arena`). The note fires in either of two cases:
 
-The note is conservative — it fires for any `Caller`-region allocation in a function that could route to a caller, even if the actual concrete chain in this program doesn't reach `main`. False positives are tolerated because the diagnostic is non-blocking.
+1. The allocation's inferred region is `Caller` and the surrounding function publishes a `FreshInCaller` return summary or store effect — so the value may flow up the caller chain to `main`.
+2. The allocation's region **widens to the root region** without an intrinsic root pin (`pin_to_root` / a literal) — either because it is routed into more than one distinct hidden caller slot (a multi-slot widen), or because it reaches a container through a Phi over caller containers (a Phi widen). Both are sound (leak-but-safe) placements, but the allocation lives for the whole process.
+
+This is a memory-cost decision the compiler surfaces visibly per `docs/design/arena_memory.md` §4.4: silent root-region placement caused growth-with-no-signal in earlier compiler versions, and the note restores that signal without conflating it with unsoundness (`RegionConflict`).
+
+The note is conservative — it fires for any qualifying allocation in a function that could route to a caller or that widens to root, even if the actual concrete chain in this program doesn't reach `main`. False positives are tolerated because the diagnostic is non-blocking. A widen-to-root allocation is flagged even when it is also returned: being returned does not undo a root-region placement.
 
 ```json
 {
