@@ -1086,6 +1086,9 @@ fn side_king_attacks(b: Board, color: i64, king_sq: i64) -> i64 {
     attacks
 }
 
+// Diagnostic-only mirror of evaluate_board's phase accumulator. Keeping the
+// hot evaluator's phase in its existing PeSTO scan avoids a second 64-square
+// walk at every leaf; the infrequent `eval` command can afford this extra pass.
 fn game_phase(b: Board) -> i64 {
     let sqs: Vec<i64> = b.squares;
     let mut phase: i64 = 0;
@@ -1800,7 +1803,7 @@ fn check_stop(ss: SearchState) [io, read] {
     }
 }
 
-fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) -> i64 [io, read] {
+fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ply: i64, ss: SearchState) -> i64 [io, read] {
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
     let mut moves: Vec<ChessMove> = Vec::new();
@@ -1813,7 +1816,7 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) 
         }
         moves = generate_legal_moves(b);
         if moves.len() == 0 {
-            return -MATE;
+            return -MATE + ply;
         }
     } else {
         let stand_pat: i64 = b.side * evaluate_board(b, ss.pst);
@@ -1843,7 +1846,7 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) 
         pick_best_to_front(moves, scores, i);
         let mv: ChessMove = moves[i];
         let undo: UndoInfo = make_move(b, mv);
-        let score: i64 = -quiesce(b, -beta, -alpha, qdepth - 1, ss);
+        let score: i64 = -quiesce(b, -beta, -alpha, qdepth - 1, ply + 1, ss);
         unmake_move(b, mv, undo);
         if score > best {
             best = score;
@@ -1900,7 +1903,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     }
 
     if d <= 0 {
-        return quiesce(b, alpha_in, beta_in, 6, ss);
+        return quiesce(b, alpha_in, beta_in, 6, ply, ss);
     }
     let null_move_near_boundary: bool = b.halfmove >= FIFTY_MOVE_PLIES - d;
 

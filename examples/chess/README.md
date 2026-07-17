@@ -40,7 +40,7 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `perft N`     | Node-count divide to depth `N` (move-generation self-test).           |
 | `captest N`   | Differential gate: asserts the quiescence capture generator equals the tactical subset of legal moves, to depth `N` (prints mismatch count). |
 | `halfmovetest` | Search gate: asserts draw ordering, exact halfmove-qualified TT score reuse, and null-move clock handling at the 50-move boundary (prints mismatch count). |
-| `eval`        | Prints the white-positive evaluation and raw mobility, pawn-shield, and king-attack balances used for testing/tuning. |
+| `eval`        | Prints the white-positive evaluation, raw mobility / pawn-shield / king-attack balances, and the tapered weighted king-safety total used for testing/tuning. |
 | `stop`        | Polled during search (checked every 1024 nodes) and honored.          |
 | `setoption`   | Accepted and ignored (no configurable options yet).                  |
 | `quit`        | Exits.                                                                 |

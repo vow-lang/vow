@@ -88,6 +88,17 @@ def test_warm_tt_preserves_negative_mate_distance(engine: Path) -> None:
     assert final_mate_score(searches[1]) == -1, searches[1]
 
 
+def test_quiescence_mate_score_uses_root_ply(engine: Path) -> None:
+    searches = run_engine(
+        engine,
+        "position fen 2n5/2k1B1r1/br3b2/4N3/B7/P1K1N1n1/6P1/1q6 b - - 4 61\n"
+        "go depth 1\n"
+        "quit\n",
+    )
+    assert len(searches) == 1, searches
+    assert final_mate_score(searches[0]) == 1, searches[0]
+
+
 def test_evaluation_reports_piece_mobility(engine: Path) -> None:
     knight = evaluation_breakdown(
         engine, "7k/8/8/8/3N4/8/8/K7 w - - 0 1"
@@ -111,6 +122,7 @@ def test_evaluation_reports_king_zone_attacks(engine: Path) -> None:
         engine, "6k1/8/8/8/8/8/1Q6/K7 w - - 0 1"
     )
     assert terms["king_attacks"] == 2, terms
+    assert terms["king_safety"] == 2, terms
 
 
 def main() -> None:
@@ -120,6 +132,7 @@ def main() -> None:
 
     test_warm_tt_preserves_mate_distance(args.engine)
     test_warm_tt_preserves_negative_mate_distance(args.engine)
+    test_quiescence_mate_score_uses_root_ply(args.engine)
     test_evaluation_reports_piece_mobility(args.engine)
     test_evaluation_reports_pawn_shield_balance(args.engine)
     test_evaluation_reports_king_zone_attacks(args.engine)
