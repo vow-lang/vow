@@ -2446,9 +2446,14 @@ fn search_best_move(b: Board, max_depth_in: i64, game_rep: GameHistory, ss: Sear
         while exact == 0 && ss.stopped == 0 {
             let root: RootSearchResult = search_root_window(b, legal, d, alpha, beta, ss);
 
-            // Preserve time management: any fully searched PV-first root move
-            // is useful even when a retry is interrupted later.
-            if root.completed_moves >= 1 {
+            // Only adopt a pass's move when it raised the score above alpha: an
+            // exact PV pass or a fail-high yields a trustworthy move, while a
+            // fail-low pass returns only upper bounds. Overwriting best_mv from a
+            // fail-low pass would replace the previous depth's exact move with a
+            // bound-selected one if the widening retry is later cut by the deadline.
+            // Full-window passes (alpha == -INF) always satisfy this, so partial
+            // iterations still make progress.
+            if root.completed_moves >= 1 && root.score > alpha {
                 best_mv = root.best_move;
             }
             if ss.stopped == 1 {
