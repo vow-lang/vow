@@ -76,6 +76,7 @@ struct TTEntry {
     score: i64,
     flag: i64,
     movekey: i64,
+    generation: i64,
 }
 
 struct SearchState {
@@ -89,6 +90,7 @@ struct SearchState {
     pst: Vec<i64>,
     rep: Vec<i64>,
     rep_base: i64,
+    tt_generation: i64,
     pending: Vec<String>,
 }
 
@@ -99,6 +101,7 @@ struct UciState {
     tt: Vec<TTEntry>,
     pst: Vec<i64>,
     game_rep: Vec<i64>,
+    tt_generation: i64,
 }
 
 // Parsed `go` limits. If fixed_depth > 0, search exactly that depth with no
@@ -1098,7 +1101,7 @@ fn build_tt() -> Vec<TTEntry> {
     let tt: Vec<TTEntry> = Vec::new();
     let mut i: i64 = 0;
     while i < TT_SIZE {
-        tt.push(TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 });
+        tt.push(TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0, generation: 0 });
         i = i + 1;
     }
     tt
@@ -1560,17 +1563,12 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     // extension is disabled past MAX_DEPTH*2 plies so a pathological forced-check
     // line (which the 50-move rule already bounds in practice) can never sustain
     // the recursion indefinitely — defence in depth against stack exhaustion.
+    // Keep seed_repetition_history's search-headroom derivation in sync with
+    // this cutoff.
     let mut d: i64 = depth;
     if in_chk && ply < MAX_DEPTH * 2 {
         d = d + 1;
     }
-
-    if d <= 0 {
-        return quiesce(b, alpha_in, beta_in, 6, ss);
-    }
-
-    let mut alpha: i64 = alpha_in;
-    let beta: i64 = beta_in;
 
     let zkey: i64 = compute_zkey(b, ss.ztab);
 
@@ -1608,13 +1606,21 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         }
     }
 
+    if d <= 0 {
+        return quiesce(b, alpha_in, beta_in, 6, ss);
+    }
+
+    let mut alpha: i64 = alpha_in;
+    let beta: i64 = beta_in;
+
     // Transposition table probe. The full key is stored, so an index collision
-    // from a different position is rejected by the key check.
+    // from a different position is rejected by the key check. The generation
+    // tag prevents reuse under a different played-game repetition context.
     let tt_idx: i64 = zkey & TT_MASK;
     let ttv: Vec<TTEntry> = ss.tt;
     let e: TTEntry = ttv[tt_idx];
     let mut tt_move_key: i64 = 0;
-    if e.flag != 0 && e.key == zkey {
+    if e.flag != 0 && e.key == zkey && e.generation == ss.tt_generation {
         tt_move_key = e.movekey;
         if e.depth >= d {
             if e.flag == TT_EXACT {
@@ -1689,7 +1695,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         if alpha >= beta {
             record_cutoff(ss, b, mv, d, ply);
             if ss.stopped == 0 {
-                ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key };
+                ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key, generation: ss.tt_generation };
             }
             return best;
         }
@@ -1702,7 +1708,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         if best <= alpha_in {
             flag = TT_UPPER;
         }
-        ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: flag, movekey: best_move_key };
+        ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: flag, movekey: best_move_key, generation: ss.tt_generation };
     }
     best
 }
@@ -1720,7 +1726,8 @@ fn seed_repetition_history(b: Board, game_rep: Vec<i64>, ss: SearchState) {
     }
 
     // A check extension can keep depth from draining until MAX_DEPTH * 2 plies,
-    // after which the remaining normal depth still needs repetition slots.
+    // after which the remaining normal depth still needs repetition slots. This
+    // reservation must change with negamax's check-extension cutoff.
     let search_headroom: i64 = MAX_DEPTH * 3;
     let mut history_budget: i64 = REP_SIZE - search_headroom;
     if history_budget < 1 {
@@ -2261,18 +2268,14 @@ fn reset_for_new_game(us: UciState) {
     // killer/history tables are rebuilt fresh per `go`, so only the board and
     // persistent game-position history need resetting here.
     //
-    // The transposition table is intentionally left WARM across games. It is a
-    // persistent root-arena Vec aliased into every search; entries store the full
-    // 64-bit Zobrist key and are only reused on an exact key match, so a previous
-    // game's entries cannot be misapplied to a different position. Clearing it in
-    // place (writing struct literals across all ~1M slots from this scope) is not
-    // free in the region model — those writes root fresh allocations and leak the
-    // table on every `ucinewgame` — so we keep it warm. The one residual risk is a
-    // stale, ply-relative mate score reused across games; that is closed by the
-    // mate-score ply-adjustment tracked in #912 (which fixes it for both the
-    // cross-game and within-game transposition cases at once).
+    // The transposition table allocation is intentionally retained across games.
+    // Clearing it in place (writing struct literals across all ~1M slots from
+    // this scope) is not free in the region model — those writes root fresh
+    // allocations and leak the table on every `ucinewgame`. Instead, advancing
+    // the generation makes all prior entries ineligible without rewriting them.
     us.board = start_board();
     seed_game_history(us.board, us.ztab, us.game_rep);
+    us.tt_generation = us.tt_generation + 1;
 }
 
 fn handle_perft(tokens: Vec<String>, b: Board) [io] {
@@ -2319,6 +2322,7 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                 reset_for_new_game(us);
             } else {
                 if cmd.eq(String::from("position")) {
+                    us.tt_generation = us.tt_generation + 1;
                     us.board = handle_position(tokens, us.board, us.ztab, us.game_rep);
                 } else if cmd.eq(String::from("perft")) {
                     handle_perft(tokens, us.board);
@@ -2352,7 +2356,7 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                             }
                             deadline = now + think;
                         }
-                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_base: 0, pending: Vec::new() };
+                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_base: 0, tt_generation: us.tt_generation, pending: Vec::new() };
                         let best: ChessMove = search_best_move(us.board, max_depth, us.game_rep, ss);
                         let out: String = String::from("bestmove ");
                         out.push_str(move_to_uci(best));
@@ -2384,7 +2388,7 @@ fn main() [io, read] {
     let ztab: Vec<i64> = build_ztab();
     let game_rep: Vec<i64> = Vec::new();
     game_rep.push(compute_zkey(board, ztab));
-    let us: UciState = UciState { board: board, running: 1, ztab: ztab, tt: build_tt(), pst: build_pst(), game_rep: game_rep };
+    let us: UciState = UciState { board: board, running: 1, ztab: ztab, tt: build_tt(), pst: build_pst(), game_rep: game_rep, tt_generation: 1 };
 
     while us.running == 1 {
         let raw: String = stdin_read_line();

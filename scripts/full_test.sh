@@ -501,6 +501,12 @@ printf '%s\n' \
     'go depth 2' \
     'quit' > "$chess_threefold_input"
 
+chess_threefold_horizon_input="$TMPDIR/chess_threefold_horizon.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1' \
+    'go depth 1' \
+    'quit' > "$chess_threefold_horizon_input"
+
 chess_twofold_input="$TMPDIR/chess_twofold.in"
 printf '%s\n' \
     'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1' \
@@ -514,6 +520,20 @@ printf '%s\n' \
     'position fen 6nk/8/8/8/8/8/8/K2Q4 b - - 7 4' \
     'go depth 2' \
     'quit' > "$chess_history_reset_input"
+
+chess_tt_context_input="$TMPDIR/chess_tt_context.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1 g8f6 a1a2 f6g8' \
+    'go depth 3' \
+    'position fen 6nk/8/8/8/8/8/K7/3Q4 w - - 10 6' \
+    'go depth 3' \
+    'quit' > "$chess_tt_context_input"
+
+chess_tt_context_reference_input="$TMPDIR/chess_tt_context_reference.in"
+printf '%s\n' \
+    'position fen 6nk/8/8/8/8/8/K7/3Q4 w - - 10 6' \
+    'go depth 3' \
+    'quit' > "$chess_tt_context_reference_input"
 
 chess_long_history_input="$TMPDIR/chess_long_history.in"
 {
@@ -542,6 +562,21 @@ check_chess_threefold_history() {
         fail "$label" "depth 2 did not score g8f6 as cp 0"
     elif ! grep -qx 'bestmove g8f6' <<< "$output"; then
         fail "$label" "engine did not choose g8f6"
+    else
+        pass "$label"
+    fi
+}
+
+check_chess_threefold_horizon() {
+    local label="$1" bin="$2"
+    local output="" status=0
+    output=$(run_self_bin "$bin" < "$chess_threefold_horizon_input") || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif ! grep -Eq '^info depth 1 score cp 0 .* pv g8f6$' <<< "$output"; then
+        fail "$label" "depth-horizon threefold was not scored as cp 0"
+    elif ! grep -qx 'bestmove g8f6' <<< "$output"; then
+        fail "$label" "engine did not choose the horizon threefold"
     else
         pass "$label"
     fi
@@ -577,6 +612,27 @@ check_chess_history_reset() {
     fi
 }
 
+check_chess_tt_context_reset() {
+    local label="$1" bin="$2"
+    local output="" reference_output="" status=0 reference_status=0
+    local depth_line="" reference_depth_line="" result="" reference_result=""
+    output=$(run_self_bin "$bin" < "$chess_tt_context_input") || status=$?
+    reference_output=$(run_self_bin "$bin" < "$chess_tt_context_reference_input") || reference_status=$?
+    depth_line=$(grep '^info depth 3 ' <<< "$output" | sed -n '2p') || true
+    reference_depth_line=$(grep '^info depth 3 ' <<< "$reference_output" | sed -n '1p') || true
+    result=$(sed -E 's/ time [0-9]+ nps [0-9]+ / /' <<< "$depth_line")
+    reference_result=$(sed -E 's/ time [0-9]+ nps [0-9]+ / /' <<< "$reference_depth_line")
+    if [ "$status" -ne 0 ] || [ "$reference_status" -ne 0 ]; then
+        fail "$label" "engine exited with status warmed=$status reference=$reference_status"
+    elif [ -z "$depth_line" ] || [ -z "$reference_depth_line" ]; then
+        fail "$label" "engine did not complete both depth 3 searches"
+    elif [ "$result" != "$reference_result" ]; then
+        fail "$label" "replacement result '$result' differed from fresh '$reference_result'"
+    else
+        pass "$label"
+    fi
+}
+
 check_chess_long_history() {
     local label="$1" bin="$2"
     local output="" reference_output="" status=0 reference_status=0
@@ -605,23 +661,31 @@ check_chess_long_history() {
 if [ -x "$chess_rust" ]; then
     check_chess_twofold_history "chess/history-twofold/rust" "$chess_rust"
     check_chess_threefold_history "chess/history-threefold/rust" "$chess_rust"
+    check_chess_threefold_horizon "chess/history-horizon/rust" "$chess_rust"
     check_chess_history_reset "chess/history-reset/rust" "$chess_rust"
+    check_chess_tt_context_reset "chess/history-tt-context/rust" "$chess_rust"
     check_chess_long_history "chess/history-bounded/rust" "$chess_rust"
 else
     fail "chess/history-twofold/rust" "binary not built"
     fail "chess/history-threefold/rust" "binary not built"
+    fail "chess/history-horizon/rust" "binary not built"
     fail "chess/history-reset/rust" "binary not built"
+    fail "chess/history-tt-context/rust" "binary not built"
     fail "chess/history-bounded/rust" "binary not built"
 fi
 if [ -x "$chess_self" ]; then
     check_chess_twofold_history "chess/history-twofold/self" "$chess_self"
     check_chess_threefold_history "chess/history-threefold/self" "$chess_self"
+    check_chess_threefold_horizon "chess/history-horizon/self" "$chess_self"
     check_chess_history_reset "chess/history-reset/self" "$chess_self"
+    check_chess_tt_context_reset "chess/history-tt-context/self" "$chess_self"
     check_chess_long_history "chess/history-bounded/self" "$chess_self"
 else
     fail "chess/history-twofold/self" "binary not built"
     fail "chess/history-threefold/self" "binary not built"
+    fail "chess/history-horizon/self" "binary not built"
     fail "chess/history-reset/self" "binary not built"
+    fail "chess/history-tt-context/self" "binary not built"
     fail "chess/history-bounded/self" "binary not built"
 fi
 echo ""
