@@ -153,6 +153,21 @@ def test_insufficient_material(engine: Engine) -> list[str]:
     return failures
 
 
+def test_checked_qdepth_draw(engine: Engine) -> list[str]:
+    # After the depth-1 root move h7c7, the score-determining qsearch line is
+    # c4c7 b1b7 c7b7 e4b7 d2f3 b7f3+. Its sixth move leaves black checked in
+    # KBvK, so the dead-position result must take precedence over the q-depth
+    # window-bound cutoff.
+    fen = "8/1nq4Q/8/8/2q1B3/5R2/3nk3/1R5K w - - 0 1"
+    score_kind, score = engine.score(fen, depth=1)
+    if score_kind != "cp" or score != 0:
+        return [
+            "checked q-depth draw: expected score cp 0, "
+            f"got {score_kind} {score}"
+        ]
+    return []
+
+
 def test_minor_mop_up(engine: Engine) -> list[str]:
     failures: list[str] = []
     _, kbb_corner = engine.score(
@@ -371,6 +386,7 @@ def main() -> int:
     engine = Engine(args.engine)
     try:
         failures = test_insufficient_material(engine)
+        failures.extend(test_checked_qdepth_draw(engine))
         failures.extend(test_minor_mop_up(engine))
         if not args.draws_only:
             failures.extend(
