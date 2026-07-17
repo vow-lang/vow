@@ -84,6 +84,40 @@ python examples/chess/play_uci_match.py \
 # implied Elo = 2000 - 400*log10(1/score - 1)
 ```
 
+## Evaluation polish measurement (#912)
+
+The mobility and king-safety coefficients were kept deliberately small:
+`mobility=3`, `pawn shield=6`, and `king-zone attack=8`. Two local tuning checks
+informed that choice:
+
+- A 100-position least-squares fit against Stockfish depth-8 evaluations was
+  rejected. Random legal positions made the features highly correlated and the
+  fitted king-attack coefficient changed sign; RMSE remained 324–343 cp versus
+  370 cp for the conservative weights. That is not a stable enough signal to
+  override chess priors.
+- A 12-game, 100 ms/move ablation of king-zone attacks (`8` versus `0`) finished
+  6–6. With no measured benefit from a more aggressive coefficient, `8` was
+  retained.
+
+The final strength gate compared the polished evaluator directly with the
+TT-mate-folding-only commit (`b2986a3`), so the mate-score correctness fix could
+not be mistaken for evaluation strength. Across 30 serialized games at 100
+ms/move, alternating colors with a 200-ply cap, the polished engine scored
+**17.5–12.5** (`+17 =1 -12`), or **58.3% / approximately +58 Elo**. The 1-sigma
+score uncertainty is about +/-9 percentage points (approximately -5 to +126 Elo
+for the delta), so this is evidence of a non-negative point estimate rather than
+a claim of statistical significance. Twenty-six games terminated normally; the
+Stockfish validator adjudicated four at the cap (three at +100, one at 0.00).
+
+```sh
+python examples/chess/play_uci_match.py \
+    --white "bash -c 'ulimit -v 2000000; exec examples/chess/.local/chess'" \
+    --black "bash -c 'ulimit -v 2000000; exec examples/chess/.local/chess-tt-only'" \
+    --white-go "go movetime 100" --black-go "go movetime 100" \
+    --games 30 --alternate-colors --plies 200 \
+    --validator stockfish --log eval-final-100ms-30.log
+```
+
 ## Lessons learnt
 
 - **Root-cause before fixing.** The dramatic "OOM at depth 7" was a *stale

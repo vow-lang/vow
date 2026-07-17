@@ -1308,6 +1308,29 @@ else
 fi
 echo ""
 
+# ─── Section 13b: Chess Engine Behaviors ────────────────────────────
+section_begin "Section 13b: Chess Engine Behaviors"
+chess_rust="$TMPDIR/chess_rust"
+chess_self="$TMPDIR/chess_self"
+r_chess=0; "$RUST" build --no-verify examples/chess/main.vow -o "$chess_rust" >/dev/null 2>&1 || r_chess=$?
+s_chess=0; run_self build --no-verify examples/chess/main.vow -o "$chess_self" >/dev/null 2>&1 || s_chess=$?
+if [ "$r_chess" -eq 0 ] && [ "$s_chess" -eq 0 ]; then
+    pass "chess/build (rust+self)"
+else
+    fail "chess/build" "rust=$r_chess self=$s_chess"
+fi
+if [ "$r_chess" -eq 0 ] && python3 examples/chess/test_engine.py --engine "$chess_rust" >/dev/null 2>&1; then
+    pass "chess/behavior-rust"
+else
+    fail "chess/behavior-rust" "compiled engine failed mate-score/evaluation regressions"
+fi
+if [ "$s_chess" -eq 0 ] && python3 examples/chess/test_engine.py --engine "$chess_self" >/dev/null 2>&1; then
+    pass "chess/behavior-self"
+else
+    fail "chess/behavior-self" "compiled engine failed mate-score/evaluation regressions"
+fi
+echo ""
+
 # ─── Section 6: Perfetto Trace (--perfetto, #784) ───────────────────
 section_begin "Section 6: Perfetto Trace"
 ptrace_dir=$(mktemp -d)

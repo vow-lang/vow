@@ -15,14 +15,16 @@ The engine (`main.vow`) implements:
   promotions, and pins.
 - **Search** — negamax with alpha-beta, quiescence (captures/promotions only),
   and time-managed iterative deepening. A Zobrist-keyed transposition table
-  provides cutoffs and best-move ordering across iterations. Move ordering uses
-  the TT move, MVV/LVA captures, killer moves, and a history heuristic; the tree
-  is pruned with null-move pruning, late move reductions (LMR), a
-  principal-variation search, and check extensions.
+  provides cutoffs and best-move ordering across iterations; mate scores are
+  folded by ply on store/probe so a warm entry preserves the root-relative mate
+  distance. Move ordering uses the TT move, MVV/LVA captures, killer moves, and
+  a history heuristic; the tree is pruned with null-move pruning, late move
+  reductions (LMR), a principal-variation search, and check extensions.
 - **Evaluation** — phase-tapered PeSTO piece-square tables (separate midgame and
   endgame tables blended by material phase) for material and placement, plus
   bishop pair, development/castling, pawn structure (passed / doubled /
-  isolated), and rook activity (open & semi-open files, 7th rank).
+  isolated), rook activity (open & semi-open files, 7th rank), piece mobility,
+  pawn shields, and enemy attacks in each king's zone.
 
 ### UCI protocol
 
@@ -38,6 +40,7 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `perft N`     | Node-count divide to depth `N` (move-generation self-test).           |
 | `captest N`   | Differential gate: asserts the quiescence capture generator equals the tactical subset of legal moves, to depth `N` (prints mismatch count). |
 | `halfmovetest` | Search gate: asserts draw ordering, exact halfmove-qualified TT score reuse, and null-move clock handling at the 50-move boundary (prints mismatch count). |
+| `eval`        | Prints the white-positive evaluation, raw mobility / pawn-shield / king-attack balances, and the tapered weighted king-safety total used for testing/tuning. |
 | `stop`        | Polled during search (checked every 1024 nodes) and honored.          |
 | `setoption`   | Accepted and ignored (no configurable options yet).                  |
 | `quit`        | Exits. Polled during search and honored even without a prior `stop`.  |
@@ -125,3 +128,10 @@ also carry wide error bars at a few dozen games per data point.
   in a single reused process (`#871`). This relies on the region inference
   placing per-node `Vec<ChessMove>` allocations in freeable frame arenas rather
   than the root arena.
+- **Repetition precedes TT probing, but TT values are not fully history-aware.**
+  A repetition or 50-move draw at the current node is returned before consulting
+  the table. A non-draw TT value can still have come from a subtree with a
+  different reversible-position history, because that history is intentionally
+  absent from the Zobrist key. Blanket-disabling TT cutoffs whenever the
+  halfmove clock is nonzero would discard most TT value; this low-impact case
+  remains documented rather than guarded without a narrower signal.
