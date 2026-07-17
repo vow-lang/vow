@@ -552,6 +552,17 @@ printf '%s\n' \
     'go depth 8' \
     'quit' > "$chess_long_history_reference_input"
 
+chess_history_memory_input="$TMPDIR/chess_history_memory.in"
+# Two million reversible plies keep command parsing below this process limit,
+# but the old unbounded key Vec crosses it before reaching `isready`.
+awk 'BEGIN {
+    printf "position fen 7k/8/5n2/8/8/8/3P4/K2Q4 w - - 0 1 moves"
+    for (cycle = 0; cycle < 500000; cycle++) {
+        printf " a1a2 f6g8 a2a1 g8f6"
+    }
+    printf "\nisready\nquit\n"
+}' > "$chess_history_memory_input"
+
 check_chess_threefold_history() {
     local label="$1" bin="$2"
     local output="" status=0
@@ -658,6 +669,22 @@ check_chess_long_history() {
     fi
 }
 
+check_chess_history_memory_bound() {
+    local label="$1" bin="$2"
+    local output="" status=0
+    output=$(
+        ulimit -v 190000
+        "$bin" < "$chess_history_memory_input" 2>&1
+    ) || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "long reversible history exceeded the 190 MB process bound (status $status)"
+    elif ! grep -qx 'readyok' <<< "$output"; then
+        fail "$label" "engine did not finish processing the bounded history"
+    else
+        pass "$label"
+    fi
+}
+
 if [ -x "$chess_rust" ]; then
     check_chess_twofold_history "chess/history-twofold/rust" "$chess_rust"
     check_chess_threefold_history "chess/history-threefold/rust" "$chess_rust"
@@ -665,6 +692,7 @@ if [ -x "$chess_rust" ]; then
     check_chess_history_reset "chess/history-reset/rust" "$chess_rust"
     check_chess_tt_context_reset "chess/history-tt-context/rust" "$chess_rust"
     check_chess_long_history "chess/history-bounded/rust" "$chess_rust"
+    check_chess_history_memory_bound "chess/history-memory-bound/rust" "$chess_rust"
 else
     fail "chess/history-twofold/rust" "binary not built"
     fail "chess/history-threefold/rust" "binary not built"
@@ -672,6 +700,7 @@ else
     fail "chess/history-reset/rust" "binary not built"
     fail "chess/history-tt-context/rust" "binary not built"
     fail "chess/history-bounded/rust" "binary not built"
+    fail "chess/history-memory-bound/rust" "binary not built"
 fi
 if [ -x "$chess_self" ]; then
     check_chess_twofold_history "chess/history-twofold/self" "$chess_self"
@@ -680,6 +709,7 @@ if [ -x "$chess_self" ]; then
     check_chess_history_reset "chess/history-reset/self" "$chess_self"
     check_chess_tt_context_reset "chess/history-tt-context/self" "$chess_self"
     check_chess_long_history "chess/history-bounded/self" "$chess_self"
+    check_chess_history_memory_bound "chess/history-memory-bound/self" "$chess_self"
 else
     fail "chess/history-twofold/self" "binary not built"
     fail "chess/history-threefold/self" "binary not built"
@@ -687,6 +717,7 @@ else
     fail "chess/history-reset/self" "binary not built"
     fail "chess/history-tt-context/self" "binary not built"
     fail "chess/history-bounded/self" "binary not built"
+    fail "chess/history-memory-bound/self" "binary not built"
 fi
 echo ""
 

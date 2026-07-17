@@ -94,13 +94,21 @@ struct SearchState {
     pending: Vec<String>,
 }
 
+// Fixed-capacity ring of played-game positions since the last irreversible
+// move. SearchState.rep owns the separate search-line suffix.
+struct GameHistory {
+    keys: Vec<i64>,
+    start: i64,
+    len: i64,
+}
+
 struct UciState {
     board: Board,
     running: i64,
     ztab: Vec<i64>,
     tt: Vec<TTEntry>,
     pst: Vec<i64>,
-    game_rep: Vec<i64>,
+    game_rep: GameHistory,
     tt_generation: i64,
 }
 
@@ -1563,8 +1571,8 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     // extension is disabled past MAX_DEPTH*2 plies so a pathological forced-check
     // line (which the 50-move rule already bounds in practice) can never sustain
     // the recursion indefinitely — defence in depth against stack exhaustion.
-    // Keep seed_repetition_history's search-headroom derivation in sync with
-    // this cutoff.
+    // Keep repetition_history_capacity's search-headroom derivation in sync
+    // with this cutoff.
     let mut d: i64 = depth;
     if in_chk && ply < MAX_DEPTH * 2 {
         d = d + 1;
@@ -1717,29 +1725,51 @@ fn moves_equal(a: ChessMove, b: ChessMove) -> bool {
     a.from == b.from && a.to == b.to && a.promote == b.promote
 }
 
-fn seed_repetition_history(b: Board, game_rep: Vec<i64>, ss: SearchState) {
-    let root_key: i64 = compute_zkey(b, ss.ztab);
-    ss.rep_base = 0;
-    if game_rep.len() == 0 || game_rep[game_rep.len() - 1] != root_key {
-        ss.rep[0] = root_key;
-        return;
-    }
-
+fn repetition_history_capacity() -> i64 {
     // A check extension can keep depth from draining until MAX_DEPTH * 2 plies,
     // after which the remaining normal depth still needs repetition slots. This
     // reservation must change with negamax's check-extension cutoff.
     let search_headroom: i64 = MAX_DEPTH * 3;
-    let mut history_budget: i64 = REP_SIZE - search_headroom;
-    if history_budget < 1 {
-        history_budget = 1;
+    let capacity: i64 = REP_SIZE - search_headroom;
+    if capacity < 1 { 1 } else { capacity }
+}
+
+fn make_game_history() -> GameHistory {
+    GameHistory { keys: make_zeros(repetition_history_capacity()), start: 0, len: 0 }
+}
+
+fn clear_game_history(history: GameHistory) {
+    history.start = 0;
+    history.len = 0;
+}
+
+fn game_history_key_at(history: GameHistory, index: i64) -> i64 {
+    history.keys[(history.start + index) % history.keys.len()]
+}
+
+fn push_game_history(history: GameHistory, key: i64) {
+    let capacity: i64 = history.keys.len();
+    if history.len < capacity {
+        let index: i64 = (history.start + history.len) % capacity;
+        history.keys[index] = key;
+        history.len = history.len + 1;
+    } else {
+        history.keys[history.start] = key;
+        history.start = (history.start + 1) % capacity;
     }
-    let mut start: i64 = 0;
-    if game_rep.len() > history_budget {
-        start = game_rep.len() - history_budget;
+}
+
+fn seed_repetition_history(b: Board, game_rep: GameHistory, ss: SearchState) {
+    let root_key: i64 = compute_zkey(b, ss.ztab);
+    ss.rep_base = 0;
+    if game_rep.len == 0 || game_history_key_at(game_rep, game_rep.len - 1) != root_key {
+        ss.rep[0] = root_key;
+        return;
     }
+
     let mut copied: i64 = 0;
-    while start + copied < game_rep.len() {
-        ss.rep[copied] = game_rep[start + copied];
+    while copied < game_rep.len {
+        ss.rep[copied] = game_history_key_at(game_rep, copied);
         copied = copied + 1;
     }
     ss.rep_base = copied - 1;
@@ -1780,7 +1810,7 @@ fn print_info(depth: i64, score: i64, nodes: i64, elapsed_ms: i64, mv: ChessMove
 // best move is only committed from a fully completed depth: an iteration cut
 // short by the deadline is discarded, so best_mv never regresses to a partial
 // (unreliable) result. Root moves are re-ordered PV-first each iteration.
-fn search_best_move(b: Board, max_depth_in: i64, game_rep: Vec<i64>, ss: SearchState) -> ChessMove [io, read] {
+fn search_best_move(b: Board, max_depth_in: i64, game_rep: GameHistory, ss: SearchState) -> ChessMove [io, read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
         return null_move();
@@ -2048,7 +2078,7 @@ fn find_legal_move(b: Board, uci: String) -> ChessMove {
     null_move()
 }
 
-fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64, ztab: Vec<i64>, game_rep: Vec<i64>) -> Board [io] {
+fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64, ztab: Vec<i64>, game_rep: GameHistory) -> Board [io] {
     let mut i: i64 = start_idx;
     while i < tokens.len() {
         let text: String = tokens[i];
@@ -2061,9 +2091,9 @@ fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64, ztab: Vec<i64>
         }
         make_move(b, mv);
         if b.halfmove == 0 {
-            game_rep.clear();
+            clear_game_history(game_rep);
         }
-        game_rep.push(compute_zkey(b, ztab));
+        push_game_history(game_rep, compute_zkey(b, ztab));
         i = i + 1;
     }
     b
@@ -2219,12 +2249,12 @@ fn parse_fen(tokens: Vec<String>, start_idx: i64) -> Board {
     }
 }
 
-fn seed_game_history(b: Board, ztab: Vec<i64>, game_rep: Vec<i64>) {
-    game_rep.clear();
-    game_rep.push(compute_zkey(b, ztab));
+fn seed_game_history(b: Board, ztab: Vec<i64>, game_rep: GameHistory) {
+    clear_game_history(game_rep);
+    push_game_history(game_rep, compute_zkey(b, ztab));
 }
 
-fn handle_position(tokens: Vec<String>, current: Board, ztab: Vec<i64>, game_rep: Vec<i64>) -> Board [io] {
+fn handle_position(tokens: Vec<String>, current: Board, ztab: Vec<i64>, game_rep: GameHistory) -> Board [io] {
     if tokens.len() < 2 {
         return current;
     }
@@ -2386,8 +2416,8 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
 fn main() [io, read] {
     let board: Board = start_board();
     let ztab: Vec<i64> = build_ztab();
-    let game_rep: Vec<i64> = Vec::new();
-    game_rep.push(compute_zkey(board, ztab));
+    let game_rep: GameHistory = make_game_history();
+    push_game_history(game_rep, compute_zkey(board, ztab));
     let us: UciState = UciState { board: board, running: 1, ztab: ztab, tt: build_tt(), pst: build_pst(), game_rep: game_rep, tt_generation: 1 };
 
     while us.running == 1 {
