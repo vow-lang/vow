@@ -14,6 +14,32 @@ and the lessons, so the next round of work doesn't relearn them.
 | Speed pass | alloc-free `square_attacked`, king-square tracking | (folded in) |
 | PeSTO eval | tapered midgame/endgame piece-square tables | ~1950 |
 | Draw detection | repetition + 50-move | **~2110** |
+| Lightweight endgames | insufficient material + KX mop-up | not Elo-measured |
+
+## Endgame acceptance (#909)
+
+The lightweight endgame change was measured separately from Elo because its
+acceptance criterion is conversion of elementary mates. With seed `909`, ten
+legal KQvK and ten legal KRvK positions, the Vow engine searching depth 4, and
+Stockfish searching depth 8 as deterministic defender, the draw-only baseline
+mated **11/20** positions before 100 plies. The mop-up evaluation mated
+**20/20**. The same run recognised all six representative insufficient-
+material FENs (including both colours and a bare king in check) and kept three
+live-material controls non-drawn.
+
+```sh
+ulimit -v 2000000
+python3 examples/chess/test_endgames.py \
+    --engine examples/chess/.local/chess \
+    --stockfish stockfish \
+    --pieces QR --positions-per-piece 10 --seed 909 \
+    --engine-depth 4 --defender-depth 8
+```
+
+This is a targeted conversion measurement, not an Elo sample. No Elo delta is
+claimed: the 20-position endgame suite is intentionally biased toward KX
+positions, while an Elo estimate requires the 20–50+ full games near the
+Stockfish ladder crossover described below.
 
 ## Measurement discipline
 
