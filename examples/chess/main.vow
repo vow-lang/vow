@@ -1742,6 +1742,67 @@ fn has_non_pawn_material(b: Board, color: i64) -> bool {
     false
 }
 
+// Dead positions covered by the standard insufficient-material cases used by
+// the engine: bare kings, one bishop or knight against a bare king, and one
+// bishop per side when both bishops live on the same square colour.
+fn is_insufficient_material(b: Board) -> bool {
+    let sqs: Vec<i64> = b.squares;
+    let mut white_bishops: i64 = 0;
+    let mut black_bishops: i64 = 0;
+    let mut white_knights: i64 = 0;
+    let mut black_knights: i64 = 0;
+    let mut first_bishop_colour: i64 = -1;
+    let mut bishops_same_colour: bool = true;
+    let mut other: i64 = 0;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let p: i64 = sqs[sq];
+        let kind: i64 = piece_kind(p);
+        if kind == BISHOP {
+            if p > 0 {
+                white_bishops = white_bishops + 1;
+            } else {
+                black_bishops = black_bishops + 1;
+            }
+            let square_colour: i64 = (file_of(sq) + rank_of(sq)) % 2;
+            if first_bishop_colour < 0 {
+                first_bishop_colour = square_colour;
+            } else {
+                if square_colour != first_bishop_colour {
+                    bishops_same_colour = false;
+                }
+            }
+        } else {
+            if kind == KNIGHT {
+                if p > 0 {
+                    white_knights = white_knights + 1;
+                } else {
+                    black_knights = black_knights + 1;
+                }
+            } else {
+                if kind != EMPTY && kind != KING {
+                    other = other + 1;
+                }
+            }
+        }
+        sq = sq + 1;
+    }
+
+    if other != 0 {
+        return false;
+    }
+    let bishops: i64 = white_bishops + black_bishops;
+    let knights: i64 = white_knights + black_knights;
+    let minors: i64 = bishops + knights;
+    if minors == 0 {
+        return true;
+    }
+    if minors == 1 {
+        return true;
+    }
+    bishops == 2 && knights == 0 && white_bishops == 1 && black_bishops == 1 && bishops_same_colour
+}
+
 fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [io, read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     let in_chk: bool = in_check(b, b.side);
@@ -1751,6 +1812,9 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         } else {
             return 0;
         }
+    }
+    if is_insufficient_material(b) {
+        return 0;
     }
 
     // Check extension: search one ply deeper when in check (forcing lines). The
