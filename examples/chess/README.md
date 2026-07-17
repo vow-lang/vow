@@ -18,7 +18,8 @@ The engine (`main.vow`) implements:
   provides cutoffs and best-move ordering across iterations. Move ordering uses
   the TT move, MVV/LVA captures, killer moves, and a history heuristic; the tree
   is pruned with null-move pruning, late move reductions (LMR), a
-  principal-variation search, and check extensions.
+  principal-variation search, and check extensions. Before search, a small
+  Zobrist-keyed opening book covers common `1.e4` and `1.d4` lines.
 - **Evaluation** — phase-tapered PeSTO piece-square tables (separate midgame and
   endgame tables blended by material phase) for material and placement, plus
   bishop pair, development/castling, pawn structure (passed / doubled /
@@ -34,7 +35,7 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `isready`     | Replies `readyok`.                                                    |
 | `ucinewgame`  | Full per-game reset (start position today; all per-game state).       |
 | `position`    | `startpos` or `fen <FEN>`, optionally followed by `moves <uci> ...`.   |
-| `go`          | `depth N`, `movetime MS`, or `wtime`/`btime` (+`winc`/`binc`/`movestogo`) real time management. Emits `info depth/score/nodes/nps/pv`. |
+| `go`          | Returns a legal root book move when available; otherwise uses `depth N`, `movetime MS`, or `wtime`/`btime` (+`winc`/`binc`/`movestogo`) real time management and emits `info depth/score/nodes/nps/pv`. |
 | `perft N`     | Node-count divide to depth `N` (move-generation self-test).           |
 | `captest N`   | Differential gate: asserts the quiescence capture generator equals the tactical subset of legal moves, to depth `N` (prints mismatch count). |
 | `stop`        | Polled during search (checked every 1024 nodes) and honored.          |
@@ -64,6 +65,32 @@ printf 'uci\nposition startpos\ngo depth 4\nquit\n' | examples/chess/.local/ches
 ```
 
 If your environment has a tight `/tmp` quota, keep `TMPDIR=/dev/shm` for builds.
+
+## Opening Book
+
+`opening_book_cases.py` is the readable source of truth for the book's 49
+positions. `generate_opening_book.py` asks Stockfish to validate every history
+and next move, reproduces the engine's fixed splitmix64 Zobrist table (including
+its en-passant convention), and writes `opening_book.vow`. Do not edit the
+generated Vow module by hand.
+
+```sh
+python examples/chess/generate_opening_book.py --stockfish stockfish
+python examples/chess/generate_opening_book.py --stockfish stockfish --check
+```
+
+After compiling the engine, exercise every book position through the public UCI
+interface. The test requires each hit to return the expected legal move without
+emitting a search-depth line, then confirms an off-book position still searches:
+
+```sh
+ulimit -v 2000000
+python examples/chess/test_opening_book.py examples/chess/.local/chess
+```
+
+The generated lookup returns only an encoded move. `main.vow` resolves it again
+against the root's legal move list and falls back to normal search if the data
+ever becomes stale. No book lookup occurs in negamax or quiescence.
 
 ## Playing A Match
 

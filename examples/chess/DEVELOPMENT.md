@@ -58,6 +58,9 @@ adjudication.
 - A *differential gate* proves a fast path equals a slow one (the `captest`
   command checks that the quiescence capture generator equals the tactical
   subset of the full legal move list).
+- The opening-book black-box test drives every generated position through UCI,
+  requires the expected legal move without a search `info` line, and checks that
+  an off-book position still enters normal search.
 - A tactical suite vs a Stockfish oracle catches pruning that silently drops
   tactics. A change that passes perft but drops tactics is broken.
 
@@ -103,7 +106,8 @@ python examples/chess/play_uci_match.py \
   64-bit key makes index collisions self-correcting.
 - **Generate error-prone data, don't type it.** The 1536 PeSTO table values were
   emitted by a script (with a board-orientation sanity check), never hand-typed
-  into the source.
+  into the source. Opening-book Zobrist keys follow the same rule: readable UCI
+  histories are validated by Stockfish and compiled into the exact engine keys.
 - **Know when to stop.** At the target, on a validated engine, each new feature
-  is margin and fresh regression surface. Opening book / endgame knowledge were
-  deliberately left as future work.
+  is margin and fresh regression surface. Keep the opening book deliberately
+  small and generated; endgame knowledge remains separate future work.
