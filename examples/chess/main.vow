@@ -1,4 +1,5 @@
 module ChessUci
+use opening_book
 
 const EMPTY: i64 = 0;
 const WHITE: i64 = 1;
@@ -2003,6 +2004,22 @@ fn find_legal_move(b: Board, uci: String) -> ChessMove {
     null_move()
 }
 
+fn find_legal_move_key(b: Board, movekey: i64) -> ChessMove {
+    if movekey < 0 {
+        return null_move();
+    }
+    let legal: Vec<ChessMove> = generate_legal_moves(b);
+    let mut i: i64 = 0;
+    while i < legal.len() {
+        let mv: ChessMove = legal[i];
+        if move_key(mv) == movekey {
+            return mv;
+        }
+        i = i + 1;
+    }
+    null_move()
+}
+
 fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board [io] {
     let mut i: i64 = start_idx;
     while i < tokens.len() {
@@ -2280,6 +2297,17 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                     print_line(msg);
                 } else {
                     if cmd.eq(String::from("go")) {
+                        // The book is consulted once at the root. Re-resolving
+                        // the generated key through legal move generation makes
+                        // stale data fail closed to the normal search below.
+                        let book_movekey: i64 = opening_book_move_key(compute_zkey(us.board, us.ztab));
+                        let book_move: ChessMove = find_legal_move_key(us.board, book_movekey);
+                        if !is_null_move(book_move) {
+                            let book_out: String = String::from("bestmove ");
+                            book_out.push_str(move_to_uci(book_move));
+                            print_line(book_out);
+                            return;
+                        }
                         let limits: GoLimits = parse_go_limits(tokens, us.board.side);
                         let fd: i64 = limits.fixed_depth;
                         let budget: i64 = limits.budget_ms;
