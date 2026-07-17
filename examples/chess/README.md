@@ -24,7 +24,10 @@ The engine (`main.vow`) implements:
 - **Evaluation** — phase-tapered PeSTO piece-square tables (separate midgame and
   endgame tables blended by material phase) for material and placement, plus
   bishop pair, development/castling, pawn structure (passed / doubled /
-  isolated), and rook activity (open & semi-open files, 7th rank).
+  isolated), and rook activity (open & semi-open files, 7th rank). Lightweight
+  endgame knowledge scores KvK, KNvK, KBvK, and same-coloured KBvKB as draws;
+  KQ/KR/KBB/KBN versus a bare king gain a bounded mating gradient that confines
+  the defending king and brings the winning king and mating piece closer.
 
 ### UCI protocol
 
@@ -39,6 +42,8 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `go`          | `depth N`, `movetime MS`, `wtime`/`btime` (+`winc`/`binc`/`movestogo`), or `infinite`. Infinite analysis searches until `stop` or `MAX_DEPTH`. Emits `info depth/score/nodes/nps/pv`. |
 | `perft N`     | Node-count divide to depth `N` (move-generation self-test).           |
 | `captest N`   | Differential gate: asserts the quiescence capture generator equals the tactical subset of legal moves, to depth `N` (prints mismatch count). |
+| `reptest`     | Checks recursive-quiescence repetition draws and repetition-buffer headroom (prints mismatch count). |
+| `ttreptest`   | Checks that transposition cutoffs do not cross different repetition paths (prints mismatch count). |
 | `stop`        | Polled during search (checked every 1024 nodes) and honored.          |
 | `setoption`   | Accepted and ignored (no configurable options yet).                  |
 | `quit`        | Exits. Polled during search and honored even without a prior `stop`.  |
@@ -65,6 +70,20 @@ The engine reads UCI commands on `stdin`:
 ```sh
 printf 'uci\nposition startpos\ngo depth 4\nquit\n' | examples/chess/.local/chess
 ```
+
+The endgame acceptance harness uses seeded legal KQvK/KRvK positions and
+Stockfish as a deterministic defender and legality/checkmate validator:
+
+```sh
+ulimit -v 2000000
+python3 examples/chess/test_endgames.py \
+    --engine examples/chess/.local/chess \
+    --stockfish stockfish
+```
+
+The default run also checks the standard insufficient-material draws, KBB
+corner pressure, and the correct bishop-coloured KBN corners. See
+`DEVELOPMENT.md` for the recorded baseline and conversion rate.
 
 If your environment has a tight `/tmp` quota, keep `TMPDIR=/dev/shm` for builds.
 

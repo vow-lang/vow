@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use crate::CallSiteInfo;
+use crate::counterexample::CallSiteInfo;
 
 /// Fold a binary i64 arithmetic opcode, recursing into operands via
 /// `eval_operand`. Returns `None` for any non-arithmetic opcode (so a caller can
