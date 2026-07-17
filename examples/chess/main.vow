@@ -15,6 +15,7 @@ const INF: i64 = 100000000;
 const MATE: i64 = 1000000;
 const MATE_THRESHOLD: i64 = 999000;
 const MAX_DEPTH: i64 = 64;
+const FIFTY_MOVE_PLIES: i64 = 100;
 const KILLER_SLOTS: i64 = 132;
 const HISTORY_SIZE: i64 = 4096;
 const HISTORY_ORDER_CAP: i64 = 60000;
@@ -1448,6 +1449,17 @@ fn captest(b: Board, depth: i64) -> i64 {
     bad
 }
 
+fn halfmovetest(ztab: Vec<i64>, tt: Vec<TTEntry>, pst: Vec<i64>) -> i64 [io, read] {
+    let board: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 100 1")), 0);
+    let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
+    let score: i64 = negamax(board, 0, 1, -INF, INF, ss);
+    if score == 0 {
+        0
+    } else {
+        1
+    }
+}
+
 fn check_stop(ss: SearchState) [io, read] {
     ss.nodes = ss.nodes + 1;
     if ss.stopped == 0 && ss.nodes % 1024 == 0 {
@@ -1563,6 +1575,10 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         d = d + 1;
     }
 
+    if ply >= 1 && b.halfmove >= FIFTY_MOVE_PLIES {
+        return 0;
+    }
+
     if d <= 0 {
         return quiesce(b, alpha_in, beta_in, 6, ss);
     }
@@ -1576,9 +1592,6 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     // current line (same side to move => an even number of plies back, bounded by
     // the halfmove clock since the last irreversible move).
     if ply >= 1 {
-        if b.halfmove >= 100 {
-            return 0;
-        }
         if ply < REP_SIZE {
             let mut lim: i64 = ply - b.halfmove;
             if lim < 0 {
@@ -2276,6 +2289,11 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                     let cdepth: i64 = if tokens.len() >= 2 { parse_i64_or(tokens[1], 3) } else { 3 };
                     let bad: i64 = captest(us.board, cdepth);
                     let msg: String = String::from("captest mismatches: ");
+                    msg.push_str(i64_to_string(bad));
+                    print_line(msg);
+                } else if cmd.eq(String::from("halfmovetest")) {
+                    let bad: i64 = halfmovetest(us.ztab, us.tt, us.pst);
+                    let msg: String = String::from("halfmovetest mismatches: ");
                     msg.push_str(i64_to_string(bad));
                     print_line(msg);
                 } else {
