@@ -513,6 +513,24 @@ printf '%s\n' \
     'go depth 2' \
     'quit' > "$chess_twofold_input"
 
+chess_ep_uncapturable_input="$TMPDIR/chess_ep_uncapturable.in"
+printf '%s\n' \
+    'position fen 3q3k/8/5n2/8/8/8/3P4/K7 w - - 0 1 moves d2d4 f6g8 a1a2 g8f6 a2a1 f6g8 a1a2 g8f6' \
+    'go depth 1' \
+    'quit' > "$chess_ep_uncapturable_input"
+
+chess_ep_pinned_input="$TMPDIR/chess_ep_pinned.in"
+printf '%s\n' \
+    'position fen 3qk3/8/5n2/8/4p3/8/3P4/K3R3 w - - 0 1 moves d2d4 f6g8 a1a2 g8f6 a2a1 f6g8 a1a2 g8f6' \
+    'go depth 1' \
+    'quit' > "$chess_ep_pinned_input"
+
+chess_ep_legal_input="$TMPDIR/chess_ep_legal.in"
+printf '%s\n' \
+    'position fen 3q3k/8/5n2/8/4p3/8/3P4/K7 w - - 0 1 moves d2d4 f6g8 a1a2 g8f6 a2a1 f6g8 a1a2 g8f6' \
+    'go depth 1' \
+    'quit' > "$chess_ep_legal_input"
+
 chess_history_reset_input="$TMPDIR/chess_history_reset.in"
 printf '%s\n' \
     'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1' \
@@ -626,6 +644,21 @@ check_chess_twofold_history() {
     fi
 }
 
+check_chess_ep_history() {
+    local label="$1" bin="$2" input="$3" expected="$4"
+    local output="" status=0
+    output=$(run_self_bin "$bin" < "$input") || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif [ "$expected" = "draw" ] && ! grep -Eq '^info depth 1 score cp 0 .* pv a2a1$' <<< "$output"; then
+        fail "$label" "uncapturable en-passant square prevented the repetition draw"
+    elif [ "$expected" = "non-draw" ] && ! grep -Eq '^info depth 1 score cp -[1-9][0-9]* ' <<< "$output"; then
+        fail "$label" "legal en-passant right was incorrectly normalized away"
+    else
+        pass "$label"
+    fi
+}
+
 check_chess_history_reset() {
     local label="$1" bin="$2"
     local output="" status=0 first_depth="" second_depth=""
@@ -707,6 +740,9 @@ check_chess_history_memory_bound() {
 
 if [ -x "$chess_rust" ]; then
     check_chess_twofold_history "chess/history-twofold/rust" "$chess_rust"
+    check_chess_ep_history "chess/history-ep-uncapturable/rust" "$chess_rust" "$chess_ep_uncapturable_input" "draw"
+    check_chess_ep_history "chess/history-ep-pinned/rust" "$chess_rust" "$chess_ep_pinned_input" "draw"
+    check_chess_ep_history "chess/history-ep-legal/rust" "$chess_rust" "$chess_ep_legal_input" "non-draw"
     check_chess_threefold_history "chess/history-threefold/rust" "$chess_rust"
     check_chess_threefold_horizon "chess/history-horizon/rust" "$chess_rust"
     check_chess_history_reset "chess/history-reset/rust" "$chess_rust"
@@ -715,6 +751,9 @@ if [ -x "$chess_rust" ]; then
     check_chess_history_memory_bound "chess/history-memory-bound/rust" "$chess_rust"
 else
     fail "chess/history-twofold/rust" "binary not built"
+    fail "chess/history-ep-uncapturable/rust" "binary not built"
+    fail "chess/history-ep-pinned/rust" "binary not built"
+    fail "chess/history-ep-legal/rust" "binary not built"
     fail "chess/history-threefold/rust" "binary not built"
     fail "chess/history-horizon/rust" "binary not built"
     fail "chess/history-reset/rust" "binary not built"
@@ -724,6 +763,9 @@ else
 fi
 if [ -x "$chess_self" ]; then
     check_chess_twofold_history "chess/history-twofold/self" "$chess_self"
+    check_chess_ep_history "chess/history-ep-uncapturable/self" "$chess_self" "$chess_ep_uncapturable_input" "draw"
+    check_chess_ep_history "chess/history-ep-pinned/self" "$chess_self" "$chess_ep_pinned_input" "draw"
+    check_chess_ep_history "chess/history-ep-legal/self" "$chess_self" "$chess_ep_legal_input" "non-draw"
     check_chess_threefold_history "chess/history-threefold/self" "$chess_self"
     check_chess_threefold_horizon "chess/history-horizon/self" "$chess_self"
     check_chess_history_reset "chess/history-reset/self" "$chess_self"
@@ -732,6 +774,9 @@ if [ -x "$chess_self" ]; then
     check_chess_history_memory_bound "chess/history-memory-bound/self" "$chess_self"
 else
     fail "chess/history-twofold/self" "binary not built"
+    fail "chess/history-ep-uncapturable/self" "binary not built"
+    fail "chess/history-ep-pinned/self" "binary not built"
+    fail "chess/history-ep-legal/self" "binary not built"
     fail "chess/history-threefold/self" "binary not built"
     fail "chess/history-horizon/self" "binary not built"
     fail "chess/history-reset/self" "binary not built"

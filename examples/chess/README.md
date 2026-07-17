@@ -37,6 +37,7 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `go`          | `depth N`, `movetime MS`, `wtime`/`btime` (+`winc`/`binc`/`movestogo`), or `infinite`. Infinite analysis searches until `stop` or `MAX_DEPTH`. Emits `info depth/score/nodes/nps/pv`. |
 | `perft N`     | Node-count divide to depth `N` (move-generation self-test).           |
 | `captest N`   | Differential gate: asserts the quiescence capture generator equals the tactical subset of legal moves, to depth `N` (prints mismatch count). |
+| `reptest`     | Checks that recursive quiescence preserves repetition draws (prints mismatch count). |
 | `stop`        | Polled during search (checked every 1024 nodes) and honored.          |
 | `setoption`   | Accepted and ignored (no configurable options yet).                  |
 | `quit`        | Exits. Polled during search and honored even without a prior `stop`.  |
