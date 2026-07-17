@@ -888,6 +888,29 @@ mod tests {
     }
 
     #[test]
+    fn match_arms_require_comma_separators() {
+        for source in [
+            "match x { A => 1 B => 2 }",
+            "match x { A => { 1 } B => { 2 } }",
+        ] {
+            let tokens = crate::lexer::Lexer::new(source)
+                .tokenize()
+                .expect("lex error");
+            let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
+            parser.parse_expr_inner(0);
+
+            assert!(
+                parser
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == vow_diag::ErrorCode::UnexpectedToken),
+                "expected UnexpectedToken for {source:?}, got {:?}",
+                parser.diagnostics
+            );
+        }
+    }
+
+    #[test]
     fn question_postfix() {
         let expr = parse_no_errors("foo?");
         match &expr.kind {

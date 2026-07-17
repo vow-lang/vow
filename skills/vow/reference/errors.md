@@ -193,6 +193,30 @@ fn f(o: Option<i64>) -> i64 {
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
 
+### UnsupportedPattern
+
+**Phase:** Type Checker
+**Meaning:** A parsed `match` pattern or scrutinee is not in the subset that
+the compiler can lower safely. Match currently accepts enum-valued scrutinees,
+qualified unit variants, qualified tuple variants with `_` or immutable
+identifier payloads, and final catchall `_` or immutable identifier arms.
+
+```vow
+fn f(n: i64) -> i64 {
+    match n {
+        0 => 5,
+        _ => 9,
+    }
+}
+```
+
+**Output:** `literal match patterns are not supported`
+
+**Fix:** Use `if`/`else` comparisons for scalar or literal cases. For enum
+payloads, bind each payload to `_` or an immutable identifier and inspect it
+separately. Unsupported patterns fail before lowering and never produce an
+executable.
+
 ### ImmutableAssignment
 
 **Phase:** Type Checker

@@ -1,0 +1,36 @@
+// TEST: stdout "77420"
+module MatchSupportedCatchalls
+
+enum E {
+    A(i64),
+    B,
+}
+
+fn extract(value: E) -> i64 {
+    match value {
+        E::A(n) => n,
+        E::B => 0,
+    }
+}
+
+fn wildcard(value: E) -> i64 {
+    match value {
+        _ => 7,
+    }
+}
+
+fn binding(value: E) -> i64 {
+    match value {
+        whole => extract(whole),
+    }
+}
+
+fn main() -> i32 [io] {
+    let a: E = E::A(42);
+    let b: E = E::B {};
+    print_i64(wildcard(a));
+    print_i64(wildcard(b));
+    print_i64(binding(a));
+    print_i64(binding(b));
+    0
+}
