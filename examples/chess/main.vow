@@ -53,6 +53,7 @@ struct Board {
     wk_sq: i64,
     bk_sq: i64,
     halfmove: i64,
+    non_king_count: i64,
 }
 
 struct UndoInfo {
@@ -71,6 +72,7 @@ struct UndoInfo {
     castle_rook_piece: i64,
     placed: i64,
     old_halfmove: i64,
+    old_non_king_count: i64,
 }
 
 struct TTEntry {
@@ -239,6 +241,7 @@ fn start_board() -> Board {
         wk_sq: 4,
         bk_sq: 60,
         halfmove: 0,
+        non_king_count: 30,
     };
     let sqs: Vec<i64> = b.squares;
     let mut i: i64 = 0;
@@ -631,12 +634,19 @@ fn make_move(b: Board, mv: ChessMove) -> UndoInfo {
     let old_bk: i64 = b.bk;
     let old_bq: i64 = b.bq;
     let old_halfmove: i64 = b.halfmove;
+    let old_non_king_count: i64 = b.non_king_count;
 
     // Halfmove clock: reset on a pawn move or any capture (irreversible), else +1.
     if piece_kind(moving) == 1 || captured != 0 || mv.en_passant == 1 {
         b.halfmove = 0;
     } else {
         b.halfmove = old_halfmove + 1;
+    }
+    if captured != 0 && piece_kind(captured) != KING {
+        b.non_king_count = b.non_king_count - 1;
+    }
+    if mv.en_passant == 1 {
+        b.non_king_count = b.non_king_count - 1;
     }
 
     let mut ep_capture_sq: i64 = -1;
@@ -762,6 +772,7 @@ fn make_move(b: Board, mv: ChessMove) -> UndoInfo {
         castle_rook_piece: castle_rook_piece,
         placed: placed,
         old_halfmove: old_halfmove,
+        old_non_king_count: old_non_king_count,
     }
 }
 
@@ -793,6 +804,7 @@ fn unmake_move(b: Board, mv: ChessMove, u: UndoInfo) {
         b.bk_sq = mv.from;
     }
     b.halfmove = u.old_halfmove;
+    b.non_king_count = u.old_non_king_count;
 }
 
 fn generate_legal_moves(b: Board) -> Vec<ChessMove> {
@@ -1201,7 +1213,12 @@ fn evaluate_board(b: Board, pst: Vec<i64>) -> i64 {
         phase = 24;
     }
     let mut score: i64 = (mg * phase + eg * (24 - phase)) / 24;
-    score = score + side_structure_score(b, 1) - side_structure_score(b, -1) + positional_score(b) + mop_up_score(b);
+    score = score + side_structure_score(b, 1) - side_structure_score(b, -1) + positional_score(b);
+    // The largest named KX set is KQvK (phase 4). Reuse the PeSTO phase as a
+    // cheap hot-path gate so ordinary positions never pay for another scan.
+    if phase <= 4 {
+        score = score + mop_up_score(b);
+    }
     score
 }
 
@@ -1749,7 +1766,7 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ply: i64, ss: Sea
         if is_draw_node(b, ply, compute_zkey(b, ss.ztab), ss) {
             return 0;
         }
-        if is_insufficient_material(b) {
+        if b.non_king_count <= 2 && is_insufficient_material(b) {
             return 0;
         }
         if qdepth <= 0 {
@@ -1759,7 +1776,7 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ply: i64, ss: Sea
         if is_draw_node(b, ply, compute_zkey(b, ss.ztab), ss) {
             return 0;
         }
-        if is_insufficient_material(b) {
+        if b.non_king_count <= 2 && is_insufficient_material(b) {
             return 0;
         }
         let stand_pat: i64 = b.side * evaluate_board(b, ss.pst);
@@ -1898,7 +1915,6 @@ fn is_insufficient_material(b: Board) -> bool {
     let mut black_knights: i64 = 0;
     let mut first_bishop_colour: i64 = -1;
     let mut bishops_same_colour: bool = true;
-    let mut other: i64 = 0;
     let mut sq: i64 = 0;
     while sq < 64 {
         let p: i64 = sqs[sq];
@@ -1926,16 +1942,16 @@ fn is_insufficient_material(b: Board) -> bool {
                 }
             } else {
                 if kind != EMPTY && kind != KING {
-                    other = other + 1;
+                    return false;
                 }
             }
+        }
+        if white_bishops + black_bishops + white_knights + black_knights > 2 {
+            return false;
         }
         sq = sq + 1;
     }
 
-    if other != 0 {
-        return false;
-    }
     let bishops: i64 = white_bishops + black_bishops;
     let knights: i64 = white_knights + black_knights;
     let minors: i64 = bishops + knights;
@@ -1958,7 +1974,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
             return 0;
         }
     }
-    if is_insufficient_material(b) {
+    if b.non_king_count <= 2 && is_insufficient_material(b) {
         return 0;
     }
 
@@ -2618,12 +2634,16 @@ fn parse_fen(tokens: Vec<String>, start_idx: i64) -> Board {
 
     let mut wksq: i64 = -1;
     let mut bksq: i64 = -1;
+    let mut non_king_count: i64 = 0;
     let mut sq: i64 = 0;
     while sq < 64 {
-        if sqs[sq] == KING {
+        let p: i64 = sqs[sq];
+        if p == KING {
             wksq = sq;
-        } else if sqs[sq] == -KING {
+        } else if p == -KING {
             bksq = sq;
+        } else if p != EMPTY {
+            non_king_count = non_king_count + 1;
         }
         sq = sq + 1;
     }
@@ -2644,6 +2664,7 @@ fn parse_fen(tokens: Vec<String>, start_idx: i64) -> Board {
         wk_sq: wksq,
         bk_sq: bksq,
         halfmove: halfmove,
+        non_king_count: non_king_count,
     }
 }
 
