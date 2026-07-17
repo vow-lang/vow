@@ -1757,6 +1757,9 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ply: i64, ss: Sea
     let mut moves: Vec<ChessMove> = Vec::new();
     let mut is_in_check: i64 = 0;
 
+    if b.non_king_count <= 2 && is_insufficient_material(b) {
+        return 0;
+    }
     if in_check(b, b.side) {
         is_in_check = 1;
         moves = generate_legal_moves(b);
@@ -1766,17 +1769,11 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ply: i64, ss: Sea
         if is_draw_node(b, ply, compute_zkey(b, ss.ztab), ss) {
             return 0;
         }
-        if b.non_king_count <= 2 && is_insufficient_material(b) {
-            return 0;
-        }
         if qdepth <= 0 {
             return alpha_in;
         }
     } else {
         if is_draw_node(b, ply, compute_zkey(b, ss.ztab), ss) {
-            return 0;
-        }
-        if b.non_king_count <= 2 && is_insufficient_material(b) {
             return 0;
         }
         let stand_pat: i64 = b.side * evaluate_board(b, ss.pst);
