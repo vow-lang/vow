@@ -521,19 +521,36 @@ printf '%s\n' \
     'go depth 2' \
     'quit' > "$chess_history_reset_input"
 
+# The engine reads stdin during a search and stops on the next command or EOF
+# (see #922). Searches deeper than the 1024-node poll interval must therefore be
+# kept alive with idle `isready` keepalives until they finish, before the next
+# command or quit is fed.
+emit_keepalive() {
+    local keep=0
+    while [ "$keep" -lt 40 ]; do
+        printf 'isready\n'
+        keep=$((keep + 1))
+    done
+}
+
 chess_tt_context_input="$TMPDIR/chess_tt_context.in"
-printf '%s\n' \
-    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1 g8f6 a1a2 f6g8' \
-    'go depth 3' \
-    'position fen 6nk/8/8/8/8/8/K7/3Q4 w - - 10 6' \
-    'go depth 3' \
-    'quit' > "$chess_tt_context_input"
+{
+    printf 'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1 g8f6 a1a2 f6g8\n'
+    printf 'go depth 3\n'
+    emit_keepalive
+    printf 'position fen 6nk/8/8/8/8/8/K7/3Q4 w - - 10 6\n'
+    printf 'go depth 3\n'
+    emit_keepalive
+    printf 'quit\n'
+} > "$chess_tt_context_input"
 
 chess_tt_context_reference_input="$TMPDIR/chess_tt_context_reference.in"
-printf '%s\n' \
-    'position fen 6nk/8/8/8/8/8/K7/3Q4 w - - 10 6' \
-    'go depth 3' \
-    'quit' > "$chess_tt_context_reference_input"
+{
+    printf 'position fen 6nk/8/8/8/8/8/K7/3Q4 w - - 10 6\n'
+    printf 'go depth 3\n'
+    emit_keepalive
+    printf 'quit\n'
+} > "$chess_tt_context_reference_input"
 
 chess_long_history_input="$TMPDIR/chess_long_history.in"
 {
@@ -543,14 +560,17 @@ chess_long_history_input="$TMPDIR/chess_long_history.in"
         printf ' a1a2 f6g8 a2a1 g8f6'
         cycle=$((cycle + 1))
     done
-    printf '\ngo depth 8\nquit\n'
+    printf '\ngo depth 8\n'
+    emit_keepalive
+    printf 'quit\n'
 } > "$chess_long_history_input"
 
 chess_long_history_reference_input="$TMPDIR/chess_long_history_reference.in"
-printf '%s\n' \
-    'position fen 7k/8/5n2/8/8/8/3P4/K2Q4 w - - 516 259' \
-    'go depth 8' \
-    'quit' > "$chess_long_history_reference_input"
+{
+    printf 'position fen 7k/8/5n2/8/8/8/3P4/K2Q4 w - - 516 259\ngo depth 8\n'
+    emit_keepalive
+    printf 'quit\n'
+} > "$chess_long_history_reference_input"
 
 check_chess_threefold_history() {
     local label="$1" bin="$2"
