@@ -1749,11 +1749,17 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ply: i64, ss: Sea
         if is_draw_node(b, ply, compute_zkey(b, ss.ztab), ss) {
             return 0;
         }
+        if is_insufficient_material(b) {
+            return 0;
+        }
         if qdepth <= 0 {
             return alpha_in;
         }
     } else {
         if is_draw_node(b, ply, compute_zkey(b, ss.ztab), ss) {
+            return 0;
+        }
+        if is_insufficient_material(b) {
             return 0;
         }
         let stand_pat: i64 = b.side * evaluate_board(b, ss.pst);
