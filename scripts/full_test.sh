@@ -484,6 +484,308 @@ for vow_file in examples/*.vow; do
 done
 echo ""
 
+# ─── Chess UCI repetition history ──────────────────────────────
+
+section_begin "Chess UCI repetition history"
+chess_rust="$TMPDIR/chess_rust"
+chess_self="$TMPDIR/chess_self"
+chess_rust_json="" chess_self_json="" chess_rust_exit=0 chess_self_exit=0
+chess_rust_json=$($RUST build --no-verify examples/chess/main.vow -o "$chess_rust" 2>/dev/null) || chess_rust_exit=$?
+chess_self_json=$(run_self build --no-verify examples/chess/main.vow -o "$chess_self" 2>/dev/null) || chess_self_exit=$?
+
+compare_json "chess/history-build" "$chess_rust_json" "$chess_self_json" "$chess_rust_exit" "$chess_self_exit"
+
+chess_threefold_input="$TMPDIR/chess_threefold.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1' \
+    'go depth 2' \
+    'quit' > "$chess_threefold_input"
+
+chess_threefold_horizon_input="$TMPDIR/chess_threefold_horizon.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1' \
+    'go depth 1' \
+    'quit' > "$chess_threefold_horizon_input"
+
+chess_twofold_input="$TMPDIR/chess_twofold.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1' \
+    'go depth 2' \
+    'quit' > "$chess_twofold_input"
+
+chess_ep_uncapturable_input="$TMPDIR/chess_ep_uncapturable.in"
+printf '%s\n' \
+    'position fen 3q3k/8/5n2/8/8/8/3P4/K7 w - - 0 1 moves d2d4 f6g8 a1a2 g8f6 a2a1 f6g8 a1a2 g8f6' \
+    'go depth 1' \
+    'quit' > "$chess_ep_uncapturable_input"
+
+chess_ep_pinned_input="$TMPDIR/chess_ep_pinned.in"
+printf '%s\n' \
+    'position fen 3qk3/8/5n2/8/4p3/8/3P4/K3R3 w - - 0 1 moves d2d4 f6g8 a1a2 g8f6 a2a1 f6g8 a1a2 g8f6' \
+    'go depth 1' \
+    'quit' > "$chess_ep_pinned_input"
+
+chess_ep_legal_input="$TMPDIR/chess_ep_legal.in"
+printf '%s\n' \
+    'position fen 3q3k/8/5n2/8/4p3/8/3P4/K7 w - - 0 1 moves d2d4 f6g8 a1a2 g8f6 a2a1 f6g8 a1a2 g8f6' \
+    'go depth 1' \
+    'quit' > "$chess_ep_legal_input"
+
+chess_history_reset_input="$TMPDIR/chess_history_reset.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1' \
+    'go depth 2' \
+    'position fen 6nk/8/8/8/8/8/8/K2Q4 b - - 7 4' \
+    'go depth 2' \
+    'quit' > "$chess_history_reset_input"
+
+# The engine reads stdin during a search and stops on the next command or EOF
+# (see #922). Searches deeper than the 1024-node poll interval must therefore be
+# kept alive with idle `isready` keepalives until they finish, before the next
+# command or quit is fed.
+emit_keepalive() {
+    local keep=0
+    while [ "$keep" -lt 40 ]; do
+        printf 'isready\n'
+        keep=$((keep + 1))
+    done
+}
+
+chess_tt_context_input="$TMPDIR/chess_tt_context.in"
+{
+    printf 'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1 g8f6 a1a2 f6g8\n'
+    printf 'go depth 3\n'
+    emit_keepalive
+    printf 'position fen 6nk/8/8/8/8/8/K7/3Q4 w - - 10 6\n'
+    printf 'go depth 3\n'
+    emit_keepalive
+    printf 'quit\n'
+} > "$chess_tt_context_input"
+
+chess_tt_context_reference_input="$TMPDIR/chess_tt_context_reference.in"
+{
+    printf 'position fen 6nk/8/8/8/8/8/K7/3Q4 w - - 10 6\n'
+    printf 'go depth 3\n'
+    emit_keepalive
+    printf 'quit\n'
+} > "$chess_tt_context_reference_input"
+
+chess_long_history_input="$TMPDIR/chess_long_history.in"
+{
+    printf 'position fen 7k/8/5n2/8/8/8/3P4/K2Q4 w - - 0 1 moves'
+    cycle=0
+    while [ "$cycle" -lt 129 ]; do
+        printf ' a1a2 f6g8 a2a1 g8f6'
+        cycle=$((cycle + 1))
+    done
+    printf '\ngo depth 8\n'
+    emit_keepalive
+    printf 'quit\n'
+} > "$chess_long_history_input"
+
+chess_long_history_reference_input="$TMPDIR/chess_long_history_reference.in"
+{
+    printf 'position fen 7k/8/5n2/8/8/8/3P4/K2Q4 w - - 516 259\ngo depth 8\n'
+    emit_keepalive
+    printf 'quit\n'
+} > "$chess_long_history_reference_input"
+
+chess_history_memory_input="$TMPDIR/chess_history_memory.in"
+# Two million reversible plies keep command parsing below this process limit,
+# but the old unbounded key Vec crosses it before reaching `isready`.
+awk 'BEGIN {
+    printf "position fen 7k/8/5n2/8/8/8/3P4/K2Q4 w - - 0 1 moves"
+    for (cycle = 0; cycle < 500000; cycle++) {
+        printf " a1a2 f6g8 a2a1 g8f6"
+    }
+    printf "\nisready\nquit\n"
+}' > "$chess_history_memory_input"
+
+check_chess_threefold_history() {
+    local label="$1" bin="$2"
+    local output="" status=0
+    output=$(run_self_bin "$bin" < "$chess_threefold_input") || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif ! grep -Eq '^info depth 2 score cp 0 .* pv g8f6$' <<< "$output"; then
+        fail "$label" "depth 2 did not score g8f6 as cp 0"
+    elif ! grep -qx 'bestmove g8f6' <<< "$output"; then
+        fail "$label" "engine did not choose g8f6"
+    else
+        pass "$label"
+    fi
+}
+
+check_chess_threefold_horizon() {
+    local label="$1" bin="$2"
+    local output="" status=0
+    output=$(run_self_bin "$bin" < "$chess_threefold_horizon_input") || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif ! grep -Eq '^info depth 1 score cp 0 .* pv g8f6$' <<< "$output"; then
+        fail "$label" "depth-horizon threefold was not scored as cp 0"
+    elif ! grep -qx 'bestmove g8f6' <<< "$output"; then
+        fail "$label" "engine did not choose the horizon threefold"
+    else
+        pass "$label"
+    fi
+}
+
+check_chess_twofold_history() {
+    local label="$1" bin="$2"
+    local output="" status=0
+    output=$(run_self_bin "$bin" < "$chess_twofold_input") || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif ! grep -Eq '^info depth 2 score cp -[1-9][0-9]* ' <<< "$output"; then
+        fail "$label" "ordinary twofold history was scored as a draw"
+    else
+        pass "$label"
+    fi
+}
+
+check_chess_ep_history() {
+    local label="$1" bin="$2" input="$3" expected="$4"
+    local output="" status=0
+    output=$(run_self_bin "$bin" < "$input") || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif [ "$expected" = "draw" ] && ! grep -Eq '^info depth 1 score cp 0 .* pv a2a1$' <<< "$output"; then
+        fail "$label" "uncapturable en-passant square prevented the repetition draw"
+    elif [ "$expected" = "non-draw" ] && ! grep -Eq '^info depth 1 score cp -[1-9][0-9]* ' <<< "$output"; then
+        fail "$label" "legal en-passant right was incorrectly normalized away"
+    else
+        pass "$label"
+    fi
+}
+
+check_chess_history_reset() {
+    local label="$1" bin="$2"
+    local output="" status=0 first_depth="" second_depth=""
+    output=$(run_self_bin "$bin" < "$chess_history_reset_input") || status=$?
+    first_depth=$(grep '^info depth 2 ' <<< "$output" | sed -n '1p') || true
+    second_depth=$(grep '^info depth 2 ' <<< "$output" | sed -n '2p') || true
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif ! grep -Eq '^info depth 2 score cp 0 .* pv g8f6$' <<< "$first_depth"; then
+        fail "$label" "first search did not find the history draw"
+    elif ! grep -Eq '^info depth 2 score cp -[1-9][0-9]* ' <<< "$second_depth"; then
+        fail "$label" "replacement position retained stale repetition history"
+    else
+        pass "$label"
+    fi
+}
+
+check_chess_tt_context_reset() {
+    local label="$1" bin="$2"
+    local output="" reference_output="" status=0 reference_status=0
+    local depth_line="" reference_depth_line="" result="" reference_result=""
+    output=$(run_self_bin "$bin" < "$chess_tt_context_input") || status=$?
+    reference_output=$(run_self_bin "$bin" < "$chess_tt_context_reference_input") || reference_status=$?
+    depth_line=$(grep '^info depth 3 ' <<< "$output" | sed -n '2p') || true
+    reference_depth_line=$(grep '^info depth 3 ' <<< "$reference_output" | sed -n '1p') || true
+    result=$(sed -E 's/ time [0-9]+ nps [0-9]+ / /' <<< "$depth_line")
+    reference_result=$(sed -E 's/ time [0-9]+ nps [0-9]+ / /' <<< "$reference_depth_line")
+    if [ "$status" -ne 0 ] || [ "$reference_status" -ne 0 ]; then
+        fail "$label" "engine exited with status warmed=$status reference=$reference_status"
+    elif [ -z "$depth_line" ] || [ -z "$reference_depth_line" ]; then
+        fail "$label" "engine did not complete both depth 3 searches"
+    elif [ "$result" != "$reference_result" ]; then
+        fail "$label" "replacement result '$result' differed from fresh '$reference_result'"
+    else
+        pass "$label"
+    fi
+}
+
+check_chess_long_history() {
+    local label="$1" bin="$2"
+    local output="" reference_output="" status=0 reference_status=0
+    local depth_line="" reference_depth_line="" result="" reference_result=""
+    output=$(run_self_bin "$bin" < "$chess_long_history_input" 2>&1) || status=$?
+    reference_output=$(run_self_bin "$bin" < "$chess_long_history_reference_input" 2>&1) || reference_status=$?
+    depth_line=$(grep '^info depth 8 ' <<< "$output" | tail -1) || true
+    reference_depth_line=$(grep '^info depth 8 ' <<< "$reference_output" | tail -1) || true
+    result=$(sed -E 's/ time [0-9]+ nps [0-9]+ / /' <<< "$depth_line")
+    reference_result=$(sed -E 's/ time [0-9]+ nps [0-9]+ / /' <<< "$reference_depth_line")
+    if [ "$status" -ne 0 ] || [ "$reference_status" -ne 0 ]; then
+        fail "$label" "engine exited with status history=$status reference=$reference_status"
+    elif grep -q 'IndexOutOfBounds' <<< "$output"; then
+        fail "$label" "engine exceeded the fixed repetition buffer"
+    elif [ -z "$depth_line" ] || [ -z "$reference_depth_line" ]; then
+        fail "$label" "engine did not complete depth 8"
+    elif [ "$result" != "$reference_result" ]; then
+        fail "$label" "history result '$result' differed from reference '$reference_result'"
+    elif ! grep -Eq '^bestmove [a-h][1-8][a-h][1-8][qrbn]?$' <<< "$output"; then
+        fail "$label" "engine did not emit a legal bestmove"
+    else
+        pass "$label"
+    fi
+}
+
+check_chess_history_memory_bound() {
+    local label="$1" bin="$2"
+    local output="" status=0
+    output=$(
+        ulimit -v 190000
+        "$bin" < "$chess_history_memory_input" 2>&1
+    ) || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "long reversible history exceeded the 190 MB process bound (status $status)"
+    elif ! grep -qx 'readyok' <<< "$output"; then
+        fail "$label" "engine did not finish processing the bounded history"
+    else
+        pass "$label"
+    fi
+}
+
+if [ -x "$chess_rust" ]; then
+    check_chess_twofold_history "chess/history-twofold/rust" "$chess_rust"
+    check_chess_ep_history "chess/history-ep-uncapturable/rust" "$chess_rust" "$chess_ep_uncapturable_input" "draw"
+    check_chess_ep_history "chess/history-ep-pinned/rust" "$chess_rust" "$chess_ep_pinned_input" "draw"
+    check_chess_ep_history "chess/history-ep-legal/rust" "$chess_rust" "$chess_ep_legal_input" "non-draw"
+    check_chess_threefold_history "chess/history-threefold/rust" "$chess_rust"
+    check_chess_threefold_horizon "chess/history-horizon/rust" "$chess_rust"
+    check_chess_history_reset "chess/history-reset/rust" "$chess_rust"
+    check_chess_tt_context_reset "chess/history-tt-context/rust" "$chess_rust"
+    check_chess_long_history "chess/history-bounded/rust" "$chess_rust"
+    check_chess_history_memory_bound "chess/history-memory-bound/rust" "$chess_rust"
+else
+    fail "chess/history-twofold/rust" "binary not built"
+    fail "chess/history-ep-uncapturable/rust" "binary not built"
+    fail "chess/history-ep-pinned/rust" "binary not built"
+    fail "chess/history-ep-legal/rust" "binary not built"
+    fail "chess/history-threefold/rust" "binary not built"
+    fail "chess/history-horizon/rust" "binary not built"
+    fail "chess/history-reset/rust" "binary not built"
+    fail "chess/history-tt-context/rust" "binary not built"
+    fail "chess/history-bounded/rust" "binary not built"
+    fail "chess/history-memory-bound/rust" "binary not built"
+fi
+if [ -x "$chess_self" ]; then
+    check_chess_twofold_history "chess/history-twofold/self" "$chess_self"
+    check_chess_ep_history "chess/history-ep-uncapturable/self" "$chess_self" "$chess_ep_uncapturable_input" "draw"
+    check_chess_ep_history "chess/history-ep-pinned/self" "$chess_self" "$chess_ep_pinned_input" "draw"
+    check_chess_ep_history "chess/history-ep-legal/self" "$chess_self" "$chess_ep_legal_input" "non-draw"
+    check_chess_threefold_history "chess/history-threefold/self" "$chess_self"
+    check_chess_threefold_horizon "chess/history-horizon/self" "$chess_self"
+    check_chess_history_reset "chess/history-reset/self" "$chess_self"
+    check_chess_tt_context_reset "chess/history-tt-context/self" "$chess_self"
+    check_chess_long_history "chess/history-bounded/self" "$chess_self"
+    check_chess_history_memory_bound "chess/history-memory-bound/self" "$chess_self"
+else
+    fail "chess/history-twofold/self" "binary not built"
+    fail "chess/history-ep-uncapturable/self" "binary not built"
+    fail "chess/history-ep-pinned/self" "binary not built"
+    fail "chess/history-ep-legal/self" "binary not built"
+    fail "chess/history-threefold/self" "binary not built"
+    fail "chess/history-horizon/self" "binary not built"
+    fail "chess/history-reset/self" "binary not built"
+    fail "chess/history-tt-context/self" "binary not built"
+    fail "chess/history-bounded/self" "binary not built"
+    fail "chess/history-memory-bound/self" "binary not built"
+fi
+echo ""
+
 # ─── Section 3b: Chess Self-Tests ──────────────────────────────────
 
 section_begin "Section 3b: Chess Self-Tests"

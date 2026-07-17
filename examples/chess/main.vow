@@ -15,6 +15,7 @@ const INF: i64 = 100000000;
 const MATE: i64 = 1000000;
 const MATE_THRESHOLD: i64 = 999000;
 const MAX_DEPTH: i64 = 64;
+const QUIESCE_DEPTH: i64 = 6;
 const KILLER_SLOTS: i64 = 132;
 const HISTORY_SIZE: i64 = 4096;
 const HISTORY_ORDER_CAP: i64 = 60000;
@@ -29,6 +30,8 @@ const TT_EXACT: i64 = 1;
 const TT_LOWER: i64 = 2;
 const TT_UPPER: i64 = 3;
 const REP_SIZE: i64 = 512;
+const REP_CONTEXT_SEED: i64 = 7640891576956012809;
+const REP_CONTEXT_BOUNDARY: i64 = -7046029254386353131;
 
 struct ChessMove {
     from: i64,
@@ -76,6 +79,7 @@ struct TTEntry {
     score: i64,
     flag: i64,
     movekey: i64,
+    generation: i64,
 }
 
 struct SearchState {
@@ -89,7 +93,18 @@ struct SearchState {
     tt: Vec<TTEntry>,
     pst: Vec<i64>,
     rep: Vec<i64>,
+    rep_context: Vec<i64>,
+    rep_base: i64,
+    tt_generation: i64,
     pending: Vec<String>,
+}
+
+// Fixed-capacity ring of played-game positions since the last irreversible
+// move. SearchState.rep owns the separate search-line suffix.
+struct GameHistory {
+    keys: Vec<i64>,
+    start: i64,
+    len: i64,
 }
 
 struct UciState {
@@ -98,6 +113,8 @@ struct UciState {
     ztab: Vec<i64>,
     tt: Vec<TTEntry>,
     pst: Vec<i64>,
+    game_rep: GameHistory,
+    tt_generation: i64,
 }
 
 // Parsed `go` limits. If fixed_depth > 0, search exactly that depth with no
@@ -1094,11 +1111,19 @@ fn build_ztab() -> Vec<i64> {
     t
 }
 
+fn mix_repetition_context(context: i64, key: i64) -> i64 {
+    let mut z: u64 = (context as u64) ^ (key as u64);
+    z = z + 11400714819323198485u64;
+    z = (z ^ (z >> 30u32)) * 13787848793156543929u64;
+    z = (z ^ (z >> 27u32)) * 10723151780598845931u64;
+    (z ^ (z >> 31u32)) as i64
+}
+
 fn build_tt() -> Vec<TTEntry> {
     let tt: Vec<TTEntry> = Vec::new();
     let mut i: i64 = 0;
     while i < TT_SIZE {
-        tt.push(TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 });
+        tt.push(TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0, generation: 0 });
         i = i + 1;
     }
     tt
@@ -1213,6 +1238,57 @@ fn zob_piece_index(piece: i64) -> i64 {
     }
 }
 
+fn legal_en_passant_from(b: Board, from: i64) -> bool {
+    if from < 0 || from >= 64 || b.ep < 0 || b.ep >= 64 {
+        return false;
+    }
+    let sqs: Vec<i64> = b.squares;
+    if sqs[from] != b.side * PAWN {
+        return false;
+    }
+    let mv: ChessMove = ChessMove { from: from, to: b.ep, promote: 0, en_passant: 1, castle: 0 };
+    let mover: i64 = b.side;
+    let undo: UndoInfo = make_move(b, mv);
+    let legal: bool = !in_check(b, mover);
+    unmake_move(b, mv, undo);
+    legal
+}
+
+// FIDE position identity includes an en-passant file only when the side to
+// move has a legal capture. A merely adjacent but pinned pawn does not count.
+fn has_legal_en_passant(b: Board) -> bool {
+    if b.ep < 0 || b.ep >= 64 {
+        return false;
+    }
+    let sqs: Vec<i64> = b.squares;
+    let ep_file: i64 = file_of(b.ep);
+    if sqs[b.ep] != EMPTY {
+        return false;
+    }
+    if b.side == WHITE {
+        if rank_of(b.ep) != 5 || sqs[b.ep - 8] != -PAWN {
+            return false;
+        }
+        if ep_file > 0 && legal_en_passant_from(b, b.ep - 9) {
+            return true;
+        }
+        if ep_file < 7 && legal_en_passant_from(b, b.ep - 7) {
+            return true;
+        }
+    } else {
+        if rank_of(b.ep) != 2 || sqs[b.ep + 8] != PAWN {
+            return false;
+        }
+        if ep_file > 0 && legal_en_passant_from(b, b.ep + 7) {
+            return true;
+        }
+        if ep_file < 7 && legal_en_passant_from(b, b.ep + 9) {
+            return true;
+        }
+    }
+    false
+}
+
 fn compute_zkey(b: Board, ztab: Vec<i64>) -> i64 {
     let sqs: Vec<i64> = b.squares;
     let mut key: i64 = 0;
@@ -1239,7 +1315,7 @@ fn compute_zkey(b: Board, ztab: Vec<i64>) -> i64 {
     if b.bq == 1 {
         key = key ^ ztab[772];
     }
-    if b.ep >= 0 {
+    if has_legal_en_passant(b) {
         key = key ^ ztab[773 + file_of(b.ep)];
     }
     key
@@ -1479,7 +1555,47 @@ fn check_stop(ss: SearchState) [io, read] {
     }
 }
 
-fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) -> i64 [io, read] {
+// Record the current node in the combined game/search repetition stack and
+// report automatic/claimable draws. The caller handles mate/stalemate first.
+fn is_draw_node(b: Board, ply: i64, zkey: i64, ss: SearchState) -> bool {
+    if ply < 1 {
+        return false;
+    }
+    if b.halfmove >= 100 {
+        return true;
+    }
+    let rep_idx: i64 = ss.rep_base + ply;
+    if rep_idx < 0 || rep_idx >= REP_SIZE {
+        return false;
+    }
+    let mut lim: i64 = rep_idx - b.halfmove;
+    if lim < 0 {
+        lim = 0;
+    }
+    let mut game_matches: i64 = 0;
+    let mut back: i64 = rep_idx - 2;
+    while back >= lim {
+        if ss.rep[back] == zkey {
+            if back >= ss.rep_base {
+                return true;
+            }
+            game_matches = game_matches + 1;
+            if game_matches >= 2 {
+                return true;
+            }
+        }
+        back = back - 2;
+    }
+    ss.rep[rep_idx] = zkey;
+    if b.halfmove == 0 {
+        ss.rep_context[rep_idx] = mix_repetition_context(REP_CONTEXT_SEED, zkey);
+    } else {
+        ss.rep_context[rep_idx] = mix_repetition_context(ss.rep_context[rep_idx - 1], zkey);
+    }
+    false
+}
+
+fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ply: i64, ss: SearchState) -> i64 [io, read] {
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
     let mut moves: Vec<ChessMove> = Vec::new();
@@ -1487,14 +1603,20 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) 
 
     if in_check(b, b.side) {
         is_in_check = 1;
-        if qdepth <= 0 {
-            return alpha_in;
-        }
         moves = generate_legal_moves(b);
         if moves.len() == 0 {
             return -MATE;
         }
+        if is_draw_node(b, ply, compute_zkey(b, ss.ztab), ss) {
+            return 0;
+        }
+        if qdepth <= 0 {
+            return alpha_in;
+        }
     } else {
+        if is_draw_node(b, ply, compute_zkey(b, ss.ztab), ss) {
+            return 0;
+        }
         let stand_pat: i64 = b.side * evaluate_board(b, ss.pst);
         if stand_pat >= beta {
             return stand_pat;
@@ -1522,7 +1644,7 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) 
         pick_best_to_front(moves, scores, i);
         let mv: ChessMove = moves[i];
         let undo: UndoInfo = make_move(b, mv);
-        let score: i64 = -quiesce(b, -beta, -alpha, qdepth - 1, ss);
+        let score: i64 = -quiesce(b, -beta, -alpha, qdepth - 1, ply + 1, ss);
         unmake_move(b, mv, undo);
         if score > best {
             best = score;
@@ -1536,6 +1658,72 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) 
         i = i + 1;
     }
     best
+}
+
+// White has one quiet check evasion (Ka1-b1). The resulting position is
+// already present in the search-line repetition stack, so recursive quiescence
+// must score the evasion as a draw rather than the losing static position.
+fn quiesce_repetition_self_test(us: UciState) -> i64 [io, read] {
+    let sqs: Vec<i64> = make_zeros(64);
+    sqs[0] = KING;
+    sqs[18] = -QUEEN;
+    sqs[56] = -ROOK;
+    sqs[63] = -KING;
+    let b: Board = Board { squares: sqs, side: WHITE, ep: -1, wk: 0, wq: 0, bk: 0, bq: 0, wk_sq: 0, bk_sq: 63, halfmove: 4 };
+    let legal: Vec<ChessMove> = generate_legal_moves(b);
+    if legal.len() != 1 || legal[0].from != 0 || legal[0].to != 1 {
+        return 1;
+    }
+
+    let evasion: ChessMove = legal[0];
+    let undo: UndoInfo = make_move(b, evasion);
+    let repeated_key: i64 = compute_zkey(b, us.ztab);
+    unmake_move(b, evasion, undo);
+
+    let rep: Vec<i64> = make_zeros(REP_SIZE);
+    rep[4] = repeated_key;
+    let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: rep, rep_context: make_zeros(REP_SIZE), rep_base: 4, tt_generation: us.tt_generation, pending: Vec::new() };
+    let score: i64 = quiesce(b, -INF, INF, 1, 1, ss);
+    if score == 0 { 0 } else { 1 }
+}
+
+// Warm the same TT position under two search histories. In the first, the
+// forced Kb1 evasion repeats the search root and is a draw; in the second it is
+// not. A cutoff cached for the checked position must not cross those contexts.
+fn tt_repetition_path_self_test(us: UciState) -> i64 [io, read] {
+    let sqs: Vec<i64> = make_zeros(64);
+    sqs[0] = KING;
+    sqs[18] = -QUEEN;
+    sqs[56] = -ROOK;
+    sqs[63] = -KING;
+    let b: Board = Board { squares: sqs, side: WHITE, ep: -1, wk: 0, wq: 0, bk: 0, bq: 0, wk_sq: 0, bk_sq: 63, halfmove: 4 };
+    let legal: Vec<ChessMove> = generate_legal_moves(b);
+    if legal.len() != 1 || legal[0].from != 0 || legal[0].to != 1 {
+        return 1;
+    }
+
+    let undo: UndoInfo = make_move(b, legal[0]);
+    let repeated_key: i64 = compute_zkey(b, us.ztab);
+    unmake_move(b, legal[0], undo);
+
+    let repeated_rep: Vec<i64> = make_zeros(REP_SIZE);
+    repeated_rep[4] = repeated_key;
+    let repeated_context: Vec<i64> = make_zeros(REP_SIZE);
+    repeated_context[4] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, repeated_key), REP_CONTEXT_BOUNDARY);
+    let repeated_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: repeated_rep, rep_context: repeated_context, rep_base: 4, tt_generation: -1, pending: Vec::new() };
+    let repeated_score: i64 = negamax(b, 1, 1, -INF, INF, repeated_ss);
+
+    let clear_context: Vec<i64> = make_zeros(REP_SIZE);
+    clear_context[4] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, 0), REP_CONTEXT_BOUNDARY);
+    let stale_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: clear_context, rep_base: 4, tt_generation: -1, pending: Vec::new() };
+    let stale_score: i64 = negamax(b, 1, 1, -INF, INF, stale_ss);
+
+    let fresh_context: Vec<i64> = make_zeros(REP_SIZE);
+    fresh_context[4] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, 0), REP_CONTEXT_BOUNDARY);
+    let fresh_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: fresh_context, rep_base: 4, tt_generation: -2, pending: Vec::new() };
+    let fresh_score: i64 = negamax(b, 1, 1, -INF, INF, fresh_ss);
+
+    if repeated_score != 0 || stale_score != fresh_score { 1 } else { 0 }
 }
 
 fn has_non_pawn_material(b: Board, color: i64) -> bool {
@@ -1569,50 +1757,46 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     // extension is disabled past MAX_DEPTH*2 plies so a pathological forced-check
     // line (which the 50-move rule already bounds in practice) can never sustain
     // the recursion indefinitely — defence in depth against stack exhaustion.
+    // Keep repetition_history_capacity's check-extension and QUIESCE_DEPTH
+    // headroom derivation in sync with this cutoff and the quiescence call.
     let mut d: i64 = depth;
     if in_chk && ply < MAX_DEPTH * 2 {
         d = d + 1;
     }
 
+    let zkey: i64 = compute_zkey(b, ss.ztab);
+
+    // Draw detection is shared with recursive quiescence. Before rep_base, two
+    // matching played positions make this node the third occurrence. At or
+    // after rep_base, one match retains the existing search-cycle cutoff.
+    if is_draw_node(b, ply, zkey, ss) {
+        return 0;
+    }
+
     if d <= 0 {
-        return quiesce(b, alpha_in, beta_in, 6, ss);
+        return quiesce(b, alpha_in, beta_in, QUIESCE_DEPTH, ply, ss);
     }
 
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
 
-    let zkey: i64 = compute_zkey(b, ss.ztab);
-
-    // Draw detection: 50-move rule and repetition of a position earlier on the
-    // current line (same side to move => an even number of plies back, bounded by
-    // the halfmove clock since the last irreversible move).
-    if ply >= 1 {
-        if b.halfmove >= 100 {
-            return 0;
-        }
-        if ply < REP_SIZE {
-            let mut lim: i64 = ply - b.halfmove;
-            if lim < 0 {
-                lim = 0;
-            }
-            let mut back: i64 = ply - 2;
-            while back >= lim {
-                if ss.rep[back] == zkey {
-                    return 0;
-                }
-                back = back - 2;
-            }
-            ss.rep[ply] = zkey;
-        }
+    // Transposition table probe. Position and rolling repetition context are
+    // folded into the stored key, so cutoffs cannot cross different search paths
+    // within the same `go` without growing every entry. Generation rejects other
+    // UCI histories.
+    let rep_idx: i64 = ss.rep_base + ply;
+    let tt_context_valid: bool = rep_idx >= 0 && rep_idx < REP_SIZE;
+    let mut tt_rep_context: i64 = 0;
+    let mut tt_key: i64 = 0;
+    if tt_context_valid {
+        tt_rep_context = mix_repetition_context(ss.rep_context[rep_idx], b.halfmove);
+        tt_key = mix_repetition_context(zkey, tt_rep_context);
     }
-
-    // Transposition table probe. The full key is stored, so an index collision
-    // from a different position is rejected by the key check.
     let tt_idx: i64 = zkey & TT_MASK;
     let ttv: Vec<TTEntry> = ss.tt;
     let e: TTEntry = ttv[tt_idx];
     let mut tt_move_key: i64 = 0;
-    if e.flag != 0 && e.key == zkey {
+    if tt_context_valid && e.flag != 0 && e.key == tt_key && e.generation == ss.tt_generation {
         tt_move_key = e.movekey;
         if e.depth >= d {
             if e.flag == TT_EXACT {
@@ -1686,8 +1870,8 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         }
         if alpha >= beta {
             record_cutoff(ss, b, mv, d, ply);
-            if ss.stopped == 0 {
-                ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key };
+            if ss.stopped == 0 && tt_context_valid {
+                ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key, generation: ss.tt_generation };
             }
             return best;
         }
@@ -1695,18 +1879,79 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         i = i + 1;
     }
 
-    if ss.stopped == 0 {
+    if ss.stopped == 0 && tt_context_valid {
         let mut flag: i64 = TT_EXACT;
         if best <= alpha_in {
             flag = TT_UPPER;
         }
-        ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: flag, movekey: best_move_key };
+        ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: best, flag: flag, movekey: best_move_key, generation: ss.tt_generation };
     }
     best
 }
 
 fn moves_equal(a: ChessMove, b: ChessMove) -> bool {
     a.from == b.from && a.to == b.to && a.promote == b.promote
+}
+
+fn repetition_history_capacity() -> i64 {
+    // A check extension can keep depth from draining until MAX_DEPTH * 2 plies,
+    // after which the remaining normal depth and recursive quiescence still need
+    // repetition slots. Keep this synchronized with negamax and QUIESCE_DEPTH.
+    let search_headroom: i64 = MAX_DEPTH * 3 + QUIESCE_DEPTH;
+    let capacity: i64 = REP_SIZE - search_headroom;
+    if capacity < 1 { 1 } else { capacity }
+}
+
+fn repetition_headroom_self_test() -> i64 {
+    let required: i64 = MAX_DEPTH * 3 + QUIESCE_DEPTH;
+    if repetition_history_capacity() + required <= REP_SIZE { 0 } else { 1 }
+}
+
+fn make_game_history() -> GameHistory {
+    GameHistory { keys: make_zeros(repetition_history_capacity()), start: 0, len: 0 }
+}
+
+fn clear_game_history(history: GameHistory) {
+    history.start = 0;
+    history.len = 0;
+}
+
+fn game_history_key_at(history: GameHistory, index: i64) -> i64 {
+    history.keys[(history.start + index) % history.keys.len()]
+}
+
+fn push_game_history(history: GameHistory, key: i64) {
+    let capacity: i64 = history.keys.len();
+    if history.len < capacity {
+        let index: i64 = (history.start + history.len) % capacity;
+        history.keys[index] = key;
+        history.len = history.len + 1;
+    } else {
+        history.keys[history.start] = key;
+        history.start = (history.start + 1) % capacity;
+    }
+}
+
+fn seed_repetition_history(b: Board, game_rep: GameHistory, ss: SearchState) {
+    let root_key: i64 = compute_zkey(b, ss.ztab);
+    ss.rep_base = 0;
+    if game_rep.len == 0 || game_history_key_at(game_rep, game_rep.len - 1) != root_key {
+        ss.rep[0] = root_key;
+        ss.rep_context[0] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, root_key), REP_CONTEXT_BOUNDARY);
+        return;
+    }
+
+    let mut copied: i64 = 0;
+    let mut context: i64 = REP_CONTEXT_SEED;
+    while copied < game_rep.len {
+        let key: i64 = game_history_key_at(game_rep, copied);
+        ss.rep[copied] = key;
+        context = mix_repetition_context(context, key);
+        ss.rep_context[copied] = context;
+        copied = copied + 1;
+    }
+    ss.rep_base = copied - 1;
+    ss.rep_context[ss.rep_base] = mix_repetition_context(context, REP_CONTEXT_BOUNDARY);
 }
 
 // Iterative deepening: search depth 1, 2, ..., max_depth. The best move from
@@ -1745,7 +1990,7 @@ fn print_info(depth: i64, score: i64, nodes: i64, elapsed_ms: i64, mv: ChessMove
 // best_mv even if the rest of that iteration is interrupted; an interruption
 // before then retains the previous iteration's result. Root moves are re-ordered
 // PV-first each iteration.
-fn search_best_move(b: Board, max_depth_in: i64, ss: SearchState) -> ChessMove [io, read] {
+fn search_best_move(b: Board, max_depth_in: i64, game_rep: GameHistory, ss: SearchState) -> ChessMove [io, read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
         return null_move();
@@ -1761,9 +2006,7 @@ fn search_best_move(b: Board, max_depth_in: i64, ss: SearchState) -> ChessMove [
 
     ss.stopped = 0;
     ss.nodes = 0;
-    // Seed the repetition stack with the root position (ply 0). Search lines that
-    // return to it are detected as draws by negamax.
-    ss.rep[0] = compute_zkey(b, ss.ztab);
+    seed_repetition_history(b, game_rep, ss);
     let start_ms: i64 = time_unix_ms();
     let mut best_mv: ChessMove = legal[0];
     let mut d: i64 = 1;
@@ -2024,7 +2267,7 @@ fn find_legal_move(b: Board, uci: String) -> ChessMove {
     null_move()
 }
 
-fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board [io] {
+fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64, ztab: Vec<i64>, game_rep: GameHistory) -> Board [io] {
     let mut i: i64 = start_idx;
     while i < tokens.len() {
         let text: String = tokens[i];
@@ -2036,6 +2279,10 @@ fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board [io] 
             return b;
         }
         make_move(b, mv);
+        if b.halfmove == 0 {
+            clear_game_history(game_rep);
+        }
+        push_game_history(game_rep, compute_zkey(b, ztab));
         i = i + 1;
     }
     b
@@ -2191,7 +2438,12 @@ fn parse_fen(tokens: Vec<String>, start_idx: i64) -> Board {
     }
 }
 
-fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
+fn seed_game_history(b: Board, ztab: Vec<i64>, game_rep: GameHistory) {
+    clear_game_history(game_rep);
+    push_game_history(game_rep, compute_zkey(b, ztab));
+}
+
+fn handle_position(tokens: Vec<String>, current: Board, ztab: Vec<i64>, game_rep: GameHistory) -> Board [io] {
     if tokens.len() < 2 {
         return current;
     }
@@ -2199,10 +2451,11 @@ fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
     let mode: String = tokens[1];
     if mode.eq(String::from("startpos")) {
         let board: Board = start_board();
+        seed_game_history(board, ztab, game_rep);
         if tokens.len() >= 3 {
             let next: String = tokens[2];
             if next.eq(String::from("moves")) {
-                return apply_uci_moves(board, tokens, 3);
+                return apply_uci_moves(board, tokens, 3, ztab, game_rep);
             }
         }
         return board;
@@ -2213,11 +2466,12 @@ fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
             return current;
         }
         let board: Board = parse_fen(tokens, 2);
+        seed_game_history(board, ztab, game_rep);
         let mut moves_idx: i64 = 2;
         while moves_idx < tokens.len() {
             let tok: String = tokens[moves_idx];
             if tok.eq(String::from("moves")) {
-                return apply_uci_moves(board, tokens, moves_idx + 1);
+                return apply_uci_moves(board, tokens, moves_idx + 1, ztab, game_rep);
             }
             moves_idx = moves_idx + 1;
         }
@@ -2230,20 +2484,17 @@ fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
 fn reset_for_new_game(us: UciState) {
     // Canonical per-game reset point: cutechess-cli reuses one engine process
     // across a match, so ucinewgame is the only per-game teardown signal. The
-    // killer/history/repetition tables are rebuilt fresh per `go`, so only the
-    // board needs resetting here.
+    // killer/history tables are rebuilt fresh per `go`, so only the board and
+    // persistent game-position history need resetting here.
     //
-    // The transposition table is intentionally left WARM across games. It is a
-    // persistent root-arena Vec aliased into every search; entries store the full
-    // 64-bit Zobrist key and are only reused on an exact key match, so a previous
-    // game's entries cannot be misapplied to a different position. Clearing it in
-    // place (writing struct literals across all ~1M slots from this scope) is not
-    // free in the region model — those writes root fresh allocations and leak the
-    // table on every `ucinewgame` — so we keep it warm. The one residual risk is a
-    // stale, ply-relative mate score reused across games; that is closed by the
-    // mate-score ply-adjustment tracked in #912 (which fixes it for both the
-    // cross-game and within-game transposition cases at once).
+    // The transposition table allocation is intentionally retained across games.
+    // Clearing it in place (writing struct literals across all ~1M slots from
+    // this scope) is not free in the region model — those writes root fresh
+    // allocations and leak the table on every `ucinewgame`. Instead, advancing
+    // the generation makes all prior entries ineligible without rewriting them.
     us.board = start_board();
+    seed_game_history(us.board, us.ztab, us.game_rep);
+    us.tt_generation = us.tt_generation + 1;
 }
 
 fn handle_perft(tokens: Vec<String>, b: Board) [io] {
@@ -2290,7 +2541,12 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                 reset_for_new_game(us);
             } else {
                 if cmd.eq(String::from("position")) {
-                    us.board = handle_position(tokens, us.board);
+                    // GUIs resend the accumulated game before each go. Advancing
+                    // here deliberately trades cross-move TT reuse for correctness:
+                    // even an incrementally extended history changes which future
+                    // nodes can become repetition draws.
+                    us.tt_generation = us.tt_generation + 1;
+                    us.board = handle_position(tokens, us.board, us.ztab, us.game_rep);
                 } else if cmd.eq(String::from("perft")) {
                     handle_perft(tokens, us.board);
                 } else if cmd.eq(String::from("captest")) {
@@ -2299,8 +2555,18 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                     let msg: String = String::from("captest mismatches: ");
                     msg.push_str(i64_to_string(bad));
                     print_line(msg);
+                } else if cmd.eq(String::from("ttreptest")) {
+                    let bad: i64 = tt_repetition_path_self_test(us);
+                    let msg: String = String::from("ttreptest mismatches: ");
+                    msg.push_str(i64_to_string(bad));
+                    print_line(msg);
                 } else {
-                    if cmd.eq(String::from("go")) {
+                    if cmd.eq(String::from("reptest")) {
+                        let bad: i64 = quiesce_repetition_self_test(us) + repetition_headroom_self_test();
+                        let msg: String = String::from("reptest mismatches: ");
+                        msg.push_str(i64_to_string(bad));
+                        print_line(msg);
+                    } else if cmd.eq(String::from("go")) {
                         let limits: GoLimits = parse_go_limits(tokens, us.board.side);
                         let fd: i64 = limits.fixed_depth;
                         let budget: i64 = limits.budget_ms;
@@ -2326,8 +2592,8 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                                 deadline = now + think;
                             }
                         }
-                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, infinite: infinite, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
-                        let best: ChessMove = search_best_move(us.board, max_depth, ss);
+                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, infinite: infinite, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: make_zeros(REP_SIZE), rep_base: 0, tt_generation: us.tt_generation, pending: Vec::new() };
+                        let best: ChessMove = search_best_move(us.board, max_depth, us.game_rep, ss);
                         let out: String = String::from("bestmove ");
                         out.push_str(move_to_uci(best));
                         print_line(out);
@@ -2354,7 +2620,11 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
 }
 
 fn main() [io, read] {
-    let us: UciState = UciState { board: start_board(), running: 1, ztab: build_ztab(), tt: build_tt(), pst: build_pst() };
+    let board: Board = start_board();
+    let ztab: Vec<i64> = build_ztab();
+    let game_rep: GameHistory = make_game_history();
+    push_game_history(game_rep, compute_zkey(board, ztab));
+    let us: UciState = UciState { board: board, running: 1, ztab: ztab, tt: build_tt(), pst: build_pst(), game_rep: game_rep, tt_generation: 1 };
 
     while us.running == 1 {
         let raw: String = stdin_read_line();
