@@ -15,6 +15,7 @@ const INF: i64 = 100000000;
 const MATE: i64 = 1000000;
 const MATE_THRESHOLD: i64 = 999000;
 const MAX_DEPTH: i64 = 64;
+const QUIESCE_DEPTH: i64 = 6;
 const KILLER_SLOTS: i64 = 132;
 const HISTORY_SIZE: i64 = 4096;
 const HISTORY_ORDER_CAP: i64 = 60000;
@@ -29,6 +30,8 @@ const TT_EXACT: i64 = 1;
 const TT_LOWER: i64 = 2;
 const TT_UPPER: i64 = 3;
 const REP_SIZE: i64 = 512;
+const REP_CONTEXT_SEED: i64 = 7640891576956012809;
+const REP_CONTEXT_BOUNDARY: i64 = -7046029254386353131;
 
 struct ChessMove {
     from: i64,
@@ -90,6 +93,7 @@ struct SearchState {
     tt: Vec<TTEntry>,
     pst: Vec<i64>,
     rep: Vec<i64>,
+    rep_context: Vec<i64>,
     rep_base: i64,
     tt_generation: i64,
     pending: Vec<String>,
@@ -1107,6 +1111,14 @@ fn build_ztab() -> Vec<i64> {
     t
 }
 
+fn mix_repetition_context(context: i64, key: i64) -> i64 {
+    let mut z: u64 = (context as u64) ^ (key as u64);
+    z = z + 11400714819323198485u64;
+    z = (z ^ (z >> 30u32)) * 13787848793156543929u64;
+    z = (z ^ (z >> 27u32)) * 10723151780598845931u64;
+    (z ^ (z >> 31u32)) as i64
+}
+
 fn build_tt() -> Vec<TTEntry> {
     let tt: Vec<TTEntry> = Vec::new();
     let mut i: i64 = 0;
@@ -1575,6 +1587,11 @@ fn is_draw_node(b: Board, ply: i64, zkey: i64, ss: SearchState) -> bool {
         back = back - 2;
     }
     ss.rep[rep_idx] = zkey;
+    if b.halfmove == 0 {
+        ss.rep_context[rep_idx] = mix_repetition_context(REP_CONTEXT_SEED, zkey);
+    } else {
+        ss.rep_context[rep_idx] = mix_repetition_context(ss.rep_context[rep_idx - 1], zkey);
+    }
     false
 }
 
@@ -1665,9 +1682,48 @@ fn quiesce_repetition_self_test(us: UciState) -> i64 [io, read] {
 
     let rep: Vec<i64> = make_zeros(REP_SIZE);
     rep[4] = repeated_key;
-    let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: rep, rep_base: 4, tt_generation: us.tt_generation, pending: Vec::new() };
+    let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: rep, rep_context: make_zeros(REP_SIZE), rep_base: 4, tt_generation: us.tt_generation, pending: Vec::new() };
     let score: i64 = quiesce(b, -INF, INF, 1, 1, ss);
     if score == 0 { 0 } else { 1 }
+}
+
+// Warm the same TT position under two search histories. In the first, the
+// forced Kb1 evasion repeats the search root and is a draw; in the second it is
+// not. A cutoff cached for the checked position must not cross those contexts.
+fn tt_repetition_path_self_test(us: UciState) -> i64 [io, read] {
+    let sqs: Vec<i64> = make_zeros(64);
+    sqs[0] = KING;
+    sqs[18] = -QUEEN;
+    sqs[56] = -ROOK;
+    sqs[63] = -KING;
+    let b: Board = Board { squares: sqs, side: WHITE, ep: -1, wk: 0, wq: 0, bk: 0, bq: 0, wk_sq: 0, bk_sq: 63, halfmove: 4 };
+    let legal: Vec<ChessMove> = generate_legal_moves(b);
+    if legal.len() != 1 || legal[0].from != 0 || legal[0].to != 1 {
+        return 1;
+    }
+
+    let undo: UndoInfo = make_move(b, legal[0]);
+    let repeated_key: i64 = compute_zkey(b, us.ztab);
+    unmake_move(b, legal[0], undo);
+
+    let repeated_rep: Vec<i64> = make_zeros(REP_SIZE);
+    repeated_rep[4] = repeated_key;
+    let repeated_context: Vec<i64> = make_zeros(REP_SIZE);
+    repeated_context[4] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, repeated_key), REP_CONTEXT_BOUNDARY);
+    let repeated_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: repeated_rep, rep_context: repeated_context, rep_base: 4, tt_generation: -1, pending: Vec::new() };
+    let repeated_score: i64 = negamax(b, 1, 1, -INF, INF, repeated_ss);
+
+    let clear_context: Vec<i64> = make_zeros(REP_SIZE);
+    clear_context[4] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, 0), REP_CONTEXT_BOUNDARY);
+    let stale_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: clear_context, rep_base: 4, tt_generation: -1, pending: Vec::new() };
+    let stale_score: i64 = negamax(b, 1, 1, -INF, INF, stale_ss);
+
+    let fresh_context: Vec<i64> = make_zeros(REP_SIZE);
+    fresh_context[4] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, 0), REP_CONTEXT_BOUNDARY);
+    let fresh_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: fresh_context, rep_base: 4, tt_generation: -2, pending: Vec::new() };
+    let fresh_score: i64 = negamax(b, 1, 1, -INF, INF, fresh_ss);
+
+    if repeated_score != 0 || stale_score != fresh_score { 1 } else { 0 }
 }
 
 fn has_non_pawn_material(b: Board, color: i64) -> bool {
@@ -1701,8 +1757,8 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     // extension is disabled past MAX_DEPTH*2 plies so a pathological forced-check
     // line (which the 50-move rule already bounds in practice) can never sustain
     // the recursion indefinitely — defence in depth against stack exhaustion.
-    // Keep repetition_history_capacity's search-headroom derivation in sync
-    // with this cutoff.
+    // Keep repetition_history_capacity's check-extension and QUIESCE_DEPTH
+    // headroom derivation in sync with this cutoff and the quiescence call.
     let mut d: i64 = depth;
     if in_chk && ply < MAX_DEPTH * 2 {
         d = d + 1;
@@ -1718,20 +1774,29 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     }
 
     if d <= 0 {
-        return quiesce(b, alpha_in, beta_in, 6, ply, ss);
+        return quiesce(b, alpha_in, beta_in, QUIESCE_DEPTH, ply, ss);
     }
 
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
 
-    // Transposition table probe. The full key is stored, so an index collision
-    // from a different position is rejected by the key check. The generation
-    // tag prevents reuse under a different played-game repetition context.
+    // Transposition table probe. Position and rolling repetition context are
+    // folded into the stored key, so cutoffs cannot cross different search paths
+    // within the same `go` without growing every entry. Generation rejects other
+    // UCI histories.
+    let rep_idx: i64 = ss.rep_base + ply;
+    let tt_context_valid: bool = rep_idx >= 0 && rep_idx < REP_SIZE;
+    let mut tt_rep_context: i64 = 0;
+    let mut tt_key: i64 = 0;
+    if tt_context_valid {
+        tt_rep_context = mix_repetition_context(ss.rep_context[rep_idx], b.halfmove);
+        tt_key = mix_repetition_context(zkey, tt_rep_context);
+    }
     let tt_idx: i64 = zkey & TT_MASK;
     let ttv: Vec<TTEntry> = ss.tt;
     let e: TTEntry = ttv[tt_idx];
     let mut tt_move_key: i64 = 0;
-    if e.flag != 0 && e.key == zkey && e.generation == ss.tt_generation {
+    if tt_context_valid && e.flag != 0 && e.key == tt_key && e.generation == ss.tt_generation {
         tt_move_key = e.movekey;
         if e.depth >= d {
             if e.flag == TT_EXACT {
@@ -1805,8 +1870,8 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         }
         if alpha >= beta {
             record_cutoff(ss, b, mv, d, ply);
-            if ss.stopped == 0 {
-                ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key, generation: ss.tt_generation };
+            if ss.stopped == 0 && tt_context_valid {
+                ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key, generation: ss.tt_generation };
             }
             return best;
         }
@@ -1814,12 +1879,12 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         i = i + 1;
     }
 
-    if ss.stopped == 0 {
+    if ss.stopped == 0 && tt_context_valid {
         let mut flag: i64 = TT_EXACT;
         if best <= alpha_in {
             flag = TT_UPPER;
         }
-        ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: flag, movekey: best_move_key, generation: ss.tt_generation };
+        ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: best, flag: flag, movekey: best_move_key, generation: ss.tt_generation };
     }
     best
 }
@@ -1830,11 +1895,16 @@ fn moves_equal(a: ChessMove, b: ChessMove) -> bool {
 
 fn repetition_history_capacity() -> i64 {
     // A check extension can keep depth from draining until MAX_DEPTH * 2 plies,
-    // after which the remaining normal depth still needs repetition slots. This
-    // reservation must change with negamax's check-extension cutoff.
-    let search_headroom: i64 = MAX_DEPTH * 3;
+    // after which the remaining normal depth and recursive quiescence still need
+    // repetition slots. Keep this synchronized with negamax and QUIESCE_DEPTH.
+    let search_headroom: i64 = MAX_DEPTH * 3 + QUIESCE_DEPTH;
     let capacity: i64 = REP_SIZE - search_headroom;
     if capacity < 1 { 1 } else { capacity }
+}
+
+fn repetition_headroom_self_test() -> i64 {
+    let required: i64 = MAX_DEPTH * 3 + QUIESCE_DEPTH;
+    if repetition_history_capacity() + required <= REP_SIZE { 0 } else { 1 }
 }
 
 fn make_game_history() -> GameHistory {
@@ -1867,15 +1937,21 @@ fn seed_repetition_history(b: Board, game_rep: GameHistory, ss: SearchState) {
     ss.rep_base = 0;
     if game_rep.len == 0 || game_history_key_at(game_rep, game_rep.len - 1) != root_key {
         ss.rep[0] = root_key;
+        ss.rep_context[0] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, root_key), REP_CONTEXT_BOUNDARY);
         return;
     }
 
     let mut copied: i64 = 0;
+    let mut context: i64 = REP_CONTEXT_SEED;
     while copied < game_rep.len {
-        ss.rep[copied] = game_history_key_at(game_rep, copied);
+        let key: i64 = game_history_key_at(game_rep, copied);
+        ss.rep[copied] = key;
+        context = mix_repetition_context(context, key);
+        ss.rep_context[copied] = context;
         copied = copied + 1;
     }
     ss.rep_base = copied - 1;
+    ss.rep_context[ss.rep_base] = mix_repetition_context(context, REP_CONTEXT_BOUNDARY);
 }
 
 // Iterative deepening: search depth 1, 2, ..., max_depth. The best move from
@@ -2479,9 +2555,14 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                     let msg: String = String::from("captest mismatches: ");
                     msg.push_str(i64_to_string(bad));
                     print_line(msg);
+                } else if cmd.eq(String::from("ttreptest")) {
+                    let bad: i64 = tt_repetition_path_self_test(us);
+                    let msg: String = String::from("ttreptest mismatches: ");
+                    msg.push_str(i64_to_string(bad));
+                    print_line(msg);
                 } else {
                     if cmd.eq(String::from("reptest")) {
-                        let bad: i64 = quiesce_repetition_self_test(us);
+                        let bad: i64 = quiesce_repetition_self_test(us) + repetition_headroom_self_test();
                         let msg: String = String::from("reptest mismatches: ");
                         msg.push_str(i64_to_string(bad));
                         print_line(msg);
@@ -2511,7 +2592,7 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                                 deadline = now + think;
                             }
                         }
-                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, infinite: infinite, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_base: 0, tt_generation: us.tt_generation, pending: Vec::new() };
+                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, infinite: infinite, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: make_zeros(REP_SIZE), rep_base: 0, tt_generation: us.tt_generation, pending: Vec::new() };
                         let best: ChessMove = search_best_move(us.board, max_depth, us.game_rep, ss);
                         let out: String = String::from("bestmove ");
                         out.push_str(move_to_uci(best));

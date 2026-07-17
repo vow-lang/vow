@@ -42,6 +42,7 @@ printf '%s\n' \
     'position startpos' \
     'captest 3' \
     'reptest' \
+    'ttreptest' \
     'quit' >"$TMP/commands"
 
 if ! (ulimit -v 2000000; "$TMP/chess" <"$TMP/commands") \
@@ -50,8 +51,8 @@ if ! (ulimit -v 2000000; "$TMP/chess" <"$TMP/commands") \
     fail "chess self-test process exited non-zero"
 fi
 
-actual=$(grep -E '^(Nodes searched|captest mismatches|reptest mismatches): ' "$TMP/chess.out" || true)
-expected=$'Nodes searched: 8902\nNodes searched: 97862\nNodes searched: 2812\nNodes searched: 39764\ncaptest mismatches: 0\nreptest mismatches: 0'
+actual=$(grep -E '^(Nodes searched|captest mismatches|reptest mismatches|ttreptest mismatches): ' "$TMP/chess.out" || true)
+expected=$'Nodes searched: 8902\nNodes searched: 97862\nNodes searched: 2812\nNodes searched: 39764\ncaptest mismatches: 0\nreptest mismatches: 0\nttreptest mismatches: 0'
 
 if [ "$actual" != "$expected" ]; then
     printf 'expected summaries:\n%s\nactual summaries:\n%s\n' "$expected" "$actual" >&2
