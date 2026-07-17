@@ -37,7 +37,7 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `go`          | `depth N`, `movetime MS`, or `wtime`/`btime` (+`winc`/`binc`/`movestogo`) real time management. Emits `info depth/score/nodes/nps/pv`. |
 | `perft N`     | Node-count divide to depth `N` (move-generation self-test).           |
 | `captest N`   | Differential gate: asserts the quiescence capture generator equals the tactical subset of legal moves, to depth `N` (prints mismatch count). |
-| `halfmovetest` | Search gate: asserts horizon, warm-TT, and null-move behavior at the 50-move boundary (prints mismatch count). |
+| `halfmovetest` | Search gate: asserts draw ordering, exact halfmove-qualified TT score reuse, and null-move clock handling at the 50-move boundary (prints mismatch count). |
 | `stop`        | Polled during search (checked every 1024 nodes) and honored.          |
 | `setoption`   | Accepted and ignored (no configurable options yet).                  |
 | `quit`        | Exits.                                                                 |

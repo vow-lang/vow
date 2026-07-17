@@ -58,9 +58,10 @@ adjudication.
 - A *differential gate* proves a fast path equals a slow one (the `captest`
   command checks that the quiescence capture generator equals the tactical
   subset of the full legal move list).
-- The deterministic `halfmovetest` search gate covers horizon, warm-TT, and
-  null-move behavior at the 50-move boundary. Its expected output is
-  `halfmovetest mismatches: 0`.
+- The deterministic `halfmovetest` search gate covers draw-before-quiescence,
+  exact halfmove-qualified TT probes and stores (including deeper entries), and
+  null-move clock advancement/restoration at the 50-move boundary. Its expected
+  output is `halfmovetest mismatches: 0`.
 - A tactical suite vs a Stockfish oracle catches pruning that silently drops
   tactics. A change that passes perft but drops tactics is broken.
 
