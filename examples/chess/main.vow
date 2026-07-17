@@ -1214,9 +1214,11 @@ fn evaluate_board(b: Board, pst: Vec<i64>) -> i64 {
     }
     let mut score: i64 = (mg * phase + eg * (24 - phase)) / 24;
     score = score + side_structure_score(b, 1) - side_structure_score(b, -1) + positional_score(b);
-    // The largest named KX set is KQvK (phase 4). Reuse the PeSTO phase as a
-    // cheap hot-path gate so ordinary positions never pay for another scan.
-    if phase <= 4 {
+    // mop_up_score only fires for a bare king facing KQ/KR/KBB/KBN, i.e.
+    // non_king_count <= 2 (KQ is the largest such set, phase 4). Gate on both:
+    // phase alone lets deep pawn endgames (phase 0, but many pawns) pay for the
+    // 64-square scan on every leaf, so also require the cheap material count.
+    if phase <= 4 && b.non_king_count <= 2 {
         score = score + mop_up_score(b);
     }
     score
