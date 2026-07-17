@@ -484,6 +484,50 @@ for vow_file in examples/*.vow; do
 done
 echo ""
 
+# ─── Chess UCI repetition history ──────────────────────────────
+
+section_begin "Chess UCI repetition history"
+chess_rust="$TMPDIR/chess_rust"
+chess_self="$TMPDIR/chess_self"
+chess_rust_json="" chess_self_json="" chess_rust_exit=0 chess_self_exit=0
+chess_rust_json=$($RUST build --no-verify examples/chess/main.vow -o "$chess_rust" 2>/dev/null) || chess_rust_exit=$?
+chess_self_json=$(run_self build --no-verify examples/chess/main.vow -o "$chess_self" 2>/dev/null) || chess_self_exit=$?
+
+compare_json "chess/history-build" "$chess_rust_json" "$chess_self_json" "$chess_rust_exit" "$chess_self_exit"
+
+chess_threefold_input="$TMPDIR/chess_threefold.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1' \
+    'go depth 2' \
+    'quit' > "$chess_threefold_input"
+
+check_chess_threefold_history() {
+    local label="$1" bin="$2"
+    local output="" status=0
+    output=$(run_self_bin "$bin" < "$chess_threefold_input") || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif ! grep -Eq '^info depth 2 score cp 0 .* pv g8f6$' <<< "$output"; then
+        fail "$label" "depth 2 did not score g8f6 as cp 0"
+    elif ! grep -qx 'bestmove g8f6' <<< "$output"; then
+        fail "$label" "engine did not choose g8f6"
+    else
+        pass "$label"
+    fi
+}
+
+if [ -x "$chess_rust" ]; then
+    check_chess_threefold_history "chess/history-threefold/rust" "$chess_rust"
+else
+    fail "chess/history-threefold/rust" "binary not built"
+fi
+if [ -x "$chess_self" ]; then
+    check_chess_threefold_history "chess/history-threefold/self" "$chess_self"
+else
+    fail "chess/history-threefold/self" "binary not built"
+fi
+echo ""
+
 # ─── Section 4: Run Tests (tests/run/) ────────────────────────────
 
 section_begin "Section 4: Run Tests"

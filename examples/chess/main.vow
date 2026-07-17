@@ -88,6 +88,7 @@ struct SearchState {
     tt: Vec<TTEntry>,
     pst: Vec<i64>,
     rep: Vec<i64>,
+    rep_base: i64,
     pending: Vec<String>,
 }
 
@@ -97,6 +98,7 @@ struct UciState {
     ztab: Vec<i64>,
     tt: Vec<TTEntry>,
     pst: Vec<i64>,
+    game_rep: Vec<i64>,
 }
 
 // Parsed `go` limits. If fixed_depth > 0, search exactly that depth with no
@@ -1572,26 +1574,28 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
 
     let zkey: i64 = compute_zkey(b, ss.ztab);
 
-    // Draw detection: 50-move rule and repetition of a position earlier on the
-    // current line (same side to move => an even number of plies back, bounded by
-    // the halfmove clock since the last irreversible move).
+    // Draw detection: 50-move rule and repetition of a position earlier in the
+    // known game history or current search line. Same-side positions are an even
+    // number of plies apart, bounded by the halfmove clock since the last
+    // irreversible move.
     if ply >= 1 {
         if b.halfmove >= 100 {
             return 0;
         }
-        if ply < REP_SIZE {
-            let mut lim: i64 = ply - b.halfmove;
+        let rep_idx: i64 = ss.rep_base + ply;
+        if rep_idx >= 0 && rep_idx < REP_SIZE {
+            let mut lim: i64 = rep_idx - b.halfmove;
             if lim < 0 {
                 lim = 0;
             }
-            let mut back: i64 = ply - 2;
+            let mut back: i64 = rep_idx - 2;
             while back >= lim {
                 if ss.rep[back] == zkey {
                     return 0;
                 }
                 back = back - 2;
             }
-            ss.rep[ply] = zkey;
+            ss.rep[rep_idx] = zkey;
         }
     }
 
@@ -1698,6 +1702,22 @@ fn moves_equal(a: ChessMove, b: ChessMove) -> bool {
     a.from == b.from && a.to == b.to && a.promote == b.promote
 }
 
+fn seed_repetition_history(b: Board, game_rep: Vec<i64>, ss: SearchState) {
+    let root_key: i64 = compute_zkey(b, ss.ztab);
+    ss.rep_base = 0;
+    if game_rep.len() == 0 || game_rep[game_rep.len() - 1] != root_key {
+        ss.rep[0] = root_key;
+        return;
+    }
+
+    let mut i: i64 = 0;
+    while i < game_rep.len() {
+        ss.rep[i] = game_rep[i];
+        i = i + 1;
+    }
+    ss.rep_base = game_rep.len() - 1;
+}
+
 // Iterative deepening: search depth 1, 2, ..., max_depth. The best move from
 // each iteration is tried first in the next (PV move ordering).
 fn print_info(depth: i64, score: i64, nodes: i64, elapsed_ms: i64, mv: ChessMove) [io] {
@@ -1733,7 +1753,7 @@ fn print_info(depth: i64, score: i64, nodes: i64, elapsed_ms: i64, mv: ChessMove
 // best move is only committed from a fully completed depth: an iteration cut
 // short by the deadline is discarded, so best_mv never regresses to a partial
 // (unreliable) result. Root moves are re-ordered PV-first each iteration.
-fn search_best_move(b: Board, max_depth_in: i64, ss: SearchState) -> ChessMove [io, read] {
+fn search_best_move(b: Board, max_depth_in: i64, game_rep: Vec<i64>, ss: SearchState) -> ChessMove [io, read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
         return null_move();
@@ -1749,9 +1769,7 @@ fn search_best_move(b: Board, max_depth_in: i64, ss: SearchState) -> ChessMove [
 
     ss.stopped = 0;
     ss.nodes = 0;
-    // Seed the repetition stack with the root position (ply 0). Search lines that
-    // return to it are detected as draws by negamax.
-    ss.rep[0] = compute_zkey(b, ss.ztab);
+    seed_repetition_history(b, game_rep, ss);
     let start_ms: i64 = time_unix_ms();
     let mut best_mv: ChessMove = legal[0];
     let mut d: i64 = 1;
@@ -2003,7 +2021,7 @@ fn find_legal_move(b: Board, uci: String) -> ChessMove {
     null_move()
 }
 
-fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board [io] {
+fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64, ztab: Vec<i64>, game_rep: Vec<i64>) -> Board [io] {
     let mut i: i64 = start_idx;
     while i < tokens.len() {
         let text: String = tokens[i];
@@ -2015,6 +2033,10 @@ fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board [io] 
             return b;
         }
         make_move(b, mv);
+        if b.halfmove == 0 {
+            game_rep.clear();
+        }
+        game_rep.push(compute_zkey(b, ztab));
         i = i + 1;
     }
     b
@@ -2170,7 +2192,12 @@ fn parse_fen(tokens: Vec<String>, start_idx: i64) -> Board {
     }
 }
 
-fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
+fn seed_game_history(b: Board, ztab: Vec<i64>, game_rep: Vec<i64>) {
+    game_rep.clear();
+    game_rep.push(compute_zkey(b, ztab));
+}
+
+fn handle_position(tokens: Vec<String>, current: Board, ztab: Vec<i64>, game_rep: Vec<i64>) -> Board [io] {
     if tokens.len() < 2 {
         return current;
     }
@@ -2178,10 +2205,11 @@ fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
     let mode: String = tokens[1];
     if mode.eq(String::from("startpos")) {
         let board: Board = start_board();
+        seed_game_history(board, ztab, game_rep);
         if tokens.len() >= 3 {
             let next: String = tokens[2];
             if next.eq(String::from("moves")) {
-                return apply_uci_moves(board, tokens, 3);
+                return apply_uci_moves(board, tokens, 3, ztab, game_rep);
             }
         }
         return board;
@@ -2192,11 +2220,12 @@ fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
             return current;
         }
         let board: Board = parse_fen(tokens, 2);
+        seed_game_history(board, ztab, game_rep);
         let mut moves_idx: i64 = 2;
         while moves_idx < tokens.len() {
             let tok: String = tokens[moves_idx];
             if tok.eq(String::from("moves")) {
-                return apply_uci_moves(board, tokens, moves_idx + 1);
+                return apply_uci_moves(board, tokens, moves_idx + 1, ztab, game_rep);
             }
             moves_idx = moves_idx + 1;
         }
@@ -2269,7 +2298,7 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                 reset_for_new_game(us);
             } else {
                 if cmd.eq(String::from("position")) {
-                    us.board = handle_position(tokens, us.board);
+                    us.board = handle_position(tokens, us.board, us.ztab, us.game_rep);
                 } else if cmd.eq(String::from("perft")) {
                     handle_perft(tokens, us.board);
                 } else if cmd.eq(String::from("captest")) {
@@ -2302,8 +2331,8 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                             }
                             deadline = now + think;
                         }
-                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
-                        let best: ChessMove = search_best_move(us.board, max_depth, ss);
+                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_base: 0, pending: Vec::new() };
+                        let best: ChessMove = search_best_move(us.board, max_depth, us.game_rep, ss);
                         let out: String = String::from("bestmove ");
                         out.push_str(move_to_uci(best));
                         print_line(out);
@@ -2330,7 +2359,11 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
 }
 
 fn main() [io, read] {
-    let us: UciState = UciState { board: start_board(), running: 1, ztab: build_ztab(), tt: build_tt(), pst: build_pst() };
+    let board: Board = start_board();
+    let ztab: Vec<i64> = build_ztab();
+    let game_rep: Vec<i64> = Vec::new();
+    game_rep.push(compute_zkey(board, ztab));
+    let us: UciState = UciState { board: board, running: 1, ztab: ztab, tt: build_tt(), pst: build_pst(), game_rep: game_rep };
 
     while us.running == 1 {
         let raw: String = stdin_read_line();
