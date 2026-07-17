@@ -2966,7 +2966,8 @@ pub extern "C" fn __vow_stdin_ready() -> i64 {
         revents: 0,
     };
     let ret = unsafe { libc::poll(&mut pollfd, 1, 0) };
-    if ret > 0 && (pollfd.revents & libc::POLLIN) != 0 {
+    let ready_events = libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL;
+    if ret > 0 && (pollfd.revents & ready_events) != 0 {
         1
     } else {
         0
