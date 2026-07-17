@@ -125,6 +125,7 @@ DRAW_CASES = {
     "KvK": "7k/8/8/8/8/8/4K3/8 w - - 0 1",
     "KNvK": "7k/8/8/8/8/2N5/8/K7 w - - 0 1",
     "KvKN": "7k/8/5n2/8/8/8/8/K7 w - - 0 1",
+    "KNvK (bare king in check)": "7k/5N2/4K3/8/8/8/8/8 b - - 0 1",
     "KBvK": "7k/8/8/8/8/8/2B5/K7 w - - 0 1",
     "same-coloured KBvKB": "5b1k/8/8/8/8/8/8/K1B5 w - - 0 1",
 }
