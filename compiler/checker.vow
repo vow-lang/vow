@@ -1042,6 +1042,73 @@ fn builtin_variant_payload(ts: TyStore, scrutinee_tid: i64, enum_name: String, v
     CTY_UNIT()
 }
 
+fn validate_arm_pattern(e: CheckEnv, m: Module, pid: i64, is_last: bool) -> bool [io] {
+    let a: AstArena = m.arena;
+    let tag: i64 = pat_tag(a, pid);
+    if tag == PAT_WILD() {
+        if !is_last {
+            env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("catchall match patterns must be the final arm; move the catchall pattern to the final match arm"), pat_span(a, pid));
+            return false;
+        }
+        return true;
+    }
+    if tag == PAT_IDENT() {
+        if pat_b(a, pid) == 0 {
+            if !is_last {
+                env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("catchall match patterns must be the final arm; move the catchall pattern to the final match arm"), pat_span(a, pid));
+                return false;
+            }
+            return true;
+        }
+        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("mutable identifier patterns are not supported; remove `mut` from the binding"), pat_span(a, pid));
+        return false;
+    }
+    if tag == PAT_ENUM() {
+        let path_lid: i64 = pat_a(a, pid);
+        if list_len(a, path_lid) != 2 {
+            env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("enum variant patterns must use a qualified `Enum::Variant` path"), pat_span(a, pid));
+            return false;
+        }
+        let inner_lid: i64 = pat_b(a, pid);
+        let n_inner: i64 = list_len(a, inner_lid);
+        let mut i: i64 = 0;
+        while i < n_inner {
+            let inner_pid: i64 = list_get(a, inner_lid, i);
+            let inner_tag: i64 = pat_tag(a, inner_pid);
+            let supported_ident: bool = inner_tag == PAT_IDENT() && pat_b(a, inner_pid) == 0;
+            if inner_tag != PAT_WILD() && !supported_ident {
+                env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("nested enum payload patterns are not supported; bind the payload and inspect it separately"), pat_span(a, pid));
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    if tag == PAT_LIT() {
+        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("literal match patterns are not supported; use `if`/`else` comparisons"), pat_span(a, pid));
+    } else if tag == PAT_TUPLE() {
+        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("tuple match patterns are not supported; access elements explicitly"), pat_span(a, pid));
+    } else if tag == PAT_STRUCT() {
+        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("struct match patterns are not supported; access fields explicitly"), pat_span(a, pid));
+    } else if tag == PAT_OR() {
+        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("or-patterns are not supported; write separate enum variant arms"), pat_span(a, pid));
+    } else {
+        env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("pattern form is not supported"), pat_span(a, pid));
+    }
+    false
+}
+
+fn is_enum_match_tid(ts: TyStore, tid: i64) -> bool {
+    let tag: i64 = ty_tag(ts, tid);
+    if tag == CTY_ENUM() {
+        return true;
+    }
+    if tag == CTY_APPLIED() {
+        return ty_tag(ts, ty_a(ts, tid)) == CTY_ENUM();
+    }
+    false
+}
+
 fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
@@ -1716,13 +1783,31 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let ts: TyStore = e.ts;
         let n_pairs: i64 = list_len(a, arms_lid);
         let n_arms: i64 = n_pairs / 2;
+        let supported_arms: Vec<bool> = Vec::new();
+        let mut all_arms_supported: bool = true;
+        let mut validation_i: i64 = 0;
+        while validation_i < n_arms {
+            let validation_pid: i64 = list_get(a, arms_lid, validation_i * 2);
+            let arm_supported: bool = validate_arm_pattern(e, m, validation_pid, validation_i == n_arms - 1);
+            supported_arms.push(arm_supported);
+            if !arm_supported {
+                all_arms_supported = false;
+            }
+            validation_i = validation_i + 1;
+        }
+        let scrutinee_supported: bool = is_enum_match_tid(e.ts, scrutinee_tid);
+        if all_arms_supported && !scrutinee_supported {
+            env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("match scrutinee must be an enum; use `if`/`else` comparisons for scalar values"), expr_span(a, scrutinee_eid));
+        }
         let mut result_tid: i64 = CTY_NEVER();
         let mut i: i64 = 0;
         while i < n_arms {
             let pat_pid: i64 = list_get(a, arms_lid, i * 2);
             let body_eid: i64 = list_get(a, arms_lid, i * 2 + 1);
             env_push_scope(e);
-            bind_arm_pattern(e, m, pat_pid, scrutinee_tid);
+            if supported_arms[i] && scrutinee_supported {
+                bind_arm_pattern(e, m, pat_pid, scrutinee_tid);
+            }
             let arm_tid: i64 = check_expr(e, m, body_eid);
             env_pop_scope(e);
             if is_opaque(result_tid) {

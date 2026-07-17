@@ -17,6 +17,8 @@ fn main() -> i32 {
     if SEV_WARNING() != 1 { return 2; }
     if DIAG_BLAME_CALLER() != 0 { return 3; }
     if DIAG_BLAME_CALLEE() != 1 { return 4; }
+    if EC_UNSUPPORTED_PATTERN() != 28 { return 10; }
+    if ec_name(EC_UNSUPPORTED_PATTERN()) != String::from("UnsupportedPattern") { return 11; }
 
     // ir: build a trivial IrModule and check that the constructor preserves
     // the name and starts with empty function/string/layout vectors.

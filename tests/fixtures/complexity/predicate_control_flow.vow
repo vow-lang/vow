@@ -31,9 +31,9 @@ fn predicate_scopes(xs: Vec<i64>, b: Bucket) -> bool vow {
 fn select(c: bool, x: i64, y: i64) -> i64 vow {
     requires: if c { let sum: i64 = x + y; sum >= x } else { pair_ordered(Pair { left: x, right: y }) },
     requires: bucket_nonneg(Bucket::Small(y)),
-    ensures: match c {
-        true => { result == x },
-        false => { let z: i64 = y; result == z },
+    ensures: if c { result == x } else {
+        let z: i64 = y;
+        result == z
     }
 } {
     if c { x } else { y }
