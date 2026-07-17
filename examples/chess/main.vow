@@ -2210,7 +2210,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         unmake_move(b, mv, undo);
         if score > best {
             best = score;
-            best_move_key = move_key(mv);
+            best_move_key = key;
         }
         if score > alpha {
             alpha = score;
