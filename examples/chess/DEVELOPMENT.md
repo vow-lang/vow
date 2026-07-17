@@ -131,6 +131,13 @@ reducing the representative depth-6 tree:
 | Pawn endgame | 4,783 | 4,133 | 13.6% |
 | **Aggregate** | **493,096** | **422,129** | **14.4%** |
 
+> **Note (post-merge):** the *Tuned* column was measured on the pre-#924 base.
+> After merging `main`'s endgame-knowledge and repetition/TT-generation changes,
+> the tuned engine's fixed-depth aggregate is **434,746** nodes — with identical
+> scores and best moves — and the per-position counts shift correspondingly, so
+> re-running the command above reports those numbers. `search_regression.py`'s
+> default ceiling still anchors to the *Baseline* column (see #932).
+
 The tactical result remained 8/10 against the Stockfish oracle, with all ten
 pre-change engine moves identical. The advanced seventh-rank pawn safeguard and
 the asynchronous `stop` path also pass. The move-generation gates remained
