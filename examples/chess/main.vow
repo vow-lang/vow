@@ -1459,7 +1459,7 @@ fn captest(b: Board, depth: i64) -> i64 {
 
 fn halfmovetest(ztab: Vec<i64>, tt: Vec<TTEntry>, pst: Vec<i64>) -> i64 [io, read] {
     let board: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 100 1")), 0);
-    let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
+    let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
     let score: i64 = negamax(board, 0, 1, -INF, INF, ss);
     let mut bad: i64 = 0;
     if score != 0 {
@@ -1531,7 +1531,7 @@ fn halfmovetest(ztab: Vec<i64>, tt: Vec<TTEntry>, pst: Vec<i64>) -> i64 [io, rea
     }
 
     ttv[tt_idx] = TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 };
-    let null_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
+    let null_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
     let null_score: i64 = negamax(near_boundary, 3, 1, -1, 1, null_ss);
     if null_score != 0 || near_boundary.halfmove != 99 {
         bad = bad + 1;
@@ -1542,7 +1542,7 @@ fn halfmovetest(ztab: Vec<i64>, tt: Vec<TTEntry>, pst: Vec<i64>) -> i64 [io, rea
     let null_clock_board: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 95 1")), 0);
     let null_position_key: i64 = compute_zkey(null_clock_board, ztab) ^ ztab[768];
     let null_tt_idx: i64 = null_position_key & TT_MASK;
-    let null_clock_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
+    let null_clock_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
     let null_ttv: Vec<TTEntry> = null_clock_ss.tt;
     null_ttv[null_tt_idx] = TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 };
     negamax(null_clock_board, 4, 1, -1, 1, null_clock_ss);
