@@ -34,6 +34,7 @@ const REP_SIZE: i64 = 512;
 const MOBILITY_WEIGHT: i64 = 3;
 const PAWN_SHIELD_WEIGHT: i64 = 6;
 const KING_ATTACK_WEIGHT: i64 = 8;
+const PESTO_MAX_PHASE: i64 = 24;
 
 struct ChessMove {
     from: i64,
@@ -1086,32 +1087,37 @@ fn side_king_attacks(b: Board, color: i64, king_sq: i64) -> i64 {
     attacks
 }
 
-// Diagnostic-only mirror of evaluate_board's phase accumulator. Keeping the
-// hot evaluator's phase in its existing PeSTO scan avoids a second 64-square
-// walk at every leaf; the infrequent `eval` command can afford this extra pass.
+fn piece_phase_weight(kind: i64) -> i64 {
+    if kind == KNIGHT || kind == BISHOP {
+        1
+    } else if kind == ROOK {
+        2
+    } else if kind == QUEEN {
+        4
+    } else {
+        0
+    }
+}
+
+// Keeping the hot evaluator's phase in its existing PeSTO scan avoids a second
+// 64-square walk at every leaf; the infrequent `eval` command can afford this
+// extra pass. Both paths share the per-piece weights and maximum phase.
 fn game_phase(b: Board) -> i64 {
     let sqs: Vec<i64> = b.squares;
     let mut phase: i64 = 0;
     let mut sq: i64 = 0;
     while sq < 64 {
-        let kind: i64 = piece_kind(sqs[sq]);
-        if kind == KNIGHT || kind == BISHOP {
-            phase = phase + 1;
-        } else if kind == ROOK {
-            phase = phase + 2;
-        } else if kind == QUEEN {
-            phase = phase + 4;
-        }
+        phase = phase + piece_phase_weight(piece_kind(sqs[sq]));
         sq = sq + 1;
     }
-    min_i64(phase, 24)
+    min_i64(phase, PESTO_MAX_PHASE)
 }
 
 fn evaluation_extras(b: Board, phase: i64) -> EvalExtras {
     let mobility: i64 = side_mobility(b, WHITE) - side_mobility(b, BLACK);
     let pawn_shield: i64 = side_pawn_shield(b, WHITE) - side_pawn_shield(b, BLACK);
     let king_attacks: i64 = side_king_attacks(b, WHITE, b.bk_sq) - side_king_attacks(b, BLACK, b.wk_sq);
-    let king_safety: i64 = (pawn_shield * PAWN_SHIELD_WEIGHT + king_attacks * KING_ATTACK_WEIGHT) * phase / 24;
+    let king_safety: i64 = (pawn_shield * PAWN_SHIELD_WEIGHT + king_attacks * KING_ATTACK_WEIGHT) * phase / PESTO_MAX_PHASE;
     EvalExtras { mobility: mobility, pawn_shield: pawn_shield, king_attacks: king_attacks, king_safety: king_safety }
 }
 
@@ -1240,13 +1246,7 @@ fn evaluate_board(b: Board, pst: Vec<i64>) -> i64 {
         let p: i64 = sqs[sq];
         if p != 0 {
             let kind: i64 = piece_kind(p);
-            if kind == 2 || kind == 3 {
-                phase = phase + 1;
-            } else if kind == 4 {
-                phase = phase + 2;
-            } else if kind == 5 {
-                phase = phase + 4;
-            }
+            phase = phase + piece_phase_weight(kind);
             if p > 0 {
                 mg = mg + pst[(kind - 1) * 64 + sq];
                 eg = eg + pst[(6 + kind - 1) * 64 + sq];
@@ -1258,10 +1258,8 @@ fn evaluate_board(b: Board, pst: Vec<i64>) -> i64 {
         }
         sq = sq + 1;
     }
-    if phase > 24 {
-        phase = 24;
-    }
-    let mut score: i64 = (mg * phase + eg * (24 - phase)) / 24;
+    phase = min_i64(phase, PESTO_MAX_PHASE);
+    let mut score: i64 = (mg * phase + eg * (PESTO_MAX_PHASE - phase)) / PESTO_MAX_PHASE;
     let extras: EvalExtras = evaluation_extras(b, phase);
     score = score + side_structure_score(b, 1) - side_structure_score(b, -1) + positional_score(b);
     score = score + extras.mobility * MOBILITY_WEIGHT + extras.king_safety;
