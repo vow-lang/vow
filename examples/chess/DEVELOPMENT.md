@@ -23,9 +23,9 @@ acceptance criterion is conversion of elementary mates. With seed `909`, ten
 legal KQvK and ten legal KRvK positions, the Vow engine searching depth 4, and
 Stockfish searching depth 8 as deterministic defender, the draw-only baseline
 mated **11/20** positions before 100 plies. The mop-up evaluation mated
-**20/20**. The same run recognised all five representative insufficient-
-material FENs (including both colours) and kept three live-material controls
-non-drawn.
+**20/20**. The same run recognised all six representative insufficient-
+material FENs (including both colours and a bare king in check) and kept three
+live-material controls non-drawn.
 
 ```sh
 ulimit -v 2000000
