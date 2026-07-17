@@ -501,6 +501,12 @@ printf '%s\n' \
     'go depth 2' \
     'quit' > "$chess_threefold_input"
 
+chess_twofold_input="$TMPDIR/chess_twofold.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1' \
+    'go depth 2' \
+    'quit' > "$chess_twofold_input"
+
 chess_history_reset_input="$TMPDIR/chess_history_reset.in"
 printf '%s\n' \
     'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1' \
@@ -530,6 +536,19 @@ check_chess_threefold_history() {
         fail "$label" "depth 2 did not score g8f6 as cp 0"
     elif ! grep -qx 'bestmove g8f6' <<< "$output"; then
         fail "$label" "engine did not choose g8f6"
+    else
+        pass "$label"
+    fi
+}
+
+check_chess_twofold_history() {
+    local label="$1" bin="$2"
+    local output="" status=0
+    output=$(run_self_bin "$bin" < "$chess_twofold_input") || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif ! grep -Eq '^info depth 2 score cp -[1-9][0-9]* ' <<< "$output"; then
+        fail "$label" "ordinary twofold history was scored as a draw"
     else
         pass "$label"
     fi
@@ -568,19 +587,23 @@ check_chess_long_history() {
 }
 
 if [ -x "$chess_rust" ]; then
+    check_chess_twofold_history "chess/history-twofold/rust" "$chess_rust"
     check_chess_threefold_history "chess/history-threefold/rust" "$chess_rust"
     check_chess_history_reset "chess/history-reset/rust" "$chess_rust"
     check_chess_long_history "chess/history-bounded/rust" "$chess_rust"
 else
+    fail "chess/history-twofold/rust" "binary not built"
     fail "chess/history-threefold/rust" "binary not built"
     fail "chess/history-reset/rust" "binary not built"
     fail "chess/history-bounded/rust" "binary not built"
 fi
 if [ -x "$chess_self" ]; then
+    check_chess_twofold_history "chess/history-twofold/self" "$chess_self"
     check_chess_threefold_history "chess/history-threefold/self" "$chess_self"
     check_chess_history_reset "chess/history-reset/self" "$chess_self"
     check_chess_long_history "chess/history-bounded/self" "$chess_self"
 else
+    fail "chess/history-twofold/self" "binary not built"
     fail "chess/history-threefold/self" "binary not built"
     fail "chess/history-reset/self" "binary not built"
     fail "chess/history-bounded/self" "binary not built"

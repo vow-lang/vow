@@ -1575,9 +1575,11 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     let zkey: i64 = compute_zkey(b, ss.ztab);
 
     // Draw detection: 50-move rule and repetition of a position earlier in the
-    // known game history or current search line. Same-side positions are an even
-    // number of plies apart, bounded by the halfmove clock since the last
-    // irreversible move.
+    // known game history or current search line. Before rep_base, two matching
+    // played positions make the current node the third occurrence. At or after
+    // rep_base, one match is enough for the existing search-cycle cutoff.
+    // Same-side positions are an even number of plies apart, bounded by the
+    // halfmove clock since the last irreversible move.
     if ply >= 1 {
         if b.halfmove >= 100 {
             return 0;
@@ -1588,10 +1590,17 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
             if lim < 0 {
                 lim = 0;
             }
+            let mut game_matches: i64 = 0;
             let mut back: i64 = rep_idx - 2;
             while back >= lim {
                 if ss.rep[back] == zkey {
-                    return 0;
+                    if back >= ss.rep_base {
+                        return 0;
+                    }
+                    game_matches = game_matches + 1;
+                    if game_matches >= 2 {
+                        return 0;
+                    }
                 }
                 back = back - 2;
             }
