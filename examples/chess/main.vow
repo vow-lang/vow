@@ -1027,6 +1027,54 @@ fn positional_score(b: Board) -> i64 {
     score
 }
 
+fn basic_mop_up_bonus(own_king: i64, enemy_king: i64) -> i64 {
+    let enemy_file: i64 = file_of(enemy_king);
+    let enemy_rank: i64 = rank_of(enemy_king);
+    let file_edge: i64 = min_i64(enemy_file, 7 - enemy_file);
+    let rank_edge: i64 = min_i64(enemy_rank, 7 - enemy_rank);
+    let edge_distance: i64 = min_i64(file_edge, rank_edge);
+    let king_distance: i64 = abs_i64(file_of(own_king) - enemy_file) + abs_i64(rank_of(own_king) - enemy_rank);
+    let king_closeness: i64 = 14 - king_distance;
+    (3 - edge_distance) * 20 + king_closeness * king_closeness * 3
+}
+
+// Return a white-positive mating gradient only for exact KQvK. Other material
+// configurations retain the general evaluation until their KX slices opt in.
+fn mop_up_score(b: Board) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    let mut white_non_king: i64 = 0;
+    let mut black_non_king: i64 = 0;
+    let mut white_queens: i64 = 0;
+    let mut black_queens: i64 = 0;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let p: i64 = sqs[sq];
+        let kind: i64 = piece_kind(p);
+        if kind != EMPTY && kind != KING {
+            if p > 0 {
+                white_non_king = white_non_king + 1;
+                if kind == QUEEN {
+                    white_queens = white_queens + 1;
+                }
+            } else {
+                black_non_king = black_non_king + 1;
+                if kind == QUEEN {
+                    black_queens = black_queens + 1;
+                }
+            }
+        }
+        sq = sq + 1;
+    }
+
+    if black_non_king == 0 && white_non_king == 1 && white_queens == 1 {
+        return basic_mop_up_bonus(b.wk_sq, b.bk_sq);
+    }
+    if white_non_king == 0 && black_non_king == 1 && black_queens == 1 {
+        return -basic_mop_up_bonus(b.bk_sq, b.wk_sq);
+    }
+    0
+}
+
 // PeSTO tapered piece-square evaluation. Each side's material+placement is
 // accumulated for midgame and endgame from the pst tables, then blended by the
 // game phase. White uses pst[sq]; black mirrors the rank (sq ^ 56) and negates.
@@ -1062,7 +1110,7 @@ fn evaluate_board(b: Board, pst: Vec<i64>) -> i64 {
         phase = 24;
     }
     let mut score: i64 = (mg * phase + eg * (24 - phase)) / 24;
-    score = score + side_structure_score(b, 1) - side_structure_score(b, -1) + positional_score(b);
+    score = score + side_structure_score(b, 1) - side_structure_score(b, -1) + positional_score(b) + mop_up_score(b);
     score
 }
 
