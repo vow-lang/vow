@@ -1453,11 +1453,35 @@ fn halfmovetest(ztab: Vec<i64>, tt: Vec<TTEntry>, pst: Vec<i64>) -> i64 [io, rea
     let board: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 100 1")), 0);
     let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
     let score: i64 = negamax(board, 0, 1, -INF, INF, ss);
-    if score == 0 {
-        0
-    } else {
-        1
+    let mut bad: i64 = 0;
+    if score != 0 {
+        bad = bad + 1;
     }
+
+    let low_clock: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 0 1")), 0);
+    let near_boundary: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 99 1")), 0);
+    let low_key: i64 = compute_zkey(low_clock, ztab);
+    let tt_idx: i64 = low_key & TT_MASK;
+    let ttv: Vec<TTEntry> = ss.tt;
+    ttv[tt_idx] = TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 };
+    ss.stopped = 0;
+    ss.nodes = 0;
+    ss.rep[0] = 0;
+    ss.rep[1] = 0;
+    let warm_score: i64 = negamax(low_clock, 2, 1, -INF, INF, ss);
+    if warm_score == 0 {
+        bad = bad + 1;
+    }
+
+    ss.stopped = 0;
+    ss.nodes = 0;
+    ss.rep[0] = 0;
+    ss.rep[1] = 0;
+    let boundary_score: i64 = negamax(near_boundary, 2, 1, -INF, INF, ss);
+    if boundary_score != 0 {
+        bad = bad + 1;
+    }
+    bad
 }
 
 fn check_stop(ss: SearchState) [io, read] {
@@ -1582,6 +1606,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     if d <= 0 {
         return quiesce(b, alpha_in, beta_in, 6, ss);
     }
+    let fifty_move_in_horizon: bool = b.halfmove >= FIFTY_MOVE_PLIES - d;
 
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
@@ -1616,7 +1641,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     let mut tt_move_key: i64 = 0;
     if e.flag != 0 && e.key == zkey {
         tt_move_key = e.movekey;
-        if e.depth >= d {
+        if !fifty_move_in_horizon && e.depth >= d {
             if e.flag == TT_EXACT {
                 return e.score;
             }
@@ -1688,7 +1713,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         }
         if alpha >= beta {
             record_cutoff(ss, b, mv, d, ply);
-            if ss.stopped == 0 {
+            if ss.stopped == 0 && !fifty_move_in_horizon {
                 ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key };
             }
             return best;
@@ -1697,7 +1722,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         i = i + 1;
     }
 
-    if ss.stopped == 0 {
+    if ss.stopped == 0 && !fifty_move_in_horizon {
         let mut flag: i64 = TT_EXACT;
         if best <= alpha_in {
             flag = TT_UPPER;
