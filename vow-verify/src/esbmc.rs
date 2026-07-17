@@ -1634,13 +1634,7 @@ VERIFICATION SUCCESSFUL";
     #[cfg(unix)]
     #[test]
     fn failed_output_takes_priority_over_memory_limit_text() {
-        let (_dir, esbmc) = fake_esbmc_script(
-            r#"#!/bin/sh
-echo "VERIFICATION FAILED"
-echo "std::bad_alloc"
-exit 10
-"#,
-        );
+        let esbmc = fake_esbmc_fixture("verification-failed-with-bad-alloc.sh");
         let result = run_esbmc_with_max_k_step(
             &esbmc,
             "int main(void) { __ESBMC_assert(0, \"vow:1\"); return 0; }",
@@ -1652,27 +1646,16 @@ exit 10
     }
 
     #[cfg(unix)]
-    fn fake_esbmc_script(body: &str) -> (tempfile::TempDir, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let esbmc = dir.path().join("fake-esbmc");
-        std::fs::write(&esbmc, body).expect("write fake esbmc");
-        let mut perms = std::fs::metadata(&esbmc).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&esbmc, perms).expect("chmod fake esbmc");
-        (dir, esbmc)
+    fn fake_esbmc_fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fake-esbmc")
+            .join(name)
     }
 
     #[cfg(unix)]
     #[test]
     fn run_esbmc_reports_memlimit_output_as_unknown() {
-        let (_dir, esbmc) = fake_esbmc_script(
-            r#"#!/bin/sh
-echo "Out of memory: memory limit exceeded"
-exit 6
-"#,
-        );
+        let esbmc = fake_esbmc_fixture("memory-limit.sh");
         let result = run_esbmc_with_max_k_step(
             &esbmc,
             "int main(void) { return 0; }",
@@ -1692,13 +1675,7 @@ exit 6
     #[cfg(unix)]
     #[test]
     fn run_esbmc_prefers_memlimit_reason_over_generic_unknown() {
-        let (_dir, esbmc) = fake_esbmc_script(
-            r#"#!/bin/sh
-echo "terminate called after throwing an instance of std::bad_alloc"
-echo "VERIFICATION UNKNOWN"
-exit 6
-"#,
-        );
+        let esbmc = fake_esbmc_fixture("memory-limit-unknown.sh");
         let result = run_esbmc_with_max_k_step(
             &esbmc,
             "int main(void) { return 0; }",
