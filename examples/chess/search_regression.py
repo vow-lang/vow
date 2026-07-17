@@ -209,6 +209,12 @@ def run_bestmove(engine_command: str, fen: str, depth: int) -> str:
         engine.quit()
 
 
+# A stop that is honored returns bestmove almost immediately; bound the wait so
+# a regression that ignores stop fails within this deadline instead of blocking
+# on the full `go depth 64` search (read_bestmove would otherwise never return).
+STOP_PATH_DEADLINE_S = 10.0
+
+
 def run_stop_path(engine_command: str) -> tuple[str, list[int]]:
     engine = Engine(limited_command(engine_command), ROOT, "candidate")
     try:
@@ -220,7 +226,7 @@ def run_stop_path(engine_command: str) -> tuple[str, list[int]]:
         # stdin_ready() begins polling the underlying descriptor.
         time.sleep(0.05)
         engine.send("stop")
-        bestmove, lines = engine.read_bestmove()
+        bestmove, lines = engine.read_bestmove(timeout=STOP_PATH_DEADLINE_S)
     finally:
         engine.quit()
 
@@ -309,17 +315,21 @@ def main() -> int:
                     f"{name}: expected stable move {expected_move}, got {move}"
                 )
 
-    stopped_move, completed_depths = run_stop_path(args.engine)
-    print(
-        f"stop regression: bestmove={stopped_move} "
-        f"completed_depths={completed_depths}"
-    )
-    if stopped_move not in STARTPOS_MOVES:
-        failures.append(f"stop path returned illegal startpos move {stopped_move}")
-    if completed_depths != sorted(set(completed_depths)):
-        failures.append(
-            f"stop path published non-monotonic completed depths {completed_depths}"
+    try:
+        stopped_move, completed_depths = run_stop_path(args.engine)
+    except RuntimeError as exc:
+        failures.append(f"stop path did not return bestmove within deadline: {exc}")
+    else:
+        print(
+            f"stop regression: bestmove={stopped_move} "
+            f"completed_depths={completed_depths}"
         )
+        if stopped_move not in STARTPOS_MOVES:
+            failures.append(f"stop path returned illegal startpos move {stopped_move}")
+        if completed_depths != sorted(set(completed_depths)):
+            failures.append(
+                f"stop path published non-monotonic completed depths {completed_depths}"
+            )
 
     if failures:
         print("FAIL:")

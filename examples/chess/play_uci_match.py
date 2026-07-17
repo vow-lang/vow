@@ -112,23 +112,49 @@ class Engine:
             raise RuntimeError(f"{self.name}: EOF while waiting for {prefix!r}")
         return box[0]
 
-    def read_bestmove(self) -> tuple[str, list[str]]:
+    def read_bestmove(self, timeout: float | None = None) -> tuple[str, list[str]]:
+        """Read (blocking) until a ``bestmove`` line, returning (move, all_lines).
+
+        The blocking ``readline`` runs in a daemon reader thread joined with an
+        optional ``timeout`` (mirroring ``read_until_prefix``), so it is immune to
+        the buffered-reader/``select`` race yet a caller can bound the wait. With
+        ``timeout=None`` it blocks until ``bestmove`` or EOF, as before; a bounded
+        caller (e.g. the stop-path regression) raises instead of hanging forever
+        when the engine never emits ``bestmove``."""
         if self.proc.stdout is None:
             raise RuntimeError(f"{self.name}: stdout unavailable")
-        out: list[str] = []
-        while True:
-            line = self.proc.stdout.readline()
-            if line == "":
-                raise RuntimeError(
-                    f"{self.name}: EOF while waiting for bestmove; partial={out!r}"
-                )
-            text = line.rstrip("\n")
-            out.append(text)
-            if text.startswith("bestmove "):
-                parts = text.split()
-                if len(parts) < 2:
-                    raise RuntimeError(f"{self.name}: malformed bestmove line {text!r}")
-                return parts[1], out
+
+        box: list[tuple[str, list[str]] | None] = []
+
+        def _reader() -> None:
+            out: list[str] = []
+            while True:
+                line = self.proc.stdout.readline()
+                if line == "":
+                    box.append(None)  # EOF
+                    return
+                text = line.rstrip("\n")
+                out.append(text)
+                if text.startswith("bestmove "):
+                    box.append((text, out))
+                    return
+
+        reader = threading.Thread(target=_reader, daemon=True)
+        reader.start()
+        reader.join(timeout)
+        if reader.is_alive():
+            raise RuntimeError(
+                f"{self.name}: timed out after {timeout}s waiting for bestmove "
+                f"(did the engine honor stop/the deadline?)"
+            )
+        result = box[0] if box else None
+        if result is None:
+            raise RuntimeError(f"{self.name}: EOF while waiting for bestmove")
+        text, out = result
+        parts = text.split()
+        if len(parts) < 2:
+            raise RuntimeError(f"{self.name}: malformed bestmove line {text!r}")
+        return parts[1], out
 
     def read_line_timeout(self, timeout: float = 5.0) -> str | None:
         """Read a single line with a timeout. Returns None on timeout."""
