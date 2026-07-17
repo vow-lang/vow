@@ -14,6 +14,7 @@ and the lessons, so the next round of work doesn't relearn them.
 | Speed pass | alloc-free `square_attacked`, king-square tracking | (folded in) |
 | PeSTO eval | tapered midgame/endgame piece-square tables | ~1950 |
 | Draw detection | repetition + 50-move | **~2110** |
+| Search depth | aspiration windows, table LMR, shallow quiet pruning | **~2115** |
 
 ## Measurement discipline
 
@@ -47,8 +48,9 @@ the deterministic fixed-depth mode instead.
 an unfinished game by the validator's eval with a **±1.0** threshold — a +1.0
 position at the ply cap counts as a *full point*. Before believing a headline
 number, check the outcome breakdown (`--log`, then look at `Result:` lines) and
-prefer a ply cap high enough that games actually finish. Our final figure was
-23/24 decisive (checkmate / no legal move), so it was not inflated by soft
+prefer a ply cap high enough that games actually finish. The current 50-game
+headline run was 45/50 decisive (checkmate / no legal move), and all five
+adjudicated games were engine losses, so the score was not inflated by soft
 adjudication.
 
 **6. Correctness gates come before strength.**
@@ -70,15 +72,59 @@ aborting the `go` search so it returned a depth-1 move. Hold stdin open
 ### Reproducing a measurement
 
 ```sh
-# One rung of the ladder: engine vs Stockfish limited to ~2000, 30 games, 1 s/move.
-python examples/chess/play_uci_match.py \
+# One rung of the ladder: engine vs Stockfish limited to ~2000, 50 games, 1 s/move.
+ulimit -v 2000000
+python3 examples/chess/play_uci_match.py \
     --white examples/chess/.local/chess --black stockfish \
     --black-option "UCI_LimitStrength=true" --black-option "UCI_Elo=2000" \
     --white-go "go movetime 1000" --black-go "go movetime 1000" \
-    --games 30 --alternate-colors --plies 200 \
+    --games 50 --alternate-colors --plies 200 \
     --validator stockfish --log match.log
 # implied Elo = 2000 - 400*log10(1/score - 1)
 ```
+
+### Search-depth tuning regression (#911)
+
+The deterministic gate launches a fresh engine for each position, freezes the
+depth-6 score and best move, requires the ten depth-7 tactical moves to remain
+unchanged, exercises `stop`, and enforces a strict aggregate node ceiling:
+
+```sh
+python3 examples/chess/search_regression.py \
+    --engine examples/chess/.local/chess
+```
+
+The tuned search keeps every fixed-depth score and best move unchanged while
+reducing the representative depth-6 tree:
+
+| Position | Baseline nodes | Tuned nodes | Reduction |
+| --- | ---: | ---: | ---: |
+| Start position | 16,541 | 10,483 | 36.6% |
+| Kiwipete | 356,711 | 313,524 | 12.1% |
+| Middlegame | 115,061 | 93,989 | 18.3% |
+| Pawn endgame | 4,783 | 4,133 | 13.6% |
+| **Aggregate** | **493,096** | **422,129** | **14.4%** |
+
+The tactical result remained 8/10 against the Stockfish oracle, with all ten
+pre-change engine moves identical. The advanced seventh-rank pawn safeguard and
+the asynchronous `stop` path also pass. The move-generation gates remained
+unchanged: start position `perft 4 = 197281`, Kiwipete `perft 3 = 97862`,
+position 3 `perft 4 = 43238`, position 5 `perft 3 = 59412`, and all four
+`captest 3` runs report zero mismatches.
+
+For the fixed-time crossover, the parent and tuned binaries were run
+sequentially with the command above, substituting `/tmp/chess-911-baseline` and
+then `/tmp/chess-911-candidate` for `--white` and using corresponding separate
+log paths. The processes were never concurrent.
+
+| Engine | W/D/L | Score | Implied Elo | 1σ band | Decisive W/D/L | Adjudicated W/D/L |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Baseline | 25/3/22 | 53.0% | 2021 | 1972–2071 | 24/0/20 | 1/3/2 |
+| Tuned | 33/0/17 | 66.0% | 2115 | 2065–2170 | 33/0/12 | 0/0/5 |
+
+This is a +13 percentage-point score change and a **+94 Elo point-estimate
+delta** at the crossover. The independent 1σ bands still overlap, so the match
+supports the acceptance direction rather than a precise Elo-gain claim.
 
 ## Lessons learnt
 
