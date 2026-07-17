@@ -83,6 +83,7 @@ struct SearchState {
     stopped: i64,
     nodes: i64,
     deadline: i64,
+    infinite: i64,
     killers: Vec<i64>,
     history: Vec<i64>,
     ztab: Vec<i64>,
@@ -105,11 +106,12 @@ struct UciState {
 }
 
 // Parsed `go` limits. If fixed_depth > 0, search exactly that depth with no
-// clock. Otherwise search until budget_ms of wall-clock elapse (iterative
-// deepening up to MAX_DEPTH).
+// clock. Infinite searches also have no clock and run up to MAX_DEPTH. All
+// other searches use budget_ms of wall-clock time.
 struct GoLimits {
     fixed_depth: i64,
     budget_ms: i64,
+    infinite: i64,
 }
 
 fn abs_i64(x: i64) -> i64 {
@@ -1461,12 +1463,21 @@ fn check_stop(ss: SearchState) [io, read] {
         }
         if stdin_ready() {
             let line: String = stdin_read_line();
-            let trimmed: String = trim_line(line);
-            if trimmed.eq(String::from("stop")) {
+            if line.len() == 0 {
                 ss.stopped = 1;
             } else {
-                if trimmed.len() > 0 {
-                    ss.pending.push(trimmed);
+                let trimmed: String = trim_line(line);
+                if trimmed.eq(String::from("stop")) {
+                    ss.stopped = 1;
+                } else {
+                    if trimmed.len() > 0 {
+                        // `quit` must end a deadline-free infinite search; it is still
+                        // queued so the post-search drain dispatches it and shuts down.
+                        if trimmed.eq(String::from("quit")) {
+                            ss.stopped = 1;
+                        }
+                        ss.pending.push(trimmed);
+                    }
                 }
             }
         }
@@ -1776,10 +1787,11 @@ fn print_info(depth: i64, score: i64, nodes: i64, elapsed_ms: i64, mv: ChessMove
     print_line(out);
 }
 
-// Iterative deepening bounded by ss.deadline (wall clock) and max_depth. The
-// best move is only committed from a fully completed depth: an iteration cut
-// short by the deadline is discarded, so best_mv never regresses to a partial
-// (unreliable) result. Root moves are re-ordered PV-first each iteration.
+// Iterative deepening bounded by max_depth, ss.deadline for timed searches, or
+// an observed stop command. Once the PV move completes, its result can improve
+// best_mv even if the rest of that iteration is interrupted; an interruption
+// before then retains the previous iteration's result. Root moves are re-ordered
+// PV-first each iteration.
 fn search_best_move(b: Board, max_depth_in: i64, game_rep: Vec<i64>, ss: SearchState) -> ChessMove [io, read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
@@ -1862,7 +1874,7 @@ fn search_best_move(b: Board, max_depth_in: i64, game_rep: Vec<i64>, ss: SearchS
         if i >= legal.len() {
             let now_ms: i64 = time_unix_ms();
             print_info(d, best_score, ss.nodes, now_ms - start_ms, best_mv);
-            if best_score >= MATE_THRESHOLD || best_score <= -MATE_THRESHOLD {
+            if ss.infinite == 0 && (best_score >= MATE_THRESHOLD || best_score <= -MATE_THRESHOLD) {
                 break;
             }
         }
@@ -1985,7 +1997,7 @@ fn find_go_int(tokens: Vec<String>, key: String) -> i64 {
 fn parse_go_limits(tokens: Vec<String>, side: i64) -> GoLimits {
     let depth: i64 = find_go_int(tokens, String::from("depth"));
     if depth >= 1 {
-        return GoLimits { fixed_depth: depth, budget_ms: 0 };
+        return GoLimits { fixed_depth: depth, budget_ms: 0, infinite: 0 };
     }
 
     let mt: i64 = find_go_int(tokens, String::from("movetime"));
@@ -1994,7 +2006,7 @@ fn parse_go_limits(tokens: Vec<String>, side: i64) -> GoLimits {
         if budget < 5 {
             budget = 5;
         }
-        return GoLimits { fixed_depth: 0, budget_ms: budget };
+        return GoLimits { fixed_depth: 0, budget_ms: budget, infinite: 0 };
     }
 
     let time_key: String = if side == 1 {
@@ -2027,11 +2039,20 @@ fn parse_go_limits(tokens: Vec<String>, side: i64) -> GoLimits {
         if budget < 5 {
             budget = 5;
         }
-        return GoLimits { fixed_depth: 0, budget_ms: budget };
+        return GoLimits { fixed_depth: 0, budget_ms: budget, infinite: 0 };
     }
 
-    // `go` with no recognised limits (e.g. `go infinite`): default think time.
-    GoLimits { fixed_depth: 0, budget_ms: 1000 }
+    let mut i: i64 = 1;
+    while i < tokens.len() {
+        let token: String = tokens[i];
+        if token.eq(String::from("infinite")) {
+            return GoLimits { fixed_depth: 0, budget_ms: 0, infinite: 1 };
+        }
+        i = i + 1;
+    }
+
+    // `go` with no recognised limits uses the default think time.
+    GoLimits { fixed_depth: 0, budget_ms: 1000, infinite: 0 }
 }
 
 fn find_legal_move(b: Board, uci: String) -> ChessMove {
@@ -2337,26 +2358,29 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                         let limits: GoLimits = parse_go_limits(tokens, us.board.side);
                         let fd: i64 = limits.fixed_depth;
                         let budget: i64 = limits.budget_ms;
+                        let infinite: i64 = limits.infinite;
                         let mut deadline: i64 = 0;
                         let mut max_depth: i64 = MAX_DEPTH;
                         if fd > 0 {
                             max_depth = fd;
                         } else {
-                            let now: i64 = time_unix_ms();
-                            let mut margin: i64 = budget / 20;
-                            if margin > 50 {
-                                margin = 50;
+                            if infinite == 0 {
+                                let now: i64 = time_unix_ms();
+                                let mut margin: i64 = budget / 20;
+                                if margin > 50 {
+                                    margin = 50;
+                                }
+                                if margin < 1 {
+                                    margin = 1;
+                                }
+                                let mut think: i64 = budget - margin;
+                                if think < 1 {
+                                    think = 1;
+                                }
+                                deadline = now + think;
                             }
-                            if margin < 1 {
-                                margin = 1;
-                            }
-                            let mut think: i64 = budget - margin;
-                            if think < 1 {
-                                think = 1;
-                            }
-                            deadline = now + think;
                         }
-                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_base: 0, tt_generation: us.tt_generation, pending: Vec::new() };
+                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, infinite: infinite, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_base: 0, tt_generation: us.tt_generation, pending: Vec::new() };
                         let best: ChessMove = search_best_move(us.board, max_depth, us.game_rep, ss);
                         let out: String = String::from("bestmove ");
                         out.push_str(move_to_uci(best));
