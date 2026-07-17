@@ -249,6 +249,31 @@ class UciGoTest(unittest.TestCase):
         self.engine.proc.wait(timeout=10)
         self.assertEqual(self.engine.proc.returncode, 0)
 
+    def test_go_infinite_stdin_eof_shuts_down(self) -> None:
+        self.engine.send("position startpos")
+        self.engine.send("go infinite")
+
+        # Let the search enter its stdin polling loop before closing the pipe.
+        self.engine.read_for(duration=0.3)
+
+        assert self.engine.proc.stdin is not None
+        self.engine.proc.stdin.close()
+
+        try:
+            bestmove = self.engine.wait_for(
+                lambda line: line.startswith("bestmove "), timeout=10
+            )
+            self.assertRegex(bestmove, BESTMOVE_RE)
+
+            self.engine.proc.wait(timeout=10)
+            self.assertEqual(self.engine.proc.returncode, 0)
+        finally:
+            # Keep the red phase bounded: the pre-fix engine keeps searching
+            # after EOF, so terminate it before tearDown tries to send commands.
+            if self.engine.proc.poll() is None:
+                self.engine.proc.terminate()
+                self.engine.proc.wait(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()

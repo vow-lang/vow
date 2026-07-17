@@ -42,6 +42,7 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `quit`        | Exits. Polled during search and honored even without a prior `stop`.  |
 
 Moves are read and emitted in long algebraic form (`e2e4`, `e7e8q`).
+Closing stdin also interrupts an active search and exits cleanly.
 
 ## Build And Run
 
