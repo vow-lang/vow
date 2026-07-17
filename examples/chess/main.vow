@@ -1719,9 +1719,16 @@ fn seed_repetition_history(b: Board, game_rep: Vec<i64>, ss: SearchState) {
         return;
     }
 
+    // A check extension can keep depth from draining until MAX_DEPTH * 2 plies,
+    // after which the remaining normal depth still needs repetition slots.
+    let search_headroom: i64 = MAX_DEPTH * 3;
+    let mut history_budget: i64 = REP_SIZE - search_headroom;
+    if history_budget < 1 {
+        history_budget = 1;
+    }
     let mut start: i64 = 0;
-    if game_rep.len() > REP_SIZE {
-        start = game_rep.len() - REP_SIZE;
+    if game_rep.len() > history_budget {
+        start = game_rep.len() - history_budget;
     }
     let mut copied: i64 = 0;
     while start + copied < game_rep.len() {

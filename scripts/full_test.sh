@@ -517,14 +517,20 @@ printf '%s\n' \
 
 chess_long_history_input="$TMPDIR/chess_long_history.in"
 {
-    printf 'position startpos moves'
+    printf 'position fen 7k/8/5n2/8/8/8/3P4/K2Q4 w - - 0 1 moves'
     cycle=0
     while [ "$cycle" -lt 129 ]; do
-        printf ' g1f3 g8f6 f3g1 f6g8'
+        printf ' a1a2 f6g8 a2a1 g8f6'
         cycle=$((cycle + 1))
     done
-    printf '\ngo depth 2\nquit\n'
+    printf '\ngo depth 8\nquit\n'
 } > "$chess_long_history_input"
+
+chess_long_history_reference_input="$TMPDIR/chess_long_history_reference.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/3P4/K2Q4 w - - 516 259' \
+    'go depth 8' \
+    'quit' > "$chess_long_history_reference_input"
 
 check_chess_threefold_history() {
     local label="$1" bin="$2"
@@ -573,12 +579,22 @@ check_chess_history_reset() {
 
 check_chess_long_history() {
     local label="$1" bin="$2"
-    local output="" status=0
+    local output="" reference_output="" status=0 reference_status=0
+    local depth_line="" reference_depth_line="" result="" reference_result=""
     output=$(run_self_bin "$bin" < "$chess_long_history_input" 2>&1) || status=$?
-    if [ "$status" -ne 0 ]; then
-        fail "$label" "engine exited with status $status"
+    reference_output=$(run_self_bin "$bin" < "$chess_long_history_reference_input" 2>&1) || reference_status=$?
+    depth_line=$(grep '^info depth 8 ' <<< "$output" | tail -1) || true
+    reference_depth_line=$(grep '^info depth 8 ' <<< "$reference_output" | tail -1) || true
+    result=$(sed -E 's/ time [0-9]+ nps [0-9]+ / /' <<< "$depth_line")
+    reference_result=$(sed -E 's/ time [0-9]+ nps [0-9]+ / /' <<< "$reference_depth_line")
+    if [ "$status" -ne 0 ] || [ "$reference_status" -ne 0 ]; then
+        fail "$label" "engine exited with status history=$status reference=$reference_status"
     elif grep -q 'IndexOutOfBounds' <<< "$output"; then
         fail "$label" "engine exceeded the fixed repetition buffer"
+    elif [ -z "$depth_line" ] || [ -z "$reference_depth_line" ]; then
+        fail "$label" "engine did not complete depth 8"
+    elif [ "$result" != "$reference_result" ]; then
+        fail "$label" "history result '$result' differed from reference '$reference_result'"
     elif ! grep -Eq '^bestmove [a-h][1-8][a-h][1-8][qrbn]?$' <<< "$output"; then
         fail "$label" "engine did not emit a legal bestmove"
     else
