@@ -1,0 +1,21 @@
+// TEST: error-code UnexpectedToken
+// TEST: stderr "UnexpectedToken"
+module MatchArmMissingCommaBlock
+
+enum E {
+    A,
+    B,
+}
+
+fn f(e: E) -> i64 {
+    match e {
+        E::A => { 5 }
+        E::B => { 9 }
+    }
+}
+
+fn main() -> i32 {
+    let _a: i64 = f(E::A);
+    let _b: i64 = f(E::B);
+    0
+}

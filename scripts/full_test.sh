@@ -893,10 +893,17 @@ const BAD: bool = 42;
 fn main() -> i32 { 0 }
 EOF
 
-for fixture in parse_error type_error missing_module const_type_mismatch; do
+for fixture_path in \
+    "$TMPDIR/parse_error.vow" \
+    "$TMPDIR/type_error.vow" \
+    "$TMPDIR/missing_module.vow" \
+    "$TMPDIR/const_type_mismatch.vow" \
+    "tests/error/match_arm_missing_comma_scalar.vow" \
+    "tests/error/match_arm_missing_comma_block.vow"; do
+    fixture=$(basename "$fixture_path" .vow)
     rust_json="" self_json="" rust_exit=0 self_exit=0
-    rust_json=$($RUST build --no-verify "$TMPDIR/${fixture}.vow" -o "$TMPDIR/rust_${fixture}" 2>/dev/null) || rust_exit=$?
-    self_json=$(run_self build --no-verify "$TMPDIR/${fixture}.vow" -o "$TMPDIR/self_${fixture}" 2>/dev/null) || self_exit=$?
+    rust_json=$($RUST build --no-verify "$fixture_path" -o "$TMPDIR/rust_${fixture}" 2>/dev/null) || rust_exit=$?
+    self_json=$(run_self build --no-verify "$fixture_path" -o "$TMPDIR/self_${fixture}" 2>/dev/null) || self_exit=$?
 
     if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
         skip "${fixture}/error" "empty output (rust=$rust_exit, self=$self_exit)"
