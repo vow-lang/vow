@@ -152,6 +152,36 @@ def test_insufficient_material(engine: Engine) -> list[str]:
     return failures
 
 
+def test_minor_mop_up(engine: Engine) -> list[str]:
+    failures: list[str] = []
+    _, kbb_corner = engine.score(
+        "7k/8/4K3/8/8/BB6/8/8 w - - 0 1", depth=1
+    )
+    _, kbb_centre = engine.score(
+        "8/8/8/4k3/8/BB6/2K5/8 w - - 0 1", depth=1
+    )
+    if kbb_corner - kbb_centre < 120:
+        failures.append(
+            "KBBvK: expected a corner mop-up margin of at least 120 cp, "
+            f"got {kbb_corner - kbb_centre} cp"
+        )
+
+    # The c1 bishop controls a1/h8. The otherwise identical wrong-corner
+    # position puts the bare king on a8, which KBN cannot mate in.
+    _, kbn_right_corner = engine.score(
+        "7k/8/4K3/8/8/3N4/8/2B5 w - - 0 1", depth=1
+    )
+    _, kbn_wrong_corner = engine.score(
+        "k7/8/4K3/8/8/3N4/8/2B5 w - - 0 1", depth=1
+    )
+    if kbn_right_corner - kbn_wrong_corner < 100:
+        failures.append(
+            "KBNvK: expected the bishop-controlled corner to lead by at least "
+            f"100 cp, got {kbn_right_corner - kbn_wrong_corner} cp"
+        )
+    return failures
+
+
 def king_distance(a: int, b: int) -> int:
     return max(abs(a % 8 - b % 8), abs(a // 8 - b // 8))
 
@@ -331,17 +361,20 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine", required=True, help="UCI engine command")
     parser.add_argument("--stockfish", default="stockfish", help="Stockfish command")
-    parser.add_argument("--pieces", default="Q", choices=("Q", "R", "QR"))
-    parser.add_argument("--positions-per-piece", type=int, default=4)
+    parser.add_argument("--pieces", default="QR", choices=("Q", "R", "QR"))
+    parser.add_argument("--positions-per-piece", type=int, default=10)
     parser.add_argument("--seed", type=int, default=909)
-    parser.add_argument("--engine-depth", type=int, default=3)
-    parser.add_argument("--defender-depth", type=int, default=6)
-    parser.add_argument("--draws-only", action="store_true")
+    parser.add_argument("--engine-depth", type=int, default=4)
+    parser.add_argument("--defender-depth", type=int, default=8)
+    parser.add_argument(
+        "--draws-only", action="store_true", help="skip seeded conversion games"
+    )
     args = parser.parse_args()
 
     engine = Engine(args.engine)
     try:
         failures = test_insufficient_material(engine)
+        failures.extend(test_minor_mop_up(engine))
         if not args.draws_only:
             failures.extend(
                 test_conversion(
