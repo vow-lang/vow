@@ -484,6 +484,17 @@ for vow_file in examples/*.vow; do
 done
 echo ""
 
+# ─── Section 3b: Chess Self-Tests ──────────────────────────────────
+
+section_begin "Section 3b: Chess Self-Tests"
+chess_test_log="$TMPDIR/chess-self-tests.log"
+if VOWC_BIN="$SELF" bash tests/chess/tests.sh >"$chess_test_log" 2>&1; then
+    pass "chess/perft-captest"
+else
+    fail "chess/perft-captest" "$(tail -20 "$chess_test_log")"
+fi
+echo ""
+
 # ─── Section 4: Run Tests (tests/run/) ────────────────────────────
 
 section_begin "Section 4: Run Tests"
