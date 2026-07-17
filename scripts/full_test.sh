@@ -501,6 +501,14 @@ printf '%s\n' \
     'go depth 2' \
     'quit' > "$chess_threefold_input"
 
+chess_history_reset_input="$TMPDIR/chess_history_reset.in"
+printf '%s\n' \
+    'position fen 7k/8/5n2/8/8/8/8/K2Q4 w - - 0 1 moves a1a2 f6g8 a2a1 g8f6 a1a2 f6g8 a2a1' \
+    'go depth 2' \
+    'position fen 6nk/8/8/8/8/8/8/K2Q4 b - - 7 4' \
+    'go depth 2' \
+    'quit' > "$chess_history_reset_input"
+
 check_chess_threefold_history() {
     local label="$1" bin="$2"
     local output="" status=0
@@ -516,15 +524,36 @@ check_chess_threefold_history() {
     fi
 }
 
+check_chess_history_reset() {
+    local label="$1" bin="$2"
+    local output="" status=0 first_depth="" second_depth=""
+    output=$(run_self_bin "$bin" < "$chess_history_reset_input") || status=$?
+    first_depth=$(grep '^info depth 2 ' <<< "$output" | sed -n '1p') || true
+    second_depth=$(grep '^info depth 2 ' <<< "$output" | sed -n '2p') || true
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif ! grep -Eq '^info depth 2 score cp 0 .* pv g8f6$' <<< "$first_depth"; then
+        fail "$label" "first search did not find the history draw"
+    elif ! grep -Eq '^info depth 2 score cp -[1-9][0-9]* ' <<< "$second_depth"; then
+        fail "$label" "replacement position retained stale repetition history"
+    else
+        pass "$label"
+    fi
+}
+
 if [ -x "$chess_rust" ]; then
     check_chess_threefold_history "chess/history-threefold/rust" "$chess_rust"
+    check_chess_history_reset "chess/history-reset/rust" "$chess_rust"
 else
     fail "chess/history-threefold/rust" "binary not built"
+    fail "chess/history-reset/rust" "binary not built"
 fi
 if [ -x "$chess_self" ]; then
     check_chess_threefold_history "chess/history-threefold/self" "$chess_self"
+    check_chess_history_reset "chess/history-reset/self" "$chess_self"
 else
     fail "chess/history-threefold/self" "binary not built"
+    fail "chess/history-reset/self" "binary not built"
 fi
 echo ""
 

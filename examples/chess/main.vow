@@ -2238,8 +2238,8 @@ fn handle_position(tokens: Vec<String>, current: Board, ztab: Vec<i64>, game_rep
 fn reset_for_new_game(us: UciState) {
     // Canonical per-game reset point: cutechess-cli reuses one engine process
     // across a match, so ucinewgame is the only per-game teardown signal. The
-    // killer/history/repetition tables are rebuilt fresh per `go`, so only the
-    // board needs resetting here.
+    // killer/history tables are rebuilt fresh per `go`, so only the board and
+    // persistent game-position history need resetting here.
     //
     // The transposition table is intentionally left WARM across games. It is a
     // persistent root-arena Vec aliased into every search; entries store the full
@@ -2252,6 +2252,7 @@ fn reset_for_new_game(us: UciState) {
     // mate-score ply-adjustment tracked in #912 (which fixes it for both the
     // cross-game and within-game transposition cases at once).
     us.board = start_board();
+    seed_game_history(us.board, us.ztab, us.game_rep);
 }
 
 fn handle_perft(tokens: Vec<String>, b: Board) [io] {
