@@ -1482,6 +1482,21 @@ fn halfmovetest(ztab: Vec<i64>, tt: Vec<TTEntry>, pst: Vec<i64>) -> i64 [io, rea
         bad = bad + 1;
     }
 
+    // Deeper-entry probe: a depth-10 entry keyed to this position but populated at a
+    // low clock must not be trusted at halfmove 90 with a depth-1 request. The request
+    // horizon (b.halfmove < 100 - 1) says "safe", but the entry summarizes a subtree
+    // that crosses the boundary (90 + 10 == 100), so the score cutoff must be suppressed.
+    let deep_board: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 90 1")), 0);
+    ttv[tt_idx] = TTEntry { key: low_key, depth: 10, score: 12345, flag: TT_EXACT, movekey: 0 };
+    ss.stopped = 0;
+    ss.nodes = 0;
+    ss.rep[0] = 0;
+    ss.rep[1] = 0;
+    let deep_score: i64 = negamax(deep_board, 1, 1, -INF, INF, ss);
+    if deep_score == 12345 {
+        bad = bad + 1;
+    }
+
     ttv[tt_idx] = TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 };
     let null_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
     let null_score: i64 = negamax(near_boundary, 3, 1, -1, 1, null_ss);
@@ -1648,7 +1663,11 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     let mut tt_move_key: i64 = 0;
     if e.flag != 0 && e.key == zkey {
         tt_move_key = e.movekey;
-        if !fifty_move_in_horizon && e.depth >= d {
+        // The entry summarizes an e.depth-ply subtree, so gate the score cutoff on
+        // the entry's own horizon: a deeper entry populated at a lower clock could
+        // otherwise leak a 50-move-boundary-dependent score (compute_zkey omits halfmove).
+        let entry_in_horizon: bool = b.halfmove >= FIFTY_MOVE_PLIES - e.depth;
+        if !entry_in_horizon && e.depth >= d {
             if e.flag == TT_EXACT {
                 return e.score;
             }
