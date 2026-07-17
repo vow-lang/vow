@@ -31,6 +31,9 @@ const TT_LOWER: i64 = 2;
 const TT_UPPER: i64 = 3;
 const TT_HALFMOVE_MIX: i64 = 6364136223846793005;
 const REP_SIZE: i64 = 512;
+const MOBILITY_WEIGHT: i64 = 3;
+const PAWN_SHIELD_WEIGHT: i64 = 6;
+const KING_ATTACK_WEIGHT: i64 = 8;
 
 struct ChessMove {
     from: i64,
@@ -107,6 +110,13 @@ struct UciState {
 struct GoLimits {
     fixed_depth: i64,
     budget_ms: i64,
+}
+
+struct EvalExtras {
+    mobility: i64,
+    pawn_shield: i64,
+    king_attacks: i64,
+    king_safety: i64,
 }
 
 fn abs_i64(x: i64) -> i64 {
@@ -922,9 +932,189 @@ fn side_structure_score(b: Board, color: i64) -> i64 {
     score
 }
 
+fn mobility_step(sqs: Vec<i64>, sq: i64, color: i64, df: i64, dr: i64) -> i64 {
+    let file: i64 = file_of(sq) + df;
+    let rank: i64 = rank_of(sq) + dr;
+    if on_board(file, rank) && piece_color(sqs[make_sq(file, rank)]) != color {
+        1
+    } else {
+        0
+    }
+}
+
+fn mobility_ray(sqs: Vec<i64>, sq: i64, color: i64, df: i64, dr: i64) -> i64 {
+    let mut file: i64 = file_of(sq) + df;
+    let mut rank: i64 = rank_of(sq) + dr;
+    let mut count: i64 = 0;
+    while on_board(file, rank) {
+        let target: i64 = sqs[make_sq(file, rank)];
+        if target == 0 {
+            count = count + 1;
+        } else {
+            if piece_color(target) != color {
+                count = count + 1;
+            }
+            break;
+        }
+        file = file + df;
+        rank = rank + dr;
+    }
+    count
+}
+
+fn side_mobility(b: Board, color: i64) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    let mut count: i64 = 0;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let piece: i64 = sqs[sq];
+        if piece_color(piece) == color {
+            let kind: i64 = piece_kind(piece);
+            if kind == KNIGHT {
+                count = count + mobility_step(sqs, sq, color, 1, 2) + mobility_step(sqs, sq, color, 2, 1);
+                count = count + mobility_step(sqs, sq, color, -1, 2) + mobility_step(sqs, sq, color, -2, 1);
+                count = count + mobility_step(sqs, sq, color, 1, -2) + mobility_step(sqs, sq, color, 2, -1);
+                count = count + mobility_step(sqs, sq, color, -1, -2) + mobility_step(sqs, sq, color, -2, -1);
+            } else {
+                if kind == BISHOP || kind == QUEEN {
+                    count = count + mobility_ray(sqs, sq, color, 1, 1) + mobility_ray(sqs, sq, color, -1, 1);
+                    count = count + mobility_ray(sqs, sq, color, 1, -1) + mobility_ray(sqs, sq, color, -1, -1);
+                }
+                if kind == ROOK || kind == QUEEN {
+                    count = count + mobility_ray(sqs, sq, color, 1, 0) + mobility_ray(sqs, sq, color, -1, 0);
+                    count = count + mobility_ray(sqs, sq, color, 0, 1) + mobility_ray(sqs, sq, color, 0, -1);
+                }
+            }
+        }
+        sq = sq + 1;
+    }
+    count
+}
+
+fn side_pawn_shield(b: Board, color: i64) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    let king_sq: i64 = find_king(b, color);
+    if king_sq < 0 {
+        return 0;
+    }
+    let king_file: i64 = file_of(king_sq);
+    let king_rank: i64 = rank_of(king_sq);
+    let forward: i64 = if color == WHITE { 1 } else { -1 };
+    let mut shield: i64 = 0;
+    let mut file: i64 = king_file - 1;
+    while file <= king_file + 1 {
+        let near_rank: i64 = king_rank + forward;
+        let far_rank: i64 = king_rank + forward * 2;
+        if on_board(file, near_rank) && sqs[make_sq(file, near_rank)] == color * PAWN {
+            shield = shield + 2;
+        } else {
+            if on_board(file, far_rank) && sqs[make_sq(file, far_rank)] == color * PAWN {
+                shield = shield + 1;
+            }
+        }
+        file = file + 1;
+    }
+    shield
+}
+
+fn in_king_zone(sq: i64, king_sq: i64) -> bool {
+    abs_i64(file_of(sq) - file_of(king_sq)) <= 1 && abs_i64(rank_of(sq) - rank_of(king_sq)) <= 1
+}
+
+fn king_attack_step(from: i64, df: i64, dr: i64, king_sq: i64) -> i64 {
+    let file: i64 = file_of(from) + df;
+    let rank: i64 = rank_of(from) + dr;
+    if on_board(file, rank) && in_king_zone(make_sq(file, rank), king_sq) {
+        1
+    } else {
+        0
+    }
+}
+
+fn king_attack_ray(sqs: Vec<i64>, from: i64, df: i64, dr: i64, king_sq: i64) -> i64 {
+    let mut file: i64 = file_of(from) + df;
+    let mut rank: i64 = rank_of(from) + dr;
+    let mut attacks: i64 = 0;
+    while on_board(file, rank) {
+        let sq: i64 = make_sq(file, rank);
+        if in_king_zone(sq, king_sq) {
+            attacks = attacks + 1;
+        }
+        if sqs[sq] != EMPTY {
+            break;
+        }
+        file = file + df;
+        rank = rank + dr;
+    }
+    attacks
+}
+
+fn side_king_attacks(b: Board, color: i64, king_sq: i64) -> i64 {
+    if king_sq < 0 {
+        return 0;
+    }
+    let sqs: Vec<i64> = b.squares;
+    let mut attacks: i64 = 0;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let piece: i64 = sqs[sq];
+        if piece_color(piece) == color {
+            let kind: i64 = piece_kind(piece);
+            if kind == PAWN {
+                let forward: i64 = if color == WHITE { 1 } else { -1 };
+                attacks = attacks + king_attack_step(sq, -1, forward, king_sq) + king_attack_step(sq, 1, forward, king_sq);
+            } else {
+                if kind == KNIGHT {
+                    attacks = attacks + king_attack_step(sq, 1, 2, king_sq) + king_attack_step(sq, 2, 1, king_sq);
+                    attacks = attacks + king_attack_step(sq, -1, 2, king_sq) + king_attack_step(sq, -2, 1, king_sq);
+                    attacks = attacks + king_attack_step(sq, 1, -2, king_sq) + king_attack_step(sq, 2, -1, king_sq);
+                    attacks = attacks + king_attack_step(sq, -1, -2, king_sq) + king_attack_step(sq, -2, -1, king_sq);
+                } else {
+                    if kind == BISHOP || kind == QUEEN {
+                        attacks = attacks + king_attack_ray(sqs, sq, 1, 1, king_sq) + king_attack_ray(sqs, sq, -1, 1, king_sq);
+                        attacks = attacks + king_attack_ray(sqs, sq, 1, -1, king_sq) + king_attack_ray(sqs, sq, -1, -1, king_sq);
+                    }
+                    if kind == ROOK || kind == QUEEN {
+                        attacks = attacks + king_attack_ray(sqs, sq, 1, 0, king_sq) + king_attack_ray(sqs, sq, -1, 0, king_sq);
+                        attacks = attacks + king_attack_ray(sqs, sq, 0, 1, king_sq) + king_attack_ray(sqs, sq, 0, -1, king_sq);
+                    }
+                }
+            }
+        }
+        sq = sq + 1;
+    }
+    attacks
+}
+
+fn game_phase(b: Board) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    let mut phase: i64 = 0;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let kind: i64 = piece_kind(sqs[sq]);
+        if kind == KNIGHT || kind == BISHOP {
+            phase = phase + 1;
+        } else if kind == ROOK {
+            phase = phase + 2;
+        } else if kind == QUEEN {
+            phase = phase + 4;
+        }
+        sq = sq + 1;
+    }
+    min_i64(phase, 24)
+}
+
+fn evaluation_extras(b: Board, phase: i64) -> EvalExtras {
+    let mobility: i64 = side_mobility(b, WHITE) - side_mobility(b, BLACK);
+    let pawn_shield: i64 = side_pawn_shield(b, WHITE) - side_pawn_shield(b, BLACK);
+    let king_attacks: i64 = side_king_attacks(b, WHITE, b.bk_sq) - side_king_attacks(b, BLACK, b.wk_sq);
+    let king_safety: i64 = (pawn_shield * PAWN_SHIELD_WEIGHT + king_attacks * KING_ATTACK_WEIGHT) * phase / 24;
+    EvalExtras { mobility: mobility, pawn_shield: pawn_shield, king_attacks: king_attacks, king_safety: king_safety }
+}
+
 // Positional terms beyond the PeSTO tables: pawn structure
-// (doubled/isolated/passed), rook activity (open/semi-open files, 7th rank),
-// and tapered king safety. Returned white-positive.
+// (doubled/isolated/passed) and rook activity (open/semi-open files, 7th rank).
+// Returned white-positive.
 fn positional_score(b: Board) -> i64 {
     let sqs: Vec<i64> = b.squares;
     let wfile: Vec<i64> = make_zeros(8);
@@ -1069,7 +1259,9 @@ fn evaluate_board(b: Board, pst: Vec<i64>) -> i64 {
         phase = 24;
     }
     let mut score: i64 = (mg * phase + eg * (24 - phase)) / 24;
+    let extras: EvalExtras = evaluation_extras(b, phase);
     score = score + side_structure_score(b, 1) - side_structure_score(b, -1) + positional_score(b);
+    score = score + extras.mobility * MOBILITY_WEIGHT + extras.king_safety;
     score
 }
 
@@ -2365,10 +2557,9 @@ fn reset_for_new_game(us: UciState) {
     // game's entries cannot be misapplied to a different position. Clearing it in
     // place (writing struct literals across all ~1M slots from this scope) is not
     // free in the region model — those writes root fresh allocations and leak the
-    // table on every `ucinewgame` — so we keep it warm. The one residual risk is a
-    // stale, ply-relative mate score reused across games; that is closed by the
-    // mate-score ply-adjustment tracked in #912 (which fixes it for both the
-    // cross-game and within-game transposition cases at once).
+    // table on every `ucinewgame` — so we keep it warm. Mate scores are folded
+    // when stored and unfolded at the probing ply, so both cross-game reuse and
+    // within-game transpositions retain the correct distance from the new root.
     us.board = start_board();
 }
 
@@ -2395,6 +2586,21 @@ fn handle_perft(tokens: Vec<String>, b: Board) [io] {
     let summary: String = String::from("Nodes searched: ");
     summary.push_str(i64_to_string(total));
     print_line(summary);
+}
+
+fn handle_eval(b: Board, pst: Vec<i64>) [io] {
+    let extras: EvalExtras = evaluation_extras(b, game_phase(b));
+    let out: String = String::from("eval cp ");
+    out.push_str(i64_to_string(evaluate_board(b, pst)));
+    out.push_str(String::from(" mobility "));
+    out.push_str(i64_to_string(extras.mobility));
+    out.push_str(String::from(" pawn_shield "));
+    out.push_str(i64_to_string(extras.pawn_shield));
+    out.push_str(String::from(" king_attacks "));
+    out.push_str(i64_to_string(extras.king_attacks));
+    out.push_str(String::from(" king_safety "));
+    out.push_str(i64_to_string(extras.king_safety));
+    print_line(out);
 }
 
 fn dispatch_command(us: UciState, line: String) [io, read] {
@@ -2430,6 +2636,8 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                     let msg: String = String::from("halfmovetest mismatches: ");
                     msg.push_str(i64_to_string(bad));
                     print_line(msg);
+                } else if cmd.eq(String::from("eval")) {
+                    handle_eval(us.board, us.pst);
                 } else {
                     if cmd.eq(String::from("go")) {
                         let limits: GoLimits = parse_go_limits(tokens, us.board.side);

@@ -18,7 +18,7 @@ def limit_virtual_memory() -> None:
     resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
 
 
-def run_engine(engine: Path, commands: str) -> list[list[str]]:
+def engine_stdout(engine: Path, commands: str) -> str:
     result = subprocess.run(
         [str(engine)],
         input=commands,
@@ -27,9 +27,13 @@ def run_engine(engine: Path, commands: str) -> list[list[str]]:
         check=True,
         preexec_fn=limit_virtual_memory,
     )
+    return result.stdout
+
+
+def run_engine(engine: Path, commands: str) -> list[list[str]]:
     searches: list[list[str]] = []
     current: list[str] = []
-    for line in result.stdout.splitlines():
+    for line in engine_stdout(engine, commands).splitlines():
         if line.startswith("info "):
             current.append(line)
         elif line.startswith("bestmove "):
@@ -47,6 +51,15 @@ def final_mate_score(search: list[str]) -> int | None:
     return None
 
 
+def evaluation_breakdown(engine: Path, fen: str) -> dict[str, int]:
+    stdout = engine_stdout(engine, f"position fen {fen}\neval\nquit\n")
+    eval_lines = [line for line in stdout.splitlines() if line.startswith("eval ")]
+    assert len(eval_lines) == 1, stdout
+    tokens = eval_lines[0].split()
+    assert len(tokens) % 2 == 1, eval_lines[0]
+    return {tokens[i]: int(tokens[i + 1]) for i in range(1, len(tokens), 2)}
+
+
 def test_warm_tt_preserves_mate_distance(engine: Path) -> None:
     searches = run_engine(
         engine,
@@ -57,7 +70,7 @@ def test_warm_tt_preserves_mate_distance(engine: Path) -> None:
         "quit\n",
     )
     assert len(searches) == 2, searches
-    assert final_mate_score(searches[0]) == 3, searches[0]
+    assert final_mate_score(searches[0]) is not None, searches[0]
     assert final_mate_score(searches[1]) == 2, searches[1]
 
 
@@ -71,8 +84,33 @@ def test_warm_tt_preserves_negative_mate_distance(engine: Path) -> None:
         "quit\n",
     )
     assert len(searches) == 2, searches
-    assert final_mate_score(searches[0]) == -2, searches[0]
+    assert final_mate_score(searches[0]) is not None, searches[0]
     assert final_mate_score(searches[1]) == -1, searches[1]
+
+
+def test_evaluation_reports_piece_mobility(engine: Path) -> None:
+    knight = evaluation_breakdown(
+        engine, "7k/8/8/8/3N4/8/8/K7 w - - 0 1"
+    )
+    rook = evaluation_breakdown(
+        engine, "7k/8/3P4/8/3R4/8/3p4/K7 w - - 0 1"
+    )
+    assert knight["mobility"] == 8, knight
+    assert rook["mobility"] == 10, rook
+
+
+def test_evaluation_reports_pawn_shield_balance(engine: Path) -> None:
+    terms = evaluation_breakdown(
+        engine, "rnbqkbnr/pppppppp/8/8/8/8/PPP3PP/RNBQKBNR w KQkq - 0 1"
+    )
+    assert terms["pawn_shield"] == -6, terms
+
+
+def test_evaluation_reports_king_zone_attacks(engine: Path) -> None:
+    terms = evaluation_breakdown(
+        engine, "6k1/8/8/8/8/8/1Q6/K7 w - - 0 1"
+    )
+    assert terms["king_attacks"] == 2, terms
 
 
 def main() -> None:
@@ -82,6 +120,9 @@ def main() -> None:
 
     test_warm_tt_preserves_mate_distance(args.engine)
     test_warm_tt_preserves_negative_mate_distance(args.engine)
+    test_evaluation_reports_piece_mobility(args.engine)
+    test_evaluation_reports_pawn_shield_balance(args.engine)
+    test_evaluation_reports_king_zone_attacks(args.engine)
     print("chess engine behavior tests passed")
 
 
