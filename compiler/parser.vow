@@ -996,6 +996,8 @@ fn parse_match_expr(p: Parser) -> i64 {
         arm_items.push(body);
         if at(p, tok_comma()) {
             let _c: Token = advance(p);
+        } else {
+            break;
         }
     }
     let _rb: bool = expect(p, tok_rbrace());
@@ -1005,16 +1007,17 @@ fn parse_match_expr(p: Parser) -> i64 {
 
 fn parse_pattern(p: Parser) -> i64 {
     let t: Token = peek(p);
+    let span_start: i64 = t.span_start;
     let tag: i64 = t.tag;
     if tag == tok_underscore() {
         let _adv: Token = advance(p);
-        arena_add_pat(p.arena, PAT_WILD(), 0, 0, 0)
+        arena_add_pat(p.arena, PAT_WILD(), 0, 0, span_pack_to_here(p, span_start))
     } else if tag == tok_lit_int() || tag == tok_lit_int_suffixed() {
         let _adv: Token = advance(p);
-        arena_add_pat(p.arena, PAT_LIT(), EXPR_LIT_INT(), t.int_val, 0)
+        arena_add_pat(p.arena, PAT_LIT(), EXPR_LIT_INT(), t.int_val, span_pack_to_here(p, span_start))
     } else if tag == tok_lit_bool() {
         let _adv: Token = advance(p);
-        arena_add_pat(p.arena, PAT_LIT(), EXPR_LIT_BOOL(), t.int_val, 0)
+        arena_add_pat(p.arena, PAT_LIT(), EXPR_LIT_BOOL(), t.int_val, span_pack_to_here(p, span_start))
     } else if tag == tok_ident() {
         let _adv: Token = advance(p);
         let sid: i64 = arena_intern_str(p.arena, t.str_val);
@@ -1038,9 +1041,9 @@ fn parse_pattern(p: Parser) -> i64 {
                 }
                 let _rp: bool = expect(p, tok_rparen());
                 let inner_lid: i64 = arena_add_list(p.arena, inner_items);
-                arena_add_pat(p.arena, PAT_ENUM(), path_lid, inner_lid, 0)
+                arena_add_pat(p.arena, PAT_ENUM(), path_lid, inner_lid, span_pack_to_here(p, span_start))
             } else {
-                arena_add_pat(p.arena, PAT_ENUM(), path_lid, arena_add_list(p.arena, Vec::new()), 0)
+                arena_add_pat(p.arena, PAT_ENUM(), path_lid, arena_add_list(p.arena, Vec::new()), span_pack_to_here(p, span_start))
             }
         } else if at(p, tok_lbrace()) {
             let _lb: Token = advance(p);
@@ -1057,15 +1060,15 @@ fn parse_pattern(p: Parser) -> i64 {
             }
             let _rb: bool = expect(p, tok_rbrace());
             let fields_lid: i64 = arena_add_list(p.arena, field_items);
-            arena_add_pat(p.arena, PAT_STRUCT(), sid, fields_lid, 0)
+            arena_add_pat(p.arena, PAT_STRUCT(), sid, fields_lid, span_pack_to_here(p, span_start))
         } else {
             let is_mut: i64 = 0;
-            arena_add_pat(p.arena, PAT_IDENT(), sid, is_mut, 0)
+            arena_add_pat(p.arena, PAT_IDENT(), sid, is_mut, span_pack_to_here(p, span_start))
         }
     } else if tag == tok_kw_mut() {
         let _m: Token = advance(p);
         let sid: i64 = expect_ident(p);
-        arena_add_pat(p.arena, PAT_IDENT(), sid, 1, 0)
+        arena_add_pat(p.arena, PAT_IDENT(), sid, 1, span_pack_to_here(p, span_start))
     } else if tag == tok_lparen() {
         let _lp: Token = advance(p);
         let elem_items: Vec<i64> = Vec::new();
@@ -1077,9 +1080,9 @@ fn parse_pattern(p: Parser) -> i64 {
         }
         let _rp: bool = expect(p, tok_rparen());
         let elems_lid: i64 = arena_add_list(p.arena, elem_items);
-        arena_add_pat(p.arena, PAT_TUPLE(), elems_lid, 0, 0)
+        arena_add_pat(p.arena, PAT_TUPLE(), elems_lid, 0, span_pack_to_here(p, span_start))
     } else {
         push_error(p, String::from("unexpected token in pattern"));
-        arena_add_pat(p.arena, PAT_WILD(), 0, 0, 0)
+        arena_add_pat(p.arena, PAT_WILD(), 0, 0, span_pack(t.span_start, t.span_len))
     }
 }

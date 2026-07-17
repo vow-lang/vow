@@ -13,10 +13,12 @@ pub fn check_exhaustive(
     file: &str,
     emitter: &mut dyn DiagnosticEmitter,
 ) {
-    if arms
-        .iter()
-        .any(|arm| matches!(arm.pattern.kind, PatKind::Wildcard))
-    {
+    if arms.iter().any(|arm| {
+        matches!(
+            arm.pattern.kind,
+            PatKind::Wildcard | PatKind::Ident { is_mut: false, .. }
+        )
+    }) {
         return;
     }
 
@@ -198,6 +200,25 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         let env = TypeEnv::new();
         let arms = vec![make_arm(PatKind::Wildcard)];
+        check_exhaustive(
+            &Ty::Bool,
+            &arms,
+            &env,
+            dummy_span(),
+            "test.vow",
+            &mut emitter,
+        );
+        assert!(emitter.0.is_empty());
+    }
+
+    #[test]
+    fn immutable_identifier_binding_is_always_exhaustive() {
+        let mut emitter = TestEmitter(vec![]);
+        let env = TypeEnv::new();
+        let arms = vec![make_arm(PatKind::Ident {
+            name: "value".to_string(),
+            is_mut: false,
+        })];
         check_exhaustive(
             &Ty::Bool,
             &arms,

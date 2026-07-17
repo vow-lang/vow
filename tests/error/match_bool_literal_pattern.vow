@@ -1,0 +1,13 @@
+// TEST: error-code UnsupportedPattern
+module MatchBoolLiteralPattern
+
+fn f(value: bool) -> i64 {
+    match value {
+        true => 5,
+        _ => 9,
+    }
+}
+
+fn main() -> i32 {
+    0
+}

@@ -1,0 +1,28 @@
+// TEST: error-code UnsupportedPattern
+module MatchParsedUnsupportedPatterns
+
+enum E {
+    N,
+}
+
+fn mutable_binding(value: E) -> i64 {
+    match value {
+        mut x => 1,
+    }
+}
+
+fn tuple_pattern(value: E) -> i64 {
+    match value {
+        (x) => 2,
+    }
+}
+
+fn struct_pattern(value: E) -> i64 {
+    match value {
+        Point { x: x } => 3,
+    }
+}
+
+fn main() -> i32 {
+    0
+}

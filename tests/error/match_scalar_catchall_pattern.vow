@@ -1,0 +1,18 @@
+// TEST: error-code UnsupportedPattern
+module MatchScalarCatchallPattern
+
+fn wildcard(value: i64) -> i64 {
+    match value {
+        _ => 1,
+    }
+}
+
+fn binding(value: bool) -> i64 {
+    match value {
+        x => 2,
+    }
+}
+
+fn main() -> i32 {
+    0
+}
