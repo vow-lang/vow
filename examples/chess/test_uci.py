@@ -228,6 +228,27 @@ class UciGoTest(unittest.TestCase):
 
         self.assertRegex(bestmove, BESTMOVE_RE)
 
+    def test_go_infinite_quit_without_stop_shuts_down(self) -> None:
+        self.engine.send("position startpos")
+        self.engine.send("go infinite")
+
+        # Let the search spin up so check_stop is actively polling stdin.
+        self.engine.read_for(duration=0.3)
+
+        # A bare `quit` (no preceding `stop`) must end the deadline-free search
+        # and shut the engine down promptly, not hang until MAX_DEPTH.
+        self.engine.send("quit")
+
+        bestmove = self.engine.wait_for(
+            lambda line: line.startswith("bestmove "), timeout=10
+        )
+        self.assertRegex(bestmove, BESTMOVE_RE)
+
+        # Load-bearing assertion: the process actually terminates. On the pre-fix
+        # engine this wait times out (search grinds on toward MAX_DEPTH).
+        self.engine.proc.wait(timeout=10)
+        self.assertEqual(self.engine.proc.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

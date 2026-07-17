@@ -39,7 +39,7 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `captest N`   | Differential gate: asserts the quiescence capture generator equals the tactical subset of legal moves, to depth `N` (prints mismatch count). |
 | `stop`        | Polled during search (checked every 1024 nodes) and honored.          |
 | `setoption`   | Accepted and ignored (no configurable options yet).                  |
-| `quit`        | Exits.                                                                 |
+| `quit`        | Exits. Polled during search and honored even without a prior `stop`.  |
 
 Moves are read and emitted in long algebraic form (`e2e4`, `e7e8q`).
 

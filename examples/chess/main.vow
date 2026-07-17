@@ -1463,6 +1463,11 @@ fn check_stop(ss: SearchState) [io, read] {
                 ss.stopped = 1;
             } else {
                 if trimmed.len() > 0 {
+                    // `quit` must end a deadline-free infinite search; it is still
+                    // queued so the post-search drain dispatches it and shuts down.
+                    if trimmed.eq(String::from("quit")) {
+                        ss.stopped = 1;
+                    }
                     ss.pending.push(trimmed);
                 }
             }
