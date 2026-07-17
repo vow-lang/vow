@@ -299,14 +299,10 @@ def play_kx_game(
             )
         previous_fen = actual_fen
 
-    # A mate delivered on the final allowed ply has no responding bestmove, so
-    # probe once without making a 101st move.
-    probe = defender.bestmove(fen, moves, 1)
-    if probe in {"0000", "(none)"}:
-        _, in_check = defender.display(fen, moves)
-        if in_check:
-            return ConversionResult(True, max_plies, "checkmate", moves)
-        return ConversionResult(False, max_plies, "stalemate", moves)
+    # With an even max_plies the defender (bare king) always moves on odd
+    # plies, so every checkmate or stalemate it faces is detected in-loop on
+    # that move. A loop that runs to completion is therefore always a
+    # non-conversion: the 50-move limit was reached without mate.
     return ConversionResult(False, max_plies, "50-move limit", moves)
 
 
