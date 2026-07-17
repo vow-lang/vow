@@ -1481,6 +1481,13 @@ fn halfmovetest(ztab: Vec<i64>, tt: Vec<TTEntry>, pst: Vec<i64>) -> i64 [io, rea
     if boundary_score != 0 {
         bad = bad + 1;
     }
+
+    ttv[tt_idx] = TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 };
+    let null_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
+    let null_score: i64 = negamax(near_boundary, 3, 1, -1, 1, null_ss);
+    if null_score != 0 {
+        bad = bad + 1;
+    }
     bad
 }
 
@@ -1657,7 +1664,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     // Null-move pruning: if we can pass and still fail high, the position is so
     // good that we prune. Skipped in check and when the side to move has only
     // pawns (zugzwang risk).
-    if d >= 3 && !in_chk && beta < MATE_THRESHOLD && beta > -MATE_THRESHOLD && has_non_pawn_material(b, b.side) {
+    if d >= 3 && !in_chk && !fifty_move_in_horizon && beta < MATE_THRESHOLD && beta > -MATE_THRESHOLD && has_non_pawn_material(b, b.side) {
         let r_null: i64 = 2;
         let saved_ep: i64 = b.ep;
         b.ep = -1;
