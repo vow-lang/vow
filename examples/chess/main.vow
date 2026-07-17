@@ -29,6 +29,7 @@ const TT_MASK: i64 = 1048575;
 const TT_EXACT: i64 = 1;
 const TT_LOWER: i64 = 2;
 const TT_UPPER: i64 = 3;
+const TT_HALFMOVE_MIX: i64 = 6364136223846793005;
 const REP_SIZE: i64 = 512;
 
 struct ChessMove {
@@ -1244,6 +1245,11 @@ fn compute_zkey(b: Board, ztab: Vec<i64>) -> i64 {
     key
 }
 
+fn compute_tt_key(zkey: i64, halfmove: i64) -> i64 {
+    // Odd multiplication is one-to-one modulo 2^64 for a fixed position key.
+    zkey ^ (halfmove * TT_HALFMOVE_MIX)
+}
+
 // Ordering score. Tacticals (captures, promotions) occupy bands far above any
 // quiet move so that killer/history bonuses on quiets can never overtake a real
 // capture. Relative order within tacticals is unchanged from the original
@@ -1482,25 +1488,64 @@ fn halfmovetest(ztab: Vec<i64>, tt: Vec<TTEntry>, pst: Vec<i64>) -> i64 [io, rea
         bad = bad + 1;
     }
 
-    // Deeper-entry probe: a depth-10 entry keyed to this position but populated at a
-    // low clock must not be trusted at halfmove 90 with a depth-1 request. The request
-    // horizon (b.halfmove < 100 - 1) says "safe", but the entry summarizes a subtree
-    // that crosses the boundary (90 + 10 == 100), so the score cutoff must be suppressed.
-    let deep_board: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 90 1")), 0);
-    ttv[tt_idx] = TTEntry { key: low_key, depth: 10, score: 12345, flag: TT_EXACT, movekey: 0 };
+    // TT score identity includes the exact halfmove clock, even when neither the
+    // requested nor stored nominal depth reaches the boundary.
+    let clock_board: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 90 1")), 0);
+    ttv[tt_idx] = TTEntry { key: low_key, depth: 1, score: 12345, flag: TT_EXACT, movekey: 0 };
     ss.stopped = 0;
     ss.nodes = 0;
     ss.rep[0] = 0;
     ss.rep[1] = 0;
-    let deep_score: i64 = negamax(deep_board, 1, 1, -INF, INF, ss);
+    let clock_score: i64 = negamax(clock_board, 1, 1, -INF, INF, ss);
+    if clock_score == 12345 {
+        bad = bad + 1;
+    }
+
+    // A deeper entry can cross the boundary even when the requested search cannot.
+    // Exact clock qualification must reject this cross-clock score independently of
+    // the requested depth, stored depth, or descendant check extensions.
+    ttv[tt_idx] = TTEntry { key: low_key, depth: 20, score: 12345, flag: TT_EXACT, movekey: 0 };
+    ss.stopped = 0;
+    ss.nodes = 0;
+    ss.rep[0] = 0;
+    ss.rep[1] = 0;
+    let deep_score: i64 = negamax(clock_board, 5, 1, -INF, INF, ss);
     if deep_score == 12345 {
+        bad = bad + 1;
+    }
+
+    // Storage is clock-qualified instead of being suppressed using nominal depth:
+    // descendant check extensions can cross the boundary beyond that estimate.
+    let store_board: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 98 1")), 0);
+    ttv[tt_idx] = TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 };
+    ss.stopped = 0;
+    ss.nodes = 0;
+    ss.rep[0] = 0;
+    ss.rep[1] = 0;
+    let store_score: i64 = negamax(store_board, 1, 1, -INF, INF, ss);
+    let stored: TTEntry = ttv[tt_idx];
+    if stored.flag == 0 || stored.key != compute_tt_key(low_key, 98) || stored.score != store_score {
         bad = bad + 1;
     }
 
     ttv[tt_idx] = TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 };
     let null_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
     let null_score: i64 = negamax(near_boundary, 3, 1, -1, 1, null_ss);
-    if null_score != 0 {
+    if null_score != 0 || near_boundary.halfmove != 99 {
+        bad = bad + 1;
+    }
+
+    // A synthetic null move consumes one reversible ply. Its recursive TT entry
+    // must use the advanced clock, while the caller's board is restored afterward.
+    let null_clock_board: Board = parse_fen(split_words(String::from("7k/8/8/8/8/8/6R1/6K1 w - - 95 1")), 0);
+    let null_position_key: i64 = compute_zkey(null_clock_board, ztab) ^ ztab[768];
+    let null_tt_idx: i64 = null_position_key & TT_MASK;
+    let null_clock_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: ztab, tt: tt, pst: pst, rep: make_zeros(REP_SIZE), pending: Vec::new() };
+    let null_ttv: Vec<TTEntry> = null_clock_ss.tt;
+    null_ttv[null_tt_idx] = TTEntry { key: 0, depth: 0, score: 0, flag: 0, movekey: 0 };
+    negamax(null_clock_board, 4, 1, -1, 1, null_clock_ss);
+    let null_stored: TTEntry = null_ttv[null_tt_idx];
+    if null_stored.flag == 0 || null_stored.key != compute_tt_key(null_position_key, 96) || null_clock_board.halfmove != 95 {
         bad = bad + 1;
     }
     bad
@@ -1628,7 +1673,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     if d <= 0 {
         return quiesce(b, alpha_in, beta_in, 6, ss);
     }
-    let fifty_move_in_horizon: bool = b.halfmove >= FIFTY_MOVE_PLIES - d;
+    let null_move_near_boundary: bool = b.halfmove >= FIFTY_MOVE_PLIES - d;
 
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
@@ -1655,19 +1700,16 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         }
     }
 
-    // Transposition table probe. The full key is stored, so an index collision
-    // from a different position is rejected by the key check.
+    // Repetition and table indexing use the position-only key. TT score identity
+    // also includes the exact halfmove clock because it changes the 50-move result.
     let tt_idx: i64 = zkey & TT_MASK;
+    let tt_key: i64 = compute_tt_key(zkey, b.halfmove);
     let ttv: Vec<TTEntry> = ss.tt;
     let e: TTEntry = ttv[tt_idx];
     let mut tt_move_key: i64 = 0;
-    if e.flag != 0 && e.key == zkey {
+    if e.flag != 0 && e.key == tt_key {
         tt_move_key = e.movekey;
-        // The entry summarizes an e.depth-ply subtree, so gate the score cutoff on
-        // the entry's own horizon: a deeper entry populated at a lower clock could
-        // otherwise leak a 50-move-boundary-dependent score (compute_zkey omits halfmove).
-        let entry_in_horizon: bool = b.halfmove >= FIFTY_MOVE_PLIES - e.depth;
-        if !entry_in_horizon && e.depth >= d {
+        if e.depth >= d {
             if e.flag == TT_EXACT {
                 return e.score;
             }
@@ -1683,13 +1725,16 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     // Null-move pruning: if we can pass and still fail high, the position is so
     // good that we prune. Skipped in check and when the side to move has only
     // pawns (zugzwang risk).
-    if d >= 3 && !in_chk && !fifty_move_in_horizon && beta < MATE_THRESHOLD && beta > -MATE_THRESHOLD && has_non_pawn_material(b, b.side) {
+    if d >= 3 && !in_chk && !null_move_near_boundary && beta < MATE_THRESHOLD && beta > -MATE_THRESHOLD && has_non_pawn_material(b, b.side) {
         let r_null: i64 = 2;
         let saved_ep: i64 = b.ep;
+        let saved_halfmove: i64 = b.halfmove;
         b.ep = -1;
+        b.halfmove = saved_halfmove + 1;
         b.side = -b.side;
         let nscore: i64 = -negamax(b, d - 1 - r_null, ply + 1, -beta, -beta + 1, ss);
         b.side = -b.side;
+        b.halfmove = saved_halfmove;
         b.ep = saved_ep;
         if ss.stopped == 0 && nscore >= beta {
             return beta;
@@ -1739,8 +1784,8 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         }
         if alpha >= beta {
             record_cutoff(ss, b, mv, d, ply);
-            if ss.stopped == 0 && !fifty_move_in_horizon {
-                ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key };
+            if ss.stopped == 0 {
+                ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key };
             }
             return best;
         }
@@ -1748,12 +1793,12 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         i = i + 1;
     }
 
-    if ss.stopped == 0 && !fifty_move_in_horizon {
+    if ss.stopped == 0 {
         let mut flag: i64 = TT_EXACT;
         if best <= alpha_in {
             flag = TT_UPPER;
         }
-        ttv[tt_idx] = TTEntry { key: zkey, depth: d, score: best, flag: flag, movekey: best_move_key };
+        ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: best, flag: flag, movekey: best_move_key };
     }
     best
 }
