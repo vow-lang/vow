@@ -34,7 +34,7 @@ The engine speaks enough of UCI to play in standard GUIs and match runners:
 | `isready`     | Replies `readyok`.                                                    |
 | `ucinewgame`  | Full per-game reset (start position today; all per-game state).       |
 | `position`    | `startpos` or `fen <FEN>`, optionally followed by `moves <uci> ...`.   |
-| `go`          | `depth N`, `movetime MS`, or `wtime`/`btime` (+`winc`/`binc`/`movestogo`) real time management. Emits `info depth/score/nodes/nps/pv`. |
+| `go`          | `depth N`, `movetime MS`, `wtime`/`btime` (+`winc`/`binc`/`movestogo`), or `infinite`. Infinite analysis searches until `stop` or `MAX_DEPTH`. Emits `info depth/score/nodes/nps/pv`. |
 | `perft N`     | Node-count divide to depth `N` (move-generation self-test).           |
 | `captest N`   | Differential gate: asserts the quiescence capture generator equals the tactical subset of legal moves, to depth `N` (prints mismatch count). |
 | `stop`        | Polled during search (checked every 1024 nodes) and honored.          |
@@ -64,6 +64,15 @@ printf 'uci\nposition startpos\ngo depth 4\nquit\n' | examples/chess/.local/ches
 ```
 
 If your environment has a tight `/tmp` quota, keep `TMPDIR=/dev/shm` for builds.
+
+Run the focused UCI regression suite with:
+
+```sh
+python3 -m unittest -v examples/chess/test_uci.py
+```
+
+The suite builds its own engine binary under `examples/chess/.local/` and bounds
+the compiler and engine processes to 2 GB of virtual memory.
 
 ## Playing A Match
 
