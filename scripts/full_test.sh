@@ -509,6 +509,17 @@ printf '%s\n' \
     'go depth 2' \
     'quit' > "$chess_history_reset_input"
 
+chess_long_history_input="$TMPDIR/chess_long_history.in"
+{
+    printf 'position startpos moves'
+    cycle=0
+    while [ "$cycle" -lt 129 ]; do
+        printf ' g1f3 g8f6 f3g1 f6g8'
+        cycle=$((cycle + 1))
+    done
+    printf '\ngo depth 2\nquit\n'
+} > "$chess_long_history_input"
+
 check_chess_threefold_history() {
     local label="$1" bin="$2"
     local output="" status=0
@@ -541,19 +552,38 @@ check_chess_history_reset() {
     fi
 }
 
+check_chess_long_history() {
+    local label="$1" bin="$2"
+    local output="" status=0
+    output=$(run_self_bin "$bin" < "$chess_long_history_input" 2>&1) || status=$?
+    if [ "$status" -ne 0 ]; then
+        fail "$label" "engine exited with status $status"
+    elif grep -q 'IndexOutOfBounds' <<< "$output"; then
+        fail "$label" "engine exceeded the fixed repetition buffer"
+    elif ! grep -Eq '^bestmove [a-h][1-8][a-h][1-8][qrbn]?$' <<< "$output"; then
+        fail "$label" "engine did not emit a legal bestmove"
+    else
+        pass "$label"
+    fi
+}
+
 if [ -x "$chess_rust" ]; then
     check_chess_threefold_history "chess/history-threefold/rust" "$chess_rust"
     check_chess_history_reset "chess/history-reset/rust" "$chess_rust"
+    check_chess_long_history "chess/history-bounded/rust" "$chess_rust"
 else
     fail "chess/history-threefold/rust" "binary not built"
     fail "chess/history-reset/rust" "binary not built"
+    fail "chess/history-bounded/rust" "binary not built"
 fi
 if [ -x "$chess_self" ]; then
     check_chess_threefold_history "chess/history-threefold/self" "$chess_self"
     check_chess_history_reset "chess/history-reset/self" "$chess_self"
+    check_chess_long_history "chess/history-bounded/self" "$chess_self"
 else
     fail "chess/history-threefold/self" "binary not built"
     fail "chess/history-reset/self" "binary not built"
+    fail "chess/history-bounded/self" "binary not built"
 fi
 echo ""
 

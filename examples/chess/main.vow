@@ -1710,12 +1710,16 @@ fn seed_repetition_history(b: Board, game_rep: Vec<i64>, ss: SearchState) {
         return;
     }
 
-    let mut i: i64 = 0;
-    while i < game_rep.len() {
-        ss.rep[i] = game_rep[i];
-        i = i + 1;
+    let mut start: i64 = 0;
+    if game_rep.len() > REP_SIZE {
+        start = game_rep.len() - REP_SIZE;
     }
-    ss.rep_base = game_rep.len() - 1;
+    let mut copied: i64 = 0;
+    while start + copied < game_rep.len() {
+        ss.rep[copied] = game_rep[start + copied];
+        copied = copied + 1;
+    }
+    ss.rep_base = copied - 1;
 }
 
 // Iterative deepening: search depth 1, 2, ..., max_depth. The best move from
