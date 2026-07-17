@@ -133,6 +133,30 @@ fn min_i64(a: i64, b: i64) -> i64 {
     }
 }
 
+// Mate scores include their distance from the current search root. Fold that
+// root-relative ply out before storing in the TT, then restore it when probing
+// from another ply. Negative mate scores use the inverse adjustment so that a
+// longer loss remains preferable.
+fn value_to_tt(score: i64, ply: i64) -> i64 {
+    if score >= MATE_THRESHOLD {
+        return score + ply;
+    }
+    if score <= -MATE_THRESHOLD {
+        return score - ply;
+    }
+    score
+}
+
+fn value_from_tt(score: i64, ply: i64) -> i64 {
+    if score >= MATE_THRESHOLD {
+        return score - ply;
+    }
+    if score <= -MATE_THRESHOLD {
+        return score + ply;
+    }
+    score
+}
+
 fn file_of(sq: i64) -> i64 {
     sq % 8
 }
@@ -1723,14 +1747,15 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
     if e.flag != 0 && e.key == tt_key {
         tt_move_key = e.movekey;
         if e.depth >= d {
+            let tt_score: i64 = value_from_tt(e.score, ply);
             if e.flag == TT_EXACT {
-                return e.score;
+                return tt_score;
             }
-            if e.flag == TT_LOWER && e.score >= beta {
-                return e.score;
+            if e.flag == TT_LOWER && tt_score >= beta {
+                return tt_score;
             }
-            if e.flag == TT_UPPER && e.score <= alpha {
-                return e.score;
+            if e.flag == TT_UPPER && tt_score <= alpha {
+                return tt_score;
             }
         }
     }
@@ -1798,7 +1823,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         if alpha >= beta {
             record_cutoff(ss, b, mv, d, ply);
             if ss.stopped == 0 {
-                ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: best, flag: TT_LOWER, movekey: best_move_key };
+                ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: value_to_tt(best, ply), flag: TT_LOWER, movekey: best_move_key };
             }
             return best;
         }
@@ -1811,7 +1836,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         if best <= alpha_in {
             flag = TT_UPPER;
         }
-        ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: best, flag: flag, movekey: best_move_key };
+        ttv[tt_idx] = TTEntry { key: tt_key, depth: d, score: value_to_tt(best, ply), flag: flag, movekey: best_move_key };
     }
     best
 }
