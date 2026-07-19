@@ -1,0 +1,39 @@
+// TEST: exit 0
+module BTreeMapEnumValue
+
+enum StoredEnum {
+    Empty,
+    Number(i64),
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, StoredEnum> = BTreeMap::new();
+    let number: StoredEnum = StoredEnum::Number(73);
+    let empty: StoredEnum = StoredEnum::Empty {};
+    m.insert(20, number);
+    m.insert(10, empty);
+
+    match m.get(20) {
+        Option::Some(value) => {
+            match value {
+                StoredEnum::Number(payload) => {
+                    if payload != 73 {
+                        return 3;
+                    }
+                },
+                StoredEnum::Empty => { return 2 },
+            }
+        },
+        Option::None => { return 1 },
+    }
+    match m.get(10) {
+        Option::Some(value) => {
+            match value {
+                StoredEnum::Number(_) => { return 5 },
+                StoredEnum::Empty => {},
+            }
+        },
+        Option::None => { return 4 },
+    }
+    0
+}
