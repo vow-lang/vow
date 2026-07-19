@@ -1,0 +1,34 @@
+// TEST: exit 0
+module BTreeMapOptionValue
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, Option<i64>> = BTreeMap::new();
+    let some: Option<i64> = Option::Some(42);
+    let none: Option<i64> = Option::None;
+    m.insert(20, some);
+    m.insert(10, none);
+
+    match m.get(20) {
+        Option::Some(value) => {
+            match value {
+                Option::Some(payload) => {
+                    if payload != 42 {
+                        return 3;
+                    }
+                },
+                Option::None => { return 2 },
+            }
+        },
+        Option::None => { return 1 },
+    }
+    match m.get(10) {
+        Option::Some(value) => {
+            match value {
+                Option::Some(_) => { return 5 },
+                Option::None => {},
+            }
+        },
+        Option::None => { return 4 },
+    }
+    0
+}
