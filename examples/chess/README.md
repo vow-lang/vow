@@ -17,8 +17,10 @@ The engine (`main.vow`) implements:
   and time-managed iterative deepening. A Zobrist-keyed transposition table
   provides cutoffs and best-move ordering across iterations. Move ordering uses
   the TT move, MVV/LVA captures, killer moves, and a history heuristic; the tree
-  is pruned with null-move pruning, late move reductions (LMR), a
-  principal-variation search, and check extensions.
+  is pruned with null-move pruning, depth/move-count table-driven late move
+  reductions (LMR), conservative shallow futility/late-quiet pruning, a
+  principal-variation search, and check extensions. Root iterative deepening
+  uses aspiration windows with deterministic widening on fail-low or fail-high.
 - **Evaluation** — phase-tapered PeSTO piece-square tables (separate midgame and
   endgame tables blended by material phase) for material and placement, plus
   bishop pair, development/castling, pawn structure (passed / doubled /
@@ -85,6 +87,15 @@ corner pressure, and the correct bishop-coloured KBN corners. See
 
 If your environment has a tight `/tmp` quota, keep `TMPDIR=/dev/shm` for builds.
 
+Run the deterministic search regression after search changes. It preserves the
+fixed-depth scores and best moves, the tactical baseline, and the `stop` path
+while requiring an aggregate node-count reduction:
+
+```sh
+python3 examples/chess/search_regression.py \
+    --engine examples/chess/.local/chess
+```
+
 Run the focused UCI regression suite with:
 
 ```sh
@@ -125,8 +136,8 @@ command; it is used to fetch FENs and evaluate positions and is optional.
 At **1 second per move**, the engine performs at roughly **~2110 Elo** measured
 against Stockfish's `UCI_LimitStrength` ladder (alternating colours). The headline
 comes from the rung nearest the 50% crossover — the most reliable data point (see
-`DEVELOPMENT.md`, "anchor near the 50% crossover"): **65% over 50 games vs
-`UCI_Elo=2000`** (1σ band ~2058–2162). The flanking rungs are consistent — 77% vs
+`DEVELOPMENT.md`, "anchor near the 50% crossover"): **66% over 50 games vs
+`UCI_Elo=2000`** (1σ band ~2065–2170). The flanking rungs are consistent — 77% vs
 1900 (~2115) and 58% vs 2100 (~2158) — but sit further from 50% and so carry less
 weight. Strength scales strongly with time control; at very short controls the
 engine reaches only shallow depths and plays materially weaker.

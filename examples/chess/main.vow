@@ -15,6 +15,9 @@ const INF: i64 = 100000000;
 const MATE: i64 = 1000000;
 const MATE_THRESHOLD: i64 = 999000;
 const MAX_DEPTH: i64 = 64;
+const ASPIRATION_MIN_DEPTH: i64 = 4;
+const ASPIRATION_INITIAL: i64 = 50;
+const LMR_MOVE_BUCKETS: i64 = 64;
 const QUIESCE_DEPTH: i64 = 6;
 const KILLER_SLOTS: i64 = 132;
 const HISTORY_SIZE: i64 = 4096;
@@ -91,6 +94,7 @@ struct SearchState {
     infinite: i64,
     killers: Vec<i64>,
     history: Vec<i64>,
+    lmr: Vec<i64>,
     ztab: Vec<i64>,
     tt: Vec<TTEntry>,
     pst: Vec<i64>,
@@ -126,6 +130,13 @@ struct GoLimits {
     fixed_depth: i64,
     budget_ms: i64,
     infinite: i64,
+}
+
+struct RootSearchResult {
+    score: i64,
+    best_move: ChessMove,
+    completed_moves: i64,
+    completed_all: i64,
 }
 
 fn abs_i64(x: i64) -> i64 {
@@ -1251,6 +1262,40 @@ fn make_zeros(n: i64) -> Vec<i64> {
     v
 }
 
+fn log2_floor(x: i64) -> i64 {
+    let mut value: i64 = x;
+    let mut result: i64 = 0;
+    while value >= 2 {
+        value = value / 2;
+        result = result + 1;
+    }
+    result
+}
+
+// One immutable late-move-reduction table per search. The move dimension is
+// 1-based at lookup time and clamped into the 64 stored buckets.
+fn build_lmr_table() -> Vec<i64> {
+    let table: Vec<i64> = Vec::new();
+    let mut depth: i64 = 0;
+    while depth <= MAX_DEPTH {
+        let mut bucket: i64 = 0;
+        while bucket < LMR_MOVE_BUCKETS {
+            let move_count: i64 = bucket + 1;
+            let mut reduction: i64 = 0;
+            if depth >= 3 && move_count >= 5 {
+                reduction = 1 + log2_floor(depth) * log2_floor(move_count) / 4;
+                if reduction > depth - 2 {
+                    reduction = depth - 2;
+                }
+            }
+            table.push(reduction);
+            bucket = bucket + 1;
+        }
+        depth = depth + 1;
+    }
+    table
+}
+
 // Deterministic Zobrist table (splitmix64, fixed seed). Layout: [0..768) piece
 // x square, [768] side-to-move, [769..773) castling, [773..781) ep file.
 fn build_ztab() -> Vec<i64> {
@@ -1555,6 +1600,68 @@ fn record_cutoff(ss: SearchState, b: Board, mv: ChessMove, depth: i64, ply: i64)
     ss.history[mv.from * 64 + mv.to] = ss.history[mv.from * 64 + mv.to] + depth * depth;
 }
 
+fn lmr_reduction(ss: SearchState, depth: i64, move_count: i64, ply: i64, key: i64, tt_move_key: i64, quiet: bool, was_in_check: bool) -> i64 {
+    if !quiet || was_in_check {
+        return 0;
+    }
+
+    let mut table_depth: i64 = depth;
+    if table_depth < 0 {
+        table_depth = 0;
+    }
+    if table_depth > MAX_DEPTH {
+        table_depth = MAX_DEPTH;
+    }
+    let mut table_count: i64 = move_count;
+    if table_count < 1 {
+        table_count = 1;
+    }
+    if table_count > LMR_MOVE_BUCKETS {
+        table_count = LMR_MOVE_BUCKETS;
+    }
+    let mut reduction: i64 = ss.lmr[table_depth * LMR_MOVE_BUCKETS + table_count - 1];
+    if is_priority_move(ss, ply, key, tt_move_key) && reduction > 0 {
+        reduction = reduction - 1;
+    }
+    reduction
+}
+
+fn is_priority_move(ss: SearchState, ply: i64, key: i64, tt_move_key: i64) -> bool {
+    if tt_move_key != 0 && key == tt_move_key {
+        return true;
+    }
+    if ply >= 0 && ply < KILLER_SLOTS / 2 {
+        return key == ss.killers[ply * 2] || key == ss.killers[ply * 2 + 1];
+    }
+    false
+}
+
+fn is_advanced_pawn_push(b: Board, mv: ChessMove) -> bool {
+    let sqs: Vec<i64> = b.squares;
+    let moving: i64 = sqs[mv.from];
+    if piece_kind(moving) != PAWN {
+        return false;
+    }
+    let target_rank: i64 = rank_of(mv.to);
+    (moving > 0 && target_rank == 6) || (moving < 0 && target_rank == 1)
+}
+
+fn futility_margin(depth: i64) -> i64 {
+    if depth == 2 {
+        300
+    } else {
+        450
+    }
+}
+
+fn late_quiet_limit(depth: i64) -> i64 {
+    if depth == 2 {
+        10
+    } else {
+        16
+    }
+}
+
 // Score every move once. Ordering is applied lazily via pick_best_to_front,
 // which selects the current best from the precomputed scores without rescoring
 // (the board is unchanged across a node's move loop, so scores are constant).
@@ -1843,7 +1950,7 @@ fn quiesce_repetition_self_test(us: UciState) -> i64 [io, read] {
 
     let rep: Vec<i64> = make_zeros(REP_SIZE);
     rep[4] = repeated_key;
-    let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: rep, rep_context: make_zeros(REP_SIZE), rep_base: 4, tt_generation: us.tt_generation, pending: Vec::new() };
+    let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), lmr: build_lmr_table(), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: rep, rep_context: make_zeros(REP_SIZE), rep_base: 4, tt_generation: us.tt_generation, pending: Vec::new() };
     let score: i64 = quiesce(b, -INF, INF, 1, 1, ss);
     if score == 0 { 0 } else { 1 }
 }
@@ -1871,17 +1978,17 @@ fn tt_repetition_path_self_test(us: UciState) -> i64 [io, read] {
     repeated_rep[4] = repeated_key;
     let repeated_context: Vec<i64> = make_zeros(REP_SIZE);
     repeated_context[4] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, repeated_key), REP_CONTEXT_BOUNDARY);
-    let repeated_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: repeated_rep, rep_context: repeated_context, rep_base: 4, tt_generation: -1, pending: Vec::new() };
+    let repeated_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), lmr: build_lmr_table(), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: repeated_rep, rep_context: repeated_context, rep_base: 4, tt_generation: -1, pending: Vec::new() };
     let repeated_score: i64 = negamax(b, 1, 1, -INF, INF, repeated_ss);
 
     let clear_context: Vec<i64> = make_zeros(REP_SIZE);
     clear_context[4] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, 0), REP_CONTEXT_BOUNDARY);
-    let stale_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: clear_context, rep_base: 4, tt_generation: -1, pending: Vec::new() };
+    let stale_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), lmr: build_lmr_table(), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: clear_context, rep_base: 4, tt_generation: -1, pending: Vec::new() };
     let stale_score: i64 = negamax(b, 1, 1, -INF, INF, stale_ss);
 
     let fresh_context: Vec<i64> = make_zeros(REP_SIZE);
     fresh_context[4] = mix_repetition_context(mix_repetition_context(REP_CONTEXT_SEED, 0), REP_CONTEXT_BOUNDARY);
-    let fresh_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: fresh_context, rep_base: 4, tt_generation: -2, pending: Vec::new() };
+    let fresh_ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: 0, infinite: 0, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), lmr: build_lmr_table(), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: fresh_context, rep_base: 4, tt_generation: -2, pending: Vec::new() };
     let fresh_score: i64 = negamax(b, 1, 1, -INF, INF, fresh_ss);
 
     if repeated_score != 0 || stale_score != fresh_score { 1 } else { 0 }
@@ -2053,9 +2160,17 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
 
     let mut best: i64 = -INF;
     let mut best_move_key: i64 = 0;
+    // Depth-one pruning changed a fixed-depth score in the regression suite;
+    // keep selective pruning at the empirically safe null-window depths 2-3.
+    let selective_pruning: bool = d >= 2 && d <= 3 && !in_chk && beta_in - alpha_in == 1 && alpha_in > -MATE_THRESHOLD && beta_in < MATE_THRESHOLD;
+    let mut static_eval: i64 = 0;
+    if selective_pruning {
+        static_eval = b.side * evaluate_board(b, ss.pst);
+    }
     let scores: Vec<i64> = score_moves_ns(b, legal, ss, ply, tt_move_key);
     let mut i: i64 = 0;
     let mut searched: i64 = 0;
+    let mut quiet_count: i64 = 0;
     while i < legal.len() {
         check_stop(ss);
         if ss.stopped == 1 {
@@ -2064,18 +2179,26 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         pick_best_to_front(legal, scores, i);
         let mv: ChessMove = legal[i];
         let quiet: bool = mv.promote == 0 && captured_piece_value(b, mv) == 0;
+        let key: i64 = move_key(mv);
+        let priority: bool = is_priority_move(ss, ply, key, tt_move_key);
+        let advanced_pawn: bool = is_advanced_pawn_push(b, mv);
+        if quiet {
+            quiet_count = quiet_count + 1;
+        }
         let undo: UndoInfo = make_move(b, mv);
+        let gives_check: bool = in_check(b, b.side);
+        if selective_pruning && searched >= 1 && quiet && !priority && !advanced_pawn && !gives_check {
+            if static_eval + futility_margin(d) <= alpha || quiet_count > late_quiet_limit(d) {
+                unmake_move(b, mv, undo);
+                i = i + 1;
+                continue;
+            }
+        }
         let mut score: i64 = 0;
         if searched == 0 {
             score = -negamax(b, d - 1, ply + 1, -beta, -alpha, ss);
         } else {
-            let mut red: i64 = 0;
-            if d >= 3 && searched >= 4 && quiet && !in_chk {
-                red = 1;
-                if searched >= 8 {
-                    red = 2;
-                }
-            }
+            let red: i64 = lmr_reduction(ss, d, i + 1, ply, key, tt_move_key, quiet, in_chk);
             score = -negamax(b, d - 1 - red, ply + 1, -alpha - 1, -alpha, ss);
             if score > alpha && red > 0 {
                 score = -negamax(b, d - 1, ply + 1, -alpha - 1, -alpha, ss);
@@ -2087,7 +2210,7 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
         unmake_move(b, mv, undo);
         if score > best {
             best = score;
-            best_move_key = move_key(mv);
+            best_move_key = key;
         }
         if score > alpha {
             alpha = score;
@@ -2115,6 +2238,64 @@ fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: Sear
 
 fn moves_equal(a: ChessMove, b: ChessMove) -> bool {
     a.from == b.from && a.to == b.to && a.promote == b.promote
+}
+
+fn clone_moves(moves: Vec<ChessMove>) -> Vec<ChessMove> {
+    let cloned: Vec<ChessMove> = Vec::new();
+    let mut i: i64 = 0;
+    while i < moves.len() {
+        cloned.push(moves[i]);
+        i = i + 1;
+    }
+    cloned
+}
+
+// Search one root pass inside the supplied alpha-beta window. Each pass owns a
+// fresh move-vector clone so aspiration retries begin from identical ordering.
+fn search_root_window(b: Board, ordered: Vec<ChessMove>, depth: i64, alpha_in: i64, beta: i64, ss: SearchState) -> RootSearchResult [io, read] {
+    let moves: Vec<ChessMove> = clone_moves(ordered);
+    let scores: Vec<i64> = score_moves(b, moves);
+    let mut best_score: i64 = -INF;
+    let mut alpha: i64 = alpha_in;
+    let mut iter_best: ChessMove = moves[0];
+    let mut completed_moves: i64 = 0;
+    let mut i: i64 = 0;
+    while i < moves.len() {
+        check_stop(ss);
+        if ss.stopped == 1 {
+            break;
+        }
+        if depth <= 1 || i > 0 {
+            pick_best_to_front(moves, scores, i);
+        }
+        let mv: ChessMove = moves[i];
+        let undo: UndoInfo = make_move(b, mv);
+        let score: i64 = -negamax(b, depth - 1, 1, -beta, -alpha, ss);
+        unmake_move(b, mv, undo);
+        // A stopped child has no reliable bound. The move is restored above,
+        // but it is not counted as completed or allowed to replace iter_best.
+        if ss.stopped == 1 {
+            break;
+        }
+        if score > best_score {
+            best_score = score;
+            iter_best = mv;
+        }
+        if score > alpha {
+            alpha = score;
+        }
+        completed_moves = completed_moves + 1;
+        i = i + 1;
+        if alpha >= beta {
+            break;
+        }
+    }
+
+    let mut completed_all: i64 = 0;
+    if i >= moves.len() {
+        completed_all = 1;
+    }
+    RootSearchResult { score: best_score, best_move: iter_best, completed_moves: completed_moves, completed_all: completed_all }
 }
 
 fn repetition_history_capacity() -> i64 {
@@ -2210,10 +2391,10 @@ fn print_info(depth: i64, score: i64, nodes: i64, elapsed_ms: i64, mv: ChessMove
 }
 
 // Iterative deepening bounded by max_depth, ss.deadline for timed searches, or
-// an observed stop command. Once the PV move completes, its result can improve
-// best_mv even if the rest of that iteration is interrupted; an interruption
-// before then retains the previous iteration's result. Root moves are re-ordered
-// PV-first each iteration.
+// an observed stop command. Root searches from depth four use a narrow window
+// around the preceding exact score, widening deterministically after
+// fail-low/high. Root moves are ordered PV-first once per depth and every retry
+// starts from that same order.
 fn search_best_move(b: Board, max_depth_in: i64, game_rep: GameHistory, ss: SearchState) -> ChessMove [io, read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
@@ -2233,6 +2414,8 @@ fn search_best_move(b: Board, max_depth_in: i64, game_rep: GameHistory, ss: Sear
     seed_repetition_history(b, game_rep, ss);
     let start_ms: i64 = time_unix_ms();
     let mut best_mv: ChessMove = legal[0];
+    let mut previous_exact_score: i64 = 0;
+    let mut have_previous_exact: i64 = 0;
     let mut d: i64 = 1;
     while d <= max_depth {
         if ss.stopped == 1 {
@@ -2250,55 +2433,58 @@ fn search_best_move(b: Board, max_depth_in: i64, game_rep: GameHistory, ss: Sear
             }
         }
 
-        let mut best_score: i64 = -INF;
+        let mut width: i64 = ASPIRATION_INITIAL;
         let mut alpha: i64 = -INF;
-        let beta: i64 = INF;
-        let mut iter_best: ChessMove = legal[0];
-        let mut done_moves: i64 = 0;
+        let mut beta: i64 = INF;
+        if d >= ASPIRATION_MIN_DEPTH && have_previous_exact == 1 && abs_i64(previous_exact_score) < MATE_THRESHOLD {
+            alpha = max_i64(-INF, previous_exact_score - width);
+            beta = min_i64(INF, previous_exact_score + width);
+        }
 
-        let scores: Vec<i64> = score_moves(b, legal);
-        let mut i: i64 = 0;
-        while i < legal.len() {
-            check_stop(ss);
+        let mut exact: i64 = 0;
+        let mut mate_found: i64 = 0;
+        while exact == 0 && ss.stopped == 0 {
+            let root: RootSearchResult = search_root_window(b, legal, d, alpha, beta, ss);
+
+            // Only adopt a pass's move when it raised the score above alpha: an
+            // exact PV pass or a fail-high yields a trustworthy move, while a
+            // fail-low pass returns only upper bounds. Overwriting best_mv from a
+            // fail-low pass would replace the previous depth's exact move with a
+            // bound-selected one if the widening retry is later cut by the deadline.
+            // Full-window passes (alpha == -INF) always satisfy this, so partial
+            // iterations still make progress.
+            if root.completed_moves >= 1 && root.score > alpha {
+                best_mv = root.best_move;
+            }
             if ss.stopped == 1 {
                 break;
             }
-            if d <= 1 || i > 0 {
-                pick_best_to_front(legal, scores, i);
-            }
-            let mv: ChessMove = legal[i];
-            let undo: UndoInfo = make_move(b, mv);
-            let score: i64 = -negamax(b, d - 1, 1, -beta, -alpha, ss);
-            unmake_move(b, mv, undo);
-            // Discard a move whose search was aborted by the deadline: its score
-            // is unreliable. Moves completed before the abort are still valid.
-            if ss.stopped == 1 {
-                break;
-            }
-            if score > best_score {
-                best_score = score;
-                iter_best = mv;
-            }
-            if score > alpha {
-                alpha = score;
-            }
-            done_moves = done_moves + 1;
-            i = i + 1;
-        }
 
-        // Commit the best move found this iteration as long as at least the PV
-        // move completed. Root searches PV-first, so best-so-far never regresses
-        // below the previous depth's choice — capturing partial deeper searches
-        // instead of wasting the time spent on an unfinished iteration.
-        if done_moves >= 1 {
-            best_mv = iter_best;
-        }
-        if i >= legal.len() {
-            let now_ms: i64 = time_unix_ms();
-            print_info(d, best_score, ss.nodes, now_ms - start_ms, best_mv);
-            if ss.infinite == 0 && (best_score >= MATE_THRESHOLD || best_score <= -MATE_THRESHOLD) {
-                break;
+            if root.completed_all == 1 && root.score > alpha && root.score < beta {
+                previous_exact_score = root.score;
+                have_previous_exact = 1;
+                exact = 1;
+                let now_ms: i64 = time_unix_ms();
+                print_info(d, root.score, ss.nodes, now_ms - start_ms, best_mv);
+                if ss.infinite == 0 && (root.score >= MATE_THRESHOLD || root.score <= -MATE_THRESHOLD) {
+                    mate_found = 1;
+                }
+            } else {
+                // A failed pass is only a bound. Double the symmetric window
+                // around the previous exact score and retry; eventually this
+                // reaches [-INF, INF] without publishing the failed score.
+                if width < INF {
+                    width = width * 2;
+                    if width > INF {
+                        width = INF;
+                    }
+                }
+                alpha = max_i64(-INF, previous_exact_score - width);
+                beta = min_i64(INF, previous_exact_score + width);
             }
+        }
+        if mate_found == 1 {
+            break;
         }
         d = d + 1;
     }
@@ -2821,7 +3007,7 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                                 deadline = now + think;
                             }
                         }
-                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, infinite: infinite, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: make_zeros(REP_SIZE), rep_base: 0, tt_generation: us.tt_generation, pending: Vec::new() };
+                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, deadline: deadline, infinite: infinite, killers: make_zeros(KILLER_SLOTS), history: make_zeros(HISTORY_SIZE), lmr: build_lmr_table(), ztab: us.ztab, tt: us.tt, pst: us.pst, rep: make_zeros(REP_SIZE), rep_context: make_zeros(REP_SIZE), rep_base: 0, tt_generation: us.tt_generation, pending: Vec::new() };
                         let best: ChessMove = search_best_move(us.board, max_depth, us.game_rep, ss);
                         let out: String = String::from("bestmove ");
                         out.push_str(move_to_uci(best));
