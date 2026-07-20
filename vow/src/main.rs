@@ -11346,6 +11346,10 @@ fn emit_frontend_diagnostics_to_stderr(diagnostics: &[Diagnostic]) {
         .expect("failed to emit frontend diagnostics");
 }
 
+fn is_broken_pipe(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::BrokenPipe
+}
+
 fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
     let message = error.failure_message().to_string();
     let diagnostics = error.into_diagnostics();
@@ -11356,6 +11360,56 @@ fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
         counterexamples: vec![],
         verify_status: None,
         verify_message: None,
+    }
+}
+
+fn frontend_diagnostic_emission_error_to_output(
+    error: std::io::Error,
+    diagnostics: Vec<Diagnostic>,
+) -> BuildOutput {
+    BuildOutput {
+        status: BuildStatus::CompileFailed {
+            message: format!("failed to emit frontend diagnostics: {error}"),
+        },
+        executable: None,
+        diagnostics,
+        counterexamples: vec![],
+        verify_status: None,
+        verify_message: None,
+    }
+}
+
+fn emit_frontend_result(
+    frontend: Result<FrontendBundle, FrontendError>,
+    emitter: &mut dyn DiagnosticEmitter,
+) -> Result<FrontendBundle, Box<BuildOutput>> {
+    match frontend {
+        Ok(bundle) => match emit_frontend_diagnostics(bundle.diagnostics(), emitter) {
+            Ok(()) => Ok(bundle),
+            Err(error) if is_broken_pipe(&error) => Ok(bundle),
+            Err(error) => {
+                let (diagnostics, _, _) = bundle.into_parts();
+                Err(Box::new(frontend_diagnostic_emission_error_to_output(
+                    error,
+                    diagnostics,
+                )))
+            }
+        },
+        Err(frontend_error) => {
+            match emit_frontend_diagnostics(frontend_error.diagnostics(), emitter) {
+                Ok(()) => Err(Box::new(frontend_error_to_output(frontend_error))),
+                Err(error) if is_broken_pipe(&error) => {
+                    Err(Box::new(frontend_error_to_output(frontend_error)))
+                }
+                Err(error) => {
+                    let diagnostics = frontend_error.into_diagnostics();
+                    Err(Box::new(frontend_diagnostic_emission_error_to_output(
+                        error,
+                        diagnostics,
+                    )))
+                }
+            }
+        }
     }
 }
 
@@ -11374,16 +11428,9 @@ fn compile_frontend_with_root(
     module_root: Option<&Path>,
     prof: Option<&perfetto::Profiler>,
 ) -> Result<FrontendBundle, Box<BuildOutput>> {
-    match prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr, prof) {
-        Ok(bundle) => {
-            emit_frontend_diagnostics_to_stderr(bundle.diagnostics());
-            Ok(bundle)
-        }
-        Err(error) => {
-            emit_frontend_diagnostics_to_stderr(error.diagnostics());
-            Err(Box::new(frontend_error_to_output(error)))
-        }
-    }
+    let frontend = prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr, prof);
+    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    emit_frontend_result(frontend, &mut stderr_emit)
 }
 
 // ---------------------------------------------------------------------------
@@ -13539,6 +13586,57 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(emitter.emit_attempts, 1);
         assert_eq!(emitter.finish_attempts, 1);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_converts_writer_error_to_compile_failure() {
+        let dir = TempDir::new().unwrap();
+        let source = write_source(&dir, "bad_parse.vow", "module M 123");
+        let frontend = prepare_frontend(&source, FrontendGoal::LoweredIr);
+        let expected_diagnostics = frontend.as_ref().unwrap_err().diagnostics().to_vec();
+        let mut emitter = EmitFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::PermissionDenied,
+        };
+
+        let output = emit_frontend_result(frontend, &mut emitter).unwrap_err();
+
+        match &output.status {
+            BuildStatus::CompileFailed { message } => {
+                assert!(message.contains("failed to emit frontend diagnostics"));
+                assert!(message.contains("permission denied"));
+            }
+            status => panic!("expected CompileFailed, got {status:?}"),
+        }
+        assert!(output.executable.is_none());
+        assert_eq!(output.diagnostics, expected_diagnostics);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 0);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_broken_pipe_preserves_frontend_failure() {
+        let dir = TempDir::new().unwrap();
+        let source = write_source(&dir, "bad_parse.vow", "module M 123");
+        let frontend = prepare_frontend(&source, FrontendGoal::LoweredIr);
+        let expected_diagnostics = frontend.as_ref().unwrap_err().diagnostics().to_vec();
+        let mut emitter = EmitFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::BrokenPipe,
+        };
+
+        let output = emit_frontend_result(frontend, &mut emitter).unwrap_err();
+
+        match &output.status {
+            BuildStatus::CompileFailed { message } => assert_eq!(message, "parse error"),
+            status => panic!("expected CompileFailed, got {status:?}"),
+        }
+        assert!(output.executable.is_none());
+        assert_eq!(output.diagnostics, expected_diagnostics);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 0);
     }
 
     #[test]
