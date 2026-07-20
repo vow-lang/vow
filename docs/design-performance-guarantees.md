@@ -403,6 +403,12 @@ The new `vow-perf` crate runs in parallel with `vow-verify` and `vow-codegen`:
 4. Performs doubling ratio test + curve fitting
 5. Reports pass/fail/warn with data
 
+**Routing invariant.** The IR reserves the typed `ComplexityDescriptor` opcode
+for Phase 1 lowering. When present, the ESBMC correctness pipeline explicitly
+skips that opcode, so it can never be treated as a refinement predicate; normal
+code generation skips it as non-executable metadata. `vow-perf` is the sole
+consumer responsible for interpreting the descriptor.
+
 ### CLI Integration
 
 ```bash

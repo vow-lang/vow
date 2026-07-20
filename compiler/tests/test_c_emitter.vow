@@ -107,6 +107,76 @@ fn check_modelable_call_target_is_mangled() -> i64 {
     0
 }
 
+fn check_complexity_descriptor_routing() -> i64 {
+    let descriptor_only_insts: Vec<IrInst> = Vec::new();
+    descriptor_only_insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    descriptor_only_insts.push(mk_inst(1, IOP_COMPLEXITY_DESCRIPTOR(), ITY_UNIT(), Vec::new()));
+    descriptor_only_insts.push(mk_inst_return(2, 0));
+    let descriptor_only_blocks: Vec<IrBlock> = Vec::new();
+    descriptor_only_blocks.push(mk_block(0, descriptor_only_insts));
+    let descriptor_only_params: Vec<i64> = Vec::new();
+    descriptor_only_params.push(ITY_I64());
+    let descriptor_only: IrFunction = mk_function(
+        11,
+        String::from("linear_identity"),
+        descriptor_only_params,
+        ITY_I64(),
+        descriptor_only_blocks
+    );
+
+    let descriptor_only_funcs: Vec<IrFunction> = Vec::new();
+    descriptor_only_funcs.push(descriptor_only);
+    let descriptor_only_module: IrModule = mk_module(descriptor_only_funcs);
+    let const_fn_indices: Vec<i64> = Vec::new();
+    if non_modelable_reason(descriptor_only, descriptor_only_module, const_fn_indices) != String::from("") {
+        return 27;
+    }
+    let descriptor_only_c: String = emit_c_module(descriptor_only_module, 16, 16, 16, 16);
+    if descriptor_only_c.contains(String::from("  __ESBMC_assume("))
+       || descriptor_only_c.contains(String::from("  __ESBMC_assert(")) {
+        return 28;
+    }
+
+    let ensured_insts: Vec<IrInst> = Vec::new();
+    ensured_insts.push(mk_inst_arg(0, ITY_I64(), 0));
+    ensured_insts.push(mk_inst(1, IOP_COMPLEXITY_DESCRIPTOR(), ITY_UNIT(), Vec::new()));
+    let eq_args: Vec<i64> = Vec::new();
+    eq_args.push(0);
+    eq_args.push(0);
+    ensured_insts.push(mk_inst(2, IOP_EQ_I64(), ITY_BOOL(), eq_args));
+    let ensures_args: Vec<i64> = Vec::new();
+    ensures_args.push(2);
+    ensured_insts.push(ir_inst_new(
+        3,
+        IOP_VOW_ENS(),
+        ITY_UNIT(),
+        ensures_args,
+        IDATA_VOW_ID(),
+        0,
+        0,
+        String::from("")
+    ));
+    ensured_insts.push(mk_inst_return(4, 0));
+    let ensured_blocks: Vec<IrBlock> = Vec::new();
+    ensured_blocks.push(mk_block(0, ensured_insts));
+    let ensured_params: Vec<i64> = Vec::new();
+    ensured_params.push(ITY_I64());
+    let ensured: IrFunction = mk_function(
+        12,
+        String::from("identity_with_ensures"),
+        ensured_params,
+        ITY_I64(),
+        ensured_blocks
+    );
+    let ensured_funcs: Vec<IrFunction> = Vec::new();
+    ensured_funcs.push(ensured);
+    let ensured_c: String = emit_c_module(mk_module(ensured_funcs), 16, 16, 16, 16);
+    if !ensured_c.contains(String::from("  __ESBMC_assert(v2, \"vow:0\");")) {
+        return 29;
+    }
+    0
+}
+
 fn i64_result_to_i32(r: i64) -> i32 {
     if r == 1 { return 1; }
     if r == 2 { return 2; }
@@ -127,6 +197,9 @@ fn i64_result_to_i32(r: i64) -> i32 {
     if r == 24 { return 24; }
     if r == 25 { return 25; }
     if r == 26 { return 26; }
+    if r == 27 { return 27; }
+    if r == 28 { return 28; }
+    if r == 29 { return 29; }
     if r != 0 { return 99; }
     0
 }
@@ -142,5 +215,7 @@ fn main() -> i32 {
     if r4 != 0 { return i64_result_to_i32(r4); }
     let r5: i64 = check_modelable_call_target_is_mangled();
     if r5 != 0 { return i64_result_to_i32(r5); }
+    let r6: i64 = check_complexity_descriptor_routing();
+    if r6 != 0 { return i64_result_to_i32(r6); }
     0
 }

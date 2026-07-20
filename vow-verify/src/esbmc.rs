@@ -1141,6 +1141,107 @@ mod tests {
     }
 
     #[test]
+    fn complexity_descriptor_only_produces_no_verification_conditions() {
+        let func = Function {
+            id: FuncId(0),
+            name: "linear_identity".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["n".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::ComplexityDescriptor,
+                        Ty::Unit,
+                        vec![],
+                        InstData::None,
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+
+        let c = emit_verify_c_source(
+            &func,
+            &module_of(&func),
+            &HashMap::new(),
+            &VerifyLimits::default(),
+        );
+
+        assert!(!c.contains("  __ESBMC_assume("), "unexpected VC:\n{c}");
+        assert!(!c.contains("  __ESBMC_assert("), "unexpected VC:\n{c}");
+    }
+
+    #[test]
+    fn complexity_descriptor_does_not_hide_ensures_verification() {
+        let func = Function {
+            id: FuncId(0),
+            name: "identity_with_ensures".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["n".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result == n".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::ComplexityDescriptor,
+                        Ty::Unit,
+                        vec![],
+                        InstData::None,
+                    ),
+                    inst(2, Opcode::EqI64, Ty::Bool, vec![0, 0], InstData::None),
+                    inst(
+                        3,
+                        Opcode::VowEnsures,
+                        Ty::Unit,
+                        vec![2],
+                        InstData::VowId(VowId(0)),
+                    ),
+                    inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+
+        let module = module_of(&func);
+        let c = emit_verify_c_source(&func, &module, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("  __ESBMC_assert(v2, \"vow:0\");"),
+            "ensures VC was not emitted:\n{c}"
+        );
+
+        match verify(&VerifyRequest::new(
+            &func,
+            &module,
+            &VerifyLimits::default(),
+        )) {
+            VerificationResult::Proven | VerificationResult::ToolNotFound => {}
+            other => panic!("expected ensures to remain verifiable, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn emit_verify_c_source_uses_module_string_pool_without_callees() {
         let func = Function {
             id: FuncId(0),

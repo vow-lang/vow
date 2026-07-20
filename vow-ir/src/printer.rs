@@ -136,6 +136,7 @@ fn opcode_name(opcode: &Opcode) -> &'static str {
         Opcode::VowRequires => "VowRequires",
         Opcode::VowEnsures => "VowEnsures",
         Opcode::VowInvariant => "VowInvariant",
+        Opcode::ComplexityDescriptor => "ComplexityDescriptor",
         Opcode::Call => "Call",
         Opcode::RegionAlloc => "RegionAlloc",
         Opcode::RegionOpen => "RegionOpen",
@@ -638,6 +639,7 @@ mod tests {
             (Opcode::CastI64ToU64, "CastI64ToU64"),
             (Opcode::CastU64ToI64, "CastU64ToI64"),
             (Opcode::DebugCall, "DebugCall"),
+            (Opcode::ComplexityDescriptor, "ComplexityDescriptor"),
         ];
         for (op, expected) in pairs {
             assert_eq!(opcode_name(&op), expected);
