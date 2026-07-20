@@ -11330,11 +11330,20 @@ impl BuildOutput {
 // Frontend (parse → module load → type check → IR lower)
 // ---------------------------------------------------------------------------
 
-fn emit_frontend_diagnostics(diagnostics: &[Diagnostic]) {
-    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+fn emit_frontend_diagnostics(
+    diagnostics: &[Diagnostic],
+    emitter: &mut dyn DiagnosticEmitter,
+) -> std::io::Result<()> {
     for diagnostic in diagnostics {
-        stderr_emit.emit(diagnostic);
+        emitter.try_emit(diagnostic)?;
     }
+    Ok(())
+}
+
+fn emit_frontend_diagnostics_to_stderr(diagnostics: &[Diagnostic]) {
+    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    emit_frontend_diagnostics(diagnostics, &mut stderr_emit)
+        .expect("failed to emit frontend diagnostics");
     stderr_emit.finish();
 }
 
@@ -11368,11 +11377,11 @@ fn compile_frontend_with_root(
 ) -> Result<FrontendBundle, Box<BuildOutput>> {
     match prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr, prof) {
         Ok(bundle) => {
-            emit_frontend_diagnostics(bundle.diagnostics());
+            emit_frontend_diagnostics_to_stderr(bundle.diagnostics());
             Ok(bundle)
         }
         Err(error) => {
-            emit_frontend_diagnostics(error.diagnostics());
+            emit_frontend_diagnostics_to_stderr(error.diagnostics());
             Err(Box::new(frontend_error_to_output(error)))
         }
     }
@@ -12812,11 +12821,11 @@ fn run_build_command(
 fn run_decl_command(source: &Path, output: Option<&Path>) {
     let frontend = match prepare_frontend(source, FrontendGoal::MergedAst) {
         Ok(bundle) => {
-            emit_frontend_diagnostics(bundle.diagnostics());
+            emit_frontend_diagnostics_to_stderr(bundle.diagnostics());
             bundle
         }
         Err(error) => {
-            emit_frontend_diagnostics(error.diagnostics());
+            emit_frontend_diagnostics_to_stderr(error.diagnostics());
             eprintln!("vow decl: {}", error.failure_message());
             std::process::exit(1);
         }
@@ -13413,6 +13422,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
     use tempfile::TempDir;
 
     fn write_source(dir: &TempDir, name: &str, src: &str) -> PathBuf {
@@ -13427,6 +13437,59 @@ mod tests {
             BuildStatus::VerifyFailed { description, .. }
                 if description.contains("ESBMC not found")
         )
+    }
+
+    struct EmitFailingDiagnosticEmitter {
+        emit_attempts: usize,
+        finish_attempts: usize,
+        error_kind: io::ErrorKind,
+    }
+
+    impl DiagnosticEmitter for EmitFailingDiagnosticEmitter {
+        fn try_emit(&mut self, _: &Diagnostic) -> io::Result<()> {
+            self.emit_attempts += 1;
+            Err(io::Error::from(self.error_kind))
+        }
+
+        fn try_finish(&mut self) -> io::Result<()> {
+            self.finish_attempts += 1;
+            Ok(())
+        }
+    }
+
+    fn frontend_test_diagnostic(message: &str) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Error,
+            code: vow_diag::ErrorCode::UnexpectedToken,
+            message: message.to_string(),
+            primary: vow_diag::SourceLocation {
+                file: "test.vow".to_string(),
+                byte_offset: 0,
+                byte_len: 1,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+            hints: vec![],
+        }
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_returns_emit_failure_without_finishing() {
+        let diagnostics = [
+            frontend_test_diagnostic("first"),
+            frontend_test_diagnostic("second"),
+        ];
+        let mut emitter = EmitFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::BrokenPipe,
+        };
+
+        let error = emit_frontend_diagnostics(&diagnostics, &mut emitter).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 0);
     }
 
     #[test]

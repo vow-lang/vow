@@ -224,7 +224,7 @@ fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
     cx_sat(nloc.wrapping_mul(fl).wrapping_mul(fl))
 }
 
-use crate::emit_frontend_diagnostics;
+use crate::emit_frontend_diagnostics_to_stderr;
 use crate::frontend::{FrontendGoal, prepare_frontend};
 
 // Structural counts accumulated by the AST walk. Mirrors the self-hosted
@@ -731,11 +731,11 @@ pub(crate) fn run_complexity_command(
 ) {
     let frontend = match prepare_frontend(source, FrontendGoal::LoweredIr) {
         Ok(bundle) => {
-            emit_frontend_diagnostics(bundle.diagnostics());
+            emit_frontend_diagnostics_to_stderr(bundle.diagnostics());
             bundle
         }
         Err(error) => {
-            emit_frontend_diagnostics(error.diagnostics());
+            emit_frontend_diagnostics_to_stderr(error.diagnostics());
             eprintln!("vow complexity: {}", error.failure_message());
             std::process::exit(1);
         }
