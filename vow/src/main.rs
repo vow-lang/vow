@@ -11340,14 +11340,19 @@ fn emit_frontend_diagnostics(
     emitter.try_finish()
 }
 
-fn emit_frontend_diagnostics_to_stderr(diagnostics: &[Diagnostic]) {
+fn emit_frontend_diagnostics_to_stderr(diagnostics: &[Diagnostic]) -> std::io::Result<()> {
     let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
     emit_frontend_diagnostics(diagnostics, &mut stderr_emit)
-        .expect("failed to emit frontend diagnostics");
 }
 
 fn is_broken_pipe(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::BrokenPipe
+}
+
+fn write_stderr_best_effort(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+
+    let _ = writeln!(std::io::stderr(), "{args}");
 }
 
 fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
@@ -12865,14 +12870,32 @@ fn run_build_command(
 }
 
 fn run_decl_command(source: &Path, output: Option<&Path>) {
+    let mut stderr_broken_pipe = false;
     let frontend = match prepare_frontend(source, FrontendGoal::MergedAst) {
         Ok(bundle) => {
-            emit_frontend_diagnostics_to_stderr(bundle.diagnostics());
+            match emit_frontend_diagnostics_to_stderr(bundle.diagnostics()) {
+                Ok(()) => {}
+                Err(error) if is_broken_pipe(&error) => stderr_broken_pipe = true,
+                Err(error) => {
+                    write_stderr_best_effort(format_args!(
+                        "vow decl: failed to emit frontend diagnostics: {error}"
+                    ));
+                    std::process::exit(1);
+                }
+            }
             bundle
         }
         Err(error) => {
-            emit_frontend_diagnostics_to_stderr(error.diagnostics());
-            eprintln!("vow decl: {}", error.failure_message());
+            match emit_frontend_diagnostics_to_stderr(error.diagnostics()) {
+                Ok(()) => {
+                    write_stderr_best_effort(format_args!("vow decl: {}", error.failure_message()))
+                }
+                Err(emission_error) if is_broken_pipe(&emission_error) => {}
+                Err(emission_error) => write_stderr_best_effort(format_args!(
+                    "vow decl: {}; failed to emit frontend diagnostics: {emission_error}",
+                    error.failure_message()
+                )),
+            }
             std::process::exit(1);
         }
     };
@@ -12893,10 +12916,14 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     };
 
     if let Err(e) = std::fs::write(&out_path, &decl_text) {
-        eprintln!("vow decl: {}", e);
+        if !stderr_broken_pipe {
+            write_stderr_best_effort(format_args!("vow decl: {e}"));
+        }
         std::process::exit(1);
     }
-    eprintln!("wrote {}", out_path.display());
+    if !stderr_broken_pipe {
+        write_stderr_best_effort(format_args!("wrote {}", out_path.display()));
+    }
 }
 
 fn run_verify_command(

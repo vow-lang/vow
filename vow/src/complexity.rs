@@ -224,8 +224,8 @@ fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
     cx_sat(nloc.wrapping_mul(fl).wrapping_mul(fl))
 }
 
-use crate::emit_frontend_diagnostics_to_stderr;
 use crate::frontend::{FrontendGoal, prepare_frontend};
+use crate::{emit_frontend_diagnostics_to_stderr, is_broken_pipe, write_stderr_best_effort};
 
 // Structural counts accumulated by the AST walk. Mirrors the self-hosted
 // `cx_walk_*` (compiler/complexity.vow) handled-kind set exactly so the JSON
@@ -729,14 +729,33 @@ pub(crate) fn run_complexity_command(
     max_cognitive: i64,
     max_cyclomatic: i64,
 ) {
+    let mut stderr_broken_pipe = false;
     let frontend = match prepare_frontend(source, FrontendGoal::LoweredIr) {
         Ok(bundle) => {
-            emit_frontend_diagnostics_to_stderr(bundle.diagnostics());
+            match emit_frontend_diagnostics_to_stderr(bundle.diagnostics()) {
+                Ok(()) => {}
+                Err(error) if is_broken_pipe(&error) => stderr_broken_pipe = true,
+                Err(error) => {
+                    write_stderr_best_effort(format_args!(
+                        "vow complexity: failed to emit frontend diagnostics: {error}"
+                    ));
+                    std::process::exit(1);
+                }
+            }
             bundle
         }
         Err(error) => {
-            emit_frontend_diagnostics_to_stderr(error.diagnostics());
-            eprintln!("vow complexity: {}", error.failure_message());
+            match emit_frontend_diagnostics_to_stderr(error.diagnostics()) {
+                Ok(()) => write_stderr_best_effort(format_args!(
+                    "vow complexity: {}",
+                    error.failure_message()
+                )),
+                Err(emission_error) if is_broken_pipe(&emission_error) => {}
+                Err(emission_error) => write_stderr_best_effort(format_args!(
+                    "vow complexity: {}; failed to emit frontend diagnostics: {emission_error}",
+                    error.failure_message()
+                )),
+            }
             std::process::exit(1);
         }
     };
@@ -744,7 +763,9 @@ pub(crate) fn run_complexity_command(
     let src = match read_complexity_source(source) {
         Ok(src) => src,
         Err(error) => {
-            eprintln!("vow complexity: {error}");
+            if !stderr_broken_pipe {
+                write_stderr_best_effort(format_args!("vow complexity: {error}"));
+            }
             std::process::exit(1);
         }
     };
