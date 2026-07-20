@@ -1,0 +1,9 @@
+// TEST: error ShiftCountOutOfRange
+// TEST: stderr "shift count 8 is out of range for u8"
+module U8ShiftOutOfRange
+
+fn main() -> i32 {
+    let byte: u8 = 1;
+    let shifted: u8 = byte << 8;
+    0
+}
