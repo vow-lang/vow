@@ -24,10 +24,10 @@ use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
     ConstantValue, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, ReachVerdict, Solver,
-    SolverConfig, VerificationResult, VerifyLimits, detect_constant_functions,
+    SolverConfig, VerificationResult, VerifyLimits, VerifyRequest, detect_constant_functions,
     emit_bodyreplace_c_source, emit_reach_c_source, emit_verify_c_source, find_esbmc,
     non_modelable_reason, run_esbmc_bodyreplace, run_esbmc_multi_property, run_esbmc_reach,
-    run_with_fallback, verify_function_with_module_and_const_fns_configured,
+    run_with_fallback, verify,
 };
 
 use cache::{CachedFailure, VerifyCache};
@@ -11464,14 +11464,11 @@ fn verify_one_function(
             res
         }
     } else {
-        verify_function_with_module_and_const_fns_configured(
-            func,
-            ir_module,
-            const_fns,
-            limits.max_k_step,
-            &func_config,
-            limits,
-        )
+        verify(&VerifyRequest {
+            const_fns: Some(const_fns),
+            config: Some(&func_config),
+            ..VerifyRequest::new(func, ir_module, limits)
+        })
     };
 
     match result {
