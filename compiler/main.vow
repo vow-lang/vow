@@ -256,13 +256,13 @@ fn inst_const_i64_string_by_id(f: IrFunction, inst_id: i64) -> String {
                         let lhs: i64 = str_to_i64(lhs_s);
                         let rhs: i64 = str_to_i64(rhs_s);
                         if lhs_s == i64_to_str(lhs) && rhs_s == i64_to_str(rhs) {
-                            if inst.op == IOP_WADD_I32() || inst.op == IOP_WADD_I64() || inst.op == IOP_CADD_I32() || inst.op == IOP_CADD_I64() {
+                            if inst.op == IOP_WADD() || inst.op == IOP_CADD() {
                                 return i64_to_str(lhs + rhs);
                             }
-                            if inst.op == IOP_WSUB_I32() || inst.op == IOP_WSUB_I64() || inst.op == IOP_CSUB_I32() || inst.op == IOP_CSUB_I64() {
+                            if inst.op == IOP_WSUB() || inst.op == IOP_CSUB() {
                                 return i64_to_str(lhs - rhs);
                             }
-                            if inst.op == IOP_WMUL_I32() || inst.op == IOP_WMUL_I64() || inst.op == IOP_CMUL_I32() || inst.op == IOP_CMUL_I64() {
+                            if inst.op == IOP_WMUL() || inst.op == IOP_CMUL() {
                                 return i64_to_str(lhs * rhs);
                             }
                         }
@@ -313,13 +313,13 @@ fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, c
                     if string_is_i64_literal(lhs_s) && string_is_i64_literal(rhs_s) {
                         let lhs: i64 = str_to_i64(lhs_s);
                         let rhs: i64 = str_to_i64(rhs_s);
-                        if inst.op == IOP_WADD_I32() || inst.op == IOP_WADD_I64() || inst.op == IOP_CADD_I32() || inst.op == IOP_CADD_I64() {
+                        if inst.op == IOP_WADD() || inst.op == IOP_CADD() {
                             return i64_to_str(lhs + rhs);
                         }
-                        if inst.op == IOP_WSUB_I32() || inst.op == IOP_WSUB_I64() || inst.op == IOP_CSUB_I32() || inst.op == IOP_CSUB_I64() {
+                        if inst.op == IOP_WSUB() || inst.op == IOP_CSUB() {
                             return i64_to_str(lhs - rhs);
                         }
-                        if inst.op == IOP_WMUL_I32() || inst.op == IOP_WMUL_I64() || inst.op == IOP_CMUL_I32() || inst.op == IOP_CMUL_I64() {
+                        if inst.op == IOP_WMUL() || inst.op == IOP_CMUL() {
                             return i64_to_str(lhs * rhs);
                         }
                     }
@@ -381,27 +381,27 @@ fn callee_bool_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_in
                     if string_is_i64_literal(lhs_s) && string_is_i64_literal(rhs_s) {
                         let lhs: i64 = str_to_i64(lhs_s);
                         let rhs: i64 = str_to_i64(rhs_s);
-                        if inst.op == IOP_EQ_I32() || inst.op == IOP_EQ_I64() {
+                        if inst.op == IOP_EQ() {
                             if lhs == rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_NE_I32() || inst.op == IOP_NE_I64() {
+                        if inst.op == IOP_NE() {
                             if lhs != rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_LT_I32() || inst.op == IOP_LT_I64() {
+                        if inst.op == IOP_LT() {
                             if lhs < rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_LE_I32() || inst.op == IOP_LE_I64() {
+                        if inst.op == IOP_LE() {
                             if lhs <= rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_GT_I32() || inst.op == IOP_GT_I64() {
+                        if inst.op == IOP_GT() {
                             if lhs > rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_GE_I32() || inst.op == IOP_GE_I64() {
+                        if inst.op == IOP_GE() {
                             if lhs >= rhs { return 1; }
                             return 0;
                         }
@@ -3652,7 +3652,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `/`      | Div (wrapping) |\n"));
     r.push_str(String::from("| `%`      | Rem (wrapping) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Wrapping operators silently wrap on overflow. For `u64` operands, division and remainder use unsigned semantics.\n"));
+    r.push_str(String::from("Wrapping operators silently wrap on overflow. For unsigned operands, including\n"));
+    r.push_str(String::from("`u8`, division and remainder use unsigned semantics.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Checked Arithmetic\n"));
     r.push_str(String::from("\n"));
@@ -3665,6 +3666,20 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `%!`     | Rem (checked)     |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Checked operators abort with `ArithmeticOverflow` on overflow.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Saturating Arithmetic\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Saturating arithmetic uses named compiler intrinsics rather than a third\n"));
+    r.push_str(String::from("operator family. The `u8` intrinsics are:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Behavior |\n"));
+    r.push_str(String::from("|----------|-----------|----------|\n"));
+    r.push_str(String::from("| `add_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps sums above 255 to 255 |\n"));
+    r.push_str(String::from("| `sub_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps differences below 0 to 0 |\n"));
+    r.push_str(String::from("| `mul_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps products above 255 to 255 |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("These functions are pure and have direct verifier semantics; they do not\n"));
+    r.push_str(String::from("lower to wrapping arithmetic.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Comparison Operators\n"));
     r.push_str(String::from("\n"));
@@ -3784,6 +3799,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("These intrinsics are emitted by the compiler so ESBMC sees their semantics\n"));
     r.push_str(String::from("directly in the verification C model.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For the `u8` target, the available narrowing source types are `i16`, `i32`,\n"));
+    r.push_str(String::from("`i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three\n"));
+    r.push_str(String::from("forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The\n"));
     r.push_str(String::from("operands must already have the same type. The compiler does not coerce\n"));
@@ -4306,6 +4325,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Each `parse_X` returns `Option::None` for malformed input, empty strings, or\n"));
     r.push_str(String::from("values outside the target type's range.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("In particular, `parse_u8` accepts decimal values from `0` through `255` and\n"));
+    r.push_str(String::from("returns `Option::None` for negative or larger values.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing\n"));
     r.push_str(String::from("pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and\n"));
@@ -8256,7 +8278,8 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `/`      | Div (wrapping) |\n"));
     r.push_str(String::from("| `%`      | Rem (wrapping) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Wrapping operators silently wrap on overflow. For `u64` operands, division and remainder use unsigned semantics.\n"));
+    r.push_str(String::from("Wrapping operators silently wrap on overflow. For unsigned operands, including\n"));
+    r.push_str(String::from("`u8`, division and remainder use unsigned semantics.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Checked Arithmetic\n"));
     r.push_str(String::from("\n"));
@@ -8269,6 +8292,20 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `%!`     | Rem (checked)     |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Checked operators abort with `ArithmeticOverflow` on overflow.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Saturating Arithmetic\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Saturating arithmetic uses named compiler intrinsics rather than a third\n"));
+    r.push_str(String::from("operator family. The `u8` intrinsics are:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Behavior |\n"));
+    r.push_str(String::from("|----------|-----------|----------|\n"));
+    r.push_str(String::from("| `add_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps sums above 255 to 255 |\n"));
+    r.push_str(String::from("| `sub_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps differences below 0 to 0 |\n"));
+    r.push_str(String::from("| `mul_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps products above 255 to 255 |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("These functions are pure and have direct verifier semantics; they do not\n"));
+    r.push_str(String::from("lower to wrapping arithmetic.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Comparison Operators\n"));
     r.push_str(String::from("\n"));
@@ -8388,6 +8425,10 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("These intrinsics are emitted by the compiler so ESBMC sees their semantics\n"));
     r.push_str(String::from("directly in the verification C model.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For the `u8` target, the available narrowing source types are `i16`, `i32`,\n"));
+    r.push_str(String::from("`i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three\n"));
+    r.push_str(String::from("forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The\n"));
     r.push_str(String::from("operands must already have the same type. The compiler does not coerce\n"));
@@ -8910,6 +8951,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Each `parse_X` returns `Option::None` for malformed input, empty strings, or\n"));
     r.push_str(String::from("values outside the target type's range.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("In particular, `parse_u8` accepts decimal values from `0` through `255` and\n"));
+    r.push_str(String::from("returns `Option::None` for negative or larger values.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing\n"));
     r.push_str(String::from("pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and\n"));

@@ -40,6 +40,9 @@ fn EC_REGION_LITERAL_MUTATION() -> i64 { 25 }
 fn EC_IMMUTABLE_ASSIGNMENT() -> i64 { 26 }
 fn EC_UNUSED_MUT() -> i64 { 27 }
 fn EC_UNSUPPORTED_PATTERN() -> i64 { 28 }
+fn EC_LITERAL_OUT_OF_RANGE() -> i64 { 29 }
+fn EC_NARROWING_CAST_NOT_ALLOWED() -> i64 { 30 }
+fn EC_SHIFT_COUNT_OUT_OF_RANGE() -> i64 { 31 }
 
 struct Diagnostic {
     severity: i64,
@@ -255,8 +258,17 @@ fn ec_name(code: i64) -> String {
     if code == EC_UNSUPPORTED_PATTERN() {
         String::from("UnsupportedPattern")
     } else {
+    if code == EC_LITERAL_OUT_OF_RANGE() {
+        String::from("LiteralOutOfRange")
+    } else {
+    if code == EC_NARROWING_CAST_NOT_ALLOWED() {
+        String::from("NarrowingCastNotAllowed")
+    } else {
+    if code == EC_SHIFT_COUNT_OUT_OF_RANGE() {
+        String::from("ShiftCountOutOfRange")
+    } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {

@@ -83,18 +83,45 @@ const ITY_UNIT: i64 = 5;
 const ITY_PTR: i64 = 6;
 const ITY_LPTR: i64 = 7;
 const ITY_U64: i64 = 8;
+const ITY_U8: i64 = 9;
+const ITY_I8: i64 = 10;
+const ITY_I16: i64 = 11;
+const ITY_U16: i64 = 12;
+const ITY_U32: i64 = 13;
+const ITY_I128: i64 = 14;
+const ITY_U128: i64 = 15;
 
 fn ity_to_cranelift(ty: i64) -> Option<types::Type> {
     match ty {
+        ITY_I8 => Some(types::I8),
         ITY_I32 => Some(types::I32),
         ITY_I64 => Some(types::I64),
         ITY_F32 => Some(types::F32),
         ITY_F64 => Some(types::F64),
         ITY_BOOL => Some(types::I64),
         ITY_U64 => Some(types::I64),
+        ITY_U8 => Some(types::I8),
+        ITY_I16 | ITY_U16 => Some(types::I16),
+        ITY_U32 => Some(types::I32),
+        ITY_I128 | ITY_U128 => Some(types::I128),
         ITY_UNIT => None,
         ITY_PTR | ITY_LPTR => Some(types::I64),
         _ => None,
+    }
+}
+
+fn ity_is_signed(ty: i64) -> bool {
+    matches!(ty, ITY_I8 | ITY_I16 | ITY_I32 | ITY_I64 | ITY_I128)
+}
+
+fn ity_bits(ty: i64) -> i64 {
+    match ty {
+        ITY_I8 | ITY_U8 => 8,
+        ITY_I16 | ITY_U16 => 16,
+        ITY_I32 | ITY_U32 => 32,
+        ITY_I64 | ITY_U64 => 64,
+        ITY_I128 | ITY_U128 => 128,
+        _ => 0,
     }
 }
 
@@ -114,40 +141,6 @@ const IOP_CONST_BOOL: i64 = 4;
 const IOP_CONST_STR: i64 = 5;
 const IOP_CONST_UNIT: i64 = 6;
 const IOP_GET_ARG: i64 = 7;
-
-const IOP_WADD_I32: i64 = 8;
-const IOP_WSUB_I32: i64 = 9;
-const IOP_WMUL_I32: i64 = 10;
-const IOP_WDIV_I32: i64 = 11;
-const IOP_WREM_I32: i64 = 12;
-const IOP_CADD_I32: i64 = 13;
-const IOP_CSUB_I32: i64 = 14;
-const IOP_CMUL_I32: i64 = 15;
-const IOP_CDIV_I32: i64 = 16;
-const IOP_CREM_I32: i64 = 17;
-const IOP_EQ_I32: i64 = 18;
-const IOP_NE_I32: i64 = 19;
-const IOP_LT_I32: i64 = 20;
-const IOP_LE_I32: i64 = 21;
-const IOP_GT_I32: i64 = 22;
-const IOP_GE_I32: i64 = 23;
-
-const IOP_WADD_I64: i64 = 24;
-const IOP_WSUB_I64: i64 = 25;
-const IOP_WMUL_I64: i64 = 26;
-const IOP_WDIV_I64: i64 = 27;
-const IOP_WREM_I64: i64 = 28;
-const IOP_CADD_I64: i64 = 29;
-const IOP_CSUB_I64: i64 = 30;
-const IOP_CMUL_I64: i64 = 31;
-const IOP_CDIV_I64: i64 = 32;
-const IOP_CREM_I64: i64 = 33;
-const IOP_EQ_I64: i64 = 34;
-const IOP_NE_I64: i64 = 35;
-const IOP_LT_I64: i64 = 36;
-const IOP_LE_I64: i64 = 37;
-const IOP_GT_I64: i64 = 38;
-const IOP_GE_I64: i64 = 39;
 
 const IOP_ADD_F32: i64 = 40;
 const IOP_SUB_F32: i64 = 41;
@@ -617,38 +610,8 @@ const IOP_LINEAR_BORROW: i64 = 80;
 const IOP_FIELD_GET: i64 = 81;
 const IOP_FIELD_SET: i64 = 82;
 
-const IOP_XOR_I32: i64 = 83;
-const IOP_XOR_I64: i64 = 84;
-
-const IOP_WADD_U64: i64 = 85;
-const IOP_WSUB_U64: i64 = 86;
-const IOP_WMUL_U64: i64 = 87;
-const IOP_WDIV_U64: i64 = 88;
-const IOP_WREM_U64: i64 = 89;
-const IOP_CADD_U64: i64 = 90;
-const IOP_CSUB_U64: i64 = 91;
-const IOP_CMUL_U64: i64 = 92;
-const IOP_CDIV_U64: i64 = 93;
-const IOP_CREM_U64: i64 = 94;
-const IOP_EQ_U64: i64 = 95;
-const IOP_NE_U64: i64 = 96;
-const IOP_LT_U64: i64 = 97;
-const IOP_LE_U64: i64 = 98;
-const IOP_GT_U64: i64 = 99;
-const IOP_GE_U64: i64 = 100;
-const IOP_XOR_U64: i64 = 101;
 const IOP_CONST_U64: i64 = 102;
-const IOP_CAST_I64_TO_U64: i64 = 103;
-const IOP_CAST_U64_TO_I64: i64 = 104;
 const IOP_DEBUG_CALL: i64 = 105;
-const IOP_BITAND_I64: i64 = 106;
-const IOP_BITOR_I64: i64 = 107;
-const IOP_SHL_I64: i64 = 108;
-const IOP_SHR_I64: i64 = 109;
-const IOP_BITAND_U64: i64 = 110;
-const IOP_BITOR_U64: i64 = 111;
-const IOP_SHL_U64: i64 = 112;
-const IOP_SHR_U64: i64 = 113;
 // Phase 2: declared but never emitted. Phase 4 wires arena open/close to
 // __vow_arena_open / __vow_arena_close. If one leaks into the shim today
 // it is a defensive no-op rather than a misdispatch (see compile_function
@@ -657,6 +620,29 @@ const IOP_SHR_U64: i64 = 113;
 const IOP_REGION_OPEN: i64 = 114;
 #[allow(dead_code)]
 const IOP_REGION_CLOSE: i64 = 115;
+const IOP_WADD: i64 = 116;
+const IOP_WSUB: i64 = 117;
+const IOP_WMUL: i64 = 118;
+const IOP_WDIV: i64 = 119;
+const IOP_WREM: i64 = 120;
+const IOP_CADD: i64 = 121;
+const IOP_CSUB: i64 = 122;
+const IOP_CMUL: i64 = 123;
+const IOP_CDIV: i64 = 124;
+const IOP_CREM: i64 = 125;
+const IOP_EQ: i64 = 126;
+const IOP_NE: i64 = 127;
+const IOP_LT: i64 = 128;
+const IOP_LE: i64 = 129;
+const IOP_GT: i64 = 130;
+const IOP_GE: i64 = 131;
+const IOP_BITAND: i64 = 132;
+const IOP_BITOR: i64 = 133;
+const IOP_BITXOR: i64 = 134;
+const IOP_SHL: i64 = 135;
+const IOP_SHR: i64 = 136;
+const IOP_CONST_U8: i64 = 137;
+const IOP_INT_CAST: i64 = 138;
 
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
@@ -679,6 +665,9 @@ const IDATA_VOW_ID: i64 = 14;
 const IDATA_ALLOC_SIZE: i64 = 15;
 const IDATA_FIELD: i64 = 16;
 const IDATA_CONST_U64: i64 = 17;
+const IDATA_INTEGER: i64 = 18;
+const IDATA_CONST_U8: i64 = 19;
+const IDATA_INTEGER_CAST: i64 = 20;
 
 // ---------------------------------------------------------------------------
 // Module context (opaque handle passed through FFI)
@@ -1764,7 +1753,9 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     // Widen i8 (booleans from icmp/fcmp/const_bool) to i64 so
                     // value_map always holds i64 for booleans, matching slot loads.
                     let norm = match src_ty {
-                        types::I8 => builder.ins().uextend(types::I64, val_),
+                        types::I8 if ity != ITY_I8 && ity != ITY_U8 => {
+                            builder.ins().uextend(types::I64, val_)
+                        }
                         _ => val_,
                     };
                     value_map.insert(id_, norm);
@@ -1784,6 +1775,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 IOP_CONST_I64 => {
                     if dk == IDATA_CONST_I64 {
                         let val = builder.ins().iconst(types::I64, dv);
+                        set_val!(iid, val);
+                    }
+                }
+                IOP_CONST_U8 => {
+                    if dk == IDATA_CONST_U8 {
+                        let val = builder.ins().iconst(types::I8, dv);
                         set_val!(iid, val);
                     }
                 }
@@ -1832,90 +1829,113 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     }
                 }
 
-                // Wrapping arithmetic
-                IOP_WADD_I32 | IOP_WADD_I64 => {
+                IOP_WADD => {
                     let val = builder.ins().iadd(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_WSUB_I32 | IOP_WSUB_I64 => {
+                IOP_WSUB => {
                     let val = builder.ins().isub(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_WMUL_I32 | IOP_WMUL_I64 => {
+                IOP_WMUL => {
                     let val = builder.ins().imul(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_WDIV_I32 | IOP_WDIV_I64 => {
-                    let val = builder.ins().sdiv(arg!(0), arg!(1));
+                IOP_WDIV | IOP_WREM => {
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let val = match (op, signed) {
+                        (IOP_WDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
+                        (IOP_WDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
+                        (IOP_WREM, true) => builder.ins().srem(arg!(0), arg!(1)),
+                        (IOP_WREM, false) => builder.ins().urem(arg!(0), arg!(1)),
+                        _ => unreachable!(),
+                    };
                     set_val!(iid, val);
                 }
-                IOP_WREM_I32 | IOP_WREM_I64 => {
-                    let val = builder.ins().srem(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
-                // Checked arithmetic
-                IOP_CADD_I32 | IOP_CADD_I64 => {
-                    let (result, overflow) = builder.ins().sadd_overflow(arg!(0), arg!(1));
+                IOP_CADD | IOP_CSUB | IOP_CMUL => {
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let (result, overflow) = match (op, signed) {
+                        (IOP_CADD, true) => builder.ins().sadd_overflow(arg!(0), arg!(1)),
+                        (IOP_CADD, false) => builder.ins().uadd_overflow(arg!(0), arg!(1)),
+                        (IOP_CSUB, true) => builder.ins().ssub_overflow(arg!(0), arg!(1)),
+                        (IOP_CSUB, false) => builder.ins().usub_overflow(arg!(0), arg!(1)),
+                        (IOP_CMUL, true) => builder.ins().smul_overflow(arg!(0), arg!(1)),
+                        (IOP_CMUL, false) => builder.ins().umul_overflow(arg!(0), arg!(1)),
+                        _ => unreachable!(),
+                    };
                     emit_overflow_check(&mut builder, overflow, overflow_ref);
                     set_val!(iid, result);
                 }
-                IOP_CSUB_I32 | IOP_CSUB_I64 => {
-                    let (result, overflow) = builder.ins().ssub_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CMUL_I32 | IOP_CMUL_I64 => {
-                    let (result, overflow) = builder.ins().smul_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CDIV_I32 | IOP_CDIV_I64 => {
-                    let cl_ty = ity_to_cranelift(ity).unwrap_or(types::I64);
+                IOP_CDIV | IOP_CREM => {
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let cl_ty = builder.func.dfg.value_type(arg!(1));
                     let zero = builder.ins().iconst(cl_ty, 0);
                     let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
                     emit_overflow_check(&mut builder, is_zero, overflow_ref);
-                    let val = builder.ins().sdiv(arg!(0), arg!(1));
+                    let val = match (op, signed) {
+                        (IOP_CDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
+                        (IOP_CDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
+                        (IOP_CREM, true) => builder.ins().srem(arg!(0), arg!(1)),
+                        (IOP_CREM, false) => builder.ins().urem(arg!(0), arg!(1)),
+                        _ => unreachable!(),
+                    };
                     set_val!(iid, val);
                 }
-                IOP_CREM_I32 | IOP_CREM_I64 => {
-                    let cl_ty = ity_to_cranelift(ity).unwrap_or(types::I64);
-                    let zero = builder.ins().iconst(cl_ty, 0);
-                    let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-                    emit_overflow_check(&mut builder, is_zero, overflow_ref);
-                    let val = builder.ins().srem(arg!(0), arg!(1));
+                IOP_EQ | IOP_NE | IOP_LT | IOP_LE | IOP_GT | IOP_GE => {
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let cc = match (op, signed) {
+                        (IOP_EQ, _) => IntCC::Equal,
+                        (IOP_NE, _) => IntCC::NotEqual,
+                        (IOP_LT, true) => IntCC::SignedLessThan,
+                        (IOP_LT, false) => IntCC::UnsignedLessThan,
+                        (IOP_LE, true) => IntCC::SignedLessThanOrEqual,
+                        (IOP_LE, false) => IntCC::UnsignedLessThanOrEqual,
+                        (IOP_GT, true) => IntCC::SignedGreaterThan,
+                        (IOP_GT, false) => IntCC::UnsignedGreaterThan,
+                        (IOP_GE, true) => IntCC::SignedGreaterThanOrEqual,
+                        (IOP_GE, false) => IntCC::UnsignedGreaterThanOrEqual,
+                        _ => unreachable!(),
+                    };
+                    let val = builder.ins().icmp(cc, arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-
-                // Integer comparisons
-                IOP_EQ_I32 | IOP_EQ_I64 => {
-                    let val = builder.ins().icmp(IntCC::Equal, arg!(0), arg!(1));
+                IOP_BITAND => {
+                    let val = builder.ins().band(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_NE_I32 | IOP_NE_I64 => {
-                    let val = builder.ins().icmp(IntCC::NotEqual, arg!(0), arg!(1));
+                IOP_BITOR => {
+                    let val = builder.ins().bor(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_LT_I32 | IOP_LT_I64 => {
-                    let val = builder.ins().icmp(IntCC::SignedLessThan, arg!(0), arg!(1));
+                IOP_BITXOR => {
+                    let val = builder.ins().bxor(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_LE_I32 | IOP_LE_I64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::SignedLessThanOrEqual, arg!(0), arg!(1));
+                IOP_SHL => {
+                    if dk == IDATA_INTEGER && dv == ITY_U8 {
+                        let out_of_range =
+                            builder
+                                .ins()
+                                .icmp_imm(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
+                        emit_overflow_check(&mut builder, out_of_range, overflow_ref);
+                    }
+                    let val = builder.ins().ishl(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_GT_I32 | IOP_GT_I64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::SignedGreaterThan, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_GE_I32 | IOP_GE_I64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::SignedGreaterThanOrEqual, arg!(0), arg!(1));
+                IOP_SHR => {
+                    if dk == IDATA_INTEGER && dv == ITY_U8 {
+                        let out_of_range =
+                            builder
+                                .ins()
+                                .icmp_imm(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
+                        emit_overflow_check(&mut builder, out_of_range, overflow_ref);
+                    }
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let val = if signed {
+                        builder.ins().sshr(arg!(0), arg!(1))
+                    } else {
+                        builder.ins().ushr(arg!(0), arg!(1))
+                    };
                     set_val!(iid, val);
                 }
 
@@ -1986,119 +2006,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, val);
                 }
 
-                IOP_BITAND_I64 | IOP_BITAND_U64 => {
-                    let val = builder.ins().band(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_BITOR_I64 | IOP_BITOR_U64 => {
-                    let val = builder.ins().bor(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_XOR_I32 | IOP_XOR_I64 | IOP_XOR_U64 => {
-                    let val = builder.ins().bxor(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_SHL_I64 | IOP_SHL_U64 => {
-                    let val = builder.ins().ishl(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_SHR_I64 => {
-                    let val = builder.ins().sshr(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_SHR_U64 => {
-                    let val = builder.ins().ushr(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
-                // U64 wrapping arithmetic
-                IOP_WADD_U64 => {
-                    let val = builder.ins().iadd(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_WSUB_U64 => {
-                    let val = builder.ins().isub(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_WMUL_U64 => {
-                    let val = builder.ins().imul(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_WDIV_U64 => {
-                    let val = builder.ins().udiv(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_WREM_U64 => {
-                    let val = builder.ins().urem(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
-                // U64 checked arithmetic
-                IOP_CADD_U64 => {
-                    let (result, overflow) = builder.ins().uadd_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CSUB_U64 => {
-                    let (result, overflow) = builder.ins().usub_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CMUL_U64 => {
-                    let (result, overflow) = builder.ins().umul_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CDIV_U64 => {
-                    let zero = builder.ins().iconst(types::I64, 0);
-                    let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-                    emit_overflow_check(&mut builder, is_zero, overflow_ref);
-                    let val = builder.ins().udiv(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_CREM_U64 => {
-                    let zero = builder.ins().iconst(types::I64, 0);
-                    let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-                    emit_overflow_check(&mut builder, is_zero, overflow_ref);
-                    let val = builder.ins().urem(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
-                // U64 comparisons
-                IOP_EQ_U64 => {
-                    let val = builder.ins().icmp(IntCC::Equal, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_NE_U64 => {
-                    let val = builder.ins().icmp(IntCC::NotEqual, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_LT_U64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_LE_U64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::UnsignedLessThanOrEqual, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_GT_U64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::UnsignedGreaterThan, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_GE_U64 => {
-                    let val =
-                        builder
-                            .ins()
-                            .icmp(IntCC::UnsignedGreaterThanOrEqual, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
                 // ConstU64
                 IOP_CONST_U64 => {
                     if dk == IDATA_CONST_U64 {
@@ -2107,10 +2014,28 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     }
                 }
 
-                // Cast (no-op at machine level)
-                IOP_CAST_I64_TO_U64 | IOP_CAST_U64_TO_I64 => {
-                    let val = arg!(0);
-                    set_val!(iid, val);
+                IOP_INT_CAST => {
+                    if dk != IDATA_INTEGER_CAST {
+                        return -1;
+                    }
+                    let value = arg!(0);
+                    let from_bits = ity_bits(dv);
+                    let to_bits = ity_bits(dv2);
+                    let result = if from_bits == to_bits {
+                        value
+                    } else if to_bits > from_bits {
+                        let Some(target_ty) = ity_to_cranelift(dv2) else {
+                            return -1;
+                        };
+                        if ity_is_signed(dv) {
+                            builder.ins().sextend(target_ty, value)
+                        } else {
+                            builder.ins().uextend(target_ty, value)
+                        }
+                    } else {
+                        return -1;
+                    };
+                    set_val!(iid, result);
                 }
 
                 // Memory
@@ -2965,6 +2890,36 @@ fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, ret_ty: i6
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
+    let narrow_source_ty =
+        if sym.starts_with("__vow_i16_to_u8_") || sym.starts_with("__vow_u16_to_u8_") {
+            Some(types::I16)
+        } else if sym.starts_with("__vow_i32_to_u8_") || sym.starts_with("__vow_u32_to_u8_") {
+            Some(types::I32)
+        } else if sym.starts_with("__vow_i64_to_u8_") || sym.starts_with("__vow_u64_to_u8_") {
+            Some(types::I64)
+        } else if sym.starts_with("__vow_i128_to_u8_") || sym.starts_with("__vow_u128_to_u8_") {
+            Some(types::I128)
+        } else {
+            None
+        };
+    if let Some(source_ty) = narrow_source_ty {
+        sig.params.push(AbiParam::new(source_ty));
+        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
+            types::I64
+        } else {
+            types::I8
+        }));
+        return sig;
+    }
+    if matches!(
+        sym,
+        "__vow_add_sat_u8" | "__vow_sub_sat_u8" | "__vow_mul_sat_u8"
+    ) {
+        sig.params.push(AbiParam::new(types::I8));
+        sig.params.push(AbiParam::new(types::I8));
+        sig.returns.push(AbiParam::new(types::I8));
+        return sig;
+    }
     match sym {
         "__vow_print_str" => {
             sig.params.push(AbiParam::new(types::I64));
@@ -3229,7 +3184,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_parse_i64_opt" | "__vow_string_parse_u64_opt" => {
+        "__vow_string_parse_i64_opt"
+        | "__vow_string_parse_u64_opt"
+        | "__vow_string_parse_u8_opt" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }

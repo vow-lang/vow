@@ -142,7 +142,7 @@ mod tests {
     fn insert_before_middle_reindexes_args() {
         let i0 = make_inst(0, Opcode::ConstI32, InstData::ConstI32(10));
         let i1 = make_inst(1, Opcode::ConstI32, InstData::ConstI32(20));
-        let i2 = make_inst_with_args(2, Opcode::WrappingAddI32, vec![InstId(0), InstId(1)]);
+        let i2 = make_inst_with_args(2, Opcode::WrappingAdd, vec![InstId(0), InstId(1)]);
         let mut block = block_with_insts(vec![i0, i1, i2]);
 
         let new_inst = make_inst(99, Opcode::ConstI32, InstData::ConstI32(5));

@@ -55,6 +55,7 @@ const TAG_F32: u8 = 2;
 const TAG_F64: u8 = 3;
 const TAG_BOOL: u8 = 4;
 const TAG_U64: u8 = 5;
+const TAG_U8: u8 = 6;
 
 /// Reserved process exit status for any runtime abort — a contract
 /// violation, checked-arithmetic overflow, unwrap-on-None, index-out-of-bounds,
@@ -84,6 +85,7 @@ fn fmt_payload(tag: u8, payload: u64) -> String {
         TAG_F64 => format!("{}", f64::from_bits(payload)),
         TAG_BOOL => if payload != 0 { "true" } else { "false" }.to_string(),
         TAG_U64 => format!("{payload}"),
+        TAG_U8 => format!("{}", payload as u8),
         _ => format!("0x{payload:x}"),
     }
 }
@@ -2248,6 +2250,137 @@ pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
         }
     }
     ptr as *mut u8
+}
+
+unsafe fn alloc_option_u8(value: Option<u8>) -> *mut u8 {
+    let ptr = __vow_vec_new(8, 8) as *mut i64;
+    match value {
+        Some(value) => unsafe {
+            *ptr = 1;
+            *ptr.add(1) = i64::from(value);
+        },
+        None => unsafe {
+            *ptr = 0;
+            *ptr.add(1) = 0;
+        },
+    }
+    ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_parse_u8_opt(s: *const u8) -> *mut u8 {
+    if s.is_null() {
+        return unsafe { alloc_option_u8(None) };
+    }
+    sanitize_on_read(s as usize, 0);
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let value = std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|text| text.trim().parse::<u8>().ok());
+    unsafe { alloc_option_u8(value) }
+}
+
+macro_rules! define_signed_to_u8 {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $try_name(value: $ty) -> *mut u8 {
+            unsafe { alloc_option_u8(u8::try_from(value).ok()) }
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $wrap_name(value: $ty) -> u8 {
+            value as u8
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $sat_name(value: $ty) -> u8 {
+            value.clamp(0, 255) as u8
+        }
+    };
+}
+
+macro_rules! define_unsigned_to_u8 {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $try_name(value: $ty) -> *mut u8 {
+            unsafe { alloc_option_u8(u8::try_from(value).ok()) }
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $wrap_name(value: $ty) -> u8 {
+            value as u8
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $sat_name(value: $ty) -> u8 {
+            value.min(255) as u8
+        }
+    };
+}
+
+define_signed_to_u8!(
+    __vow_i16_to_u8_try,
+    __vow_i16_to_u8_wrap,
+    __vow_i16_to_u8_sat,
+    i16
+);
+define_signed_to_u8!(
+    __vow_i32_to_u8_try,
+    __vow_i32_to_u8_wrap,
+    __vow_i32_to_u8_sat,
+    i32
+);
+define_signed_to_u8!(
+    __vow_i64_to_u8_try,
+    __vow_i64_to_u8_wrap,
+    __vow_i64_to_u8_sat,
+    i64
+);
+define_signed_to_u8!(
+    __vow_i128_to_u8_try,
+    __vow_i128_to_u8_wrap,
+    __vow_i128_to_u8_sat,
+    i128
+);
+define_unsigned_to_u8!(
+    __vow_u16_to_u8_try,
+    __vow_u16_to_u8_wrap,
+    __vow_u16_to_u8_sat,
+    u16
+);
+define_unsigned_to_u8!(
+    __vow_u32_to_u8_try,
+    __vow_u32_to_u8_wrap,
+    __vow_u32_to_u8_sat,
+    u32
+);
+define_unsigned_to_u8!(
+    __vow_u64_to_u8_try,
+    __vow_u64_to_u8_wrap,
+    __vow_u64_to_u8_sat,
+    u64
+);
+define_unsigned_to_u8!(
+    __vow_u128_to_u8_try,
+    __vow_u128_to_u8_wrap,
+    __vow_u128_to_u8_sat,
+    u128
+);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_add_sat_u8(a: u8, b: u8) -> u8 {
+    a.saturating_add(b)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_sub_sat_u8(a: u8, b: u8) -> u8 {
+    a.saturating_sub(b)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_mul_sat_u8(a: u8, b: u8) -> u8 {
+    a.saturating_mul(b)
 }
 
 #[unsafe(no_mangle)]

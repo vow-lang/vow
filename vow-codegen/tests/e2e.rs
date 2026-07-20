@@ -5,8 +5,8 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_ir::{
-    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId,
-    RegionSummary, Ty, VowEntry, VowId,
+    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, IntegerType, Module, Opcode,
+    RegionId, RegionSummary, Ty, VowEntry, VowId,
 };
 use vow_syntax::span::Span;
 
@@ -15,6 +15,7 @@ fn sp() -> Span {
 }
 
 fn inst(id: u32, op: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
+    let data = integer_test_data(op, ty, data);
     Inst {
         id: InstId(id),
         opcode: op,
@@ -24,6 +25,43 @@ fn inst(id: u32, op: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
         origin: sp(),
         region: RegionId::Root,
     }
+}
+
+fn integer_test_data(op: Opcode, ty: Ty, data: InstData) -> InstData {
+    if data != InstData::None
+        || !matches!(
+            op,
+            Opcode::WrappingAdd
+                | Opcode::WrappingSub
+                | Opcode::WrappingMul
+                | Opcode::WrappingDiv
+                | Opcode::WrappingRem
+                | Opcode::CheckedAdd
+                | Opcode::CheckedSub
+                | Opcode::CheckedMul
+                | Opcode::CheckedDiv
+                | Opcode::CheckedRem
+                | Opcode::Eq
+                | Opcode::Ne
+                | Opcode::Lt
+                | Opcode::Le
+                | Opcode::Gt
+                | Opcode::Ge
+                | Opcode::BitAnd
+                | Opcode::BitOr
+                | Opcode::BitXor
+                | Opcode::Shl
+                | Opcode::Shr
+        )
+    {
+        return data;
+    }
+    InstData::Integer(match ty {
+        Ty::I32 => IntegerType::I32,
+        Ty::U64 => IntegerType::U64,
+        Ty::U8 => IntegerType::U8,
+        _ => IntegerType::I64,
+    })
 }
 
 /// Build, link, and return the path to a runnable executable in `dir`.
@@ -148,7 +186,7 @@ fn vow_violation_exits_with_reserved_abort_code_and_blames_caller() {
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
                 inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-                inst(3, Opcode::NeI64, Ty::Bool, vec![1, 2], InstData::None),
+                inst(3, Opcode::Ne, Ty::Bool, vec![1, 2], InstData::None),
                 Inst {
                     id: InstId(4),
                     opcode: Opcode::VowRequires,
@@ -158,13 +196,7 @@ fn vow_violation_exits_with_reserved_abort_code_and_blames_caller() {
                     origin: sp(),
                     region: RegionId::Root,
                 },
-                inst(
-                    5,
-                    Opcode::WrappingDivI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
+                inst(5, Opcode::WrappingDiv, Ty::I64, vec![0, 1], InstData::None),
                 inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
             ],
         }],
@@ -278,7 +310,7 @@ fn vow_violation_reports_variable_values() {
             insts: vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-                inst(2, Opcode::GtI64, Ty::Bool, vec![0, 1], InstData::None),
+                inst(2, Opcode::Gt, Ty::Bool, vec![0, 1], InstData::None),
                 Inst {
                     id: InstId(3),
                     opcode: Opcode::VowEnsures,

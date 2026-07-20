@@ -799,6 +799,7 @@ impl<'e> Checker<'e> {
                     match self.env.resolve(ann) {
                         Ok(ann_ty) => {
                             self.check_btreemap_key_in_ty(&ann_ty, ann.span());
+                            self.check_integer_literal_range(init, &ann_ty);
                             if !can_context_coerce(&init_ty, &ann_ty) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
@@ -850,6 +851,35 @@ impl<'e> Checker<'e> {
                     expr_ty
                 }
             }
+        }
+    }
+
+    fn check_integer_literal_range(&mut self, expr: &Expr, target: &Ty) {
+        if *target != Ty::U8 {
+            return;
+        }
+        let value = match &expr.kind {
+            ExprKind::Lit(Lit::Int(value)) => Some(*value),
+            ExprKind::UnaryOp {
+                op: UnOp::Neg,
+                operand,
+            } => match &operand.kind {
+                ExprKind::Lit(Lit::Int(value)) => Some(-*value),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(value) = value
+            && !(0..=255).contains(&value)
+        {
+            self.emit_error_with_hints(
+                ErrorCode::LiteralOutOfRange,
+                format!("literal {value} does not fit in u8 (range 0..=255)"),
+                expr.span,
+                vec![
+                    "use a value in 0..=255 or choose an explicit narrowing intrinsic".to_string(),
+                ],
+            );
         }
     }
 
@@ -995,6 +1025,14 @@ impl<'e> Checker<'e> {
             ExprKind::BinaryOp { op, lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);
                 let rhs_ty = self.check_expr(rhs);
+                if !matches!(op, BinOp::Shl | BinOp::Shr) {
+                    if lhs_ty == Ty::U8 && rhs_ty.is_lit_int() {
+                        self.check_integer_literal_range(rhs, &Ty::U8);
+                    }
+                    if rhs_ty == Ty::U8 && lhs_ty.is_lit_int() {
+                        self.check_integer_literal_range(lhs, &Ty::U8);
+                    }
+                }
                 match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
                         self.check_same_numeric(lhs_ty, rhs_ty, expr.span)
@@ -1023,9 +1061,31 @@ impl<'e> Checker<'e> {
                         }
                         Ty::Bool
                     }
-                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
                         self.check_same_integer(lhs_ty, rhs_ty, expr.span)
                     }
+                    BinOp::Shl | BinOp::Shr if lhs_ty == Ty::U8 => {
+                        if rhs_ty != Ty::U32 && !rhs_ty.is_lit_int() && rhs_ty != Ty::Never {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                format!("u8 shift count must be u32, found `{rhs_ty}`"),
+                                rhs.span,
+                                vec!["use a u32 shift count".to_string()],
+                            );
+                        }
+                        if let ExprKind::Lit(Lit::Int(count)) = rhs.kind
+                            && count >= 8
+                        {
+                            self.emit_error_with_hints(
+                                ErrorCode::ShiftCountOutOfRange,
+                                format!("shift count {count} is out of range for u8"),
+                                rhs.span,
+                                vec!["u8 shift counts must be in 0..8".to_string()],
+                            );
+                        }
+                        Ty::U8
+                    }
+                    BinOp::Shl | BinOp::Shr => self.check_same_integer(lhs_ty, rhs_ty, expr.span),
                     BinOp::And | BinOp::Or => {
                         if lhs_ty != Ty::Bool && lhs_ty != Ty::Never {
                             self.emit_error_with_hints(
@@ -1848,20 +1908,27 @@ impl<'e> Checker<'e> {
                     }
                     _ => Ty::Unit,
                 };
-                let valid = (src_ty.is_lit_int() && tgt_ty.is_integer())
-                    || matches!(
-                        (&src_ty, &tgt_ty),
-                        (Ty::I64, Ty::U64)
-                            | (Ty::U64, Ty::I64)
-                            | (Ty::I32, Ty::U64)
-                            | (Ty::I32, Ty::I64)
-                    );
-                if !valid && src_ty != Ty::Never {
+                if src_ty.is_lit_int() && tgt_ty.is_integer() {
+                    self.check_integer_literal_range(expr, &tgt_ty);
+                } else if let (Some(src_width), Some(tgt_width)) =
+                    (src_ty.integer_width(), tgt_ty.integer_width())
+                {
+                    if tgt_width < src_width {
+                        self.emit_error_with_hints(
+                            ErrorCode::NarrowingCastNotAllowed,
+                            format!("cannot cast {src_ty} to {tgt_ty} via as"),
+                            expr.span,
+                            vec![format!(
+                                "use a `{src_ty}_to_{tgt_ty}_try`, `_wrap`, or `_sat` narrowing intrinsic"
+                            )],
+                        );
+                    }
+                } else if src_ty != Ty::Never {
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!("cannot cast `{src_ty}` to `{tgt_ty}`"),
                         expr.span,
-                        vec!["only i64 <-> u64 casts are allowed".to_string()],
+                        vec!["`as` only permits same-width or widening integer casts".to_string()],
                     );
                 }
                 tgt_ty

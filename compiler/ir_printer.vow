@@ -69,6 +69,7 @@ fn debug_escape_str(s: String) -> String {
 }
 
 fn ir_ty_str(ty: i64) -> String {
+    if ty == ITY_I8() { return String::from("i8"); }
     if ty == ITY_I32() { return String::from("i32"); }
     if ty == ITY_I64() { return String::from("i64"); }
     if ty == ITY_F32() { return String::from("f32"); }
@@ -78,6 +79,12 @@ fn ir_ty_str(ty: i64) -> String {
     if ty == ITY_PTR() { return String::from("ptr"); }
     if ty == ITY_LPTR() { return String::from("linear_ptr"); }
     if ty == ITY_U64() { return String::from("u64"); }
+    if ty == ITY_U8() { return String::from("u8"); }
+    if ty == ITY_I16() { return String::from("i16"); }
+    if ty == ITY_U16() { return String::from("u16"); }
+    if ty == ITY_U32() { return String::from("u32"); }
+    if ty == ITY_I128() { return String::from("i128"); }
+    if ty == ITY_U128() { return String::from("u128"); }
     String::from("???")
 }
 
@@ -90,38 +97,29 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_CONST_STR() { return String::from("ConstStr"); }
     if op == IOP_CONST_UNIT() { return String::from("ConstUnit"); }
     if op == IOP_GET_ARG() { return String::from("GetArg"); }
-    if op == IOP_WADD_I32() { return String::from("WrappingAddI32"); }
-    if op == IOP_WSUB_I32() { return String::from("WrappingSubI32"); }
-    if op == IOP_WMUL_I32() { return String::from("WrappingMulI32"); }
-    if op == IOP_WDIV_I32() { return String::from("WrappingDivI32"); }
-    if op == IOP_WREM_I32() { return String::from("WrappingRemI32"); }
-    if op == IOP_CADD_I32() { return String::from("CheckedAddI32"); }
-    if op == IOP_CSUB_I32() { return String::from("CheckedSubI32"); }
-    if op == IOP_CMUL_I32() { return String::from("CheckedMulI32"); }
-    if op == IOP_CDIV_I32() { return String::from("CheckedDivI32"); }
-    if op == IOP_CREM_I32() { return String::from("CheckedRemI32"); }
-    if op == IOP_EQ_I32() { return String::from("EqI32"); }
-    if op == IOP_NE_I32() { return String::from("NeI32"); }
-    if op == IOP_LT_I32() { return String::from("LtI32"); }
-    if op == IOP_LE_I32() { return String::from("LeI32"); }
-    if op == IOP_GT_I32() { return String::from("GtI32"); }
-    if op == IOP_GE_I32() { return String::from("GeI32"); }
-    if op == IOP_WADD_I64() { return String::from("WrappingAddI64"); }
-    if op == IOP_WSUB_I64() { return String::from("WrappingSubI64"); }
-    if op == IOP_WMUL_I64() { return String::from("WrappingMulI64"); }
-    if op == IOP_WDIV_I64() { return String::from("WrappingDivI64"); }
-    if op == IOP_WREM_I64() { return String::from("WrappingRemI64"); }
-    if op == IOP_CADD_I64() { return String::from("CheckedAddI64"); }
-    if op == IOP_CSUB_I64() { return String::from("CheckedSubI64"); }
-    if op == IOP_CMUL_I64() { return String::from("CheckedMulI64"); }
-    if op == IOP_CDIV_I64() { return String::from("CheckedDivI64"); }
-    if op == IOP_CREM_I64() { return String::from("CheckedRemI64"); }
-    if op == IOP_EQ_I64() { return String::from("EqI64"); }
-    if op == IOP_NE_I64() { return String::from("NeI64"); }
-    if op == IOP_LT_I64() { return String::from("LtI64"); }
-    if op == IOP_LE_I64() { return String::from("LeI64"); }
-    if op == IOP_GT_I64() { return String::from("GtI64"); }
-    if op == IOP_GE_I64() { return String::from("GeI64"); }
+    if op == IOP_WADD() { return String::from("WrappingAdd"); }
+    if op == IOP_WSUB() { return String::from("WrappingSub"); }
+    if op == IOP_WMUL() { return String::from("WrappingMul"); }
+    if op == IOP_WDIV() { return String::from("WrappingDiv"); }
+    if op == IOP_WREM() { return String::from("WrappingRem"); }
+    if op == IOP_CADD() { return String::from("CheckedAdd"); }
+    if op == IOP_CSUB() { return String::from("CheckedSub"); }
+    if op == IOP_CMUL() { return String::from("CheckedMul"); }
+    if op == IOP_CDIV() { return String::from("CheckedDiv"); }
+    if op == IOP_CREM() { return String::from("CheckedRem"); }
+    if op == IOP_EQ() { return String::from("Eq"); }
+    if op == IOP_NE() { return String::from("Ne"); }
+    if op == IOP_LT() { return String::from("Lt"); }
+    if op == IOP_LE() { return String::from("Le"); }
+    if op == IOP_GT() { return String::from("Gt"); }
+    if op == IOP_GE() { return String::from("Ge"); }
+    if op == IOP_BITAND() { return String::from("BitAnd"); }
+    if op == IOP_BITOR() { return String::from("BitOr"); }
+    if op == IOP_BITXOR() { return String::from("BitXor"); }
+    if op == IOP_SHL() { return String::from("Shl"); }
+    if op == IOP_SHR() { return String::from("Shr"); }
+    if op == IOP_CONST_U8() { return String::from("ConstU8"); }
+    if op == IOP_INT_CAST() { return String::from("IntCast"); }
     if op == IOP_ADD_F32() { return String::from("AddF32"); }
     if op == IOP_SUB_F32() { return String::from("SubF32"); }
     if op == IOP_MUL_F32() { return String::from("MulF32"); }
@@ -147,12 +145,6 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_NOT() { return String::from("Not"); }
     if op == IOP_AND() { return String::from("And"); }
     if op == IOP_OR() { return String::from("Or"); }
-    if op == IOP_BITAND_I64() { return String::from("BitAndI64"); }
-    if op == IOP_BITOR_I64() { return String::from("BitOrI64"); }
-    if op == IOP_XOR_I32() { return String::from("XorI32"); }
-    if op == IOP_XOR_I64() { return String::from("XorI64"); }
-    if op == IOP_SHL_I64() { return String::from("ShlI64"); }
-    if op == IOP_SHR_I64() { return String::from("ShrI64"); }
     if op == IOP_LOAD() { return String::from("Load"); }
     if op == IOP_STORE() { return String::from("Store"); }
     if op == IOP_BRANCH() { return String::from("Branch"); }
@@ -172,30 +164,7 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_LINEAR_BORROW() { return String::from("LinearBorrow"); }
     if op == IOP_FIELD_GET() { return String::from("FieldGet"); }
     if op == IOP_FIELD_SET() { return String::from("FieldSet"); }
-    if op == IOP_WADD_U64() { return String::from("WrappingAddU64"); }
-    if op == IOP_WSUB_U64() { return String::from("WrappingSubU64"); }
-    if op == IOP_WMUL_U64() { return String::from("WrappingMulU64"); }
-    if op == IOP_WDIV_U64() { return String::from("WrappingDivU64"); }
-    if op == IOP_WREM_U64() { return String::from("WrappingRemU64"); }
-    if op == IOP_CADD_U64() { return String::from("CheckedAddU64"); }
-    if op == IOP_CSUB_U64() { return String::from("CheckedSubU64"); }
-    if op == IOP_CMUL_U64() { return String::from("CheckedMulU64"); }
-    if op == IOP_CDIV_U64() { return String::from("CheckedDivU64"); }
-    if op == IOP_CREM_U64() { return String::from("CheckedRemU64"); }
-    if op == IOP_EQ_U64() { return String::from("EqU64"); }
-    if op == IOP_NE_U64() { return String::from("NeU64"); }
-    if op == IOP_LT_U64() { return String::from("LtU64"); }
-    if op == IOP_LE_U64() { return String::from("LeU64"); }
-    if op == IOP_GT_U64() { return String::from("GtU64"); }
-    if op == IOP_GE_U64() { return String::from("GeU64"); }
-    if op == IOP_XOR_U64() { return String::from("XorU64"); }
-    if op == IOP_BITAND_U64() { return String::from("BitAndU64"); }
-    if op == IOP_BITOR_U64() { return String::from("BitOrU64"); }
-    if op == IOP_SHL_U64() { return String::from("ShlU64"); }
-    if op == IOP_SHR_U64() { return String::from("ShrU64"); }
     if op == IOP_CONST_U64() { return String::from("ConstU64"); }
-    if op == IOP_CAST_I64_TO_U64() { return String::from("CastI64ToU64"); }
-    if op == IOP_CAST_U64_TO_I64() { return String::from("CastU64ToI64"); }
     if op == IOP_DEBUG_CALL() { return String::from("DebugCall"); }
     String::from("???")
 }
@@ -294,6 +263,18 @@ fn format_data(inst: IrInst) -> String {
     if dk == IDATA_CONST_U64() {
         let out: String = i64_to_str(inst.dv);
         out.push_str(String::from("u64"));
+        return out;
+    }
+    if dk == IDATA_CONST_U8() {
+        let out: String = i64_to_str(inst.dv);
+        out.push_str(String::from("u8"));
+        return out;
+    }
+    if dk == IDATA_INTEGER() { return ir_ty_str(inst.dv); }
+    if dk == IDATA_INTEGER_CAST() {
+        let out: String = ir_ty_str(inst.dv);
+        out.push_str(String::from("->"));
+        out.push_str(ir_ty_str(inst.dv2));
         return out;
     }
     String::from("")

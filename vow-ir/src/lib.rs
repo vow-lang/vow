@@ -15,7 +15,8 @@ pub use region::{infer_regions, insert_region_markers};
 pub use serialize::{DecodeError, MODULE_MAGIC, MODULE_VERSION, decode_module, encode_module};
 pub use types::{
     AbstractRegionId, BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function,
-    HiddenRegionIdx, Inst, InstData, InstId, Module, Opcode, RegionConstraint, RegionId,
-    RegionSummary, RegionVar, StoreEffect, StructLayout, Ty, VariantLayout, VowEntry, VowId,
+    HiddenRegionIdx, Inst, InstData, InstId, IntegerSignedness, IntegerType, IntegerWidth, Module,
+    Opcode, RegionConstraint, RegionId, RegionSummary, RegionVar, StoreEffect, StructLayout, Ty,
+    VariantLayout, VowEntry, VowId,
 };
 pub use validator::{ValidationError, ValidationResult, validate, validate_function};

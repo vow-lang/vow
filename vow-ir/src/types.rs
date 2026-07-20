@@ -32,6 +32,56 @@ pub enum RegionId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VowId(pub u32);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IntegerWidth {
+    W8,
+    W16,
+    W32,
+    W64,
+    W128,
+}
+
+impl IntegerWidth {
+    pub const fn bits(self) -> u16 {
+        match self {
+            Self::W8 => 8,
+            Self::W16 => 16,
+            Self::W32 => 32,
+            Self::W64 => 64,
+            Self::W128 => 128,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IntegerSignedness {
+    Signed,
+    Unsigned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IntegerType {
+    pub width: IntegerWidth,
+    pub signedness: IntegerSignedness,
+}
+
+impl IntegerType {
+    pub const fn new(width: IntegerWidth, signedness: IntegerSignedness) -> Self {
+        Self { width, signedness }
+    }
+
+    pub const I8: Self = Self::new(IntegerWidth::W8, IntegerSignedness::Signed);
+    pub const U8: Self = Self::new(IntegerWidth::W8, IntegerSignedness::Unsigned);
+    pub const I16: Self = Self::new(IntegerWidth::W16, IntegerSignedness::Signed);
+    pub const U16: Self = Self::new(IntegerWidth::W16, IntegerSignedness::Unsigned);
+    pub const I32: Self = Self::new(IntegerWidth::W32, IntegerSignedness::Signed);
+    pub const U32: Self = Self::new(IntegerWidth::W32, IntegerSignedness::Unsigned);
+    pub const I64: Self = Self::new(IntegerWidth::W64, IntegerSignedness::Signed);
+    pub const U64: Self = Self::new(IntegerWidth::W64, IntegerSignedness::Unsigned);
+    pub const I128: Self = Self::new(IntegerWidth::W128, IntegerSignedness::Signed);
+    pub const U128: Self = Self::new(IntegerWidth::W128, IntegerSignedness::Unsigned);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
     ConstI32,
@@ -44,39 +94,28 @@ pub enum Opcode {
 
     GetArg,
 
-    WrappingAddI32,
-    WrappingSubI32,
-    WrappingMulI32,
-    WrappingDivI32,
-    WrappingRemI32,
-    CheckedAddI32,
-    CheckedSubI32,
-    CheckedMulI32,
-    CheckedDivI32,
-    CheckedRemI32,
-    EqI32,
-    NeI32,
-    LtI32,
-    LeI32,
-    GtI32,
-    GeI32,
-
-    WrappingAddI64,
-    WrappingSubI64,
-    WrappingMulI64,
-    WrappingDivI64,
-    WrappingRemI64,
-    CheckedAddI64,
-    CheckedSubI64,
-    CheckedMulI64,
-    CheckedDivI64,
-    CheckedRemI64,
-    EqI64,
-    NeI64,
-    LtI64,
-    LeI64,
-    GtI64,
-    GeI64,
+    WrappingAdd,
+    WrappingSub,
+    WrappingMul,
+    WrappingDiv,
+    WrappingRem,
+    CheckedAdd,
+    CheckedSub,
+    CheckedMul,
+    CheckedDiv,
+    CheckedRem,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    IntCast,
 
     AddF32,
     SubF32,
@@ -106,39 +145,8 @@ pub enum Opcode {
     And,
     Or,
 
-    BitAndI64,
-    BitOrI64,
-    XorI32,
-    XorI64,
-    ShlI64,
-    ShrI64,
-
-    WrappingAddU64,
-    WrappingSubU64,
-    WrappingMulU64,
-    WrappingDivU64,
-    WrappingRemU64,
-    CheckedAddU64,
-    CheckedSubU64,
-    CheckedMulU64,
-    CheckedDivU64,
-    CheckedRemU64,
-    EqU64,
-    NeU64,
-    LtU64,
-    LeU64,
-    GtU64,
-    GeU64,
-    BitAndU64,
-    BitOrU64,
-    XorU64,
-    ShlU64,
-    ShrU64,
-
     ConstU64,
-
-    CastI64ToU64,
-    CastU64ToI64,
+    ConstU8,
 
     Load,
     Store,
@@ -186,6 +194,11 @@ impl Opcode {
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstData {
     None,
+    Integer(IntegerType),
+    IntegerCast {
+        from: IntegerType,
+        to: IntegerType,
+    },
     ConstI32(i32),
     ConstI64(i64),
     ConstF32(f32),
@@ -194,6 +207,7 @@ pub enum InstData {
     ArgIndex(u32),
     PhiTarget(InstId),
     ConstU64(u64),
+    ConstU8(u8),
     ConstStr(u32),
     CallTarget(FuncId),
     CallExtern(String),
@@ -212,9 +226,16 @@ pub enum InstData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ty {
+    I8,
+    U8,
+    I16,
+    U16,
     I32,
+    U32,
     I64,
     U64,
+    I128,
+    U128,
     F32,
     F64,
     Bool,
