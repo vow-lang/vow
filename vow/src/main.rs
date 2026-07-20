@@ -11337,14 +11337,13 @@ fn emit_frontend_diagnostics(
     for diagnostic in diagnostics {
         emitter.try_emit(diagnostic)?;
     }
-    Ok(())
+    emitter.try_finish()
 }
 
 fn emit_frontend_diagnostics_to_stderr(diagnostics: &[Diagnostic]) {
     let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
     emit_frontend_diagnostics(diagnostics, &mut stderr_emit)
         .expect("failed to emit frontend diagnostics");
-    stderr_emit.finish();
 }
 
 fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
@@ -13457,6 +13456,24 @@ mod tests {
         }
     }
 
+    struct FinishFailingDiagnosticEmitter {
+        emit_attempts: usize,
+        finish_attempts: usize,
+        error_kind: io::ErrorKind,
+    }
+
+    impl DiagnosticEmitter for FinishFailingDiagnosticEmitter {
+        fn try_emit(&mut self, _: &Diagnostic) -> io::Result<()> {
+            self.emit_attempts += 1;
+            Ok(())
+        }
+
+        fn try_finish(&mut self) -> io::Result<()> {
+            self.finish_attempts += 1;
+            Err(io::Error::from(self.error_kind))
+        }
+    }
+
     fn frontend_test_diagnostic(message: &str) -> Diagnostic {
         Diagnostic {
             severity: Severity::Error,
@@ -13490,6 +13507,38 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(emitter.emit_attempts, 1);
         assert_eq!(emitter.finish_attempts, 0);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_returns_broken_pipe_from_finish() {
+        let diagnostics = [frontend_test_diagnostic("parse error")];
+        let mut emitter = FinishFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::BrokenPipe,
+        };
+
+        let error = emit_frontend_diagnostics(&diagnostics, &mut emitter).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 1);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_returns_non_broken_pipe_from_finish() {
+        let diagnostics = [frontend_test_diagnostic("type error")];
+        let mut emitter = FinishFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::PermissionDenied,
+        };
+
+        let error = emit_frontend_diagnostics(&diagnostics, &mut emitter).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 1);
     }
 
     #[test]
