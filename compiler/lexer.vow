@@ -36,7 +36,8 @@ fn is_ident_start(b: i64) -> bool vow {
 
 fn is_ident_cont(b: i64) -> bool vow {
     requires: b >= 0,
-    requires: b <= 255
+    requires: b <= 255,
+    ensures: result == (is_alpha(b) || is_digit(b) || b == 95)
 } {
     is_alpha(b) || is_digit(b) || b == 95
 }
