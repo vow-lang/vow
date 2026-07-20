@@ -5,7 +5,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use vow_ir::{FuncId, Function, InstData, Module, Ty};
+use vow_ir::{FuncId, Function, Module, Ty};
 
 use crate::solver_strategy::{
     DEFAULT_AUTO_TIMEOUT_SECS, Encoding, Solver, SolverConfig, run_with_fallback,
@@ -13,8 +13,15 @@ use crate::solver_strategy::{
 
 use crate::c_emitter::{
     ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
-    emit_c_module, emit_c_module_with_callees, non_modelable_reason, verifier_c_func_name,
+    emit_c_module_with_callees, non_modelable_reason, verifier_c_func_name,
 };
+
+// Path A (single-function, no-module verification) is test-only; these are used
+// only by the `#[cfg(test)]`-gated `verify_function`/`no_module_verification_reason`.
+#[cfg(test)]
+use crate::c_emitter::emit_c_module;
+#[cfg(test)]
+use vow_ir::InstData;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -347,26 +354,87 @@ fn save_esbmc_debug(
 // Verification entry point
 // ---------------------------------------------------------------------------
 
-pub fn verify_function(func: &Function, limits: &VerifyLimits) -> VerificationResult {
+/// A request to verify one function against its `requires`/`ensures` contracts
+/// with full module context. Bundles what the former
+/// `verify_function_with_module*` wrapper family threaded as positional
+/// parameters. The three references are required; the rest are optional
+/// overrides that [`verify`] defaults:
+///
+/// - `const_fns` — the module's constant-returning functions. Defaults to
+///   [`detect_constant_functions`] over `module`.
+/// - `config` — the ESBMC solver configuration. Defaults to
+///   [`SolverConfig::default_config`].
+/// - `max_k_step` — the k-induction unwind bound for the *runner*. Independent
+///   of `limits` (which bounds the *emitter*'s collection models). Defaults to
+///   `limits.max_k_step`.
+pub struct VerifyRequest<'a> {
+    pub func: &'a Function,
+    pub module: &'a Module,
+    pub limits: &'a VerifyLimits,
+    pub const_fns: Option<&'a HashMap<FuncId, ConstantValue>>,
+    pub config: Option<&'a SolverConfig>,
+    pub max_k_step: Option<u32>,
+}
+
+impl<'a> VerifyRequest<'a> {
+    /// A request with every override defaulted. Set `const_fns`, `config`, or
+    /// `max_k_step` on the returned value to override.
+    pub fn new(func: &'a Function, module: &'a Module, limits: &'a VerifyLimits) -> Self {
+        Self {
+            func,
+            module,
+            limits,
+            const_fns: None,
+            config: None,
+            max_k_step: None,
+        }
+    }
+}
+
+/// Verify one function against its contracts, modeling its module callees. This
+/// is the single public entry point for module-context verification; all
+/// override defaulting lives here (see [`VerifyRequest`]).
+pub fn verify(req: &VerifyRequest) -> VerificationResult {
+    let detected;
+    let const_fns = match req.const_fns {
+        Some(c) => c,
+        None => {
+            detected = detect_constant_functions(req.module);
+            &detected
+        }
+    };
+    let default_config;
+    let config = match req.config {
+        Some(c) => c,
+        None => {
+            default_config = SolverConfig::default_config();
+            &default_config
+        }
+    };
+    let max_k_step = req.max_k_step.unwrap_or(req.limits.max_k_step);
+
+    if let Some(reason) = non_modelable_reason(req.func, req.module, const_fns) {
+        return VerificationResult::Skipped { reason };
+    }
+
+    let esbmc = match find_esbmc() {
+        Some(p) => p,
+        None => return VerificationResult::ToolNotFound,
+    };
+
+    let c_src = emit_verify_c_source(req.func, req.module, const_fns, req.limits);
+    let (result, _resolved) = run_with_fallback(&esbmc, &c_src, max_k_step, &req.func.name, config);
+    result
+}
+
+// Single-function verification without module context (no callee modeling, no
+// string pool). Test-only: production always verifies with a module via
+// `verify`. A function that needs the module (string literals, etc.) returns
+// `Skipped` — see `no_module_verification_reason`.
+#[cfg(test)]
+fn verify_function(func: &Function, limits: &VerifyLimits) -> VerificationResult {
     let empty: HashMap<FuncId, ConstantValue> = HashMap::new();
     verify_function_inner(func, &empty, limits)
-}
-
-pub fn verify_function_with_module(
-    func: &Function,
-    module: &Module,
-    limits: &VerifyLimits,
-) -> VerificationResult {
-    let const_fns = detect_constant_functions(module);
-    verify_function_with_module_and_const_fns(func, module, &const_fns, limits)
-}
-
-pub fn verify_function_with_const_fns(
-    func: &Function,
-    const_fns: &HashMap<FuncId, ConstantValue>,
-    limits: &VerifyLimits,
-) -> VerificationResult {
-    verify_function_inner(func, const_fns, limits)
 }
 
 pub fn emit_verify_c_source(
@@ -517,56 +585,7 @@ fn body_replaceable_result(func: &Function) -> bool {
 pub const DEFAULT_MAX_K_STEP: u32 = 50;
 const DEFAULT_ESBMC_TIMEOUT_SECS: u32 = 300;
 
-pub fn verify_function_with_module_and_const_fns(
-    func: &Function,
-    module: &Module,
-    const_fns: &HashMap<FuncId, ConstantValue>,
-    limits: &VerifyLimits,
-) -> VerificationResult {
-    verify_function_with_module_and_const_fns_with_max_k_step(
-        func,
-        module,
-        const_fns,
-        limits.max_k_step,
-        limits,
-    )
-}
-
-pub fn verify_function_with_module_and_const_fns_with_max_k_step(
-    func: &Function,
-    module: &Module,
-    const_fns: &HashMap<FuncId, ConstantValue>,
-    max_k_step: u32,
-    limits: &VerifyLimits,
-) -> VerificationResult {
-    let config = SolverConfig::default_config();
-    verify_function_with_module_and_const_fns_configured(
-        func, module, const_fns, max_k_step, &config, limits,
-    )
-}
-
-pub fn verify_function_with_module_and_const_fns_configured(
-    func: &Function,
-    module: &Module,
-    const_fns: &HashMap<FuncId, ConstantValue>,
-    max_k_step: u32,
-    config: &SolverConfig,
-    limits: &VerifyLimits,
-) -> VerificationResult {
-    if let Some(reason) = non_modelable_reason(func, module, const_fns) {
-        return VerificationResult::Skipped { reason };
-    }
-
-    let esbmc = match find_esbmc() {
-        Some(p) => p,
-        None => return VerificationResult::ToolNotFound,
-    };
-
-    let c_src = emit_verify_c_source(func, module, const_fns, limits);
-    let (result, _resolved) = run_with_fallback(&esbmc, &c_src, max_k_step, &func.name, config);
-    result
-}
-
+#[cfg(test)]
 fn verify_function_inner(
     func: &Function,
     const_fns: &HashMap<FuncId, ConstantValue>,
@@ -574,7 +593,7 @@ fn verify_function_inner(
 ) -> VerificationResult {
     if let Some(reason) = no_module_verification_reason(func) {
         return VerificationResult::Skipped {
-            reason: format!("{reason}; use verify_function_with_module"),
+            reason: format!("{reason}; verify with module context"),
         };
     }
 
@@ -595,6 +614,7 @@ fn verify_function_inner(
     )
 }
 
+#[cfg(test)]
 fn no_module_verification_reason(func: &Function) -> Option<&'static str> {
     for block in &func.blocks {
         for inst in &block.insts {
@@ -1109,6 +1129,17 @@ mod tests {
         }
     }
 
+    fn module_of(func: &Function) -> Module {
+        Module {
+            name: "test".to_string(),
+            functions: vec![func.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        }
+    }
+
     #[test]
     fn emit_verify_c_source_uses_module_string_pool_without_callees() {
         let func = Function {
@@ -1244,6 +1275,47 @@ mod tests {
     fn verify_trivially_false_ensures() {
         let func = trivially_false_func();
         match verify_function(&func, &VerifyLimits::default()) {
+            VerificationResult::Failed(_) => {}
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Failed or ToolNotFound, got {other:?}"),
+        }
+    }
+
+    // Spec: a function whose sole `ensures` is `true` is trivially provable.
+    // Drives the single `verify` entry: with every override left at its default,
+    // the request auto-detects const callees from the module, uses the default
+    // solver config, and takes `max_k_step` from `limits`.
+    #[test]
+    fn verify_request_defaults_prove_true_ensures() {
+        let func = trivially_true_func();
+        let module = module_of(&func);
+        match verify(&VerifyRequest::new(
+            &func,
+            &module,
+            &VerifyLimits::default(),
+        )) {
+            VerificationResult::Proven => {}
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Proven or ToolNotFound, got {other:?}"),
+        }
+    }
+
+    // Spec: a function whose sole `ensures` is `false` cannot hold — the seam
+    // must surface a counterexample, not silently pass. Guards against a `verify`
+    // that only ever proves.
+    #[test]
+    fn verify_request_defaults_report_false_ensures() {
+        let func = trivially_false_func();
+        let module = module_of(&func);
+        match verify(&VerifyRequest::new(
+            &func,
+            &module,
+            &VerifyLimits::default(),
+        )) {
             VerificationResult::Failed(_) => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -2535,14 +2607,13 @@ VERIFICATION FAILED";
             enum_layouts: vec![],
             warnings: vec![],
         };
-        let result = verify_function_with_module_and_const_fns_configured(
-            &func,
-            &module,
-            &HashMap::new(),
-            10,
-            &SolverConfig::default_config(),
-            &VerifyLimits::default(),
-        );
+        let limits = VerifyLimits::default();
+        let const_fns = HashMap::new();
+        let result = verify(&VerifyRequest {
+            const_fns: Some(&const_fns),
+            max_k_step: Some(10),
+            ..VerifyRequest::new(&func, &module, &limits)
+        });
         match result {
             // ToolNotFound: esbmc absent from the test env (e.g. macOS CI unit
             // tests) — the point of the test is that the gate no longer rejects
