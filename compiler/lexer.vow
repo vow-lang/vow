@@ -20,7 +20,8 @@ fn is_alpha(b: i64) -> bool vow {
 
 fn is_digit(b: i64) -> bool vow {
     requires: b >= 0,
-    requires: b <= 255
+    requires: b <= 255,
+    ensures: result == (b >= 48 && b <= 57)
 } {
     b >= 48 && b <= 57
 }
