@@ -17,12 +17,24 @@ if [ "$CURRENT" = "$NEW_VERSION" ]; then
   exit 0
 fi
 
-# Discover workspace members exactly as bump-version.sh does. Avoids `mapfile`
-# (bash 4+ builtin) since macOS ships bash 3.2.
+# Discover workspace members exactly as bump-version.sh does, using only bash
+# builtins (no sed/awk) since GNU sed's `addr1,addr2{ cmds }` block syntax
+# isn't portable to macOS's BSD sed, and `mapfile` isn't available on macOS's
+# bash 3.2 either.
 TOMLS=()
+in_workspace=0
 while IFS= read -r line; do
-  TOMLS+=("$line")
-done < <(sed -n '/^\[workspace\]/,/^\[/{ s/^[[:space:]]*"\(.*\)",\{0,1\}/\1\/Cargo.toml/p }' Cargo.toml)
+  if [[ "$line" =~ ^\[workspace\] ]]; then
+    in_workspace=1
+    continue
+  fi
+  if [ "$in_workspace" -eq 1 ] && [[ "$line" =~ ^\[ ]]; then
+    break
+  fi
+  if [ "$in_workspace" -eq 1 ] && [[ "$line" =~ ^[[:space:]]*\"([^\"]+)\" ]]; then
+    TOMLS+=("${BASH_REMATCH[1]}/Cargo.toml")
+  fi
+done < Cargo.toml
 [ ${#TOMLS[@]} -gt 0 ] || { echo "Error: no workspace members found in Cargo.toml" >&2; exit 1; }
 
 ESCAPED_CURRENT="${CURRENT//./\\.}"
