@@ -2850,7 +2850,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, or link failure |
+| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -2929,7 +2929,7 @@ argument expression.
 | `status`           | string              | Always            | One of the four status values             |
 | `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
-| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", or link error detail) |
+| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", link error detail, or "failed to emit frontend diagnostics: {io_error}") |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
@@ -7433,7 +7433,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, or link failure |
+| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -7512,7 +7512,7 @@ argument expression.
 | `status`           | string              | Always            | One of the four status values             |
 | `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
-| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", or link error detail) |
+| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", link error detail, or "failed to emit frontend diagnostics: {io_error}") |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |

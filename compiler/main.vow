@@ -4706,7 +4706,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
-    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, or link failure |\n"));
+    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
@@ -4785,7 +4785,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `status`           | string              | Always            | One of the four status values             |\n"));
     r.push_str(String::from("| `executable`       | string \\| null      | Always            | Path to binary, null on compile failure or library module (no main) |\n"));
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
-    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", or link error detail) |\n"));
+    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", link error detail, or \"failed to emit frontend diagnostics: {io_error}\") |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
@@ -9312,7 +9312,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
-    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, or link failure |\n"));
+    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
@@ -9391,7 +9391,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `status`           | string              | Always            | One of the four status values             |\n"));
     r.push_str(String::from("| `executable`       | string \\| null      | Always            | Path to binary, null on compile failure or library module (no main) |\n"));
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
-    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", or link error detail) |\n"));
+    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", link error detail, or \"failed to emit frontend diagnostics: {io_error}\") |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
