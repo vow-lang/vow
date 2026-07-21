@@ -34,15 +34,15 @@ jobs:
       published: ${{ steps.sr.outputs.new_release_published }}
       version: ${{ steps.sr.outputs.new_release_version }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
       - name: semantic-release (dry run — compute next version)
         id: sr
-        uses: cycjimmy/semantic-release-action@v6.0.0
+        uses: cycjimmy/semantic-release-action@v6
         with:
           dry_run: true
           extra_plugins: |
@@ -80,7 +80,7 @@ jobs:
             verify: false
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -178,11 +178,11 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
       - name: Download packaged toolchains
@@ -192,7 +192,7 @@ jobs:
           path: release
           merge-multiple: true
       - name: semantic-release (publish)
-        uses: cycjimmy/semantic-release-action@v6.0.0
+        uses: cycjimmy/semantic-release-action@v6
         with:
           extra_plugins: |
             @semantic-release/changelog@6
