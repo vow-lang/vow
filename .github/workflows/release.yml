@@ -1,23 +1,22 @@
 name: Release
 
+# Hybrid semantic-release: on every push to main, `plan` runs semantic-release in
+# dry-run to decide whether a release is due and at what version; `build-package`
+# builds the full cross-platform toolchain (Linux x86_64/aarch64 + macOS, with
+# ESBMC verification) at that version; `publish` runs semantic-release for real to
+# tag, generate the CHANGELOG + notes, and create the GitHub Release with the
+# pre-built toolchains attached. Replaces the previous manual workflow_dispatch.
 on:
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: "Version bump type"
-        required: true
-        type: choice
-        options:
-          - rev
-          - minor
-          - major
+  push:
+    branches: [main]
+  workflow_dispatch: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   ESBMC_VERSION: "8.1"
@@ -26,45 +25,37 @@ env:
   ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
 
 jobs:
-  prepare-version:
+  plan:
+    name: Decide release version
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     outputs:
-      version: ${{ steps.bump.outputs.version }}
-      tag: ${{ steps.bump.outputs.tag }}
+      published: ${{ steps.sr.outputs.new_release_published }}
+      version: ${{ steps.sr.outputs.new_release_version }}
     steps:
-      - name: Ensure running on main
-        run: |
-          if [ "${{ github.ref_name }}" != "main" ]; then
-            echo "::error::Release workflow must be run from the main branch (got '${{ github.ref_name }}')"
-            exit 1
-          fi
-
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Bump version
-        id: bump
-        run: |
-          NEW_VERSION=$(scripts/bump-version.sh "${{ inputs.bump }}")
-          # Regenerate Cargo.lock after the version bump before capturing the patch.
-          cargo metadata --format-version 1 > /dev/null
-          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          git diff -- Cargo.lock */Cargo.toml > version.patch
-
-      - name: Upload version patch
-        uses: actions/upload-artifact@v7
+      - uses: actions/setup-node@v7
         with:
-          name: version-patch
-          path: version.patch
-          if-no-files-found: error
+          node-version: lts/*
+      - name: semantic-release (dry run — compute next version)
+        id: sr
+        uses: cycjimmy/semantic-release-action@v6
+        with:
+          dry_run: true
+          extra_plugins: |
+            @semantic-release/changelog@6
+            @semantic-release/git@10
+            @semantic-release/exec@7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-package:
-    needs: prepare-version
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    needs: plan
+    if: needs.plan.outputs.published == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -90,19 +81,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
-
-      - name: Download version patch
-        uses: actions/download-artifact@v8
         with:
-          name: version-patch
-
-      - name: Apply version patch
-        run: git apply version.patch
-
+          fetch-depth: 0
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
-
+      - name: Set workspace version
+        run: bash .github/semantic-release/set-version.sh "${{ needs.plan.outputs.version }}"
       - name: Cache ESBMC
         id: cache-esbmc
         if: matrix.verify
@@ -110,7 +95,6 @@ jobs:
         with:
           path: ~/esbmc
           key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
-
       - name: Install ESBMC
         if: matrix.verify && steps.cache-esbmc.outputs.cache-hit != 'true'
         env:
@@ -125,14 +109,11 @@ jobs:
 
           unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
           rm "/tmp/$ESBMC_ZIP"
-
       - name: Add ESBMC to PATH
         if: matrix.verify
         run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
-
       - name: Build Rust artifacts
         run: cargo build --all --release
-
       - name: Bootstrap compiler
         run: |
           if [ "${{ matrix.verify }}" = "true" ]; then
@@ -140,22 +121,20 @@ jobs:
           else
             scripts/bootstrap.sh --skip-cargo --no-verify
           fi
-
       - name: Package toolchain
         run: |
           scripts/package-toolchain.sh \
-            --version "${{ needs.prepare-version.outputs.version }}" \
+            --version "${{ needs.plan.outputs.version }}" \
             --os "${{ matrix.os }}" \
             --arch "${{ matrix.arch }}" \
             --output-dir release
-
       - name: Smoke-test packaged toolchain
         run: |
           asset="vow-${{ matrix.os }}-${{ matrix.arch }}.tar.gz"
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           tar -xzf "release/$asset" -C "$tmp"
-          prefix="$tmp/vow-${{ needs.prepare-version.outputs.version }}"
+          prefix="$tmp/vow-${{ needs.plan.outputs.version }}"
           runtime_lib="$prefix/lib/vow/libvow_runtime.a"
           shim_lib="$prefix/lib/vow/libvow_clif_shim.a"
           for packaged_lib in "$runtime_lib" "$shim_lib"; do
@@ -180,7 +159,6 @@ jobs:
               "$prefix/bin/vow" build --no-verify hello.vow -o hello
             ./hello
           )
-
       - name: Upload toolchain package
         uses: actions/upload-artifact@v7
         with:
@@ -191,73 +169,34 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs:
-      - prepare-version
-      - build-package
+    name: Publish release
+    needs: [plan, build-package]
+    if: needs.plan.outputs.published == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download version patch
-        uses: actions/download-artifact@v8
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
         with:
-          name: version-patch
-
-      - name: Apply version patch
-        run: |
-          if git apply --check version.patch; then
-            git apply version.patch
-          elif git apply --reverse --check version.patch; then
-            echo "Version patch already applied; continuing"
-          else
-            echo "::error::Version patch does not apply cleanly"
-            exit 1
-          fi
-
-      - name: Download packages
+          node-version: lts/*
+      - name: Download packaged toolchains
         uses: actions/download-artifact@v8
         with:
           pattern: toolchain-*
           path: release
           merge-multiple: true
-
-      - name: Commit version bump and tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if ! git diff --quiet; then
-            git add */Cargo.toml Cargo.lock
-            git commit -m "Release v${{ needs.prepare-version.outputs.version }}"
-            git push origin HEAD:${{ github.ref_name }}
-          else
-            echo "No version changes to commit"
-          fi
-
-          TAG="${{ needs.prepare-version.outputs.tag }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists"
-          else
-            git tag "$TAG"
-            git push origin "refs/tags/$TAG"
-          fi
-
-      - name: Create GitHub release
+      - name: semantic-release (publish)
+        uses: cycjimmy/semantic-release-action@v6
+        with:
+          extra_plugins: |
+            @semantic-release/changelog@6
+            @semantic-release/git@10
+            @semantic-release/exec@7
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ needs.prepare-version.outputs.tag }}"
-          printf "%s\n" "${{ needs.prepare-version.outputs.version }}" > release/VERSION
-          if gh release view "$TAG" &>/dev/null; then
-            echo "Release $TAG already exists, deleting stale release"
-            gh release delete "$TAG" --yes
-          fi
-          gh release create "$TAG" \
-            --title "Vow ${{ needs.prepare-version.outputs.version }}" \
-            --generate-notes \
-            release/vow-*.tar.gz \
-            release/vow-*.tar.gz.sha256 \
-            release/VERSION
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
