@@ -39,7 +39,11 @@ NEW_VERSION="${MAJOR}.${MINOR}.${REV}"
 
 # Discover workspace member Cargo.toml files dynamically.
 # Assumes multi-line members array (one per line), which cargo fmt enforces.
-mapfile -t TOMLS < <(sed -n '/^\[workspace\]/,/^\[/{ s/^[[:space:]]*"\(.*\)",\{0,1\}/\1\/Cargo.toml/p }' Cargo.toml)
+# Avoids `mapfile` (bash 4+ builtin) since macOS ships bash 3.2.
+TOMLS=()
+while IFS= read -r line; do
+    TOMLS+=("$line")
+done < <(sed -n '/^\[workspace\]/,/^\[/{ s/^[[:space:]]*"\(.*\)",\{0,1\}/\1\/Cargo.toml/p }' Cargo.toml)
 if [ ${#TOMLS[@]} -eq 0 ]; then
     echo "Error: no workspace members found in Cargo.toml" >&2
     exit 1
