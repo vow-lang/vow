@@ -342,7 +342,7 @@ fn block_arena_slot(
         // Cranelift reserve the complete declared slot, not just the pointer.
         let zero = builder.ins().iconst(types::I64, 0);
         for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
-            builder.ins().stack_store(zero, slot, offset);
+            builder.ins().stack_store(types::I64, zero, slot, offset);
         }
     }
     slot
@@ -391,7 +391,7 @@ fn region_to_arena_value(
     root_arena_gv: GlobalValue,
 ) -> Result<Value, CodegenError> {
     match region {
-        RegionId::Root => Ok(builder.ins().global_value(types::I64, root_arena_gv)),
+        RegionId::Root => Ok(builder.ins().symbol_value(types::I64, root_arena_gv)),
         RegionId::Caller(idx) => {
             // Route to the value's hidden caller-arena slot. A value whose
             // marker set spanned multiple slots widened to `Root` during
@@ -690,7 +690,7 @@ fn lower_inst(
         Opcode::ConstStr => {
             if let InstData::ConstStr(idx) = inst.data {
                 if let Some(&gv) = ctx.string_global_values.get(&idx) {
-                    let ptr = builder.ins().global_value(types::I64, gv);
+                    let ptr = builder.ins().symbol_value(types::I64, gv);
                     ctx.value_map.insert(inst.id, ptr);
                 } else {
                     let null = builder.ins().iconst(types::I64, 0);
@@ -1056,7 +1056,7 @@ fn lower_inst(
             if ctx.trace != TraceMode::Off
                 && let (Some(exit_ref), Some(gv)) = (ctx.trace_exit_ref, ctx.fn_name_gv)
             {
-                let name_ptr = builder.ins().global_value(types::I64, gv);
+                let name_ptr = builder.ins().symbol_value(types::I64, gv);
                 builder.ins().call(exit_ref, &[name_ptr]);
             }
             if let Some(se_ref) = ctx.stack_exit_ref {
@@ -1253,7 +1253,7 @@ fn lower_inst(
                         "missing string descriptor global for literal {idx}"
                     )));
                 };
-                let ptr = builder.ins().global_value(types::I64, gv);
+                let ptr = builder.ins().symbol_value(types::I64, gv);
                 ctx.value_map.insert(inst.id, ptr);
                 return Ok(());
             }
@@ -1599,7 +1599,7 @@ fn emit_vow_check(
         // Emit on cont_block (pass)
         builder.switch_to_block(cont_block);
         builder.seal_block(cont_block);
-        let name_ptr = builder.ins().global_value(types::I64, gv);
+        let name_ptr = builder.ins().symbol_value(types::I64, gv);
         let vid = builder.ins().iconst(types::I64, vow_id as i64);
         let passed = builder.ins().iconst(types::I64, 1);
         builder.ins().call(vow_ref, &[name_ptr, vid, passed]);
@@ -1609,7 +1609,7 @@ fn emit_vow_check(
         // Emit on violation_block (fail) before violation call
         builder.switch_to_block(violation_block);
         builder.seal_block(violation_block);
-        let name_ptr2 = builder.ins().global_value(types::I64, gv);
+        let name_ptr2 = builder.ins().symbol_value(types::I64, gv);
         let vid2 = builder.ins().iconst(types::I64, vow_id as i64);
         let failed = builder.ins().iconst(types::I64, 0);
         builder.ins().call(vow_ref, &[name_ptr2, vid2, failed]);
@@ -1643,7 +1643,7 @@ fn emit_vow_violation_body(
         let vow_id_val = builder.ins().iconst(types::I32, vow_id as i64);
         let blame_val = builder.ins().iconst(types::I8, blame as i64);
         let desc_ptr = if let Some(&gv) = ctx.vow_desc_global_values.get(&vow_id) {
-            builder.ins().global_value(types::I64, gv)
+            builder.ins().symbol_value(types::I64, gv)
         } else {
             builder.ins().iconst(types::I64, 0)
         };
@@ -1656,14 +1656,14 @@ fn emit_vow_violation_body(
                 3,
             ));
             for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
-                let name_ptr = builder.ins().global_value(types::I64, *name_gv);
-                builder.ins().stack_store(name_ptr, slot, (i * 24) as i32);
+                let name_ptr = builder.ins().symbol_value(types::I64, *name_gv);
+                builder.ins().stack_store(types::I64, name_ptr, slot, (i * 24) as i32);
                 let tag_val = builder
                     .ins()
                     .iconst(types::I8, tag_for_ir_ty(*ir_ty) as i64);
                 builder
                     .ins()
-                    .stack_store(tag_val, slot, (i * 24 + 8) as i32);
+                    .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
                 let payload: Value = match ir_ty {
                     IrTy::I32 => builder.ins().sextend(types::I64, *cl_val),
                     IrTy::I64 => *cl_val,
@@ -1681,7 +1681,7 @@ fn emit_vow_violation_body(
                 };
                 builder
                     .ins()
-                    .stack_store(payload, slot, (i * 24 + 16) as i32);
+                    .stack_store(types::I64, payload, slot, (i * 24 + 16) as i32);
             }
             let base = builder.ins().stack_addr(types::I64, slot, 0);
             let cnt = builder.ins().iconst(types::I32, n as i64);
@@ -1693,7 +1693,7 @@ fn emit_vow_violation_body(
         };
 
         let file_ptr = if let Some(&gv) = ctx.vow_file_global_values.get(&vow_id) {
-            builder.ins().global_value(types::I64, gv)
+            builder.ins().symbol_value(types::I64, gv)
         } else {
             builder.ins().iconst(types::I64, 0)
         };
@@ -1943,7 +1943,7 @@ fn compile_ir_function(
         }
         hidden_region_values.extend(entry_params[cl_idx..].iter().copied());
         if ir_func.name == "main" {
-            let root_arena = builder.ins().global_value(types::I64, root_arena_gv);
+            let root_arena = builder.ins().symbol_value(types::I64, root_arena_gv);
             hidden_region_values.push(root_arena);
             let runtime_start_ref =
                 obj_module.declare_func_in_func(runtime.runtime_start_id, builder.func);
@@ -1955,7 +1955,7 @@ fn compile_ir_function(
         if trace != TraceMode::Off
             && let (Some(enter_ref), Some(gv)) = (trace_enter_ref, fn_name_gv)
         {
-            let name_ptr = builder.ins().global_value(types::I64, gv);
+            let name_ptr = builder.ins().symbol_value(types::I64, gv);
             builder.ins().call(enter_ref, &[name_ptr]);
         }
         if ir_func.name == "main"
@@ -1964,11 +1964,11 @@ fn compile_ir_function(
             builder.ins().call(init_ref, &[]);
         }
         if let (Some(prof_ref), Some(gv)) = (profile_enter_ref, fn_name_gv) {
-            let name_ptr = builder.ins().global_value(types::I64, gv);
+            let name_ptr = builder.ins().symbol_value(types::I64, gv);
             builder.ins().call(prof_ref, &[name_ptr]);
         }
         if let (Some(se_ref), Some(gv)) = (stack_enter_ref, fn_name_gv) {
-            let name_ptr = builder.ins().global_value(types::I64, gv);
+            let name_ptr = builder.ins().symbol_value(types::I64, gv);
             builder.ins().call(se_ref, &[name_ptr]);
         }
         if ir_func.name == "main"
@@ -2047,7 +2047,7 @@ fn compile_ir_function(
     }
 
     builder.seal_all_blocks();
-    builder.finalize();
+    builder.finalize(obj_module.isa().frontend_config());
     Ok(())
 }
 
