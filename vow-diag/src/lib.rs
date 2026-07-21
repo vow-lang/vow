@@ -49,6 +49,9 @@ pub enum ErrorCode {
     LinearTypeViolation,
     NonExhaustiveMatch,
     UnsupportedPattern,
+    LiteralOutOfRange,
+    NarrowingCastNotAllowed,
+    ShiftCountOutOfRange,
     // Mutability errors (enforced by the type checker; `mut` is required only
     // for whole-binding reassignment `x = e`).
     ImmutableAssignment,

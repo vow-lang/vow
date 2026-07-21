@@ -1795,7 +1795,8 @@ mutable, arena-owned copy, use `String::from("...")`.
 | `/`      | Div (wrapping) |
 | `%`      | Rem (wrapping) |
 
-Wrapping operators silently wrap on overflow. For `u64` operands, division and remainder use unsigned semantics.
+Wrapping operators silently wrap on overflow. For unsigned operands, including
+`u8`, division and remainder use unsigned semantics.
 
 ### Checked Arithmetic
 
@@ -1808,6 +1809,20 @@ Wrapping operators silently wrap on overflow. For `u64` operands, division and r
 | `%!`     | Rem (checked)     |
 
 Checked operators abort with `ArithmeticOverflow` on overflow.
+
+### Saturating Arithmetic
+
+Saturating arithmetic uses named compiler intrinsics rather than a third
+operator family. The `u8` intrinsics are:
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `add_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps sums above 255 to 255 |
+| `sub_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps differences below 0 to 0 |
+| `mul_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps products above 255 to 255 |
+
+These functions are pure and have direct verifier semantics; they do not
+lower to wrapping arithmetic.
 
 ### Comparison Operators
 
@@ -1927,6 +1942,10 @@ match i64_to_u8_try(big) {
 
 These intrinsics are emitted by the compiler so ESBMC sees their semantics
 directly in the verification C model.
+
+For the `u8` target, the available narrowing source types are `i16`, `i32`,
+`i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
+forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.
 
 No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
 operands must already have the same type. The compiler does not coerce
@@ -2449,6 +2468,9 @@ print_str(uint_to_string(small as u64));  // widen then format
 
 Each `parse_X` returns `Option::None` for malformed input, empty strings, or
 values outside the target type's range.
+
+In particular, `parse_u8` accepts decimal values from `0` through `255` and
+returns `Option::None` for negative or larger values.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
@@ -6377,7 +6399,8 @@ mutable, arena-owned copy, use `String::from("...")`.
 | `/`      | Div (wrapping) |
 | `%`      | Rem (wrapping) |
 
-Wrapping operators silently wrap on overflow. For `u64` operands, division and remainder use unsigned semantics.
+Wrapping operators silently wrap on overflow. For unsigned operands, including
+`u8`, division and remainder use unsigned semantics.
 
 ### Checked Arithmetic
 
@@ -6390,6 +6413,20 @@ Wrapping operators silently wrap on overflow. For `u64` operands, division and r
 | `%!`     | Rem (checked)     |
 
 Checked operators abort with `ArithmeticOverflow` on overflow.
+
+### Saturating Arithmetic
+
+Saturating arithmetic uses named compiler intrinsics rather than a third
+operator family. The `u8` intrinsics are:
+
+| Function | Signature | Behavior |
+|----------|-----------|----------|
+| `add_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps sums above 255 to 255 |
+| `sub_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps differences below 0 to 0 |
+| `mul_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps products above 255 to 255 |
+
+These functions are pure and have direct verifier semantics; they do not
+lower to wrapping arithmetic.
 
 ### Comparison Operators
 
@@ -6509,6 +6546,10 @@ match i64_to_u8_try(big) {
 
 These intrinsics are emitted by the compiler so ESBMC sees their semantics
 directly in the verification C model.
+
+For the `u8` target, the available narrowing source types are `i16`, `i32`,
+`i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
+forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.
 
 No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
 operands must already have the same type. The compiler does not coerce
@@ -7031,6 +7072,9 @@ print_str(uint_to_string(small as u64));  // widen then format
 
 Each `parse_X` returns `Option::None` for malformed input, empty strings, or
 values outside the target type's range.
+
+In particular, `parse_u8` accepts decimal values from `0` through `255` and
+returns `Option::None` for negative or larger values.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and

@@ -16,7 +16,8 @@ use std::sync::Arc;
 use target_lexicon::{OperatingSystem, Triple};
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, HiddenRegionIdx, Inst, InstData, InstId,
-    Module as IrModule, Opcode, RegionConstraint, RegionId, RegionSummary, Ty as IrTy,
+    IntegerSignedness, IntegerType, IntegerWidth, Module as IrModule, Opcode, RegionConstraint,
+    RegionId, RegionSummary, Ty as IrTy,
 };
 
 use crate::return_materialization::{
@@ -178,12 +179,17 @@ fn host_triple() -> Triple {
 
 fn ir_ty_to_cranelift(ty: IrTy) -> Option<types::Type> {
     match ty {
+        IrTy::I8 => Some(types::I8),
+        IrTy::U8 => Some(types::I8),
+        IrTy::I16 | IrTy::U16 => Some(types::I16),
         IrTy::I32 => Some(types::I32),
+        IrTy::U32 => Some(types::I32),
         IrTy::I64 => Some(types::I64),
         IrTy::F32 => Some(types::F32),
         IrTy::F64 => Some(types::F64),
         IrTy::Bool => Some(types::I64),
         IrTy::U64 => Some(types::I64),
+        IrTy::I128 | IrTy::U128 => Some(types::I128),
         IrTy::Unit => None,
         IrTy::Ptr | IrTy::LinearPtr => Some(types::I64),
     }
@@ -648,6 +654,14 @@ fn lower_inst(
         };
     }
 
+    let integer_is_signed = matches!(
+        inst.data,
+        InstData::Integer(IntegerType {
+            signedness: IntegerSignedness::Signed,
+            ..
+        })
+    );
+
     match inst.opcode {
         // ------------------------------------------------------------------
         // Constants
@@ -667,6 +681,12 @@ fn lower_inst(
         Opcode::ConstU64 => {
             if let InstData::ConstU64(v) = inst.data {
                 let val = builder.ins().iconst(types::I64, v as i64);
+                ctx.value_map.insert(inst.id, val);
+            }
+        }
+        Opcode::ConstU8 => {
+            if let InstData::ConstU8(v) = inst.data {
+                let val = builder.ins().iconst(types::I8, i64::from(v));
                 ctx.value_map.insert(inst.id, val);
             }
         }
@@ -703,6 +723,35 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, val);
         }
 
+        Opcode::IntCast => {
+            let InstData::IntegerCast { from, to } = inst.data else {
+                return Err(CodegenError::UnsupportedOpcode(
+                    "IntCast requires IntegerCast metadata".to_string(),
+                ));
+            };
+            let value = arg!(0);
+            let from_bits = from.width.bits();
+            let to_bits = to.width.bits();
+            let result = if from_bits == to_bits {
+                value
+            } else if to_bits > from_bits {
+                let target_ty = ir_ty_to_cranelift(inst.ty).ok_or_else(|| {
+                    CodegenError::UnsupportedOpcode(
+                        "integer cast has non-integer target".to_string(),
+                    )
+                })?;
+                match from.signedness {
+                    IntegerSignedness::Signed => builder.ins().sextend(target_ty, value),
+                    IntegerSignedness::Unsigned => builder.ins().uextend(target_ty, value),
+                }
+            } else {
+                return Err(CodegenError::UnsupportedOpcode(
+                    "narrowing IntCast reached code generation".to_string(),
+                ));
+            };
+            ctx.value_map.insert(inst.id, result);
+        }
+
         // ------------------------------------------------------------------
         // Arguments
         // ------------------------------------------------------------------
@@ -720,167 +769,99 @@ fn lower_inst(
         // ------------------------------------------------------------------
         // Wrapping integer arithmetic
         // ------------------------------------------------------------------
-        Opcode::WrappingAddI32 | Opcode::WrappingAddI64 | Opcode::WrappingAddU64 => {
+        Opcode::WrappingAdd => {
             let val = builder.ins().iadd(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::WrappingSubI32 | Opcode::WrappingSubI64 | Opcode::WrappingSubU64 => {
+        Opcode::WrappingSub => {
             let val = builder.ins().isub(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::WrappingMulI32 | Opcode::WrappingMulI64 | Opcode::WrappingMulU64 => {
+        Opcode::WrappingMul => {
             let val = builder.ins().imul(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::WrappingDivI32 | Opcode::WrappingDivI64 => {
-            let val = builder.ins().sdiv(arg!(0), arg!(1));
+        Opcode::WrappingDiv => {
+            let val = if integer_is_signed {
+                builder.ins().sdiv(arg!(0), arg!(1))
+            } else {
+                builder.ins().udiv(arg!(0), arg!(1))
+            };
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::WrappingDivU64 => {
-            let val = builder.ins().udiv(arg!(0), arg!(1));
+        Opcode::WrappingRem => {
+            let val = if integer_is_signed {
+                builder.ins().srem(arg!(0), arg!(1))
+            } else {
+                builder.ins().urem(arg!(0), arg!(1))
+            };
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::WrappingRemI32 | Opcode::WrappingRemI64 => {
-            let val = builder.ins().srem(arg!(0), arg!(1));
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::WrappingRemU64 => {
-            let val = builder.ins().urem(arg!(0), arg!(1));
-            ctx.value_map.insert(inst.id, val);
-        }
-
         // ------------------------------------------------------------------
         // Checked integer arithmetic
         // ------------------------------------------------------------------
-        Opcode::CheckedAddI32 | Opcode::CheckedAddI64 => {
-            let (result, overflow) = builder.ins().sadd_overflow(arg!(0), arg!(1));
+        Opcode::CheckedAdd => {
+            let (result, overflow) = if integer_is_signed {
+                builder.ins().sadd_overflow(arg!(0), arg!(1))
+            } else {
+                builder.ins().uadd_overflow(arg!(0), arg!(1))
+            };
             emit_overflow_check(builder, overflow, ctx)?;
             ctx.value_map.insert(inst.id, result);
         }
-        Opcode::CheckedAddU64 => {
-            let (result, overflow) = builder.ins().uadd_overflow(arg!(0), arg!(1));
+        Opcode::CheckedSub => {
+            let (result, overflow) = if integer_is_signed {
+                builder.ins().ssub_overflow(arg!(0), arg!(1))
+            } else {
+                builder.ins().usub_overflow(arg!(0), arg!(1))
+            };
             emit_overflow_check(builder, overflow, ctx)?;
             ctx.value_map.insert(inst.id, result);
         }
-        Opcode::CheckedSubI32 | Opcode::CheckedSubI64 => {
-            let (result, overflow) = builder.ins().ssub_overflow(arg!(0), arg!(1));
+        Opcode::CheckedMul => {
+            let (result, overflow) = if integer_is_signed {
+                builder.ins().smul_overflow(arg!(0), arg!(1))
+            } else {
+                builder.ins().umul_overflow(arg!(0), arg!(1))
+            };
             emit_overflow_check(builder, overflow, ctx)?;
             ctx.value_map.insert(inst.id, result);
         }
-        Opcode::CheckedSubU64 => {
-            let (result, overflow) = builder.ins().usub_overflow(arg!(0), arg!(1));
-            emit_overflow_check(builder, overflow, ctx)?;
-            ctx.value_map.insert(inst.id, result);
-        }
-        Opcode::CheckedMulI32 | Opcode::CheckedMulI64 => {
-            let (result, overflow) = builder.ins().smul_overflow(arg!(0), arg!(1));
-            emit_overflow_check(builder, overflow, ctx)?;
-            ctx.value_map.insert(inst.id, result);
-        }
-        Opcode::CheckedMulU64 => {
-            let (result, overflow) = builder.ins().umul_overflow(arg!(0), arg!(1));
-            emit_overflow_check(builder, overflow, ctx)?;
-            ctx.value_map.insert(inst.id, result);
-        }
-        Opcode::CheckedDivI32 | Opcode::CheckedDivI64 => {
-            let cl_ty = ir_ty_to_cranelift(inst.ty).unwrap_or(types::I64);
+        Opcode::CheckedDiv | Opcode::CheckedRem => {
+            let cl_ty = builder.func.dfg.value_type(arg!(1));
             let zero = builder.ins().iconst(cl_ty, 0);
             let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
             emit_overflow_check(builder, is_zero, ctx)?;
-            let val = builder.ins().sdiv(arg!(0), arg!(1));
+            let val = match (inst.opcode, integer_is_signed) {
+                (Opcode::CheckedDiv, true) => builder.ins().sdiv(arg!(0), arg!(1)),
+                (Opcode::CheckedDiv, false) => builder.ins().udiv(arg!(0), arg!(1)),
+                (Opcode::CheckedRem, true) => builder.ins().srem(arg!(0), arg!(1)),
+                (Opcode::CheckedRem, false) => builder.ins().urem(arg!(0), arg!(1)),
+                _ => unreachable!(),
+            };
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::CheckedDivU64 => {
-            let zero = builder.ins().iconst(types::I64, 0);
-            let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-            emit_overflow_check(builder, is_zero, ctx)?;
-            let val = builder.ins().udiv(arg!(0), arg!(1));
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::CheckedRemI32 | Opcode::CheckedRemI64 => {
-            let cl_ty = ir_ty_to_cranelift(inst.ty).unwrap_or(types::I64);
-            let zero = builder.ins().iconst(cl_ty, 0);
-            let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-            emit_overflow_check(builder, is_zero, ctx)?;
-            let val = builder.ins().srem(arg!(0), arg!(1));
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::CheckedRemU64 => {
-            let zero = builder.ins().iconst(types::I64, 0);
-            let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-            emit_overflow_check(builder, is_zero, ctx)?;
-            let val = builder.ins().urem(arg!(0), arg!(1));
-            ctx.value_map.insert(inst.id, val);
-        }
-
         // ------------------------------------------------------------------
         // Integer comparisons (return Bool)
         // ------------------------------------------------------------------
-        Opcode::EqI32 | Opcode::EqI64 | Opcode::EqU64 => {
-            let cmp = builder.ins().icmp(IntCC::Equal, arg!(0), arg!(1));
+        Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
+            let cc = match (inst.opcode, integer_is_signed) {
+                (Opcode::Eq, _) => IntCC::Equal,
+                (Opcode::Ne, _) => IntCC::NotEqual,
+                (Opcode::Lt, true) => IntCC::SignedLessThan,
+                (Opcode::Lt, false) => IntCC::UnsignedLessThan,
+                (Opcode::Le, true) => IntCC::SignedLessThanOrEqual,
+                (Opcode::Le, false) => IntCC::UnsignedLessThanOrEqual,
+                (Opcode::Gt, true) => IntCC::SignedGreaterThan,
+                (Opcode::Gt, false) => IntCC::UnsignedGreaterThan,
+                (Opcode::Ge, true) => IntCC::SignedGreaterThanOrEqual,
+                (Opcode::Ge, false) => IntCC::UnsignedGreaterThanOrEqual,
+                _ => unreachable!(),
+            };
+            let cmp = builder.ins().icmp(cc, arg!(0), arg!(1));
             let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::NeI32 | Opcode::NeI64 | Opcode::NeU64 => {
-            let cmp = builder.ins().icmp(IntCC::NotEqual, arg!(0), arg!(1));
-            let val = builder.ins().uextend(types::I64, cmp);
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::LtI32 | Opcode::LtI64 => {
-            let cmp = builder.ins().icmp(IntCC::SignedLessThan, arg!(0), arg!(1));
-            let val = builder.ins().uextend(types::I64, cmp);
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::LtU64 => {
-            let cmp = builder
-                .ins()
-                .icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
-            let val = builder.ins().uextend(types::I64, cmp);
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::LeI32 | Opcode::LeI64 => {
-            let cmp = builder
-                .ins()
-                .icmp(IntCC::SignedLessThanOrEqual, arg!(0), arg!(1));
-            let val = builder.ins().uextend(types::I64, cmp);
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::LeU64 => {
-            let cmp = builder
-                .ins()
-                .icmp(IntCC::UnsignedLessThanOrEqual, arg!(0), arg!(1));
-            let val = builder.ins().uextend(types::I64, cmp);
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::GtI32 | Opcode::GtI64 => {
-            let cmp = builder
-                .ins()
-                .icmp(IntCC::SignedGreaterThan, arg!(0), arg!(1));
-            let val = builder.ins().uextend(types::I64, cmp);
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::GtU64 => {
-            let cmp = builder
-                .ins()
-                .icmp(IntCC::UnsignedGreaterThan, arg!(0), arg!(1));
-            let val = builder.ins().uextend(types::I64, cmp);
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::GeI32 | Opcode::GeI64 => {
-            let cmp = builder
-                .ins()
-                .icmp(IntCC::SignedGreaterThanOrEqual, arg!(0), arg!(1));
-            let val = builder.ins().uextend(types::I64, cmp);
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::GeU64 => {
-            let cmp = builder
-                .ins()
-                .icmp(IntCC::UnsignedGreaterThanOrEqual, arg!(0), arg!(1));
-            let val = builder.ins().uextend(types::I64, cmp);
-            ctx.value_map.insert(inst.id, val);
-        }
-
         // ------------------------------------------------------------------
         // Float arithmetic
         // ------------------------------------------------------------------
@@ -964,34 +945,56 @@ fn lower_inst(
         // ------------------------------------------------------------------
         // Integer bitwise operations
         // ------------------------------------------------------------------
-        Opcode::BitAndI64 | Opcode::BitAndU64 => {
+        Opcode::BitAnd => {
             let val = builder.ins().band(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::BitOrI64 | Opcode::BitOrU64 => {
+        Opcode::BitOr => {
             let val = builder.ins().bor(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        // ------------------------------------------------------------------
-        // Bitwise XOR
-        // ------------------------------------------------------------------
-        Opcode::XorI32 | Opcode::XorI64 | Opcode::XorU64 => {
+        Opcode::BitXor => {
             let val = builder.ins().bxor(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::ShlI64 | Opcode::ShlU64 => {
+        Opcode::Shl => {
+            if matches!(
+                inst.data,
+                InstData::Integer(IntegerType {
+                    width: IntegerWidth::W8,
+                    ..
+                })
+            ) {
+                let out_of_range =
+                    builder
+                        .ins()
+                        .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
+                emit_overflow_check(builder, out_of_range, ctx)?;
+            }
             let val = builder.ins().ishl(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::ShrI64 => {
-            let val = builder.ins().sshr(arg!(0), arg!(1));
+        Opcode::Shr => {
+            if matches!(
+                inst.data,
+                InstData::Integer(IntegerType {
+                    width: IntegerWidth::W8,
+                    ..
+                })
+            ) {
+                let out_of_range =
+                    builder
+                        .ins()
+                        .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
+                emit_overflow_check(builder, out_of_range, ctx)?;
+            }
+            let val = if integer_is_signed {
+                builder.ins().sshr(arg!(0), arg!(1))
+            } else {
+                builder.ins().ushr(arg!(0), arg!(1))
+            };
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::ShrU64 => {
-            let val = builder.ins().ushr(arg!(0), arg!(1));
-            ctx.value_map.insert(inst.id, val);
-        }
-
         // ------------------------------------------------------------------
         // Memory
         // ------------------------------------------------------------------
@@ -1424,7 +1427,7 @@ fn lower_inst(
             } else {
                 let r = results[0];
                 let rt = builder.func.dfg.value_type(r);
-                let norm = if rt == types::I8 {
+                let norm = if rt == types::I8 && !matches!(inst.ty, IrTy::I8 | IrTy::U8) {
                     builder.ins().uextend(types::I64, r)
                 } else {
                     r
@@ -1532,14 +1535,6 @@ fn lower_inst(
                 ctx.value_map.insert(inst.id, unit);
             }
         }
-
-        // ------------------------------------------------------------------
-        // Casts (i64 <-> u64 — no-op at machine level, both are I64)
-        // ------------------------------------------------------------------
-        Opcode::CastI64ToU64 | Opcode::CastU64ToI64 => {
-            let val = arg!(0);
-            ctx.value_map.insert(inst.id, val);
-        }
     }
     Ok(())
 }
@@ -1574,6 +1569,7 @@ fn tag_for_ir_ty(ty: IrTy) -> u8 {
         IrTy::F32 => 2,
         IrTy::F64 => 3,
         IrTy::Bool => 4,
+        IrTy::U8 => 6,
         _ => 0,
     }
 }
@@ -1683,6 +1679,7 @@ fn emit_vow_violation_body(
                         .ins()
                         .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     IrTy::Bool => *cl_val,
+                    IrTy::U8 => builder.ins().uextend(types::I64, *cl_val),
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder
@@ -2060,6 +2057,36 @@ fn compile_ir_function(
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
+    let narrow_source_ty =
+        if sym.starts_with("__vow_i16_to_u8_") || sym.starts_with("__vow_u16_to_u8_") {
+            Some(types::I16)
+        } else if sym.starts_with("__vow_i32_to_u8_") || sym.starts_with("__vow_u32_to_u8_") {
+            Some(types::I32)
+        } else if sym.starts_with("__vow_i64_to_u8_") || sym.starts_with("__vow_u64_to_u8_") {
+            Some(types::I64)
+        } else if sym.starts_with("__vow_i128_to_u8_") || sym.starts_with("__vow_u128_to_u8_") {
+            Some(types::I128)
+        } else {
+            None
+        };
+    if let Some(source_ty) = narrow_source_ty {
+        sig.params.push(AbiParam::new(source_ty));
+        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
+            types::I64
+        } else {
+            types::I8
+        }));
+        return sig;
+    }
+    if matches!(
+        sym,
+        "__vow_add_sat_u8" | "__vow_sub_sat_u8" | "__vow_mul_sat_u8"
+    ) {
+        sig.params.push(AbiParam::new(types::I8));
+        sig.params.push(AbiParam::new(types::I8));
+        sig.returns.push(AbiParam::new(types::I8));
+        return sig;
+    }
     match sym {
         "__vow_print_str" => {
             sig.params.push(AbiParam::new(types::I64)); // ptr
@@ -2326,7 +2353,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_parse_i64_opt" | "__vow_string_parse_u64_opt" => {
+        "__vow_string_parse_i64_opt"
+        | "__vow_string_parse_u64_opt"
+        | "__vow_string_parse_u8_opt" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
         }
@@ -2985,8 +3014,10 @@ impl Backend for CraneliftBackend {
 
             if let Err(e) = obj_module.define_function(cl_id, &mut cl_ctx) {
                 return Err(CodegenError::FunctionDefine(format!(
-                    "in function '{}': {}",
-                    ir_func.name, e
+                    "in function '{}': {}\n{}",
+                    ir_func.name,
+                    e,
+                    cl_ctx.func.display()
                 )));
             }
             obj_module.clear_context(&mut cl_ctx);
@@ -3031,6 +3062,7 @@ mod tests {
     }
 
     fn inst(id: u32, op: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
+        let data = integer_test_data(op, ty, data);
         Inst {
             id: InstId(id),
             opcode: op,
@@ -3040,6 +3072,43 @@ mod tests {
             origin: sp(),
             region: RegionId::Root,
         }
+    }
+
+    fn integer_test_data(op: Opcode, ty: Ty, data: InstData) -> InstData {
+        if data != InstData::None
+            || !matches!(
+                op,
+                Opcode::WrappingAdd
+                    | Opcode::WrappingSub
+                    | Opcode::WrappingMul
+                    | Opcode::WrappingDiv
+                    | Opcode::WrappingRem
+                    | Opcode::CheckedAdd
+                    | Opcode::CheckedSub
+                    | Opcode::CheckedMul
+                    | Opcode::CheckedDiv
+                    | Opcode::CheckedRem
+                    | Opcode::Eq
+                    | Opcode::Ne
+                    | Opcode::Lt
+                    | Opcode::Le
+                    | Opcode::Gt
+                    | Opcode::Ge
+                    | Opcode::BitAnd
+                    | Opcode::BitOr
+                    | Opcode::BitXor
+                    | Opcode::Shl
+                    | Opcode::Shr
+            )
+        {
+            return data;
+        }
+        InstData::Integer(match ty {
+            Ty::I32 => IntegerType::I32,
+            Ty::U64 => IntegerType::U64,
+            Ty::U8 => IntegerType::U8,
+            _ => IntegerType::I64,
+        })
     }
 
     fn compiled_object_symbols(bytes: &[u8]) -> HashSet<String> {
@@ -3151,13 +3220,7 @@ mod tests {
                     insts: vec![
                         inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                         inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                        inst(
-                            2,
-                            Opcode::WrappingAddI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
+                        inst(2, Opcode::WrappingAdd, Ty::I64, vec![0, 1], InstData::None),
                         inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                     ],
                 }],
@@ -3680,34 +3743,10 @@ mod tests {
                     insts: vec![
                         inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                         inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                        inst(
-                            2,
-                            Opcode::WrappingSubI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            3,
-                            Opcode::WrappingMulI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            4,
-                            Opcode::WrappingDivI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            5,
-                            Opcode::WrappingRemI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
+                        inst(2, Opcode::WrappingSub, Ty::I64, vec![0, 1], InstData::None),
+                        inst(3, Opcode::WrappingMul, Ty::I64, vec![0, 1], InstData::None),
+                        inst(4, Opcode::WrappingDiv, Ty::I64, vec![0, 1], InstData::None),
+                        inst(5, Opcode::WrappingRem, Ty::I64, vec![0, 1], InstData::None),
                         inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                     ],
                 }],
@@ -3738,41 +3777,11 @@ mod tests {
                     insts: vec![
                         inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                         inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                        inst(
-                            2,
-                            Opcode::CheckedAddI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            3,
-                            Opcode::CheckedSubI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            4,
-                            Opcode::CheckedMulI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            5,
-                            Opcode::CheckedDivI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            6,
-                            Opcode::CheckedRemI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
+                        inst(2, Opcode::CheckedAdd, Ty::I64, vec![0, 1], InstData::None),
+                        inst(3, Opcode::CheckedSub, Ty::I64, vec![0, 1], InstData::None),
+                        inst(4, Opcode::CheckedMul, Ty::I64, vec![0, 1], InstData::None),
+                        inst(5, Opcode::CheckedDiv, Ty::I64, vec![0, 1], InstData::None),
+                        inst(6, Opcode::CheckedRem, Ty::I64, vec![0, 1], InstData::None),
                         inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
                     ],
                 }],
@@ -3803,12 +3812,12 @@ mod tests {
                     insts: vec![
                         inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                         inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                        inst(2, Opcode::EqI64, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(3, Opcode::NeI64, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(4, Opcode::LtI64, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(5, Opcode::LeI64, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(6, Opcode::GtI64, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(7, Opcode::GeI64, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(2, Opcode::Eq, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(3, Opcode::Ne, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(4, Opcode::Lt, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(5, Opcode::Le, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(6, Opcode::Gt, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(7, Opcode::Ge, Ty::Bool, vec![0, 1], InstData::None),
                         inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
                     ],
                 }],
@@ -4034,11 +4043,11 @@ mod tests {
                     insts: vec![
                         inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                         inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                        inst(2, Opcode::BitAndI64, Ty::I64, vec![0, 1], InstData::None),
-                        inst(3, Opcode::BitOrI64, Ty::I64, vec![0, 1], InstData::None),
-                        inst(4, Opcode::XorI64, Ty::I64, vec![0, 1], InstData::None),
-                        inst(5, Opcode::ShlI64, Ty::I64, vec![0, 1], InstData::None),
-                        inst(6, Opcode::ShrI64, Ty::I64, vec![0, 1], InstData::None),
+                        inst(2, Opcode::BitAnd, Ty::I64, vec![0, 1], InstData::None),
+                        inst(3, Opcode::BitOr, Ty::I64, vec![0, 1], InstData::None),
+                        inst(4, Opcode::BitXor, Ty::I64, vec![0, 1], InstData::None),
+                        inst(5, Opcode::Shl, Ty::I64, vec![0, 1], InstData::None),
+                        inst(6, Opcode::Shr, Ty::I64, vec![0, 1], InstData::None),
                         inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
                     ],
                 }],
@@ -5307,13 +5316,7 @@ mod tests {
                 vec![
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                     inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                    inst(
-                        2,
-                        Opcode::WrappingAddI64,
-                        Ty::I64,
-                        vec![0, 1],
-                        InstData::None,
-                    ),
+                    inst(2, Opcode::WrappingAdd, Ty::I64, vec![0, 1], InstData::None),
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             )],
@@ -6069,41 +6072,11 @@ mod tests {
                     insts: vec![
                         inst(0, Opcode::GetArg, Ty::I32, vec![], InstData::ArgIndex(0)),
                         inst(1, Opcode::GetArg, Ty::I32, vec![], InstData::ArgIndex(1)),
-                        inst(
-                            2,
-                            Opcode::WrappingAddI32,
-                            Ty::I32,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            3,
-                            Opcode::WrappingSubI32,
-                            Ty::I32,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            4,
-                            Opcode::WrappingMulI32,
-                            Ty::I32,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            5,
-                            Opcode::WrappingDivI32,
-                            Ty::I32,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
-                        inst(
-                            6,
-                            Opcode::WrappingRemI32,
-                            Ty::I32,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
+                        inst(2, Opcode::WrappingAdd, Ty::I32, vec![0, 1], InstData::None),
+                        inst(3, Opcode::WrappingSub, Ty::I32, vec![0, 1], InstData::None),
+                        inst(4, Opcode::WrappingMul, Ty::I32, vec![0, 1], InstData::None),
+                        inst(5, Opcode::WrappingDiv, Ty::I32, vec![0, 1], InstData::None),
+                        inst(6, Opcode::WrappingRem, Ty::I32, vec![0, 1], InstData::None),
                         inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
                     ],
                 }],
@@ -6134,12 +6107,12 @@ mod tests {
                     insts: vec![
                         inst(0, Opcode::GetArg, Ty::I32, vec![], InstData::ArgIndex(0)),
                         inst(1, Opcode::GetArg, Ty::I32, vec![], InstData::ArgIndex(1)),
-                        inst(2, Opcode::EqI32, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(3, Opcode::NeI32, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(4, Opcode::LtI32, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(5, Opcode::LeI32, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(6, Opcode::GtI32, Ty::Bool, vec![0, 1], InstData::None),
-                        inst(7, Opcode::GeI32, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(2, Opcode::Eq, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(3, Opcode::Ne, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(4, Opcode::Lt, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(5, Opcode::Le, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(6, Opcode::Gt, Ty::Bool, vec![0, 1], InstData::None),
+                        inst(7, Opcode::Ge, Ty::Bool, vec![0, 1], InstData::None),
                         inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
                     ],
                 }],

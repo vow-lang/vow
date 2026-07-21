@@ -143,7 +143,16 @@ fn check_complexity_descriptor_routing() -> i64 {
     let eq_args: Vec<i64> = Vec::new();
     eq_args.push(0);
     eq_args.push(0);
-    ensured_insts.push(mk_inst(2, IOP_EQ_I64(), ITY_BOOL(), eq_args));
+    ensured_insts.push(ir_inst_new(
+        2,
+        IOP_EQ(),
+        ITY_BOOL(),
+        eq_args,
+        IDATA_INTEGER(),
+        ITY_I64(),
+        0,
+        String::from("")
+    ));
     let ensures_args: Vec<i64> = Vec::new();
     ensures_args.push(2);
     ensured_insts.push(ir_inst_new(

@@ -219,10 +219,10 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
             emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label, body_replace)
         } else {
             let preamble: String = cemit_preamble_with_limits(
-                func_has_shift_op(f, IOP_SHL_I64()),
-                func_has_shift_op(f, IOP_SHR_I64()),
-                func_has_shift_op(f, IOP_SHL_U64()),
-                func_has_shift_op(f, IOP_SHR_U64()),
+                func_has_integer_shift_op(f, IOP_SHL(), ITY_I64()),
+                func_has_integer_shift_op(f, IOP_SHR(), ITY_I64()),
+                func_has_integer_shift_op(f, IOP_SHL(), ITY_U64()),
+                func_has_integer_shift_op(f, IOP_SHR(), ITY_U64()),
                 vec_max, model_string_max, hashmap_max, btreemap_max
             );
             let empty_modelable: Vec<i64> = Vec::new();

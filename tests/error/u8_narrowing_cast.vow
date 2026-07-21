@@ -1,0 +1,11 @@
+// TEST: error-code NarrowingCastNotAllowed
+// TEST: stderr "cannot cast i64 to u8 via as"
+module U8NarrowingCast
+
+fn narrow(value: i64) -> u8 {
+    value as u8
+}
+
+fn main() -> i32 {
+    0
+}

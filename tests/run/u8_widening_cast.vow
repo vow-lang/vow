@@ -1,0 +1,16 @@
+// TEST: stdout "200"
+module U8WideningCast
+
+fn main() -> i32 [io] {
+    let byte: u8 = 200;
+    let signed_16: i16 = byte as i16;
+    let signed_32: i32 = byte as i32;
+    let signed_64: i64 = byte as i64;
+    let signed_128: i128 = byte as i128;
+    let unsigned_16: u16 = byte as u16;
+    let unsigned_32: u32 = byte as u32;
+    let unsigned_64: u64 = byte as u64;
+    let unsigned_128: u128 = byte as u128;
+    print_i64(signed_16 as i64);
+    0
+}

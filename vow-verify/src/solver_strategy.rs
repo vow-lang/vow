@@ -135,40 +135,15 @@ pub fn classify_function(func: &Function) -> SolverConfig {
         for inst in &block.insts {
             match inst.opcode {
                 // Bitwise / shift
-                Opcode::BitAndI64
-                | Opcode::BitOrI64
-                | Opcode::XorI64
-                | Opcode::XorI32
-                | Opcode::ShlI64
-                | Opcode::ShrI64
-                | Opcode::BitAndU64
-                | Opcode::BitOrU64
-                | Opcode::XorU64
-                | Opcode::ShlU64
-                | Opcode::ShrU64 => {
+                Opcode::BitAnd | Opcode::BitOr | Opcode::BitXor | Opcode::Shl | Opcode::Shr => {
                     has_bitwise = true;
                 }
-                // Multiplication / division / remainder (I64)
-                Opcode::WrappingMulI64
-                | Opcode::CheckedMulI64
-                | Opcode::WrappingDivI64
-                | Opcode::CheckedDivI64
-                | Opcode::WrappingRemI64
-                | Opcode::CheckedRemI64
-                // I32 variants
-                | Opcode::WrappingMulI32
-                | Opcode::CheckedMulI32
-                | Opcode::WrappingDivI32
-                | Opcode::CheckedDivI32
-                | Opcode::WrappingRemI32
-                | Opcode::CheckedRemI32
-                // U64 variants
-                | Opcode::WrappingMulU64
-                | Opcode::CheckedMulU64
-                | Opcode::WrappingDivU64
-                | Opcode::CheckedDivU64
-                | Opcode::WrappingRemU64
-                | Opcode::CheckedRemU64 => {
+                Opcode::WrappingMul
+                | Opcode::CheckedMul
+                | Opcode::WrappingDiv
+                | Opcode::CheckedDiv
+                | Opcode::WrappingRem
+                | Opcode::CheckedRem => {
                     has_mul_div_rem = true;
                 }
                 _ => {}
@@ -331,10 +306,13 @@ pub fn run_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstId, RegionId, RegionSummary, Ty};
+    use vow_ir::{
+        BasicBlock, BlockId, FuncId, Inst, InstId, IntegerType, RegionId, RegionSummary, Ty,
+    };
     use vow_syntax::span::Span;
 
     fn inst(id: u32, opcode: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
+        let data = integer_test_data(opcode, ty, data);
         Inst {
             id: InstId(id),
             opcode,
@@ -344,6 +322,43 @@ mod tests {
             origin: Span { start: 0, len: 0 },
             region: RegionId::Root,
         }
+    }
+
+    fn integer_test_data(op: Opcode, ty: Ty, data: InstData) -> InstData {
+        if data != InstData::None
+            || !matches!(
+                op,
+                Opcode::WrappingAdd
+                    | Opcode::WrappingSub
+                    | Opcode::WrappingMul
+                    | Opcode::WrappingDiv
+                    | Opcode::WrappingRem
+                    | Opcode::CheckedAdd
+                    | Opcode::CheckedSub
+                    | Opcode::CheckedMul
+                    | Opcode::CheckedDiv
+                    | Opcode::CheckedRem
+                    | Opcode::Eq
+                    | Opcode::Ne
+                    | Opcode::Lt
+                    | Opcode::Le
+                    | Opcode::Gt
+                    | Opcode::Ge
+                    | Opcode::BitAnd
+                    | Opcode::BitOr
+                    | Opcode::BitXor
+                    | Opcode::Shl
+                    | Opcode::Shr
+            )
+        {
+            return data;
+        }
+        InstData::Integer(match ty {
+            Ty::I32 => IntegerType::I32,
+            Ty::U64 => IntegerType::U64,
+            Ty::U8 => IntegerType::U8,
+            _ => IntegerType::I64,
+        })
     }
 
     fn make_func(name: &str, params: Vec<Ty>, return_ty: Ty, insts: Vec<Inst>) -> Function {
@@ -502,13 +517,7 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(
-                    2,
-                    Opcode::WrappingAddI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
+                inst(2, Opcode::WrappingAdd, Ty::I64, vec![0, 1], InstData::None),
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
@@ -526,7 +535,7 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(2, Opcode::BitAndI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(2, Opcode::BitAnd, Ty::I64, vec![0, 1], InstData::None),
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
@@ -550,13 +559,7 @@ mod tests {
                     vec![],
                     InstData::ConstI64(9223372036854775807),
                 ),
-                inst(
-                    2,
-                    Opcode::WrappingDivI64,
-                    Ty::I64,
-                    vec![1, 0],
-                    InstData::None,
-                ),
+                inst(2, Opcode::WrappingDiv, Ty::I64, vec![1, 0], InstData::None),
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
@@ -574,13 +577,7 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(
-                    2,
-                    Opcode::WrappingMulI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
+                inst(2, Opcode::WrappingMul, Ty::I64, vec![0, 1], InstData::None),
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
@@ -598,14 +595,8 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(
-                    2,
-                    Opcode::WrappingMulI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
-                inst(3, Opcode::ShlI64, Ty::I64, vec![2, 1], InstData::None),
+                inst(2, Opcode::WrappingMul, Ty::I64, vec![0, 1], InstData::None),
+                inst(3, Opcode::Shl, Ty::I64, vec![2, 1], InstData::None),
                 inst(
                     4,
                     Opcode::ConstI64,
@@ -637,13 +628,7 @@ mod tests {
                     vec![],
                     InstData::ConstI64(i64::MAX),
                 ),
-                inst(
-                    2,
-                    Opcode::WrappingMulI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
+                inst(2, Opcode::WrappingMul, Ty::I64, vec![0, 1], InstData::None),
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );

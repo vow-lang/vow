@@ -16,8 +16,9 @@
 
 use crate::types::{
     BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, HiddenRegionIdx, Inst,
-    InstData, InstId, Module, Opcode, RegionConstraint, RegionId, RegionSummary, RegionVar,
-    StoreEffect, StructLayout, Ty, VariantLayout, VowEntry, VowId,
+    InstData, InstId, IntegerSignedness, IntegerType, IntegerWidth, Module, Opcode,
+    RegionConstraint, RegionId, RegionSummary, RegionVar, StoreEffect, StructLayout, Ty,
+    VariantLayout, VowEntry, VowId,
 };
 use vow_diag::Blame;
 use vow_syntax::ast::Effect;
@@ -28,7 +29,7 @@ pub const MODULE_MAGIC: [u8; 4] = *b"VMOD";
 /// Skips 2 because `tests/multi/vmod_decode_bad_version/main.vow` pins
 /// the literal byte `2` as its "bad version" probe — leaving it untouched
 /// keeps that fixture meaningful without a parallel source edit.
-pub const MODULE_VERSION: u32 = 3;
+pub const MODULE_VERSION: u32 = 4;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DecodeError {
@@ -310,16 +311,6 @@ opcode_map! {
     0 => ConstI32, 1 => ConstI64, 2 => ConstF32, 3 => ConstF64,
     4 => ConstBool, 5 => ConstStr, 6 => ConstUnit,
     7 => GetArg,
-    8 => WrappingAddI32, 9 => WrappingSubI32, 10 => WrappingMulI32,
-    11 => WrappingDivI32, 12 => WrappingRemI32,
-    13 => CheckedAddI32, 14 => CheckedSubI32, 15 => CheckedMulI32,
-    16 => CheckedDivI32, 17 => CheckedRemI32,
-    18 => EqI32, 19 => NeI32, 20 => LtI32, 21 => LeI32, 22 => GtI32, 23 => GeI32,
-    24 => WrappingAddI64, 25 => WrappingSubI64, 26 => WrappingMulI64,
-    27 => WrappingDivI64, 28 => WrappingRemI64,
-    29 => CheckedAddI64, 30 => CheckedSubI64, 31 => CheckedMulI64,
-    32 => CheckedDivI64, 33 => CheckedRemI64,
-    34 => EqI64, 35 => NeI64, 36 => LtI64, 37 => LeI64, 38 => GtI64, 39 => GeI64,
     40 => AddF32, 41 => SubF32, 42 => MulF32, 43 => DivF32, 44 => RemF32,
     45 => EqF32, 46 => NeF32, 47 => LtF32, 48 => LeF32, 49 => GtF32, 50 => GeF32,
     51 => AddF64, 52 => SubF64, 53 => MulF64, 54 => DivF64, 55 => RemF64,
@@ -333,23 +324,54 @@ opcode_map! {
     77 => RegionAlloc,
     79 => LinearConsume, 80 => LinearBorrow,
     81 => FieldGet, 82 => FieldSet,
-    83 => XorI32, 84 => XorI64,
-    85 => WrappingAddU64, 86 => WrappingSubU64, 87 => WrappingMulU64,
-    88 => WrappingDivU64, 89 => WrappingRemU64,
-    90 => CheckedAddU64, 91 => CheckedSubU64, 92 => CheckedMulU64,
-    93 => CheckedDivU64, 94 => CheckedRemU64,
-    95 => EqU64, 96 => NeU64, 97 => LtU64, 98 => LeU64, 99 => GtU64, 100 => GeU64,
-    101 => XorU64, 102 => ConstU64,
-    103 => CastI64ToU64, 104 => CastU64ToI64,
+    102 => ConstU64,
     105 => DebugCall,
-    106 => BitAndI64, 107 => BitOrI64, 108 => ShlI64, 109 => ShrI64,
-    110 => BitAndU64, 111 => BitOrU64, 112 => ShlU64, 113 => ShrU64,
     114 => RegionOpen, 115 => RegionClose,
     116 => ComplexityDescriptor,
+    117 => WrappingAdd, 118 => WrappingSub, 119 => WrappingMul,
+    120 => WrappingDiv, 121 => WrappingRem,
+    122 => CheckedAdd, 123 => CheckedSub, 124 => CheckedMul,
+    125 => CheckedDiv, 126 => CheckedRem,
+    127 => Eq, 128 => Ne, 129 => Lt, 130 => Le, 131 => Gt, 132 => Ge,
+    133 => BitAnd, 134 => BitOr, 135 => BitXor, 136 => Shl, 137 => Shr,
+    138 => ConstU8,
+    139 => IntCast,
+}
+
+fn write_integer_type(out: &mut Vec<u8>, ty: IntegerType) {
+    out.push(match ty.width {
+        IntegerWidth::W8 => 0,
+        IntegerWidth::W16 => 1,
+        IntegerWidth::W32 => 2,
+        IntegerWidth::W64 => 3,
+        IntegerWidth::W128 => 4,
+    });
+    out.push(match ty.signedness {
+        IntegerSignedness::Signed => 0,
+        IntegerSignedness::Unsigned => 1,
+    });
+}
+
+fn read_integer_type(r: &mut Reader) -> Result<IntegerType, DecodeError> {
+    let width = match r.u8()? {
+        0 => IntegerWidth::W8,
+        1 => IntegerWidth::W16,
+        2 => IntegerWidth::W32,
+        3 => IntegerWidth::W64,
+        4 => IntegerWidth::W128,
+        d => return Err(DecodeError::InvalidKind("IntegerWidth", d as u32)),
+    };
+    let signedness = match r.u8()? {
+        0 => IntegerSignedness::Signed,
+        1 => IntegerSignedness::Unsigned,
+        d => return Err(DecodeError::InvalidKind("IntegerSignedness", d as u32)),
+    };
+    Ok(IntegerType::new(width, signedness))
 }
 
 fn ty_disc(t: Ty) -> u8 {
     match t {
+        Ty::I8 => 10,
         Ty::I32 => 0,
         Ty::I64 => 1,
         Ty::F32 => 2,
@@ -359,6 +381,12 @@ fn ty_disc(t: Ty) -> u8 {
         Ty::Ptr => 6,
         Ty::LinearPtr => 7,
         Ty::U64 => 8,
+        Ty::U8 => 9,
+        Ty::I16 => 11,
+        Ty::U16 => 12,
+        Ty::U32 => 13,
+        Ty::I128 => 14,
+        Ty::U128 => 15,
     }
 }
 
@@ -373,6 +401,13 @@ fn disc_ty(d: u8) -> Result<Ty, DecodeError> {
         6 => Ok(Ty::Ptr),
         7 => Ok(Ty::LinearPtr),
         8 => Ok(Ty::U64),
+        9 => Ok(Ty::U8),
+        10 => Ok(Ty::I8),
+        11 => Ok(Ty::I16),
+        12 => Ok(Ty::U16),
+        13 => Ok(Ty::U32),
+        14 => Ok(Ty::I128),
+        15 => Ok(Ty::U128),
         _ => Err(DecodeError::InvalidKind("Ty", d as u32)),
     }
 }
@@ -422,6 +457,19 @@ fn disc_blame(d: u8) -> Result<Blame, DecodeError> {
 fn write_inst_data(out: &mut Vec<u8>, d: &InstData) {
     match d {
         InstData::None => out.push(0),
+        InstData::Integer(ty) => {
+            out.push(17);
+            write_integer_type(out, *ty);
+        }
+        InstData::IntegerCast { from, to } => {
+            out.push(19);
+            write_integer_type(out, *from);
+            write_integer_type(out, *to);
+        }
+        InstData::ConstU8(v) => {
+            out.push(18);
+            out.push(*v);
+        }
         InstData::ConstI32(v) => {
             out.push(1);
             out.extend_from_slice(&v.to_le_bytes());
@@ -530,6 +578,12 @@ fn read_inst_data(r: &mut Reader) -> Result<InstData, DecodeError> {
             align: r.u32()?,
         }),
         16 => Ok(InstData::FieldIndex(r.u32()?)),
+        17 => Ok(InstData::Integer(read_integer_type(r)?)),
+        18 => Ok(InstData::ConstU8(r.u8()?)),
+        19 => Ok(InstData::IntegerCast {
+            from: read_integer_type(r)?,
+            to: read_integer_type(r)?,
+        }),
         _ => Err(DecodeError::InvalidKind("InstData", tag as u32)),
     }
 }
@@ -929,10 +983,10 @@ mod tests {
     #[test]
     fn magic_and_version_are_stable() {
         assert_eq!(&MODULE_MAGIC, b"VMOD");
-        assert_eq!(MODULE_VERSION, 3);
+        assert_eq!(MODULE_VERSION, 4);
         let bytes = encode_module(&empty_module());
         assert_eq!(&bytes[..4], b"VMOD");
-        assert_eq!(&bytes[4..8], &3u32.to_le_bytes());
+        assert_eq!(&bytes[4..8], &4u32.to_le_bytes());
     }
 
     #[test]

@@ -758,6 +758,51 @@ impl TypeEnv {
             },
         );
 
+        let option_u8 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::U8]);
+        env.define_fn(
+            "parse_u8",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: option_u8.clone(),
+                effects: BTreeSet::new(),
+            },
+        );
+        for (source_name, source_ty) in [
+            ("i16", Ty::I16),
+            ("i32", Ty::I32),
+            ("i64", Ty::I64),
+            ("i128", Ty::I128),
+            ("u16", Ty::U16),
+            ("u32", Ty::U32),
+            ("u64", Ty::U64),
+            ("u128", Ty::U128),
+        ] {
+            for (mode, return_ty) in [
+                ("try", option_u8.clone()),
+                ("wrap", Ty::U8),
+                ("sat", Ty::U8),
+            ] {
+                env.define_fn(
+                    format!("{source_name}_to_u8_{mode}"),
+                    FnSig {
+                        params: vec![source_ty.clone()],
+                        return_ty,
+                        effects: BTreeSet::new(),
+                    },
+                );
+            }
+        }
+        for name in ["add_sat_u8", "sub_sat_u8", "mul_sat_u8"] {
+            env.define_fn(
+                name,
+                FnSig {
+                    params: vec![Ty::U8, Ty::U8],
+                    return_ty: Ty::U8,
+                    effects: BTreeSet::new(),
+                },
+            );
+        }
+
         env
     }
 

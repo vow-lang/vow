@@ -177,7 +177,7 @@ Bootstrap triple test passes with binary fixed point. 89/89 tests pass.
 - `string_join`, `parse_i64`, `i64_to_string`
 
 **Bitwise XOR operator** (`^`):
-- New `Caret` token, `BitXor` BinOp, `XorI32`/`XorI64` IR opcodes
+- New `Caret` token, `BitXor` BinOp, and width-parametric `BitXor` IR opcode
 - Precedence between `||` and `&&` in both parsers
 - C emitter and Cranelift backend emit `^` / `bxor`
 

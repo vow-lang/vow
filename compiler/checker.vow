@@ -940,6 +940,15 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
                 init_tid
             } else {
                 let at_tid: i64 = resolve_ast_ty(e, m, annot_ast_tid);
+                if at_tid == CTY_U8() && expr_tag(a, init_eid) == EXPR_LIT_INT() {
+                    let literal_value: i64 = expr_a(a, init_eid);
+                    if literal_value < 0 || literal_value > 255 {
+                        let msg: String = String::from("literal ");
+                        msg.push_str(i64_to_string(literal_value));
+                        msg.push_str(String::from(" does not fit in u8 (range 0..=255)"));
+                        env_emit_error_code(e, EC_LITERAL_OUT_OF_RANGE(), msg, expr_span(a, init_eid));
+                    }
+                }
                 if !is_coercible(e.ts, init_tid, at_tid) {
                     env_emit_error(e, String::from("let binding type mismatch"), stmt_span(a, sid));
                 }
@@ -1236,6 +1245,26 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     tid
 }
 
+// A constant integer expression: a bare literal, or a literal wrapped in
+// unary negation (e.g. `-1`).
+fn expr_is_const_int(a: AstArena, eid: i64) -> bool {
+    if expr_tag(a, eid) == EXPR_LIT_INT() { return true; }
+    if expr_tag(a, eid) == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return expr_tag(a, expr_b(a, eid)) == EXPR_LIT_INT();
+    }
+    false
+}
+
+fn expr_const_int_value(a: AstArena, eid: i64) -> i64 {
+    if expr_tag(a, eid) == EXPR_LIT_INT() {
+        return expr_a(a, eid);
+    }
+    if expr_tag(a, eid) == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return 0 - expr_a(a, expr_b(a, eid));
+    }
+    0
+}
+
 fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     let a: AstArena = m.arena;
     let tag: i64 = expr_tag(a, eid);
@@ -1276,6 +1305,28 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let rhs_eid: i64 = expr_c(a, eid);
         let lhs_tid: i64 = check_expr(e, m, lhs_eid);
         let rhs_tid: i64 = check_expr(e, m, rhs_eid);
+        if op != BINOP_SHL() && op != BINOP_SHR() {
+            let rhs_is_u8_literal: bool = ty_tag(e.ts, lhs_tid) == CTY_U8() && ty_is_lit_int(e.ts, rhs_tid) && expr_tag(a, rhs_eid) == EXPR_LIT_INT();
+            let lhs_is_u8_literal: bool = ty_tag(e.ts, rhs_tid) == CTY_U8() && ty_is_lit_int(e.ts, lhs_tid) && expr_tag(a, lhs_eid) == EXPR_LIT_INT();
+            if rhs_is_u8_literal {
+                let value: i64 = expr_a(a, rhs_eid);
+                if value < 0 || value > 255 {
+                    let message: String = String::from("literal ");
+                    message.push_str(i64_to_string(value));
+                    message.push_str(String::from(" does not fit in u8 (range 0..=255)"));
+                    env_emit_error_code(e, EC_LITERAL_OUT_OF_RANGE(), message, expr_span(a, rhs_eid));
+                }
+            }
+            if lhs_is_u8_literal {
+                let value: i64 = expr_a(a, lhs_eid);
+                if value < 0 || value > 255 {
+                    let message: String = String::from("literal ");
+                    message.push_str(i64_to_string(value));
+                    message.push_str(String::from(" does not fit in u8 (range 0..=255)"));
+                    env_emit_error_code(e, EC_LITERAL_OUT_OF_RANGE(), message, expr_span(a, lhs_eid));
+                }
+            }
+        }
         if op == BINOP_AND() || op == BINOP_OR() {
             return CTY_BOOL();
         }
@@ -1293,6 +1344,21 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             if !ty_is_integer_or_lit_int(e.ts, rhs_tid) {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
                 return CTY_I64();
+            }
+            if (op == BINOP_SHL() || op == BINOP_SHR()) && ty_tag(e.ts, lhs_tid) == CTY_U8() {
+                if ty_tag(e.ts, rhs_tid) != CTY_U32() && !ty_is_lit_int(e.ts, rhs_tid) && !is_opaque(rhs_tid) {
+                    env_emit_error_code(e, EC_TYPE_MISMATCH(), String::from("u8 shift count must be u32"), expr_span(a, rhs_eid));
+                }
+                if expr_is_const_int(a, rhs_eid) {
+                    let count: i64 = expr_const_int_value(a, rhs_eid);
+                    if count >= 8 || count < 0 {
+                        let message: String = String::from("shift count ");
+                        message.push_str(i64_to_str(count));
+                        message.push_str(String::from(" is out of range for u8"));
+                        env_emit_error_code(e, EC_SHIFT_COUNT_OUT_OF_RANGE(), message, expr_span(a, rhs_eid));
+                    }
+                }
+                return lhs_tid;
             }
             // An unsuffixed-literal marker coerces to the other
             // operand's integer type; two markers stay a marker.
@@ -2063,13 +2129,33 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let tgt_tid: i64 = resolve_ast_ty(e, m, target_ast_tid);
         let src_tag: i64 = ty_tag(e.ts, src_tid);
         let tgt_tag: i64 = ty_tag(e.ts, tgt_tid);
-        let valid: bool = (src_tag == CTY_I64() && tgt_tag == CTY_U64())
-            || (src_tag == CTY_U64() && tgt_tag == CTY_I64())
-            || (src_tag == CTY_I32() && tgt_tag == CTY_U64())
-            || (src_tag == CTY_I32() && tgt_tag == CTY_I64())
-            || (src_tag == CTY_LIT_INT() && ty_is_integer(e.ts, tgt_tid));
-        if !valid && !is_opaque(src_tid) {
-            env_emit_error(e, String::from("invalid cast"), expr_span(a, eid));
+        if src_tag == CTY_LIT_INT() && ty_is_integer(e.ts, tgt_tid) {
+            if tgt_tag == CTY_U8() && expr_tag(a, inner_eid) == EXPR_LIT_INT() {
+                let literal_value: i64 = expr_a(a, inner_eid);
+                if literal_value < 0 || literal_value > 255 {
+                    env_emit_error_code(e, EC_LITERAL_OUT_OF_RANGE(),
+                        String::from("integer literal does not fit in u8"), expr_span(a, inner_eid));
+                }
+            }
+            return tgt_tid;
+        }
+        if ty_is_integer(e.ts, src_tid) && ty_is_integer(e.ts, tgt_tid) {
+            let src_width: i64 = integer_tag_width(src_tag);
+            let tgt_width: i64 = integer_tag_width(tgt_tag);
+            if tgt_width < src_width {
+                let message: String = String::from("cannot cast ");
+                message.push_str(ty_tag_name(src_tag));
+                message.push_str(String::from(" to "));
+                message.push_str(ty_tag_name(tgt_tag));
+                message.push_str(String::from(" via as"));
+                env_emit_error_code(e, EC_NARROWING_CAST_NOT_ALLOWED(),
+                    message,
+                    expr_span(a, inner_eid));
+            }
+            return tgt_tid;
+        }
+        if !is_opaque(src_tid) {
+            env_emit_error_code(e, EC_TYPE_MISMATCH(), String::from("invalid cast"), expr_span(a, eid));
         }
         return tgt_tid;
     }

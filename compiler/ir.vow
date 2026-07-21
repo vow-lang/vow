@@ -10,40 +10,6 @@ fn IOP_CONST_UNIT() -> i64 { 6 }
 
 fn IOP_GET_ARG() -> i64 { 7 }
 
-fn IOP_WADD_I32() -> i64 { 8 }
-fn IOP_WSUB_I32() -> i64 { 9 }
-fn IOP_WMUL_I32() -> i64 { 10 }
-fn IOP_WDIV_I32() -> i64 { 11 }
-fn IOP_WREM_I32() -> i64 { 12 }
-fn IOP_CADD_I32() -> i64 { 13 }
-fn IOP_CSUB_I32() -> i64 { 14 }
-fn IOP_CMUL_I32() -> i64 { 15 }
-fn IOP_CDIV_I32() -> i64 { 16 }
-fn IOP_CREM_I32() -> i64 { 17 }
-fn IOP_EQ_I32() -> i64 { 18 }
-fn IOP_NE_I32() -> i64 { 19 }
-fn IOP_LT_I32() -> i64 { 20 }
-fn IOP_LE_I32() -> i64 { 21 }
-fn IOP_GT_I32() -> i64 { 22 }
-fn IOP_GE_I32() -> i64 { 23 }
-
-fn IOP_WADD_I64() -> i64 { 24 }
-fn IOP_WSUB_I64() -> i64 { 25 }
-fn IOP_WMUL_I64() -> i64 { 26 }
-fn IOP_WDIV_I64() -> i64 { 27 }
-fn IOP_WREM_I64() -> i64 { 28 }
-fn IOP_CADD_I64() -> i64 { 29 }
-fn IOP_CSUB_I64() -> i64 { 30 }
-fn IOP_CMUL_I64() -> i64 { 31 }
-fn IOP_CDIV_I64() -> i64 { 32 }
-fn IOP_CREM_I64() -> i64 { 33 }
-fn IOP_EQ_I64() -> i64 { 34 }
-fn IOP_NE_I64() -> i64 { 35 }
-fn IOP_LT_I64() -> i64 { 36 }
-fn IOP_LE_I64() -> i64 { 37 }
-fn IOP_GT_I64() -> i64 { 38 }
-fn IOP_GE_I64() -> i64 { 39 }
-
 fn IOP_ADD_F32() -> i64 { 40 }
 fn IOP_SUB_F32() -> i64 { 41 }
 fn IOP_MUL_F32() -> i64 { 42 }
@@ -97,42 +63,36 @@ fn IOP_LINEAR_BORROW() -> i64 { 80 }
 fn IOP_FIELD_GET() -> i64 { 81 }
 fn IOP_FIELD_SET() -> i64 { 82 }
 
-fn IOP_XOR_I32() -> i64 { 83 }
-fn IOP_XOR_I64() -> i64 { 84 }
-
-fn IOP_WADD_U64() -> i64 { 85 }
-fn IOP_WSUB_U64() -> i64 { 86 }
-fn IOP_WMUL_U64() -> i64 { 87 }
-fn IOP_WDIV_U64() -> i64 { 88 }
-fn IOP_WREM_U64() -> i64 { 89 }
-fn IOP_CADD_U64() -> i64 { 90 }
-fn IOP_CSUB_U64() -> i64 { 91 }
-fn IOP_CMUL_U64() -> i64 { 92 }
-fn IOP_CDIV_U64() -> i64 { 93 }
-fn IOP_CREM_U64() -> i64 { 94 }
-fn IOP_EQ_U64() -> i64 { 95 }
-fn IOP_NE_U64() -> i64 { 96 }
-fn IOP_LT_U64() -> i64 { 97 }
-fn IOP_LE_U64() -> i64 { 98 }
-fn IOP_GT_U64() -> i64 { 99 }
-fn IOP_GE_U64() -> i64 { 100 }
-fn IOP_XOR_U64() -> i64 { 101 }
 fn IOP_CONST_U64() -> i64 { 102 }
-fn IOP_CAST_I64_TO_U64() -> i64 { 103 }
-fn IOP_CAST_U64_TO_I64() -> i64 { 104 }
 fn IOP_DEBUG_CALL() -> i64 { 105 }
-fn IOP_BITAND_I64() -> i64 { 106 }
-fn IOP_BITOR_I64() -> i64 { 107 }
-fn IOP_SHL_I64() -> i64 { 108 }
-fn IOP_SHR_I64() -> i64 { 109 }
-fn IOP_BITAND_U64() -> i64 { 110 }
-fn IOP_BITOR_U64() -> i64 { 111 }
-fn IOP_SHL_U64() -> i64 { 112 }
-fn IOP_SHR_U64() -> i64 { 113 }
 
 fn IOP_REGION_OPEN() -> i64 { 114 }
 fn IOP_REGION_CLOSE() -> i64 { 115 }
 fn IOP_COMPLEXITY_DESCRIPTOR() -> i64 { 116 }
+
+fn IOP_WADD() -> i64 { 117 }
+fn IOP_WSUB() -> i64 { 118 }
+fn IOP_WMUL() -> i64 { 119 }
+fn IOP_WDIV() -> i64 { 120 }
+fn IOP_WREM() -> i64 { 121 }
+fn IOP_CADD() -> i64 { 122 }
+fn IOP_CSUB() -> i64 { 123 }
+fn IOP_CMUL() -> i64 { 124 }
+fn IOP_CDIV() -> i64 { 125 }
+fn IOP_CREM() -> i64 { 126 }
+fn IOP_EQ() -> i64 { 127 }
+fn IOP_NE() -> i64 { 128 }
+fn IOP_LT() -> i64 { 129 }
+fn IOP_LE() -> i64 { 130 }
+fn IOP_GT() -> i64 { 131 }
+fn IOP_GE() -> i64 { 132 }
+fn IOP_BITAND() -> i64 { 133 }
+fn IOP_BITOR() -> i64 { 134 }
+fn IOP_BITXOR() -> i64 { 135 }
+fn IOP_SHL() -> i64 { 136 }
+fn IOP_SHR() -> i64 { 137 }
+fn IOP_CONST_U8() -> i64 { 138 }
+fn IOP_INT_CAST() -> i64 { 139 }
 
 fn REGION_KIND_BLOCK()  -> i64 { 0 }
 fn REGION_KIND_CALLER() -> i64 { 1 }
@@ -162,7 +122,7 @@ fn region_rodata() -> i64 { region_pack(REGION_KIND_RODATA(), 0) }
 // Skips 2 because `tests/multi/vmod_decode_bad_version/main.vow` pins the
 // literal byte 2 as its bad-version probe — kept synchronized with the
 // Rust `MODULE_VERSION` constant in `vow-ir/src/serialize.rs`.
-fn MODULE_VERSION() -> i64 { 3 }
+fn MODULE_VERSION() -> i64 { 4 }
 
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
@@ -179,6 +139,13 @@ fn ITY_UNIT() -> i64 { 5 }
 fn ITY_PTR() -> i64 { 6 }
 fn ITY_LPTR() -> i64 { 7 }
 fn ITY_U64() -> i64 { 8 }
+fn ITY_U8() -> i64 { 9 }
+fn ITY_I8() -> i64 { 10 }
+fn ITY_I16() -> i64 { 11 }
+fn ITY_U16() -> i64 { 12 }
+fn ITY_U32() -> i64 { 13 }
+fn ITY_I128() -> i64 { 14 }
+fn ITY_U128() -> i64 { 15 }
 
 // IDATA_* are the **in-memory** data-kind tags for the self-hosted IR
 // (`IrInst.dk`). They are a separate numbering space from the on-disk
@@ -218,6 +185,9 @@ fn IDATA_VOW_ID() -> i64 { 14 }
 fn IDATA_ALLOC_SIZE() -> i64 { 15 }
 fn IDATA_FIELD() -> i64 { 16 }
 fn IDATA_CONST_U64() -> i64 { 17 }
+fn IDATA_INTEGER() -> i64 { 18 }
+fn IDATA_CONST_U8() -> i64 { 19 }
+fn IDATA_INTEGER_CAST() -> i64 { 20 }
 
 fn BLAME_CALLER() -> i64 { 0 }
 fn BLAME_CALLEE() -> i64 { 1 }

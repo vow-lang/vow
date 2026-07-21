@@ -209,6 +209,15 @@ fn ty_is_integer(ts: TyStore, tid: i64) -> bool {
     tag >= CTY_I8() && tag <= CTY_U128()
 }
 
+fn integer_tag_width(tag: i64) -> i64 {
+    if tag == CTY_I8() || tag == CTY_U8() { return 8; }
+    if tag == CTY_I16() || tag == CTY_U16() { return 16; }
+    if tag == CTY_I32() || tag == CTY_U32() { return 32; }
+    if tag == CTY_I64() || tag == CTY_U64() { return 64; }
+    if tag == CTY_I128() || tag == CTY_U128() { return 128; }
+    0
+}
+
 fn ty_is_integer_or_lit_int(ts: TyStore, tid: i64) -> bool {
     ty_is_integer(ts, tid) || ty_is_lit_int(ts, tid)
 }
