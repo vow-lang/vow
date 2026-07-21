@@ -2849,7 +2849,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, or link failure |
+| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -2928,7 +2928,7 @@ argument expression.
 | `status`           | string              | Always            | One of the four status values             |
 | `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
-| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", or link error detail) |
+| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", link error detail, or "failed to emit frontend diagnostics: {io_error}") |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
@@ -7432,7 +7432,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, or link failure |
+| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -7511,7 +7511,7 @@ argument expression.
 | `status`           | string              | Always            | One of the four status values             |
 | `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
-| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", or link error detail) |
+| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", link error detail, or "failed to emit frontend diagnostics: {io_error}") |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
@@ -10986,12 +10986,29 @@ pub struct BuildOutput {
 // Frontend (parse → module load → type check → IR lower)
 // ---------------------------------------------------------------------------
 
-fn emit_frontend_diagnostics(diagnostics: &[Diagnostic]) {
-    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+fn emit_frontend_diagnostics(
+    diagnostics: &[Diagnostic],
+    emitter: &mut dyn DiagnosticEmitter,
+) -> std::io::Result<()> {
     for diagnostic in diagnostics {
-        stderr_emit.emit(diagnostic);
+        emitter.try_emit(diagnostic)?;
     }
-    stderr_emit.finish();
+    emitter.try_finish()
+}
+
+fn emit_frontend_diagnostics_to_stderr(diagnostics: &[Diagnostic]) -> std::io::Result<()> {
+    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    emit_frontend_diagnostics(diagnostics, &mut stderr_emit)
+}
+
+fn is_broken_pipe(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::BrokenPipe
+}
+
+fn write_stderr_best_effort(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+
+    let _ = writeln!(std::io::stderr(), "{args}");
 }
 
 fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
@@ -11004,6 +11021,56 @@ fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
         counterexamples: vec![],
         verify_status: None,
         verify_message: None,
+    }
+}
+
+fn frontend_diagnostic_emission_error_to_output(
+    error: std::io::Error,
+    diagnostics: Vec<Diagnostic>,
+) -> BuildOutput {
+    BuildOutput {
+        status: BuildStatus::CompileFailed {
+            message: format!("failed to emit frontend diagnostics: {error}"),
+        },
+        executable: None,
+        diagnostics,
+        counterexamples: vec![],
+        verify_status: None,
+        verify_message: None,
+    }
+}
+
+fn emit_frontend_result(
+    frontend: Result<FrontendBundle, FrontendError>,
+    emitter: &mut dyn DiagnosticEmitter,
+) -> Result<FrontendBundle, Box<BuildOutput>> {
+    match frontend {
+        Ok(bundle) => match emit_frontend_diagnostics(bundle.diagnostics(), emitter) {
+            Ok(()) => Ok(bundle),
+            Err(error) if is_broken_pipe(&error) => Ok(bundle),
+            Err(error) => {
+                let (diagnostics, _, _) = bundle.into_parts();
+                Err(Box::new(frontend_diagnostic_emission_error_to_output(
+                    error,
+                    diagnostics,
+                )))
+            }
+        },
+        Err(frontend_error) => {
+            match emit_frontend_diagnostics(frontend_error.diagnostics(), emitter) {
+                Ok(()) => Err(Box::new(frontend_error_to_output(frontend_error))),
+                Err(error) if is_broken_pipe(&error) => {
+                    Err(Box::new(frontend_error_to_output(frontend_error)))
+                }
+                Err(error) => {
+                    let diagnostics = frontend_error.into_diagnostics();
+                    Err(Box::new(frontend_diagnostic_emission_error_to_output(
+                        error,
+                        diagnostics,
+                    )))
+                }
+            }
+        }
     }
 }
 
@@ -11022,16 +11089,9 @@ fn compile_frontend_with_root(
     module_root: Option<&Path>,
     prof: Option<&perfetto::Profiler>,
 ) -> Result<FrontendBundle, Box<BuildOutput>> {
-    match prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr, prof) {
-        Ok(bundle) => {
-            emit_frontend_diagnostics(bundle.diagnostics());
-            Ok(bundle)
-        }
-        Err(error) => {
-            emit_frontend_diagnostics(error.diagnostics());
-            Err(Box::new(frontend_error_to_output(error)))
-        }
-    }
+    let frontend = prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr, prof);
+    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    emit_frontend_result(frontend, &mut stderr_emit)
 }
 
 // ---------------------------------------------------------------------------
@@ -12466,14 +12526,32 @@ fn run_build_command(
 }
 
 fn run_decl_command(source: &Path, output: Option<&Path>) {
+    let mut stderr_broken_pipe = false;
     let frontend = match prepare_frontend(source, FrontendGoal::MergedAst) {
         Ok(bundle) => {
-            emit_frontend_diagnostics(bundle.diagnostics());
+            match emit_frontend_diagnostics_to_stderr(bundle.diagnostics()) {
+                Ok(()) => {}
+                Err(error) if is_broken_pipe(&error) => stderr_broken_pipe = true,
+                Err(error) => {
+                    write_stderr_best_effort(format_args!(
+                        "vow decl: failed to emit frontend diagnostics: {error}"
+                    ));
+                    std::process::exit(1);
+                }
+            }
             bundle
         }
         Err(error) => {
-            emit_frontend_diagnostics(error.diagnostics());
-            eprintln!("vow decl: {}", error.failure_message());
+            match emit_frontend_diagnostics_to_stderr(error.diagnostics()) {
+                Ok(()) => {
+                    write_stderr_best_effort(format_args!("vow decl: {}", error.failure_message()))
+                }
+                Err(emission_error) if is_broken_pipe(&emission_error) => {}
+                Err(emission_error) => write_stderr_best_effort(format_args!(
+                    "vow decl: {}; failed to emit frontend diagnostics: {emission_error}",
+                    error.failure_message()
+                )),
+            }
             std::process::exit(1);
         }
     };
@@ -12494,10 +12572,14 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     };
 
     if let Err(e) = std::fs::write(&out_path, &decl_text) {
-        eprintln!("vow decl: {}", e);
+        if !stderr_broken_pipe {
+            write_stderr_best_effort(format_args!("vow decl: {e}"));
+        }
         std::process::exit(1);
     }
-    eprintln!("wrote {}", out_path.display());
+    if !stderr_broken_pipe {
+        write_stderr_best_effort(format_args!("wrote {}", out_path.display()));
+    }
 }
 
 fn run_verify_command(
@@ -13069,6 +13151,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
     use tempfile::TempDir;
 
     fn write_source(dir: &TempDir, name: &str, src: &str) -> PathBuf {
@@ -13083,6 +13166,160 @@ mod tests {
             BuildStatus::VerifyFailed { description, .. }
                 if description.contains("ESBMC not found")
         )
+    }
+
+    struct EmitFailingDiagnosticEmitter {
+        emit_attempts: usize,
+        finish_attempts: usize,
+        error_kind: io::ErrorKind,
+    }
+
+    impl DiagnosticEmitter for EmitFailingDiagnosticEmitter {
+        fn try_emit(&mut self, _: &Diagnostic) -> io::Result<()> {
+            self.emit_attempts += 1;
+            Err(io::Error::from(self.error_kind))
+        }
+
+        fn try_finish(&mut self) -> io::Result<()> {
+            self.finish_attempts += 1;
+            Ok(())
+        }
+    }
+
+    struct FinishFailingDiagnosticEmitter {
+        emit_attempts: usize,
+        finish_attempts: usize,
+        error_kind: io::ErrorKind,
+    }
+
+    impl DiagnosticEmitter for FinishFailingDiagnosticEmitter {
+        fn try_emit(&mut self, _: &Diagnostic) -> io::Result<()> {
+            self.emit_attempts += 1;
+            Ok(())
+        }
+
+        fn try_finish(&mut self) -> io::Result<()> {
+            self.finish_attempts += 1;
+            Err(io::Error::from(self.error_kind))
+        }
+    }
+
+    fn frontend_test_diagnostic(message: &str) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Error,
+            code: vow_diag::ErrorCode::UnexpectedToken,
+            message: message.to_string(),
+            primary: vow_diag::SourceLocation {
+                file: "test.vow".to_string(),
+                byte_offset: 0,
+                byte_len: 1,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+            hints: vec![],
+        }
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_returns_emit_failure_without_finishing() {
+        let diagnostics = [
+            frontend_test_diagnostic("first"),
+            frontend_test_diagnostic("second"),
+        ];
+        let mut emitter = EmitFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::BrokenPipe,
+        };
+
+        let error = emit_frontend_diagnostics(&diagnostics, &mut emitter).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 0);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_returns_broken_pipe_from_finish() {
+        let diagnostics = [frontend_test_diagnostic("parse error")];
+        let mut emitter = FinishFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::BrokenPipe,
+        };
+
+        let error = emit_frontend_diagnostics(&diagnostics, &mut emitter).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 1);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_returns_non_broken_pipe_from_finish() {
+        let diagnostics = [frontend_test_diagnostic("type error")];
+        let mut emitter = FinishFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::PermissionDenied,
+        };
+
+        let error = emit_frontend_diagnostics(&diagnostics, &mut emitter).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 1);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_converts_writer_error_to_compile_failure() {
+        let dir = TempDir::new().unwrap();
+        let source = write_source(&dir, "bad_parse.vow", "module M 123");
+        let frontend = prepare_frontend(&source, FrontendGoal::LoweredIr);
+        let expected_diagnostics = frontend.as_ref().unwrap_err().diagnostics().to_vec();
+        let mut emitter = EmitFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::PermissionDenied,
+        };
+
+        let output = emit_frontend_result(frontend, &mut emitter).unwrap_err();
+
+        match &output.status {
+            BuildStatus::CompileFailed { message } => {
+                assert!(message.contains("failed to emit frontend diagnostics"));
+                assert!(message.contains("permission denied"));
+            }
+            status => panic!("expected CompileFailed, got {status:?}"),
+        }
+        assert!(output.executable.is_none());
+        assert_eq!(output.diagnostics, expected_diagnostics);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 0);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_broken_pipe_preserves_frontend_failure() {
+        let dir = TempDir::new().unwrap();
+        let source = write_source(&dir, "bad_parse.vow", "module M 123");
+        let frontend = prepare_frontend(&source, FrontendGoal::LoweredIr);
+        let expected_diagnostics = frontend.as_ref().unwrap_err().diagnostics().to_vec();
+        let mut emitter = EmitFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::BrokenPipe,
+        };
+
+        let output = emit_frontend_result(frontend, &mut emitter).unwrap_err();
+
+        match &output.status {
+            BuildStatus::CompileFailed { message } => assert_eq!(message, "parse error"),
+            status => panic!("expected CompileFailed, got {status:?}"),
+        }
+        assert!(output.executable.is_none());
+        assert_eq!(output.diagnostics, expected_diagnostics);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 0);
     }
 
     #[test]
