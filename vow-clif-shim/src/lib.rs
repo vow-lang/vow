@@ -379,7 +379,7 @@ fn block_arena_slot(
         // Cranelift reserve the complete declared slot, not just the pointer.
         let zero = builder.ins().iconst(types::I64, 0);
         for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
-            builder.ins().stack_store(zero, slot, offset);
+            builder.ins().stack_store(types::I64, zero, slot, offset);
         }
     }
     slot
@@ -412,7 +412,7 @@ fn arena_value_for_region(
     let kind = rgn & 3;
     let payload = rgn >> 2;
     match kind {
-        REGION_KIND_ROOT => Some(builder.ins().global_value(types::I64, root_arena_gv)),
+        REGION_KIND_ROOT => Some(builder.ins().symbol_value(types::I64, root_arena_gv)),
         REGION_KIND_BLOCK => Some(block_arena_value(builder, block_arena_slots, payload)),
         REGION_KIND_CALLER => {
             // Route to the value's hidden caller-arena slot. Multi-slot
@@ -1596,7 +1596,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             hidden_region_values.extend(entry_params[cl_idx..].iter().copied());
         }
         if ctx.func_decls[fi].is_main {
-            let root_arena = builder.ins().global_value(types::I64, root_arena_gv);
+            let root_arena = builder.ins().symbol_value(types::I64, root_arena_gv);
             hidden_region_values.push(root_arena);
         }
     }
@@ -1654,7 +1654,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     if nb > 0 {
         let zero = builder.ins().iconst(types::I64, 0);
         for &slot in slot_map.values() {
-            builder.ins().stack_store(zero, slot, 0);
+            builder.ins().stack_store(types::I64, zero, slot, 0);
         }
         for payload in block_arena_ids {
             let slot = block_arena_slot(&mut builder, &mut block_arena_slots, payload);
@@ -1673,7 +1673,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
         // Emit trace_enter at function entry
         if let (Some(gv), Some(enter_ref)) = (fn_name_gv, trace_enter_ref) {
-            let name_ptr = builder.ins().global_value(types::I64, gv);
+            let name_ptr = builder.ins().symbol_value(types::I64, gv);
             builder.ins().call(enter_ref, &[name_ptr]);
         }
         // Emit profile_init in main, profile_enter at all function entries
@@ -1683,12 +1683,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             builder.ins().call(init_ref, &[]);
         }
         if let (Some(gv), Some(prof_ref)) = (fn_name_gv, profile_enter_ref) {
-            let name_ptr = builder.ins().global_value(types::I64, gv);
+            let name_ptr = builder.ins().symbol_value(types::I64, gv);
             builder.ins().call(prof_ref, &[name_ptr]);
         }
         // Emit stack_enter at function entry (debug/sanitize mode)
         if let (Some(gv), Some(se_ref)) = (fn_name_gv, stack_enter_ref) {
-            let name_ptr = builder.ins().global_value(types::I64, gv);
+            let name_ptr = builder.ins().symbol_value(types::I64, gv);
             builder.ins().call(se_ref, &[name_ptr]);
         }
         // Emit sanitize_init at main entry
@@ -1805,7 +1805,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     if dk == IDATA_CONST_STR {
                         let str_idx = dv;
                         if let Some(&gv) = string_global_values.get(&str_idx) {
-                            let ptr = builder.ins().global_value(types::I64, gv);
+                            let ptr = builder.ins().symbol_value(types::I64, gv);
                             set_val!(iid, ptr);
                         } else {
                             let null = builder.ins().iconst(types::I64, 0);
@@ -1916,7 +1916,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         let out_of_range =
                             builder
                                 .ins()
-                                .icmp_imm(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
+                                .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
                         emit_overflow_check(&mut builder, out_of_range, overflow_ref);
                     }
                     let val = builder.ins().ishl(arg!(0), arg!(1));
@@ -1927,7 +1927,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         let out_of_range =
                             builder
                                 .ins()
-                                .icmp_imm(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
+                                .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
                         emit_overflow_check(&mut builder, out_of_range, overflow_ref);
                     }
                     let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
@@ -2072,7 +2072,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 }
                 IOP_RETURN => {
                     if let (Some(gv), Some(exit_ref)) = (fn_name_gv, trace_exit_ref) {
-                        let name_ptr = builder.ins().global_value(types::I64, gv);
+                        let name_ptr = builder.ins().symbol_value(types::I64, gv);
                         builder.ins().call(exit_ref, &[name_ptr]);
                     }
                     if let Some(se_ref) = stack_exit_ref {
@@ -2199,7 +2199,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                     );
                                     return -1;
                                 };
-                                let ptr = builder.ins().global_value(types::I64, gv);
+                                let ptr = builder.ins().symbol_value(types::I64, gv);
                                 set_val!(iid, ptr);
                                 continue;
                             }
@@ -2501,7 +2501,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     }
 
     builder.seal_all_blocks();
-    builder.finalize();
+    builder.finalize(ctx.obj_module.isa().frontend_config());
 
     // Verify function for debugging
     if let Err(errs) = cranelift_codegen::verify_function(&cl_ctx.func, ctx.isa.as_ref()) {
@@ -2729,16 +2729,16 @@ fn load_slotted_value(
     value_ty: types::Type,
 ) -> Value {
     match value_ty {
-        types::F32 | types::F64 => builder.ins().stack_load(value_ty, slot, 0),
+        types::F32 | types::F64 => builder.ins().stack_load(types::I64, value_ty, slot, 0),
         types::I32 => {
-            let raw = builder.ins().stack_load(types::I64, slot, 0);
+            let raw = builder.ins().stack_load(types::I64, types::I64, slot, 0);
             builder.ins().ireduce(types::I32, raw)
         }
         types::I8 => {
-            let raw = builder.ins().stack_load(types::I64, slot, 0);
+            let raw = builder.ins().stack_load(types::I64, types::I64, slot, 0);
             builder.ins().ireduce(types::I8, raw)
         }
-        _ => builder.ins().stack_load(types::I64, slot, 0),
+        _ => builder.ins().stack_load(types::I64, types::I64, slot, 0),
     }
 }
 
@@ -2748,7 +2748,7 @@ fn store_slotted_value(builder: &mut FunctionBuilder<'_>, slot: StackSlot, value
         types::I8 => builder.ins().uextend(types::I64, value),
         _ => value,
     };
-    builder.ins().stack_store(store_val, slot, 0);
+    builder.ins().stack_store(types::I64, store_val, slot, 0);
 }
 
 fn tag_for_ir_ty(ty: i64) -> i64 {
@@ -2788,7 +2788,7 @@ fn emit_vow_check(
     builder.seal_block(violation_block);
     // Trace vow failure (full mode)
     if let (Some(tv_ref), Some(gv)) = (trace_vow_ref, fn_name_gv) {
-        let name_ptr = builder.ins().global_value(types::I64, gv);
+        let name_ptr = builder.ins().symbol_value(types::I64, gv);
         let vid = builder.ins().iconst(types::I64, vow_id);
         let passed = builder.ins().iconst(types::I64, 0);
         builder.ins().call(tv_ref, &[name_ptr, vid, passed]);
@@ -2797,7 +2797,7 @@ fn emit_vow_check(
         let vow_id_val = builder.ins().iconst(types::I32, vow_id);
         let blame_val = builder.ins().iconst(types::I8, blame);
         let desc_ptr = if let Some(&gv) = vow_desc_gvs.get(&vow_id) {
-            builder.ins().global_value(types::I64, gv)
+            builder.ins().symbol_value(types::I64, gv)
         } else {
             builder.ins().iconst(types::I64, 0)
         };
@@ -2810,12 +2810,14 @@ fn emit_vow_check(
                 3,
             ));
             for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
-                let name_ptr = builder.ins().global_value(types::I64, *name_gv);
-                builder.ins().stack_store(name_ptr, slot, (i * 24) as i32);
+                let name_ptr = builder.ins().symbol_value(types::I64, *name_gv);
+                builder
+                    .ins()
+                    .stack_store(types::I64, name_ptr, slot, (i * 24) as i32);
                 let tag_val = builder.ins().iconst(types::I8, tag_for_ir_ty(*ir_ty));
                 builder
                     .ins()
-                    .stack_store(tag_val, slot, (i * 24 + 8) as i32);
+                    .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
                 let payload: Value = match *ir_ty {
                     ITY_I32 => builder.ins().sextend(types::I64, *cl_val),
                     ITY_I64 => *cl_val,
@@ -2834,7 +2836,7 @@ fn emit_vow_check(
                 };
                 builder
                     .ins()
-                    .stack_store(payload, slot, (i * 24 + 16) as i32);
+                    .stack_store(types::I64, payload, slot, (i * 24 + 16) as i32);
             }
             let base = builder.ins().stack_addr(types::I64, slot, 0);
             let cnt = builder.ins().iconst(types::I32, n as i64);
@@ -2868,7 +2870,7 @@ fn emit_vow_check(
     builder.seal_block(cont_block);
     // Trace vow pass (full mode)
     if let (Some(tv_ref), Some(gv)) = (trace_vow_ref, fn_name_gv) {
-        let name_ptr = builder.ins().global_value(types::I64, gv);
+        let name_ptr = builder.ins().symbol_value(types::I64, gv);
         let vid = builder.ins().iconst(types::I64, vow_id);
         let passed = builder.ins().iconst(types::I64, 1);
         builder.ins().call(tv_ref, &[name_ptr, vid, passed]);

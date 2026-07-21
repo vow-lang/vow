@@ -163,6 +163,10 @@ pub enum Opcode {
     VowEnsures,
     VowInvariant,
 
+    /// Non-executable performance-contract metadata. Correctness verification
+    /// and production code generation must skip this node; `vow-perf` owns it.
+    ComplexityDescriptor,
+
     Call,
 
     RegionAlloc,

@@ -335,6 +335,7 @@ opcode_map! {
     132 => BitAnd, 133 => BitOr, 134 => BitXor, 135 => Shl, 136 => Shr,
     137 => ConstU8,
     138 => IntCast,
+    139 => ComplexityDescriptor,
 }
 
 fn write_integer_type(out: &mut Vec<u8>, ty: IntegerType) {
@@ -994,6 +995,12 @@ mod tests {
         let b = encode_module(&m);
         let m2 = decode_module(&b).unwrap();
         assert_eq!(m, m2);
+    }
+
+    #[test]
+    fn complexity_descriptor_opcode_round_trips() {
+        let disc = opcode_disc(Opcode::ComplexityDescriptor);
+        assert_eq!(disc_opcode(disc).unwrap(), Opcode::ComplexityDescriptor);
     }
 
     #[test]

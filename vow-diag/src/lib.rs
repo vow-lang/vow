@@ -148,10 +148,11 @@ impl<'a> CollectingEmitter<'a> {
 }
 
 impl DiagnosticEmitter for CollectingEmitter<'_> {
+    /// Retains each diagnostic before forwarding it to the inner emitter.
+    /// An inner error is returned without rolling back the collected diagnostic.
     fn try_emit(&mut self, diagnostic: &Diagnostic) -> std::io::Result<()> {
-        self.inner.try_emit(diagnostic)?;
         self.collected.push(diagnostic.clone());
-        Ok(())
+        self.inner.try_emit(diagnostic)
     }
 
     fn try_finish(&mut self) -> std::io::Result<()> {
@@ -283,6 +284,17 @@ mod tests {
         let mut emitter = HumanEmitter::new(Box::new(FailingWrite));
         let err = emitter.try_emit(&make_diagnostic()).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn collecting_emitter_keeps_diagnostic_when_inner_emit_fails() {
+        let diagnostic = make_diagnostic();
+        let mut inner = HumanEmitter::new(Box::new(FailingWrite));
+        let mut emitter = CollectingEmitter::new(&mut inner);
+
+        let err = emitter.try_emit(&diagnostic).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(emitter.into_diagnostics(), vec![diagnostic]);
     }
 
     #[test]

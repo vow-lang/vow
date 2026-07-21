@@ -1,0 +1,14 @@
+// TEST: category model-drift
+module LexerIsAlphaVerify
+
+fn is_alpha(b: i64) -> bool vow {
+    requires: b >= 0,
+    requires: b <= 255,
+    ensures: result == ((b >= 65 && b <= 90) || (b >= 97 && b <= 122))
+} {
+    (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+}
+
+fn main() -> i32 {
+    if is_alpha(65) { 0 } else { 1 }
+}

@@ -117,6 +117,10 @@ for arg in "$@"; do
     esac
 done
 
+if [ "$NO_VERIFY" = true ] && [ "$STAGE3_NO_VERIFY" = true ]; then
+    echo "warning: --no-verify supersedes --stage3-no-verify" >&2
+fi
+
 stage12_build_flags="--verify-jobs 1"
 stage3_build_flags="--verify-jobs 1"
 if [ "$NO_VERIFY" = true ]; then

@@ -68,6 +68,7 @@ fn IOP_DEBUG_CALL() -> i64 { 105 }
 
 fn IOP_REGION_OPEN() -> i64 { 114 }
 fn IOP_REGION_CLOSE() -> i64 { 115 }
+fn IOP_COMPLEXITY_DESCRIPTOR() -> i64 { 139 }
 
 fn IOP_WADD() -> i64 { 116 }
 fn IOP_WSUB() -> i64 { 117 }

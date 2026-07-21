@@ -598,6 +598,7 @@ pub fn is_modelable(
                 | Opcode::VowRequires
                 | Opcode::VowEnsures
                 | Opcode::VowInvariant
+                | Opcode::ComplexityDescriptor
                 | Opcode::Branch
                 | Opcode::Jump
                 | Opcode::Return
@@ -1040,6 +1041,11 @@ fn emit_inst(
                 "  __ESBMC_assert(v{}, \"vow:{}\");\n",
                 pred, vow_id
             ));
+        }
+
+        Opcode::ComplexityDescriptor => {
+            // Performance-contract metadata belongs to vow-perf and produces
+            // no correctness verification condition.
         }
 
         // Control flow
