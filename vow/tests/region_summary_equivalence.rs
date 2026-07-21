@@ -438,7 +438,11 @@ fn rust_internal_call_fresh_return_emits_region_root_escape_note() {
 /// compilers fire on the same input, and the shell-suite mechanism only
 /// asserts runtime stdout, not diagnostic content. Skips when `build/vowc`
 /// is not yet built (pre-bootstrap), consistent with the project's pattern
-/// of tolerating optional artifacts.
+/// of tolerating optional artifacts. Also tolerates a standalone `cargo test`
+/// run without a prior full bootstrap, where the link step fails for lack of
+/// `libvow_runtime.a` (see `self_hosted_runtime_link_failure` below) — but
+/// only when diagnostics are genuinely absent; when present, they are still
+/// checked (issue #332).
 #[test]
 fn selfhosted_internal_call_fresh_return_emits_region_root_escape_note() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -467,9 +471,18 @@ fn selfhosted_internal_call_fresh_return_emits_region_root_escape_note() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
     });
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
     let notes: Vec<_> = diagnostics
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
@@ -720,13 +733,18 @@ fn self_hosted_param_field_mutation_emits_root_escape_note() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
     });
-    if self_hosted_runtime_link_failure(&parsed, stderr.as_ref()) {
-        eprintln!("SKIP: self-hosted build failed due to missing libvow_runtime.a");
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
         return;
-    }
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
+    };
     let notes: Vec<_> = diagnostics
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
@@ -819,13 +837,18 @@ fn self_hosted_field_overwrite_emits_root_escape_note() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
     });
-    if self_hosted_runtime_link_failure(&parsed, stderr.as_ref()) {
-        eprintln!("SKIP: self-hosted build failed due to missing libvow_runtime.a");
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
         return;
-    }
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
+    };
     let notes: Vec<_> = diagnostics
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
@@ -868,13 +891,18 @@ fn self_hosted_struct_field_initializer_alloc_skipped() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
     });
-    if self_hosted_runtime_link_failure(&parsed, stderr.as_ref()) {
-        eprintln!("SKIP: self-hosted build failed due to missing libvow_runtime.a");
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
         return;
-    }
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
+    };
     let notes: Vec<_> = diagnostics
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
