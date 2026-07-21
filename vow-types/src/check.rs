@@ -158,6 +158,22 @@ fn is_numeric_or_lit_int(ty: &Ty) -> bool {
     ty.is_numeric() || ty.is_lit_int()
 }
 
+/// Evaluates a constant integer expression: a bare literal, or a literal
+/// wrapped in unary negation (e.g. `-1`). Returns `None` for anything else.
+fn const_int_value(expr: &Expr) -> Option<i128> {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Int(value)) => Some(*value),
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => match &operand.kind {
+            ExprKind::Lit(Lit::Int(value)) => Some(-*value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn is_integer_or_lit_int(ty: &Ty) -> bool {
     ty.is_integer() || ty.is_lit_int()
 }
@@ -858,18 +874,7 @@ impl<'e> Checker<'e> {
         if *target != Ty::U8 {
             return;
         }
-        let value = match &expr.kind {
-            ExprKind::Lit(Lit::Int(value)) => Some(*value),
-            ExprKind::UnaryOp {
-                op: UnOp::Neg,
-                operand,
-            } => match &operand.kind {
-                ExprKind::Lit(Lit::Int(value)) => Some(-*value),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(value) = value
+        if let Some(value) = const_int_value(expr)
             && !(0..=255).contains(&value)
         {
             self.emit_error_with_hints(
@@ -1073,8 +1078,8 @@ impl<'e> Checker<'e> {
                                 vec!["use a u32 shift count".to_string()],
                             );
                         }
-                        if let ExprKind::Lit(Lit::Int(count)) = rhs.kind
-                            && count >= 8
+                        if let Some(count) = const_int_value(rhs)
+                            && !(0..8).contains(&count)
                         {
                             self.emit_error_with_hints(
                                 ErrorCode::ShiftCountOutOfRange,
@@ -2887,6 +2892,71 @@ mod tests {
         }));
         assert_eq!(ty, Ty::LitInt);
         assert!(!checker.has_errors());
+    }
+
+    // --- u8 shift count range ---
+
+    fn u8_cast(value: i128) -> Expr {
+        make_expr(ExprKind::Cast {
+            expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(value)))),
+            target_ty: Box::new(Type::Named {
+                name: "u8".to_string(),
+                span: dummy_span(),
+            }),
+        })
+    }
+
+    fn u8_shl_with_count(count: i128) -> Expr {
+        make_expr(ExprKind::BinaryOp {
+            op: BinOp::Shl,
+            lhs: Box::new(u8_cast(1)),
+            rhs: Box::new(make_expr(ExprKind::Lit(Lit::Int(count)))),
+        })
+    }
+
+    fn u8_shl_with_neg_count(count: i128) -> Expr {
+        make_expr(ExprKind::BinaryOp {
+            op: BinOp::Shl,
+            lhs: Box::new(u8_cast(1)),
+            rhs: Box::new(make_expr(ExprKind::UnaryOp {
+                op: vow_syntax::ast::UnOp::Neg,
+                operand: Box::new(make_expr(ExprKind::Lit(Lit::Int(count)))),
+            })),
+        })
+    }
+
+    #[test]
+    fn u8_shift_count_in_range_ok() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&u8_shl_with_count(3));
+        assert_eq!(ty, Ty::U8);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn u8_shift_count_negative_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&u8_shl_with_neg_count(1));
+        assert!(checker.has_errors());
+        assert_eq!(
+            emitter.0.len(),
+            1,
+            "expected exactly one diagnostic (no spurious u8-shift-count-must-be-u32 error), got: {:?}",
+            emitter.0
+        );
+        assert_eq!(emitter.0[0].code, ErrorCode::ShiftCountOutOfRange);
+        assert!(emitter.0[0].message.contains("-1"));
+    }
+
+    #[test]
+    fn u8_shift_count_ge_8_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&u8_shl_with_count(8));
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::ShiftCountOutOfRange);
     }
 
     // --- Checked arithmetic ---

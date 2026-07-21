@@ -395,3 +395,130 @@ fn vow_violation_reports_variable_values() {
         r#"expected "result":-1 in stderr, got: {stderr}"#
     );
 }
+
+#[test]
+fn vow_violation_reports_u8_variable_value() {
+    // fn takes_byte(x: u8) -> u8
+    //   vow requires x > 200
+    // fn main() -> i32 { takes_byte(5); 0 }
+    //
+    // Regression test for a bug where a captured u8 free variable's payload
+    // was always zero-filled in the VowViolation binding (the tag correctly
+    // said "u8", but the payload-construction match had no u8 arm).
+    //
+    // IR:
+    //   takes_byte block0:
+    //     v0 = get_arg(0)         [x: u8]
+    //     v1 = const_u8(200)
+    //     v2 = gt_u8(v0, v1)      [x > 200]
+    //     v3 = vow_requires(v2)   [vow_id=0, blame=Caller, bindings=[("x", InstId(0))]]
+    //     return v0
+    use vow_diag::Blame;
+
+    let takes_byte = Function {
+        id: FuncId(0),
+        name: "takes_byte".to_string(),
+        params: vec![Ty::U8],
+        param_names: vec![],
+        return_ty: Ty::U8,
+        effects: vec![],
+        vows: vec![VowEntry {
+            id: VowId(0),
+            description: "requires x > 200".to_string(),
+            blame: Blame::Caller,
+            bindings: vec![("x".to_string(), InstId(0))],
+            file: String::new(),
+            offset: 0,
+        }],
+        blocks: vec![BasicBlock {
+            id: BlockId(0),
+            insts: vec![
+                inst(0, Opcode::GetArg, Ty::U8, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::ConstU8, Ty::U8, vec![], InstData::ConstU8(200)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Gt,
+                    ty: Ty::Bool,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::Integer(IntegerType::U8),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::VowRequires,
+                    ty: Ty::Unit,
+                    args: vec![InstId(2)],
+                    data: InstData::VowId(VowId(0)),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        }],
+        local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
+        source_file: String::new(),
+    };
+
+    let main_fn = Function {
+        id: FuncId(1),
+        name: "main".to_string(),
+        params: vec![],
+        param_names: vec![],
+        return_ty: Ty::I32,
+        effects: vec![],
+        vows: vec![],
+        blocks: vec![BasicBlock {
+            id: BlockId(0),
+            insts: vec![
+                inst(10, Opcode::ConstU8, Ty::U8, vec![], InstData::ConstU8(5)),
+                Inst {
+                    id: InstId(11),
+                    opcode: Opcode::Call,
+                    ty: Ty::U8,
+                    args: vec![InstId(10)],
+                    data: InstData::CallTarget(FuncId(0)),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(12, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(0)),
+                inst(13, Opcode::Return, Ty::Unit, vec![12], InstData::None),
+            ],
+        }],
+        local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
+        source_file: String::new(),
+    };
+
+    let module = Module {
+        name: "u8_vow_test".to_string(),
+        strings: vec![],
+        struct_layouts: vec![],
+        enum_layouts: vec![],
+        warnings: vec![],
+        functions: vec![takes_byte, main_fn],
+    };
+
+    let dir = TempDir::new().unwrap();
+    let Some(exe) = compile_and_link(&module, BuildMode::Debug, &dir) else {
+        eprintln!("SKIP: vow-runtime not found");
+        return;
+    };
+    let out = run_exe(&exe);
+    assert_eq!(
+        out.status.code(),
+        Some(134),
+        "expected reserved runtime-abort exit code 134 (vow violation), got {:?}",
+        out.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Caller"),
+        "expected blame=Caller in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(r#""x":5"#),
+        r#"expected "x":5 (real u8 value, not 0) in stderr, got: {stderr}"#
+    );
+}

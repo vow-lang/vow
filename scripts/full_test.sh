@@ -1031,6 +1031,30 @@ else
     fail "divide/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
 fi
 
+# u8_requires_violation.vow: a captured u8 free variable must report its real
+# value in the VowViolation payload, not 0 (numeric-tower u8 first-class fix).
+$RUST build --mode debug --no-verify tests/debug/u8_requires_violation.vow -o "$TMPDIR/rust_u8_violation_debug" >/dev/null 2>/dev/null
+run_self build --mode debug --no-verify tests/debug/u8_requires_violation.vow -o "$TMPDIR/self_u8_violation_debug" >/dev/null 2>/dev/null
+
+rust_exit=0 self_exit=0
+"$TMPDIR/rust_u8_violation_debug" </dev/null >"$TMPDIR/rust_u8_dbg_out" 2>"$TMPDIR/rust_u8_dbg_err" || rust_exit=$?
+run_self_bin "$TMPDIR/self_u8_violation_debug" </dev/null >"$TMPDIR/self_u8_dbg_out" 2>"$TMPDIR/self_u8_dbg_err" || self_exit=$?
+rust_err=$(cat "$TMPDIR/rust_u8_dbg_err")
+self_err=$(cat "$TMPDIR/self_u8_dbg_err")
+
+errors=()
+if [ "$rust_exit" -ne 134 ]; then errors+=("rust exit=$rust_exit, expected 134"); fi
+if [ "$self_exit" -ne 134 ]; then errors+=("self exit=$self_exit, expected 134"); fi
+for pattern in VowViolation Caller '"x":5'; do
+    if ! echo "$rust_err" | grep -qF "$pattern"; then errors+=("rust stderr missing '$pattern'"); fi
+    if ! echo "$self_err" | grep -qF "$pattern"; then errors+=("self stderr missing '$pattern'"); fi
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "u8_requires_violation/debug-violation"
+else
+    fail "u8_requires_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
+fi
+
 # callee_blame, clamp, hello: contracts pass (or none), compare runtime
 for name in callee_blame clamp hello; do
     $RUST build --mode debug --no-verify "examples/${name}.vow" -o "$TMPDIR/rust_${name}_debug" >/dev/null 2>/dev/null
@@ -1212,7 +1236,9 @@ for fixture_path in \
     "$TMPDIR/missing_module.vow" \
     "$TMPDIR/const_type_mismatch.vow" \
     "tests/error/match_arm_missing_comma_scalar.vow" \
-    "tests/error/match_arm_missing_comma_block.vow"; do
+    "tests/error/match_arm_missing_comma_block.vow" \
+    "tests/error/u8_shift_out_of_range.vow" \
+    "tests/error/u8_negative_shift_count.vow"; do
     fixture=$(basename "$fixture_path" .vow)
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST build --no-verify "$fixture_path" -o "$TMPDIR/rust_${fixture}" 2>/dev/null) || rust_exit=$?

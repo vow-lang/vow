@@ -1245,6 +1245,26 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     tid
 }
 
+// A constant integer expression: a bare literal, or a literal wrapped in
+// unary negation (e.g. `-1`).
+fn expr_is_const_int(a: AstArena, eid: i64) -> bool {
+    if expr_tag(a, eid) == EXPR_LIT_INT() { return true; }
+    if expr_tag(a, eid) == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return expr_tag(a, expr_b(a, eid)) == EXPR_LIT_INT();
+    }
+    false
+}
+
+fn expr_const_int_value(a: AstArena, eid: i64) -> i64 {
+    if expr_tag(a, eid) == EXPR_LIT_INT() {
+        return expr_a(a, eid);
+    }
+    if expr_tag(a, eid) == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return 0 - expr_a(a, expr_b(a, eid));
+    }
+    0
+}
+
 fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     let a: AstArena = m.arena;
     let tag: i64 = expr_tag(a, eid);
@@ -1329,9 +1349,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if ty_tag(e.ts, rhs_tid) != CTY_U32() && !ty_is_lit_int(e.ts, rhs_tid) && !is_opaque(rhs_tid) {
                     env_emit_error_code(e, EC_TYPE_MISMATCH(), String::from("u8 shift count must be u32"), expr_span(a, rhs_eid));
                 }
-                if expr_tag(a, rhs_eid) == EXPR_LIT_INT() {
-                    let count: i64 = expr_a(a, rhs_eid);
-                    if count >= 8 {
+                if expr_is_const_int(a, rhs_eid) {
+                    let count: i64 = expr_const_int_value(a, rhs_eid);
+                    if count >= 8 || count < 0 {
                         let message: String = String::from("shift count ");
                         message.push_str(i64_to_str(count));
                         message.push_str(String::from(" is out of range for u8"));

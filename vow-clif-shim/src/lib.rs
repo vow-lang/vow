@@ -2758,6 +2758,7 @@ fn tag_for_ir_ty(ty: i64) -> i64 {
         ITY_F32 => 2,
         ITY_F64 => 3,
         ITY_BOOL => 4,
+        ITY_U8 => 6,
         _ => 0,
     }
 }
@@ -2828,6 +2829,7 @@ fn emit_vow_check(
                         .ins()
                         .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     ITY_BOOL => *cl_val,
+                    ITY_U8 => builder.ins().uextend(types::I64, *cl_val),
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder

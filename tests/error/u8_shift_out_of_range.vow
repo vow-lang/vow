@@ -1,4 +1,4 @@
-// TEST: error ShiftCountOutOfRange
+// TEST: error-code ShiftCountOutOfRange
 // TEST: stderr "shift count 8 is out of range for u8"
 module U8ShiftOutOfRange
 

@@ -174,12 +174,50 @@ fn lower_ty_with_linear(ast_ty: &AstType, linear_struct_names: &HashSet<String>)
     }
 }
 
+fn is_scalar_field_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "f32"
+            | "f64"
+            | "bool"
+    )
+}
+
+fn scalar_ty_for_field_type_name(name: &str) -> Ty {
+    match name {
+        "i8" => Ty::I8,
+        "i16" => Ty::I16,
+        "i32" => Ty::I32,
+        "i64" => Ty::I64,
+        "i128" => Ty::I128,
+        "u8" => Ty::U8,
+        "u16" => Ty::U16,
+        "u32" => Ty::U32,
+        "u64" => Ty::U64,
+        "u128" => Ty::U128,
+        "f32" => Ty::F32,
+        "f64" => Ty::F64,
+        "bool" => Ty::Bool,
+        _ => Ty::I64,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FuncSigInfo {
     id: FuncId,
     ret_ty: Ty,
     ret_tag: Option<String>,
     ret_vec_elem: Option<String>,
+    param_tys: Vec<Ty>,
 }
 
 fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
@@ -958,6 +996,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Ident(name) => name.clone(),
                 _ => todo!("non-ident callee in Call lowering"),
             };
+            let call_info = ctx.func_index.get(&callee_name).cloned();
             if callee_name == "string_matches_literal_at" {
                 let string_id = args
                     .first()
@@ -991,7 +1030,26 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 return ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
             }
-            let arg_ids: Vec<InstId> = args.iter().map(|a| lower_consumed_expr(ctx, a)).collect();
+            let arg_ids: Vec<InstId> = args
+                .iter()
+                .enumerate()
+                .map(|(i, a)| {
+                    if let Some(info) = &call_info
+                        && info.param_tys.get(i) == Some(&Ty::U8)
+                        && let ExprKind::Lit(Lit::Int(value)) = a.kind
+                    {
+                        ctx.emit(
+                            Opcode::ConstU8,
+                            Ty::U8,
+                            vec![],
+                            InstData::ConstU8(value as u8),
+                            a.span,
+                        )
+                    } else {
+                        lower_consumed_expr(ctx, a)
+                    }
+                })
+                .collect();
             if callee_name == "pin_to_root" {
                 let Some(source_id) = arg_ids.first().copied() else {
                     return ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
@@ -1034,7 +1092,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 // direct pin_to_root(builtin_call()) becomes a no-op here.
                 return source_id;
             }
-            let call_info = ctx.func_index.get(&callee_name).cloned();
             if let Some(call_info) = call_info {
                 let result = ctx.emit(
                     Opcode::Call,
@@ -2006,19 +2063,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 )
             } else {
+                let field_type_name = ctx
+                    .struct_field_type_names
+                    .get(&struct_name)
+                    .and_then(|names| names.get(field_idx as usize))
+                    .cloned()
+                    .unwrap_or_default();
+                let field_ty = scalar_ty_for_field_type_name(&field_type_name);
                 let result_id = ctx.emit(
                     Opcode::FieldGet,
-                    Ty::I64,
+                    field_ty,
                     vec![ptr_id],
                     InstData::FieldIndex(field_idx),
                     span,
                 );
-                if let Some(type_names) = ctx.struct_field_type_names.get(&struct_name)
-                    && let Some(type_name) = type_names.get(field_idx as usize)
-                    && !type_name.is_empty()
-                    && !matches!(type_name.as_str(), "i32" | "i64" | "f32" | "f64" | "bool")
-                {
-                    ctx.inst_struct_type.insert(result_id, type_name.clone());
+                if !field_type_name.is_empty() && !is_scalar_field_type_name(&field_type_name) {
+                    ctx.inst_struct_type.insert(result_id, field_type_name);
                 }
                 if let Some(vec_elems) = ctx.struct_field_vec_elems.get(&struct_name)
                     && let Some(elem_name) = vec_elems.get(field_idx as usize)
@@ -3433,6 +3493,11 @@ pub fn lower_module(
                     ret_ty: lower_ty_with_linear(&fn_def.return_ty, &linear_struct_names),
                     ret_tag: non_scalar_type_tag(&fn_def.return_ty),
                     ret_vec_elem: vec_named_elem_type(&fn_def.return_ty),
+                    param_tys: fn_def
+                        .params
+                        .iter()
+                        .map(|p| lower_ty_with_linear(&p.ty, &linear_struct_names))
+                        .collect(),
                 },
             )
         })
@@ -3641,6 +3706,13 @@ mod tests {
     fn u64_ty() -> Type {
         Type::Named {
             name: "u64".to_string(),
+            span: sp(),
+        }
+    }
+
+    fn u8_ty() -> Type {
+        Type::Named {
+            name: "u8".to_string(),
             span: sp(),
         }
     }
@@ -5022,6 +5094,7 @@ mod tests {
                 ret_ty: Ty::Ptr,
                 ret_tag: Some("Pair".to_string()),
                 ret_vec_elem: None,
+                param_tys: vec![],
             },
         );
 
@@ -5058,6 +5131,141 @@ mod tests {
             .flat_map(|b| b.insts.iter())
             .find(|i| i.opcode == Opcode::FieldGet)
             .expect("expected FieldGet");
+        assert_eq!(field_get.data, InstData::FieldIndex(0));
+    }
+
+    #[test]
+    fn user_defined_call_coerces_u8_literal_argument() {
+        // fn caller() -> u8 { id_u8(1) }
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr("id_u8", vec![int_expr(1)]))),
+            span: sp(),
+        };
+        let fn_def = make_fn("caller", vec![], u8_ty(), body, vec![]);
+
+        let mut func_index = HashMap::new();
+        func_index.insert(
+            "id_u8".to_string(),
+            FuncSigInfo {
+                id: FuncId(0),
+                ret_ty: Ty::U8,
+                ret_tag: None,
+                ret_vec_elem: None,
+                param_tys: vec![Ty::U8],
+            },
+        );
+
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "",
+            &func_index,
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            warnings.is_empty(),
+            "unexpected lowering warnings: {warnings:?}"
+        );
+
+        let const_u8 = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|i| i.opcode == Opcode::ConstU8)
+            .expect("expected ConstU8 for literal u8 call argument, not a default i64 constant");
+        assert_eq!(const_u8.ty, Ty::U8);
+        assert_eq!(const_u8.data, InstData::ConstU8(1));
+
+        let call = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|i| i.opcode == Opcode::Call)
+            .expect("expected Call");
+        assert_eq!(
+            call.args,
+            vec![const_u8.id],
+            "Call argument must be the ConstU8 instruction, not a separately-lowered i64 constant"
+        );
+    }
+
+    #[test]
+    fn field_access_on_u8_field_uses_u8_ir_type() {
+        // struct B { x: u8 }
+        // fn byte() -> u8 { make_b().x }
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::FieldAccess {
+                    base: Box::new(Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(ident_expr("make_b")),
+                            args: vec![],
+                        },
+                        span: sp(),
+                    }),
+                    field: "x".to_string(),
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let fn_def = make_fn("byte", vec![], u8_ty(), body, vec![]);
+
+        let mut func_index = HashMap::new();
+        func_index.insert(
+            "make_b".to_string(),
+            FuncSigInfo {
+                id: FuncId(0),
+                ret_ty: Ty::Ptr,
+                ret_tag: Some("B".to_string()),
+                ret_vec_elem: None,
+                param_tys: vec![],
+            },
+        );
+
+        let mut struct_field_map = HashMap::new();
+        struct_field_map.insert("B".to_string(), vec!["x".to_string()]);
+
+        let mut struct_field_type_names = HashMap::new();
+        struct_field_type_names.insert("B".to_string(), vec!["u8".to_string()]);
+
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "",
+            &func_index,
+            struct_field_map,
+            HashMap::new(),
+            &HashSet::new(),
+            struct_field_type_names,
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            warnings.is_empty(),
+            "unexpected lowering warnings: {warnings:?}"
+        );
+
+        let field_get = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|i| i.opcode == Opcode::FieldGet)
+            .expect("expected FieldGet");
+        assert_eq!(
+            field_get.ty,
+            Ty::U8,
+            "FieldGet on a u8-typed field must carry Ty::U8, not the default Ty::I64"
+        );
         assert_eq!(field_get.data, InstData::FieldIndex(0));
     }
 }

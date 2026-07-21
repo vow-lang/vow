@@ -1673,6 +1673,7 @@ fn emit_vow_violation_body(
                         .ins()
                         .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     IrTy::Bool => *cl_val,
+                    IrTy::U8 => builder.ins().uextend(types::I64, *cl_val),
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder

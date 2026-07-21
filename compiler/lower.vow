@@ -17,6 +17,7 @@ struct LowerCtx {
     func_ret_tys: Vec<i64>,
     func_ret_tags: Vec<String>,
     func_ret_vec_elems: Vec<String>,
+    func_param_tys: Vec<Vec<i64>>,
     struct_names: Vec<String>,
     linear_struct_names: Vec<String>,
     struct_field_lists: Vec<Vec<String>>,
@@ -77,6 +78,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_ret_tys: Vec::new(),
         func_ret_tags: Vec::new(),
         func_ret_vec_elems: Vec::new(),
+        func_param_tys: Vec::new(),
         struct_names: Vec::new(),
         linear_struct_names: Vec::new(),
         struct_field_lists: Vec::new(),
@@ -482,6 +484,31 @@ fn lctx_alloc_vow(ctx: LowerCtx, desc: String, blame: i64, binding_ids: Vec<i64>
 
 fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
     lower_ast_ty_linear(a, tid, Vec::new())
+}
+
+fn is_scalar_field_type_name(name: String) -> bool {
+    name == String::from("i8") || name == String::from("i16") || name == String::from("i32") ||
+    name == String::from("i64") || name == String::from("i128") ||
+    name == String::from("u8") || name == String::from("u16") || name == String::from("u32") ||
+    name == String::from("u64") || name == String::from("u128") ||
+    name == String::from("f32") || name == String::from("f64") || name == String::from("bool")
+}
+
+fn ity_for_scalar_type_name(name: String) -> i64 {
+    if name == String::from("i8") { return ITY_I8(); }
+    if name == String::from("i16") { return ITY_I16(); }
+    if name == String::from("i32") { return ITY_I32(); }
+    if name == String::from("i64") { return ITY_I64(); }
+    if name == String::from("i128") { return ITY_I128(); }
+    if name == String::from("u8") { return ITY_U8(); }
+    if name == String::from("u16") { return ITY_U16(); }
+    if name == String::from("u32") { return ITY_U32(); }
+    if name == String::from("u64") { return ITY_U64(); }
+    if name == String::from("u128") { return ITY_U128(); }
+    if name == String::from("f32") { return ITY_F32(); }
+    if name == String::from("f64") { return ITY_F64(); }
+    if name == String::from("bool") { return ITY_BOOL(); }
+    ITY_I64()
 }
 
 fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>) -> i64 {
@@ -1303,10 +1330,18 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if fidx != -1 {
             let call_args: Vec<i64> = Vec::new();
             let nargs: i64 = list_len(a, args_lid);
+            let param_tys: Vec<i64> = ctx.func_param_tys[fidx];
+            let n_param_tys: i64 = param_tys.len();
             let mut ai: i64 = 0;
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
-                let arg_id: i64 = lower_consumed_expr(ctx, arg_eid);
+                let mut arg_id: i64 = -1;
+                if ai < n_param_tys && param_tys[ai] == ITY_U8() && expr_tag(a, arg_eid) == EXPR_LIT_INT() {
+                    let const_args: Vec<i64> = Vec::new();
+                    arg_id = lctx_emit(ctx, IOP_CONST_U8(), ITY_U8(), const_args, IDATA_CONST_U8(), expr_a(a, arg_eid), 0, String::from(""));
+                } else {
+                    arg_id = lower_consumed_expr(ctx, arg_eid);
+                }
                 call_args.push(arg_id);
                 ai = ai + 1;
             }
@@ -2095,10 +2130,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         let fg_args: Vec<i64> = Vec::new();
         fg_args.push(recv_id);
-        let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), fidx, 0, String::from(""));
         let field_type: String = lctx_struct_field_type(ctx, recv_tag_str, fidx);
+        let field_ity: i64 = ity_for_scalar_type_name(field_type);
+        let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ity, fg_args, IDATA_FIELD(), fidx, 0, String::from(""));
         if field_type != String::from("") {
-            if field_type != String::from("i32") && field_type != String::from("i64") && field_type != String::from("f32") && field_type != String::from("f64") && field_type != String::from("bool") {
+            if !is_scalar_field_type_name(field_type) {
                 lctx_tag(ctx, result, field_type);
             }
         }
@@ -3622,6 +3658,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> I
     let func_ret_tys: Vec<i64> = Vec::new();
     let func_ret_tags: Vec<String> = Vec::new();
     let func_ret_vec_elems: Vec<String> = Vec::new();
+    let func_param_tys: Vec<Vec<i64>> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
     let linear_struct_names: Vec<String> = Vec::new();
     let struct_field_lists: Vec<Vec<String>> = Vec::new();
@@ -3659,6 +3696,17 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> I
             func_ret_tys.push(ir_ret);
             func_ret_tags.push(lower_ast_type_tag_name(a, ret_tid));
             func_ret_vec_elems.push(lower_ast_type_vec_elem_name(a, ret_tid));
+
+            let params_lid: i64 = fn_params_lid(a, iid);
+            let nparams: i64 = list_len(a, params_lid) / 3;
+            let param_tys: Vec<i64> = Vec::new();
+            let mut pi: i64 = 0;
+            while pi < nparams {
+                let ptid: i64 = list_get(a, params_lid, pi * 3 + 1);
+                param_tys.push(lower_ast_ty_linear(a, ptid, linear_struct_names));
+                pi = pi + 1;
+            }
+            func_param_tys.push(param_tys);
         } else if ik == ITEM_STRUCT() {
             let sname_sid: i64 = sdef_name_sid(a, iid);
             let sname: String = arena_str(a, sname_sid);
@@ -3835,6 +3883,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> I
     ctx.func_ret_tys = func_ret_tys;
     ctx.func_ret_tags = func_ret_tags;
     ctx.func_ret_vec_elems = func_ret_vec_elems;
+    ctx.func_param_tys = func_param_tys;
     ctx.struct_names = struct_names;
     ctx.linear_struct_names = linear_struct_names;
     ctx.struct_field_lists = struct_field_lists;
