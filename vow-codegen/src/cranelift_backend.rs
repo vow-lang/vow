@@ -1657,7 +1657,9 @@ fn emit_vow_violation_body(
             ));
             for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
                 let name_ptr = builder.ins().symbol_value(types::I64, *name_gv);
-                builder.ins().stack_store(types::I64, name_ptr, slot, (i * 24) as i32);
+                builder
+                    .ins()
+                    .stack_store(types::I64, name_ptr, slot, (i * 24) as i32);
                 let tag_val = builder
                     .ins()
                     .iconst(types::I8, tag_for_ir_ty(*ir_ty) as i64);
