@@ -345,6 +345,7 @@ opcode_map! {
     106 => BitAndI64, 107 => BitOrI64, 108 => ShlI64, 109 => ShrI64,
     110 => BitAndU64, 111 => BitOrU64, 112 => ShlU64, 113 => ShrU64,
     114 => RegionOpen, 115 => RegionClose,
+    116 => ComplexityDescriptor,
 }
 
 fn ty_disc(t: Ty) -> u8 {
@@ -940,6 +941,12 @@ mod tests {
         let b = encode_module(&m);
         let m2 = decode_module(&b).unwrap();
         assert_eq!(m, m2);
+    }
+
+    #[test]
+    fn complexity_descriptor_opcode_round_trips() {
+        let disc = opcode_disc(Opcode::ComplexityDescriptor);
+        assert_eq!(disc_opcode(disc).unwrap(), Opcode::ComplexityDescriptor);
     }
 
     #[test]

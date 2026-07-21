@@ -83,6 +83,7 @@ pub fn inst_effects(opcode: &Opcode) -> Effects {
             e.traps = true;
             e
         }
+        Opcode::ComplexityDescriptor => Effects::pure(),
         Opcode::Call => {
             let mut e = Effects::pure();
             e.reads.insert(AbstractHeap::Memory);

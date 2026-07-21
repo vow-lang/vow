@@ -284,6 +284,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                    || op == IOP_BITAND_U64() || op == IOP_BITOR_U64() || op == IOP_XOR_U64() || op == IOP_SHL_U64() || op == IOP_SHR_U64()
                    || op == IOP_CONST_U64() || op == IOP_CAST_I64_TO_U64() || op == IOP_CAST_U64_TO_I64()
                    || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV()
+                   || op == IOP_COMPLEXITY_DESCRIPTOR()
                    || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_RETURN() || op == IOP_UNREACHABLE()
                    || op == IOP_PHI() || op == IOP_UPSILON()
                    || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
@@ -1189,6 +1190,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
     if op == IOP_PHI() { return; }
     if op == IOP_UPSILON() { return; }
     if op == IOP_DEBUG_CALL() { return; }
+    if op == IOP_COMPLEXITY_DESCRIPTOR() { return; }
 
     if op == IOP_CALL() {
         if inst.dk == IDATA_CALL_EXTERN() {

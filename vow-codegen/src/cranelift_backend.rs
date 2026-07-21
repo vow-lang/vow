@@ -1174,6 +1174,10 @@ fn lower_inst(
             // In Release mode: no-op
         }
 
+        Opcode::ComplexityDescriptor => {
+            // Non-executable metadata consumed by vow-perf.
+        }
+
         // ------------------------------------------------------------------
         // Debug calls (only emitted in debug/sanitize mode)
         // ------------------------------------------------------------------

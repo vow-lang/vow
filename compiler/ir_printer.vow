@@ -168,6 +168,7 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_REGION_ALLOC() { return String::from("RegionAlloc"); }
     if op == IOP_REGION_OPEN() { return String::from("RegionOpen"); }
     if op == IOP_REGION_CLOSE() { return String::from("RegionClose"); }
+    if op == IOP_COMPLEXITY_DESCRIPTOR() { return String::from("ComplexityDescriptor"); }
     if op == IOP_LINEAR_CONSUME() { return String::from("LinearConsume"); }
     if op == IOP_LINEAR_BORROW() { return String::from("LinearBorrow"); }
     if op == IOP_FIELD_GET() { return String::from("FieldGet"); }

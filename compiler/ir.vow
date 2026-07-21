@@ -132,6 +132,7 @@ fn IOP_SHR_U64() -> i64 { 113 }
 
 fn IOP_REGION_OPEN() -> i64 { 114 }
 fn IOP_REGION_CLOSE() -> i64 { 115 }
+fn IOP_COMPLEXITY_DESCRIPTOR() -> i64 { 116 }
 
 fn REGION_KIND_BLOCK()  -> i64 { 0 }
 fn REGION_KIND_CALLER() -> i64 { 1 }
