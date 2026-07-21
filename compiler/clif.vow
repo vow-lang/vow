@@ -378,14 +378,16 @@ fn clif_compile_function(ctx: i64, func_idx: i64, f: IrFunction) -> i64 [io] {
         let mut ii: i64 = 0;
         while ii < n_insts {
             let inst: IrInst = insts[ii];
-            let args: Vec<i64> = inst.args;
-            let rc_inst: i64 = __vow_clif_fn_inst(
-                ctx, inst.id, inst.op, inst.ty,
-                inst.dk, inst.dv, inst.dv2,
-                inst.ds, args, inst.rgn
-            );
-            if rc_inst != 0 {
-                return rc_inst;
+            if inst.op != IOP_COMPLEXITY_DESCRIPTOR() {
+                let args: Vec<i64> = inst.args;
+                let rc_inst: i64 = __vow_clif_fn_inst(
+                    ctx, inst.id, inst.op, inst.ty,
+                    inst.dk, inst.dv, inst.dv2,
+                    inst.ds, args, inst.rgn
+                );
+                if rc_inst != 0 {
+                    return rc_inst;
+                }
             }
             ii = ii + 1;
         }

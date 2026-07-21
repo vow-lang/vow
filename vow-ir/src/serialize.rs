@@ -327,14 +327,15 @@ opcode_map! {
     102 => ConstU64,
     105 => DebugCall,
     114 => RegionOpen, 115 => RegionClose,
-    116 => WrappingAdd, 117 => WrappingSub, 118 => WrappingMul,
-    119 => WrappingDiv, 120 => WrappingRem,
-    121 => CheckedAdd, 122 => CheckedSub, 123 => CheckedMul,
-    124 => CheckedDiv, 125 => CheckedRem,
-    126 => Eq, 127 => Ne, 128 => Lt, 129 => Le, 130 => Gt, 131 => Ge,
-    132 => BitAnd, 133 => BitOr, 134 => BitXor, 135 => Shl, 136 => Shr,
-    137 => ConstU8,
-    138 => IntCast,
+    116 => ComplexityDescriptor,
+    117 => WrappingAdd, 118 => WrappingSub, 119 => WrappingMul,
+    120 => WrappingDiv, 121 => WrappingRem,
+    122 => CheckedAdd, 123 => CheckedSub, 124 => CheckedMul,
+    125 => CheckedDiv, 126 => CheckedRem,
+    127 => Eq, 128 => Ne, 129 => Lt, 130 => Le, 131 => Gt, 132 => Ge,
+    133 => BitAnd, 134 => BitOr, 135 => BitXor, 136 => Shl, 137 => Shr,
+    138 => ConstU8,
+    139 => IntCast,
 }
 
 fn write_integer_type(out: &mut Vec<u8>, ty: IntegerType) {
@@ -994,6 +995,12 @@ mod tests {
         let b = encode_module(&m);
         let m2 = decode_module(&b).unwrap();
         assert_eq!(m, m2);
+    }
+
+    #[test]
+    fn complexity_descriptor_opcode_round_trips() {
+        let disc = opcode_disc(Opcode::ComplexityDescriptor);
+        assert_eq!(disc_opcode(disc).unwrap(), Opcode::ComplexityDescriptor);
     }
 
     #[test]

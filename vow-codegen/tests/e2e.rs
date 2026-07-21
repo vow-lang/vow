@@ -108,7 +108,14 @@ fn make_main_returns_42() -> Module {
                 id: BlockId(0),
                 insts: vec![
                     inst(0, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(42)),
-                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                    inst(
+                        1,
+                        Opcode::ComplexityDescriptor,
+                        Ty::Unit,
+                        vec![],
+                        InstData::None,
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),

@@ -12,28 +12,32 @@ fn is_whitespace(b: i64) -> bool vow {
 
 fn is_alpha(b: i64) -> bool vow {
     requires: b >= 0,
-    requires: b <= 255
+    requires: b <= 255,
+    ensures: result == ((b >= 65 && b <= 90) || (b >= 97 && b <= 122))
 } {
     (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
 }
 
 fn is_digit(b: i64) -> bool vow {
     requires: b >= 0,
-    requires: b <= 255
+    requires: b <= 255,
+    ensures: result == (b >= 48 && b <= 57)
 } {
     b >= 48 && b <= 57
 }
 
 fn is_ident_start(b: i64) -> bool vow {
     requires: b >= 0,
-    requires: b <= 255
+    requires: b <= 255,
+    ensures: result == (is_alpha(b) || b == 95)
 } {
     is_alpha(b) || b == 95
 }
 
 fn is_ident_cont(b: i64) -> bool vow {
     requires: b >= 0,
-    requires: b <= 255
+    requires: b <= 255,
+    ensures: result == (is_alpha(b) || is_digit(b) || b == 95)
 } {
     is_alpha(b) || is_digit(b) || b == 95
 }

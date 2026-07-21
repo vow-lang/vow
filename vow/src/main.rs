@@ -7,6 +7,7 @@ mod frontend;
 mod module_loader;
 mod perfetto;
 mod replay;
+mod report;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,10 +15,7 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 
-use std::collections::BTreeMap;
-
 use clap::Parser;
-use serde::Serialize;
 use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
@@ -34,6 +32,7 @@ use cache::{CachedFailure, VerifyCache};
 use frontend::{
     FrontendBundle, FrontendError, FrontendGoal, prepare_frontend, prepare_frontend_with_root,
 };
+use report::*;
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -2872,7 +2871,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, or link failure |
+| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -2951,7 +2950,7 @@ argument expression.
 | `status`           | string              | Always            | One of the four status values             |
 | `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
-| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", or link error detail) |
+| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", link error detail, or "failed to emit frontend diagnostics: {io_error}") |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
@@ -7477,7 +7476,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, or link failure |
+| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -7556,7 +7555,7 @@ argument expression.
 | `status`           | string              | Always            | One of the four status values             |
 | `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
-| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", or link error detail) |
+| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", link error detail, or "failed to emit frontend diagnostics: {io_error}") |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
@@ -11024,349 +11023,6 @@ pub struct BuildOutput {
 }
 
 // ---------------------------------------------------------------------------
-// Serde JSON output types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SpanJson {
-    pub file: String,
-    pub offset: u32,
-    pub length: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DiagnosticJson {
-    pub error_code: String,
-    pub message: String,
-    pub severity: String,
-    pub span: SpanJson,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub hints: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub secondary: Vec<SpanJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blame: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CeCallSiteJson {
-    pub caller_function: String,
-    pub file: String,
-    pub offset: u32,
-    pub length: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CeViolatingArgJson {
-    pub param: String,
-    pub value: String,
-    pub arg_offset: u32,
-    pub arg_length: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CePathStepJson {
-    pub block_id: u32,
-    pub offset: u32,
-    pub length: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CeBranchDecisionJson {
-    pub condition_offset: u32,
-    pub condition_length: u32,
-    pub taken: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CounterexampleJson {
-    pub function: String,
-    pub values: BTreeMap<String, String>,
-    pub violation: String,
-    pub vow_id: u32,
-    pub source: Option<SpanJson>,
-    pub blame: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub call_sites: Vec<CeCallSiteJson>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub violating_args: Vec<CeViolatingArgJson>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub execution_path: Vec<CePathStepJson>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub branch_decisions: Vec<CeBranchDecisionJson>,
-    /// `--replay-cex` differential-test outcome (issue #335): `"confirmed"`,
-    /// `"diverged"`, or `"skipped"`. Absent unless `--replay-cex` was passed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub replay: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub replay_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct BuildResult {
-    pub status: String,
-    pub executable: Option<String>,
-    pub diagnostics: Vec<DiagnosticJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub function: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub counterexample: Option<String>,
-    pub counterexamples: Vec<CounterexampleJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verify_status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verify_message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ContractEntryJson {
-    pub vow_id: u32,
-    pub function: String,
-    #[serde(skip)]
-    pub function_id: u32,
-    pub kind: String,
-    pub description: String,
-    pub blame: String,
-    pub source: ContractSourceJson,
-    pub status: String,
-    /// Static quality classification of the clause shape (no ESBMC): one of
-    /// `weak` (an `ensures` that only bounds `result` by a constant),
-    /// `tautological` (constant clause that says nothing about the program),
-    /// or `substantive` (equality / relational / inverse / call). See
-    /// docs/spec/contracts-methodology.md.
-    pub quality: String,
-    /// Verification-based weakness signal (#81 PR-C): true when a trivial
-    /// `return <default>` body still satisfies this `ensures` — the contract is
-    /// too weak to pin down the implementation. Only computed for `ensures`
-    /// clauses under `--verify`; always false for `requires`/`invariant` and
-    /// when `--verify` is off. Informational: it does not affect the exit code.
-    pub trivially_satisfiable: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ContractSourceJson {
-    pub file: String,
-    pub offset: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ContractsSummaryJson {
-    pub total: u32,
-    pub proven: u32,
-    pub failed: u32,
-    pub unknown: u32,
-    pub timeout: u32,
-    pub error: u32,
-    pub not_verified: u32,
-    pub skipped: u32,
-    pub vacuous: u32,
-    /// Count of `ensures` clauses a trivial `return <default>` body satisfies
-    /// (#81 PR-C). Informational, like `quality`; does not affect the exit code.
-    pub trivially_satisfiable: u32,
-    pub quality: ContractsQualityJson,
-}
-
-/// Static contract-quality tallies (independent of verification status).
-#[derive(Debug, Clone, Serialize)]
-pub struct ContractsQualityJson {
-    pub weak: u32,
-    pub tautological: u32,
-    pub substantive: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ContractsResultJson {
-    pub contracts: Vec<ContractEntryJson>,
-    pub summary: ContractsSummaryJson,
-}
-
-// ---------------------------------------------------------------------------
-// Test output types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TestResult {
-    pub status: String,
-    pub total: usize,
-    pub passed: usize,
-    pub failed: usize,
-    pub skipped: usize,
-    pub tests: Vec<TestEntry>,
-    pub contract_density: ContractDensity,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TestEntry {
-    pub file: String,
-    pub name: String,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-    pub duration_ms: u64,
-    pub diagnostics: Vec<DiagnosticJson>,
-    pub counterexamples: Vec<CounterexampleJson>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ContractDensity {
-    pub functions_total: usize,
-    pub functions_with_vows: usize,
-    pub density_pct: f64,
-}
-impl DiagnosticJson {
-    fn from_diagnostic(d: &Diagnostic) -> Self {
-        let blame = match d.blame {
-            vow_diag::Blame::Caller => Some("caller".to_string()),
-            vow_diag::Blame::Callee => Some("callee".to_string()),
-            vow_diag::Blame::None => None,
-        };
-        let secondary = d
-            .secondary
-            .iter()
-            .map(|s| SpanJson {
-                file: s.file.clone(),
-                offset: s.byte_offset,
-                length: s.byte_len,
-            })
-            .collect();
-        Self {
-            error_code: format!("{:?}", d.code),
-            message: d.message.clone(),
-            severity: match d.severity {
-                Severity::Error => "error".to_string(),
-                Severity::Warning => "warning".to_string(),
-                Severity::Note => "note".to_string(),
-            },
-            span: SpanJson {
-                file: d.primary.file.clone(),
-                offset: d.primary.byte_offset,
-                length: d.primary.byte_len,
-            },
-            hints: d.hints.clone(),
-            secondary,
-            blame,
-        }
-    }
-}
-
-impl CounterexampleJson {
-    fn from_structured(ce: &StructuredCounterexample) -> Self {
-        Self {
-            function: ce.function.clone(),
-            // Drop internal user-struct heap-model storage (`__vow_heap[]` / bump
-            // pointer): a verifier artifact, not a source free variable, so
-            // struct counterexamples don't dump the whole slot array to agents.
-            values: ce
-                .values
-                .iter()
-                .filter(|(name, _)| !name.contains("__vow_heap"))
-                .cloned()
-                .collect(),
-            violation: ce.violation.clone(),
-            vow_id: ce.vow_id,
-            source: ce.source.as_ref().map(|s| SpanJson {
-                file: s.file.clone(),
-                offset: s.offset,
-                length: s.length,
-            }),
-            blame: ce.blame.clone(),
-            call_sites: ce
-                .call_sites
-                .iter()
-                .map(|cs| CeCallSiteJson {
-                    caller_function: cs.caller_function.clone(),
-                    file: cs.file.clone(),
-                    offset: cs.offset,
-                    length: cs.length,
-                })
-                .collect(),
-            violating_args: ce
-                .violating_args
-                .iter()
-                .map(|va| CeViolatingArgJson {
-                    param: va.param.clone(),
-                    value: va.value.clone(),
-                    arg_offset: va.arg_offset,
-                    arg_length: va.arg_length,
-                })
-                .collect(),
-            execution_path: ce
-                .execution_path
-                .iter()
-                .map(|ps| CePathStepJson {
-                    block_id: ps.block_id,
-                    offset: ps.offset,
-                    length: ps.length,
-                })
-                .collect(),
-            branch_decisions: ce
-                .branch_decisions
-                .iter()
-                .map(|bd| CeBranchDecisionJson {
-                    condition_offset: bd.condition_offset,
-                    condition_length: bd.condition_length,
-                    taken: bd.taken.clone(),
-                })
-                .collect(),
-            replay: ce.replay.clone(),
-            replay_reason: ce.replay_reason.clone(),
-        }
-    }
-}
-
-impl BuildOutput {
-    pub fn to_build_result(&self) -> BuildResult {
-        let status = match &self.status {
-            BuildStatus::Verified => "Verified",
-            BuildStatus::Unverified => "Unverified",
-            BuildStatus::Skipped => "Skipped",
-            BuildStatus::CompileFailed { .. } => "CompileFailed",
-            BuildStatus::VerifyFailed { .. } => "VerifyFailed",
-        }
-        .to_string();
-
-        let (message, function, counterexample) = match &self.status {
-            BuildStatus::CompileFailed { message } => (Some(message.clone()), None, None),
-            BuildStatus::VerifyFailed {
-                function,
-                description,
-            } => (None, Some(function.clone()), Some(description.clone())),
-            _ => (None, None, None),
-        };
-
-        BuildResult {
-            status,
-            executable: self.executable.as_ref().map(|p| p.display().to_string()),
-            diagnostics: self
-                .diagnostics
-                .iter()
-                .map(DiagnosticJson::from_diagnostic)
-                .collect(),
-            message,
-            function,
-            counterexample,
-            counterexamples: self
-                .counterexamples
-                .iter()
-                .map(CounterexampleJson::from_structured)
-                .collect(),
-            verify_status: self.verify_status.clone(),
-            verify_message: self.verify_message.clone(),
-        }
-    }
-
-    pub fn emit_json(&self) {
-        let result = self.to_build_result();
-        let json = serde_json::to_string(&result).expect("BuildResult must be serializable");
-        println!("{json}");
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Counterexample construction
 // ---------------------------------------------------------------------------
 
@@ -11374,12 +11030,29 @@ impl BuildOutput {
 // Frontend (parse → module load → type check → IR lower)
 // ---------------------------------------------------------------------------
 
-fn emit_frontend_diagnostics(diagnostics: &[Diagnostic]) {
-    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+fn emit_frontend_diagnostics(
+    diagnostics: &[Diagnostic],
+    emitter: &mut dyn DiagnosticEmitter,
+) -> std::io::Result<()> {
     for diagnostic in diagnostics {
-        stderr_emit.emit(diagnostic);
+        emitter.try_emit(diagnostic)?;
     }
-    stderr_emit.finish();
+    emitter.try_finish()
+}
+
+fn emit_frontend_diagnostics_to_stderr(diagnostics: &[Diagnostic]) -> std::io::Result<()> {
+    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    emit_frontend_diagnostics(diagnostics, &mut stderr_emit)
+}
+
+fn is_broken_pipe(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::BrokenPipe
+}
+
+fn write_stderr_best_effort(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+
+    let _ = writeln!(std::io::stderr(), "{args}");
 }
 
 fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
@@ -11392,6 +11065,56 @@ fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
         counterexamples: vec![],
         verify_status: None,
         verify_message: None,
+    }
+}
+
+fn frontend_diagnostic_emission_error_to_output(
+    error: std::io::Error,
+    diagnostics: Vec<Diagnostic>,
+) -> BuildOutput {
+    BuildOutput {
+        status: BuildStatus::CompileFailed {
+            message: format!("failed to emit frontend diagnostics: {error}"),
+        },
+        executable: None,
+        diagnostics,
+        counterexamples: vec![],
+        verify_status: None,
+        verify_message: None,
+    }
+}
+
+fn emit_frontend_result(
+    frontend: Result<FrontendBundle, FrontendError>,
+    emitter: &mut dyn DiagnosticEmitter,
+) -> Result<FrontendBundle, Box<BuildOutput>> {
+    match frontend {
+        Ok(bundle) => match emit_frontend_diagnostics(bundle.diagnostics(), emitter) {
+            Ok(()) => Ok(bundle),
+            Err(error) if is_broken_pipe(&error) => Ok(bundle),
+            Err(error) => {
+                let (diagnostics, _, _) = bundle.into_parts();
+                Err(Box::new(frontend_diagnostic_emission_error_to_output(
+                    error,
+                    diagnostics,
+                )))
+            }
+        },
+        Err(frontend_error) => {
+            match emit_frontend_diagnostics(frontend_error.diagnostics(), emitter) {
+                Ok(()) => Err(Box::new(frontend_error_to_output(frontend_error))),
+                Err(error) if is_broken_pipe(&error) => {
+                    Err(Box::new(frontend_error_to_output(frontend_error)))
+                }
+                Err(error) => {
+                    let diagnostics = frontend_error.into_diagnostics();
+                    Err(Box::new(frontend_diagnostic_emission_error_to_output(
+                        error,
+                        diagnostics,
+                    )))
+                }
+            }
+        }
     }
 }
 
@@ -11410,16 +11133,9 @@ fn compile_frontend_with_root(
     module_root: Option<&Path>,
     prof: Option<&perfetto::Profiler>,
 ) -> Result<FrontendBundle, Box<BuildOutput>> {
-    match prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr, prof) {
-        Ok(bundle) => {
-            emit_frontend_diagnostics(bundle.diagnostics());
-            Ok(bundle)
-        }
-        Err(error) => {
-            emit_frontend_diagnostics(error.diagnostics());
-            Err(Box::new(frontend_error_to_output(error)))
-        }
-    }
+    let frontend = prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr, prof);
+    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    emit_frontend_result(frontend, &mut stderr_emit)
 }
 
 // ---------------------------------------------------------------------------
@@ -12854,14 +12570,32 @@ fn run_build_command(
 }
 
 fn run_decl_command(source: &Path, output: Option<&Path>) {
+    let mut stderr_broken_pipe = false;
     let frontend = match prepare_frontend(source, FrontendGoal::MergedAst) {
         Ok(bundle) => {
-            emit_frontend_diagnostics(bundle.diagnostics());
+            match emit_frontend_diagnostics_to_stderr(bundle.diagnostics()) {
+                Ok(()) => {}
+                Err(error) if is_broken_pipe(&error) => stderr_broken_pipe = true,
+                Err(error) => {
+                    write_stderr_best_effort(format_args!(
+                        "vow decl: failed to emit frontend diagnostics: {error}"
+                    ));
+                    std::process::exit(1);
+                }
+            }
             bundle
         }
         Err(error) => {
-            emit_frontend_diagnostics(error.diagnostics());
-            eprintln!("vow decl: {}", error.failure_message());
+            match emit_frontend_diagnostics_to_stderr(error.diagnostics()) {
+                Ok(()) => {
+                    write_stderr_best_effort(format_args!("vow decl: {}", error.failure_message()))
+                }
+                Err(emission_error) if is_broken_pipe(&emission_error) => {}
+                Err(emission_error) => write_stderr_best_effort(format_args!(
+                    "vow decl: {}; failed to emit frontend diagnostics: {emission_error}",
+                    error.failure_message()
+                )),
+            }
             std::process::exit(1);
         }
     };
@@ -12882,10 +12616,14 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     };
 
     if let Err(e) = std::fs::write(&out_path, &decl_text) {
-        eprintln!("vow decl: {}", e);
+        if !stderr_broken_pipe {
+            write_stderr_best_effort(format_args!("vow decl: {e}"));
+        }
         std::process::exit(1);
     }
-    eprintln!("wrote {}", out_path.display());
+    if !stderr_broken_pipe {
+        write_stderr_best_effort(format_args!("wrote {}", out_path.display()));
+    }
 }
 
 fn run_verify_command(
@@ -13457,6 +13195,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
     use tempfile::TempDir;
 
     fn write_source(dir: &TempDir, name: &str, src: &str) -> PathBuf {
@@ -13471,6 +13210,160 @@ mod tests {
             BuildStatus::VerifyFailed { description, .. }
                 if description.contains("ESBMC not found")
         )
+    }
+
+    struct EmitFailingDiagnosticEmitter {
+        emit_attempts: usize,
+        finish_attempts: usize,
+        error_kind: io::ErrorKind,
+    }
+
+    impl DiagnosticEmitter for EmitFailingDiagnosticEmitter {
+        fn try_emit(&mut self, _: &Diagnostic) -> io::Result<()> {
+            self.emit_attempts += 1;
+            Err(io::Error::from(self.error_kind))
+        }
+
+        fn try_finish(&mut self) -> io::Result<()> {
+            self.finish_attempts += 1;
+            Ok(())
+        }
+    }
+
+    struct FinishFailingDiagnosticEmitter {
+        emit_attempts: usize,
+        finish_attempts: usize,
+        error_kind: io::ErrorKind,
+    }
+
+    impl DiagnosticEmitter for FinishFailingDiagnosticEmitter {
+        fn try_emit(&mut self, _: &Diagnostic) -> io::Result<()> {
+            self.emit_attempts += 1;
+            Ok(())
+        }
+
+        fn try_finish(&mut self) -> io::Result<()> {
+            self.finish_attempts += 1;
+            Err(io::Error::from(self.error_kind))
+        }
+    }
+
+    fn frontend_test_diagnostic(message: &str) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Error,
+            code: vow_diag::ErrorCode::UnexpectedToken,
+            message: message.to_string(),
+            primary: vow_diag::SourceLocation {
+                file: "test.vow".to_string(),
+                byte_offset: 0,
+                byte_len: 1,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+            hints: vec![],
+        }
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_returns_emit_failure_without_finishing() {
+        let diagnostics = [
+            frontend_test_diagnostic("first"),
+            frontend_test_diagnostic("second"),
+        ];
+        let mut emitter = EmitFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::BrokenPipe,
+        };
+
+        let error = emit_frontend_diagnostics(&diagnostics, &mut emitter).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 0);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_returns_broken_pipe_from_finish() {
+        let diagnostics = [frontend_test_diagnostic("parse error")];
+        let mut emitter = FinishFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::BrokenPipe,
+        };
+
+        let error = emit_frontend_diagnostics(&diagnostics, &mut emitter).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 1);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_returns_non_broken_pipe_from_finish() {
+        let diagnostics = [frontend_test_diagnostic("type error")];
+        let mut emitter = FinishFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::PermissionDenied,
+        };
+
+        let error = emit_frontend_diagnostics(&diagnostics, &mut emitter).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 1);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_converts_writer_error_to_compile_failure() {
+        let dir = TempDir::new().unwrap();
+        let source = write_source(&dir, "bad_parse.vow", "module M 123");
+        let frontend = prepare_frontend(&source, FrontendGoal::LoweredIr);
+        let expected_diagnostics = frontend.as_ref().unwrap_err().diagnostics().to_vec();
+        let mut emitter = EmitFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::PermissionDenied,
+        };
+
+        let output = emit_frontend_result(frontend, &mut emitter).unwrap_err();
+
+        match &output.status {
+            BuildStatus::CompileFailed { message } => {
+                assert!(message.contains("failed to emit frontend diagnostics"));
+                assert!(message.contains("permission denied"));
+            }
+            status => panic!("expected CompileFailed, got {status:?}"),
+        }
+        assert!(output.executable.is_none());
+        assert_eq!(output.diagnostics, expected_diagnostics);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 0);
+    }
+
+    #[test]
+    fn emit_frontend_diagnostics_broken_pipe_preserves_frontend_failure() {
+        let dir = TempDir::new().unwrap();
+        let source = write_source(&dir, "bad_parse.vow", "module M 123");
+        let frontend = prepare_frontend(&source, FrontendGoal::LoweredIr);
+        let expected_diagnostics = frontend.as_ref().unwrap_err().diagnostics().to_vec();
+        let mut emitter = EmitFailingDiagnosticEmitter {
+            emit_attempts: 0,
+            finish_attempts: 0,
+            error_kind: io::ErrorKind::BrokenPipe,
+        };
+
+        let output = emit_frontend_result(frontend, &mut emitter).unwrap_err();
+
+        match &output.status {
+            BuildStatus::CompileFailed { message } => assert_eq!(message, "parse error"),
+            status => panic!("expected CompileFailed, got {status:?}"),
+        }
+        assert!(output.executable.is_none());
+        assert_eq!(output.diagnostics, expected_diagnostics);
+        assert_eq!(emitter.emit_attempts, 1);
+        assert_eq!(emitter.finish_attempts, 0);
     }
 
     #[test]

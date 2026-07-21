@@ -1315,15 +1315,22 @@ else
 fi
 echo ""
 
-# ─── Section 8b: Installer Script ─────────────────────────────────
+# ─── Section 8b: Tooling Scripts ──────────────────────────────────
 
-section_begin "Section 8b: Installer Script"
+section_begin "Section 8b: Tooling Scripts"
 
 install_toolchain_log="$TMPDIR/install_toolchain_tests.log"
 if bash tests/install_toolchain/tests.sh >"$install_toolchain_log" 2>&1; then
     pass "install-toolchain/smoke"
 else
     fail "install-toolchain/smoke" "$(tail -20 "$install_toolchain_log")"
+fi
+
+bootstrap_log="$TMPDIR/bootstrap_tests.log"
+if bash tests/bootstrap/tests.sh >"$bootstrap_log" 2>&1; then
+    pass "bootstrap/smoke"
+else
+    fail "bootstrap/smoke" "$(tail -20 "$bootstrap_log")"
 fi
 echo ""
 
