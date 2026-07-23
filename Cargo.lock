@@ -968,7 +968,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "vow"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "flate2",
@@ -986,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "vow-clif-shim"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "vow-codegen"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "vow-diag"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "vow-ir"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "vow-diag",
  "vow-syntax",
@@ -1034,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "vow-runtime"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "flate2",
  "libc",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "vow-syntax"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "proptest",
  "vow-diag",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "vow-types"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "proptest",
  "vow-diag",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "vow-verify"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libc",
  "tempfile",
