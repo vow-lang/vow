@@ -3,7 +3,7 @@
 
 Reads docs/spec/grammar.md and docs/spec/cli.md (the canonical specs),
 builds the help JSON structure, and writes it into:
-  - vow/src/main.rs  (skill_json raw string literal, skill_human string literal)
+  - vow/src/skill.rs (skill_json raw string literal, skill_human string literal)
   - compiler/main.vow (skill_json push_str calls, skill_human push_str calls)
 
 Usage:
@@ -30,7 +30,7 @@ ERRORS = SPEC_DIR / "errors.md"
 EXAMPLES = SPEC_DIR / "examples.md"
 STDLIB = SPEC_DIR / "stdlib.md"
 SCHEMAS_DIR = SPEC_DIR / "schemas"
-MAIN_RS = REPO / "vow" / "src" / "main.rs"
+SKILL_RS = REPO / "vow" / "src" / "skill.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
 SKILLS_DIR = REPO / "skills" / "vow"
 
@@ -788,7 +788,7 @@ def build_help_human(data: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Inject into Rust main.rs
+# Inject into Rust skill.rs
 # ---------------------------------------------------------------------------
 
 def _replace_between_markers(content: str, start_marker: str, end_marker: str, replacement: str) -> str:
@@ -803,8 +803,8 @@ def _replace_between_markers(content: str, start_marker: str, end_marker: str, r
     return content[:start_idx] + replacement + content[end_idx:]
 
 
-def inject_rust(main_rs: Path, json_str: str, human_str: str) -> str:
-    content = main_rs.read_text()
+def inject_rust(skill_rs: Path, json_str: str, human_str: str) -> str:
+    content = skill_rs.read_text()
 
     content = _replace_between_markers(
         content,
@@ -1012,7 +1012,7 @@ def _vow_skill_support_content_fn_name(path: str) -> str:
 def inject_skill_rust(
     content: str, entrypoint_md: str, bundle_md: str, support_files: dict[str, str]
 ) -> str:
-    """Inject generated skill helpers into Rust main.rs."""
+    """Inject generated skill helpers into Rust skill.rs."""
     # Emit each tuple in rustfmt's preferred multi-line form (with trailing
     # comma after the last entry) so the GENERATE block stays clean under
     # `cargo fmt --check`.
@@ -1211,10 +1211,10 @@ def main() -> None:
         return
 
     # Inject into Rust
-    new_rs = inject_rust(MAIN_RS, json_str, human_str)
+    new_rs = inject_rust(SKILL_RS, json_str, human_str)
     new_rs = inject_skill_rust(new_rs, skill_entrypoint_md, skill_bundle_md, skill_support_files)
-    MAIN_RS.write_text(new_rs)
-    print(f"Updated {MAIN_RS}")
+    SKILL_RS.write_text(new_rs)
+    print(f"Updated {SKILL_RS}")
 
     # Inject into self-hosted
     new_vow = inject_vow(MAIN_VOW, json_str, human_str)
