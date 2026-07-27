@@ -11,43 +11,248 @@
 
 use std::path::PathBuf;
 
-use vow_diag::Diagnostic;
+use vow_diag::{Diagnostic, Severity};
 
-use crate::{BuildOutput, SkippedFunction, VerifyOutcome};
+use crate::{BuildOutput, BuildStatus, StructuredCounterexample};
+
+/// The verifier's verdict for a whole module. Produced by the verification
+/// driver in `main.rs` and consumed by [`to_output`] / [`to_output_with_skipped`].
+pub(crate) enum VerifyOutcome {
+    /// ESBMC not invoked (`--no-verify`); maps to `BuildStatus::Unverified` (exit 0).
+    /// Named `NotRun` (not `Skipped`) to avoid colliding with `SkippedNonModelable`,
+    /// which has the opposite exit code.
+    NotRun,
+    /// ESBMC ran but ≥1 vowed function non-modelable; maps to `BuildStatus::Skipped` (exit 1).
+    SkippedNonModelable,
+    Proven,
+    Failed {
+        function: String,
+        description: String,
+        counterexamples: Vec<StructuredCounterexample>,
+    },
+    Timeout {
+        function: String,
+    },
+    /// ESBMC finished but returned `VERIFICATION UNKNOWN` — neither proof
+    /// nor counterexample. Distinct from Timeout (no wall-clock cutoff) and
+    /// from Error (no parser failure / process crash).
+    Unknown {
+        function: String,
+        reason: String,
+    },
+    Error {
+        function: String,
+        message: String,
+    },
+    ToolNotFound,
+}
+
+/// A vowed function the verifier skipped; surfaces as a Warning in `BuildOutput.diagnostics`.
+#[derive(Debug, Clone)]
+pub(crate) struct SkippedFunction {
+    pub(crate) function: String,
+    pub(crate) reason: String,
+}
 
 /// Map a counterexample `blame` string to the diagnostic error code.
 ///
 /// Note the fallback asymmetry with [`blame_to_diag_blame`]: an unrecognised
 /// blame maps to `VowRequiresViolated` (a *caller* code) here, but to
 /// `Blame::None` there. This is preserved behaviour, not a fix.
-fn blame_to_error_code(_blame: &str) -> vow_diag::ErrorCode {
-    todo!("moved in GREEN")
+fn blame_to_error_code(blame: &str) -> vow_diag::ErrorCode {
+    match blame {
+        "caller" => vow_diag::ErrorCode::VowRequiresViolated,
+        "callee" => vow_diag::ErrorCode::VowEnsuresViolated,
+        _ => vow_diag::ErrorCode::VowRequiresViolated,
+    }
 }
 
-fn blame_to_diag_blame(_blame: &str) -> vow_diag::Blame {
-    todo!("moved in GREEN")
+fn blame_to_diag_blame(blame: &str) -> vow_diag::Blame {
+    match blame {
+        "caller" => vow_diag::Blame::Caller,
+        "callee" => vow_diag::Blame::Callee,
+        _ => vow_diag::Blame::None,
+    }
 }
 
 /// Translate a [`VerifyOutcome`] into a [`BuildOutput`], appending any
 /// verification-failure diagnostics to `diagnostics`.
 pub(crate) fn to_output(
-    _outcome: VerifyOutcome,
-    _diagnostics: Vec<Diagnostic>,
-    _executable: Option<PathBuf>,
+    outcome: VerifyOutcome,
+    diagnostics: Vec<Diagnostic>,
+    executable: Option<PathBuf>,
 ) -> BuildOutput {
-    todo!("moved in GREEN")
+    to_output_with_skipped(outcome, diagnostics, &[], executable)
 }
 
 /// As [`to_output`], but also emits a `VerificationSkipped` warning for each
 /// vowed function the verifier skipped. Skipped warnings are appended *before*
 /// counterexample errors.
 pub(crate) fn to_output_with_skipped(
-    _outcome: VerifyOutcome,
-    _diagnostics: Vec<Diagnostic>,
-    _skipped: &[SkippedFunction],
-    _executable: Option<PathBuf>,
+    outcome: VerifyOutcome,
+    mut diagnostics: Vec<Diagnostic>,
+    skipped: &[SkippedFunction],
+    executable: Option<PathBuf>,
 ) -> BuildOutput {
-    todo!("moved in GREEN")
+    for s in skipped {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            code: vow_diag::ErrorCode::VerificationSkipped,
+            message: format!("skipped verification of `{}`: {}", s.function, s.reason),
+            primary: vow_diag::SourceLocation {
+                file: String::new(),
+                byte_offset: 0,
+                byte_len: 0,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+            hints: vec![
+                "the contract is documentary; runtime checks still apply in --mode debug"
+                    .to_string(),
+            ],
+        });
+    }
+    let (status, counterexamples, verify_status, verify_message) = match outcome {
+        VerifyOutcome::Failed {
+            function,
+            description,
+            ref counterexamples,
+        } => {
+            for sce in counterexamples {
+                let primary = match &sce.source {
+                    Some(src) => vow_diag::SourceLocation {
+                        file: src.file.clone(),
+                        byte_offset: src.offset,
+                        byte_len: src.length,
+                    },
+                    None => vow_diag::SourceLocation {
+                        file: String::new(),
+                        byte_offset: 0,
+                        byte_len: 0,
+                    },
+                };
+                let secondary: Vec<vow_diag::SourceLocation> = sce
+                    .call_sites
+                    .iter()
+                    .map(|cs| vow_diag::SourceLocation {
+                        file: cs.file.clone(),
+                        byte_offset: cs.offset,
+                        byte_len: cs.length,
+                    })
+                    .collect();
+                let mut hints = Vec::new();
+                match sce.blame.as_str() {
+                    "caller" => {
+                        hints.push(format!(
+                            "the call site violated function `{}`'s precondition",
+                            sce.function
+                        ));
+                        for va in &sce.violating_args {
+                            hints.push(format!(
+                                "argument `{}` = {} violates the contract",
+                                va.param, va.value
+                            ));
+                        }
+                    }
+                    "callee" => {
+                        hints.push(format!(
+                            "function `{}` failed to establish its postcondition",
+                            sce.function
+                        ));
+                    }
+                    _ => {}
+                }
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: blame_to_error_code(&sce.blame),
+                    message: format!(
+                        "contract violation in `{}`: {}",
+                        sce.function, sce.violation
+                    ),
+                    primary,
+                    secondary,
+                    blame: blame_to_diag_blame(&sce.blame),
+                    hints,
+                });
+            }
+            (
+                BuildStatus::VerifyFailed {
+                    function,
+                    description,
+                },
+                counterexamples.clone(),
+                None,
+                None,
+            )
+        }
+        VerifyOutcome::Timeout { function } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description: "verification timed out".to_string(),
+            },
+            vec![],
+            Some("timeout".to_string()),
+            None,
+        ),
+        VerifyOutcome::Unknown { function, reason } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description: format!("verification result unknown: {reason}"),
+            },
+            vec![],
+            Some("unknown".to_string()),
+            Some(reason),
+        ),
+        VerifyOutcome::Error { function, message } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description: format!("esbmc error: {message}"),
+            },
+            vec![],
+            Some("error".to_string()),
+            Some(message),
+        ),
+        VerifyOutcome::NotRun => (BuildStatus::Unverified, vec![], None, None),
+        VerifyOutcome::SkippedNonModelable => (BuildStatus::Skipped, vec![], None, None),
+        VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
+        VerifyOutcome::ToolNotFound => {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: vow_diag::ErrorCode::EsbmcNotFound,
+                message: "ESBMC not found; install ESBMC or use --no-verify to skip verification"
+                    .to_string(),
+                primary: vow_diag::SourceLocation {
+                    file: String::new(),
+                    byte_offset: 0,
+                    byte_len: 0,
+                },
+                secondary: vec![],
+                blame: vow_diag::Blame::None,
+                hints: vec![
+                    "ESBMC is required for contract verification".to_string(),
+                    "use --no-verify to compile without verification".to_string(),
+                ],
+            });
+            (
+                BuildStatus::VerifyFailed {
+                    function: String::new(),
+                    description: "ESBMC not found".to_string(),
+                },
+                vec![],
+                Some("tool_not_found".to_string()),
+                Some("ESBMC not found; install ESBMC or use --no-verify".to_string()),
+            )
+        }
+    };
+
+    BuildOutput {
+        status,
+        executable,
+        diagnostics,
+        counterexamples,
+        verify_status,
+        verify_message,
+    }
 }
 
 /// Fail-closed result for a panicked verifier worker (`join()` → `Err`). A
@@ -55,17 +260,37 @@ pub(crate) fn to_output_with_skipped(
 /// `VerifyFailed` (exit 1) and withholds the executable — the linked binary is
 /// removed so no executable masquerades as built (#413).
 pub(crate) fn panicked_output(
-    _diagnostics: Vec<Diagnostic>,
-    _executable: Option<PathBuf>,
+    diagnostics: Vec<Diagnostic>,
+    executable: Option<PathBuf>,
 ) -> BuildOutput {
-    todo!("moved in GREEN")
+    if let Some(path) = &executable {
+        let _ = std::fs::remove_file(path);
+    }
+    BuildOutput {
+        status: BuildStatus::VerifyFailed {
+            function: String::new(),
+            description: "verification thread panicked".to_string(),
+        },
+        executable: None,
+        diagnostics,
+        counterexamples: vec![],
+        verify_status: Some("panicked".to_string()),
+        verify_message: Some("verification thread panicked".to_string()),
+    }
 }
 
 /// Smart constructor for a `CompileFailed` [`BuildOutput`]: no executable, no
 /// counterexamples, no verify status. Single source of truth for the shape
 /// every compile-error path returns.
-pub(crate) fn compile_failed(_message: String, _diagnostics: Vec<Diagnostic>) -> BuildOutput {
-    todo!("moved in GREEN")
+pub(crate) fn compile_failed(message: String, diagnostics: Vec<Diagnostic>) -> BuildOutput {
+    BuildOutput {
+        status: BuildStatus::CompileFailed { message },
+        executable: None,
+        diagnostics,
+        counterexamples: vec![],
+        verify_status: None,
+        verify_message: None,
+    }
 }
 
 #[cfg(test)]
