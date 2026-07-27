@@ -11,6 +11,7 @@ mod replay;
 mod report;
 mod skill;
 mod test_runner;
+mod verify_outcome;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
