@@ -31,6 +31,48 @@ enum PerFuncResult {
     Halt(VerifyOutcome),
 }
 
+/// A raw verifier result either needs counterexample enrichment or is already
+/// a complete per-function verdict.
+enum VerificationDisposition {
+    Counterexample(vow_verify::Counterexample),
+    Complete(PerFuncResult),
+}
+
+fn classify_verification_result(
+    function: &str,
+    result: VerificationResult,
+) -> VerificationDisposition {
+    let complete = |result| VerificationDisposition::Complete(result);
+    match result {
+        VerificationResult::Failed(ce) => VerificationDisposition::Counterexample(ce),
+        VerificationResult::ToolError(message) => {
+            complete(PerFuncResult::Halt(VerifyOutcome::Error {
+                function: function.to_string(),
+                message,
+            }))
+        }
+        VerificationResult::Timeout => complete(PerFuncResult::Halt(VerifyOutcome::Timeout {
+            function: function.to_string(),
+        })),
+        VerificationResult::Unknown { reason } => {
+            complete(PerFuncResult::Halt(VerifyOutcome::Unknown {
+                function: function.to_string(),
+                reason,
+            }))
+        }
+        VerificationResult::Proven | VerificationResult::ProvenIr => complete(PerFuncResult::Ok),
+        VerificationResult::ToolNotFound => {
+            complete(PerFuncResult::Halt(VerifyOutcome::ToolNotFound))
+        }
+        VerificationResult::Skipped { reason } => {
+            complete(PerFuncResult::Skipped(SkippedFunction {
+                function: function.to_string(),
+                reason,
+            }))
+        }
+    }
+}
+
 /// Verify one vowed function with ESBMC, folding the raw
 /// [`VerificationResult`] into a [`PerFuncResult`].
 ///
@@ -123,8 +165,8 @@ fn verify_one_function(
         })
     };
 
-    match result {
-        VerificationResult::Failed(ce) => {
+    match classify_verification_result(&func.name, result) {
+        VerificationDisposition::Counterexample(ce) => {
             let sce = counterexample::build_structured_counterexample_with_module(
                 func,
                 Some(ir_module),
@@ -138,26 +180,7 @@ fn verify_one_function(
                 counterexamples: vec![sce],
             })
         }
-        VerificationResult::ToolError(e) => PerFuncResult::Halt(VerifyOutcome::Error {
-            function: func.name.clone(),
-            message: e,
-        }),
-        VerificationResult::Timeout => PerFuncResult::Halt(VerifyOutcome::Timeout {
-            function: func.name.clone(),
-        }),
-        VerificationResult::Unknown { reason } => PerFuncResult::Halt(VerifyOutcome::Unknown {
-            function: func.name.clone(),
-            reason,
-        }),
-        VerificationResult::Proven | VerificationResult::ProvenIr => PerFuncResult::Ok,
-        VerificationResult::ToolNotFound => PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
-        // The verifier-side gate already short-circuits this path; the
-        // emit-and-run code above never returns Skipped today. Treat any
-        // future Skipped from those entry points the same way.
-        VerificationResult::Skipped { reason } => PerFuncResult::Skipped(SkippedFunction {
-            function: func.name.clone(),
-            reason,
-        }),
+        VerificationDisposition::Complete(result) => result,
     }
 }
 
@@ -370,6 +393,7 @@ fn run_pool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Barrier, Condvar};
 
     fn halt(function: &str) -> PerFuncResult {
         PerFuncResult::Halt(VerifyOutcome::Failed {
@@ -396,24 +420,41 @@ mod tests {
         assert!(skipped.is_empty());
     }
 
-    // Two functions halt; the pool must report the lowest-indexed one whichever
-    // worker finishes first. Deterministic under jobs>1 because lowest-index
-    // selection is timing-independent (even though which indices get claimed
-    // is not) — the guarantee previously reachable only through real ESBMC.
+    // Two functions halt; force f5's fake verdict to complete before f2's while
+    // both are in flight. The pool must still report the lower index.
     #[test]
     fn run_pool_reports_lowest_index_halt() {
         let names = ["f0", "f1", "f2", "f3", "f4", "f5"];
-        let (outcome, _) = run_pool(4, None, 0, &names, |idx| {
-            if idx == 2 || idx == 5 {
-                halt(&format!("f{idx}"))
-            } else {
-                PerFuncResult::Ok
+        let both_halts_started = Barrier::new(2);
+        let higher_halt_completed = Condvar::new();
+        let completion = StdMutex::new((false, Vec::new()));
+        let (outcome, _) = run_pool(6, None, 0, &names, |idx| match idx {
+            2 => {
+                let mut completion = completion.lock().unwrap();
+                both_halts_started.wait();
+                while !completion.0 {
+                    completion = higher_halt_completed.wait(completion).unwrap();
+                }
+                completion.1.push(2);
+                drop(completion);
+                halt("f2")
             }
+            5 => {
+                let result = halt("f5");
+                both_halts_started.wait();
+                let mut completion = completion.lock().unwrap();
+                completion.1.push(5);
+                completion.0 = true;
+                higher_halt_completed.notify_one();
+                result
+            }
+            _ => PerFuncResult::Ok,
         });
-        match outcome {
-            VerifyOutcome::Failed { function, .. } => assert_eq!(function, "f2"),
-            _ => panic!("expected Failed outcome for lowest-index halt"),
-        }
+        assert_eq!(completion.lock().unwrap().1, [5, 2]);
+        assert!(matches!(
+            outcome,
+            VerifyOutcome::Failed { function, .. } if function == "f2"
+        ));
     }
 
     // No halt: every skip is aggregated, in ascending index order regardless of
@@ -447,10 +488,10 @@ mod tests {
                 PerFuncResult::Ok
             }
         });
-        match outcome {
-            VerifyOutcome::Failed { function, .. } => assert_eq!(function, "f1"),
-            _ => panic!("expected Failed(f1) on serial halt"),
-        }
+        assert!(matches!(
+            outcome,
+            VerifyOutcome::Failed { function, .. } if function == "f1"
+        ));
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
@@ -461,14 +502,193 @@ mod tests {
     // Serial path: a skip recorded before the halt is returned alongside it.
     #[test]
     fn run_pool_serial_returns_skips_before_halt() {
-        let names = ["f0", "f1", "f2"];
-        let (outcome, skipped) = run_pool(1, None, 0, &names, |idx| match idx {
-            0 => skip("f0"),
-            1 => halt("f1"),
-            _ => PerFuncResult::Ok,
+        let names = ["f0", "f1"];
+        let (outcome, skipped) = run_pool(1, None, 0, &names, |idx| {
+            if idx == 0 { skip("f0") } else { halt("f1") }
         });
         assert!(matches!(outcome, VerifyOutcome::Failed { .. }));
         let got: Vec<&str> = skipped.iter().map(|s| s.function.as_str()).collect();
         assert_eq!(got, ["f0"]);
+    }
+
+    #[test]
+    fn classify_verification_result_maps_every_terminal_variant() {
+        let failed = classify_verification_result(
+            "f",
+            VerificationResult::Failed(vow_verify::Counterexample {
+                description: "bad result".to_string(),
+                vow_id: None,
+                callee_precondition: None,
+                values: Vec::new(),
+                block_visits: Vec::new(),
+                raw_output: String::new(),
+            }),
+        );
+        assert!(matches!(
+            failed,
+            VerificationDisposition::Counterexample(ce) if ce.description == "bad result"
+        ));
+
+        let tool_error = classify_verification_result(
+            "f",
+            VerificationResult::ToolError("solver crashed".to_string()),
+        );
+        assert!(matches!(
+            tool_error,
+            VerificationDisposition::Complete(PerFuncResult::Halt(VerifyOutcome::Error {
+                function,
+                message,
+            })) if function == "f" && message == "solver crashed"
+        ));
+
+        let timeout = classify_verification_result("f", VerificationResult::Timeout);
+        assert!(matches!(
+            timeout,
+            VerificationDisposition::Complete(PerFuncResult::Halt(VerifyOutcome::Timeout {
+                function,
+            })) if function == "f"
+        ));
+
+        let unknown = classify_verification_result(
+            "f",
+            VerificationResult::Unknown {
+                reason: "forward condition".to_string(),
+            },
+        );
+        assert!(matches!(
+            unknown,
+            VerificationDisposition::Complete(PerFuncResult::Halt(VerifyOutcome::Unknown {
+                function,
+                reason,
+            })) if function == "f" && reason == "forward condition"
+        ));
+
+        assert!(matches!(
+            classify_verification_result("f", VerificationResult::Proven),
+            VerificationDisposition::Complete(PerFuncResult::Ok)
+        ));
+        assert!(matches!(
+            classify_verification_result("f", VerificationResult::ProvenIr),
+            VerificationDisposition::Complete(PerFuncResult::Ok)
+        ));
+        assert!(matches!(
+            classify_verification_result("f", VerificationResult::ToolNotFound),
+            VerificationDisposition::Complete(PerFuncResult::Halt(VerifyOutcome::ToolNotFound))
+        ));
+
+        let skipped = classify_verification_result(
+            "f",
+            VerificationResult::Skipped {
+                reason: "unsupported opcode".to_string(),
+            },
+        );
+        assert!(matches!(
+            skipped,
+            VerificationDisposition::Complete(PerFuncResult::Skipped(SkippedFunction {
+                function,
+                reason,
+            })) if function == "f" && reason == "unsupported opcode"
+        ));
+    }
+
+    #[test]
+    fn record_proof_span_emits_matching_flows_and_named_span() {
+        let prof = perfetto::Profiler::new();
+        record_proof_span(Some(&prof), 10, 3, "checked", 101, 20);
+
+        let events = prof.snapshot();
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            &events[0].kind,
+            perfetto::EventKind::Flow {
+                id: 3,
+                edge: perfetto::FlowEdge::Start,
+            }
+        ));
+        assert_eq!(events[0].tid, perfetto::TID_VERIFY_DRIVER);
+        assert_eq!(events[0].ts_us, 10);
+        assert!(matches!(
+            &events[1].kind,
+            perfetto::EventKind::Flow {
+                id: 3,
+                edge: perfetto::FlowEdge::End,
+            }
+        ));
+        assert_eq!(events[1].tid, 101);
+        assert_eq!(events[1].ts_us, 20);
+        assert!(matches!(&events[2].kind, perfetto::EventKind::Span { .. }));
+        assert_eq!(events[2].name, "esbmc:checked");
+        assert_eq!(
+            events[2].args,
+            [("function".to_string(), "checked".to_string())]
+        );
+    }
+
+    fn module_with_functions(functions: Vec<vow_ir::Function>) -> vow_ir::Module {
+        vow_ir::Module {
+            name: "test".to_string(),
+            functions,
+            strings: Vec::new(),
+            struct_layouts: Vec::new(),
+            enum_layouts: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn run_verification_sync_empty_module_is_proven() {
+        let module = module_with_functions(Vec::new());
+        let (outcome, skipped) = run_verification_sync(
+            &module,
+            "test.vow",
+            &std::collections::HashMap::new(),
+            None,
+            &VerifyLimits::default(),
+            4,
+            &SolverConfig::default_config(),
+            None,
+        );
+        assert!(matches!(outcome, VerifyOutcome::Proven));
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn run_verification_sync_reports_effectful_vow_as_skipped() {
+        let function = vow_ir::Function {
+            id: vow_ir::FuncId(0),
+            name: "effectful".to_string(),
+            params: Vec::new(),
+            param_names: Vec::new(),
+            return_ty: vow_ir::Ty::Unit,
+            effects: vec![vow_syntax::ast::Effect::IO],
+            vows: vec![vow_ir::VowEntry {
+                id: vow_ir::VowId(0),
+                description: "ensures: true".to_string(),
+                blame: vow_diag::Blame::Callee,
+                bindings: Vec::new(),
+                file: "test.vow".to_string(),
+                offset: 0,
+            }],
+            blocks: Vec::new(),
+            local_names: std::collections::HashMap::new(),
+            summary: vow_ir::RegionSummary::default(),
+            source_file: "test.vow".to_string(),
+        };
+        let module = module_with_functions(vec![function]);
+
+        let (outcome, skipped) = run_verification_sync(
+            &module,
+            "test.vow",
+            &std::collections::HashMap::new(),
+            None,
+            &VerifyLimits::default(),
+            1,
+            &SolverConfig::default_config(),
+            None,
+        );
+        assert!(matches!(outcome, VerifyOutcome::SkippedNonModelable));
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].function, "effectful");
+        assert!(skipped[0].reason.contains("has effects"));
     }
 }
