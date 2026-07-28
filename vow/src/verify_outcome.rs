@@ -2,7 +2,7 @@
 //! [`BuildOutput`] result shape.
 //!
 //! The verification driver (`run_verification_sync` / `verify_one_function` in
-//! `main.rs`) produces a [`VerifyOutcome`] verdict plus a list of
+//! `verification.rs`) produces a [`VerifyOutcome`] verdict plus a list of
 //! [`SkippedFunction`]s. This module owns that vocabulary and is the single
 //! place that turns any terminal outcome — a proof, a counterexample, a
 //! compile failure, or a panicked verifier — into a [`BuildOutput`] with the
@@ -16,7 +16,7 @@ use vow_diag::{Diagnostic, Severity};
 use crate::{BuildOutput, BuildStatus, StructuredCounterexample};
 
 /// The verifier's verdict for a whole module. Produced by the verification
-/// driver in `main.rs` and consumed by [`to_output`] / [`to_output_with_skipped`].
+/// driver in `verification.rs` and consumed by [`to_output`] / [`to_output_with_skipped`].
 pub(crate) enum VerifyOutcome {
     /// ESBMC not invoked (`--no-verify`); maps to `BuildStatus::Unverified` (exit 0).
     /// Named `NotRun` (not `Skipped`) to avoid colliding with `SkippedNonModelable`,

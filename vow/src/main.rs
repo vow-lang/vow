@@ -11,12 +11,11 @@ mod replay;
 mod report;
 mod skill;
 mod test_runner;
+mod verification;
 mod verify_outcome;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 
 use clap::Parser;
@@ -25,12 +24,11 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter};
 use vow_verify::{
-    ConstantValue, DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig,
-    VerificationResult, VerifyLimits, VerifyRequest, detect_constant_functions,
-    emit_verify_c_source, find_esbmc, non_modelable_reason, run_with_fallback, verify,
+    DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig, VerifyLimits,
+    find_esbmc,
 };
 
-use cache::{CachedFailure, VerifyCache};
+use cache::VerifyCache;
 use frontend::{
     FrontendBundle, FrontendError, FrontendGoal, prepare_frontend, prepare_frontend_with_root,
 };
@@ -450,13 +448,6 @@ pub struct CeCallSite {
     pub length: u32,
 }
 
-/// Per-function verdict: continue, skip-with-warning, or halt.
-enum PerFuncResult {
-    Ok,
-    Skipped(SkippedFunction),
-    Halt(VerifyOutcome),
-}
-
 #[derive(Debug)]
 pub struct BuildOutput {
     pub status: BuildStatus,
@@ -570,330 +561,6 @@ pub(crate) fn compile_frontend_with_root(
 }
 
 // ---------------------------------------------------------------------------
-// Verification (synchronous)
-// ---------------------------------------------------------------------------
-
-/// Thread-safe: `verify_cache` writes are content-addressed.
-#[allow(clippy::too_many_arguments)]
-fn verify_one_function(
-    func: &vow_ir::Function,
-    ir_module: &vow_ir::Module,
-    const_fns: &std::collections::HashMap<vow_ir::FuncId, ConstantValue>,
-    file: &str,
-    call_site_index: &std::collections::HashMap<String, Vec<counterexample::CallSiteInfo>>,
-    verify_cache: Option<&VerifyCache>,
-    limits: &VerifyLimits,
-    config: &SolverConfig,
-) -> PerFuncResult {
-    // Non-modelable vowed functions must be skipped here; the C emitter would emit __ESBMC_assert(0) traps for them.
-    if let Some(reason) = non_modelable_reason(func, ir_module, const_fns) {
-        return PerFuncResult::Skipped(SkippedFunction {
-            function: func.name.clone(),
-            reason,
-        });
-    }
-
-    // Resolve Auto solver via heuristic (Phase B).
-    // Skip heuristic when encoding is Ir — that forces Z3 via resolve().
-    let func_config = if config.solver == Solver::Auto && config.encoding != Encoding::Ir {
-        let heuristic = vow_verify::classify_function(func);
-        SolverConfig {
-            solver: heuristic.solver,
-            encoding: config.encoding,
-            timeout_secs: config.timeout_secs,
-            memlimit_mb: config.memlimit_mb,
-        }
-    } else {
-        *config
-    };
-
-    let result = if let Some(vc) = verify_cache {
-        let c_src = emit_verify_c_source(func, ir_module, const_fns, limits);
-        let key = VerifyCache::cache_key(
-            &c_src,
-            limits.max_k_step,
-            func_config.solver_str(),
-            func_config.encoding_str(),
-            func_config.memlimit_mb,
-        );
-
-        // Security: lookup only returns FAILED entries (PROVEN is never trusted
-        // from disk). The Phase D IR-fallback probe only consumed cached
-        // PROVEN, so it is removed: with PROVEN no longer cached, that probe
-        // could only return None.
-        if let Some(cached) = vc.lookup(&key) {
-            VerificationResult::Failed(cached.to_counterexample())
-        } else {
-            let esbmc = match find_esbmc() {
-                Some(p) => p,
-                None => return PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
-            };
-            let (res, resolved_config) =
-                run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
-            // Security: never cache PROVEN — a forged on-disk entry must not
-            // be able to bypass ESBMC on a later run.
-            if let VerificationResult::Failed(ce) = &res {
-                let store_key = VerifyCache::cache_key(
-                    &c_src,
-                    limits.max_k_step,
-                    resolved_config.solver_str(),
-                    resolved_config.encoding_str(),
-                    resolved_config.memlimit_mb,
-                );
-                vc.store(
-                    &store_key,
-                    &CachedFailure {
-                        vow_id: ce.vow_id,
-                        callee_precondition: ce.callee_precondition,
-                        description: ce.description.clone(),
-                        values: ce.values.clone(),
-                        block_visits: ce.block_visits.clone(),
-                        raw_output: ce.raw_output.clone(),
-                    },
-                );
-            }
-            res
-        }
-    } else {
-        verify(&VerifyRequest {
-            const_fns: Some(const_fns),
-            config: Some(&func_config),
-            ..VerifyRequest::new(func, ir_module, limits)
-        })
-    };
-
-    match result {
-        VerificationResult::Failed(ce) => {
-            let sce = counterexample::build_structured_counterexample_with_module(
-                func,
-                Some(ir_module),
-                &ce,
-                file,
-                call_site_index,
-            );
-            PerFuncResult::Halt(VerifyOutcome::Failed {
-                function: func.name.clone(),
-                description: ce.description.clone(),
-                counterexamples: vec![sce],
-            })
-        }
-        VerificationResult::ToolError(e) => PerFuncResult::Halt(VerifyOutcome::Error {
-            function: func.name.clone(),
-            message: e,
-        }),
-        VerificationResult::Timeout => PerFuncResult::Halt(VerifyOutcome::Timeout {
-            function: func.name.clone(),
-        }),
-        VerificationResult::Unknown { reason } => PerFuncResult::Halt(VerifyOutcome::Unknown {
-            function: func.name.clone(),
-            reason,
-        }),
-        VerificationResult::Proven | VerificationResult::ProvenIr => PerFuncResult::Ok,
-        VerificationResult::ToolNotFound => PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
-        // The verifier-side gate already short-circuits this path; the
-        // emit-and-run code above never returns Skipped today. Treat any
-        // future Skipped from those entry points the same way.
-        VerificationResult::Skipped { reason } => PerFuncResult::Skipped(SkippedFunction {
-            function: func.name.clone(),
-            reason,
-        }),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-/// Record one per-function ESBMC proof as a span on its worker thread track,
-/// plus a flow arrow from the verification handoff origin to the proof start.
-/// No-op when profiling is off.
-fn record_proof_span(
-    prof: Option<&perfetto::Profiler>,
-    verify_start: u64,
-    idx: usize,
-    name: &str,
-    tid: u64,
-    start_us: u64,
-) {
-    let Some(p) = prof else { return };
-    p.flow(
-        "verify->esbmc",
-        perfetto::PID_COMPILER,
-        perfetto::TID_VERIFY_DRIVER,
-        verify_start,
-        idx as u64,
-        perfetto::FlowEdge::Start,
-    );
-    p.flow(
-        "verify->esbmc",
-        perfetto::PID_COMPILER,
-        tid,
-        start_us,
-        idx as u64,
-        perfetto::FlowEdge::End,
-    );
-    p.span(
-        &format!("esbmc:{name}"),
-        perfetto::PID_COMPILER,
-        tid,
-        start_us,
-        p.now_us().saturating_sub(start_us),
-        vec![("function".to_string(), name.to_string())],
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_verification_sync(
-    ir_module: &vow_ir::Module,
-    file: &str,
-    call_site_index: &std::collections::HashMap<String, Vec<counterexample::CallSiteInfo>>,
-    verify_cache: Option<&VerifyCache>,
-    limits: &VerifyLimits,
-    jobs: usize,
-    config: &SolverConfig,
-    prof: Option<&perfetto::Profiler>,
-) -> (VerifyOutcome, Vec<SkippedFunction>) {
-    let const_fns = detect_constant_functions(ir_module);
-
-    let vowed: Vec<&vow_ir::Function> = ir_module
-        .functions
-        .iter()
-        .filter(|f| !f.vows.is_empty())
-        .collect();
-
-    if vowed.is_empty() {
-        return (VerifyOutcome::Proven, Vec::new());
-    }
-
-    // Handoff origin: a flow arrow runs from here to each per-function proof.
-    let verify_start = prof.map(|p| p.now_us()).unwrap_or(0);
-
-    let jobs = jobs.max(1).min(vowed.len());
-    if jobs == 1 {
-        let mut skipped = Vec::new();
-        for (idx, func) in vowed.iter().enumerate() {
-            let proof_start = prof.map(|p| p.now_us()).unwrap_or(0);
-            let result = verify_one_function(
-                func,
-                ir_module,
-                &const_fns,
-                file,
-                call_site_index,
-                verify_cache,
-                limits,
-                config,
-            );
-            record_proof_span(
-                prof,
-                verify_start,
-                idx,
-                &func.name,
-                perfetto::TID_VERIFY_DRIVER,
-                proof_start,
-            );
-            match result {
-                PerFuncResult::Ok => {}
-                PerFuncResult::Skipped(s) => skipped.push(s),
-                PerFuncResult::Halt(out) => return (out, skipped),
-            }
-        }
-        if skipped.is_empty() {
-            return (VerifyOutcome::Proven, skipped);
-        }
-        return (VerifyOutcome::SkippedNonModelable, skipped);
-    }
-
-    // Stop after first halt-class outcome (Failed/Error/Timeout/ToolNotFound);
-    // return lowest-indexed halt for deterministic reporting. Skipped
-    // functions never halt — they're aggregated and reported as warnings.
-    let next = AtomicUsize::new(0);
-    let stop = AtomicBool::new(false);
-    let halts: StdMutex<Vec<Option<VerifyOutcome>>> =
-        StdMutex::new((0..vowed.len()).map(|_| None).collect());
-    let skipped_acc: StdMutex<Vec<Option<SkippedFunction>>> =
-        StdMutex::new((0..vowed.len()).map(|_| None).collect());
-
-    thread::scope(|scope| {
-        for w in 0..jobs {
-            let next = &next;
-            let stop = &stop;
-            let halts = &halts;
-            let skipped_acc = &skipped_acc;
-            let vowed = &vowed;
-            let const_fns = &const_fns;
-            let worker_tid = perfetto::TID_WORKER_BASE + w as u64;
-            scope.spawn(move || {
-                loop {
-                    if stop.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let idx = next.fetch_add(1, Ordering::AcqRel);
-                    if idx >= vowed.len() {
-                        break;
-                    }
-                    // Always finish what we've claimed so `halts[idx]` reflects
-                    // its true verdict — otherwise lowest-index halt reporting
-                    // becomes timing-dependent. The pre-check already avoids claims
-                    // in the common post-halt case.
-                    let proof_start = prof.map(|p| p.now_us()).unwrap_or(0);
-                    let result = verify_one_function(
-                        vowed[idx],
-                        ir_module,
-                        const_fns,
-                        file,
-                        call_site_index,
-                        verify_cache,
-                        limits,
-                        config,
-                    );
-                    record_proof_span(
-                        prof,
-                        verify_start,
-                        idx,
-                        &vowed[idx].name,
-                        worker_tid,
-                        proof_start,
-                    );
-                    match result {
-                        PerFuncResult::Ok => {}
-                        PerFuncResult::Skipped(s) => {
-                            let mut guard =
-                                skipped_acc.lock().expect("verify skipped mutex poisoned");
-                            guard[idx] = Some(s);
-                        }
-                        PerFuncResult::Halt(out) => {
-                            let mut guard = halts.lock().expect("verify halts mutex poisoned");
-                            guard[idx] = Some(out);
-                            drop(guard);
-                            // Release pairs with sibling threads' stop.load(Acquire) to propagate early-exit.
-                            stop.store(true, Ordering::Release);
-                        }
-                    }
-                }
-            });
-        }
-    });
-
-    let halts = halts.into_inner().expect("verify halts mutex poisoned");
-    let outcome = halts.into_iter().flatten().next().unwrap_or_else(|| {
-        if skipped_acc
-            .lock()
-            .expect("verify skipped mutex poisoned")
-            .iter()
-            .any(Option::is_some)
-        {
-            VerifyOutcome::SkippedNonModelable
-        } else {
-            VerifyOutcome::Proven
-        }
-    });
-    let skipped: Vec<SkippedFunction> = skipped_acc
-        .into_inner()
-        .expect("verify skipped mutex poisoned")
-        .into_iter()
-        .flatten()
-        .collect();
-    (outcome, skipped)
-}
-
-// ---------------------------------------------------------------------------
 // Verify-only pipeline (vow verify)
 // ---------------------------------------------------------------------------
 
@@ -934,7 +601,7 @@ fn run_verify_only_inner(
     let verify_cache = if no_cache { None } else { VerifyCache::new() };
     let file = source.to_string_lossy().to_string();
     let call_site_index = counterexample::build_call_site_index(ir_module, &file);
-    let (outcome, skipped) = run_verification_sync(
+    let (outcome, skipped) = verification::run_verification_sync(
         ir_module,
         &file,
         &call_site_index,
@@ -1094,7 +761,7 @@ pub(crate) fn run_pipeline_from_frontend(
             if std::env::var_os("VOW_TEST_VERIFIER_PANIC").is_some() {
                 panic!("injected verifier panic (VOW_TEST_VERIFIER_PANIC)");
             }
-            run_verification_sync(
+            verification::run_verification_sync(
                 &module_for_verify,
                 &file_for_verify,
                 &call_site_index,
@@ -3966,9 +3633,9 @@ fn main() -> i32 {
         assert!(result.executable.is_none());
     }
 
-    // Exercises `run_verification_sync`'s threaded pool (`jobs > 1`). The public
-    // `run_pipeline` / `run_verify_only` hardcode jobs=1, so without this test
-    // the parallel code path is only covered via the CLI.
+    // End-to-end smoke of the threaded pool (`jobs > 1`) through real ESBMC.
+    // The pool's determinism guarantees are unit-tested solver-free in
+    // `verification::tests`; this confirms the full verify path still wires up.
     #[test]
     fn verify_only_inner_runs_threaded_pool() {
         let dir = TempDir::new().unwrap();
