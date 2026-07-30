@@ -1,8 +1,6 @@
 module SortedInsert
 
 fn sorted_insert(v: Vec<i64>, val: i64) -> Vec<i64> vow {
-  requires: v.len() >= 0,
-  requires: v.len() <= 6,
   ensures: result.len() == v.len() + 1
 } {
   let r: Vec<i64> = Vec::new();

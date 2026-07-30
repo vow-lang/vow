@@ -1,9 +1,7 @@
 module SafeModulo
 
 fn safe_mod(x: i64 where x >= 0, m: i64) -> i64 vow {
-  requires: x <= 1000,
   requires: m > 0,
-  requires: m <= 100,
   ensures: result >= 0,
   ensures: result < m
 } {

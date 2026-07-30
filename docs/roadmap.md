@@ -19,7 +19,7 @@ Achieved:
 - Structured JSON diagnostics with line:col source spans
 - `build`, `verify` subcommands; `--mode debug`, `--no-verify`, `--no-cache`, `--unwind N` flags
 - Verification caching: content-hash-based ESBMC result cache (23s → 0.001s on repeat)
-- Vericoding benchmark: **100% (36/36)** on Vow's non-Stretch suite
+- Vericoding references: **100% (23/23)** on the current non-Stretch suite
 - 89/89 tests passing, 40/40 CLI compatibility tests
 - Toolchain Skill document, structured `--help`, `--debug-trace`, incremental compilation
 - Bootstrap: `scripts/bootstrap.sh` produces `build/vowc` from Rust stage 0
@@ -29,12 +29,12 @@ Achieved:
 **Strongest current claim:** Vow is an unusually strong agent-first,
 bounded-verification language with an integrated compile/verify/CEGIS loop,
 blame tracking, structured counterexamples, and a self-hosted verified compiler.
-40 benchmarks; all 36 non-Stretch reference implementations verified.
+40 benchmarks; all 23 currently applicable reference implementations verified.
 Contract fidelity is machine-tracked.
 
 Known limitations:
 - Expression-level source spans are unpopulated (function/statement spans work)
-- 2/4 Stretch benchmarks hit ESBMC `--unwind` ceiling (H07, H10)
+- 17 benchmarks are Stretch; 13 were reclassified after verifier-driven source bounds were removed
 - `divide.vow` release build relies on hardware traps (SIGFPE) for division by zero — this is defined behavior, not UB; debug mode provides vow-level diagnostics with blame and captured values
 - Zero public visibility — benchmark results not yet published
 - Spec expressiveness gap: ensures clauses cannot express quantifiers (user-defined function calls now work)

@@ -187,7 +187,7 @@
     <tr><td>LSP / editor</td><td><span class="tag warn">No LSP</span>, no tree-sitter. VSCode extension + TextMate bundle in <code>editors/</code>.</td><td><span class="tag warn">No LSP</span> either; JSON-everywhere is the agent contract.</td></tr>
     <tr><td>Stdlib breadth</td><td><b>~160 built-in functions</b>: Array, Map, Set, Decimal, JSON, HTML, Markdown, Regex, strings (40+ ops), trig/log, parse helpers, base64, URL.</td><td>Minimal: Vec, String, HashMap, BTreeMap, heap, fs, io &mdash; each with verification-aware bounded models.</td></tr>
     <tr><td>Package manager</td><td>None for Vera code. Programs are single files + module loader. Vera itself ships as a Python package.</td><td>None. Single-file or DFS-loaded <code>use</code> modules.</td></tr>
-    <tr><td>Benchmarks</td><td>VeraBench: 50 problems &times; 6 models. Kimi K2.5 100% Vera vs 86% Python / 91% TS. Caveats: single run, self-acknowledged unreliability.</td><td>36/36 Vow suite (sonnet-4-6); 36/36 non-Stretch references verified by the self-hosted compiler.</td></tr>
+    <tr><td>Benchmarks</td><td>VeraBench: 50 problems &times; 6 models. Kimi K2.5 100% Vera vs 86% Python / 91% TS. Caveats: single run, self-acknowledged unreliability.</td><td>23/23 currently applicable references verified; agent results require rebaselining after semantic-contract cleanup.</td></tr>
     <tr><td>License</td><td>MIT (clean OSI).</td><td>Open source.</td></tr>
   </tbody>
 </table>

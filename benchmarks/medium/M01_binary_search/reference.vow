@@ -2,15 +2,13 @@ module BinarySearch
 
 fn bisect(lo: i64, hi: i64) -> i64 vow {
   requires: lo >= 0,
-  requires: hi >= lo,
-  requires: hi <= 100
+  requires: hi >= lo
 } {
   let mut lo: i64 = lo;
   let hi: i64 = hi;
-  while lo + 1 < hi vow {
+  while lo < hi - 1 vow {
     invariant: lo >= 0,
-    invariant: hi >= lo,
-    invariant: hi <= 100
+    invariant: hi >= lo
   } {
     let mid: i64 = lo + (hi - lo) / 2;
     lo = mid;

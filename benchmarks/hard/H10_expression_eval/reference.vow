@@ -1,15 +1,13 @@
 module ExpressionEval
 
 fn eval_rpn(ops: Vec<i64>) -> i64 vow {
-  requires: ops.len() >= 1,
-  requires: ops.len() <= 6,
-  ensures: result >= 0
+  requires: ops.len() >= 1
 } {
   let stack: Vec<i64> = Vec::new();
   let mut j: i64 = 0;
-  while j < 8 vow {
+  while j < ops.len() vow {
     invariant: j >= 0,
-    invariant: j <= 8
+    invariant: j <= ops.len()
   } {
     stack.push(0);
     j = j + 1;
@@ -20,7 +18,7 @@ fn eval_rpn(ops: Vec<i64>) -> i64 vow {
     invariant: i >= 0,
     invariant: i <= ops.len(),
     invariant: sp >= 0,
-    invariant: sp <= 8
+    invariant: sp <= ops.len()
   } {
     if ops[i] < 100 {
       stack[sp] = ops[i];

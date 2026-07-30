@@ -17,14 +17,16 @@ fn intervals_overlap(a_lo: i64, a_hi: i64, b_lo: i64, b_hi: i64) -> i64
 ## Contracts
 
 - `interval_new`: `requires: lo <= hi`
-- `interval_contains`: `requires: lo >= 0, hi >= 0, lo <= hi, hi <= 1000`, `ensures: result >= 0, ensures: result <= 1`
-- `interval_width`: `requires: lo >= 0, hi >= 0, lo <= hi, hi <= 1000`, `ensures: result >= 0`
-- `intervals_overlap`: `requires: a_lo >= 0, a_hi >= 0, a_lo <= a_hi, a_hi <= 1000, b_lo >= 0, b_hi >= 0, b_lo <= b_hi, b_hi <= 1000`, `ensures: result >= 0, ensures: result <= 1`
+- `interval_contains`: `requires: lo <= hi`, `ensures: result >= 0, ensures: result <= 1`
+- `interval_width`: `requires: lo <= hi, lo >= 0 || hi <= 9223372036854775807 + lo`, `ensures: result >= 0`
+- `intervals_overlap`: `requires: a_lo <= a_hi, b_lo <= b_hi`, `ensures: result >= 0, ensures: result <= 1`
 
 ## Constraints
 
 - Struct kept for data grouping; verified functions use i64 params
-- Bounded inputs prevent overflow in arithmetic
+- Valid ordering is the only domain restriction for operations that do not
+  compute a width
+- Width additionally uses the exact guard that keeps `hi - lo` in `i64`
 - Overlap detection: two intervals overlap if `a_lo <= b_hi` and `b_lo <= a_hi`
 
 ## Hints

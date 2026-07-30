@@ -16,7 +16,7 @@ fn sum_pair(a: i64, b: i64) -> i64
 
 - `select_first`: `ensures: result == a`
 - `select_second`: `ensures: result == b`
-- `sum_pair`: `requires: a >= 0, requires: b >= 0, requires: a <= 1000, requires: b <= 1000`, `ensures: result == a + b`
+- `sum_pair`: `requires: a >= 0, requires: b >= 0, requires: a <= 9223372036854775807 - b`, `ensures: result == a + b`
 
 ## Constraints
 
@@ -27,4 +27,4 @@ fn sum_pair(a: i64, b: i64) -> i64
 
 - `select_first` returns `a`
 - `select_second` returns `b`
-- `sum_pair` returns `a + b` (bounds prevent overflow)
+- `sum_pair` returns `a + b` (the exact precondition prevents overflow)

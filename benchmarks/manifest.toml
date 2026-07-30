@@ -2,7 +2,7 @@
 name = "vericoding"
 version = "3.0.0"
 total = 40
-stretch_count = 4
+stretch_count = 17
 
 [[benchmarks]]
 id = "E01"
@@ -86,14 +86,14 @@ id = "E12"
 name = "power_of_two"
 difficulty = "easy"
 path = "easy/E12_power_of_two"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "E13"
 name = "fibonacci_bounded"
 difficulty = "easy"
 path = "easy/E13_fibonacci_bounded"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "E14"
@@ -114,49 +114,49 @@ id = "M01"
 name = "binary_search"
 difficulty = "medium"
 path = "medium/M01_binary_search"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M02"
 name = "vec_fill"
 difficulty = "medium"
 path = "medium/M02_vec_fill"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M03"
 name = "vec_sum"
 difficulty = "medium"
 path = "medium/M03_vec_sum"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M04"
 name = "vec_find"
 difficulty = "medium"
 path = "medium/M04_vec_find"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M05"
 name = "vec_count"
 difficulty = "medium"
 path = "medium/M05_vec_count"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M06"
 name = "vec_max"
 difficulty = "medium"
 path = "medium/M06_vec_max"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M07"
 name = "count_steps"
 difficulty = "medium"
 path = "medium/M07_count_steps"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M08"
@@ -177,7 +177,7 @@ id = "M10"
 name = "map_multi_insert"
 difficulty = "medium"
 path = "medium/M10_map_multi_insert"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M11"
@@ -198,21 +198,21 @@ id = "M13"
 name = "gcd"
 difficulty = "medium"
 path = "medium/M13_gcd"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M14"
 name = "selection_min"
 difficulty = "medium"
 path = "medium/M14_selection_min"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "M15"
 name = "collatz_bounded"
 difficulty = "medium"
 path = "medium/M15_collatz_bounded"
-expected_status = "Verified"
+expected_status = "Stretch"
 
 [[benchmarks]]
 id = "H01"

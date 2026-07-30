@@ -39,7 +39,12 @@ ulimit -v 2000000; build/vowc build --no-verify benchmarks/easy/E01_absolute_val
 - **Failed**: Verification fails or times out — 0 points
 - **Score**: Verified count / Total applicable (excluding `expected_status = "Stretch"`)
 
-Stretch problems (H04, H07, H09, H10) may exceed ESBMC's current capabilities. They are included to test boundaries but excluded from the primary score denominator.
+Seventeen problems are currently Stretch. The original four Hard boundary
+problems remain in that tier; thirteen additional arithmetic, loop, and
+collection problems use honest contracts that exceed the current verifier's
+unwind or model reach. They remain in the suite but are excluded from the
+primary score denominator until the verifier can establish them without source
+contract bounds.
 
 ## Verifier Model
 

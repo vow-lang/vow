@@ -172,7 +172,7 @@
     <tr><td>Stdlib breadth</td><td>~14 modules: <code>std.mem</code>, <code>io</code>, <code>fs</code>, <code>net</code>, <code>http</code>, <code>json</code>, <code>codec</code>, <code>crypto</code>, <code>parse</code>, <code>time</code>, <code>rand</code>, <code>proc</code>, <code>path</code>, <code>args/env</code>.</td><td>Vec, String, HashMap, BTreeMap, heap, fs, io &mdash; all with verification-aware bounded models.</td></tr>
     <tr><td>Package manager</td><td><code>zero.json</code> manifest; <span class="tag warn">no registry yet</span>, no <code>zero add</code>. Local path deps only.</td><td>None. Single-file or DFS-loaded <code>use</code> modules.</td></tr>
     <tr><td>Cross-compilation</td><td>9 targets, Zig-toolchain shim: <code>darwin-arm64/x64</code>, <code>linux-musl-x64/arm64</code>, <code>linux-x64/arm64</code>, <code>win32-x64/arm64</code>, <code>wasm32-wasi/web</code>.</td><td>Host target only.</td></tr>
-    <tr><td>Verification benchmarks</td><td>None published.</td><td>36/36 Vow suite (sonnet-4-6); 36/36 non-Stretch references verified by the self-hosted compiler.</td></tr>
+    <tr><td>Verification benchmarks</td><td>None published.</td><td>23/23 currently applicable references verified; agent results require rebaselining after semantic-contract cleanup.</td></tr>
   </tbody>
 </table>
 
