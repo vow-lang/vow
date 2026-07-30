@@ -2,6 +2,11 @@
 
 **Date:** 2026-06-10  ·  **Scope:** `main` @ `d220ad2` (+ open PRs/issues cross-referenced)  ·  **Target:** the Vow surface language, the verification pipeline, the self-hosted compiler (`compiler/*.vow`), and the Rust bootstrap (`vow-*` crates), plus benchmarks, mutation testing, docs/spec, and the agent-facing tool surface.
 
+> **Disposition note (2026-07-30):** The live HumanEval corpus, import scripts,
+> and HumanEval-specific benchmark reporting were retired. Historical findings
+> and evidence below are preserved as recorded; references to those removed
+> paths are not descriptions of the current supported benchmark surface.
+
 Evaluated against `docs/vow_design.md` (authoritative). Deliberate exclusions per §3 / §5.9 (generics, traits, closures, macros, operator overloading, subtyping, exceptions, `null`, statement-level `assert`/`assume`, `async`, interactive LSP/debugger, multiple visibility gradations) are treated as **design boundaries, not gaps**, and are not reported as missing features.
 
 ---
