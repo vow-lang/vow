@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/vow-lang/vow/compare/v0.4.0...v0.5.0) (2026-07-30)
+
+
+### Features
+
+* bring i32 to full parity with u8 under the numeric tower ([#525](https://github.com/vow-lang/vow/issues/525)) ([#976](https://github.com/vow-lang/vow/issues/976)) ([f421acd](https://github.com/vow-lang/vow/commit/f421acda67505492848f9a9a3c4c56b6e92d5077))
+
 # [0.4.0](https://github.com/vow-lang/vow/compare/v0.3.0...v0.4.0) (2026-07-23)
 
 
