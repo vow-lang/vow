@@ -41,15 +41,19 @@ ulimit -v 2000000; build/vowc build --no-verify benchmarks/easy/E01_absolute_val
 
 Stretch problems (H04, H07, H09, H10) may exceed ESBMC's current capabilities. They are included to test boundaries but excluded from the primary score denominator.
 
-## Verification Constraints
+## Verifier Model
 
 ESBMC verification uses:
-- `--unwind 10` (loop bound)
+- a finite loop-unwind strategy
 - Vec capacity ≤ 128 elements
 - String length ≤ 256 bytes
 - HashMap capacity ≤ 64 entries
 
-All loop-based problems include `requires: n <= 8` or similar bounds to stay within the unwind limit.
+These are internal verifier limits, not benchmark-domain constraints. Benchmark
+contracts must remain functional and backend-independent: do not cap numeric
+inputs, collection lengths or capacities, or struct fields merely to fit the
+unwind limit or reduce solver state. A benchmark the current verifier cannot
+establish with its honest contract belongs in the existing Stretch category.
 
 ## Contract Syntax Reference
 

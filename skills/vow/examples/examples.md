@@ -154,7 +154,6 @@ module VecFill
 
 fn fill_vec(n: i64) -> Vec<i64> vow {
     requires: n >= 0,
-    requires: n <= 8,
     ensures: result.len() == n
 } {
     let v: Vec<i64> = Vec::new();
@@ -176,20 +175,21 @@ fn main() -> i32 [io] {
 }
 ```
 
-### Step 2: Build and verify
+### Step 2: Verify
 
 ```
-$ vow build examples/vec_fill.vow
+$ vow verify examples/vec_fill.vow
 ```
 
 ```json
-{"status":"Verified","executable":"examples/vec_fill","diagnostics":[],"counterexamples":[]}
+{"status":"VerifyFailed","executable":null,"diagnostics":[],"function":"fill_vec","counterexample":"verification result unknown: Unable to prove or falsify the program, giving up.","counterexamples":[],"verify_status":"unknown","verify_message":"Unable to prove or falsify the program, giving up."}
 ```
 
 **Key points:**
-- `requires: n <= 8` keeps iterations tractable for verification
 - `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body
 - The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
+- `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
 ---
 

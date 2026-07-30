@@ -2833,8 +2833,8 @@ For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inpu
 | Status          | Meaning                                              |
 |-----------------|------------------------------------------------------|
 | `not_verified`  | Verification not requested (no `--verify` flag)      |
-| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
-| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
+| `proven`        | ESBMC established this contract for the configured bounded verification model (bit-vector encoding, overflow modeled) |
+| `proven-ir`     | ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
@@ -2975,6 +2975,24 @@ Always check stderr for human-readable diagnostics alongside the JSON on stdout.
 
 Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.
 
+## Semantic Contracts Are Backend-Independent
+
+A contract states the function's real semantic domain and result. It does not
+state the limits of the tool currently used to check it. Replacing ESBMC with a
+stronger verifier must not require editing Vow source contracts.
+
+Lengths, capacities, indices, and struct fields may appear in contracts when
+they express a genuine algorithmic constraint or representation invariant. For
+example, an index may need to be within a vector's length, paired inputs may
+need equal lengths, or a ring buffer may need to be non-full before a write.
+They must not be capped merely because ESBMC uses a finite collection model or
+because a smaller struct state space is easier to solve.
+
+The same distinction applies to numeric bounds. Exact overflow guards and real
+problem-domain restrictions are semantic; unwind caps and arbitrary
+solver-friendly ranges are not. If the current verifier cannot establish an
+honest contract, report that limitation outside the contract.
+
 ## Verification Pipeline
 
 Codegen (Cranelift) and verification run in parallel:
@@ -2988,7 +3006,7 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`
+- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC completes the configured model checks; otherwise the result is `unknown`. `proven` describes the configured verification model, including its finite unwind and collection capacities, not executions outside that model.
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
@@ -3012,7 +3030,7 @@ capacity above only describes how far the *bounded* model checker reasons. The
 language and its contracts are deliberately decoupled from what any particular
 prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
 same source, the same contracts, and the same CLI keep working — the only
-difference is that proof covers more (or all) of the state space. For this
+difference is that the verifier can cover more of the state space. For this
 reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
 `requires: v.len() <= 128`); see "Verification-Driven Bounds (Anti-Pattern)"
 below and `docs/design/verifier-model-bounds.md`.
@@ -3289,7 +3307,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic, bounded collection models) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 ## Interpreting Counterexamples
 
@@ -4886,7 +4904,6 @@ module VecFill
 
 fn fill_vec(n: i64) -> Vec<i64> vow {
     requires: n >= 0,
-    requires: n <= 8,
     ensures: result.len() == n
 } {
     let v: Vec<i64> = Vec::new();
@@ -4908,20 +4925,21 @@ fn main() -> i32 [io] {
 }
 ```
 
-### Step 2: Build and verify
+### Step 2: Verify
 
 ```
-$ vow build examples/vec_fill.vow
+$ vow verify examples/vec_fill.vow
 ```
 
 ```json
-{"status":"Verified","executable":"examples/vec_fill","diagnostics":[],"counterexamples":[]}
+{"status":"VerifyFailed","executable":null,"diagnostics":[],"function":"fill_vec","counterexample":"verification result unknown: Unable to prove or falsify the program, giving up.","counterexamples":[],"verify_status":"unknown","verify_message":"Unable to prove or falsify the program, giving up."}
 ```
 
 **Key points:**
-- `requires: n <= 8` keeps iterations tractable for verification
 - `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body
 - The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
+- `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
 ---
 
@@ -7438,8 +7456,8 @@ For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inpu
 | Status          | Meaning                                              |
 |-----------------|------------------------------------------------------|
 | `not_verified`  | Verification not requested (no `--verify` flag)      |
-| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
-| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
+| `proven`        | ESBMC established this contract for the configured bounded verification model (bit-vector encoding, overflow modeled) |
+| `proven-ir`     | ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
@@ -7581,6 +7599,24 @@ Always check stderr for human-readable diagnostics alongside the JSON on stdout.
 
 Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.
 
+## Semantic Contracts Are Backend-Independent
+
+A contract states the function's real semantic domain and result. It does not
+state the limits of the tool currently used to check it. Replacing ESBMC with a
+stronger verifier must not require editing Vow source contracts.
+
+Lengths, capacities, indices, and struct fields may appear in contracts when
+they express a genuine algorithmic constraint or representation invariant. For
+example, an index may need to be within a vector's length, paired inputs may
+need equal lengths, or a ring buffer may need to be non-full before a write.
+They must not be capped merely because ESBMC uses a finite collection model or
+because a smaller struct state space is easier to solve.
+
+The same distinction applies to numeric bounds. Exact overflow guards and real
+problem-domain restrictions are semantic; unwind caps and arbitrary
+solver-friendly ranges are not. If the current verifier cannot establish an
+honest contract, report that limitation outside the contract.
+
 ## Verification Pipeline
 
 Codegen (Cranelift) and verification run in parallel:
@@ -7594,7 +7630,7 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`
+- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC completes the configured model checks; otherwise the result is `unknown`. `proven` describes the configured verification model, including its finite unwind and collection capacities, not executions outside that model.
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
@@ -7618,7 +7654,7 @@ capacity above only describes how far the *bounded* model checker reasons. The
 language and its contracts are deliberately decoupled from what any particular
 prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
 same source, the same contracts, and the same CLI keep working — the only
-difference is that proof covers more (or all) of the state space. For this
+difference is that the verifier can cover more of the state space. For this
 reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
 `requires: v.len() <= 128`); see "Verification-Driven Bounds (Anti-Pattern)"
 below and `docs/design/verifier-model-bounds.md`.
@@ -7895,7 +7931,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic, bounded collection models) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 ## Interpreting Counterexamples
 
@@ -9496,7 +9532,6 @@ module VecFill
 
 fn fill_vec(n: i64) -> Vec<i64> vow {
     requires: n >= 0,
-    requires: n <= 8,
     ensures: result.len() == n
 } {
     let v: Vec<i64> = Vec::new();
@@ -9518,20 +9553,21 @@ fn main() -> i32 [io] {
 }
 ```
 
-### Step 2: Build and verify
+### Step 2: Verify
 
 ```
-$ vow build examples/vec_fill.vow
+$ vow verify examples/vec_fill.vow
 ```
 
 ```json
-{"status":"Verified","executable":"examples/vec_fill","diagnostics":[],"counterexamples":[]}
+{"status":"VerifyFailed","executable":null,"diagnostics":[],"function":"fill_vec","counterexample":"verification result unknown: Unable to prove or falsify the program, giving up.","counterexamples":[],"verify_status":"unknown","verify_message":"Unable to prove or falsify the program, giving up."}
 ```
 
 **Key points:**
-- `requires: n <= 8` keeps iterations tractable for verification
 - `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body
 - The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+- The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.
+- `VerifyFailed` with `verify_status: "unknown"` records the current verifier's limit; it does not make the contract false.
 
 ---
 
