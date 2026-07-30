@@ -1,4 +1,4 @@
-// TEST: category postcondition-correct
+// TEST: category callee-blame
 module ParseU8Clamped
 
 fn parse_u8_clamped(s: String) -> u8 vow {
