@@ -803,6 +803,32 @@ impl TypeEnv {
             );
         }
 
+        let option_i32 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
+        env.define_fn(
+            "parse_i32",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: option_i32.clone(),
+                effects: BTreeSet::new(),
+            },
+        );
+        for (source_name, source_ty) in [("i64", Ty::I64), ("u32", Ty::U32), ("u64", Ty::U64)] {
+            for (mode, return_ty) in [
+                ("try", option_i32.clone()),
+                ("wrap", Ty::I32),
+                ("sat", Ty::I32),
+            ] {
+                env.define_fn(
+                    format!("{source_name}_to_i32_{mode}"),
+                    FnSig {
+                        params: vec![source_ty.clone()],
+                        return_ty,
+                        effects: BTreeSet::new(),
+                    },
+                );
+            }
+        }
+
         env
     }
 

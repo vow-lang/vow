@@ -222,6 +222,35 @@ fn ty_is_integer_or_lit_int(ts: TyStore, tid: i64) -> bool {
     ty_is_integer(ts, tid) || ty_is_lit_int(ts, tid)
 }
 
+// Inclusive (min, max) representable by an integer type tag. Literal values
+// are stored as i64 in the self-hosted compiler, so the true u64/u128 maximum
+// is unrepresentable; i64::MAX is used as the effective upper bound since no
+// literal can exceed it anyway.
+fn integer_tag_min(tag: i64) -> i64 {
+    let is_unsigned: bool = tag >= CTY_U8() && tag <= CTY_U128();
+    if is_unsigned {
+        return 0;
+    }
+    let width: i64 = integer_tag_width(tag);
+    if width >= 64 {
+        return -9223372036854775807 - 1;
+    }
+    -(1 << (width - 1))
+}
+
+fn integer_tag_max(tag: i64) -> i64 {
+    let width: i64 = integer_tag_width(tag);
+    if width >= 64 {
+        return 9223372036854775807;
+    }
+    let is_unsigned: bool = tag >= CTY_U8() && tag <= CTY_U128();
+    if is_unsigned {
+        (1 << width) - 1
+    } else {
+        (1 << (width - 1)) - 1
+    }
+}
+
 fn ty_is_unsigned(ts: TyStore, tid: i64) -> bool {
     let tag: i64 = ty_tag(ts, tid);
     tag >= CTY_U8() && tag <= CTY_U128()

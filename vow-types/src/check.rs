@@ -178,6 +178,27 @@ fn is_integer_or_lit_int(ty: &Ty) -> bool {
     ty.is_integer() || ty.is_lit_int()
 }
 
+/// Inclusive `(min, max)` representable by an integer type of the given
+/// `width`/signedness. Literal values are stored as `i128`, so the true
+/// `u128` maximum (`2^128 - 1`) is unrepresentable; `i128::MAX` is used as
+/// the effective upper bound since no literal can exceed it anyway.
+fn integer_type_range(width: u16, is_unsigned: bool) -> (i128, i128) {
+    let bits = u32::from(width);
+    if is_unsigned {
+        let max = if bits >= 128 {
+            i128::MAX
+        } else {
+            (1i128 << bits) - 1
+        };
+        (0, max)
+    } else if bits >= 128 {
+        (i128::MIN, i128::MAX)
+    } else {
+        let max = (1i128 << (bits - 1)) - 1;
+        (-(max + 1), max)
+    }
+}
+
 fn absorb_lit_int_operand(lhs: Ty, rhs: Ty) -> (Ty, Ty) {
     if lhs.is_lit_int() && rhs.is_integer() {
         (rhs.clone(), rhs)
@@ -871,19 +892,20 @@ impl<'e> Checker<'e> {
     }
 
     fn check_integer_literal_range(&mut self, expr: &Expr, target: &Ty) {
-        if *target != Ty::U8 {
+        let Some(width) = target.integer_width() else {
             return;
-        }
+        };
+        let (min, max) = integer_type_range(width, target.is_unsigned());
         if let Some(value) = const_int_value(expr)
-            && !(0..=255).contains(&value)
+            && !(min..=max).contains(&value)
         {
             self.emit_error_with_hints(
                 ErrorCode::LiteralOutOfRange,
-                format!("literal {value} does not fit in u8 (range 0..=255)"),
+                format!("literal {value} does not fit in {target} (range {min}..={max})"),
                 expr.span,
-                vec![
-                    "use a value in 0..=255 or choose an explicit narrowing intrinsic".to_string(),
-                ],
+                vec![format!(
+                    "use a value in {min}..={max} or choose an explicit narrowing intrinsic"
+                )],
             );
         }
     }
@@ -1031,11 +1053,11 @@ impl<'e> Checker<'e> {
                 let lhs_ty = self.check_expr(lhs);
                 let rhs_ty = self.check_expr(rhs);
                 if !matches!(op, BinOp::Shl | BinOp::Shr) {
-                    if lhs_ty == Ty::U8 && rhs_ty.is_lit_int() {
-                        self.check_integer_literal_range(rhs, &Ty::U8);
+                    if lhs_ty.is_integer() && rhs_ty.is_lit_int() {
+                        self.check_integer_literal_range(rhs, &lhs_ty);
                     }
-                    if rhs_ty == Ty::U8 && lhs_ty.is_lit_int() {
-                        self.check_integer_literal_range(lhs, &Ty::U8);
+                    if rhs_ty.is_integer() && lhs_ty.is_lit_int() {
+                        self.check_integer_literal_range(lhs, &rhs_ty);
                     }
                 }
                 match op {
@@ -1069,26 +1091,29 @@ impl<'e> Checker<'e> {
                     BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
                         self.check_same_integer(lhs_ty, rhs_ty, expr.span)
                     }
-                    BinOp::Shl | BinOp::Shr if lhs_ty == Ty::U8 => {
+                    BinOp::Shl | BinOp::Shr if matches!(lhs_ty, Ty::U8 | Ty::I32) => {
+                        let width = lhs_ty
+                            .integer_width()
+                            .expect("U8 and I32 both have an integer width");
                         if rhs_ty != Ty::U32 && !rhs_ty.is_lit_int() && rhs_ty != Ty::Never {
                             self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
-                                format!("u8 shift count must be u32, found `{rhs_ty}`"),
+                                format!("{lhs_ty} shift count must be u32, found `{rhs_ty}`"),
                                 rhs.span,
                                 vec!["use a u32 shift count".to_string()],
                             );
                         }
                         if let Some(count) = const_int_value(rhs)
-                            && !(0..8).contains(&count)
+                            && !(0..i128::from(width)).contains(&count)
                         {
                             self.emit_error_with_hints(
                                 ErrorCode::ShiftCountOutOfRange,
-                                format!("shift count {count} is out of range for u8"),
+                                format!("shift count {count} is out of range for {lhs_ty}"),
                                 rhs.span,
-                                vec!["u8 shift counts must be in 0..8".to_string()],
+                                vec![format!("{lhs_ty} shift counts must be in 0..{width}")],
                             );
                         }
-                        Ty::U8
+                        lhs_ty
                     }
                     BinOp::Shl | BinOp::Shr => self.check_same_integer(lhs_ty, rhs_ty, expr.span),
                     BinOp::And | BinOp::Or => {
@@ -2959,6 +2984,91 @@ mod tests {
         assert_eq!(emitter.0[0].code, ErrorCode::ShiftCountOutOfRange);
     }
 
+    // --- i32 shift count range ---
+
+    fn i32_cast(value: i128) -> Expr {
+        make_expr(ExprKind::Cast {
+            expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(value)))),
+            target_ty: Box::new(Type::Named {
+                name: "i32".to_string(),
+                span: dummy_span(),
+            }),
+        })
+    }
+
+    fn i32_shl_with_count(count: i128) -> Expr {
+        make_expr(ExprKind::BinaryOp {
+            op: BinOp::Shl,
+            lhs: Box::new(i32_cast(1)),
+            rhs: Box::new(make_expr(ExprKind::Lit(Lit::Int(count)))),
+        })
+    }
+
+    fn i32_shl_with_neg_count(count: i128) -> Expr {
+        make_expr(ExprKind::BinaryOp {
+            op: BinOp::Shl,
+            lhs: Box::new(i32_cast(1)),
+            rhs: Box::new(make_expr(ExprKind::UnaryOp {
+                op: vow_syntax::ast::UnOp::Neg,
+                operand: Box::new(make_expr(ExprKind::Lit(Lit::Int(count)))),
+            })),
+        })
+    }
+
+    #[test]
+    fn i32_shift_count_in_range_ok() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&i32_shl_with_count(31));
+        assert_eq!(ty, Ty::I32);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn i32_shift_count_negative_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&i32_shl_with_neg_count(1));
+        assert!(checker.has_errors());
+        assert_eq!(
+            emitter.0.len(),
+            1,
+            "expected exactly one diagnostic (no spurious i32-shift-count-must-be-u32 error), got: {:?}",
+            emitter.0
+        );
+        assert_eq!(emitter.0[0].code, ErrorCode::ShiftCountOutOfRange);
+        assert!(emitter.0[0].message.contains("-1"));
+    }
+
+    #[test]
+    fn i32_shift_count_ge_32_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&i32_shl_with_count(32));
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::ShiftCountOutOfRange);
+    }
+
+    #[test]
+    fn i32_shift_count_wrong_type_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&make_expr(ExprKind::BinaryOp {
+            op: BinOp::Shl,
+            lhs: Box::new(i32_cast(1)),
+            rhs: Box::new(make_expr(ExprKind::Cast {
+                expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(3)))),
+                target_ty: Box::new(Type::Named {
+                    name: "i64".to_string(),
+                    span: dummy_span(),
+                }),
+            })),
+        }));
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert!(emitter.0[0].message.contains("i32 shift count must be u32"));
+    }
+
     // --- Checked arithmetic ---
 
     #[test]
@@ -3718,6 +3828,43 @@ mod tests {
         checker.check_stmt(&stmt);
         assert!(checker.has_errors());
         assert!(emitter.0[0].message.contains("let binding"));
+    }
+
+    fn let_stmt_with_i32_init(value: i128) -> Stmt {
+        use vow_syntax::ast::{Pat, PatKind};
+        Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "x".to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(Type::Named {
+                name: "i32".to_string(),
+                span: dummy_span(),
+            }),
+            init: Box::new(make_expr(ExprKind::Lit(Lit::Int(value)))),
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn check_stmt_let_i32_literal_out_of_range_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_stmt(&let_stmt_with_i32_init(2147483648));
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::LiteralOutOfRange);
+        assert!(emitter.0[0].message.contains("does not fit in i32"));
+    }
+
+    #[test]
+    fn check_stmt_let_i32_literal_in_range_ok() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_stmt(&let_stmt_with_i32_init(2147483647));
+        assert!(!checker.has_errors());
     }
 
     // --- check_fn return type mismatch ---

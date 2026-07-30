@@ -387,6 +387,10 @@ For the `u8` target, the available narrowing source types are `i16`, `i32`,
 `i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three
 forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.
 
+For the `i32` target, the available narrowing source types are `i64`, `u32`,
+and `u64`, each providing all three forms: `i64_to_i32_try`/`_wrap`/`_sat`,
+`u32_to_i32_try`/`_wrap`/`_sat`, and `u64_to_i32_try`/`_wrap`/`_sat`.
+
 No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
 operands must already have the same type. The compiler does not coerce
 across integer types at operator sites — only literals coerce, per the

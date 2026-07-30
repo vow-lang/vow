@@ -1,0 +1,57 @@
+// TEST: stdout "705032704\n2147483647\n-2147483648\n-1294967296\n2147483647\n410065408\n2147483647\n8\n800\n1600\n2147483647\n-1\n"
+module I32Intrinsics
+
+fn print_optional_i32(value: Option<i32>) [io] {
+    match value {
+        Option::Some(v) => print_i64(v as i64),
+        Option::None => print_i64(-1),
+    }
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io] {
+    let wide: i64 = 5000000000;
+    let wrapped: i32 = i64_to_i32_wrap(wide);
+    let clamped: i32 = i64_to_i32_sat(wide);
+    let neg_clamped: i32 = i64_to_i32_sat(0 - wide);
+
+    let from_u32: u32 = 3000000000;
+    let wrapped_u32: i32 = u32_to_i32_wrap(from_u32);
+    let clamped_u32: i32 = u32_to_i32_sat(from_u32);
+
+    let from_u64: u64 = 9000000000;
+    let wrapped_u64: i32 = u64_to_i32_wrap(from_u64);
+    let clamped_u64: i32 = u64_to_i32_sat(from_u64);
+
+    let value: i32 = 200;
+    let mask: i32 = 15;
+    let bits: i32 = value & mask;
+    let shifted: i32 = value << 2;
+    let shift_source: i32 = 3;
+    let shift_count: u32 = shift_source as u32;
+    let dynamically_shifted: i32 = value << shift_count;
+
+    print_i64(wrapped as i64);
+    print_str(String::from("\n"));
+    print_i64(clamped as i64);
+    print_str(String::from("\n"));
+    print_i64(neg_clamped as i64);
+    print_str(String::from("\n"));
+    print_i64(wrapped_u32 as i64);
+    print_str(String::from("\n"));
+    print_i64(clamped_u32 as i64);
+    print_str(String::from("\n"));
+    print_i64(wrapped_u64 as i64);
+    print_str(String::from("\n"));
+    print_i64(clamped_u64 as i64);
+    print_str(String::from("\n"));
+    print_i64(bits as i64);
+    print_str(String::from("\n"));
+    print_i64(shifted as i64);
+    print_str(String::from("\n"));
+    print_i64(dynamically_shifted as i64);
+    print_str(String::from("\n"));
+    print_optional_i32(i64_to_i32_try(2147483647));
+    print_optional_i32(i64_to_i32_try(2147483648));
+    0
+}

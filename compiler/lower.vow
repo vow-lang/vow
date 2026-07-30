@@ -711,6 +711,16 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("add_sat_u8") { return String::from("__vow_add_sat_u8"); }
     if name == String::from("sub_sat_u8") { return String::from("__vow_sub_sat_u8"); }
     if name == String::from("mul_sat_u8") { return String::from("__vow_mul_sat_u8"); }
+    if name == String::from("parse_i32") { return String::from("__vow_string_parse_i32_opt"); }
+    if name == String::from("i64_to_i32_try") { return String::from("__vow_i64_to_i32_try"); }
+    if name == String::from("i64_to_i32_wrap") { return String::from("__vow_i64_to_i32_wrap"); }
+    if name == String::from("i64_to_i32_sat") { return String::from("__vow_i64_to_i32_sat"); }
+    if name == String::from("u32_to_i32_try") { return String::from("__vow_u32_to_i32_try"); }
+    if name == String::from("u32_to_i32_wrap") { return String::from("__vow_u32_to_i32_wrap"); }
+    if name == String::from("u32_to_i32_sat") { return String::from("__vow_u32_to_i32_sat"); }
+    if name == String::from("u64_to_i32_try") { return String::from("__vow_u64_to_i32_try"); }
+    if name == String::from("u64_to_i32_wrap") { return String::from("__vow_u64_to_i32_wrap"); }
+    if name == String::from("u64_to_i32_sat") { return String::from("__vow_u64_to_i32_sat"); }
     if name == String::from("i64_to_string") { return String::from("__vow_string_from_i64"); }
     if name == String::from("vec_sort") { return String::from("__vow_vec_sort"); }
     if name == String::from("time_unix") { return String::from("__vow_time_unix"); }
@@ -780,7 +790,9 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("parse_i64") { return ITY_I64(); }
     if name == String::from("parse_u8") || name == String::from("i16_to_u8_try") || name == String::from("i32_to_u8_try") ||
        name == String::from("i64_to_u8_try") || name == String::from("i128_to_u8_try") || name == String::from("u16_to_u8_try") ||
-       name == String::from("u32_to_u8_try") || name == String::from("u64_to_u8_try") || name == String::from("u128_to_u8_try") {
+       name == String::from("u32_to_u8_try") || name == String::from("u64_to_u8_try") || name == String::from("u128_to_u8_try") ||
+       name == String::from("parse_i32") || name == String::from("i64_to_i32_try") ||
+       name == String::from("u32_to_i32_try") || name == String::from("u64_to_i32_try") {
         return ITY_PTR();
     }
     if name == String::from("i16_to_u8_wrap") || name == String::from("i16_to_u8_sat") ||
@@ -793,6 +805,11 @@ fn builtin_ret_ty(name: String) -> i64 {
        name == String::from("u128_to_u8_wrap") || name == String::from("u128_to_u8_sat") ||
        name == String::from("add_sat_u8") || name == String::from("sub_sat_u8") || name == String::from("mul_sat_u8") {
         return ITY_U8();
+    }
+    if name == String::from("i64_to_i32_wrap") || name == String::from("i64_to_i32_sat") ||
+       name == String::from("u32_to_i32_wrap") || name == String::from("u32_to_i32_sat") ||
+       name == String::from("u64_to_i32_wrap") || name == String::from("u64_to_i32_sat") {
+        return ITY_I32();
     }
     if name == String::from("i64_to_string") { return ITY_PTR(); }
     if name == String::from("vec_sort") { return ITY_PTR(); }
@@ -1156,23 +1173,32 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let rhs_ty: i64 = lctx_inst_ty(ctx, rhs_id);
         let mut operand_ty: i64 = lhs_ty;
         let is_bitwise: bool = op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR() || op == BINOP_SHL() || op == BINOP_SHR();
-        if expr_tag(a, lhs_eid) == EXPR_LIT_INT() && rhs_ty == ITY_U8() {
+        if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_U8() {
             operand_ty = ITY_U8();
-        } else if expr_tag(a, rhs_eid) == EXPR_LIT_INT() && lhs_ty == ITY_U8() {
+        } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_U8() {
             operand_ty = ITY_U8();
+        } else if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_I32() {
+            operand_ty = ITY_I32();
+        } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_I32() {
+            operand_ty = ITY_I32();
         } else if is_bitwise && lhs_ty == ITY_I64() {
             if rhs_ty != ITY_I64() {
                 operand_ty = rhs_ty;
             }
         }
-        if operand_ty == ITY_U8() {
-            if expr_tag(a, lhs_eid) == EXPR_LIT_INT() {
+        // Re-lower a literal operand as an `operand_ty`-native constant instead
+        // of the default i64, so it shares a register width with a genuinely
+        // `operand_ty`-typed sibling operand in the same binary op.
+        if operand_ty == ITY_U8() || operand_ty == ITY_I32() {
+            let narrow_op: i64 = if operand_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
+            let narrow_data: i64 = if operand_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
+            if expr_is_const_int(a, lhs_eid) {
                 let const_args: Vec<i64> = Vec::new();
-                lhs_id = lctx_emit(ctx, IOP_CONST_U8(), ITY_U8(), const_args, IDATA_CONST_U8(), expr_a(a, lhs_eid), 0, String::from(""));
+                lhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, lhs_eid), 0, String::from(""));
             }
-            if op != BINOP_SHL() && op != BINOP_SHR() && expr_tag(a, rhs_eid) == EXPR_LIT_INT() {
+            if op != BINOP_SHL() && op != BINOP_SHR() && expr_is_const_int(a, rhs_eid) {
                 let const_args: Vec<i64> = Vec::new();
-                rhs_id = lctx_emit(ctx, IOP_CONST_U8(), ITY_U8(), const_args, IDATA_CONST_U8(), expr_a(a, rhs_eid), 0, String::from(""));
+                rhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, rhs_eid), 0, String::from(""));
             }
         }
         let iop: i64 = binop_opcode(op, operand_ty);
@@ -2101,10 +2127,18 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             set_args.push(val_id);
             return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), set_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_set_val"));
         }
-        let rhs_id: i64 = lower_expr(ctx, rhs_eid);
+        let mut rhs_id: i64 = lower_expr(ctx, rhs_eid);
         if lhs_tag == EXPR_IDENT() {
             let name_sid: i64 = expr_a(a, lhs_eid);
             let name: String = arena_str(a, name_sid);
+            let current_id: i64 = lctx_lookup(ctx, name);
+            let current_ty: i64 = lctx_inst_ty(ctx, current_id);
+            if (current_ty == ITY_U8() || current_ty == ITY_I32()) && expr_is_const_int(a, rhs_eid) {
+                let narrow_op: i64 = if current_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
+                let narrow_data: i64 = if current_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
+                let narrow_args: Vec<i64> = Vec::new();
+                rhs_id = lctx_emit(ctx, narrow_op, current_ty, narrow_args, narrow_data, expr_const_int_value(a, rhs_eid), 0, String::from(""));
+            }
             lctx_assign(ctx, name, rhs_id);
         }
         return rhs_id;
@@ -3142,10 +3176,13 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
                 if atag == TY_NAMED() {
                     let type_name_sid: i64 = type_a(a, ann_tid);
                     let type_name: String = arena_str(a, type_name_sid);
-                    if type_name == String::from("u8") && expr_tag(a, init_eid) == EXPR_LIT_INT() {
-                        let literal_value: i64 = expr_a(a, init_eid);
+                    if type_name == String::from("u8") && expr_is_const_int(a, init_eid) {
                         let const_args: Vec<i64> = Vec::new();
-                        val = lctx_emit(ctx, IOP_CONST_U8(), ITY_U8(), const_args, IDATA_CONST_U8(), literal_value, 0, String::from(""));
+                        val = lctx_emit(ctx, IOP_CONST_U8(), ITY_U8(), const_args, IDATA_CONST_U8(), expr_const_int_value(a, init_eid), 0, String::from(""));
+                    }
+                    if type_name == String::from("i32") && expr_is_const_int(a, init_eid) {
+                        let const_args: Vec<i64> = Vec::new();
+                        val = lctx_emit(ctx, IOP_CONST_I32(), ITY_I32(), const_args, IDATA_CONST_I32(), expr_const_int_value(a, init_eid), 0, String::from(""));
                     }
                     if type_name == String::from("u64") && lctx_inst_ty(ctx, val) != ITY_U64() {
                         let cast_args: Vec<i64> = Vec::new();

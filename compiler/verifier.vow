@@ -223,6 +223,8 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 func_has_integer_shift_op(f, IOP_SHR(), ITY_I64()),
                 func_has_integer_shift_op(f, IOP_SHL(), ITY_U64()),
                 func_has_integer_shift_op(f, IOP_SHR(), ITY_U64()),
+                func_has_integer_shift_op(f, IOP_SHL(), ITY_I32()),
+                func_has_integer_shift_op(f, IOP_SHR(), ITY_I32()),
                 vec_max, model_string_max, hashmap_max, btreemap_max
             );
             let empty_modelable: Vec<i64> = Vec::new();

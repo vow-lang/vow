@@ -168,6 +168,24 @@ fn expr_a(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 1] }
 fn expr_b(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 2] }
 fn expr_c(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 3] }
 
+fn expr_is_const_int(a: AstArena, eid: i64) -> bool {
+    if expr_tag(a, eid) == EXPR_LIT_INT() { return true; }
+    if expr_tag(a, eid) == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return expr_tag(a, expr_b(a, eid)) == EXPR_LIT_INT();
+    }
+    false
+}
+
+fn expr_const_int_value(a: AstArena, eid: i64) -> i64 {
+    if expr_tag(a, eid) == EXPR_LIT_INT() {
+        return expr_a(a, eid);
+    }
+    if expr_tag(a, eid) == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return 0 - expr_a(a, expr_b(a, eid));
+    }
+    0
+}
+
 fn arena_add_type(a: AstArena, tag: i64, av: i64, bv: i64, span: i64) -> i64 {
     let tid: i64 = a.type_data.len() / 4;
     a.type_data.push(tag);

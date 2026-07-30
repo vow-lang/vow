@@ -1,0 +1,18 @@
+// TEST: stdout "1\n42\n"
+module I32CallArgLiteral
+
+fn id_i32(x: i32) -> i32 {
+    x
+}
+
+fn add_one_i32(x: i32) -> i32 {
+    x + 1
+}
+
+fn main() -> i32 [io] {
+    print_i64(id_i32(1) as i64);
+    print_str(String::from("\n"));
+    print_i64(add_one_i32(41) as i64);
+    print_str(String::from("\n"));
+    0
+}

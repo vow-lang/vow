@@ -1331,6 +1331,8 @@ fn lower_inst(
                         builder.ins().sextend(types::I64, v)
                     } else if actual_ty == types::I8 && expected_ty == types::I64 {
                         builder.ins().uextend(types::I64, v)
+                    } else if actual_ty == types::I64 && expected_ty == types::I32 {
+                        builder.ins().ireduce(types::I32, v)
                     } else {
                         v
                     }
@@ -2078,6 +2080,23 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }));
         return sig;
     }
+    let i32_narrow_source_ty =
+        if sym.starts_with("__vow_i64_to_i32_") || sym.starts_with("__vow_u64_to_i32_") {
+            Some(types::I64)
+        } else if sym.starts_with("__vow_u32_to_i32_") {
+            Some(types::I32)
+        } else {
+            None
+        };
+    if let Some(source_ty) = i32_narrow_source_ty {
+        sig.params.push(AbiParam::new(source_ty));
+        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
+            types::I64
+        } else {
+            types::I32
+        }));
+        return sig;
+    }
     if matches!(
         sym,
         "__vow_add_sat_u8" | "__vow_sub_sat_u8" | "__vow_mul_sat_u8"
@@ -2355,7 +2374,8 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_string_parse_i64_opt"
         | "__vow_string_parse_u64_opt"
-        | "__vow_string_parse_u8_opt" => {
+        | "__vow_string_parse_u8_opt"
+        | "__vow_string_parse_i32_opt" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
         }

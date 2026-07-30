@@ -118,6 +118,16 @@ fn is_u8_numeric_intrinsic(name: String) -> bool {
     || name == String::from("__vow_mul_sat_u8")
 }
 
+fn is_i32_narrow_intrinsic(name: String) -> bool {
+    str_starts_with(name, String::from("__vow_i64_to_i32_"))
+    || str_starts_with(name, String::from("__vow_u32_to_i32_"))
+    || str_starts_with(name, String::from("__vow_u64_to_i32_"))
+}
+
+fn is_i32_numeric_intrinsic(name: String) -> bool {
+    is_i32_narrow_intrinsic(name)
+}
+
 fn vec_contains_i64(v: Vec<i64>, val: i64) -> bool {
     let n: i64 = v.len();
     let mut i: i64 = 0;
@@ -144,7 +154,7 @@ fn is_string_fresh_helper(name: String) -> bool {
 }
 
 fn is_known_builtin(name: String) -> bool {
-    if is_string_fresh_helper(name) || is_u8_numeric_intrinsic(name) { return true; }
+    if is_string_fresh_helper(name) || is_u8_numeric_intrinsic(name) || is_i32_numeric_intrinsic(name) { return true; }
     name == String::from("__vow_vec_new")
     || name == String::from("__vow_vec_new_val")
     || name == String::from("__vow_vec_new_in_arena")
@@ -185,6 +195,7 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_string_from_i64")
     || name == String::from("__vow_string_from_i64_in_arena")
     || name == String::from("__vow_string_parse_u8_opt")
+    || name == String::from("__vow_string_parse_i32_opt")
     || name == String::from("__vow_string_print")
     || name == String::from("__vow_map_new")
     || name == String::from("__vow_map_new_in_arena")
@@ -845,7 +856,9 @@ fn is_option_returning_extern(name: String) -> bool {
     name == String::from("__vow_string_parse_i64_opt")
     || name == String::from("__vow_string_parse_u64_opt")
     || name == String::from("__vow_string_parse_u8_opt")
+    || name == String::from("__vow_string_parse_i32_opt")
     || (is_u8_narrow_intrinsic(name) && str_ends_with(name, String::from("_try")))
+    || (is_i32_narrow_intrinsic(name) && str_ends_with(name, String::from("_try")))
     || name == String::from("__vow_btreemap_insert")
     || name == String::from("__vow_btreemap_get")
 }
@@ -1042,6 +1055,49 @@ fn emit_u8_numeric_intrinsic(out: String, inst: IrInst) {
         line.push_str(String::from("(uint16_t)v")); line.push_str(b_s);
         line.push_str(String::from(");\n"));
     }
+    out.push_str(line);
+}
+
+fn emit_i32_numeric_intrinsic(out: String, inst: IrInst) {
+    let name: String = inst.ds;
+    let id_s: String = i64_to_str(inst.id);
+    let a_s: String = i64_to_str(inst.args[0]);
+    if str_ends_with(name, String::from("_try")) {
+        let line: String = String::from("  v");
+        line.push_str(id_s);
+        line.push_str(String::from(".tag = (v"));
+        line.push_str(a_s);
+        if str_starts_with(name, String::from("__vow_i")) {
+            line.push_str(String::from(" >= -2147483648 && v"));
+            line.push_str(a_s);
+        }
+        line.push_str(String::from(" <= 2147483647); v"));
+        line.push_str(id_s);
+        line.push_str(String::from(".payload = v"));
+        line.push_str(id_s);
+        line.push_str(String::from(".tag ? (int32_t)v"));
+        line.push_str(a_s);
+        line.push_str(String::from(" : 0;\n"));
+        out.push_str(line);
+        return;
+    }
+    if str_ends_with(name, String::from("_wrap")) {
+        out.push_str(str6(String::from("  v"), id_s, String::from(" = (int32_t)v"), a_s, String::from(";"), String::from("\n")));
+        return;
+    }
+    let line: String = String::from("  v");
+    line.push_str(id_s);
+    line.push_str(String::from(" = "));
+    if str_starts_with(name, String::from("__vow_i")) {
+        line.push_str(String::from("v")); line.push_str(a_s);
+        line.push_str(String::from(" < -2147483648 ? -2147483648 : (v")); line.push_str(a_s);
+        line.push_str(String::from(" > 2147483647 ? 2147483647 : (int32_t)v")); line.push_str(a_s);
+        line.push_str(String::from(")"));
+    } else {
+        line.push_str(String::from("v")); line.push_str(a_s);
+        line.push_str(String::from(" > 2147483647 ? 2147483647 : (int32_t)v")); line.push_str(a_s);
+    }
+    line.push_str(String::from(";\n"));
     out.push_str(line);
 }
 
@@ -1308,6 +1364,10 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
             let ds: String = inst.ds;
             if is_u8_numeric_intrinsic(ds) {
                 emit_u8_numeric_intrinsic(out, inst);
+                return;
+            }
+            if is_i32_numeric_intrinsic(ds) {
+                emit_i32_numeric_intrinsic(out, inst);
                 return;
             }
             if str_starts_with(ds, String::from("__vow_vec_")) {
@@ -2577,6 +2637,7 @@ fn scan_shift_needs_in_fns(fns: Vec<IrFunction>, start: i64, end: i64, target_op
 }
 
 fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_shr_u64: i64,
+                              need_shl_i32: i64, need_shr_i32: i64,
                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let out: String = String::from("");
     out.push_str(String::from("#include <stdint.h>\n"));
@@ -2647,14 +2708,31 @@ fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64
         out.push_str(String::from("  return value >> (count & 63ULL);\n"));
         out.push_str(String::from("}\n"));
     }
-    if need_shl_i64 != 0 || need_shr_i64 != 0 || need_shl_u64 != 0 || need_shr_u64 != 0 {
+    if need_shl_i32 != 0 {
+        out.push_str(String::from("static inline int32_t __vow_shl_i32(int32_t value, int32_t count) {\n"));
+        out.push_str(String::from("  uint32_t shift = ((uint32_t)count) & 31;\n"));
+        out.push_str(String::from("  return (int32_t)(((uint32_t)value) << shift);\n"));
+        out.push_str(String::from("}\n"));
+    }
+    if need_shr_i32 != 0 {
+        out.push_str(String::from("static inline int32_t __vow_shr_i32(int32_t value, int32_t count) {\n"));
+        out.push_str(String::from("  uint32_t shift = ((uint32_t)count) & 31;\n"));
+        out.push_str(String::from("  uint32_t raw_bits = (uint32_t)value;\n"));
+        out.push_str(String::from("  uint32_t logical = raw_bits >> shift;\n"));
+        out.push_str(String::from("  uint32_t ones = ~((uint32_t)0);\n"));
+        out.push_str(String::from("  uint32_t sign_fill = value < 0 ? ((uint32_t)~(ones >> shift)) : (uint32_t)0;\n"));
+        out.push_str(String::from("  return (int32_t)(logical | sign_fill);\n"));
+        out.push_str(String::from("}\n"));
+    }
+    if need_shl_i64 != 0 || need_shr_i64 != 0 || need_shl_u64 != 0 || need_shr_u64 != 0 || need_shl_i32 != 0 || need_shr_i32 != 0 {
         out.push_byte(10);
     }
     out
 }
 
-fn cemit_preamble(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_shr_u64: i64) -> String {
-    cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX(), VOW_BTREEMAP_MAX())
+fn cemit_preamble(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_shr_u64: i64,
+                   need_shl_i32: i64, need_shr_i32: i64) -> String {
+    cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, need_shl_i32, need_shr_i32, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX(), VOW_BTREEMAP_MAX())
 }
 
 fn string_max_for_literals(m: IrModule, string_max: i64) -> i64 {
@@ -2714,7 +2792,9 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
     let need_shr_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR(), ITY_I64());
     let need_shl_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL(), ITY_U64());
     let need_shr_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR(), ITY_U64());
-    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, model_string_max, hashmap_max, btreemap_max);
+    let need_shl_i32: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL(), ITY_I32());
+    let need_shr_i32: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR(), ITY_I32());
+    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, need_shl_i32, need_shr_i32, vec_max, model_string_max, hashmap_max, btreemap_max);
 
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let empty_modelable: Vec<i64> = Vec::new();
@@ -2758,7 +2838,9 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     let need_shr_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR(), ITY_I64());
     let need_shl_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL(), ITY_U64());
     let need_shr_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR(), ITY_U64());
-    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, model_string_max, hashmap_max, btreemap_max);
+    let need_shl_i32: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL(), ITY_I32());
+    let need_shr_i32: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR(), ITY_I32());
+    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, need_shl_i32, need_shr_i32, vec_max, model_string_max, hashmap_max, btreemap_max);
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
 
     let mut ci: i64 = 0;

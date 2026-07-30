@@ -383,7 +383,9 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
                 && (name == "__vow_string_parse_i64_opt"
                     || name == "__vow_string_parse_u64_opt"
                     || name == "__vow_string_parse_u8_opt"
+                    || name == "__vow_string_parse_i32_opt"
                     || (name.contains("_to_u8_") && name.ends_with("_try"))
+                    || (name.contains("_to_i32_") && name.ends_with("_try"))
                     || name == "__vow_btreemap_insert"
                     || name == "__vow_btreemap_get")
             {
@@ -422,7 +424,10 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
 // ---------------------------------------------------------------------------
 
 fn is_known_builtin(name: &str) -> bool {
-    if is_string_fresh_helper(name) || is_u8_numeric_intrinsic(name) {
+    if is_string_fresh_helper(name)
+        || is_u8_numeric_intrinsic(name)
+        || is_i32_numeric_intrinsic(name)
+    {
         return true;
     }
 
@@ -470,6 +475,7 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_parse_i64_opt"
             | "__vow_string_parse_u64_opt"
             | "__vow_string_parse_u8_opt"
+            | "__vow_string_parse_i32_opt"
             | "__vow_string_print"
             | "__vow_map_new"
             | "__vow_map_new_in_arena"
@@ -496,6 +502,12 @@ fn is_u8_numeric_intrinsic(name: &str) -> bool {
             name,
             "__vow_add_sat_u8" | "__vow_sub_sat_u8" | "__vow_mul_sat_u8"
         )
+}
+
+fn is_i32_numeric_intrinsic(name: &str) -> bool {
+    name.starts_with("__vow_")
+        && name.contains("_to_i32_")
+        && (name.ends_with("_try") || name.ends_with("_wrap") || name.ends_with("_sat"))
 }
 
 fn is_reserved_verifier_symbol(name: &str) -> bool {
@@ -1142,6 +1154,34 @@ fn emit_inst(
                         "  uint16_t __sat_{id} = {expression};\n  v{id} = __sat_{id} > 255 ? 255 : (uint8_t)__sat_{id};\n"
                     ));
                 }
+            }
+        }
+
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(name) if is_i32_numeric_intrinsic(name)) =>
+        {
+            let InstData::CallExtern(name) = &inst.data else {
+                unreachable!()
+            };
+            let a = inst.args[0].0;
+            if name.ends_with("_try") {
+                let guard = if name.starts_with("__vow_i") {
+                    format!("v{a} >= -2147483648 && v{a} <= 2147483647")
+                } else {
+                    format!("v{a} <= 2147483647")
+                };
+                out.push_str(&format!(
+                    "  v{id}.tag = ({guard});\n  v{id}.payload = v{id}.tag ? (int32_t)v{a} : 0;\n"
+                ));
+            } else if name.ends_with("_wrap") {
+                out.push_str(&format!("  v{id} = (int32_t)v{a};\n"));
+            } else if name.starts_with("__vow_i") {
+                out.push_str(&format!(
+                    "  v{id} = v{a} < -2147483648 ? -2147483648 : (v{a} > 2147483647 ? 2147483647 : (int32_t)v{a});\n"
+                ));
+            } else {
+                out.push_str(&format!(
+                    "  v{id} = v{a} > 2147483647 ? 2147483647 : (int32_t)v{a};\n"
+                ));
             }
         }
 
@@ -2274,41 +2314,100 @@ pub fn emit_c_function_full(
     out
 }
 
-#[derive(Default)]
-struct ShiftNeeds {
-    shl_i64: bool,
-    shr_i64: bool,
-    shl_u64: bool,
-    shr_u64: bool,
-}
+/// Set of `(is_shl, signedness, width)` shift-helper flavors actually used by
+/// the module. `W8` is excluded — `u8` shifts are modelled inline with an
+/// explicit range assert (see the `Opcode::Shl | Opcode::Shr` arm below), not
+/// via a generated helper.
+type ShiftNeeds = std::collections::BTreeSet<(bool, IntegerSignedness, IntegerWidth)>;
 
 fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
-    let mut needs = ShiftNeeds::default();
+    let mut needs = ShiftNeeds::new();
     for func in funcs {
         for block in &func.blocks {
             for inst in &block.insts {
-                match inst.opcode {
-                    Opcode::Shl | Opcode::Shr => {
-                        if let InstData::Integer(IntegerType {
-                            width: IntegerWidth::W64,
-                            signedness,
-                        }) = inst.data
-                        {
-                            match (inst.opcode, signedness) {
-                                (Opcode::Shl, IntegerSignedness::Signed) => needs.shl_i64 = true,
-                                (Opcode::Shr, IntegerSignedness::Signed) => needs.shr_i64 = true,
-                                (Opcode::Shl, IntegerSignedness::Unsigned) => needs.shl_u64 = true,
-                                (Opcode::Shr, IntegerSignedness::Unsigned) => needs.shr_u64 = true,
-                                _ => {}
-                            }
-                        }
-                    }
-                    _ => {}
+                let is_shl = match inst.opcode {
+                    Opcode::Shl => true,
+                    Opcode::Shr => false,
+                    _ => continue,
+                };
+                if let InstData::Integer(IntegerType { width, signedness }) = inst.data
+                    && width != IntegerWidth::W8
+                {
+                    needs.insert((is_shl, signedness, width));
                 }
             }
         }
     }
     needs
+}
+
+fn c_uint_type(width: IntegerWidth) -> &'static str {
+    match width {
+        IntegerWidth::W8 => "uint8_t",
+        IntegerWidth::W16 => "uint16_t",
+        IntegerWidth::W32 => "uint32_t",
+        IntegerWidth::W64 => "uint64_t",
+        IntegerWidth::W128 => "unsigned __int128",
+    }
+}
+
+fn c_int_type(width: IntegerWidth) -> &'static str {
+    match width {
+        IntegerWidth::W8 => "int8_t",
+        IntegerWidth::W16 => "int16_t",
+        IntegerWidth::W32 => "int32_t",
+        IntegerWidth::W64 => "int64_t",
+        IntegerWidth::W128 => "__int128",
+    }
+}
+
+/// Emits one `__vow_{shl,shr}_{i,u}<bits>` helper. Mirrors hardware shift
+/// semantics for any shift count (masked to `width - 1`, matching Cranelift's
+/// `ishl`/`sshr`/`ushr`) rather than C's undefined behavior for
+/// out-of-range/negative shift counts.
+fn emit_shift_helper(
+    out: &mut String,
+    is_shl: bool,
+    signedness: IntegerSignedness,
+    width: IntegerWidth,
+) {
+    let bits = width.bits();
+    let mask = bits - 1;
+    let uint_ty = c_uint_type(width);
+    let int_ty = c_int_type(width);
+    let prefix = match signedness {
+        IntegerSignedness::Signed => "i",
+        IntegerSignedness::Unsigned => "u",
+    };
+    let op = if is_shl { "shl" } else { "shr" };
+    match (is_shl, signedness) {
+        (true, IntegerSignedness::Signed) => out.push_str(&format!(
+            "static inline {int_ty} __vow_{op}_{prefix}{bits}({int_ty} value, {int_ty} count) {{\n\
+             \x20 {uint_ty} shift = (({uint_ty})count) & {mask};\n\
+             \x20 return ({int_ty})((({uint_ty})value) << shift);\n\
+             }}\n"
+        )),
+        (false, IntegerSignedness::Signed) => out.push_str(&format!(
+            "static inline {int_ty} __vow_{op}_{prefix}{bits}({int_ty} value, {int_ty} count) {{\n\
+             \x20 {uint_ty} shift = (({uint_ty})count) & {mask};\n\
+             \x20 {uint_ty} raw_bits = ({uint_ty})value;\n\
+             \x20 {uint_ty} logical = raw_bits >> shift;\n\
+             \x20 {uint_ty} ones = ~(({uint_ty})0);\n\
+             \x20 {uint_ty} sign_fill = value < 0 ? (({uint_ty})~(ones >> shift)) : ({uint_ty})0;\n\
+             \x20 return ({int_ty})(logical | sign_fill);\n\
+             }}\n"
+        )),
+        (true, IntegerSignedness::Unsigned) => out.push_str(&format!(
+            "static inline {uint_ty} __vow_{op}_{prefix}{bits}({uint_ty} value, {uint_ty} count) {{\n\
+             \x20 return value << (count & {mask});\n\
+             }}\n"
+        )),
+        (false, IntegerSignedness::Unsigned) => out.push_str(&format!(
+            "static inline {uint_ty} __vow_{op}_{prefix}{bits}({uint_ty} value, {uint_ty} count) {{\n\
+             \x20 return value >> (count & {mask});\n\
+             }}\n"
+        )),
+    }
 }
 
 fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits) {
@@ -2350,40 +2449,10 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
         "typedef struct {{ int64_t len; int64_t keys[{btreemap_max}]; int64_t vals[{btreemap_max}]; }} __vow_btreemap_t;\n",
     ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
-    if shifts.shl_i64 {
-        out.push_str(
-            "static inline int64_t __vow_shl_i64(int64_t value, int64_t count) {\n\
-             \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
-             \x20 return (int64_t)(((uint64_t)value) << shift);\n\
-             }\n",
-        );
+    for &(is_shl, signedness, width) in shifts {
+        emit_shift_helper(out, is_shl, signedness, width);
     }
-    if shifts.shr_i64 {
-        out.push_str(
-            "static inline int64_t __vow_shr_i64(int64_t value, int64_t count) {\n\
-             \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
-             \x20 uint64_t bits = (uint64_t)value;\n\
-             \x20 uint64_t logical = bits >> shift;\n\
-             \x20 uint64_t sign_fill = value < 0 ? ~(~0ULL >> shift) : 0ULL;\n\
-             \x20 return (int64_t)(logical | sign_fill);\n\
-             }\n",
-        );
-    }
-    if shifts.shl_u64 {
-        out.push_str(
-            "static inline uint64_t __vow_shl_u64(uint64_t value, uint64_t count) {\n\
-             \x20 return value << (count & 63ULL);\n\
-             }\n",
-        );
-    }
-    if shifts.shr_u64 {
-        out.push_str(
-            "static inline uint64_t __vow_shr_u64(uint64_t value, uint64_t count) {\n\
-             \x20 return value >> (count & 63ULL);\n\
-             }\n",
-        );
-    }
-    if shifts.shl_i64 || shifts.shr_i64 || shifts.shl_u64 || shifts.shr_u64 {
+    if !shifts.is_empty() {
         out.push('\n');
     }
 }
