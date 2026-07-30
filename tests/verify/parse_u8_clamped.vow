@@ -4,10 +4,20 @@ module ParseU8Clamped
 fn parse_u8_clamped(s: String) -> u8 vow {
   ensures: result <= 200
 } {
+  let mut result: u8 = 0;
   match parse_u8(s) {
-    Option::Some(v) => if v > 200 { 200 } else { v },
-    Option::None => 0,
+    Option::Some(v) => {
+      if v > 200 {
+        result = 200;
+      } else {
+        result = v;
+      }
+    },
+    Option::None => {
+      result = 0;
+    },
   }
+  result
 }
 
 fn main() -> i32 [io] {
