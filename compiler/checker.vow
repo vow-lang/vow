@@ -922,11 +922,15 @@ fn expr_diverges(e: CheckEnv, m: Module, eid: i64) -> bool {
 }
 
 fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_tag: i64) {
-    // Literal values are stored as i64 (the self-hosted host's native width).
-    // For 64+ bit targets a signed i64 comparison can't distinguish an
-    // in-range value from two's-complement wraparound, so skip the check —
-    // the true bounds aren't representable here.
-    if integer_tag_width(target_tag) >= 64 {
+    let is_unsigned: bool = target_tag >= CTY_U8() && target_tag <= CTY_U128();
+    // Literal values are stored as i64 (the self-hosted host's native
+    // width). A bare (non-negated) literal for a 64+ bit unsigned target
+    // whose magnitude exceeds i64::MAX wraps to a negative i64 during
+    // lexing, indistinguishable here from an in-range value -- skip in
+    // that specific case only. An explicitly negated literal (`-5`) is
+    // never a wraparound artifact (the lexer only emits non-negative
+    // EXPR_LIT_INT tokens), so it's still validated below.
+    if is_unsigned && integer_tag_width(target_tag) >= 64 && expr_tag(a, lit_eid) == EXPR_LIT_INT() && expr_a(a, lit_eid) < 0 {
         return;
     }
     let literal_value: i64 = expr_a(a, lit_eid);
