@@ -15,9 +15,9 @@ fn ring_count(rb: RingBuf) -> i64
 
 ## Contracts
 
-- `ring_new`: `requires: capacity > 0, requires: capacity <= 4`, `ensures: result.count == 0, ensures: result.capacity == capacity`
-- `ring_write`: `requires: rb.count < rb.capacity, requires: rb.write_pos >= 0, requires: rb.write_pos < rb.capacity`, `ensures: result.count == rb.count + 1`
-- `ring_count`: `ensures: result >= 0`
+- `ring_new`: `requires: capacity > 0`, `ensures: result.count == 0, ensures: result.capacity == capacity, ensures: result.data.len() == capacity`
+- `ring_write`: requires a non-negative count, available capacity, a valid write position, and `rb.data.len() == rb.capacity`; ensures count increments and capacity/data length are preserved
+- `ring_count`: `requires: rb.count >= 0`, `ensures: result >= 0`
 
 ## Constraints
 
@@ -28,3 +28,4 @@ fn ring_count(rb: RingBuf) -> i64
 
 - `ring_write` writes at `write_pos`, then `write_pos = (write_pos + 1) % capacity`
 - Vec must be pre-filled to `capacity` size for indexed writes
+- Verifier unwind and Vec-model limits are not source preconditions

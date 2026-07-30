@@ -2,7 +2,8 @@
 
 ## Problem
 
-Implement a function `vec_sum` that sums all elements of a Vec of non-negative integers.
+Implement a function `vec_sum` that computes the wrapping `i64` sum of all
+elements in a Vec.
 
 ## Signature
 
@@ -12,19 +13,18 @@ fn vec_sum(v: Vec<i64>) -> i64
 
 ## Contracts
 
-- `requires: v.len() >= 0` — valid Vec
-- `requires: v.len() <= 8` — bounded for verification
-- `ensures: result >= 0` — sum of non-negative elements is non-negative
-- Loop `invariant: sum >= 0`
+- `vec_sum` is currently uncontracted because Vow cannot yet express a fold over
+  all Vec elements
 - Loop `invariant: i >= 0`
 - Loop `invariant: i <= v.len()`
 
 ## Constraints
 
 - Iterate with index, accumulate sum
-- Elements are assumed non-negative (simplification for verification)
+- Addition uses Vow's normal wrapping `i64` semantics
+- This benchmark is Stretch until the aggregate fold relation is expressible
 
 ## Hints
 
 - Start `sum = 0`, add `v[i]` each iteration
-- The invariant `sum >= 0` holds because each element contributes non-negatively
+- Verifier unwind and Vec-model limits are not source preconditions

@@ -1,8 +1,7 @@
 module VecSum
 
 fn make_vec(n: i64) -> Vec<i64> vow {
-  requires: n >= 0,
-  requires: n <= 8
+  requires: n >= 0
 } {
   let v: Vec<i64> = Vec::new();
   let mut i: i64 = 0;
@@ -16,15 +15,10 @@ fn make_vec(n: i64) -> Vec<i64> vow {
   v
 }
 
-fn vec_sum(v: Vec<i64>) -> i64 vow {
-  requires: v.len() >= 0,
-  requires: v.len() <= 8,
-  ensures: result >= 0
-} {
+fn vec_sum(v: Vec<i64>) -> i64 {
   let mut sum: i64 = 0;
   let mut i: i64 = 0;
   while i < v.len() vow {
-    invariant: sum >= 0,
     invariant: i >= 0,
     invariant: i <= v.len()
   } {

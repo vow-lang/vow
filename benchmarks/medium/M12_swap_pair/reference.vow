@@ -15,8 +15,7 @@ fn select_second(a: i64, b: i64) -> i64 vow {
 fn sum_pair(a: i64, b: i64) -> i64 vow {
   requires: a >= 0,
   requires: b >= 0,
-  requires: a <= 1000,
-  requires: b <= 1000,
+  requires: a <= 9223372036854775807 - b,
   ensures: result == a + b
 } {
   a + b

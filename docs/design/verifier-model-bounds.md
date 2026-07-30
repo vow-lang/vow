@@ -33,6 +33,13 @@ If the answer is "no, something in the language would have to change," that
 something is a leak and does not belong in the language. The bounded model
 checker we use today (ESBMC) must be swappable for a stronger backend with **no
 edits to any `.vow` source, any contract, or any user-facing CLI surface.**
+This is a source-contract portability test, not a claim that today's
+`Verified` status covers executions outside ESBMC's configured model.
+
+The rule applies equally to scalar parameters, collection lengths and
+capacities, indices, and struct fields. They may be constrained when the
+algorithm or representation genuinely requires it; they may not be capped to
+fit an unwind limit, a fixed collection model, or a smaller solver state space.
 
 ## What was wrong
 
@@ -70,8 +77,7 @@ were never language properties.
 2. **Keep a single safe internal default per collection type**, passed to ESBMC
    by the verifier. These defaults are not user-tunable and are not part of the
    language. The current values are `Vec` 128, `String` 256, `HashMap` 64,
-   `BTreeMap` 64 — chosen because they verify the entire reference + benchmark
-   corpus and the self-hosted compiler.
+   `BTreeMap` 64 — internal engineering defaults for the current verifier.
 3. **Keep automatic, invisible per-function widening** where the model *must*
    accommodate static content: a string literal longer than the default
    `String` capacity transparently raises that function's `String` model size

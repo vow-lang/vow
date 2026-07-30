@@ -2,6 +2,24 @@
 
 Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.
 
+## Semantic Contracts Are Backend-Independent
+
+A contract states the function's real semantic domain and result. It does not
+state the limits of the tool currently used to check it. Replacing ESBMC with a
+stronger verifier must not require editing Vow source contracts.
+
+Lengths, capacities, indices, and struct fields may appear in contracts when
+they express a genuine algorithmic constraint or representation invariant. For
+example, an index may need to be within a vector's length, paired inputs may
+need equal lengths, or a ring buffer may need to be non-full before a write.
+They must not be capped merely because ESBMC uses a finite collection model or
+because a smaller struct state space is easier to solve.
+
+The same distinction applies to numeric bounds. Exact overflow guards and real
+problem-domain restrictions are semantic; unwind caps and arbitrary
+solver-friendly ranges are not. If the current verifier cannot establish an
+honest contract, report that limitation outside the contract.
+
 ## Verification Pipeline
 
 Codegen (Cranelift) and verification run in parallel:
@@ -15,7 +33,7 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`
+- Verification strategy: **incremental BMC** (`--incremental-bmc`) — base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC completes the configured model checks; otherwise the result is `unknown`. `proven` describes the configured verification model, including its finite unwind and collection capacities, not executions outside that model.
 - Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
@@ -39,7 +57,7 @@ capacity above only describes how far the *bounded* model checker reasons. The
 language and its contracts are deliberately decoupled from what any particular
 prover can prove: replace ESBMC with a stronger (or unbounded) checker and the
 same source, the same contracts, and the same CLI keep working — the only
-difference is that proof covers more (or all) of the state space. For this
+difference is that the verifier can cover more of the state space. For this
 reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.
 `requires: v.len() <= 128`); see "Verification-Driven Bounds (Anti-Pattern)"
 below and `docs/design/verifier-model-bounds.md`.
@@ -316,7 +334,7 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 } { ... }
 ```
 
-Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic, bounded collection models) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
 
 ## Interpreting Counterexamples
 

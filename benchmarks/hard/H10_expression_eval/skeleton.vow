@@ -1,9 +1,7 @@
 module ExpressionEval
 
 fn eval_rpn(ops: Vec<i64>) -> i64 vow {
-  requires: ops.len() >= 1,
-  requires: ops.len() <= 6,
-  ensures: result >= 0
+  requires: ops.len() >= 1
 } {
   0
 }

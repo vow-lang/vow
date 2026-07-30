@@ -13,7 +13,6 @@ fn map_fill(n: i64) -> HashMap<i64, i64>
 ## Contracts
 
 - `requires: n >= 0` — count is non-negative
-- `requires: n <= 4` — bounded (HashMap capacity is limited)
 - `ensures: result.len() == n` — map has exactly `n` entries
 - Loop `invariant: i >= 0`
 - Loop `invariant: i <= n`
@@ -27,3 +26,4 @@ fn map_fill(n: i64) -> HashMap<i64, i64>
 
 - `m.insert(i, i * 10)` with `i` as key guarantees distinct keys
 - Distinct keys means each insert increases length by 1
+- Verifier unwind and HashMap-model limits are not source preconditions

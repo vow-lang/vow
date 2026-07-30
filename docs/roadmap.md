@@ -19,7 +19,7 @@ Achieved:
 - Structured JSON diagnostics with line:col source spans
 - `build`, `verify` subcommands; `--mode debug`, `--no-verify`, `--no-cache`, `--unwind N` flags
 - Verification caching: content-hash-based ESBMC result cache (23s → 0.001s on repeat)
-- Vericoding benchmark: **100% (36/36)** on Vow's original suite; **98.5% (66/67)** on HumanEval
+- Vericoding references: **100% (23/23)** on the current non-Stretch suite
 - 89/89 tests passing, 40/40 CLI compatibility tests
 - Toolchain Skill document, structured `--help`, `--debug-trace`, incremental compilation
 - Bootstrap: `scripts/bootstrap.sh` produces `build/vowc` from Rust stage 0
@@ -29,15 +29,12 @@ Achieved:
 **Strongest current claim:** Vow is an unusually strong agent-first,
 bounded-verification language with an integrated compile/verify/CEGIS loop,
 blame tracking, structured counterexamples, and a self-hosted verified compiler.
-107 benchmarks (40 original + 67 HumanEval); all 103 non-stretch reference
-implementations verified. Contract fidelity is machine-tracked (exact/partial/weak).
-Phase 21.4e–f complete: Claude Sonnet 4 achieves **99.0% combined** (102/103),
-**98.5% HumanEval** (66/67) vs Dafny 82%, Verus 44%, Lean 27%.
-Publication report: `reports/2026-03-22-publication-comparison.md`.
+40 benchmarks; all 23 currently applicable reference implementations verified.
+Contract fidelity is machine-tracked.
 
 Known limitations:
 - Expression-level source spans are unpopulated (function/statement spans work)
-- 2/4 Stretch benchmarks hit ESBMC `--unwind` ceiling (H07, H10)
+- 17 benchmarks are Stretch; 13 were reclassified after verifier-driven source bounds were removed
 - `divide.vow` release build relies on hardware traps (SIGFPE) for division by zero — this is defined behavior, not UB; debug mode provides vow-level diagnostics with blame and captured values
 - Zero public visibility — benchmark results not yet published
 - Spec expressiveness gap: ensures clauses cannot express quantifiers (user-defined function calls now work)
@@ -189,6 +186,13 @@ Bootstrap triple test passes with binary fixed point. 89/89 tests pass.
 ### 21.4 Vericoding comparison with contract fidelity
 
 **Status: COMPLETE (21.4a–f all done).**
+
+> **Historical experiment, retired 2026-07-30.** The HumanEval corpus,
+> translation scripts, runner branches, and active comparison claims described
+> below were removed from the repository. Their generated contracts included
+> verifier-driven numeric and collection-length bounds, contrary to Vow's
+> semantic-contract policy. The text below is retained only as a record of work
+> performed in March 2026; its paths and commands are no longer live.
 
 **21.4a Infrastructure (COMPLETE).** `contract_fidelity` field added to all
 meta.toml files, `BenchmarkInfo`, `BenchmarkResult`. `--suite` flag
@@ -477,10 +481,11 @@ until a concrete verification need exceeds ESBMC's capabilities.
 
 ---
 
-*This document captures the forward-looking roadmap as of 22 March 2026.
-Phase 21 critical path: 21.1 → 21.4 → 21.7 (publish direct comparison).
-Parallel: 21.3 → 21.6 → 21.8 (publish dual-track update). 21.1–21.4 are
-complete (107 benchmarks, 102/103 verified by Sonnet 4, publication report
-generated). Next: 21.7 (publish). Phase 22 improves agent ergonomics.
+*This document captures the forward-looking roadmap as of 22 March 2026,
+with current-state corrections through 30 July 2026. Phase 21 critical path:
+21.1 → 21.4 → 21.7 (publish direct comparison). Parallel: 21.3 → 21.6 → 21.8
+(publish dual-track update). The HumanEval portion of 21.4 was retired; the
+supported corpus is the original 40-benchmark suite. Next: 21.7 (publish).
+Phase 22 improves agent ergonomics.
 Phase 23 is toolchain polish. Phases 24–25 are demand-driven. If a phase
 isn't earning its keep, cut it.*

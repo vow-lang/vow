@@ -12,8 +12,6 @@ fn vec_count_pos(v: Vec<i64>) -> i64
 
 ## Contracts
 
-- `requires: v.len() >= 0`
-- `requires: v.len() <= 8` — bounded for verification
 - `ensures: result >= 0` — count is non-negative
 - `ensures: result <= v.len()` — count is at most the Vec length
 - Loop `invariant: count >= 0`
@@ -29,3 +27,4 @@ fn vec_count_pos(v: Vec<i64>) -> i64
 
 - `count` starts at 0 and is incremented at most once per iteration
 - The invariant `count <= i` ensures `count <= v.len()` after the loop
+- Verifier unwind and Vec-model limits are not source preconditions

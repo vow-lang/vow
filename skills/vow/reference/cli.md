@@ -443,8 +443,8 @@ For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inpu
 | Status          | Meaning                                              |
 |-----------------|------------------------------------------------------|
 | `not_verified`  | Verification not requested (no `--verify` flag)      |
-| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
-| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
+| `proven`        | ESBMC established this contract for the configured bounded verification model (bit-vector encoding, overflow modeled) |
+| `proven-ir`     | ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |

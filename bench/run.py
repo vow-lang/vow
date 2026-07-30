@@ -88,15 +88,6 @@ def cmd_run(args: argparse.Namespace) -> None:
     applicable = [b for b in all_benchmarks if b.expected_status != "Stretch"]
     stretch = [b for b in all_benchmarks if b.expected_status == "Stretch"]
 
-    # Filter by suite
-    suite = getattr(args, "suite", "all")
-    if suite == "vow":
-        applicable = [b for b in applicable if not b.id.startswith("HE")]
-        stretch = [b for b in stretch if not b.id.startswith("HE")]
-    elif suite == "humaneval":
-        applicable = [b for b in applicable if b.id.startswith("HE")]
-        stretch = [b for b in stretch if b.id.startswith("HE")]
-
     # Filter to single benchmark if requested
     if args.benchmark:
         applicable = [b for b in applicable if b.id == args.benchmark]
@@ -281,25 +272,12 @@ def _compute_summary(results: list[dict]) -> dict:
         if r["status"] == "verified":
             by_fidelity[fid]["verified"] += 1
 
-    he_results = [r for r in results if r["benchmark_id"].startswith("HE")]
-    he_total = len(he_results)
-    he_verified = sum(1 for r in he_results if r["status"] == "verified")
-    he_exact = [r for r in he_results if r.get("contract_fidelity") == "exact"]
-    he_exact_total = len(he_exact)
-    he_exact_verified = sum(1 for r in he_exact if r["status"] == "verified")
-
     return {
         "total_applicable": total,
         "verified": verified,
         "verification_rate": verified / total if total else 0,
         "by_difficulty": by_diff,
         "by_fidelity": by_fidelity,
-        "humaneval_total": he_total,
-        "humaneval_verified": he_verified,
-        "humaneval_rate": he_verified / he_total if he_total else 0,
-        "humaneval_exact_total": he_exact_total,
-        "humaneval_exact_verified": he_exact_verified,
-        "humaneval_exact_rate": he_exact_verified / he_exact_total if he_exact_total else 0,
         "mean_cegis_iterations": round(mean_iters, 2),
     }
 
@@ -334,8 +312,6 @@ def main() -> None:
     run_parser.add_argument("--run-id", help="Run ID (default: timestamp)")
     run_parser.add_argument("--compiler", choices=["rust", "self-hosted"], default="rust",
                             help="Which compiler to use for verification (default: rust)")
-    run_parser.add_argument("--suite", choices=["vow", "humaneval", "all"], default="all",
-                            help="Benchmark suite to run: vow (E/M/H), humaneval (HE*), all (default)")
     run_parser.set_defaults(func=cmd_run)
 
     # report

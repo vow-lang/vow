@@ -12,8 +12,6 @@ fn sorted_insert(v: Vec<i64>, val: i64) -> Vec<i64>
 
 ## Contracts
 
-- `requires: v.len() >= 0`
-- `requires: v.len() <= 6` — bounded for verification
 - `ensures: result.len() == v.len() + 1` — one element added
 - Loop `invariant: i >= 0`
 - Loop `invariant: i <= v.len()`
@@ -28,3 +26,4 @@ fn sorted_insert(v: Vec<i64>, val: i64) -> Vec<i64>
 - Find insertion point by scanning until `v[i] >= val`
 - Build new Vec: copy elements before insertion point, insert val, copy remaining
 - Verifying sorted order across the entire Vec is hard for bounded model checking
+- Verifier unwind and Vec-model limits are not source preconditions

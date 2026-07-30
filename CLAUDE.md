@@ -36,9 +36,11 @@ Contracts express **semantic correctness** — what is mathematically required f
 
 - **Write the true contract.** `gcd(a, b)` requires `a >= 0, b >= 0, a + b > 0`. It does not require `a <= 50` — that is a verifier limitation, not a property of Euclid's algorithm.
 - **ESBMC bounds are not contracts.** Bounds like `n <= 10` (to fit within `--unwind 10`) or `a <= 100` (to help the SMT solver) are verification artifacts. They do not belong in `requires`/`ensures` clauses.
+- **Collection and representation facts follow the same rule.** Lengths, capacities, indices, and struct fields belong in contracts only when they express the function's real domain, result, or representation invariant. Never cap a collection, struct, or capacity merely to fit the verifier's model or reduce its state space.
 - **Postconditions should be tight.** `min(a, b)` must ensure `result == a || result == b`, not just `result <= a && result <= b`. A weak postcondition that admits incorrect implementations is a bad contract.
 - **If ESBMC can't prove a correct contract, that's ESBMC's problem.** Mark the function as unverifiable or skip it in the verification pass. Do not distort the contract to accommodate the tool.
 - **Only add bounds that reflect genuine semantic constraints.** Overflow guards (e.g., `requires: x > -9223372036854775807` for `abs`) are legitimate — they prevent undefined behavior in the implementation. Loop iteration caps for ESBMC are not.
+- **Use the backend-independence test.** Replacing ESBMC with a stronger verifier must not require editing a source contract.
 
 ## Pull Requests
 

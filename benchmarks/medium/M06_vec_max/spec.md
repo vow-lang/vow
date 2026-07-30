@@ -2,7 +2,7 @@
 
 ## Problem
 
-Implement a function `vec_max` that finds the maximum element in a non-empty Vec of non-negative integers.
+Implement a function `vec_max` that finds the maximum element in a non-empty Vec.
 
 ## Signature
 
@@ -13,9 +13,8 @@ fn vec_max(v: Vec<i64>) -> i64
 ## Contracts
 
 - `requires: v.len() > 0` — Vec must be non-empty
-- `requires: v.len() <= 8` — bounded for verification
-- `ensures: result >= 0` — max of non-negative elements is non-negative
-- Loop `invariant: best >= 0`
+- `ensures: result >= v[0]` — the maximum is at least the first element
+- Loop `invariant: best >= v[0]`
 - Loop `invariant: i >= 1`
 - Loop `invariant: i <= v.len()`
 
@@ -26,5 +25,6 @@ fn vec_max(v: Vec<i64>) -> i64
 
 ## Hints
 
-- Since all elements are non-negative, `best >= 0` is maintained
+- Since `best` starts at `v[0]` and only increases, `best >= v[0]` is maintained
 - Start loop from `i = 1` since `best` is already `v[0]`
+- Verifier unwind and Vec-model limits are not source preconditions

@@ -13,7 +13,7 @@ fn counter_is_zero(count: i64) -> i64
 
 ## Contracts
 
-- `counter_inc`: `requires: count >= 0, requires: count < max, requires: max <= 100`, `ensures: result == count + 1, ensures: result <= max`
+- `counter_inc`: `requires: count >= 0, requires: count < max`, `ensures: result == count + 1, ensures: result <= max`
 - `counter_is_zero`: `requires: count >= 0`, `ensures: result >= 0, ensures: result <= 1`
 
 ## Constraints

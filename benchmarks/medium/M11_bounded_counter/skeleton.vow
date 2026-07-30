@@ -3,7 +3,6 @@ module BoundedCounter
 fn counter_inc(count: i64, max: i64) -> i64 vow {
   requires: count >= 0,
   requires: count < max,
-  requires: max <= 100,
   ensures: result == count + 1,
   ensures: result <= max
 } {
