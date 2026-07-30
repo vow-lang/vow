@@ -79,7 +79,7 @@ admits only correct implementations:
 
 ```vow
 fn abs(x: i64) -> i64 vow {
-    requires: x > -9223372036854775807,
+    requires: x > -9223372036854775807 - 1,
     ensures: result >= 0,
     ensures: result == x || result == 0 - x
 } {
