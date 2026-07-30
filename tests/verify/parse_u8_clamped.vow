@@ -1,0 +1,16 @@
+// TEST: category postcondition-correct
+module ParseU8Clamped
+
+fn parse_u8_clamped(s: String) -> u8 vow {
+  ensures: result <= 200
+} {
+  match parse_u8(s) {
+    Option::Some(v) => if v > 200 { 200 } else { v },
+    Option::None => 0,
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(parse_u8_clamped(String::from("42")) as i64);
+  0
+}
