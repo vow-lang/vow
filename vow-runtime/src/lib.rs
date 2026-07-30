@@ -2281,6 +2281,35 @@ pub unsafe extern "C" fn __vow_string_parse_u8_opt(s: *const u8) -> *mut u8 {
     unsafe { alloc_option_u8(value) }
 }
 
+unsafe fn alloc_option_i32(value: Option<i32>) -> *mut u8 {
+    let ptr = __vow_vec_new(8, 8) as *mut i64;
+    match value {
+        Some(value) => unsafe {
+            *ptr = 1;
+            *ptr.add(1) = i64::from(value);
+        },
+        None => unsafe {
+            *ptr = 0;
+            *ptr.add(1) = 0;
+        },
+    }
+    ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_parse_i32_opt(s: *const u8) -> *mut u8 {
+    if s.is_null() {
+        return unsafe { alloc_option_i32(None) };
+    }
+    sanitize_on_read(s as usize, 0);
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let value = std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|text| text.trim().parse::<i32>().ok());
+    unsafe { alloc_option_i32(value) }
+}
+
 macro_rules! define_signed_to_u8 {
     ($try_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
         #[unsafe(no_mangle)]
@@ -2366,6 +2395,63 @@ define_unsigned_to_u8!(
     __vow_u128_to_u8_wrap,
     __vow_u128_to_u8_sat,
     u128
+);
+
+macro_rules! define_signed_to_i32 {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $try_name(value: $ty) -> *mut u8 {
+            unsafe { alloc_option_i32(i32::try_from(value).ok()) }
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $wrap_name(value: $ty) -> i32 {
+            value as i32
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $sat_name(value: $ty) -> i32 {
+            value.clamp(i32::MIN as $ty, i32::MAX as $ty) as i32
+        }
+    };
+}
+
+macro_rules! define_unsigned_to_i32 {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $ty:ty) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $try_name(value: $ty) -> *mut u8 {
+            unsafe { alloc_option_i32(i32::try_from(value).ok()) }
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $wrap_name(value: $ty) -> i32 {
+            value as i32
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $sat_name(value: $ty) -> i32 {
+            value.min(i32::MAX as $ty) as i32
+        }
+    };
+}
+
+define_signed_to_i32!(
+    __vow_i64_to_i32_try,
+    __vow_i64_to_i32_wrap,
+    __vow_i64_to_i32_sat,
+    i64
+);
+define_unsigned_to_i32!(
+    __vow_u32_to_i32_try,
+    __vow_u32_to_i32_wrap,
+    __vow_u32_to_i32_sat,
+    u32
+);
+define_unsigned_to_i32!(
+    __vow_u64_to_i32_try,
+    __vow_u64_to_i32_wrap,
+    __vow_u64_to_i32_sat,
+    u64
 );
 
 #[unsafe(no_mangle)]

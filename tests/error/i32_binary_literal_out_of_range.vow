@@ -1,0 +1,9 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 2147483648 does not fit in i32"
+module I32BinaryLiteralOutOfRange
+
+fn main() -> i32 {
+    let value: i32 = 1;
+    let invalid: i32 = value + 2147483648;
+    0
+}

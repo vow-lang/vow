@@ -1,0 +1,8 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 2147483648 does not fit in i32"
+module I32LiteralOutOfRange
+
+fn main() -> i32 {
+    let x: i32 = 2147483648;
+    0
+}

@@ -84,6 +84,16 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "add_sat_u8" => Some(("__vow_add_sat_u8", Ty::U8)),
         "sub_sat_u8" => Some(("__vow_sub_sat_u8", Ty::U8)),
         "mul_sat_u8" => Some(("__vow_mul_sat_u8", Ty::U8)),
+        "parse_i32" => Some(("__vow_string_parse_i32_opt", Ty::Ptr)),
+        "i64_to_i32_try" => Some(("__vow_i64_to_i32_try", Ty::Ptr)),
+        "i64_to_i32_wrap" => Some(("__vow_i64_to_i32_wrap", Ty::I32)),
+        "i64_to_i32_sat" => Some(("__vow_i64_to_i32_sat", Ty::I32)),
+        "u32_to_i32_try" => Some(("__vow_u32_to_i32_try", Ty::Ptr)),
+        "u32_to_i32_wrap" => Some(("__vow_u32_to_i32_wrap", Ty::I32)),
+        "u32_to_i32_sat" => Some(("__vow_u32_to_i32_sat", Ty::I32)),
+        "u64_to_i32_try" => Some(("__vow_u64_to_i32_try", Ty::Ptr)),
+        "u64_to_i32_wrap" => Some(("__vow_u64_to_i32_wrap", Ty::I32)),
+        "u64_to_i32_sat" => Some(("__vow_u64_to_i32_sat", Ty::I32)),
         "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
         "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
         "time_unix" => Some(("__vow_time_unix", Ty::I64)),
@@ -142,7 +152,8 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
             ctx.inst_struct_type.insert(result, "Vec".to_string());
         }
         "parse_u8" | "i16_to_u8_try" | "i32_to_u8_try" | "i64_to_u8_try" | "i128_to_u8_try"
-        | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
+        | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" | "parse_i32"
+        | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
             ctx.inst_struct_type.insert(result, "Option".to_string());
         }
         _ => {}
@@ -950,19 +961,23 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     op,
                     BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr
                 );
-                let has_contextual_u8_literal = (expr_is_integer_literal(lhs) && rhs_ty == Ty::U8)
-                    || (expr_is_integer_literal(rhs) && lhs_ty == Ty::U8);
-                let operand_ty = if has_contextual_u8_literal {
+                let contextual_narrow_literal_ty = |narrow_ty: Ty| {
+                    (expr_is_integer_literal(lhs) && rhs_ty == narrow_ty)
+                        || (expr_is_integer_literal(rhs) && lhs_ty == narrow_ty)
+                };
+                let operand_ty = if contextual_narrow_literal_ty(Ty::U8) {
                     Ty::U8
+                } else if contextual_narrow_literal_ty(Ty::I32) {
+                    Ty::I32
                 } else if is_bitwise && lhs_ty == Ty::I64 {
                     if rhs_ty != Ty::I64 { rhs_ty } else { lhs_ty }
                 } else {
                     lhs_ty
                 };
-                if operand_ty == Ty::U8 {
-                    lhs_id = lower_u8_literal(ctx, lhs, lhs_id);
+                if matches!(operand_ty, Ty::U8 | Ty::I32) {
+                    lhs_id = lower_narrow_literal(ctx, lhs, lhs_id, operand_ty);
                     if !matches!(op, BinOp::Shl | BinOp::Shr) {
-                        rhs_id = lower_u8_literal(ctx, rhs, rhs_id);
+                        rhs_id = lower_narrow_literal(ctx, rhs, rhs_id, operand_ty);
                     }
                 }
                 let (opcode, ty, data) = binop_opcode(*op, &operand_ty);
@@ -1319,9 +1334,15 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Assign { lhs, rhs } => {
-            let new_val = lower_expr(ctx, rhs);
+            let mut new_val = lower_expr(ctx, rhs);
             match &lhs.kind {
                 ExprKind::Ident(name) => {
+                    if let Some(current) = ctx.lookup(name) {
+                        let current_ty = ctx.inst_ty(current);
+                        if matches!(current_ty, Ty::U8 | Ty::I32) {
+                            new_val = lower_narrow_literal(ctx, rhs, new_val, current_ty);
+                        }
+                    }
                     ctx.assign(name, new_val);
                 }
                 ExprKind::FieldAccess { base, field } => {
@@ -3140,20 +3161,52 @@ fn integer_type_for_ir_ty(ty: Ty) -> IntegerType {
 }
 
 fn expr_is_integer_literal(expr: &Expr) -> bool {
-    matches!(expr.kind, ExprKind::Lit(Lit::Int(_)))
+    integer_literal_value(expr).is_some()
 }
 
-fn lower_u8_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId) -> InstId {
-    let ExprKind::Lit(Lit::Int(value)) = expr.kind else {
+/// Extracts the literal integer value of `expr`, unwrapping a single leading
+/// unary negation (e.g. `-2147483648`, parsed as `Neg(Lit(2147483648))`).
+/// Returns `None` for any other expression shape.
+fn integer_literal_value(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Int(v)) => Some(*v as i64),
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => match &operand.kind {
+            ExprKind::Lit(Lit::Int(v)) => Some(-(*v as i64)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Re-lower an integer-literal operand as a `ty`-native constant instead of
+/// the default `ConstI64`, so it shares a Cranelift register width with a
+/// genuinely `ty`-typed sibling operand in the same binary op. Only `U8` and
+/// `I32` are narrow enough to need this today; other widths still default
+/// to `ConstI64` via `lower_expr`.
+fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
+    let Some(value) = integer_literal_value(expr) else {
         return original;
     };
-    ctx.emit(
-        Opcode::ConstU8,
-        Ty::U8,
-        vec![],
-        InstData::ConstU8(value as u8),
-        expr.span,
-    )
+    match ty {
+        Ty::U8 => ctx.emit(
+            Opcode::ConstU8,
+            Ty::U8,
+            vec![],
+            InstData::ConstU8(value as u8),
+            expr.span,
+        ),
+        Ty::I32 => ctx.emit(
+            Opcode::ConstI32,
+            Ty::I32,
+            vec![],
+            InstData::ConstI32(value as i32),
+            expr.span,
+        ),
+        _ => original,
+    }
 }
 
 fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty, InstData) {
@@ -3206,16 +3259,12 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
             if let Some(AstType::Named {
                 name: type_name, ..
             }) = ty
-                && type_name == "u8"
-                && let ExprKind::Lit(Lit::Int(value)) = init.kind
             {
-                val = ctx.emit(
-                    Opcode::ConstU8,
-                    Ty::U8,
-                    vec![],
-                    InstData::ConstU8(value as u8),
-                    span,
-                );
+                if type_name == "u8" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::U8);
+                } else if type_name == "i32" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::I32);
+                }
             }
             if let Some(AstType::Named {
                 name: type_name, ..
