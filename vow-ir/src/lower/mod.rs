@@ -765,27 +765,6 @@ fn block_result_is_coercible_int_marker(block: &Block) -> bool {
     false
 }
 
-/// Peel `{ <marker expr> }` block wrappers down to the innermost expr, so a
-/// match/if arm body like `{ 0 }` still resolves as the literal `0` for
-/// re-narrowing purposes (see the match-merge Upsilon fixup). Mirrors
-/// block_result_is_coercible_int_marker's notion of "the block's value expr".
-fn unwrap_marker_block(expr: &Expr) -> &Expr {
-    if let ExprKind::Block(block) = &expr.kind {
-        if let Some(trailing) = &block.trailing_expr {
-            return unwrap_marker_block(trailing);
-        }
-        if let Some(Stmt::Expr {
-            expr: inner,
-            has_semicolon: false,
-            ..
-        }) = block.stmts.last()
-        {
-            return unwrap_marker_block(inner);
-        }
-    }
-    expr
-}
-
 fn choose_match_result_ty(
     arm_results: &[(BlockId, InstId, Ty, Vec<InstId>)],
     arm_result_markers: &[bool],
@@ -2664,30 +2643,23 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         continue;
                     }
                     let block_idx = arm_block.0 as usize;
-                    let old_arg = ctx.func.blocks[block_idx]
+                    // Locate the arm's own result Upsilon by id rather than assuming
+                    // block position: the "Phis for mutated variables" pass above may
+                    // have already appended extra Upsilons after this arm's own
+                    // [Upsilon, Jump] pair, so it's not reliably the block's tail.
+                    let up_pos = ctx.func.blocks[block_idx]
                         .insts
                         .iter()
-                        .find(|inst| inst.id == up_id)
-                        .map(|inst| inst.args[0]);
-                    let Some(old_arg) = old_arg else { continue };
-                    // The Upsilon's replacement value must be defined *before* the
-                    // Upsilon in instruction order (codegen resolves values
-                    // sequentially), so pop the trailing [Upsilon, Jump] pair, emit
-                    // the narrowed const + a fresh Upsilon in the correct position,
-                    // then restore the original Jump on top.
-                    let jump_inst = ctx.func.blocks[block_idx].insts.pop();
-                    let popped_upsilon = ctx.func.blocks[block_idx].insts.pop();
-                    debug_assert!(
-                        matches!(jump_inst.as_ref().map(|i| i.opcode), Some(Opcode::Jump))
-                            && popped_upsilon.as_ref().map(|i| i.id) == Some(up_id)
-                    );
+                        .position(|inst| inst.id == up_id);
+                    let Some(up_pos) = up_pos else { continue };
+                    let old_arg = ctx.func.blocks[block_idx].insts[up_pos].args[0];
                     ctx.switch_to_block(arm_block);
-                    let narrowed = lower_narrow_literal(
-                        ctx,
-                        unwrap_marker_block(arm_bodies[i]),
-                        old_arg,
-                        phi_ty,
-                    );
+                    let narrowed = lower_narrow_literal(ctx, arm_bodies[i], old_arg, phi_ty);
+                    if narrowed == old_arg {
+                        // arm_bodies[i] isn't a shape integer_literal_value can
+                        // evaluate; leave the original (i64-default) Upsilon as-is.
+                        continue;
+                    }
                     let new_up_id = ctx.emit(
                         Opcode::Upsilon,
                         Ty::Unit,
@@ -2695,9 +2667,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         InstData::PhiTarget(InstId(u32::MAX)),
                         span,
                     );
-                    if let Some(jump_inst) = jump_inst {
-                        ctx.func.blocks[block_idx].insts.push(jump_inst);
-                    }
+                    // lower_narrow_literal's const and the Upsilon above were both
+                    // appended at the block's current tail. Splice them back to
+                    // where the old Upsilon lived so the new value is defined
+                    // before it's referenced, and the block's Jump / any mutation
+                    // Upsilons after it keep their relative order.
+                    let insts = &mut ctx.func.blocks[block_idx].insts;
+                    let new_up_inst = insts.pop().expect("Upsilon just emitted above");
+                    let new_const_inst = insts
+                        .pop()
+                        .expect("const just emitted by lower_narrow_literal");
+                    insts.remove(up_pos);
+                    insts.insert(up_pos, new_up_inst);
+                    insts.insert(up_pos, new_const_inst);
                     arm_results[i].1 = new_up_id;
                 }
                 ctx.switch_to_block(merge_block);
@@ -3293,12 +3275,45 @@ fn integer_literal_value(expr: &Expr) -> Option<i64> {
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
-        } => match &operand.kind {
-            ExprKind::Lit(Lit::Int(v)) => Some(-(*v as i64)),
-            _ => None,
-        },
+        } => integer_literal_value(operand).map(|v| v.wrapping_neg()),
+        ExprKind::BinaryOp { op, lhs, rhs } => {
+            let l = integer_literal_value(lhs)?;
+            let r = integer_literal_value(rhs)?;
+            match op {
+                BinOp::Add | BinOp::AddChecked => Some(l.wrapping_add(r)),
+                BinOp::Sub | BinOp::SubChecked => Some(l.wrapping_sub(r)),
+                BinOp::Mul | BinOp::MulChecked => Some(l.wrapping_mul(r)),
+                BinOp::Div | BinOp::DivChecked => l.checked_div(r),
+                BinOp::Rem | BinOp::RemChecked => l.checked_rem(r),
+                BinOp::BitAnd => Some(l & r),
+                BinOp::BitOr => Some(l | r),
+                BinOp::BitXor => Some(l ^ r),
+                BinOp::Shl => Some(l.wrapping_shl(r as u32)),
+                BinOp::Shr => Some(l.wrapping_shr(r as u32)),
+                _ => None,
+            }
+        }
+        ExprKind::Block(block) => integer_literal_value_from_block(block),
         _ => None,
     }
+}
+
+/// Mirrors block_result_is_coercible_int_marker's notion of "the block's
+/// value expr", but extracts the literal value instead of just checking
+/// markerhood.
+fn integer_literal_value_from_block(block: &Block) -> Option<i64> {
+    if let Some(expr) = &block.trailing_expr {
+        return integer_literal_value(expr);
+    }
+    if let Some(Stmt::Expr {
+        expr,
+        has_semicolon: false,
+        ..
+    }) = block.stmts.last()
+    {
+        return integer_literal_value(expr);
+    }
+    None
 }
 
 /// Re-lower an integer-literal operand as a `ty`-native constant instead of

@@ -983,29 +983,6 @@ fn block_result_is_coercible_int_marker(a: AstArena, bid: i64) -> bool {
     expr_is_coercible_int_marker(a, stmt_a(a, last_sid))
 }
 
-// Peel `{ <marker expr> }` block wrappers down to the innermost expr id, so a
-// match/if arm body like `{ 0 }` still resolves as the literal `0` for
-// re-narrowing purposes. Mirrors block_result_is_coercible_int_marker's
-// notion of "the block's value expr".
-fn unwrap_marker_block_eid(a: AstArena, eid: i64) -> i64 {
-    if expr_tag(a, eid) != EXPR_BLOCK() {
-        return eid;
-    }
-    let bid: i64 = expr_a(a, eid);
-    let trail_eid: i64 = blk_trail(a, bid);
-    if trail_eid != -1 {
-        return unwrap_marker_block_eid(a, trail_eid);
-    }
-    let stmts_lid: i64 = blk_stmts(a, bid);
-    let n: i64 = list_len(a, stmts_lid);
-    if n == 0 { return eid; }
-    let last_sid: i64 = list_get(a, stmts_lid, n - 1);
-    if stmt_tag(a, last_sid) != STMT_EXPR() || stmt_b(a, last_sid) != 0 {
-        return eid;
-    }
-    unwrap_marker_block_eid(a, stmt_a(a, last_sid))
-}
-
 fn expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_INT() {
@@ -1058,18 +1035,91 @@ fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i6
     result_ty
 }
 
+// Evaluates a const-int-shaped AST expr at compile time, mirroring
+// expr_is_coercible_int_marker's recognized shapes (bare literal, negation,
+// constant arithmetic/bitwise BinOps, and block-wrapped forms of any of
+// those) rather than just expr_is_const_int's narrower bare-literal-only
+// set. Sets ok[0] = false (value undefined) for anything unrecognized, or
+// for a division/remainder by a literal zero -- never panics the compiler
+// itself on an ill-formed user expression.
+fn narrow_literal_eval(a: AstArena, eid: i64, ok: Vec<bool>) -> i64 {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() {
+        return expr_a(a, eid);
+    }
+    if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return 0 - narrow_literal_eval(a, expr_b(a, eid), ok);
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        let is_marker_op: bool = op == BINOP_ADD() || op == BINOP_SUB() || op == BINOP_MUL()
+            || op == BINOP_DIV() || op == BINOP_REM()
+            || op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK() || op == BINOP_MUL_CHK()
+            || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK()
+            || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
+            || op == BINOP_SHL() || op == BINOP_SHR();
+        if !is_marker_op {
+            ok[0] = false;
+            return 0;
+        }
+        let l: i64 = narrow_literal_eval(a, expr_b(a, eid), ok);
+        let r: i64 = narrow_literal_eval(a, expr_c(a, eid), ok);
+        if op == BINOP_ADD() || op == BINOP_ADD_CHK() { return l + r; }
+        if op == BINOP_SUB() || op == BINOP_SUB_CHK() { return l - r; }
+        if op == BINOP_MUL() || op == BINOP_MUL_CHK() { return l * r; }
+        if op == BINOP_DIV() || op == BINOP_DIV_CHK() {
+            if r == 0 { ok[0] = false; return 0; }
+            return l / r;
+        }
+        if op == BINOP_REM() || op == BINOP_REM_CHK() {
+            if r == 0 { ok[0] = false; return 0; }
+            return l % r;
+        }
+        if op == BINOP_BITAND() { return l & r; }
+        if op == BINOP_BITOR() { return l | r; }
+        if op == BINOP_XOR() { return l ^ r; }
+        if op == BINOP_SHL() { return l << r; }
+        return l >> r;
+    }
+    if tag == EXPR_BLOCK() {
+        let bid: i64 = expr_a(a, eid);
+        let trail_eid: i64 = blk_trail(a, bid);
+        if trail_eid != -1 {
+            return narrow_literal_eval(a, trail_eid, ok);
+        }
+        let stmts_lid: i64 = blk_stmts(a, bid);
+        let n: i64 = list_len(a, stmts_lid);
+        if n > 0 {
+            let last_sid: i64 = list_get(a, stmts_lid, n - 1);
+            if stmt_tag(a, last_sid) == STMT_EXPR() && stmt_b(a, last_sid) == 0 {
+                return narrow_literal_eval(a, stmt_a(a, last_sid), ok);
+            }
+        }
+        ok[0] = false;
+        return 0;
+    }
+    ok[0] = false;
+    0
+}
+
 // Re-lower a const-int-shaped AST expr as a `ty`-native constant instead of
 // the default i64, so it shares a Cranelift register width with a genuinely
 // `ty`-typed sibling value (e.g. a match/if arm merge). Returns -1 if `eid`
 // isn't a const-int expr (caller should keep the original value in that case).
 fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64 {
-    if eid == -1 || !expr_is_const_int(a, eid) {
+    if eid == -1 {
+        return -1;
+    }
+    let ok: Vec<bool> = Vec::new();
+    ok.push(true);
+    let value: i64 = narrow_literal_eval(a, eid, ok);
+    if !ok[0] {
         return -1;
     }
     let narrow_op: i64 = if ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
     let narrow_data: i64 = if ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
     let const_args: Vec<i64> = Vec::new();
-    lctx_emit(ctx, narrow_op, ty, const_args, narrow_data, expr_const_int_value(a, eid), 0, String::from(""))
+    lctx_emit(ctx, narrow_op, ty, const_args, narrow_data, value, 0, String::from(""))
 }
 
 fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64) {
@@ -3092,33 +3142,47 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let up_id: i64 = arm_up_ids[fi];
                     let blk: IrBlock = ctx.func.blocks[arm_block];
                     let n_insts: i64 = blk.insts.len();
+                    // Locate the arm's own result Upsilon by id rather than assuming
+                    // block position: the "Phis for mutated variables" pass above may
+                    // have already appended extra Upsilons after this arm's own
+                    // [Upsilon, Jump] pair, so it's not reliably the block's tail.
+                    let mut up_pos: i64 = -1;
                     let mut old_arg: i64 = -1;
                     let mut fj: i64 = 0;
                     while fj < n_insts {
                         let inst: IrInst = blk.insts[fj];
                         if inst.id == up_id {
+                            up_pos = fj;
                             old_arg = inst.args[0];
                         }
                         fj = fj + 1;
                     }
-                    if old_arg != -1 {
-                        // The replacement value must be defined *before* the Upsilon
-                        // in instruction order (codegen resolves values sequentially),
-                        // so pop the trailing [Upsilon, Jump] pair, emit the narrowed
-                        // const + a fresh Upsilon in the correct position, then
-                        // restore the original Jump on top.
-                        let jn: i64 = blk.insts.len();
-                        let jump_inst: IrInst = blk.insts[jn - 1];
-                        blk.insts.pop();
-                        blk.insts.pop();
+                    if up_pos != -1 {
+                        // lctx_emit refuses to append once the block's last inst is a
+                        // terminator, and the tail after the Upsilon (Jump, plus any
+                        // mutation Upsilons) must keep its relative order -- so save
+                        // that tail, truncate it off, emit the narrowed const + a
+                        // fresh Upsilon (now safely appending to a non-terminated
+                        // block), then restore the tail on top.
+                        let tail: Vec<IrInst> = Vec::new();
+                        let mut ti: i64 = up_pos + 1;
+                        while ti < n_insts {
+                            tail.push(blk.insts[ti]);
+                            ti = ti + 1;
+                        }
+                        blk.insts.truncate(up_pos);
                         lctx_switch_to_block(ctx, arm_block);
-                        let narrowed: i64 = lower_narrow_literal(ctx, a, unwrap_marker_block_eid(a, arm_bodies[fi]), result_ty);
+                        let narrowed: i64 = lower_narrow_literal(ctx, a, arm_bodies[fi], result_ty);
                         let final_val: i64 = if narrowed != -1 { narrowed } else { old_arg };
                         let new_up_args: Vec<i64> = Vec::new();
                         new_up_args.push(final_val);
                         let new_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), new_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
                         let blk2: IrBlock = ctx.func.blocks[arm_block];
-                        blk2.insts.push(jump_inst);
+                        let mut tj: i64 = 0;
+                        while tj < tail.len() {
+                            blk2.insts.push(tail[tj]);
+                            tj = tj + 1;
+                        }
                         arm_up_ids[fi] = new_up_id;
                     }
                 }

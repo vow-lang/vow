@@ -1,0 +1,20 @@
+// TEST: stdout "41\n3\n"
+module MatchArmConstantExprMarker
+
+fn f(opt: Option<i32>) -> i32 {
+    match opt {
+        Option::Some(v) => v,
+        Option::None => 1 + 2,
+    }
+}
+
+fn main() -> i32 [io] {
+    // expr_is_coercible_int_marker recognizes constant arithmetic (not just a
+    // bare literal) as a narrowable marker arm; the narrowing evaluator must
+    // actually be able to compute a value for such expressions too.
+    print_i64(f(parse_i32(String::from("41"))) as i64);
+    print_str(String::from("\n"));
+    print_i64(f(parse_i32(String::from("nope"))) as i64);
+    print_str(String::from("\n"));
+    0
+}
