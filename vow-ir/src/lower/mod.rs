@@ -232,6 +232,7 @@ pub(crate) struct FuncSigInfo {
     ret_ty: Ty,
     ret_tag: Option<String>,
     ret_vec_elem: Option<String>,
+    ret_option_elem: Option<Ty>,
     param_tys: Vec<Ty>,
 }
 
@@ -259,6 +260,17 @@ fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
         AstType::Named { name, .. } if name == "str" => Some("String".to_string()),
         AstType::Named { name, .. } => Some(name.clone()),
         AstType::Generic { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+fn option_named_elem_type(ast_ty: &AstType) -> Option<Ty> {
+    match ast_ty {
+        AstType::Generic { name, args, .. } if name == "Option" => match args.first() {
+            Some(AstType::Named { name, .. }) if name == "i32" => Some(Ty::I32),
+            Some(AstType::Named { name, .. }) if name == "u8" => Some(Ty::U8),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -753,6 +765,27 @@ fn block_result_is_coercible_int_marker(block: &Block) -> bool {
     false
 }
 
+/// Peel `{ <marker expr> }` block wrappers down to the innermost expr, so a
+/// match/if arm body like `{ 0 }` still resolves as the literal `0` for
+/// re-narrowing purposes (see the match-merge Upsilon fixup). Mirrors
+/// block_result_is_coercible_int_marker's notion of "the block's value expr".
+fn unwrap_marker_block(expr: &Expr) -> &Expr {
+    if let ExprKind::Block(block) = &expr.kind {
+        if let Some(trailing) = &block.trailing_expr {
+            return unwrap_marker_block(trailing);
+        }
+        if let Some(Stmt::Expr {
+            expr: inner,
+            has_semicolon: false,
+            ..
+        }) = block.stmts.last()
+        {
+            return unwrap_marker_block(inner);
+        }
+    }
+    expr
+}
+
 fn choose_match_result_ty(
     arm_results: &[(BlockId, InstId, Ty, Vec<InstId>)],
     arm_result_markers: &[bool],
@@ -1129,6 +1162,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 if let Some(ret_vec_elem) = call_info.ret_vec_elem {
                     ctx.inst_vec_elem_type.insert(result, ret_vec_elem);
+                }
+                if let Some(ret_option_elem) = call_info.ret_option_elem {
+                    ctx.inst_option_elem_ty.insert(result, ret_option_elem);
                 }
                 result
             } else if let Some((sym, ret_ty)) = vow_debug_builtin_to_runtime(&callee_name) {
@@ -2408,6 +2444,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
             let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
             let mut arm_result_markers: Vec<bool> = Vec::new();
+            // Parallel to arm_results/arm_result_markers: the arm body expr, so a marker
+            // arm's Upsilon value can be re-narrowed to phi_ty once it's known (see below).
+            let mut arm_bodies: Vec<&Expr> = Vec::new();
 
             let mut arm_iter = arms.iter().peekable();
             while let Some(arm) = arm_iter.next() {
@@ -2501,6 +2540,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
+                            arm_bodies.push(&arm.body);
                         }
 
                         ctx.restore_scope(scope_snap.clone());
@@ -2544,6 +2584,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
+                            arm_bodies.push(&arm.body);
                         }
 
                         ctx.restore_scope(scope_snap.clone());
@@ -2572,6 +2613,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         );
                         arm_results.push((arm_block, up_id, Ty::Unit, arm_mut_vals));
                         arm_result_markers.push(false);
+                        arm_bodies.push(&arm.body);
                     }
                 }
             }
@@ -2606,6 +2648,61 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             let phi_ty = choose_match_result_ty(&arm_results, &arm_result_markers);
+
+            // A marker arm's Upsilon still carries its default `i64`-width value
+            // (see expr_is_coercible_int_marker). Now that the merge's real result
+            // type is known, re-narrow those arms so every Upsilon feeding the Phi
+            // shares its Cranelift register width -- otherwise a plain literal arm
+            // (e.g. `None => -1`) merging with a genuinely narrow-typed arm (e.g.
+            // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
+            if matches!(phi_ty, Ty::U8 | Ty::I32 | Ty::U32) {
+                for i in 0..arm_results.len() {
+                    let arm_block = arm_results[i].0;
+                    let up_id = arm_results[i].1;
+                    let arm_ty = arm_results[i].2;
+                    if !arm_result_markers[i] || arm_ty == phi_ty {
+                        continue;
+                    }
+                    let block_idx = arm_block.0 as usize;
+                    let old_arg = ctx.func.blocks[block_idx]
+                        .insts
+                        .iter()
+                        .find(|inst| inst.id == up_id)
+                        .map(|inst| inst.args[0]);
+                    let Some(old_arg) = old_arg else { continue };
+                    // The Upsilon's replacement value must be defined *before* the
+                    // Upsilon in instruction order (codegen resolves values
+                    // sequentially), so pop the trailing [Upsilon, Jump] pair, emit
+                    // the narrowed const + a fresh Upsilon in the correct position,
+                    // then restore the original Jump on top.
+                    let jump_inst = ctx.func.blocks[block_idx].insts.pop();
+                    let popped_upsilon = ctx.func.blocks[block_idx].insts.pop();
+                    debug_assert!(
+                        matches!(jump_inst.as_ref().map(|i| i.opcode), Some(Opcode::Jump))
+                            && popped_upsilon.as_ref().map(|i| i.id) == Some(up_id)
+                    );
+                    ctx.switch_to_block(arm_block);
+                    let narrowed = lower_narrow_literal(
+                        ctx,
+                        unwrap_marker_block(arm_bodies[i]),
+                        old_arg,
+                        phi_ty,
+                    );
+                    let new_up_id = ctx.emit(
+                        Opcode::Upsilon,
+                        Ty::Unit,
+                        vec![narrowed],
+                        InstData::PhiTarget(InstId(u32::MAX)),
+                        span,
+                    );
+                    if let Some(jump_inst) = jump_inst {
+                        ctx.func.blocks[block_idx].insts.push(jump_inst);
+                    }
+                    arm_results[i].1 = new_up_id;
+                }
+                ctx.switch_to_block(merge_block);
+            }
+
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
 
             for (arm_block, up_id, _, _) in &arm_results {
@@ -3463,6 +3560,16 @@ pub(crate) fn lower_function(
                     ctx.inst_vec_elem_type.insert(arg_id, elem_name.clone());
                 }
             }
+            AstType::Generic { name, args, .. } if name == "Option" => {
+                ctx.inst_struct_type.insert(arg_id, "Option".to_string());
+                if let Some(elem_ty) = args.first().and_then(|t| match t {
+                    AstType::Named { name, .. } if name == "i32" => Some(Ty::I32),
+                    AstType::Named { name, .. } if name == "u8" => Some(Ty::U8),
+                    _ => None,
+                }) {
+                    ctx.inst_option_elem_ty.insert(arg_id, elem_ty);
+                }
+            }
             AstType::Named { name, .. } if ctx.struct_field_map.contains_key(name.as_str()) => {
                 ctx.inst_struct_type.insert(arg_id, name.clone());
             }
@@ -3572,6 +3679,7 @@ pub fn lower_module(
                     ret_ty: lower_ty_with_linear(&fn_def.return_ty, &linear_struct_names),
                     ret_tag: non_scalar_type_tag(&fn_def.return_ty),
                     ret_vec_elem: vec_named_elem_type(&fn_def.return_ty),
+                    ret_option_elem: option_named_elem_type(&fn_def.return_ty),
                     param_tys: fn_def
                         .params
                         .iter()
@@ -5173,6 +5281,7 @@ mod tests {
                 ret_ty: Ty::Ptr,
                 ret_tag: Some("Pair".to_string()),
                 ret_vec_elem: None,
+                ret_option_elem: None,
                 param_tys: vec![],
             },
         );
@@ -5231,6 +5340,7 @@ mod tests {
                 ret_ty: Ty::U8,
                 ret_tag: None,
                 ret_vec_elem: None,
+                ret_option_elem: None,
                 param_tys: vec![Ty::U8],
             },
         );
@@ -5306,6 +5416,7 @@ mod tests {
                 ret_ty: Ty::Ptr,
                 ret_tag: Some("B".to_string()),
                 ret_vec_elem: None,
+                ret_option_elem: None,
                 param_tys: vec![],
             },
         );
