@@ -152,9 +152,13 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
             ctx.inst_struct_type.insert(result, "Vec".to_string());
         }
         "parse_u8" | "i16_to_u8_try" | "i32_to_u8_try" | "i64_to_u8_try" | "i128_to_u8_try"
-        | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" | "parse_i32"
-        | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
+        | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
             ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::U8);
+        }
+        "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
+            ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::I32);
         }
         _ => {}
     }
@@ -335,6 +339,8 @@ pub(crate) struct LowerCtx {
     loop_exit_phis: Vec<Vec<(String, InstId)>>,
     // InstId of a Vec allocation → element type name (for struct-in-Vec field access)
     inst_vec_elem_type: HashMap<InstId, String>,
+    // InstId of an Option-tagged value → its payload type (for Option::Some(v) match-arm FieldGet)
+    inst_option_elem_ty: HashMap<InstId, Ty>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     warnings: Vec<vow_diag::Diagnostic>,
@@ -407,6 +413,7 @@ impl LowerCtx {
             loop_break_upsilons: Vec::new(),
             loop_exit_phis: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
+            inst_option_elem_ty: HashMap::new(),
             struct_field_vec_elems,
             warnings: Vec::new(),
         }
@@ -969,12 +976,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Ty::U8
                 } else if contextual_narrow_literal_ty(Ty::I32) {
                     Ty::I32
+                } else if contextual_narrow_literal_ty(Ty::U32) {
+                    Ty::U32
                 } else if is_bitwise && lhs_ty == Ty::I64 {
                     if rhs_ty != Ty::I64 { rhs_ty } else { lhs_ty }
                 } else {
                     lhs_ty
                 };
-                if matches!(operand_ty, Ty::U8 | Ty::I32) {
+                if matches!(operand_ty, Ty::U8 | Ty::I32 | Ty::U32) {
                     lhs_id = lower_narrow_literal(ctx, lhs, lhs_id, operand_ty);
                     if !matches!(op, BinOp::Shl | BinOp::Shr) {
                         rhs_id = lower_narrow_literal(ctx, rhs, rhs_id, operand_ty);
@@ -2443,11 +2452,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
                         ctx.switch_to_block(arm_block);
                         ctx.push_scope();
+                        // The Option<T> builtins tag their result InstId with the payload's
+                        // real type; every other payload (user enums, Result, etc.) defaults
+                        // to I64 as before.
+                        let payload_ty = ctx
+                            .inst_option_elem_ty
+                            .get(&ptr_id)
+                            .copied()
+                            .unwrap_or(Ty::I64);
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
+                                let field_ty = if i == 0 { payload_ty } else { Ty::I64 };
                                 let field_val = ctx.emit(
                                     Opcode::FieldGet,
-                                    Ty::I64,
+                                    field_ty,
                                     vec![ptr_id],
                                     InstData::FieldIndex(1 + i as u32),
                                     span,
@@ -3203,6 +3221,13 @@ fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: T
             Ty::I32,
             vec![],
             InstData::ConstI32(value as i32),
+            expr.span,
+        ),
+        Ty::U32 => ctx.emit(
+            Opcode::ConstI32,
+            Ty::U32,
+            vec![],
+            InstData::ConstI32(value as u32 as i32),
             expr.span,
         ),
         _ => original,

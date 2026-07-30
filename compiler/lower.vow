@@ -48,6 +48,8 @@ struct LowerCtx {
     loop_exit_phi_ids: Vec<Vec<i64>>,
     vec_elem_inst_ids: Vec<i64>,
     vec_elem_names: Vec<String>,
+    option_elem_inst_ids: Vec<i64>,
+    option_elem_tys: Vec<i64>,
     warnings: Vec<String>,
     file: String,
 }
@@ -109,6 +111,8 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         loop_exit_phi_ids: Vec::new(),
         vec_elem_inst_ids: Vec::new(),
         vec_elem_names: Vec::new(),
+        option_elem_inst_ids: Vec::new(),
+        option_elem_tys: Vec::new(),
         warnings: Vec::new(),
         file: String::from(""),
     }
@@ -348,6 +352,23 @@ fn lctx_get_vec_elem(ctx: LowerCtx, inst_id: i64) -> String {
         }
     }
     String::from("")
+}
+
+fn lctx_tag_option_elem(ctx: LowerCtx, inst_id: i64, elem_ty: i64) {
+    ctx.option_elem_inst_ids.push(inst_id);
+    ctx.option_elem_tys.push(elem_ty);
+}
+
+fn lctx_get_option_elem_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
+    let n: i64 = ctx.option_elem_inst_ids.len();
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.option_elem_inst_ids[i] == inst_id {
+            return ctx.option_elem_tys[i];
+        }
+    }
+    ITY_I64()
 }
 
 fn lctx_intern_str(ctx: LowerCtx, s: String) -> i64 {
@@ -1181,6 +1202,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             operand_ty = ITY_I32();
         } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_I32() {
             operand_ty = ITY_I32();
+        } else if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_U32() {
+            operand_ty = ITY_U32();
+        } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_U32() {
+            operand_ty = ITY_U32();
         } else if is_bitwise && lhs_ty == ITY_I64() {
             if rhs_ty != ITY_I64() {
                 operand_ty = rhs_ty;
@@ -1189,7 +1214,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // Re-lower a literal operand as an `operand_ty`-native constant instead
         // of the default i64, so it shares a register width with a genuinely
         // `operand_ty`-typed sibling operand in the same binary op.
-        if operand_ty == ITY_U8() || operand_ty == ITY_I32() {
+        if operand_ty == ITY_U8() || operand_ty == ITY_I32() || operand_ty == ITY_U32() {
             let narrow_op: i64 = if operand_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
             let narrow_data: i64 = if operand_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
             if expr_is_const_int(a, lhs_eid) {
@@ -1349,6 +1374,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                fn_name == String::from("u32_to_u8_try") || fn_name == String::from("u64_to_u8_try") ||
                fn_name == String::from("u128_to_u8_try") {
                 lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_U8());
+            }
+            if fn_name == String::from("parse_i32") || fn_name == String::from("i64_to_i32_try") ||
+               fn_name == String::from("u32_to_i32_try") || fn_name == String::from("u64_to_i32_try") {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_I32());
             }
             return result;
         }
@@ -2814,6 +2845,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 lctx_switch_to_block(ctx, arm_block);
                 lctx_push_scope(ctx);
 
+                let payload_ty: i64 = lctx_get_option_elem_ty(ctx, ptr_id);
                 let n_inner: i64 = list_len(a, inner_lid);
                 let mut ii: i64 = 0;
                 while ii < n_inner {
@@ -2822,9 +2854,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     if inner_ptag == PAT_IDENT() {
                         let name_sid: i64 = pat_a(a, inner_pid);
                         let pname: String = arena_str(a, name_sid);
+                        let field_ty: i64 = if ii == 0 { payload_ty } else { ITY_I64() };
                         let fg2_args: Vec<i64> = Vec::new();
                         fg2_args.push(ptr_id);
-                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg2_args, IDATA_FIELD(), 1 + ii, 0, String::from(""));
+                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, IDATA_FIELD(), 1 + ii, 0, String::from(""));
                         lctx_define(ctx, pname, field_val);
                     }
                     ii = ii + 1;
@@ -3569,6 +3602,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.tag_names = Vec::new();
     ctx.vec_elem_inst_ids = Vec::new();
     ctx.vec_elem_names = Vec::new();
+    ctx.option_elem_inst_ids = Vec::new();
+    ctx.option_elem_tys = Vec::new();
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;
