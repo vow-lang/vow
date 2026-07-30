@@ -9,7 +9,6 @@ module OffByOneBounds
 
 fn last_element(n: i64) -> i64 vow {
   requires: n >= 1,
-  requires: n <= 8,
   ensures: result >= 0
 } {
   let v: Vec<i64> = Vec::new();
