@@ -3058,9 +3058,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
 
         lctx_switch_to_block(ctx, continue_block);
+        let payload_ty: i64 = lctx_get_option_elem_ty(ctx, inner_id);
         let payload_args: Vec<i64> = Vec::new();
         payload_args.push(inner_id);
-        return lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), payload_args, IDATA_FIELD(), 1, 0, String::from(""));
+        return lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, IDATA_FIELD(), 1, 0, String::from(""));
     }
 
     if tag == EXPR_BREAK() {

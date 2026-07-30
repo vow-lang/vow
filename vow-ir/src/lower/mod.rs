@@ -3069,9 +3069,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Continue: extract payload from field 1
             ctx.switch_to_block(continue_block);
+            let payload_ty = ctx
+                .inst_option_elem_ty
+                .get(&ptr_id)
+                .copied()
+                .unwrap_or(Ty::I64);
             ctx.emit(
                 Opcode::FieldGet,
-                Ty::I64,
+                payload_ty,
                 vec![ptr_id],
                 InstData::FieldIndex(1),
                 span,
