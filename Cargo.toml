@@ -4,6 +4,7 @@ members = [
     "vow-types",
     "vow-ir",
     "vow-codegen",
+    "vow-linker",
     "vow-verify",
     "vow-diag",
     "vow-runtime",

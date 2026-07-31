@@ -7,6 +7,7 @@ edition = "2024"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+vow-linker = { path = "../vow-linker" }
 cranelift-codegen = "0.134"
 cranelift-frontend = "0.134"
 cranelift-module = "0.134"

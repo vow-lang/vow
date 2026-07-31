@@ -995,6 +995,7 @@ dependencies = [
  "cranelift-object",
  "target-lexicon",
  "tempfile",
+ "vow-linker",
 ]
 
 [[package]]
@@ -1012,6 +1013,7 @@ dependencies = [
  "tempfile",
  "vow-diag",
  "vow-ir",
+ "vow-linker",
  "vow-syntax",
  "vow-types",
 ]
@@ -1031,6 +1033,10 @@ dependencies = [
  "vow-diag",
  "vow-syntax",
 ]
+
+[[package]]
+name = "vow-linker"
+version = "0.5.1"
 
 [[package]]
 name = "vow-runtime"
