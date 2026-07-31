@@ -297,6 +297,21 @@ on fallback. `__vow_vec_from_raw_parts_copy_val(arena, ptr, len)`
 already has the explicit-arena shape and copies the raw slots into the
 supplied arena.
 
+Runtime-created mutable `Vec` and `String` descriptors retain the
+public 24-byte `{ptr, len, cap}` layout, but the runtime allocation that
+contains the descriptor prefixes it with one private `VowArena*` owner
+word. The high bit of the public `cap` word is reserved as
+`VOW_CAP_RUNTIME_OWNED`; the remaining bits encode the logical capacity.
+The pointer returned to generated code still points at the public
+descriptor. Constructors, clone operations, and raw-parts copy operations
+MUST initialize both the marker and the prefix. Static `VOW_CAP_RODATA`
+descriptors are bare 24-byte descriptors and have no prefix. Valid foreign
+mutable descriptors MUST use a capacity below `VOW_CAP_RUNTIME_OWNED` and
+therefore leave the marker clear. Generated code and FFI consumers MUST NOT
+inspect or depend on the private prefix. Consumers that inspect mutable
+runtime descriptor capacity MUST mask off `VOW_CAP_RUNTIME_OWNED`; mutation
+entry points do this internally.
+
 #### String runtime allocation API
 
 The existing root-region String symbols remain ABI-stable:
@@ -339,6 +354,10 @@ void  __vow_string_push_str_in_arena(struct VowArena* arena,
                                      void* dest, const void* src);
 void  __vow_string_push_byte_in_arena(struct VowArena* arena,
                                       void* string, int64_t byte);
+void  __vow_string_push_str_in_candidate_arena(
+          struct VowArena* candidate, void* dest, const void* src);
+void  __vow_string_push_byte_in_candidate_arena(
+          struct VowArena* candidate, void* string, int64_t byte);
 void* __vow_string_substr_in_arena(struct VowArena* arena,
                                    const void* string,
                                    int64_t start, int64_t len);
@@ -372,6 +391,16 @@ descriptor/header and any later growth allocation. Growth for both root
 and explicit-arena Strings uses the same arena grow path as Vec: try to
 extend in place, then allocate in the selected arena and copy on
 fallback.
+
+The two `_in_candidate_arena` mutation entries are not unchecked
+explicit-arena operations. They compare the receiver descriptor's
+private owner word with `candidate`; a match uses that arena, while a
+mismatch delegates to the root wrapper. Before reading outside the public
+descriptor, they require the in-descriptor `VOW_CAP_RUNTIME_OWNED` marker.
+Foreign descriptors leave it clear and fall back without a prefix read.
+They also test `cap == VOW_CAP_RODATA` first because static literal
+descriptors do not carry the private prefix. The normal mutation path then
+reports `RegionLiteralMutation`.
 
 #### HashMap runtime allocation API
 
@@ -1140,16 +1169,15 @@ compile time MUST be placed in `.rodata`. The surrounding descriptor
 with the read-only-backing sentinel `cap = VOW_CAP_RODATA`.
 
 `VOW_CAP_RODATA` is a reserved `usize` value that is distinguishable
-from every legal runtime capacity. It MUST NOT collide with the
-existing "empty, not yet allocated, growable" sentinel used by the
-current runtime (`cap = 0`; see `__vow_vec_reserve` in
-`vow-runtime`, which lazily allocates `VEC_INITIAL_CAP` when
-`v.cap == 0`). The Phase 1 implementation MUST choose the sentinel
-explicitly — the recommended value is `usize::MAX`, reserving it
-from the legal capacity range; any alternative (e.g., an unused
-high bit, or a distinct flag word added to the descriptor) is
-acceptable provided the read-only and lazy-empty states remain
-strictly disjoint at runtime. Phase 1 runtime changes MUST update
+from every legal runtime capacity. It is `usize::MAX`. The high bit is
+also reserved as `VOW_CAP_RUNTIME_OWNED` for mutable descriptors created
+by the Vow runtime (§3.3); their logical capacity is the remaining low
+bits, with the all-low-bits-set value reserved to keep rodata distinct. A
+valid foreign mutable descriptor leaves the ownership bit clear. The
+logical "empty, not yet allocated, growable" capacity is zero (encoded as
+`VOW_CAP_RUNTIME_OWNED` for runtime-owned descriptors and raw `0` for
+foreign descriptors). These states remain strictly disjoint. Phase 1
+runtime changes MUST update
 `__vow_vec_reserve`, `__vow_vec_push`, `__vow_string_push_str`,
 `__vow_hashmap_insert`, and every other mutation entry point to
 test for `VOW_CAP_RODATA` first and trap before any growth logic
@@ -1258,6 +1286,35 @@ fresh allocation. For the "build up one buffer" pattern where the
 container's backing is the most recent allocation in the arena,
 extension succeeds and growth is O(1) amortized with no copy and no
 orphaned backing.
+
+### 7.2.1. Checked projection routing
+
+A projected container value does not necessarily share its container's
+arena. A `FieldGet`, `Load`, or `__vow_vec_get*` result may have been
+written through an alias, carried around a loop back-edge, or copied
+from another arena. Consequently, tracing the projected receiver back
+to its container is never sufficient evidence for selecting an
+explicit-arena mutation entry.
+
+Codegen MAY trace those projection forms to produce an arena
+**candidate**. For `String::push_str` and `String::push_byte`, it MUST
+route such a receiver through the matching
+`_in_candidate_arena` entry. That entry authorizes the candidate only
+when the receiver carries `VOW_CAP_RUNTIME_OWNED` and its runtime owner
+word matches the candidate; otherwise mutation uses the root arena. The
+marker test occurs before the prefix read, so a bare foreign descriptor
+cannot cause an out-of-bounds prefix access. Direct receivers whose
+defining instruction has a `Block` or `Caller` region continue to use the
+ordinary `_in_arena` entry. A phi may retain a candidate only when all
+incoming routes name the same region, and it remains a candidate when any
+incoming route is projection-derived.
+
+Candidate routing MUST NOT be used for Vec or HashMap mutation unless
+an equivalent checked runtime entry exists. Nor may a candidate be
+passed as a function's hidden receiver-region argument. Both cases
+fall back to the projected value's conservative recorded region. This
+separation makes runtime provenance, rather than a local IR
+approximation, the safety proof for projection-derived String routing.
 
 ### 7.3. Mutation of literal-backed containers
 
@@ -1380,13 +1437,14 @@ The stdlib MUST provide:
   **type-directed deep copy** into the root region, following
   the same discipline as §8.3's pointer-containing FFI path.
   The intrinsic does not attempt to detect whether the input
-  already lives in root and short-circuit: the `{ptr, len, cap}`
-  container descriptor has no free bit for a region tag (`cap`
-  is reserved by `VOW_CAP_RODATA` for literal-backed values
-  (§6.1), and root-allocated containers carry real mutable
-  capacities), and scanning `__vow_root_arena`'s chunk chain
-  for pointer containment would add a per-call cost the
-  intrinsic cannot amortise.
+  already lives in root and short-circuit. The private owner prefix
+  described in §3.3 is runtime metadata for checked mutation routing,
+  not a semantic region tag: it is absent from static and foreign
+  descriptors, its accompanying capacity marker only proves the prefix
+  may be read, and neither proves that recursively referenced values share
+  the descriptor's arena. Scanning `__vow_root_arena`'s chunk chain for
+  pointer containment would likewise add a per-call cost the intrinsic
+  cannot amortise.
 
   Double-pinning is therefore the programmer's concern:
   `pin_to_root(pin_to_root(x))` copies twice and produces two
@@ -1643,9 +1701,13 @@ may keep emitting canonical root-wrapper extern symbols
 `infer_regions`, codegen reads the call's `region` field: `Root` keeps
 the ABI-stable wrapper symbol, while `Block(_)` and `Caller(_)` prepend
 the selected `*VowArena` and call the matching `_in_arena` symbol. Vec
-and String growth calls follow the same rule using the receiver's
-defining region: root-owned receivers keep the wrapper symbol, and
-block/caller-owned receivers route to the matching `_in_arena` symbol.
+and String growth calls use the receiver's defining route: root-owned
+receivers keep the wrapper symbol, and direct block/caller-owned
+receivers route to the matching `_in_arena` symbol.
+Projection-derived String receivers use the checked candidate routing
+in §7.2.1. Projection-derived Vec receivers remain on their
+conservative recorded region because Vec has no checked candidate
+mutation ABI.
 
 ### 12.3. Block region opcodes
 
