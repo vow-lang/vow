@@ -206,21 +206,22 @@ There are three distinct failures, and their blame must remain distinct.
 ### Restart implementation violates its own postcondition
 
 This is an ordinary callee postcondition failure. It uses the existing
-`VerifyFailed` / `VowEnsuresViolated` family, points at the restart expression
-and failed restart clause, and identifies the restart in the function/path
-context. It does not blame a handler that selected a recovery advertised by the
-callee.
+top-level `VerifyFailed` status and is classified semantically as
+`VowEnsuresViolated`. It points at the restart expression and failed restart
+clause, and identifies the restart in the function/path context. It does not
+blame a handler that selected a recovery advertised by the callee.
 
 ### A handler violates a restart argument contract
 
 This is a caller precondition failure at the restart invocation. It uses the
-existing `VerifyFailed` / `VowRequiresViolated` family, points at the invalid
-argument and failed restart clause, identifies the selected restart, and uses
-`blame: "caller"`. The verifier does not enter the recovery edge or assume
-`R_r` after this failure. Its counterexample also appends an attempted
-selection to `recovery_path`, with `entered: false`, so the callee, restart,
-call site, and handler arm remain machine-readable without claiming that the
-recovery guarantee became available.
+existing top-level `VerifyFailed` status and is classified semantically as
+`VowRequiresViolated`. It points at the invalid argument and failed restart
+clause, identifies the selected restart, and uses `blame: "caller"`. The
+verifier does not enter the recovery edge or assume `R_r` after this failure.
+Its counterexample also appends an attempted selection to `recovery_path`, with
+`entered: false`, so the callee, restart, call site, and handler arm remain
+machine-readable without claiming that the recovery guarantee became
+available.
 
 ### A caller relies on a guarantee absent from a recovery path
 
@@ -236,13 +237,12 @@ for every selected restart; nested, sequential, and repeated recoveries are
 retained rather than collapsed. Successfully entered recovery edges use
 `entered: true`. A restart argument-contract failure may add one final
 `entered: false` entry for the attempted selection. The future schema addition
-has this minimum shape:
+contains the following field. This is an illustrative counterexample fragment,
+not a complete schema-valid object; unchanged required fields such as `values`,
+`vow_id`, and `source` are omitted:
 
 ```json
 {
-  "function": "read_strictly_positive",
-  "violation": "ensures result > 0",
-  "blame": "callee",
   "recovery_path": [
     {
       "callee": "read_positive",
