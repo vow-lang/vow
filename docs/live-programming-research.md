@@ -225,34 +225,28 @@ calling-convention extension that threads restart arguments alongside the
 precondition check. Either way, this is more than a branch-target tweak and
 should be sized accordingly.
 
-**Verification:** Each restart expression is a separate ESBMC verification
-target. A restart may establish the function's normal `ensures` clauses or a
-declared restart-specific postcondition. At a `handle` site, the normal edge
-applies the ordinary body's write footprint before exposing the normal
-postcondition. After the handler proves the selected restart's argument
-contract in the live heap state produced by the handler, its recovery edge
-applies the restart write footprint and exposes only that restart's
-postcondition. Because
-heap-backed arguments are shared, callee verification conservatively forgets
-mutable heap facts from the original failure before proving the restart; any
-such fact needed by the restart must be re-established by its argument
-contract. All helpers used by the normal pre/postconditions or restart
-argument/postconditions must be observationally read-only even when they are
-effect-free; the verifier rejects transitive writes to shared heap state during
-clause evaluation. The verifier checks downstream obligations on every
-reachable edge; it never assumes the stronger normal postcondition after a
-weaker recovery, and it never weakens the enclosing function's contract
-automatically. Every normal and recovery outcome's modular interface carries a
-sound over-approximation of its heap writes. Caller lowering havocs those
-shared locations before assuming the corresponding postcondition, so aliases
-cannot retain stale pre-outcome facts; an imprecise normal summary must include
-all mutable memory reachable through heap-backed call arguments, and an
-imprecise restart summary must also include memory reachable through restart
-arguments.
+**Verification:** Each restart expression is a heap-read-only synthetic
+verification target that reuses ordinary function-contract checking. The
+initial feature admits only locally validated read-only instructions and known
+read-only builtins; writes, mutable allocation, and user-defined calls are
+rejected rather than requiring transitive footprint analysis. Every successful
+restart must establish the function's normal `ensures` clauses. A declared
+restart-specific postcondition is an additional path-local fact, so recovery
+through restart `r` exposes `Q && R_r`, never `R_r` in place of `Q`.
 
-The facts stay in ordinary CFG path conditions rather than becoming a new
-refinement-type axis. The complete caller-side decision, including failure
-diagnostics, is recorded in
+The handler proves the selected restart's argument contract in its live state
+before invocation. The restart proof starts only from that argument contract;
+it does not inherit mutable facts from the original condition failure. If a
+restart can establish a weaker restart-specific clause but cannot establish
+the function's normal postcondition, the verifier rejects the restart
+declaration. Authors who need a genuinely weaker outcome must put that truth
+in the ordinary function contract or return an explicit result variant.
+
+This keeps caller verification modular without outcome write-footprint or
+alias-summary machinery: the restart is heap-read-only, the normal
+postcondition remains available on every successful edge, and
+restart-specific facts stay guarded by ordinary CFG path conditions. The
+complete caller-side decision and failure diagnostics are recorded in
 [ADR 0002](adr/0002-restart-postcondition-propagation.md). Restart paths are
 finite, statically enumerable, and bounded.
 
