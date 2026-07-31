@@ -1,0 +1,13 @@
+// TEST: stdout "0\n"
+module NarrowAnnotatedLocal
+
+fn main() -> i32 [io] {
+    let x: i8 = if true { 127 } else { 0 };
+    if x + 1 > 0 {
+        print_i64(1);
+    } else {
+        print_i64(0);
+    }
+    print_str(String::from("\n"));
+    0
+}

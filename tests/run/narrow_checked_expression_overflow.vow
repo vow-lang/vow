@@ -1,0 +1,11 @@
+// TEST: exit 132
+module NarrowCheckedExpressionOverflow
+
+fn overflow() -> i8 {
+    127 +! 1
+}
+
+fn main() -> i32 {
+    overflow();
+    0
+}

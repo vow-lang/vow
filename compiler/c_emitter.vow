@@ -128,6 +128,19 @@ fn is_i32_numeric_intrinsic(name: String) -> bool {
     is_i32_narrow_intrinsic(name)
 }
 
+fn cemit_narrow_intrinsic_target(name: String) -> i64 {
+    let valid: bool = str_starts_with(name, String::from("__vow_")) &&
+        (str_ends_with(name, String::from("_try")) ||
+         str_ends_with(name, String::from("_wrap")) ||
+         str_ends_with(name, String::from("_sat")));
+    if !valid { return -1; }
+    if name.contains(String::from("_to_i8_")) { return ITY_I8(); }
+    if name.contains(String::from("_to_i16_")) { return ITY_I16(); }
+    if name.contains(String::from("_to_u16_")) { return ITY_U16(); }
+    if name.contains(String::from("_to_u32_")) { return ITY_U32(); }
+    -1
+}
+
 fn vec_contains_i64(v: Vec<i64>, val: i64) -> bool {
     let n: i64 = v.len();
     let mut i: i64 = 0;
@@ -154,7 +167,8 @@ fn is_string_fresh_helper(name: String) -> bool {
 }
 
 fn is_known_builtin(name: String) -> bool {
-    if is_string_fresh_helper(name) || is_u8_numeric_intrinsic(name) || is_i32_numeric_intrinsic(name) { return true; }
+    if is_string_fresh_helper(name) || is_u8_numeric_intrinsic(name) ||
+       is_i32_numeric_intrinsic(name) || cemit_narrow_intrinsic_target(name) != -1 { return true; }
     name == String::from("__vow_vec_new")
     || name == String::from("__vow_vec_new_val")
     || name == String::from("__vow_vec_new_in_arena")
@@ -194,7 +208,11 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_string_substring_in_arena")
     || name == String::from("__vow_string_from_i64")
     || name == String::from("__vow_string_from_i64_in_arena")
+    || name == String::from("__vow_string_parse_i8_opt")
     || name == String::from("__vow_string_parse_u8_opt")
+    || name == String::from("__vow_string_parse_i16_opt")
+    || name == String::from("__vow_string_parse_u16_opt")
+    || name == String::from("__vow_string_parse_u32_opt")
     || name == String::from("__vow_string_parse_i32_opt")
     || name == String::from("__vow_string_print")
     || name == String::from("__vow_map_new")
@@ -855,10 +873,15 @@ fn collect_btreemap_vars(f: IrFunction) -> Vec<i64> {
 fn is_option_returning_extern(name: String) -> bool {
     name == String::from("__vow_string_parse_i64_opt")
     || name == String::from("__vow_string_parse_u64_opt")
+    || name == String::from("__vow_string_parse_i8_opt")
     || name == String::from("__vow_string_parse_u8_opt")
+    || name == String::from("__vow_string_parse_i16_opt")
+    || name == String::from("__vow_string_parse_u16_opt")
+    || name == String::from("__vow_string_parse_u32_opt")
     || name == String::from("__vow_string_parse_i32_opt")
     || (is_u8_narrow_intrinsic(name) && str_ends_with(name, String::from("_try")))
     || (is_i32_narrow_intrinsic(name) && str_ends_with(name, String::from("_try")))
+    || (cemit_narrow_intrinsic_target(name) != -1 && str_ends_with(name, String::from("_try")))
     || name == String::from("__vow_btreemap_insert")
     || name == String::from("__vow_btreemap_get")
 }
@@ -1101,6 +1124,68 @@ fn emit_i32_numeric_intrinsic(out: String, inst: IrInst) {
     out.push_str(line);
 }
 
+fn emit_new_narrow_intrinsic(out: String, inst: IrInst) {
+    let name: String = inst.ds;
+    let target: i64 = cemit_narrow_intrinsic_target(name);
+    let c_ty: String = if target == ITY_I8() { String::from("int8_t") }
+        else if target == ITY_I16() { String::from("int16_t") }
+        else if target == ITY_U16() { String::from("uint16_t") }
+        else { String::from("uint32_t") };
+    let min_value: String = if target == ITY_I8() { String::from("-128") }
+        else if target == ITY_I16() { String::from("-32768") }
+        else { String::from("0") };
+    let max_value: String = if target == ITY_I8() { String::from("127") }
+        else if target == ITY_I16() { String::from("32767") }
+        else if target == ITY_U16() { String::from("65535") }
+        else { String::from("4294967295ULL") };
+    let id_s: String = i64_to_str(inst.id);
+    let a_s: String = i64_to_str(inst.args[0]);
+    let source_signed: bool = str_starts_with(name, String::from("__vow_i"));
+
+    if str_ends_with(name, String::from("_try")) {
+        let line: String = String::from("  v");
+        line.push_str(id_s);
+        line.push_str(String::from(".tag = ("));
+        if source_signed {
+            line.push_str(String::from("v")); line.push_str(a_s);
+            line.push_str(String::from(" >= ")); line.push_str(min_value);
+            line.push_str(String::from(" && "));
+        }
+        line.push_str(String::from("v")); line.push_str(a_s);
+        line.push_str(String::from(" <= ")); line.push_str(max_value);
+        line.push_str(String::from("); v")); line.push_str(id_s);
+        line.push_str(String::from(".payload = v")); line.push_str(id_s);
+        line.push_str(String::from(".tag ? (")); line.push_str(c_ty);
+        line.push_str(String::from(")v")); line.push_str(a_s);
+        line.push_str(String::from(" : 0;\n"));
+        out.push_str(line);
+        return;
+    }
+    if str_ends_with(name, String::from("_wrap")) {
+        let line: String = String::from("  v");
+        line.push_str(id_s); line.push_str(String::from(" = (")); line.push_str(c_ty);
+        line.push_str(String::from(")v")); line.push_str(a_s); line.push_str(String::from(";\n"));
+        out.push_str(line);
+        return;
+    }
+    let line: String = String::from("  v");
+    line.push_str(id_s); line.push_str(String::from(" = "));
+    if source_signed {
+        line.push_str(String::from("v")); line.push_str(a_s);
+        line.push_str(String::from(" < ")); line.push_str(min_value);
+        line.push_str(String::from(" ? ")); line.push_str(min_value);
+        line.push_str(String::from(" : ("));
+    }
+    line.push_str(String::from("v")); line.push_str(a_s);
+    line.push_str(String::from(" > ")); line.push_str(max_value);
+    line.push_str(String::from(" ? ")); line.push_str(max_value);
+    line.push_str(String::from(" : (")); line.push_str(c_ty);
+    line.push_str(String::from(")v")); line.push_str(a_s);
+    if source_signed { line.push_str(String::from(")")); }
+    line.push_str(String::from(";\n"));
+    out.push_str(line);
+}
+
 fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, string_vars: Vec<i64>,
              hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, option_vars: Vec<i64>,
              const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
@@ -1253,15 +1338,24 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
         return;
     }
     if op == IOP_SHL() || op == IOP_SHR() {
-        if inst.dk == IDATA_INTEGER() && inst.dv == ITY_U8() {
-            out.push_str(str3(String::from("  __ESBMC_assert(v"), i64_to_str(iargs[1]), String::from(" < 8, \"u8 shift count\");\n")));
-            let operator: String = if op == IOP_SHL() { String::from(" << ") } else { String::from(" >> ") };
+        let narrow_shift: bool = inst.dk == IDATA_INTEGER() &&
+            (inst.dv == ITY_I8() || inst.dv == ITY_U8() || inst.dv == ITY_I16() ||
+             inst.dv == ITY_U16() || inst.dv == ITY_U32());
+        if narrow_shift {
+            let width: i64 = if inst.dv == ITY_I8() || inst.dv == ITY_U8() { 8 } else if inst.dv == ITY_I16() || inst.dv == ITY_U16() { 16 } else { 32 };
+            out.push_str(str5(String::from("  __ESBMC_assert(v"), i64_to_str(iargs[1]), String::from(" < "), i64_to_str(width), String::from(", \"integer shift count\");\n")));
+            let opname: String = if op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
+            let prefix: String = if inst.dv == ITY_I8() || inst.dv == ITY_I16() { String::from("i") } else { String::from("u") };
             let expr: String = String::from("  v");
             expr.push_str(i64_to_str(id));
-            expr.push_str(String::from(" = (uint8_t)(v"));
+            expr.push_str(String::from(" = __vow_"));
+            expr.push_str(opname);
+            expr.push_str(String::from("_"));
+            expr.push_str(prefix);
+            expr.push_str(i64_to_str(width));
+            expr.push_str(String::from("(v"));
             expr.push_str(i64_to_str(iargs[0]));
-            expr.push_str(operator);
-            expr.push_str(String::from("v"));
+            expr.push_str(String::from(", v"));
             expr.push_str(i64_to_str(iargs[1]));
             expr.push_str(String::from(");\n"));
             out.push_str(expr);
@@ -1376,6 +1470,10 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
             }
             if is_i32_numeric_intrinsic(ds) {
                 emit_i32_numeric_intrinsic(out, inst);
+                return;
+            }
+            if cemit_narrow_intrinsic_target(ds) != -1 {
+                emit_new_narrow_intrinsic(out, inst);
                 return;
             }
             if str_starts_with(ds, String::from("__vow_vec_")) {
@@ -1719,6 +1817,19 @@ fn const_str_index_for(ids: Vec<i64>, idxs: Vec<i64>, id: i64) -> i64 {
     -1
 }
 
+fn emit_narrow_parse_option(out: String, id: i64, min_value: String, max_value: String) {
+    let ids: String = i64_to_str(id);
+    out.push_str(str3(String::from("  v"), ids, String::from(".tag = __VERIFIER_nondet_long();\n")));
+    out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".tag == 0 || v")));
+    out.push_str(str3(ids, String::from(".tag == 1);\n"), String::from("")));
+    out.push_str(str3(String::from("  if (v"), ids, String::from(".tag == 1) {\n")));
+    out.push_str(str3(String::from("    v"), ids, String::from(".payload = __VERIFIER_nondet_long();\n")));
+    out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".payload >= ")));
+    out.push_str(str3(min_value, String::from(" && v"), ids));
+    out.push_str(str3(String::from(".payload <= "), max_value, String::from(");\n")));
+    out.push_str(String::from("  }\n"));
+}
+
 fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max: i64, string_max: i64,
                   const_str_ids: Vec<i64>, const_str_idxs: Vec<i64>,
                   eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
@@ -2026,15 +2137,23 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
         return;
     }
     if ds == String::from("__vow_string_parse_u8_opt") {
-        let ids: String = i64_to_str(id);
-        out.push_str(str3(String::from("  v"), ids, String::from(".tag = __VERIFIER_nondet_long();\n")));
-        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".tag == 0 || v")));
-        out.push_str(str3(ids, String::from(".tag == 1);\n"), String::from("")));
-        out.push_str(str3(String::from("  if (v"), ids, String::from(".tag == 1) {\n")));
-        out.push_str(str3(String::from("    v"), ids, String::from(".payload = __VERIFIER_nondet_long();\n")));
-        out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".payload >= 0 && v")));
-        out.push_str(str3(ids, String::from(".payload <= 255);\n"), String::from("")));
-        out.push_str(String::from("  }\n"));
+        emit_narrow_parse_option(out, id, String::from("0"), String::from("255"));
+        return;
+    }
+    if ds == String::from("__vow_string_parse_i8_opt") {
+        emit_narrow_parse_option(out, id, String::from("-128"), String::from("127"));
+        return;
+    }
+    if ds == String::from("__vow_string_parse_i16_opt") {
+        emit_narrow_parse_option(out, id, String::from("-32768"), String::from("32767"));
+        return;
+    }
+    if ds == String::from("__vow_string_parse_u16_opt") {
+        emit_narrow_parse_option(out, id, String::from("0"), String::from("65535"));
+        return;
+    }
+    if ds == String::from("__vow_string_parse_u32_opt") {
+        emit_narrow_parse_option(out, id, String::from("0"), String::from("4294967295"));
         return;
     }
     emit_unmodelled(out, inst);
@@ -2668,6 +2787,123 @@ fn scan_shift_needs_in_fns(fns: Vec<IrFunction>, start: i64, end: i64, target_op
     0
 }
 
+fn narrow_shift_ty_at(index: i64) -> i64 {
+    if index == 0 { return ITY_I8(); }
+    if index == 1 { return ITY_U8(); }
+    if index == 2 { return ITY_I16(); }
+    if index == 3 { return ITY_U16(); }
+    ITY_U32()
+}
+
+fn cemit_narrow_shift_helper(target_op: i64, target_ty: i64) -> String {
+    let bits: i64 = if target_ty == ITY_I8() || target_ty == ITY_U8() { 8 }
+        else if target_ty == ITY_I16() || target_ty == ITY_U16() { 16 }
+        else { 32 };
+    let mask: i64 = bits - 1;
+    let signed: bool = target_ty == ITY_I8() || target_ty == ITY_I16();
+    let c_ty: String = ir_ty_to_c(target_ty);
+    let u_ty: String = if bits == 8 { String::from("uint8_t") }
+        else if bits == 16 { String::from("uint16_t") }
+        else { String::from("uint32_t") };
+    let opname: String = if target_op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
+    let prefix: String = if signed { String::from("i") } else { String::from("u") };
+    let out: String = String::from("static inline ");
+    out.push_str(c_ty);
+    out.push_str(String::from(" __vow_"));
+    out.push_str(opname);
+    out.push_str(String::from("_"));
+    out.push_str(prefix);
+    out.push_str(i64_to_str(bits));
+    out.push_str(String::from("("));
+    out.push_str(c_ty);
+    out.push_str(String::from(" value, "));
+    out.push_str(c_ty);
+    out.push_str(String::from(" count) {\n"));
+    if signed {
+        out.push_str(String::from("  "));
+        out.push_str(u_ty);
+        out.push_str(String::from(" shift = (("));
+        out.push_str(u_ty);
+        out.push_str(String::from(")count) & "));
+        out.push_str(i64_to_str(mask));
+        out.push_str(String::from(";\n"));
+        if target_op == IOP_SHL() {
+            out.push_str(String::from("  return ("));
+            out.push_str(c_ty);
+            out.push_str(String::from(")((("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")value) << shift);\n"));
+        } else {
+            out.push_str(String::from("  "));
+            out.push_str(u_ty);
+            out.push_str(String::from(" raw_bits = ("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")value;\n  "));
+            out.push_str(u_ty);
+            out.push_str(String::from(" logical = raw_bits >> shift;\n  "));
+            out.push_str(u_ty);
+            out.push_str(String::from(" ones = ~(("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")0);\n  "));
+            out.push_str(u_ty);
+            out.push_str(String::from(" sign_fill = value < 0 ? (("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")~(ones >> shift)) : ("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")0;\n  return ("));
+            out.push_str(c_ty);
+            out.push_str(String::from(")(logical | sign_fill);\n"));
+        }
+    } else {
+        out.push_str(String::from("  return value "));
+        if target_op == IOP_SHL() { out.push_str(String::from("<<")); }
+        else { out.push_str(String::from(">>")); }
+        out.push_str(String::from(" (count & "));
+        out.push_str(i64_to_str(mask));
+        out.push_str(String::from(");\n"));
+    }
+    out.push_str(String::from("}\n"));
+    out
+}
+
+fn append_narrow_shift_helpers_for_fns(out: String, fns: Vec<IrFunction>, start: i64, end: i64) {
+    let mut emitted: bool = false;
+    let mut ti: i64 = 0;
+    while ti < 5 {
+        let ty: i64 = narrow_shift_ty_at(ti);
+        let mut oi: i64 = 0;
+        while oi < 2 {
+            let op: i64 = if oi == 0 { IOP_SHL() } else { IOP_SHR() };
+            if scan_shift_needs_in_fns(fns, start, end, op, ty) == 1 {
+                out.push_str(cemit_narrow_shift_helper(op, ty));
+                emitted = true;
+            }
+            oi = oi + 1;
+        }
+        ti = ti + 1;
+    }
+    if emitted { out.push_byte(10); }
+}
+
+fn append_narrow_shift_helpers_for_function(out: String, f: IrFunction) {
+    let mut emitted: bool = false;
+    let mut ti: i64 = 0;
+    while ti < 5 {
+        let ty: i64 = narrow_shift_ty_at(ti);
+        let mut oi: i64 = 0;
+        while oi < 2 {
+            let op: i64 = if oi == 0 { IOP_SHL() } else { IOP_SHR() };
+            if func_has_integer_shift_op(f, op, ty) == 1 {
+                out.push_str(cemit_narrow_shift_helper(op, ty));
+                emitted = true;
+            }
+            oi = oi + 1;
+        }
+        ti = ti + 1;
+    }
+    if emitted { out.push_byte(10); }
+}
+
 fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_shr_u64: i64,
                               need_shl_i32: i64, need_shr_i32: i64,
                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
@@ -2827,6 +3063,7 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
     let need_shl_i32: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL(), ITY_I32());
     let need_shr_i32: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR(), ITY_I32());
     let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, need_shl_i32, need_shr_i32, vec_max, model_string_max, hashmap_max, btreemap_max);
+    append_narrow_shift_helpers_for_fns(out, fns, 0, n);
 
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let empty_modelable: Vec<i64> = Vec::new();
@@ -2862,6 +3099,25 @@ fn scan_shift_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis:
     0
 }
 
+fn append_narrow_shift_helpers_for_module_fns(out: String, fns: Vec<IrFunction>, target_fi: i64, callee_fis: Vec<i64>) {
+    let mut emitted: bool = false;
+    let mut ti: i64 = 0;
+    while ti < 5 {
+        let ty: i64 = narrow_shift_ty_at(ti);
+        let mut oi: i64 = 0;
+        while oi < 2 {
+            let op: i64 = if oi == 0 { IOP_SHL() } else { IOP_SHR() };
+            if scan_shift_op_in_module_fns(fns, target_fi, callee_fis, op, ty) == 1 {
+                out.push_str(cemit_narrow_shift_helper(op, ty));
+                emitted = true;
+            }
+            oi = oi + 1;
+        }
+        ti = ti + 1;
+    }
+    if emitted { out.push_byte(10); }
+}
+
 fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>, modelable_fi_set: Vec<i64>,
                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, target_reach_label: bool, target_body_replace: bool) -> String {
     let fns: Vec<IrFunction> = m.functions;
@@ -2873,6 +3129,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     let need_shl_i32: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL(), ITY_I32());
     let need_shr_i32: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR(), ITY_I32());
     let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, need_shl_i32, need_shr_i32, vec_max, model_string_max, hashmap_max, btreemap_max);
+    append_narrow_shift_helpers_for_module_fns(out, fns, target_fi, callee_fis);
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
 
     let mut ci: i64 = 0;

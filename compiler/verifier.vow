@@ -227,6 +227,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 func_has_integer_shift_op(f, IOP_SHR(), ITY_I32()),
                 vec_max, model_string_max, hashmap_max, btreemap_max
             );
+            append_narrow_shift_helpers_for_function(preamble, f);
             let empty_modelable: Vec<i64> = Vec::new();
             emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label, body_replace, 0);
             preamble.push_byte(10);
