@@ -164,7 +164,7 @@ callee.
 This is a caller precondition failure at the restart invocation. It uses the
 existing `VerifyFailed` / `VowRequiresViolated` family, points at the invalid
 argument and failed restart clause, identifies the selected restart, and uses
-`blame: "Caller"`. The verifier does not enter the recovery edge or assume
+`blame: "caller"`. The verifier does not enter the recovery edge or assume
 `R_r` after this failure. Its counterexample also includes `recovery_path`
 context so the callee, restart, call site, and handler arm remain
 machine-readable.
@@ -173,7 +173,7 @@ machine-readable.
 
 The primary counterexample remains the actual proof obligation that failed. For
 example, if the enclosing function's `ensures` cannot be proved on a recovery
-edge, the violation is that enclosing `ensures` clause with `blame: "Callee"`.
+edge, the violation is that enclosing `ensures` clause with `blame: "callee"`.
 Selecting a restart is not a precondition violation, so this must not be
 reported as generic Caller blame.
 
@@ -184,7 +184,7 @@ Every counterexample whose trace crosses a recovery edge must add structured
 {
   "function": "read_strictly_positive",
   "violation": "ensures result > 0",
-  "blame": "Callee",
+  "blame": "callee",
   "recovery_path": {
     "callee": "read_positive",
     "restart": "use_zero",
@@ -202,6 +202,11 @@ Every counterexample whose trace crosses a recovery edge must add structured
   }
 }
 ```
+
+These lowercase blame strings are the static counterexample wire values
+defined by `counterexample.schema.json`. Debug-mode runtime `VowViolation`
+output is a separate schema and retains its capitalized `"Caller"` and
+`"Callee"` values.
 
 Human output should explain the same path directly: `recovery through
 read_positive::use_zero guarantees result == 0; this path does not establish
