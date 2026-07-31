@@ -235,6 +235,61 @@ fn check_narrow_shifts_use_helpers() -> i64 {
     0
 }
 
+fn check_expanding_string_helper_falls_back(name: String, argc: i64, base_code: i64) -> i64 {
+    let args: Vec<i64> = Vec::new();
+    let insts: Vec<IrInst> = Vec::new();
+    let mut i: i64 = 0;
+    while i < argc {
+        args.push(i);
+        insts.push(mk_inst_const_i64(i, 0));
+        i = i + 1;
+    }
+
+    let call_id: i64 = 40;
+    insts.push(mk_inst_call_extern(call_id, ITY_PTR(), args, name));
+    insts.push(mk_inst_return(call_id + 1, call_id));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let f: IrFunction = mk_function(
+        base_code,
+        String::from("expanding_helper"),
+        Vec::new(),
+        ITY_PTR(),
+        blocks
+    );
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    let const_fn_indices: Vec<i64> = Vec::new();
+
+    let reason: String = non_modelable_reason(f, m, const_fn_indices);
+    if !reason.contains(name) {
+        return base_code;
+    }
+
+    let c: String = String::from("");
+    let modelable_fi_set: Vec<i64> = Vec::new();
+    emit_c_function(
+        c,
+        f,
+        const_fn_indices,
+        modelable_fi_set,
+        m,
+        16,
+        16,
+        16,
+        16,
+        false,
+        false,
+        0
+    );
+    if !c.contains(String::from("/* opcode Call not modelled */")) {
+        return base_code + 1;
+    }
+    0
+}
+
 fn i64_result_to_i32(r: i64) -> i32 {
     if r == 1 { return 1; }
     if r == 2 { return 2; }
@@ -268,6 +323,18 @@ fn i64_result_to_i32(r: i64) -> i32 {
     if r == 37 { return 37; }
     if r == 38 { return 38; }
     if r == 39 { return 39; }
+    if r == 40 { return 40; }
+    if r == 41 { return 41; }
+    if r == 42 { return 42; }
+    if r == 43 { return 43; }
+    if r == 44 { return 44; }
+    if r == 45 { return 45; }
+    if r == 46 { return 46; }
+    if r == 47 { return 47; }
+    if r == 48 { return 48; }
+    if r == 49 { return 49; }
+    if r == 50 { return 50; }
+    if r == 51 { return 51; }
     if r != 0 { return 99; }
     0
 }
@@ -287,5 +354,17 @@ fn main() -> i32 {
     if r6 != 0 { return i64_result_to_i32(r6); }
     let r7: i64 = check_narrow_shifts_use_helpers();
     if r7 != 0 { return i64_result_to_i32(r7); }
+    let r8: i64 = check_expanding_string_helper_falls_back(String::from("__vow_string_replace"), 3, 40);
+    if r8 != 0 { return i64_result_to_i32(r8); }
+    let r9: i64 = check_expanding_string_helper_falls_back(String::from("__vow_string_replace_in_arena"), 4, 42);
+    if r9 != 0 { return i64_result_to_i32(r9); }
+    let r10: i64 = check_expanding_string_helper_falls_back(String::from("__vow_string_join"), 2, 44);
+    if r10 != 0 { return i64_result_to_i32(r10); }
+    let r11: i64 = check_expanding_string_helper_falls_back(String::from("__vow_string_join_in_arena"), 3, 46);
+    if r11 != 0 { return i64_result_to_i32(r11); }
+    let r12: i64 = check_expanding_string_helper_falls_back(String::from("__vow_string_split"), 2, 48);
+    if r12 != 0 { return i64_result_to_i32(r12); }
+    let r13: i64 = check_expanding_string_helper_falls_back(String::from("__vow_string_split_in_arena"), 3, 50);
+    if r13 != 0 { return i64_result_to_i32(r13); }
     0
 }

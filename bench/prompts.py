@@ -41,6 +41,16 @@ Fill in the function bodies so that all contracts verify. Return ONLY the comple
 Return the complete .vow file with function bodies filled in. Do not change the module name, function signatures, or contracts."""
 
 
+def build_skeleton_mismatch_prompt(message: str) -> str:
+    return f"""The response changed an immutable part of the supplied skeleton:
+
+{message}
+
+Restore the exact module name, skeleton function signatures, and contracts.
+Change function bodies only; additional helper functions are allowed. Return
+ONLY the complete updated .vow file, no explanation."""
+
+
 def _classify_violation(violation: str) -> str:
     """Classify a violation string as requires/ensures/invariant."""
     v = violation.lower()
@@ -139,6 +149,8 @@ def curate_verify_output(
 
     counterexamples = parsed_json.get("counterexamples", [])
     func = parsed_json.get("function", "unknown")
+    first_formatted_call_sites = ""
+    first_formatted_violating_args = ""
 
     if not counterexamples:
         parts.append(
@@ -173,6 +185,10 @@ def curate_verify_output(
             violating_args = _format_violating_args(ce.get("violating_args"))
             if violating_args:
                 parts.append(f"- Violating arguments: {violating_args}")
+
+            if i == 0:
+                first_formatted_call_sites = call_sites
+                first_formatted_violating_args = violating_args
 
             exec_path = ce.get("execution_path", [])
             if exec_path:
@@ -214,9 +230,7 @@ def curate_verify_output(
             )
         elif vtype == "requires":
             context_hint = ""
-            if _format_call_sites(ce0.get("call_sites")) or _format_violating_args(
-                ce0.get("violating_args")
-            ):
+            if first_formatted_call_sites or first_formatted_violating_args:
                 context_hint = " Use the caller context above to locate the bad call and argument values."
             parts.append(
                 f"**Hint:** The precondition `{violation}` was violated by the caller. "
