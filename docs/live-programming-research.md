@@ -226,10 +226,12 @@ precondition check. Either way, this is more than a branch-target tweak and
 should be sized accordingly.
 
 **Verification:** Each restart expression is a heap-read-only synthetic
-verification target that reuses ordinary function-contract checking. The
-initial feature admits only locally validated read-only instructions and known
-read-only builtins; writes, mutable allocation, and user-defined calls are
-rejected rather than requiring transitive footprint analysis. Every successful
+verification target that reuses ordinary function-contract checking. The same
+local read-only validator applies to the restart expression, its argument
+contract, and its restart-specific postcondition. The initial feature admits
+only locally validated read-only instructions and known read-only builtins;
+writes, mutable allocation, and user-defined calls are rejected in all three
+places rather than requiring transitive footprint analysis. Every successful
 restart must establish the function's normal `ensures` clauses. A declared
 restart-specific postcondition is an additional path-local fact, so recovery
 through restart `r` exposes `Q && R_r`, never `R_r` in place of `Q`.

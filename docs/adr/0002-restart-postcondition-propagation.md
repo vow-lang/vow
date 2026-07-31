@@ -41,8 +41,8 @@ completion; restart contracts do not create an implicit call-time snapshot.
 Every successful completion of a function, normal or recovered, must establish
 the function's ordinary postcondition `Q`. A restart-specific postcondition is
 an additional path-local fact, not a replacement for `Q`. Restart expressions
-are restricted to heap-read-only computation so recovery does not require a
-new write-footprint summary.
+and restart-specific contract clauses are restricted to heap-read-only
+computation so recovery does not require a new write-footprint summary.
 
 The exported guarantee of recovery through `r` is therefore:
 
@@ -83,19 +83,21 @@ object to establish `Q`, that fact must be included in `A_r`, and the handler
 must prove it at the invocation site.
 
 For the initial feature, heap-read-only is a structural restriction on the
-restart expression's lowered instructions. Literals, scalar operators,
-callee/restart arguments, and reads through those arguments are permitted.
-Assignments, field or indexed writes, mutable allocation, and user-defined
-function or method calls are rejected. Known read-only compiler builtins may
-be admitted directly. This fail-closed subset prevents a nominally
-effect-free helper from hiding a write and requires only local opcode
-validation, not transitive write or escape analysis. The subset may be widened
-later only when existing compiler summaries can prove the same read-only
-property without adding a new verifier mechanism.
+lowered instructions of the restart expression, `A_r`, and `R_r`. Literals,
+scalar operators, callee/restart arguments, and reads through those arguments
+are permitted. Assignments, field or indexed writes, mutable allocation, and
+user-defined function or method calls are rejected in all three places. Known
+read-only compiler builtins may be admitted directly. Applying one validator
+to the body and both restart-specific clauses prevents a nominally effect-free
+helper from hiding a write during either contract phase. It requires only
+local opcode validation, not transitive write or escape analysis. The subset
+may be widened later only when existing compiler summaries can prove the same
+read-only property without adding a new verifier mechanism.
 
-This ADR does not strengthen purity rules for existing functions or contracts.
-If those rules are independently found insufficient, that is a general
-soundness issue and must not be hidden inside the restart feature.
+This ADR does not retroactively strengthen purity rules for ordinary functions
+or their existing `P` and `Q` clauses. If those rules are independently found
+insufficient, that is a general soundness issue and must not be hidden inside
+the restart feature.
 
 ### Facts exposed at a handle site
 
@@ -282,7 +284,7 @@ The following remain part of the broader condition/restart feature design:
   exhaustiveness;
 - runtime selection and parameter-passing ABI;
 - continuation representation and whether restart invocation returns locally;
-- exact IR representation of the pure synthetic restart target.
+- exact IR representation of the heap-read-only synthetic restart target.
 
 Those choices may change without changing this ADR's invariant: every
 successful outcome establishes `Q`, and a restart adds only path-local facts.
@@ -303,6 +305,6 @@ public-interface tests must cover:
 8. no automatic weakening of an enclosing function's contract;
 9. existing ensures diagnostics identifying a restart that cannot establish
    `Q`; and
-10. rejection of restart expressions containing writes or user-defined calls;
-    and
+10. rejection of writes or user-defined calls in a restart expression, `A_r`,
+    or `R_r`; and
 11. Rust/self-hosted parity for all restart verification and diagnostics.
