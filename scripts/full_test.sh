@@ -1024,6 +1024,13 @@ if bash tests/bootstrap/tests.sh >"$bootstrap_log" 2>&1; then
 else
     fail "bootstrap/smoke" "$(tail -20 "$bootstrap_log")"
 fi
+
+release_log="$TMPDIR/release_tests.log"
+if python3 tests/test_release.py >"$release_log" 2>&1; then
+    pass "release/smoke"
+else
+    fail "release/smoke" "$(tail -20 "$release_log")"
+fi
 echo ""
 
 # ─── Section 8c: Contract Quality ─────────────────────────────────
