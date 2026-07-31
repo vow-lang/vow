@@ -129,6 +129,16 @@ fn maximum_supported_declaration_does_not_pass_quartic_work() {
 }
 
 #[test]
+fn maximum_supported_declaration_is_ambiguous_without_enough_trend_samples() {
+    let samples = [16_u64, 32, 64].map(|input_size| Sample::new(input_size, input_size.pow(4)));
+
+    let analysis = analyze(ComplexityClass::CubicLogarithmic, &samples).unwrap();
+
+    assert_eq!(analysis.verdict, Verdict::Ambiguous);
+    assert_eq!(analysis.observed, Some(ComplexityClass::CubicLogarithmic));
+}
+
+#[test]
 fn maximum_supported_declaration_ignores_fixed_setup_cost_for_quartic_work() {
     let samples = [16_u64, 32, 64, 128, 256, 512]
         .map(|input_size| Sample::new(input_size, 1_000_000_000 + input_size.pow(4)));

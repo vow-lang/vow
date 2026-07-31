@@ -158,8 +158,9 @@ pub enum Verdict {
 ///
 /// `observed` is `None` when no candidate meets the fit threshold. An
 /// `Ambiguous` result may retain the maximum candidate when its normalized
-/// tail is still rising, because finite samples cannot distinguish a
-/// higher-order curve from lower-order effects with certainty.
+/// tail is still rising or has too few intervals to establish a trend, because
+/// finite samples cannot distinguish a higher-order curve from lower-order
+/// effects with certainty.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Analysis {
     pub verdict: Verdict,
@@ -206,6 +207,7 @@ impl std::error::Error for AnalysisError {}
 const MINIMUM_R_SQUARED: f64 = 0.90;
 const NORMALIZED_TREND_TOLERANCE: f64 = 1.0e-9;
 const REQUIRED_RISING_SLOPE_STEPS: usize = 2;
+const REQUIRED_MAXIMUM_TREND_SAMPLES: usize = REQUIRED_RISING_SLOPE_STEPS + 2;
 const CANDIDATES: [ComplexityClass; 8] = [
     ComplexityClass::Constant,
     ComplexityClass::Logarithmic,
@@ -259,7 +261,7 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
 
     let verdict = if observed == ComplexityClass::CubicLogarithmic
         && observed <= declared
-        && has_rising_maximum_residual_tail(samples)
+        && maximum_trend_is_ambiguous(samples)
     {
         Verdict::Ambiguous
     } else if observed <= declared {
@@ -274,20 +276,20 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
     })
 }
 
-fn has_rising_maximum_residual_tail(samples: &[Sample]) -> bool {
+fn maximum_trend_is_ambiguous(samples: &[Sample]) -> bool {
+    if samples.len() < REQUIRED_MAXIMUM_TREND_SAMPLES {
+        return true;
+    }
+
     let maximum = ComplexityClass::CubicLogarithmic;
     let mut slopes = samples
         .windows(2)
         .rev()
         .map(|pair| normalized_interval_slope(maximum, &pair[0], &pair[1]));
-    let Some(mut newer) = slopes.next() else {
-        return false;
-    };
+    let mut newer = slopes.next().expect("sample count checked above");
 
     for _ in 0..REQUIRED_RISING_SLOPE_STEPS {
-        let Some(older) = slopes.next() else {
-            return false;
-        };
+        let older = slopes.next().expect("sample count checked above");
         let scale = newer.abs().max(older.abs()).max(1.0);
         if newer <= older + scale * NORMALIZED_TREND_TOLERANCE {
             return false;
