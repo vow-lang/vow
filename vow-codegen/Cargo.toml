@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 vow-ir = { path = "../vow-ir" }
 vow-diag = { path = "../vow-diag" }
+vow-linker = { path = "../vow-linker" }
 cranelift-codegen = "0.134"
 cranelift-frontend = "0.134"
 cranelift-module = "0.134"

@@ -96,21 +96,21 @@ echo "Measuring build/vowc build --no-verify compiler/main.vow ($SAMPLES samples
 nv_rss=$(measure_one no_verify build/vowc build --no-verify compiler/main.vow)
 echo "  median peak RSS (kbytes): $nv_rss" >&2
 
-verify_block='"stage2_default_kb": null'
 if [ "$INCLUDE_VERIFY" = "1" ]; then
     echo "Measuring build/vowc build --verify-jobs 1 compiler/main.vow ($SAMPLES samples)..." >&2
     v_rss=$(measure_one verify_j1 build/vowc build --verify-jobs 1 compiler/main.vow)
     echo "  median peak RSS (kbytes): $v_rss" >&2
-    verify_block="\"stage2_default_kb\": $v_rss"
 fi
 
-cat > "$OUT" <<EOF
 {
-    "stage2_no_verify_kb": $nv_rss,
-    $verify_block,
-    "samples": $SAMPLES
-}
-EOF
+    printf '{\n'
+    printf '    "stage2_no_verify_kb": %s,\n' "$nv_rss"
+    if [ "$INCLUDE_VERIFY" = "1" ]; then
+        printf '    "stage2_default_kb": %s,\n' "$v_rss"
+    fi
+    printf '    "samples": %s\n' "$SAMPLES"
+    printf '}\n'
+} > "$OUT"
 
 echo "Wrote $OUT"
 echo "  stage2_no_verify_kb = $nv_rss"

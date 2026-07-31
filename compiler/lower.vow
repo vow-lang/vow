@@ -2483,6 +2483,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(source_id);
                 let clone_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_clone"));
+                lctx_set_inst_span(ctx, clone_id, expr_span(a, eid));
                 lctx_tag(ctx, clone_id, String::from("String"));
                 return clone_id;
             }
@@ -2506,6 +2507,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args2, IDATA_CONST_I64(), 0, 0, String::from("")));
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_raw_parts_copy"));
+            lctx_set_inst_span(ctx, result, expr_span(a, eid));
             lctx_tag(ctx, result, String::from("String"));
             return result;
         }
@@ -2519,6 +2521,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             call_args.push(ptr_val);
             call_args.push(len_val);
             let str_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_new"));
+            lctx_set_inst_span(ctx, str_result, expr_span(a, eid));
             lctx_tag(ctx, str_result, String::from("String"));
             return str_result;
         }
@@ -2526,6 +2529,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if enum_name == String::from("HashMap") && variant_name == String::from("new") {
             let call_args: Vec<i64> = Vec::new();
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_new"));
+            lctx_set_inst_span(ctx, result, expr_span(a, eid));
             lctx_tag(ctx, result, String::from("HashMap"));
             return result;
         }
@@ -2533,6 +2537,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if enum_name == String::from("BTreeMap") && variant_name == String::from("new") {
             let call_args: Vec<i64> = Vec::new();
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_new"));
+            lctx_set_inst_span(ctx, result, expr_span(a, eid));
             lctx_tag(ctx, result, String::from("BTreeMap"));
             return result;
         }
@@ -2546,6 +2551,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             call_args.push(size_val);
             call_args.push(align_val);
             let vec_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_new"));
+            lctx_set_inst_span(ctx, vec_result, expr_span(a, eid));
             return vec_result;
         }
 
@@ -2567,6 +2573,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args2, IDATA_CONST_I64(), 0, 0, String::from("")));
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_from_raw_parts_copy_val"));
+            lctx_set_inst_span(ctx, result, expr_span(a, eid));
             lctx_tag(ctx, result, String::from("Vec"));
             return result;
         }

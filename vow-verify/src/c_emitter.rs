@@ -4765,6 +4765,12 @@ mod tests {
                 matches!(reason.as_deref(), Some(text) if text.contains(name)),
                 "{name} should stay non-modelable until its expanding length semantics are modeled; reason: {reason:?}"
             );
+
+            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains("/* opcode Call not modelled */"),
+                "{name} should fall through to the unmodelled-call path: {c}"
+            );
         }
     }
 

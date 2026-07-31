@@ -1007,27 +1007,27 @@ fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<
 }
 
 // Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
-fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+fn run_verify_loop(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> i64 [io] {
-    run_verify_loop_traced(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, trace_off())
+    run_verify_loop_traced(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, trace_off())
 }
 
 // Collect one ESBMC result and record its proof span + compiler->esbmc flow
 // arrow (issue #784). `verify_origin` is the verification-driver handoff origin;
 // `fi` is the function index used as the flow id. A no-op for tracing when `t`
 // is disabled. Returns the proven flag from verify_collect_and_report.
-fn verify_collect_traced(t: TraceCtx, verify_origin: i64, h: i64, tmp: String, f: IrFunction, fi: i64, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+fn verify_collect_traced(esbmc_bin: String, t: TraceCtx, verify_origin: i64, h: i64, tmp: String, f: IrFunction, fi: i64, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                          vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
     let proof_start: i64 = trace_now(t);
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, fi, TRACE_FLOW_START());
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, fi, TRACE_FLOW_END());
-    let proven: i64 = verify_collect_and_report(h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t);
+    let proven: i64 = verify_collect_and_report(esbmc_bin, h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t);
     trace_span(t, str2(String::from("esbmc:"), f.name), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, trace_now(t) - proof_start, f.name);
     proven
 }
 
 // Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
-fn run_verify_loop_traced(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64, t: TraceCtx) -> i64 [io] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
@@ -1050,7 +1050,7 @@ fn run_verify_loop_traced(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indic
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -1061,7 +1061,7 @@ fn run_verify_loop_traced(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indic
                     any_skipped = 1;
                 } else {
                     eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
-                    let started: EsbmcStart = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    let started: EsbmcStart = verify_start(esbmc_bin, f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                     in_flight_h.push(started.handle);
                     in_flight_fi.push(fi);
                     in_flight_tmp.push(started.tmp_path);
@@ -1078,7 +1078,7 @@ fn run_verify_loop_traced(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indic
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -1216,7 +1216,7 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
 }
 
 fn verify_collect_and_report(
-    h: i64, tmp_path: String, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
+    esbmc_bin: String, h: i64, tmp_path: String, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, t: TraceCtx,
 ) -> i64 [io] {
@@ -1257,7 +1257,7 @@ fn verify_collect_and_report(
         let auto_enc: bool = is_auto_encoding(encoding);
         if (!bv_is_unknown || bv_memory_limit) && auto_enc && bv_solver != String::from("bitwuzla") {
             eprintln_str(str3(String::from("  "), f.name, String::from(": BV inconclusive, retrying with --z3 --ir...")));
-            let vr2: VerifyResult = verify_function_ir_fallback(f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+            let vr2: VerifyResult = verify_function_ir_fallback(esbmc_bin, f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
             let st2: i64 = vr2.status;
             if st2 == VERIFY_PROVEN_IR() {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (IR)")));
@@ -1350,7 +1350,8 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
             solver = String::from("z3");
         }
     }
-    if !esbmc_exists() {
+    let esbmc_bin: String = esbmc_path();
+    if !esbmc_exists(esbmc_bin) {
         eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
         diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
         return 1;
@@ -1362,7 +1363,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     let soft_meta: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
     let t_verify: i64 = trace_now(tctx);
-    let outcome: i64 = run_verify_loop_traced(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, tctx);
+    let outcome: i64 = run_verify_loop_traced(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, tctx);
     trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), t_verify, trace_now(tctx) - t_verify, String::from(""));
     let status_str: String = {
         if outcome == 0 { String::from("Verified") }
@@ -1406,7 +1407,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
 //   - `ces`, `soft_meta`: counterexample + soft-fail accumulators threaded
 //     through to `verify_collect_and_report`.
 // Returns `[all_proven, any_skipped]`.
-fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+fn build_verify_phase(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                      vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64, verify_origin: i64, t: TraceCtx) -> Vec<i64> [io] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
@@ -1424,7 +1425,7 @@ fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: 
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -1435,7 +1436,7 @@ fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: 
                     any_skipped = 1;
                 } else {
                     eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
-                    let started: EsbmcStart = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    let started: EsbmcStart = verify_start(esbmc_bin, f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                     in_flight_h.push(started.handle);
                     in_flight_fi.push(fi);
                     in_flight_tmp.push(started.tmp_path);
@@ -1458,7 +1459,7 @@ fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: 
 //
 // A no-op when `in_flight_h` is empty; callers may invoke it unconditionally
 // without a do_verify guard if desired.
-fn build_drain_verify_phase(in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx) -> i64 [io] {
+fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx) -> i64 [io] {
     let mut all_proven: i64 = all_proven_in;
     while in_flight_h.len() > 0 {
         let oldest_h: i64 = in_flight_h[0];
@@ -1468,7 +1469,7 @@ fn build_drain_verify_phase(in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_fl
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_traced(t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -1542,8 +1543,12 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     }
     emit_ir_warnings(ir_mod, dctx);
     let do_verify: bool = !has_flag(argv, "--no-verify");
+    let esbmc_bin: String = {
+        if do_verify { esbmc_path() }
+        else { String::from("") }
+    };
     if do_verify {
-        if !esbmc_exists() {
+        if !esbmc_exists(esbmc_bin) {
             eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify to skip verification"));
             diag_emit_build_verify_json(String::from("VerifyFailed"), String::from(""), dctx, Vec::new());
             return 1;
@@ -1584,7 +1589,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
     let verify_origin: i64 = trace_now(tctx);
     if do_verify {
-        let phase_result: Vec<i64> = build_verify_phase(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, verify_origin, tctx);
+        let phase_result: Vec<i64> = build_verify_phase(esbmc_bin, fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, in_flight_tmp, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs, verify_origin, tctx);
         if phase_result[0] == 0 { all_proven = 0; }
         if phase_result[1] == 1 { any_skipped = 1; }
     }
@@ -1598,7 +1603,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
-    all_proven = build_drain_verify_phase(in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx);
+    all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx);
     trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, trace_now(tctx) - verify_origin, String::from(""));
     let status_str: String = {
         if all_proven == 0 { String::from("VerifyFailed") }
@@ -1795,6 +1800,10 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         else { 30000 }
     };
     let do_verify: bool = has_flag(argv, "--verify");
+    let esbmc_bin: String = {
+        if do_verify { esbmc_path() }
+        else { String::from("") }
+    };
     let t_mks_str: String = get_flag_arg(argv, "--max-k-step");
     let t_max_k_step: String = { if t_mks_str.len() > 0 { t_mks_str } else { String::from("50") } };
     let t_vec_max: i64 = VOW_VEC_MAX();
@@ -1931,7 +1940,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                                     verify_failed = true;
                                 } else if ovr.status == VERIFY_TIMEOUT() || (ovr.status == VERIFY_UNKNOWN() && output_has_memory_limit(ovr.raw_output)) {
                                     // BV timed out or hit the memory cap; retry with IR before failing.
-                                    let ovr2: VerifyResult = verify_function_ir_fallback(ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
+                                    let ovr2: VerifyResult = verify_function_ir_fallback(esbmc_bin, ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                                     if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {
                                         verify_failed = true;
                                     }
@@ -1950,7 +1959,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                             if skip_if_non_modelable(vf, ir_mod, t_const_fns, t_dctx) {
                                 contract_skipped = true;
                             } else {
-                                let vstarted: EsbmcStart = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
+                                let vstarted: EsbmcStart = verify_start(esbmc_bin, vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                                 vin_flight_h.push(vstarted.handle);
                                 vin_flight_fi.push(vfi);
                                 vin_flight_tmp.push(vstarted.tmp_path);
@@ -1979,7 +1988,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         } else if ovr.status == VERIFY_TIMEOUT() || (ovr.status == VERIFY_UNKNOWN() && output_has_memory_limit(ovr.raw_output)) {
                             // Mirror the bounded-pool drain: retry IR before treating Timeout or memlimit as passing.
                             // Without this, the common nfns <= t_jobs case silently accepts unverified functions.
-                            let ovr2: VerifyResult = verify_function_ir_fallback(ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
+                            let ovr2: VerifyResult = verify_function_ir_fallback(esbmc_bin, ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                             if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {
                                 verify_failed = true;
                             }
@@ -2140,7 +2149,8 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
     }
     if n_errors == 0 {
         if do_verify {
-            if !esbmc_exists() {
+            let esbmc_bin: String = esbmc_path();
+            if !esbmc_exists(esbmc_bin) {
                 eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
                 diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
                 return 1;
@@ -2161,7 +2171,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let use_cache_leg: bool = !has_flag(argv, "--no-cache");
             let jobs_leg: i64 = resolve_verify_jobs(argv);
             let const_fn_indices_leg: Vec<i64> = detect_const_fns(ir_mod);
-            let outcome: i64 = run_verify_loop(fns, ir_mod, const_fn_indices_leg, dctx, path, ces, soft_meta_leg, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, btreemap_max_leg, jobs_leg);
+            let outcome: i64 = run_verify_loop(esbmc_bin, fns, ir_mod, const_fn_indices_leg, dctx, path, ces, soft_meta_leg, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, btreemap_max_leg, jobs_leg);
             let status_str: String = {
                 if outcome == 0 { String::from("Verified") }
                 else if outcome == 2 { String::from("Skipped") }
@@ -4373,7 +4383,16 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`memory_root_arena_bytes()` returns the current bytes retained by root-region arena chunks. `memory_peak_bytes()` returns the peak live bytes retained by all open arena chunks since process start. `memory_alloc_count_since_start()` returns the number of successful Vow arena allocation requests since process start. These queries do not allocate; they are effectful because they observe runtime process state.\n"));
+    r.push_str(String::from("`memory_root_arena_bytes()` returns the current bytes retained by root-region\n"));
+    r.push_str(String::from("arena chunks. It is a gauge, not a monotone counter: adding a root chunk raises\n"));
+    r.push_str(String::from("it, while reclaiming an abandoned single-resident oversized root chunk during\n"));
+    r.push_str(String::from("backing growth lowers it. `memory_peak_bytes()` returns the peak live bytes\n"));
+    r.push_str(String::from("retained by all open arena chunks since process start.\n"));
+    r.push_str(String::from("`memory_alloc_count_since_start()` returns the number of successful Vow arena\n"));
+    r.push_str(String::from("allocation requests since process start. Peak bytes and allocation count are\n"));
+    r.push_str(String::from("monotone non-decreasing and saturate at `u64::MAX` rather than wrapping. These\n"));
+    r.push_str(String::from("queries do not allocate; they are effectful because they observe runtime process\n"));
+    r.push_str(String::from("state.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### Encoding\n"));
     r.push_str(String::from("\n"));
@@ -9037,7 +9056,16 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("`num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`memory_root_arena_bytes()` returns the current bytes retained by root-region arena chunks. `memory_peak_bytes()` returns the peak live bytes retained by all open arena chunks since process start. `memory_alloc_count_since_start()` returns the number of successful Vow arena allocation requests since process start. These queries do not allocate; they are effectful because they observe runtime process state.\n"));
+    r.push_str(String::from("`memory_root_arena_bytes()` returns the current bytes retained by root-region\n"));
+    r.push_str(String::from("arena chunks. It is a gauge, not a monotone counter: adding a root chunk raises\n"));
+    r.push_str(String::from("it, while reclaiming an abandoned single-resident oversized root chunk during\n"));
+    r.push_str(String::from("backing growth lowers it. `memory_peak_bytes()` returns the peak live bytes\n"));
+    r.push_str(String::from("retained by all open arena chunks since process start.\n"));
+    r.push_str(String::from("`memory_alloc_count_since_start()` returns the number of successful Vow arena\n"));
+    r.push_str(String::from("allocation requests since process start. Peak bytes and allocation count are\n"));
+    r.push_str(String::from("monotone non-decreasing and saturate at `u64::MAX` rather than wrapping. These\n"));
+    r.push_str(String::from("queries do not allocate; they are effectful because they observe runtime process\n"));
+    r.push_str(String::from("state.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### Encoding\n"));
     r.push_str(String::from("\n"));
@@ -13146,8 +13174,12 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
 
     // If --verify, run verification per function and update statuses
     let mut exit_code: i32 = 0;
+    let esbmc_bin: String = {
+        if do_verify { esbmc_path() }
+        else { String::from("") }
+    };
     if do_verify {
-        if !esbmc_exists() {
+        if !esbmc_exists(esbmc_bin) {
             let mut ei_missing: i64 = 0;
             while ei_missing < e_statuses.len() {
                 e_statuses[ei_missing] = String::from("error");
@@ -13174,7 +13206,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                         // `vow:N` claim is reported individually, so each clause
                         // gets a precise verdict instead of the siblings of a
                         // failed clause collapsing to `unknown` (#81 PR-A).
-                        let mpr: MultiPropertyResult = verify_function_multi_property(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        let mpr: MultiPropertyResult = verify_function_multi_property(esbmc_bin, func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
                         let overall: i64 = mpr.status;
                         let v_ids: Vec<i64> = mpr.verdict_ids;
                         let v_proven: Vec<i64> = mpr.verdict_proven;
@@ -13216,7 +13248,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                         // requires; if that point is unreachable, override the
                         // whole contract's clauses with `vacuous`. Only functions
                         // with a `requires` are eligible.
-                        let vac: i64 = verify_function_vacuity(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        let vac: i64 = verify_function_vacuity(esbmc_bin, func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
                         if vac == 1 {
                             let mut vi2: i64 = 0;
                             while vi2 < e_func_ids.len() {
@@ -13230,7 +13262,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                         // Weakness probe (#81 PR-C): if a trivial `return
                         // <default>` body still satisfies the ensures, mark each
                         // ensures clause trivially_satisfiable (informational).
-                        let triv: i64 = verify_function_trivial(func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        let triv: i64 = verify_function_trivial(esbmc_bin, func, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
                         if triv == 1 {
                             let mut ti: i64 = 0;
                             while ti < e_func_ids.len() {

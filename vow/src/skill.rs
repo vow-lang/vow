@@ -2313,7 +2313,16 @@ section.
 
 `num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
 
-`memory_root_arena_bytes()` returns the current bytes retained by root-region arena chunks. `memory_peak_bytes()` returns the peak live bytes retained by all open arena chunks since process start. `memory_alloc_count_since_start()` returns the number of successful Vow arena allocation requests since process start. These queries do not allocate; they are effectful because they observe runtime process state.
+`memory_root_arena_bytes()` returns the current bytes retained by root-region
+arena chunks. It is a gauge, not a monotone counter: adding a root chunk raises
+it, while reclaiming an abandoned single-resident oversized root chunk during
+backing growth lowers it. `memory_peak_bytes()` returns the peak live bytes
+retained by all open arena chunks since process start.
+`memory_alloc_count_since_start()` returns the number of successful Vow arena
+allocation requests since process start. Peak bytes and allocation count are
+monotone non-decreasing and saturate at `u64::MAX` rather than wrapping. These
+queries do not allocate; they are effectful because they observe runtime process
+state.
 
 #### Encoding
 
@@ -6955,7 +6964,16 @@ section.
 
 `num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
 
-`memory_root_arena_bytes()` returns the current bytes retained by root-region arena chunks. `memory_peak_bytes()` returns the peak live bytes retained by all open arena chunks since process start. `memory_alloc_count_since_start()` returns the number of successful Vow arena allocation requests since process start. These queries do not allocate; they are effectful because they observe runtime process state.
+`memory_root_arena_bytes()` returns the current bytes retained by root-region
+arena chunks. It is a gauge, not a monotone counter: adding a root chunk raises
+it, while reclaiming an abandoned single-resident oversized root chunk during
+backing growth lowers it. `memory_peak_bytes()` returns the peak live bytes
+retained by all open arena chunks since process start.
+`memory_alloc_count_since_start()` returns the number of successful Vow arena
+allocation requests since process start. Peak bytes and allocation count are
+monotone non-decreasing and saturate at `u64::MAX` rather than wrapping. These
+queries do not allocate; they are effectful because they observe runtime process
+state.
 
 #### Encoding
 
