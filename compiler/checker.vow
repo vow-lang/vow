@@ -1497,7 +1497,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let count: i64 = expr_const_int_value(a, rhs_eid);
                     if count >= width || count < 0 {
                         let message: String = String::from("shift count ");
-                        message.push_str(i64_to_str(count));
+                        message.push_str(i64_to_string(count));
                         message.push_str(String::from(" is out of range for "));
                         message.push_str(ty_tag_name(lhs_tag));
                         env_emit_error_code(e, EC_SHIFT_COUNT_OUT_OF_RANGE(), message, expr_span(a, rhs_eid));
