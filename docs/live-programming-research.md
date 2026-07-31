@@ -226,9 +226,17 @@ precondition check. Either way, this is more than a branch-target tweak and
 should be sized accordingly.
 
 **Verification:** Each restart expression is a separate ESBMC verification
-target. The verifier proves that the restart's return value satisfies the
-function's `ensures` clause (or a weaker restart-specific postcondition). The
-restart paths are finite, statically enumerable, and bounded.
+target. A restart may establish the function's normal `ensures` clauses or a
+declared restart-specific postcondition. At a `handle` site, the normal edge
+exposes the normal postcondition and each selected recovery edge exposes only
+that restart's postcondition. The verifier checks downstream obligations on
+every reachable edge; it never assumes the stronger normal postcondition after
+a weaker recovery, and it never weakens the enclosing function's contract
+automatically. The facts stay in ordinary CFG path conditions rather than
+becoming a new refinement-type axis. The complete caller-side decision,
+including failure diagnostics, is recorded in
+[ADR 0002](adr/0002-restart-postcondition-propagation.md). Restart paths are
+finite, statically enumerable, and bounded.
 
 **Agent bug class eliminated:** Unrecoverable contract violations. Agents can
 program compositional recovery strategies without recompilation.
