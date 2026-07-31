@@ -1002,15 +1002,37 @@ mod tests {
         Span::new(0, 0)
     }
 
-    // find_esbmc must agree with a fresh PATH lookup, with no machine-specific
-    // shortcuts that could shadow it. A hardcoded fallback to one developer's
-    // install path silently shipped to main once (commit ee14b5c1) and stuck
-    // around for months; this test exists so that the next time someone is
-    // tempted, CI catches it.
     #[test]
-    fn find_esbmc_agrees_with_path_lookup() {
-        let from_path = which("esbmc");
-        assert_eq!(find_esbmc(), from_path);
+    fn find_esbmc_returns_none_when_path_is_empty() {
+        const CHILD_SENTINEL: &str = "VOW_TEST_FIND_ESBMC_EMPTY_PATH_CHILD";
+        const CHILD_MARKER: &str = "find_esbmc empty-PATH child executed";
+
+        // Run the PATH override in a child process so other tests cannot race
+        // with process-global environment mutation. The sentinel prevents the
+        // selected child test from recursively spawning itself.
+        if std::env::var_os(CHILD_SENTINEL).is_some() {
+            println!("{CHILD_MARKER}");
+            assert!(find_esbmc().is_none());
+            return;
+        }
+
+        let empty_path = tempfile::tempdir().expect("empty PATH tempdir");
+        let output = Command::new(std::env::current_exe().expect("current test executable"))
+            .arg("--exact")
+            .arg("esbmc::tests::find_esbmc_returns_none_when_path_is_empty")
+            .arg("--nocapture")
+            .env("PATH", empty_path.path())
+            .env(CHILD_SENTINEL, "1")
+            .output()
+            .expect("run empty-PATH child test");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success() && stdout.contains(CHILD_MARKER),
+            "empty-PATH child did not execute successfully\nstatus: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status
+        );
     }
 
     #[test]
