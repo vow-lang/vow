@@ -1,0 +1,15 @@
+// TEST: stdout ""
+// Issue #331 regression: the inline Vec::new() is published through a
+// parameter container, so its allocation must surface as a RegionRootEscape
+// note anchored to the constructor expression.
+module RegionVecNewRootEscapeSpan
+
+fn push_empty(buckets: Vec<Vec<i64>>) {
+    buckets.push(Vec::new());
+}
+
+fn main() -> i32 {
+    let buckets: Vec<Vec<i64>> = Vec::new();
+    push_empty(buckets);
+    0
+}
