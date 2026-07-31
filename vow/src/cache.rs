@@ -8,8 +8,9 @@ use crate::frontend::DependencyManifest;
 // Bump this whenever generated object files are no longer ABI-compatible with
 // existing cached artifacts. Static string literals, full-width block arena
 // stack slots, and UTF-8-preserving string lexing all change generated object
-// contents, so pre-cutover objects must not be reused.
-const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-v1";
+// contents. Aggregate match-payload tags also change FieldGet indices for the
+// same source, so pre-cutover objects must not be reused.
+const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-match-aggregate-v2";
 
 pub struct CompileCache {
     dir: PathBuf,
@@ -417,6 +418,25 @@ mod tests {
             CompileCache::cache_key_with_abi_seed(&deps, "Release", "Off", "new-abi").unwrap();
 
         assert_ne!(old_key, new_key);
+    }
+
+    #[test]
+    fn compile_cache_key_invalidates_pre_aggregate_pattern_objects() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.vow");
+        std::fs::write(&a, "module A").unwrap();
+
+        let deps = DependencyManifest::from_paths(vec![a]);
+        let legacy_key = CompileCache::cache_key_with_abi_seed(
+            &deps,
+            "Release",
+            "Off",
+            "static-string-arena-slot-utf8-lexer-v1",
+        )
+        .unwrap();
+        let current_key = CompileCache::cache_key(&deps, "Release", "Off").unwrap();
+
+        assert_ne!(legacy_key, current_key);
     }
 
     #[test]
