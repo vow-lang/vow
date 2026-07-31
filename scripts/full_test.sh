@@ -455,6 +455,12 @@ if [ -z "$self_json" ]; then
 else
     check_unsigned_long_preamble_capture "verifier-preamble/self" "$self_capture" "$self_json" "$self_exit"
 fi
+
+if VOWC_BIN="$SELF" bash tests/esbmc-path-cache/tests.sh >"$TMPDIR/esbmc-path-cache.log" 2>&1; then
+    pass "verifier/esbmc-path-cache"
+else
+    fail "verifier/esbmc-path-cache" "$(tail -10 "$TMPDIR/esbmc-path-cache.log")"
+fi
 echo ""
 
 # ─── Section 3: Runtime Execution ──────────────────────────────────
