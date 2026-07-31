@@ -4315,7 +4315,12 @@ fn parse_or_default(s: String) -> i64 {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         let item_files = vec!["parse_i64.vow".to_string(); ast.items.len()];
-        let module = lower_module(&ast, &item_files, &StringExprSet::new());
+        let module = lower_module_with_pattern_aggregates(
+            &ast,
+            &item_files,
+            &StringExprSet::new(),
+            PatternAggregateMap::new(),
+        );
         let instructions: Vec<&Inst> = module.functions[0]
             .blocks
             .iter()
