@@ -2697,7 +2697,14 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_profile_enter" => {
             sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
         }
-        "__vow_profile_init" | "__vow_init_stack_guard" | "__vow_stack_exit" => {}
+        "__vow_perf_counter_read" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_perf_count"
+        | "__vow_perf_counter_reset"
+        | "__vow_profile_init"
+        | "__vow_init_stack_guard"
+        | "__vow_stack_exit" => {}
         "__vow_stack_enter" => {
             sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
         }

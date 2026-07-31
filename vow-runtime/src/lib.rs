@@ -297,6 +297,33 @@ pub unsafe extern "C" fn __vow_trace_vow(fn_name_ptr: *const c_char, vow_id: i64
 }
 
 // ---------------------------------------------------------------------------
+// Performance operation counting
+// ---------------------------------------------------------------------------
+
+static PERF_OPERATION_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Count one executed operation in a `vow-perf` instrumented artifact.
+///
+/// Saturation preserves the strongest reportable lower bound instead of
+/// wrapping a long-running measurement back to a deceptively small value.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_perf_count() {
+    let _ = PERF_OPERATION_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+        count.checked_add(1)
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_perf_counter_reset() {
+    PERF_OPERATION_COUNT.store(0, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_perf_counter_read() -> u64 {
+    PERF_OPERATION_COUNT.load(Ordering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------
 // Profile instrumentation
 // ---------------------------------------------------------------------------
 
@@ -4043,6 +4070,16 @@ pub extern "C" fn __vow_sanitize_check_generation(vec: *const u8, index: usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn performance_operation_counter_can_be_reset_incremented_and_read() {
+        __vow_perf_counter_reset();
+        __vow_perf_count();
+        __vow_perf_count();
+        assert_eq!(__vow_perf_counter_read(), 2);
+        __vow_perf_counter_reset();
+        assert_eq!(__vow_perf_counter_read(), 0);
+    }
 
     #[test]
     fn collect_proc_samples_reports_compiler_self() {
