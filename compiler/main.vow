@@ -3732,7 +3732,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Operator | Meaning    |\n"));
     r.push_str(String::from("|----------|------------|\n"));
-    r.push_str(String::from("| `-`      | Negation (not allowed on `u64`) |\n"));
+    r.push_str(String::from("| `-`      | Negation (not allowed on unsigned types) |\n"));
     r.push_str(String::from("| `!`      | Logical NOT|\n"));
     r.push_str(String::from("| `&`      | Borrow     |\n"));
     r.push_str(String::from("| `?`      | Unwrap (propagate error) |\n"));
@@ -8336,7 +8336,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Operator | Meaning    |\n"));
     r.push_str(String::from("|----------|------------|\n"));
-    r.push_str(String::from("| `-`      | Negation (not allowed on `u64`) |\n"));
+    r.push_str(String::from("| `-`      | Negation (not allowed on unsigned types) |\n"));
     r.push_str(String::from("| `!`      | Logical NOT|\n"));
     r.push_str(String::from("| `&`      | Borrow     |\n"));
     r.push_str(String::from("| `?`      | Unwrap (propagate error) |\n"));

@@ -1876,7 +1876,7 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 
 | Operator | Meaning    |
 |----------|------------|
-| `-`      | Negation (not allowed on `u64`) |
+| `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
 | `&`      | Borrow     |
 | `?`      | Unwrap (propagate error) |
@@ -6458,7 +6458,7 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 
 | Operator | Meaning    |
 |----------|------------|
-| `-`      | Negation (not allowed on `u64`) |
+| `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
 | `&`      | Borrow     |
 | `?`      | Unwrap (propagate error) |
