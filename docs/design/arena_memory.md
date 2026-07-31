@@ -297,6 +297,16 @@ on fallback. `__vow_vec_from_raw_parts_copy_val(arena, ptr, len)`
 already has the explicit-arena shape and copies the raw slots into the
 supplied arena.
 
+Runtime-created mutable `Vec` and `String` descriptors retain the
+public 24-byte `{ptr, len, cap}` layout, but the runtime allocation that
+contains the descriptor prefixes it with one private `VowArena*` owner
+word. The pointer returned to generated code still points at the public
+descriptor. Constructors, clone operations, and raw-parts copy
+operations MUST initialize this prefix. Static `VOW_CAP_RODATA`
+descriptors are bare 24-byte descriptors and have no prefix. Generated
+code and FFI consumers MUST NOT inspect or depend on this private word;
+it exists only for the checked projection routing described in §7.2.1.
+
 #### String runtime allocation API
 
 The existing root-region String symbols remain ABI-stable:
@@ -339,6 +349,10 @@ void  __vow_string_push_str_in_arena(struct VowArena* arena,
                                      void* dest, const void* src);
 void  __vow_string_push_byte_in_arena(struct VowArena* arena,
                                       void* string, int64_t byte);
+void  __vow_string_push_str_in_candidate_arena(
+          struct VowArena* candidate, void* dest, const void* src);
+void  __vow_string_push_byte_in_candidate_arena(
+          struct VowArena* candidate, void* string, int64_t byte);
 void* __vow_string_substr_in_arena(struct VowArena* arena,
                                    const void* string,
                                    int64_t start, int64_t len);
@@ -372,6 +386,14 @@ descriptor/header and any later growth allocation. Growth for both root
 and explicit-arena Strings uses the same arena grow path as Vec: try to
 extend in place, then allocate in the selected arena and copy on
 fallback.
+
+The two `_in_candidate_arena` mutation entries are not unchecked
+explicit-arena operations. They compare the receiver descriptor's
+private owner word with `candidate`; a match uses that arena, while a
+mismatch delegates to the root wrapper. They test `cap ==
+VOW_CAP_RODATA` before reading the owner word, because static literal
+descriptors do not carry the private prefix. The normal mutation path
+then reports `RegionLiteralMutation`.
 
 #### HashMap runtime allocation API
 
@@ -1259,6 +1281,33 @@ container's backing is the most recent allocation in the arena,
 extension succeeds and growth is O(1) amortized with no copy and no
 orphaned backing.
 
+### 7.2.1. Checked projection routing
+
+A projected container value does not necessarily share its container's
+arena. A `FieldGet`, `Load`, or `__vow_vec_get*` result may have been
+written through an alias, carried around a loop back-edge, or copied
+from another arena. Consequently, tracing the projected receiver back
+to its container is never sufficient evidence for selecting an
+explicit-arena mutation entry.
+
+Codegen MAY trace those projection forms to produce an arena
+**candidate**. For `String::push_str` and `String::push_byte`, it MUST
+route such a receiver through the matching
+`_in_candidate_arena` entry. That entry authorizes the candidate only
+when the receiver's runtime owner word matches it; otherwise mutation
+uses the root arena. Direct receivers whose defining instruction has a
+`Block` or `Caller` region continue to use the ordinary `_in_arena`
+entry. A phi may retain a candidate only when all incoming routes name
+the same region, and it remains a candidate when any incoming route is
+projection-derived.
+
+Candidate routing MUST NOT be used for Vec or HashMap mutation unless
+an equivalent checked runtime entry exists. Nor may a candidate be
+passed as a function's hidden receiver-region argument. Both cases
+fall back to the projected value's conservative recorded region. This
+separation makes runtime provenance, rather than a local IR
+approximation, the safety proof for projection-derived String routing.
+
 ### 7.3. Mutation of literal-backed containers
 
 Containers whose descriptor carries `cap == VOW_CAP_RODATA` are
@@ -1380,12 +1429,12 @@ The stdlib MUST provide:
   **type-directed deep copy** into the root region, following
   the same discipline as §8.3's pointer-containing FFI path.
   The intrinsic does not attempt to detect whether the input
-  already lives in root and short-circuit: the `{ptr, len, cap}`
-  container descriptor has no free bit for a region tag (`cap`
-  is reserved by `VOW_CAP_RODATA` for literal-backed values
-  (§6.1), and root-allocated containers carry real mutable
-  capacities), and scanning `__vow_root_arena`'s chunk chain
-  for pointer containment would add a per-call cost the
+  already lives in root and short-circuit. The private owner prefix
+  described in §3.3 is runtime metadata for checked mutation routing,
+  not a semantic region tag: it is absent from static and foreign
+  descriptors and does not prove that recursively referenced values
+  share the descriptor's arena. Scanning `__vow_root_arena`'s chunk
+  chain for pointer containment would likewise add a per-call cost the
   intrinsic cannot amortise.
 
   Double-pinning is therefore the programmer's concern:
@@ -1643,9 +1692,13 @@ may keep emitting canonical root-wrapper extern symbols
 `infer_regions`, codegen reads the call's `region` field: `Root` keeps
 the ABI-stable wrapper symbol, while `Block(_)` and `Caller(_)` prepend
 the selected `*VowArena` and call the matching `_in_arena` symbol. Vec
-and String growth calls follow the same rule using the receiver's
-defining region: root-owned receivers keep the wrapper symbol, and
-block/caller-owned receivers route to the matching `_in_arena` symbol.
+and String growth calls use the receiver's defining route: root-owned
+receivers keep the wrapper symbol, and direct block/caller-owned
+receivers route to the matching `_in_arena` symbol.
+Projection-derived String receivers use the checked candidate routing
+in §7.2.1. Projection-derived Vec receivers remain on their
+conservative recorded region because Vec has no checked candidate
+mutation ABI.
 
 ### 12.3. Block region opcodes
 
