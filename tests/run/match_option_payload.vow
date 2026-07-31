@@ -1,11 +1,17 @@
-// TEST: stdout "10\n-1\n55\n55\n-1\n"
+// TEST: stdout "10\n-1\n55\n77\n88\n99\n111\n55\n-1\n"
 // Regression: `match` on a built-in `Option` must bind the variant payload.
 // Covers Option<i64> (Some/None) and Option<struct> returned from a match
-// (exercising direct field access and structural match-arm typing).
+// (exercising direct field access, Vec element tags, and structural
+// match-arm typing).
 module match_option_payload
 
 struct Box {
     v: i64,
+}
+
+enum Payload {
+    Boxed(Box),
+    Empty,
 }
 
 fn opt_i64(m: BTreeMap<i64, i64>, k: i64) -> i64 {
@@ -29,6 +35,34 @@ fn opt_box_field(m: BTreeMap<i64, Box>, k: i64) -> i64 {
     }
 }
 
+fn opt_box_vec_field(m: BTreeMap<i64, Vec<Box>>, k: i64) -> i64 {
+    match m.get(k) {
+        Option::Some(boxes) => { boxes[0].v },
+        Option::None => { -1 },
+    }
+}
+
+fn option_box_field(value: Option<Box>) -> i64 {
+    match value {
+        Option::Some(boxed) => { boxed.v },
+        Option::None => { -1 },
+    }
+}
+
+fn result_box_vec_field(value: Result<Vec<Box>, ()>) -> i64 {
+    match value {
+        Result::Ok(boxes) => { boxes[0].v },
+        Result::Err(_) => { -1 },
+    }
+}
+
+fn user_enum_box_field(value: Payload) -> i64 {
+    match value {
+        Payload::Boxed(boxed) => { boxed.v },
+        Payload::Empty => { -1 },
+    }
+}
+
 fn main() -> i32 [io] {
     let mi: BTreeMap<i64, i64> = BTreeMap::new();
     mi.insert(1, 10);
@@ -41,6 +75,26 @@ fn main() -> i32 [io] {
     ms.insert(5, Box { v: 55 });
     print_i64(opt_box_field(ms, 5));
     print_str(String::from("\n"));
+
+    let boxes: Vec<Box> = Vec::new();
+    boxes.push(Box { v: 77 });
+    let mv: BTreeMap<i64, Vec<Box>> = BTreeMap::new();
+    mv.insert(7, boxes);
+    print_i64(opt_box_vec_field(mv, 7));
+    print_str(String::from("\n"));
+
+    print_i64(option_box_field(Option::Some(Box { v: 88 })));
+    print_str(String::from("\n"));
+
+    let result_boxes: Vec<Box> = Vec::new();
+    result_boxes.push(Box { v: 99 });
+    let ok_boxes: Result<Vec<Box>, ()> = Result::Ok(result_boxes);
+    print_i64(result_box_vec_field(ok_boxes));
+    print_str(String::from("\n"));
+
+    print_i64(user_enum_box_field(Payload::Boxed(Box { v: 111 })));
+    print_str(String::from("\n"));
+
     let found: Box = opt_box_or_default(ms, 5);
     print_i64(found.v);
     print_str(String::from("\n"));

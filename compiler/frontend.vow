@@ -36,6 +36,8 @@ struct FrontendPrep {
     checked: CheckedFrontend,
     merged: Module,
     str_eids: Vec<i64>,
+    pat_aggregate_names: Vec<String>,
+    pat_vec_elem_names: Vec<String>,
     // Parallel to `merged.items`: the originating source-file path for each
     // item. Threaded into `lower_module_vow` so each `IrFunction.source_file`
     // labels region diagnostics with the right file under multi-module
@@ -187,6 +189,8 @@ fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) 
         checked: checked,
         merged: merged,
         str_eids: e.expr_str_eids,
+        pat_aggregate_names: e.pat_aggregate_names,
+        pat_vec_elem_names: e.pat_vec_elem_names,
         item_files: item_files,
     }
 }
@@ -224,7 +228,13 @@ fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) ->
             // in place; emits any RegionConflict diagnostics through dctx so
             // they reach the existing CompileFailed JSON path.
             let t_lower: i64 = trace_now(t);
-            let lowered: IrModule = lower_module_vow(prep.merged, prep.str_eids, prep.item_files);
+            let lowered: IrModule = lower_module_vow(
+                prep.merged,
+                prep.str_eids,
+                prep.pat_aggregate_names,
+                prep.pat_vec_elem_names,
+                prep.item_files,
+            );
             trace_span(t, String::from("lower"), PID_COMPILER(), TID_MAIN(), t_lower, trace_now(t) - t_lower, String::from(""));
             let t_region: i64 = trace_now(t);
             let inferred: IrModule = infer_regions_module(lowered, checked.dctx);

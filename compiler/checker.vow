@@ -1141,6 +1141,34 @@ fn is_enum_match_tid(ts: TyStore, tid: i64) -> bool {
     false
 }
 
+fn pattern_aggregate_name(ts: TyStore, tid: i64) -> String {
+    let tag: i64 = ty_tag(ts, tid);
+    if tag == CTY_STR() {
+        return String::from("String");
+    }
+    if tag == CTY_STRUCT() || tag == CTY_ENUM() {
+        return ty_struct_name(ts, tid);
+    }
+    if tag == CTY_APPLIED() || tag == CTY_REF() {
+        return pattern_aggregate_name(ts, ty_a(ts, tid));
+    }
+    String::from("")
+}
+
+fn pattern_vec_elem_name(ts: TyStore, tid: i64) -> String {
+    if ty_tag(ts, tid) != CTY_APPLIED() {
+        return String::from("");
+    }
+    if pattern_aggregate_name(ts, ty_a(ts, tid)) != String::from("Vec") {
+        return String::from("");
+    }
+    let args_lid: i64 = ty_b(ts, tid);
+    if ts_arg_len(ts, args_lid) == 0 {
+        return String::from("");
+    }
+    pattern_aggregate_name(ts, ts_arg_get(ts, args_lid, 0))
+}
+
 fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
@@ -1150,6 +1178,15 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     if tag == PAT_IDENT() {
         let name_sid: i64 = pat_a(a, pid);
         let name: String = arena_str(a, name_sid);
+        let aggregate_name: String = pattern_aggregate_name(e.ts, scrutinee_tid);
+        if aggregate_name.len() > 0 {
+            while e.pat_aggregate_names.len() <= pid {
+                e.pat_aggregate_names.push(String::from(""));
+                e.pat_vec_elem_names.push(String::from(""));
+            }
+            e.pat_aggregate_names[pid] = aggregate_name;
+            e.pat_vec_elem_names[pid] = pattern_vec_elem_name(e.ts, scrutinee_tid);
+        }
         env_define_var(e, name, scrutinee_tid);
         return;
     }

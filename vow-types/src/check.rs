@@ -13,6 +13,36 @@ use crate::types::Ty;
 /// Set of expression addresses (`*const Expr as usize`) whose resolved type is `Ty::Str`.
 pub type StringExprSet = HashSet<usize>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternAggregateInfo {
+    pub type_name: String,
+    pub vec_elem_type: Option<String>,
+}
+
+/// Aggregate type metadata for identifier patterns, keyed by `*const Pat as usize`.
+pub type PatternAggregateMap = HashMap<usize, PatternAggregateInfo>;
+
+fn aggregate_type_name(ty: &Ty) -> Option<String> {
+    match ty {
+        Ty::Str => Some("String".to_string()),
+        Ty::Struct(name) | Ty::Enum(name) => Some(name.clone()),
+        Ty::Applied(base, _) | Ty::Reference(base) => aggregate_type_name(base),
+        _ => None,
+    }
+}
+
+fn pattern_aggregate_info(ty: &Ty) -> Option<PatternAggregateInfo> {
+    let type_name = aggregate_type_name(ty)?;
+    let vec_elem_type = match ty {
+        Ty::Applied(_, args) if type_name == "Vec" => args.first().and_then(aggregate_type_name),
+        _ => None,
+    };
+    Some(PatternAggregateInfo {
+        type_name,
+        vec_elem_type,
+    })
+}
+
 const MAX_HINT_CANDIDATES: usize = 256;
 const MAX_HINT_IDENTIFIER_BYTES: usize = 128;
 
@@ -217,6 +247,7 @@ pub struct Checker<'e> {
     pub(crate) file: String,
     pub(crate) emitter: &'e mut dyn DiagnosticEmitter,
     string_exprs: StringExprSet,
+    pattern_aggregates: PatternAggregateMap,
     in_loop: u32,
     /// Stack of break-value type collectors. `Some(vec)` for `loop` (collects
     /// break types), `None` for `while` (break-with-value is an error).
@@ -261,11 +292,16 @@ impl<'e> Checker<'e> {
             file: file.into(),
             emitter,
             string_exprs: HashSet::new(),
+            pattern_aggregates: HashMap::new(),
             in_loop: 0,
             break_types_stack: Vec::new(),
             const_values: HashMap::new(),
             const_types: HashMap::new(),
         }
+    }
+
+    pub fn into_lowering_metadata(self) -> (StringExprSet, PatternAggregateMap) {
+        (self.string_exprs, self.pattern_aggregates)
     }
 
     pub fn into_string_exprs(self) -> StringExprSet {
@@ -2302,6 +2338,10 @@ impl<'e> Checker<'e> {
     fn bind_arm_pattern(&mut self, pat: &Pat, scrutinee_ty: &Ty) {
         match &pat.kind {
             PatKind::Ident { name, .. } => {
+                if let Some(info) = pattern_aggregate_info(scrutinee_ty) {
+                    self.pattern_aggregates
+                        .insert(pat as *const Pat as usize, info);
+                }
                 self.env.define(name, scrutinee_ty.clone());
             }
             PatKind::Wildcard => {}

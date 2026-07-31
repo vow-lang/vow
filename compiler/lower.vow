@@ -51,12 +51,8 @@ struct LowerCtx {
     vec_elem_names: Vec<String>,
     option_elem_inst_ids: Vec<i64>,
     option_elem_tys: Vec<i64>,
-    enum_payload_inst_ids: Vec<i64>,
-    enum_payload_variant_tags: Vec<i64>,
-    enum_payload_field_idxs: Vec<i64>,
-    enum_payload_struct_names: Vec<String>,
-    btreemap_value_inst_ids: Vec<i64>,
-    btreemap_value_struct_names: Vec<String>,
+    pat_aggregate_names: Vec<String>,
+    pat_vec_elem_names: Vec<String>,
     warnings: Vec<String>,
     file: String,
 }
@@ -121,12 +117,8 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         vec_elem_names: Vec::new(),
         option_elem_inst_ids: Vec::new(),
         option_elem_tys: Vec::new(),
-        enum_payload_inst_ids: Vec::new(),
-        enum_payload_variant_tags: Vec::new(),
-        enum_payload_field_idxs: Vec::new(),
-        enum_payload_struct_names: Vec::new(),
-        btreemap_value_inst_ids: Vec::new(),
-        btreemap_value_struct_names: Vec::new(),
+        pat_aggregate_names: Vec::new(),
+        pat_vec_elem_names: Vec::new(),
         warnings: Vec::new(),
         file: String::from(""),
     }
@@ -385,40 +377,16 @@ fn lctx_get_option_elem_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
     ITY_I64()
 }
 
-fn lctx_tag_enum_payload(ctx: LowerCtx, inst_id: i64, variant_tag: i64, field_idx: i64, struct_name: String) {
-    ctx.enum_payload_inst_ids.push(inst_id);
-    ctx.enum_payload_variant_tags.push(variant_tag);
-    ctx.enum_payload_field_idxs.push(field_idx);
-    ctx.enum_payload_struct_names.push(struct_name);
-}
-
-fn lctx_get_enum_payload_struct(ctx: LowerCtx, inst_id: i64, variant_tag: i64, field_idx: i64) -> String {
-    let n: i64 = ctx.enum_payload_inst_ids.len();
-    let mut i: i64 = n;
-    while i > 0 {
-        i = i - 1;
-        if ctx.enum_payload_inst_ids[i] == inst_id &&
-           ctx.enum_payload_variant_tags[i] == variant_tag &&
-           ctx.enum_payload_field_idxs[i] == field_idx {
-            return ctx.enum_payload_struct_names[i];
-        }
+fn lctx_get_pattern_aggregate(ctx: LowerCtx, pid: i64) -> String {
+    if pid < ctx.pat_aggregate_names.len() {
+        return ctx.pat_aggregate_names[pid];
     }
     String::from("")
 }
 
-fn lctx_tag_btreemap_value(ctx: LowerCtx, inst_id: i64, struct_name: String) {
-    ctx.btreemap_value_inst_ids.push(inst_id);
-    ctx.btreemap_value_struct_names.push(struct_name);
-}
-
-fn lctx_get_btreemap_value_struct(ctx: LowerCtx, inst_id: i64) -> String {
-    let n: i64 = ctx.btreemap_value_inst_ids.len();
-    let mut i: i64 = n;
-    while i > 0 {
-        i = i - 1;
-        if ctx.btreemap_value_inst_ids[i] == inst_id {
-            return ctx.btreemap_value_struct_names[i];
-        }
+fn lctx_get_pattern_vec_elem(ctx: LowerCtx, pid: i64) -> String {
+    if pid < ctx.pat_vec_elem_names.len() {
+        return ctx.pat_vec_elem_names[pid];
     }
     String::from("")
 }
@@ -2809,10 +2777,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(v_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_insert"));
                 lctx_tag(ctx, result, String::from("Option"));
-                let value_struct: String = lctx_get_btreemap_value_struct(ctx, recv_id);
-                if value_struct.len() > 0 {
-                    lctx_tag_enum_payload(ctx, result, 1, 0, value_struct);
-                }
                 return result;
             }
             if method_name == String::from("get") {
@@ -2830,10 +2794,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(k_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_get"));
                 lctx_tag(ctx, result, String::from("Option"));
-                let value_struct: String = lctx_get_btreemap_value_struct(ctx, recv_id);
-                if value_struct.len() > 0 {
-                    lctx_tag_enum_payload(ctx, result, 1, 0, value_struct);
-                }
                 return result;
             }
             if method_name == String::from("contains") {
@@ -3028,7 +2988,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     if inner_ptag == PAT_IDENT() {
                         let name_sid: i64 = pat_a(a, inner_pid);
                         let pname: String = arena_str(a, name_sid);
-                        let aggregate_struct: String = lctx_get_enum_payload_struct(ctx, ptr_id, expected_tag, ii);
+                        let aggregate_struct: String = lctx_get_pattern_aggregate(ctx, inner_pid);
+                        let aggregate_vec_elem: String = lctx_get_pattern_vec_elem(ctx, inner_pid);
                         let field_ty: i64 = {
                             if aggregate_struct.len() > 0 {
                                 ITY_PTR()
@@ -3043,6 +3004,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, IDATA_FIELD(), 1 + ii, 0, String::from(""));
                         if aggregate_struct.len() > 0 {
                             lctx_tag(ctx, field_val, aggregate_struct);
+                        }
+                        if aggregate_vec_elem.len() > 0 {
+                            lctx_tag_vec_elem(ctx, field_val, aggregate_vec_elem);
                         }
                         lctx_define(ctx, pname, field_val);
                     }
@@ -3858,12 +3822,6 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.vec_elem_names = Vec::new();
     ctx.option_elem_inst_ids = Vec::new();
     ctx.option_elem_tys = Vec::new();
-    ctx.enum_payload_inst_ids = Vec::new();
-    ctx.enum_payload_variant_tags = Vec::new();
-    ctx.enum_payload_field_idxs = Vec::new();
-    ctx.enum_payload_struct_names = Vec::new();
-    ctx.btreemap_value_inst_ids = Vec::new();
-    ctx.btreemap_value_struct_names = Vec::new();
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;
@@ -3904,14 +3862,6 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                     lctx_tag(ctx, arg_id, String::from("HashMap"));
                 } else if tn == String::from("BTreeMap") {
                     lctx_tag(ctx, arg_id, String::from("BTreeMap"));
-                    let pargs_lid: i64 = type_b(a, ptid);
-                    if list_len(a, pargs_lid) > 1 {
-                        let value_tid: i64 = list_get(a, pargs_lid, 1);
-                        let value_struct: String = lower_ast_type_tag_name(a, value_tid);
-                        if value_struct.len() > 0 {
-                            lctx_tag_btreemap_value(ctx, arg_id, value_struct);
-                        }
-                    }
                 } else if tn == String::from("Vec") {
                     lctx_tag(ctx, arg_id, String::from("Vec"));
                     let pargs_lid: i64 = type_b(a, ptid);
@@ -3994,7 +3944,13 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.func
 }
 
-fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> IrModule {
+fn lower_module_vow(
+    m: Module,
+    str_eids: Vec<i64>,
+    pat_aggregate_names: Vec<String>,
+    pat_vec_elem_names: Vec<String>,
+    item_files: Vec<String>,
+) -> IrModule {
     let a: AstArena = m.arena;
     let mod_name_sid: i64 = m.name_sid;
     let mod_name: String = arena_str(a, mod_name_sid);
@@ -4225,6 +4181,8 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> I
     }
 
     let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
+    ctx.pat_aggregate_names = pat_aggregate_names;
+    ctx.pat_vec_elem_names = pat_vec_elem_names;
     // ctx.file is updated per FnDef inside the lowering loop below so each
     // IrFunction gets the originating source path from `item_files`.
     ctx.func_names = func_names;

@@ -2,14 +2,13 @@ pub mod vow;
 
 use std::collections::{HashMap, HashSet};
 
-pub type StringExprSet = HashSet<usize>;
-
 use vow_diag::Blame;
 use vow_syntax::ast::{
     BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
     Type as AstType, UnOp, VariantKind, VowBlock,
 };
 use vow_syntax::span::Span;
+pub use vow_types::check::{PatternAggregateMap, StringExprSet};
 
 use crate::types::{
     BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId,
@@ -353,12 +352,8 @@ pub(crate) struct LowerCtx {
     inst_vec_elem_type: HashMap<InstId, String>,
     // InstId of an Option-tagged value → its payload type (for Option::Some(v) match-arm FieldGet)
     inst_option_elem_ty: HashMap<InstId, Ty>,
-    // (enum InstId, variant tag, payload index) → aggregate type metadata.
-    // Match bindings copy these tags onto their payload FieldGet instructions.
-    inst_enum_payload_struct_type: HashMap<(InstId, u32, u32), String>,
-    // BTreeMap InstId → aggregate value metadata, propagated through get/insert
-    // to the returned Option::Some payload.
-    inst_btreemap_value_struct_type: HashMap<InstId, String>,
+    // Identifier-pattern address → checker-resolved aggregate metadata.
+    pattern_aggregates: PatternAggregateMap,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     warnings: Vec<vow_diag::Diagnostic>,
@@ -380,6 +375,7 @@ impl LowerCtx {
         struct_field_type_names: HashMap<String, Vec<String>>,
         struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
+        pattern_aggregates: PatternAggregateMap,
     ) -> Self {
         let entry = BasicBlock {
             id: BlockId(0),
@@ -432,8 +428,7 @@ impl LowerCtx {
             loop_exit_phis: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
             inst_option_elem_ty: HashMap::new(),
-            inst_enum_payload_struct_type: HashMap::new(),
-            inst_btreemap_value_struct_type: HashMap::new(),
+            pattern_aggregates,
             struct_field_vec_elems,
             warnings: Vec::new(),
         }
@@ -2488,10 +2483,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             .unwrap_or(Ty::I64);
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
-                                let payload_key = (ptr_id, expected_tag as u32, i as u32);
-                                let aggregate_type =
-                                    ctx.inst_enum_payload_struct_type.get(&payload_key).cloned();
-                                let field_ty = if aggregate_type.is_some() {
+                                let aggregate = ctx
+                                    .pattern_aggregates
+                                    .get(&(inner_pat as *const _ as usize))
+                                    .cloned();
+                                let field_ty = if aggregate.is_some() {
                                     Ty::Ptr
                                 } else if i == 0 {
                                     payload_ty
@@ -2505,8 +2501,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     InstData::FieldIndex(1 + i as u32),
                                     span,
                                 );
-                                if let Some(type_name) = aggregate_type {
-                                    ctx.inst_struct_type.insert(field_val, type_name);
+                                if let Some(info) = aggregate {
+                                    ctx.inst_struct_type.insert(field_val, info.type_name);
+                                    if let Some(elem_name) = info.vec_elem_type {
+                                        ctx.inst_vec_elem_type.insert(field_val, elem_name);
+                                    }
                                 }
                                 ctx.define(name.clone(), field_val);
                             }
@@ -2909,12 +2908,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                     ctx.inst_struct_type.insert(result, "Option".to_string());
-                    if let Some(type_name) =
-                        ctx.inst_btreemap_value_struct_type.get(&recv_id).cloned()
-                    {
-                        ctx.inst_enum_payload_struct_type
-                            .insert((result, 1, 0), type_name);
-                    }
                     result
                 }
                 (Some("BTreeMap"), "get") => {
@@ -2932,12 +2925,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                     ctx.inst_struct_type.insert(result, "Option".to_string());
-                    if let Some(type_name) =
-                        ctx.inst_btreemap_value_struct_type.get(&recv_id).cloned()
-                    {
-                        ctx.inst_enum_payload_struct_type
-                            .insert((result, 1, 0), type_name);
-                    }
                     result
                 }
                 (Some("BTreeMap"), "contains") => {
@@ -3532,7 +3519,7 @@ fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn lower_function(
+fn lower_function_with_pattern_aggregates(
     fn_def: &FnDef,
     file: &str,
     func_index: &HashMap<String, FuncSigInfo>,
@@ -3542,6 +3529,7 @@ pub(crate) fn lower_function(
     struct_field_type_names: HashMap<String, Vec<String>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
+    pattern_aggregates: &PatternAggregateMap,
     const_map: &HashMap<String, (i64, Ty)>,
 ) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
     let params: Vec<Ty> = fn_def
@@ -3567,6 +3555,7 @@ pub(crate) fn lower_function(
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs.clone(),
+        pattern_aggregates.clone(),
     );
 
     ctx.const_map = const_map.clone();
@@ -3591,14 +3580,8 @@ pub(crate) fn lower_function(
             AstType::Generic { name, .. } if name == "HashMap" => {
                 ctx.inst_struct_type.insert(arg_id, "HashMap".to_string());
             }
-            AstType::Generic { name, args, .. } if name == "BTreeMap" => {
+            AstType::Generic { name, .. } if name == "BTreeMap" => {
                 ctx.inst_struct_type.insert(arg_id, "BTreeMap".to_string());
-                if let Some(value_ty) = args.get(1) {
-                    if let Some(type_name) = non_scalar_type_tag(value_ty) {
-                        ctx.inst_btreemap_value_struct_type
-                            .insert(arg_id, type_name);
-                    }
-                }
             }
             AstType::Generic { name, args, .. } if name == "Vec" => {
                 ctx.inst_struct_type.insert(arg_id, "Vec".to_string());
@@ -3680,10 +3663,53 @@ pub(crate) fn lower_function(
     ctx.finish()
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn lower_function(
+    fn_def: &FnDef,
+    file: &str,
+    func_index: &HashMap<String, FuncSigInfo>,
+    struct_field_map: HashMap<String, Vec<String>>,
+    enum_variant_map: HashMap<String, Vec<String>>,
+    linear_struct_names: &HashSet<String>,
+    struct_field_type_names: HashMap<String, Vec<String>>,
+    struct_field_vec_elems: HashMap<String, Vec<String>>,
+    string_exprs: &StringExprSet,
+    const_map: &HashMap<String, (i64, Ty)>,
+) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
+    lower_function_with_pattern_aggregates(
+        fn_def,
+        file,
+        func_index,
+        struct_field_map,
+        enum_variant_map,
+        linear_struct_names,
+        struct_field_type_names,
+        struct_field_vec_elems,
+        string_exprs,
+        &PatternAggregateMap::new(),
+        const_map,
+    )
+}
+
 pub fn lower_module(
     module: &AstModule,
     item_files: &[String],
     string_exprs: &StringExprSet,
+) -> Module {
+    lower_module_with_pattern_aggregates(
+        module,
+        item_files,
+        string_exprs,
+        &PatternAggregateMap::new(),
+    )
+}
+
+pub fn lower_module_with_pattern_aggregates(
+    module: &AstModule,
+    item_files: &[String],
+    string_exprs: &StringExprSet,
+    pattern_aggregates: &PatternAggregateMap,
 ) -> Module {
     debug_assert_eq!(
         module.items.len(),
@@ -3880,7 +3906,7 @@ pub fn lower_module(
         .iter()
         .enumerate()
         .map(|(idx, (fn_def, src_file))| {
-            let (mut func, pool, func_warnings) = lower_function(
+            let (mut func, pool, func_warnings) = lower_function_with_pattern_aggregates(
                 fn_def,
                 src_file,
                 &func_index,
@@ -3890,6 +3916,7 @@ pub fn lower_module(
                 struct_field_type_names.clone(),
                 struct_field_vec_elems.clone(),
                 string_exprs,
+                pattern_aggregates,
                 &const_map,
             );
             func.id = FuncId(idx as u32);
