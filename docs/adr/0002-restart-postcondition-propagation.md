@@ -281,21 +281,27 @@ Every entry records the values that instantiate its contracts in two ordered
 binding arrays:
 
 - `invocation_bindings` contains every selected restart argument, whether or
-  not `A_r` mentions it, plus every callee argument read directly by `A_r` and
-  every heap projection that `A_r` reads. Values are observed in `H_r`.
-- `completion_bindings` contains every selected restart argument or callee
-  argument read directly by `R_r`, every heap projection that `R_r` reads,
-  and `result` when `R_r` references it. Values are observed in `H'_r`. This
-  array is empty when `entered` is false because no completion guarantee
+  not `A_r` mentions it, plus every callee argument and heap projection in the
+  transitive read-dependency closure of `A_r`. Values are observed in `H_r`.
+- `completion_bindings` contains every selected restart argument plus every
+  callee argument and heap projection in the transitive read-dependency closure
+  of `R_r`, plus `result` when referenced. Values are observed in `H'_r`.
+  This array is empty when `entered` is false because no completion guarantee
   became available.
 
 Each binding has a `role` (`restart_argument`, `callee_argument`,
 `reachable_state`, or `result`), its source `name`, and its counterexample
 `value` using the same string encoding as the top-level `values` map. The same
 source may appear in both arrays with different values when the restart writes
-it. Within each array, selected restart arguments appear in declaration order,
-followed by other observations in lexical first-use order; a source is emitted
-once per phase. No selected argument or contract observation may be omitted.
+it. The read-dependency closure expands calls to pure contract helpers
+transitively, so a clause `is_valid(state)` also records a field such as
+`state.last` when `is_valid` reads it. It is instantiated for the concrete
+counterexample: projection names include concrete indices, and distinct
+projections reached by repeated or recursive helper calls remain distinct.
+Within each array, selected restart arguments appear in declaration order,
+followed by other observations in deterministic depth-first evaluation order
+after substituting helper arguments; the first occurrence of an identical
+observation wins. No selected argument or contract observation may be omitted.
 Keeping the two phases on the individual occurrence makes repeated selections
 distinguishable and identifies the exact instantiations of `A_r` and `R_r`;
 the top-level `values` map describes the failed proof obligation and is not a
@@ -454,6 +460,8 @@ public-interface tests must cover:
 10. sequential and nested recoveries retaining every selected restart in
     execution order, including repeated selections with identical restart
     arguments but distinct invocation or completion bindings;
-11. restart mutation invalidating aliased pre-invocation facts unless `R_r`
+11. recovery diagnostics capturing heap observations made transitively by pure
+    helpers called from `A_r` or `R_r`;
+12. restart mutation invalidating aliased pre-invocation facts unless `R_r`
     re-establishes them; and
-12. Rust/self-hosted parity for `recovery_path` diagnostics.
+13. Rust/self-hosted parity for `recovery_path` diagnostics.
