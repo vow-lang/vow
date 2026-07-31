@@ -271,6 +271,8 @@ fn hidden_region_idx_for_store_target(
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty: IrTy) -> Value {
     let val_ty = builder.func.dfg.value_type(val);
     match (val_ty, ir_ty_to_cranelift(return_ty)) {
+        (types::I64, Some(types::I8)) => builder.ins().ireduce(types::I8, val),
+        (types::I64, Some(types::I16)) => builder.ins().ireduce(types::I16, val),
         (types::I64, Some(types::I32)) => builder.ins().ireduce(types::I32, val),
         (types::I32, Some(types::I64)) => builder.ins().sextend(types::I64, val),
         _ => val,
@@ -6185,6 +6187,31 @@ mod tests {
                         inst(1, const_op, ty, vec![], const_data),
                         inst(2, Opcode::WrappingAdd, ty, vec![0, 1], InstData::None),
                         inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                )
+            })
+            .collect();
+        let module = make_module("test", functions);
+
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_phase3_returns_reduce_default_literal_width() {
+        let functions = [("i8_return", Ty::I8), ("i16_return", Ty::I16)]
+            .into_iter()
+            .enumerate()
+            .map(|(id, (name, return_ty))| {
+                simple_fn(
+                    id as u32,
+                    name,
+                    vec![],
+                    return_ty,
+                    vec![
+                        inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                        inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                     ],
                 )
             })
