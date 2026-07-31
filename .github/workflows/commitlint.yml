@@ -13,8 +13,8 @@ jobs:
   commitlint:
     runs-on: ubuntu-latest
     steps:
-      # Tag-pinned, not hash-pinned: this repo's policy is tag pins kept current by
-      # Dependabot rather than SHA pins, so unpinned-uses is a known, accepted tradeoff.
+      # Tag-pinned, not hash-pinned: a deliberate tradeoff for readability over the
+      # marginal supply-chain hardening SHA-pinning would add.
       - uses: actions/checkout@v7.0.0 # zizmor: ignore[unpinned-uses]
         with:
           fetch-depth: 0
