@@ -228,20 +228,23 @@ should be sized accordingly.
 **Verification:** Each restart expression is a separate ESBMC verification
 target. A restart may establish the function's normal `ensures` clauses or a
 declared restart-specific postcondition. At a `handle` site, the normal edge
-exposes the normal postcondition. After the handler proves the selected
-restart's argument contract in the live heap state produced by the handler,
-its recovery edge exposes only that restart's postcondition. Because
+applies the ordinary body's write footprint before exposing the normal
+postcondition. After the handler proves the selected restart's argument
+contract in the live heap state produced by the handler, its recovery edge
+applies the restart write footprint and exposes only that restart's
+postcondition. Because
 heap-backed arguments are shared, callee verification conservatively forgets
 mutable heap facts from the original failure before proving the restart; any
 such fact needed by the restart must be re-established by its argument
 contract. The verifier checks downstream obligations on every reachable edge;
 it never assumes the stronger normal postcondition after a weaker recovery,
-and it never weakens the enclosing function's contract automatically. A
-restart's modular interface also carries a sound over-approximation of its heap
-writes. Caller lowering havocs those shared locations before assuming the
-restart postcondition, so handler aliases cannot retain stale pre-restart
-facts; an imprecise summary must conservatively include all mutable memory
-reachable through heap-backed call and restart arguments.
+and it never weakens the enclosing function's contract automatically. Every
+normal and recovery outcome's modular interface carries a sound
+over-approximation of its heap writes. Caller lowering havocs those shared
+locations before assuming the corresponding postcondition, so aliases cannot
+retain stale pre-outcome facts; an imprecise normal summary must include all
+mutable memory reachable through heap-backed call arguments, and an imprecise
+restart summary must also include memory reachable through restart arguments.
 
 The facts stay in ordinary CFG path conditions rather than becoming a new
 refinement-type axis. The complete caller-side decision, including failure

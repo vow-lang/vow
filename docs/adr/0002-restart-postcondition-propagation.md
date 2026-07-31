@@ -22,7 +22,11 @@ representation.
 For a function `f`:
 
 - `P` is the conjunction of `f`'s `requires` clauses.
-- `Q(args, result)` is the conjunction of `f`'s normal `ensures` clauses.
+- `H'_f` is the heap when `f`'s ordinary body completes.
+- `Q(H'_f, args, result)` is the conjunction of `f`'s normal `ensures`
+  clauses.
+- `W_f` is a sound over-approximation of the mutable heap locations that the
+  ordinary body may write.
 - `H_r` is the live heap immediately before restart `r` is invoked, after the
   selected handler arm has run. It includes mutations made through aliases of
   heap-backed call arguments.
@@ -63,12 +67,14 @@ the restart expression must establish its declared `R_r`. In proof notation,
 the obligation is universal over every `H_r` that satisfies `A_r`, not just the
 heap at the point where the original condition was raised.
 
-Restart verification must also derive a sound `W_r` from the restart
-implementation. The actual writes on every execution must be a subset of this
-footprint. A compiler may export a more precise footprint, but when it cannot
-prove one it must conservatively include all mutable memory transitively
-reachable through heap-backed call and restart arguments, plus any other state
-the restart is permitted to write. Under-approximating `W_r` is unsound.
+Callee verification must also derive `W_f` from the ordinary body and `W_r`
+from each restart implementation. The actual writes on every execution must be
+a subset of the corresponding footprint. A compiler may export a more precise
+footprint, but when it cannot prove one, `W_f` must conservatively include all
+mutable memory transitively reachable through heap-backed call arguments and
+`W_r` must do the same for heap-backed call and restart arguments. Both also
+include any other state that outcome is permitted to write. Under-approximating
+either footprint is unsound.
 
 This is a callee obligation, just like an ordinary `ensures` clause. A restart
 may rely on immutable value arguments and on mutable facts explicitly
@@ -77,15 +83,18 @@ aliased memory unless `A_r` states that fact. Proving `R_r` under `A_r` does
 not make `R_r` available for restart arguments or invocation states that
 violate `A_r`.
 
-The function's ordinary body is still checked against `Q`. A weaker `R_r` does
-not weaken that check, and proving the ordinary body against `Q` does not prove
-the restart.
+The function's ordinary body is checked against `Q`, and its writes are checked
+against `W_f`. A weaker `R_r` does not weaken those checks, and proving the
+ordinary body does not prove the restart.
 
 ### Facts exposed at a handle site
 
 A handled call lowers to explicit verifier control-flow edges:
 
-1. The normal edge carries `assume(Q(actual_args, call_result))`.
+1. Modular caller lowering constructs `H'_f` on the normal edge by havocing
+   every location in the imported `W_f`, with the same alias-aware rule used
+   for restart writes. It then carries
+   `assume(Q(H'_f, actual_args, call_result))`.
 2. The selected handler arm runs, including any mutations it makes through
    aliases of the handled call's heap-backed arguments.
 3. Immediately before invoking restart `r`, lowering creates the caller
@@ -132,9 +141,9 @@ The implementation must not replace this summary with an unconditional
 coarse return type. Existing branch reasoning is sufficient; no
 restart-refined type or new type-system axis is introduced.
 
-An unhandled call keeps today's rule: its caller must prove `P`, and only its
-normal edge and `Q` are available. Declaring a restart does not weaken ordinary
-calls.
+An unhandled call keeps today's rule: its caller must prove `P`, apply `W_f`,
+and then use `Q` on the normal edge. Declaring a restart does not weaken
+ordinary calls.
 
 ### Handler and enclosing-function contracts
 
@@ -202,30 +211,32 @@ outside the sound footprint keeps its prior facts.
 ## Verification boundary
 
 Caller verification remains modular. Compiled interface metadata for a
-restart-capable function must include `Q`, every advertised `R_r`, each sound
-`W_r`, restart parameter contracts, and the source identities needed for
-diagnostics. A caller imports those summaries and does not inline the callee's
-body or restart expressions.
+restart-capable function must include `Q`, sound `W_f`, every advertised `R_r`
+and sound `W_r`, restart parameter contracts, and the source identities needed
+for diagnostics. A caller imports those summaries and does not inline the
+callee's body or restart expressions.
 
 The soundness chain is:
 
-1. Callee verification proves the normal body establishes `Q`, each restart's
-   actual writes are covered by `W_r`, and each restart establishes its own
-   `R_r` for every invocation heap satisfying `A_r`.
-2. Handle-site lowering runs the handler, proves the selected restart's
-   argument contract in the resulting live heap, applies the selected
-   restart's `W_r`, then exposes exactly one verified postcondition on each
-   outcome edge.
+1. Callee verification proves the normal body establishes `Q` with writes
+   covered by `W_f`, each restart's actual writes are covered by `W_r`, and
+   each restart establishes its own `R_r` for every invocation heap satisfying
+   `A_r`.
+2. Handle-site lowering applies `W_f` before exposing `Q` on normal completion.
+   On recovery, it runs the handler, proves the selected restart's argument
+   contract in the resulting live heap, applies the selected restart's `W_r`,
+   then exposes `R_r`.
 3. Caller verification proves downstream obligations independently on all
    reachable edges.
 
 No step permits `Q` to be assumed on a recovery edge unless that edge's facts
 independently imply `Q`. No step permits `R_r` to be assumed until the selected
 arguments and live invocation heap have established `A_r`. Facts about aliased
-memory at the original condition failure are not carried across handler
-execution unless the argument contract re-establishes them, and facts about
-locations in `W_r` are not carried across restart execution unless `R_r`
-re-establishes them.
+locations in `W_f` are not carried across normal execution unless `Q`
+re-establishes them. Facts about aliased memory at the original condition
+failure are not carried across handler execution unless the argument contract
+re-establishes them, and facts about locations in `W_r` are not carried across
+restart execution unless `R_r` re-establishes them.
 
 ## Diagnostics
 
@@ -264,13 +275,31 @@ Every counterexample whose trace crosses a recovery edge must add structured
 for every selected restart; nested, sequential, and repeated recoveries are
 retained rather than collapsed. Successfully entered recovery edges use
 `entered: true`. A restart argument-contract failure may add one final
-`entered: false` entry for the attempted selection. Every entry also records
-the selected restart arguments as a name-to-counterexample-value map. This map
-is empty for a parameterless restart and contains the attempted values when
-`entered` is false. Keeping arguments on the individual entry makes repeated
-selections distinguishable and identifies the exact instantiation of `A_r` and
-`R_r`; the top-level `values` map describes the failed proof obligation and is
-not a substitute for this occurrence-local context.
+`entered: false` entry for the attempted selection.
+
+Every entry records the values that instantiate its contracts in two ordered
+binding arrays:
+
+- `invocation_bindings` contains every selected restart argument, whether or
+  not `A_r` mentions it, plus every callee argument read directly by `A_r` and
+  every heap projection that `A_r` reads. Values are observed in `H_r`.
+- `completion_bindings` contains every selected restart argument or callee
+  argument read directly by `R_r`, every heap projection that `R_r` reads,
+  and `result` when `R_r` references it. Values are observed in `H'_r`. This
+  array is empty when `entered` is false because no completion guarantee
+  became available.
+
+Each binding has a `role` (`restart_argument`, `callee_argument`,
+`reachable_state`, or `result`), its source `name`, and its counterexample
+`value` using the same string encoding as the top-level `values` map. The same
+source may appear in both arrays with different values when the restart writes
+it. Within each array, selected restart arguments appear in declaration order,
+followed by other observations in lexical first-use order; a source is emitted
+once per phase. No selected argument or contract observation may be omitted.
+Keeping the two phases on the individual occurrence makes repeated selections
+distinguishable and identifies the exact instantiations of `A_r` and `R_r`;
+the top-level `values` map describes the failed proof obligation and is not a
+substitute for this occurrence-local context.
 
 The future schema addition contains the following field. This is an
 illustrative counterexample fragment, not a complete schema-valid object;
@@ -282,9 +311,18 @@ unchanged required fields such as `values`, `vow_id`, and `source` are omitted:
     {
       "callee": "read_positive",
       "restart": "use_value",
-      "arguments": { "value": "0" },
-      "postcondition": "result == value",
+      "argument_contract": "value >= minimum",
+      "postcondition": "result == value && state.last == result",
       "entered": true,
+      "invocation_bindings": [
+        { "role": "restart_argument", "name": "value", "value": "0" },
+        { "role": "callee_argument", "name": "minimum", "value": "0" }
+      ],
+      "completion_bindings": [
+        { "role": "restart_argument", "name": "value", "value": "0" },
+        { "role": "reachable_state", "name": "state.last", "value": "0" },
+        { "role": "result", "name": "result", "value": "0" }
+      ],
       "call_site": {
         "file": "reader.vow",
         "offset": 120,
@@ -306,10 +344,12 @@ output is a separate schema and retains its capitalized `"Caller"` and
 `"Callee"` values.
 
 Human output must render the whole recovery path in the same order, then relate
-the relevant guarantee to the failed obligation. For a single entry:
-`recovery through read_positive::use_value(value = 0) guarantees result ==
-value; this path
-does not establish ensures result > 0`.
+the relevant guarantee to the failed obligation. It must show invocation and
+completion bindings separately when both are present. For a single entry:
+`recovery through read_positive::use_value with invocation {value = 0,
+minimum = 0} and completion {value = 0, state.last = 0, result = 0} guarantees
+result == value && state.last == result; this path does not establish ensures
+result > 0`.
 
 This ADR does not allocate a new error code. The failure is produced by the
 existing verifier, not the parser or type checker. The condition/restart
@@ -323,7 +363,7 @@ The decision satisfies Vow's language-design constraints:
 - **Verifier impact stays local.** Restarts already require finite explicit
   outcome branches. Propagating a different verified assumption per branch
   uses existing CFG and SMT machinery rather than refinement typing. Modeling
-  handler interference and restart writes conservatively havocs existing heap
+  handler interference and outcome writes conservatively havocs existing heap
   state; it does not add a borrow or alias axis to the type system.
 - **It eliminates an agent bug class.** An agent cannot accidentally consume a
   degraded recovery as though normal success occurred; the false assumption
@@ -387,7 +427,8 @@ The following remain part of the broader condition/restart feature design:
   exhaustiveness;
 - runtime selection and parameter-passing ABI;
 - continuation representation and whether restart invocation returns locally;
-- exact IR nodes and the encoding or precision of `W_r` in interface metadata.
+- exact IR nodes and the encoding or precision of `W_f` and `W_r` in interface
+  metadata.
 
 Those choices may change without changing this ADR's invariant: each reachable
 outcome applies a sound write footprint and exposes only the postcondition
@@ -399,18 +440,20 @@ When condition/restart support is implemented in both compilers, its first
 public-interface tests must cover:
 
 1. a normal edge retaining the main `ensures`;
-2. a weak recovery proving a weaker enclosing postcondition;
-3. the same recovery failing a stronger enclosing postcondition;
-4. a handler re-establishing the stronger property;
-5. an unreachable weak recovery not contaminating the join;
-6. parameterized restart postcondition instantiation;
-7. rejection of invalid restart arguments before their postcondition becomes
+2. normal-body mutation invalidating aliased entry facts unless `Q`
+   re-establishes them;
+3. a weak recovery proving a weaker enclosing postcondition;
+4. the same recovery failing a stronger enclosing postcondition;
+5. a handler re-establishing the stronger property;
+6. an unreachable weak recovery not contaminating the join;
+7. parameterized restart postcondition instantiation;
+8. rejection of invalid restart arguments before their postcondition becomes
    available;
-8. handler mutation through an aliased call argument invalidating a stale
+9. handler mutation through an aliased call argument invalidating a stale
    failure-state fact unless `A_r` re-establishes it;
-9. sequential and nested recoveries retaining every selected restart in
-   execution order, including repeated parameterized edges with distinct
-   per-entry argument values;
-10. restart mutation invalidating aliased pre-invocation facts unless `R_r`
+10. sequential and nested recoveries retaining every selected restart in
+    execution order, including repeated selections with identical restart
+    arguments but distinct invocation or completion bindings;
+11. restart mutation invalidating aliased pre-invocation facts unless `R_r`
     re-establishes them; and
-11. Rust/self-hosted parity for `recovery_path` diagnostics.
+12. Rust/self-hosted parity for `recovery_path` diagnostics.
