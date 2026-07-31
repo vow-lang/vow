@@ -3535,17 +3535,52 @@ mod tests {
         }
     }
 
-    fn declare_test_function(ctx: i64, name: &str, ret_ty: i64) {
+    fn link_float_phi_test_object(
+        object_path: &std::path::Path,
+        executable_path: &std::path::Path,
+    ) {
+        let support_path = object_path.with_extension("support.c");
+        std::fs::write(
+            &support_path,
+            "void __vow_runtime_start(void) {}\nvoid __vow_init_stack_guard(void) {}\n",
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to write float-Phi runtime support {}: {error}",
+                support_path.display()
+            )
+        });
+
+        let mut command = std::process::Command::new("cc");
+        command
+            .arg(object_path)
+            .arg(&support_path)
+            .arg("-o")
+            .arg(executable_path);
+        let output = command
+            .output()
+            .unwrap_or_else(|error| panic!("failed to invoke {command:?}: {error}"));
+        let link_failure = format!(
+            "failed to link float-Phi test object {}\ncommand: {command:?}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            object_path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(output.status.success(), "{link_failure}");
+    }
+
+    fn declare_test_function(ctx: i64, func_idx: i64, name: &str, ret_ty: i64, is_main: bool) {
         let name_vec = vow_string(name);
         unsafe {
             __vow_clif_declare_function(
                 ctx,
-                0,
+                func_idx,
                 &name_vec as *const VowVec as i64,
                 0,
                 0,
                 ret_ty,
-                0,
+                i64::from(is_main),
                 RSUM_KIND_CONSTANT_GLOBAL,
                 0,
             );
@@ -3589,8 +3624,8 @@ mod tests {
         }
     }
 
-    fn assert_cross_block_float_phi_compiles(
-        name: &str,
+    fn compile_cross_block_float_phi(
+        ctx: i64,
         float_ty: i64,
         const_op: i64,
         const_kind: i64,
@@ -3599,10 +3634,6 @@ mod tests {
         rhs_bits: i64,
         add_bits: i64,
     ) {
-        let ctx = __vow_clif_create(0, 0);
-        assert_ne!(ctx, 0);
-        declare_test_function(ctx, name, float_ty);
-
         unsafe {
             assert_eq!(__vow_clif_fn_begin(ctx, 0, float_ty, 0), 0);
         }
@@ -3647,35 +3678,105 @@ mod tests {
 
         unsafe {
             assert_eq!(__vow_clif_fn_end(ctx), 0);
-            __vow_clif_destroy(ctx);
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn assert_cross_block_float_phi_runtime_value(
+        name: &str,
+        float_ty: i64,
+        const_op: i64,
+        const_kind: i64,
+        add_op: i64,
+        compare_op: i64,
+        lhs_bits: i64,
+        rhs_bits: i64,
+        add_bits: i64,
+        expected_bits: i64,
+    ) {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, name, float_ty, false);
+        declare_test_function(ctx, 1, "main", ITY_I32, true);
+
+        compile_cross_block_float_phi(
+            ctx, float_ty, const_op, const_kind, add_op, lhs_bits, rhs_bits, add_bits,
+        );
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 1, ITY_I32, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 1, IOP_CALL, float_ty, IDATA_CALL_TARGET, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            2,
+            const_op,
+            float_ty,
+            const_kind,
+            expected_bits,
+            0,
+            &[],
+        );
+        add_test_inst(ctx, 3, compare_op, ITY_BOOL, IDATA_NONE, 0, 0, &[1, 2]);
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join(format!("{name}.o"));
+        let executable_path = temp_dir.path().join(name);
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        unsafe {
+            assert_eq!(
+                __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64),
+                0
+            );
+        }
+        link_float_phi_test_object(&object_path, &executable_path);
+
+        let output = std::process::Command::new(&executable_path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "generated executable returned the wrong float value\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
     #[test]
-    fn f64_phi_loaded_from_cross_block_slot_keeps_float_type() {
-        assert_cross_block_float_phi_compiles(
+    fn f64_phi_loaded_from_cross_block_slot_returns_expected_runtime_value() {
+        assert_cross_block_float_phi_runtime_value(
             "cross_block_f64",
             ITY_F64,
             IOP_CONST_F64,
             IDATA_CONST_F64,
             IOP_ADD_F64,
+            IOP_NE_F64,
             1.5f64.to_bits() as i64,
             2.5f64.to_bits() as i64,
             1.0f64.to_bits() as i64,
+            2.5f64.to_bits() as i64,
         );
     }
 
     #[test]
-    fn f32_phi_loaded_from_cross_block_slot_keeps_float_type() {
-        assert_cross_block_float_phi_compiles(
+    fn f32_phi_loaded_from_cross_block_slot_returns_expected_runtime_value() {
+        assert_cross_block_float_phi_runtime_value(
             "cross_block_f32",
             ITY_F32,
             IOP_CONST_F32,
             IDATA_CONST_F32,
             IOP_ADD_F32,
+            IOP_NE_F32,
             1.5f32.to_bits() as i64,
             2.5f32.to_bits() as i64,
             1.0f32.to_bits() as i64,
+            2.5f32.to_bits() as i64,
         );
     }
 
