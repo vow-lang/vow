@@ -1037,6 +1037,9 @@ dependencies = [
 [[package]]
 name = "vow-linker"
 version = "0.5.1"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "vow-runtime"
