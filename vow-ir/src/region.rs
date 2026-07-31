@@ -1812,6 +1812,13 @@ fn string_creation_extern(sym: &str) -> bool {
     )
 }
 
+fn option_creation_extern(sym: &str) -> bool {
+    matches!(
+        sym,
+        "__vow_string_parse_i64_opt" | "__vow_string_parse_i64_opt_in_arena"
+    )
+}
+
 fn map_creation_extern(sym: &str) -> bool {
     matches!(sym, "__vow_map_new" | "__vow_map_new_in_arena")
 }
@@ -1820,6 +1827,7 @@ fn heap_producing_extern(sym: &str) -> bool {
     extern_fresh_in_caller(sym)
         || vec_creation_extern(sym)
         || string_creation_extern(sym)
+        || option_creation_extern(sym)
         || map_creation_extern(sym)
 }
 
@@ -6397,7 +6405,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_string_runtime_helpers_non_escaping_allocate_in_block_region() {
+    fn fresh_runtime_helpers_non_escaping_allocate_in_block_region() {
         let cases = [
             ("__vow_string_split", 2),
             ("__vow_string_trim", 1),
@@ -6405,6 +6413,7 @@ mod tests {
             ("__vow_string_to_lower", 1),
             ("__vow_string_replace", 3),
             ("__vow_string_join", 2),
+            ("__vow_string_parse_i64_opt", 1),
         ];
 
         for (sym, arity) in cases {

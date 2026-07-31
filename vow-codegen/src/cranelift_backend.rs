@@ -562,6 +562,10 @@ fn routed_vec_extern<'a>(
             RegionId::Root => (sym, None),
             region => ("__vow_string_from_i64_in_arena", Some(region)),
         },
+        "__vow_string_parse_i64_opt" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_parse_i64_opt_in_arena", Some(region)),
+        },
         "__vow_string_split" => match inst.region {
             RegionId::Root => (sym, None),
             region => ("__vow_string_split_in_arena", Some(region)),
@@ -2376,6 +2380,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         | "__vow_string_parse_u64_opt"
         | "__vow_string_parse_u8_opt"
         | "__vow_string_parse_i32_opt" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
+        }
+        "__vow_string_parse_i64_opt_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
         }
@@ -4575,6 +4584,11 @@ mod tests {
             ("__vow_string_to_lower", "__vow_string_to_lower_in_arena", 1),
             ("__vow_string_replace", "__vow_string_replace_in_arena", 3),
             ("__vow_string_join", "__vow_string_join_in_arena", 2),
+            (
+                "__vow_string_parse_i64_opt",
+                "__vow_string_parse_i64_opt_in_arena",
+                1,
+            ),
         ];
 
         let mut insts = vec![
