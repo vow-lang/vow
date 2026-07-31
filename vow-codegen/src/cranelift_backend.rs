@@ -279,6 +279,60 @@ fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty:
     }
 }
 
+fn ir_ty_is_signed_integer(ty: IrTy) -> bool {
+    matches!(
+        ty,
+        IrTy::I8 | IrTy::I16 | IrTy::I32 | IrTy::I64 | IrTy::I128
+    )
+}
+
+/// Reconcile an IR argument's register width with an ABI signature while
+/// retaining the logical IR signedness that Cranelift's raw I8/I16/I32 types
+/// do not encode.
+fn coerce_call_argument(
+    builder: &mut FunctionBuilder<'_>,
+    value: Value,
+    source_ty: IrTy,
+    expected_ty: types::Type,
+) -> Value {
+    let actual_ty = builder.func.dfg.value_type(value);
+    if !actual_ty.is_int() || !expected_ty.is_int() {
+        return value;
+    }
+    if actual_ty.bits() > expected_ty.bits() {
+        return builder.ins().ireduce(expected_ty, value);
+    }
+    if actual_ty.bits() < expected_ty.bits() {
+        return if ir_ty_is_signed_integer(source_ty) {
+            builder.ins().sextend(expected_ty, value)
+        } else {
+            builder.ins().uextend(expected_ty, value)
+        };
+    }
+    value
+}
+
+fn extend_field_store_value(
+    builder: &mut FunctionBuilder<'_>,
+    value: Value,
+    source_ty: IrTy,
+) -> Value {
+    match source_ty {
+        IrTy::I8 | IrTy::I16 | IrTy::I32 => builder.ins().sextend(types::I64, value),
+        IrTy::U8 | IrTy::U16 | IrTy::U32 => builder.ins().uextend(types::I64, value),
+        IrTy::F32 => {
+            let bits = builder
+                .ins()
+                .bitcast(types::I32, MemFlagsData::new(), value);
+            builder.ins().uextend(types::I64, bits)
+        }
+        IrTy::F64 => builder
+            .ins()
+            .bitcast(types::I64, MemFlagsData::new(), value),
+        _ => value,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Instruction lowering
 // ---------------------------------------------------------------------------
@@ -751,9 +805,12 @@ fn lower_inst(
                     IntegerSignedness::Unsigned => builder.ins().uextend(target_ty, value),
                 }
             } else {
-                return Err(CodegenError::UnsupportedOpcode(
-                    "narrowing IntCast reached code generation".to_string(),
-                ));
+                let target_ty = ir_ty_to_cranelift(inst.ty).ok_or_else(|| {
+                    CodegenError::UnsupportedOpcode(
+                        "integer cast has non-integer target".to_string(),
+                    )
+                })?;
+                builder.ins().ireduce(target_ty, value)
             };
             ctx.value_map.insert(inst.id, result);
         }
@@ -1220,19 +1277,8 @@ fn lower_inst(
                             )
                         });
                         if let Some(&expected_ty) = expected_types.get(i) {
-                            let actual_ty = builder.func.dfg.value_type(v);
-                            if actual_ty == types::I32 && expected_ty == types::I64 {
-                                return builder.ins().sextend(types::I64, v);
-                            }
-                            if actual_ty == types::I8 && expected_ty == types::I64 {
-                                return builder.ins().uextend(types::I64, v);
-                            }
-                            if actual_ty.is_int()
-                                && expected_ty.is_int()
-                                && actual_ty.bits() < expected_ty.bits()
-                            {
-                                return builder.ins().uextend(expected_ty, v);
-                            }
+                            let source_ty = ctx.inst_ty_map.get(id).copied().unwrap_or(IrTy::I64);
+                            return coerce_call_argument(builder, v, source_ty, expected_ty);
                         }
                         v
                     })
@@ -1338,26 +1384,8 @@ fn lower_inst(
                     )
                 });
                 let v = if let Some(&expected_ty) = expected_types.get(i + hidden_arg_offset) {
-                    let actual_ty = builder.func.dfg.value_type(v);
-                    if actual_ty == types::I32 && expected_ty == types::I64 {
-                        builder.ins().sextend(types::I64, v)
-                    } else if actual_ty == types::I8 && expected_ty == types::I64 {
-                        builder.ins().uextend(types::I64, v)
-                    } else if actual_ty == types::I64 && expected_ty == types::I32 {
-                        builder.ins().ireduce(types::I32, v)
-                    } else if actual_ty.bits() > expected_ty.bits()
-                        && actual_ty.is_int()
-                        && expected_ty.is_int()
-                    {
-                        builder.ins().ireduce(expected_ty, v)
-                    } else if actual_ty.bits() < expected_ty.bits()
-                        && actual_ty.is_int()
-                        && expected_ty.is_int()
-                    {
-                        builder.ins().uextend(expected_ty, v)
-                    } else {
-                        v
-                    }
+                    let source_ty = ctx.inst_ty_map.get(id).copied().unwrap_or(IrTy::I64);
+                    coerce_call_argument(builder, v, source_ty, expected_ty)
                 } else {
                     v
                 };
@@ -1537,22 +1565,12 @@ fn lower_inst(
                 let base = ctx.value_map[&inst.args[0]];
                 let new_val = ctx.value_map[&inst.args[1]];
                 let offset = (idx as i32) * 8;
-                let src_ty = builder.func.dfg.value_type(new_val);
-                let store_val = match src_ty {
-                    types::I16 => builder.ins().sextend(types::I64, new_val),
-                    types::I32 => builder.ins().sextend(types::I64, new_val),
-                    types::I8 => builder.ins().uextend(types::I64, new_val),
-                    types::F32 => {
-                        let bits = builder
-                            .ins()
-                            .bitcast(types::I32, MemFlagsData::new(), new_val);
-                        builder.ins().uextend(types::I64, bits)
-                    }
-                    types::F64 => builder
-                        .ins()
-                        .bitcast(types::I64, MemFlagsData::new(), new_val),
-                    _ => new_val,
-                };
+                let source_ty = ctx
+                    .inst_ty_map
+                    .get(&inst.args[1])
+                    .copied()
+                    .unwrap_or(IrTy::I64);
+                let store_val = extend_field_store_value(builder, new_val, source_ty);
                 builder
                     .ins()
                     .store(MemFlagsData::trusted(), store_val, base, offset);
@@ -3098,6 +3116,31 @@ mod tests {
 
     fn sp() -> Span {
         Span::new(0, 0)
+    }
+
+    #[test]
+    fn abi_and_field_widening_preserve_logical_signedness() {
+        let mut function = cranelift_codegen::ir::Function::new();
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut function, &mut builder_ctx);
+        let block = builder.create_block();
+        builder.switch_to_block(block);
+
+        let signed_i8 = builder.ins().iconst(types::I8, -1);
+        coerce_call_argument(&mut builder, signed_i8, IrTy::I8, types::I64);
+        let unsigned_i8 = builder.ins().iconst(types::I8, -1);
+        coerce_call_argument(&mut builder, unsigned_i8, IrTy::U8, types::I64);
+        let signed_i16 = builder.ins().iconst(types::I16, -1);
+        extend_field_store_value(&mut builder, signed_i16, IrTy::I16);
+        let unsigned_i16 = builder.ins().iconst(types::I16, -1);
+        extend_field_store_value(&mut builder, unsigned_i16, IrTy::U16);
+
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        builder.finalize(make_isa(BuildMode::Release).unwrap().frontend_config());
+        let clif = function.display().to_string();
+        assert_eq!(clif.matches("sextend.i64").count(), 2, "{clif}");
+        assert_eq!(clif.matches("uextend.i64").count(), 2, "{clif}");
     }
 
     fn make_module(name: &str, funcs: Vec<Function>) -> Module {

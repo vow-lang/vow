@@ -2737,12 +2737,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let Some(up_pos) = up_pos else { continue };
                     let old_arg = ctx.func.blocks[block_idx].insts[up_pos].args[0];
                     ctx.switch_to_block(arm_block);
+                    let tail = ctx.func.blocks[block_idx].insts.split_off(up_pos + 1);
+                    ctx.func.blocks[block_idx].insts.truncate(up_pos);
                     let narrowed = lower_narrow_literal(ctx, arm_bodies[i], old_arg, phi_ty);
-                    if narrowed == old_arg {
-                        // arm_bodies[i] isn't a shape integer_literal_value can
-                        // evaluate; leave the original (i64-default) Upsilon as-is.
-                        continue;
-                    }
                     let new_up_id = ctx.emit(
                         Opcode::Upsilon,
                         Ty::Unit,
@@ -2750,19 +2747,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         InstData::PhiTarget(InstId(u32::MAX)),
                         span,
                     );
-                    // lower_narrow_literal's const and the Upsilon above were both
-                    // appended at the block's current tail. Splice them back to
-                    // where the old Upsilon lived so the new value is defined
-                    // before it's referenced, and the block's Jump / any mutation
-                    // Upsilons after it keep their relative order.
-                    let insts = &mut ctx.func.blocks[block_idx].insts;
-                    let new_up_inst = insts.pop().expect("Upsilon just emitted above");
-                    let new_const_inst = insts
-                        .pop()
-                        .expect("const just emitted by lower_narrow_literal");
-                    insts.remove(up_pos);
-                    insts.insert(up_pos, new_up_inst);
-                    insts.insert(up_pos, new_const_inst);
+                    // Restore the terminator and any mutation Upsilons after the
+                    // replacement marker expression and result Upsilon.
+                    ctx.func.blocks[block_idx].insts.extend(tail);
                     arm_results[i].1 = new_up_id;
                 }
                 ctx.switch_to_block(merge_block);
@@ -3346,47 +3333,12 @@ fn integer_type_for_ir_ty(ty: Ty) -> IntegerType {
 }
 
 fn expr_is_integer_literal(expr: &Expr) -> bool {
-    integer_literal_value(expr).is_some()
+    expr_is_coercible_int_marker(expr)
 }
 
-/// Extracts the literal integer value of `expr`, unwrapping a single leading
-/// unary negation (e.g. `-2147483648`, parsed as `Neg(Lit(2147483648))`).
-/// Returns `None` for any other expression shape.
-fn integer_literal_value(expr: &Expr) -> Option<i64> {
-    match &expr.kind {
-        ExprKind::Lit(Lit::Int(v)) => Some(*v as i64),
-        ExprKind::UnaryOp {
-            op: UnOp::Neg,
-            operand,
-        } => integer_literal_value(operand).map(|v| v.wrapping_neg()),
-        ExprKind::BinaryOp { op, lhs, rhs } => {
-            let l = integer_literal_value(lhs)?;
-            let r = integer_literal_value(rhs)?;
-            match op {
-                BinOp::Add | BinOp::AddChecked => Some(l.wrapping_add(r)),
-                BinOp::Sub | BinOp::SubChecked => Some(l.wrapping_sub(r)),
-                BinOp::Mul | BinOp::MulChecked => Some(l.wrapping_mul(r)),
-                BinOp::Div | BinOp::DivChecked => l.checked_div(r),
-                BinOp::Rem | BinOp::RemChecked => l.checked_rem(r),
-                BinOp::BitAnd => Some(l & r),
-                BinOp::BitOr => Some(l | r),
-                BinOp::BitXor => Some(l ^ r),
-                BinOp::Shl => Some(l.wrapping_shl(r as u32)),
-                BinOp::Shr => Some(l.wrapping_shr(r as u32)),
-                _ => None,
-            }
-        }
-        ExprKind::Block(block) => integer_literal_value_from_block(block),
-        _ => None,
-    }
-}
-
-/// Mirrors block_result_is_coercible_int_marker's notion of "the block's
-/// value expr", but extracts the literal value instead of just checking
-/// markerhood.
-fn integer_literal_value_from_block(block: &Block) -> Option<i64> {
+fn integer_marker_from_block(block: &Block) -> Option<&Expr> {
     if let Some(expr) = &block.trailing_expr {
-        return integer_literal_value(expr);
+        return Some(expr);
     }
     if let Some(Stmt::Expr {
         expr,
@@ -3394,63 +3346,113 @@ fn integer_literal_value_from_block(block: &Block) -> Option<i64> {
         ..
     }) = block.stmts.last()
     {
-        return integer_literal_value(expr);
+        return Some(expr);
     }
     None
 }
 
-/// Re-lower an integer-literal operand as a `ty`-native constant instead of
-/// the default `ConstI64`, so it shares a Cranelift register width with a
-/// genuinely `ty`-typed sibling operand in the same binary op.
-fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
-    let Some(value) = integer_literal_value(expr) else {
-        return original;
-    };
+fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: i64, ty: Ty, span: Span) -> InstId {
     match ty {
         Ty::I8 => ctx.emit(
             Opcode::ConstU8,
             Ty::I8,
             vec![],
             InstData::ConstU8(value as u8),
-            expr.span,
+            span,
         ),
         Ty::U8 => ctx.emit(
             Opcode::ConstU8,
             Ty::U8,
             vec![],
             InstData::ConstU8(value as u8),
-            expr.span,
+            span,
         ),
-        Ty::I16 => ctx.emit(
+        Ty::I16 | Ty::U16 | Ty::I32 => ctx.emit(
             Opcode::ConstI32,
-            Ty::I16,
+            ty,
             vec![],
             InstData::ConstI32(value as i32),
-            expr.span,
-        ),
-        Ty::U16 => ctx.emit(
-            Opcode::ConstI32,
-            Ty::U16,
-            vec![],
-            InstData::ConstI32(value as i32),
-            expr.span,
-        ),
-        Ty::I32 => ctx.emit(
-            Opcode::ConstI32,
-            Ty::I32,
-            vec![],
-            InstData::ConstI32(value as i32),
-            expr.span,
+            span,
         ),
         Ty::U32 => ctx.emit(
             Opcode::ConstI32,
             Ty::U32,
             vec![],
             InstData::ConstI32(value as u32 as i32),
-            expr.span,
+            span,
         ),
-        _ => original,
+        _ => unreachable!("non-narrow integer context: {ty:?}"),
     }
+}
+
+/// Re-lower a coercible integer marker in its contextual narrow type. This
+/// preserves the original operators -- especially checked arithmetic --
+/// instead of folding the whole expression into a wrapping constant.
+fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<InstId> {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Int(value)) => Some(emit_narrow_integer_constant(
+            ctx,
+            *value as i64,
+            ty,
+            expr.span,
+        )),
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => {
+            let zero = emit_narrow_integer_constant(ctx, 0, ty, expr.span);
+            let value = lower_integer_marker_as(ctx, operand, ty)?;
+            Some(ctx.emit(
+                Opcode::WrappingSub,
+                ty,
+                vec![zero, value],
+                InstData::Integer(integer_type_for_ir_ty(ty)),
+                expr.span,
+            ))
+        }
+        ExprKind::BinaryOp { op, lhs, rhs } if expr_is_coercible_int_marker(expr) => {
+            let lhs = lower_integer_marker_as(ctx, lhs, ty)?;
+            let rhs_ty = if matches!(op, BinOp::Shl | BinOp::Shr) {
+                Ty::U32
+            } else {
+                ty
+            };
+            let rhs = lower_integer_marker_as(ctx, rhs, rhs_ty)?;
+            let (opcode, result_ty, data) = binop_opcode(*op, &ty);
+            Some(ctx.emit(opcode, result_ty, vec![lhs, rhs], data, expr.span))
+        }
+        ExprKind::Block(block) => {
+            lower_integer_marker_as(ctx, integer_marker_from_block(block)?, ty)
+        }
+        _ => None,
+    }
+}
+
+/// Coerce an expression into an admitted contextual narrow integer type.
+/// Marker expressions are re-lowered at that width so checked operations keep
+/// their overflow behavior; control-flow results are explicitly reduced after
+/// their Phi so later users observe the annotated type.
+fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
+    if !matches!(ty, Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32) {
+        return original;
+    }
+    if let Some(narrowed) = lower_integer_marker_as(ctx, expr, ty) {
+        return narrowed;
+    }
+    let source_ty = ctx.inst_ty(original);
+    if ir_ty_is_integer(source_ty) && source_ty != ty {
+        return ctx.emit(
+            Opcode::IntCast,
+            ty,
+            vec![original],
+            InstData::IntegerCast {
+                from: integer_type_for_ir_ty(source_ty),
+                to: integer_type_for_ir_ty(ty),
+            },
+            expr.span,
+        );
+    }
+    original
 }
 
 fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty, InstData) {
@@ -3514,6 +3516,8 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                     val = lower_narrow_literal(ctx, init, val, Ty::U16);
                 } else if type_name == "i32" {
                     val = lower_narrow_literal(ctx, init, val, Ty::I32);
+                } else if type_name == "u32" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::U32);
                 }
             }
             if let Some(AstType::Named {
@@ -4375,6 +4379,124 @@ mod tests {
                 "missing native {name} constant in {func:#?}"
             );
         }
+    }
+
+    #[test]
+    fn checked_marker_return_keeps_narrow_overflow_operation() {
+        let checked_add = Expr {
+            kind: ExprKind::BinaryOp {
+                op: BinOp::AddChecked,
+                lhs: Box::new(int_expr(127)),
+                rhs: Box::new(int_expr(1)),
+            },
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "checked_i8",
+            vec![],
+            named_ty("i8"),
+            Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(checked_add)),
+                span: sp(),
+            },
+            vec![],
+        );
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        let checked = all_insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::CheckedAdd && inst.ty == Ty::I8)
+            .expect("contextual i8 checked add");
+        assert_eq!(checked.data, InstData::Integer(IntegerType::I8));
+        let ret = all_insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::Return)
+            .expect("return");
+        assert_eq!(ret.args, vec![checked.id]);
+    }
+
+    #[test]
+    fn annotated_narrow_local_reduces_control_flow_result() {
+        let init = Expr {
+            kind: ExprKind::If {
+                condition: Box::new(bool_expr(true)),
+                then_branch: Box::new(Block {
+                    stmts: vec![],
+                    trailing_expr: Some(Box::new(int_expr(127))),
+                    span: sp(),
+                }),
+                else_branch: Some(Box::new(int_expr(0))),
+            },
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "local_i8",
+            vec![],
+            named_ty("i8"),
+            Block {
+                stmts: vec![Stmt::Let {
+                    pattern: Pat {
+                        kind: PatKind::Ident {
+                            name: "x".to_string(),
+                            is_mut: false,
+                        },
+                        span: sp(),
+                    },
+                    ty: Some(named_ty("i8")),
+                    init: Box::new(init),
+                    span: sp(),
+                }],
+                trailing_expr: Some(Box::new(ident_expr("x"))),
+                span: sp(),
+            },
+            vec![],
+        );
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        let cast = all_insts
+            .iter()
+            .find(|inst| {
+                inst.opcode == Opcode::IntCast
+                    && inst.ty == Ty::I8
+                    && inst.data
+                        == InstData::IntegerCast {
+                            from: IntegerType::I64,
+                            to: IntegerType::I8,
+                        }
+            })
+            .expect("i64 Phi reduced to annotated i8");
+        let ret = all_insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::Return)
+            .expect("return");
+        assert_eq!(ret.args, vec![cast.id]);
     }
 
     #[test]

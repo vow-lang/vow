@@ -7,9 +7,10 @@ use crate::frontend::DependencyManifest;
 
 // Bump this whenever generated object files are no longer ABI-compatible with
 // existing cached artifacts. Static string literals, full-width block arena
-// stack slots, and UTF-8-preserving string lexing all change generated object
-// contents, so pre-cutover objects must not be reused.
-const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-v1";
+// stack slots, UTF-8-preserving string lexing, and contextual narrow-integer
+// reductions all change generated object contents, so pre-cutover objects must
+// not be reused.
+const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-narrow-context-v2";
 
 pub struct CompileCache {
     dir: PathBuf,

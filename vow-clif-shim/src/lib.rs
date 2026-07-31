@@ -125,6 +125,50 @@ fn ity_bits(ty: i64) -> i64 {
     }
 }
 
+fn coerce_call_argument(
+    builder: &mut FunctionBuilder<'_>,
+    value: Value,
+    source_ty: i64,
+    expected_ty: types::Type,
+) -> Value {
+    let actual_ty = builder.func.dfg.value_type(value);
+    if !actual_ty.is_int() || !expected_ty.is_int() {
+        return value;
+    }
+    if actual_ty.bits() > expected_ty.bits() {
+        return builder.ins().ireduce(expected_ty, value);
+    }
+    if actual_ty.bits() < expected_ty.bits() {
+        return if ity_is_signed(source_ty) {
+            builder.ins().sextend(expected_ty, value)
+        } else {
+            builder.ins().uextend(expected_ty, value)
+        };
+    }
+    value
+}
+
+fn extend_field_store_value(
+    builder: &mut FunctionBuilder<'_>,
+    value: Value,
+    source_ty: i64,
+) -> Value {
+    match source_ty {
+        ITY_I8 | ITY_I16 | ITY_I32 => builder.ins().sextend(types::I64, value),
+        ITY_U8 | ITY_U16 | ITY_U32 => builder.ins().uextend(types::I64, value),
+        ITY_F32 => {
+            let bits = builder
+                .ins()
+                .bitcast(types::I32, MemFlagsData::new(), value);
+            builder.ins().uextend(types::I64, bits)
+        }
+        ITY_F64 => builder
+            .ins()
+            .bitcast(types::I64, MemFlagsData::new(), value),
+        _ => value,
+    }
+}
+
 fn signature_return_ty(ret_ty: i64, is_main: bool) -> Option<types::Type> {
     if is_main && ret_ty == ITY_UNIT {
         Some(types::I32)
@@ -2037,7 +2081,10 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             builder.ins().uextend(target_ty, value)
                         }
                     } else {
-                        return -1;
+                        let Some(target_ty) = ity_to_cranelift(dv2) else {
+                            return -1;
+                        };
+                        builder.ins().ireduce(target_ty, value)
                     };
                     set_val!(iid, result);
                 }
@@ -2271,31 +2318,14 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 "clif shim: IOP_CALL value_map miss: inst_id={iid} arg_id={arg_id} (block={bi}, inst_idx={ii}, func_idx={func_idx})"
                             )
                         });
-                        let v =
-                            if let Some(&expected_ty) = expected_types.get(i + hidden_arg_offset) {
-                                let actual_ty = builder.func.dfg.value_type(v);
-                                if actual_ty == types::I32 && expected_ty == types::I64 {
-                                    builder.ins().sextend(types::I64, v)
-                                } else if actual_ty == types::I8 && expected_ty == types::I64 {
-                                    builder.ins().uextend(types::I64, v)
-                                } else if actual_ty == types::I64 && expected_ty == types::I32 {
-                                    builder.ins().ireduce(types::I32, v)
-                                } else if actual_ty.bits() > expected_ty.bits()
-                                    && actual_ty.is_int()
-                                    && expected_ty.is_int()
-                                {
-                                    builder.ins().ireduce(expected_ty, v)
-                                } else if actual_ty.bits() < expected_ty.bits()
-                                    && actual_ty.is_int()
-                                    && expected_ty.is_int()
-                                {
-                                    builder.ins().uextend(expected_ty, v)
-                                } else {
-                                    v
-                                }
-                            } else {
-                                v
-                            };
+                        let v = if let Some(&expected_ty) =
+                            expected_types.get(i + hidden_arg_offset)
+                        {
+                            let source_ty = inst_ty_map.get(&arg_id).copied().unwrap_or(ITY_I64);
+                            coerce_call_argument(&mut builder, v, source_ty, expected_ty)
+                        } else {
+                            v
+                        };
                         call_args.push(v);
                     }
                     if dk == IDATA_CALL_TARGET {
@@ -2380,19 +2410,16 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                         )
                                     });
                                     if let Some(&expected_ty) = expected_types.get(i) {
-                                        let actual_ty = builder.func.dfg.value_type(v);
-                                        if actual_ty == types::I32 && expected_ty == types::I64 {
-                                            return builder.ins().sextend(types::I64, v);
-                                        }
-                                        if actual_ty == types::I8 && expected_ty == types::I64 {
-                                            return builder.ins().uextend(types::I64, v);
-                                        }
-                                        if actual_ty.is_int()
-                                            && expected_ty.is_int()
-                                            && actual_ty.bits() < expected_ty.bits()
-                                        {
-                                            return builder.ins().uextend(expected_ty, v);
-                                        }
+                                        let source_ty = inst_ty_map
+                                            .get(&arg_id)
+                                            .copied()
+                                            .unwrap_or(ITY_I64);
+                                        return coerce_call_argument(
+                                            &mut builder,
+                                            v,
+                                            source_ty,
+                                            expected_ty,
+                                        );
                                     }
                                     v
                                 })
@@ -2495,25 +2522,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         let base = arg!(0);
                         let new_val = arg!(1);
                         let offset = (idx as i32) * 8;
-                        let src_ty = builder.func.dfg.value_type(new_val);
-                        let store_val = match src_ty {
-                            types::I16 => builder.ins().sextend(types::I64, new_val),
-                            types::I32 => builder.ins().sextend(types::I64, new_val),
-                            types::I8 => builder.ins().uextend(types::I64, new_val),
-                            types::F32 => {
-                                let bits =
-                                    builder
-                                        .ins()
-                                        .bitcast(types::I32, MemFlagsData::new(), new_val);
-                                builder.ins().uextend(types::I64, bits)
-                            }
-                            types::F64 => {
-                                builder
-                                    .ins()
-                                    .bitcast(types::I64, MemFlagsData::new(), new_val)
-                            }
-                            _ => new_val,
-                        };
+                        let source_ty = inst_ty_map
+                            .get(&all_args[aoff + 1])
+                            .copied()
+                            .unwrap_or(ITY_I64);
+                        let store_val = extend_field_store_value(&mut builder, new_val, source_ty);
                         builder
                             .ins()
                             .store(MemFlagsData::trusted(), store_val, base, offset);
@@ -3558,6 +3571,33 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abi_and_field_widening_preserve_logical_signedness() {
+        let mut function = cranelift_codegen::ir::Function::new();
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut function, &mut builder_ctx);
+        let block = builder.create_block();
+        builder.switch_to_block(block);
+
+        let signed_i8 = builder.ins().iconst(types::I8, -1);
+        coerce_call_argument(&mut builder, signed_i8, ITY_I8, types::I64);
+        let unsigned_i8 = builder.ins().iconst(types::I8, -1);
+        coerce_call_argument(&mut builder, unsigned_i8, ITY_U8, types::I64);
+        let signed_i16 = builder.ins().iconst(types::I16, -1);
+        extend_field_store_value(&mut builder, signed_i16, ITY_I16);
+        let unsigned_i16 = builder.ins().iconst(types::I16, -1);
+        extend_field_store_value(&mut builder, unsigned_i16, ITY_U16);
+
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        let flags = settings::Flags::new(settings::builder());
+        let isa = isa::lookup(host_triple()).unwrap().finish(flags).unwrap();
+        builder.finalize(isa.frontend_config());
+        let clif = function.display().to_string();
+        assert_eq!(clif.matches("sextend.i64").count(), 2, "{clif}");
+        assert_eq!(clif.matches("uextend.i64").count(), 2, "{clif}");
+    }
 
     fn vow_string(s: &str) -> VowVec {
         VowVec {
