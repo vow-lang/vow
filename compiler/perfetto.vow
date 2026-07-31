@@ -101,7 +101,10 @@ fn trace_counter_pid(group: String) -> i64 {
     let segs: Vec<String> = string_split(group, String::from(":"));
     if segs.len() == 2 {
         let pid_str: String = segs[1];
-        return parse_i64(pid_str);
+        return match parse_i64(pid_str) {
+            Option::Some(pid) => { pid },
+            Option::None => { PID_COMPILER() },
+        };
     }
     PID_COMPILER()
 }
@@ -124,7 +127,15 @@ fn trace_sample(t: TraceCtx, ts: i64) [io] {
             let rss_str: String = parts[1];
             let cpu_str: String = parts[2];
             let pid: i64 = trace_counter_pid(group);
-            trace_counter(t, group, pid, ts, parse_i64(rss_str), parse_i64(cpu_str));
+            let rss_kb: i64 = match parse_i64(rss_str) {
+                Option::Some(value) => { value },
+                Option::None => { 0 },
+            };
+            let cpu_pct: i64 = match parse_i64(cpu_str) {
+                Option::Some(value) => { value },
+                Option::None => { 0 },
+            };
+            trace_counter(t, group, pid, ts, rss_kb, cpu_pct);
         }
         i = i + 1;
     }

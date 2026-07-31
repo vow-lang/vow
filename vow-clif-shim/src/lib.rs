@@ -518,6 +518,13 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
                 ("__vow_string_from_u64_in_arena", Some(inst_rgn))
             }
         }
+        "__vow_string_parse_i64_opt" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_parse_i64_opt_in_arena", Some(inst_rgn))
+            }
+        }
         "__vow_string_split" => {
             if (inst_rgn & 3) == REGION_KIND_ROOT {
                 (sym, None)
@@ -3100,6 +3107,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_parse_i64_opt_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_split" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3148,10 +3160,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_string_join_in_arena" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_parse_i64" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -3411,6 +3419,40 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_i64_option_routes_to_its_allocation_region() {
+        let root = region_root();
+        assert_eq!(
+            routed_vec_extern("__vow_string_parse_i64_opt", root, root),
+            ("__vow_string_parse_i64_opt", None),
+        );
+
+        let block = region_pack(REGION_KIND_BLOCK, 7);
+        assert_eq!(
+            routed_vec_extern("__vow_string_parse_i64_opt", block, root),
+            ("__vow_string_parse_i64_opt_in_arena", Some(block)),
+        );
+    }
+
+    #[test]
+    fn parse_i64_option_arena_extern_accepts_arena_and_string() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+        let sig = make_extern_sig(
+            "__vow_string_parse_i64_opt_in_arena",
+            &module_ctx.obj_module,
+        );
+
+        assert_eq!(sig.params.len(), 2);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.params[1].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        unsafe { __vow_clif_destroy(ctx) };
+    }
 
     #[test]
     fn create_returns_zero_when_native_isa_builder_fails() {
