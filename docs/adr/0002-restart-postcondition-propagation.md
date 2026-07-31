@@ -23,6 +23,8 @@ For a function `f`:
 
 - `P` is the conjunction of `f`'s `requires` clauses.
 - `Q(args, result)` is the conjunction of `f`'s normal `ensures` clauses.
+- `A_r(args, restart_args)` is the conjunction of restart `r`'s argument
+  preconditions; it is `true` when the restart declares none.
 - `r` is a declared restart and `R_r(args, restart_args, result)` is its
   restart-specific postcondition.
 - A **normal edge** is completion of `f`'s ordinary body after `P` holds.
@@ -45,9 +47,10 @@ silently promoted to the function's normal postcondition.
 ### Callee obligations
 
 The verifier checks every declared restart independently. In the symbolic
-state at the point where the restart can run, the restart expression must
-establish its declared `R_r` for every permitted restart argument. This is a
-callee obligation, just like an ordinary `ensures` clause.
+state at the point where the restart can run, and under the assumption `A_r`,
+the restart expression must establish its declared `R_r`. This is a callee
+obligation, just like an ordinary `ensures` clause. Proving `R_r` under `A_r`
+does not make `R_r` available for restart arguments that violate `A_r`.
 
 The function's ordinary body is still checked against `Q`. A weaker `R_r` does
 not weaken that check, and proving the ordinary body against `Q` does not prove
@@ -58,14 +61,17 @@ the restart.
 A handled call lowers to explicit verifier control-flow edges:
 
 1. The normal edge carries `assume(Q(actual_args, call_result))`.
-2. Each reachable recovery edge for restart `r` carries only
+2. Selecting restart `r` first creates the caller obligation
+   `assert(A_r(actual_args, selected_restart_args))` at the restart invocation.
+3. Only after that obligation succeeds does the recovery edge carry
    `assume(R_r(actual_args, selected_restart_args, call_result))`.
-3. Handler code and all downstream proof obligations are checked on every
+4. Handler code and all downstream proof obligations are checked on every
    reachable edge.
 
 For a parameterized restart, the postcondition is instantiated with the actual
-arguments supplied by the handler. This lets a handler prove a stronger fact
-for a particular selection even when the restart's general contract is weak.
+arguments supplied by the handler, after those arguments have satisfied the
+restart's parameter contract. This lets a handler prove a stronger fact for a
+particular valid selection even when the restart's general contract is weak.
 
 The facts remain branch-sensitive in the verifier's ordinary CFG/SSA model. At
 a join, their logical summary is:
@@ -132,17 +138,18 @@ The soundness chain is:
 
 1. Callee verification proves the normal body establishes `Q` and each restart
    establishes its own `R_r`.
-2. Handle-site lowering exposes exactly one verified summary on each outcome
-   edge.
+2. Handle-site lowering proves the selected restart's argument contract, then
+   exposes exactly one verified summary on each outcome edge.
 3. Caller verification proves downstream obligations independently on all
    reachable edges.
 
 No step permits `Q` to be assumed on a recovery edge unless that edge's facts
-independently imply `Q`.
+independently imply `Q`. No step permits `R_r` to be assumed until the selected
+arguments have established `A_r`.
 
 ## Diagnostics
 
-There are two distinct failures, and their blame must remain distinct.
+There are three distinct failures, and their blame must remain distinct.
 
 ### Restart implementation violates its own postcondition
 
@@ -152,11 +159,21 @@ and failed restart clause, and identifies the restart in the function/path
 context. It does not blame a handler that selected a recovery advertised by the
 callee.
 
+### A handler violates a restart argument contract
+
+This is a caller precondition failure at the restart invocation. It uses the
+existing `VerifyFailed` / `VowRequiresViolated` family, points at the invalid
+argument and failed restart clause, identifies the selected restart, and uses
+`blame: "Caller"`. The verifier does not enter the recovery edge or assume
+`R_r` after this failure. Its counterexample also includes `recovery_path`
+context so the callee, restart, call site, and handler arm remain
+machine-readable.
+
 ### A caller relies on a guarantee absent from a recovery path
 
 The primary counterexample remains the actual proof obligation that failed. For
 example, if the enclosing function's `ensures` cannot be proved on a recovery
-edge, the violation is that enclosing `ensures` clause with `blame: "callee"`.
+edge, the violation is that enclosing `ensures` clause with `blame: "Callee"`.
 Selecting a restart is not a precondition violation, so this must not be
 reported as generic Caller blame.
 
@@ -167,7 +184,7 @@ Every counterexample whose trace crosses a recovery edge must add structured
 {
   "function": "read_strictly_positive",
   "violation": "ensures result > 0",
-  "blame": "callee",
+  "blame": "Callee",
   "recovery_path": {
     "callee": "read_positive",
     "restart": "use_zero",
@@ -263,5 +280,7 @@ public-interface tests must cover:
 3. the same recovery failing a stronger enclosing postcondition;
 4. a handler re-establishing the stronger property;
 5. an unreachable weak recovery not contaminating the join;
-6. parameterized restart postcondition instantiation; and
-7. Rust/self-hosted parity for `recovery_path` diagnostics.
+6. parameterized restart postcondition instantiation;
+7. rejection of invalid restart arguments before their postcondition becomes
+   available; and
+8. Rust/self-hosted parity for `recovery_path` diagnostics.
