@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+import prompts
 from prompts import curate_verify_output
 
 
@@ -65,6 +67,50 @@ class CegisPromptTests(unittest.TestCase):
 
         self.assertIn("test.vow@12+8", prompt)
         self.assertIn("main in test.vow@50+15", prompt)
+        self.assertIn("y=0 at arg@59+1", prompt)
+        self.assertIn("Use the caller context", prompt)
+
+    def test_requires_context_formats_first_counterexample_once(self):
+        with (
+            patch.object(
+                prompts,
+                "_format_call_sites",
+                wraps=prompts._format_call_sites,
+            ) as format_call_sites,
+            patch.object(
+                prompts,
+                "_format_violating_args",
+                wraps=prompts._format_violating_args,
+            ) as format_violating_args,
+        ):
+            prompt = curate_verify_output(
+                {
+                    "status": "VerifyFailed",
+                    "function": "main",
+                    "counterexamples": [
+                        {
+                            "violation": "requires: y != 0",
+                            "blame": "Caller",
+                            "vow_id": 3,
+                            "values": {},
+                            "call_sites": [],
+                            "violating_args": [
+                                {
+                                    "param": "y",
+                                    "value": "0",
+                                    "arg_offset": 59,
+                                    "arg_length": 1,
+                                }
+                            ],
+                        }
+                    ],
+                },
+                iteration=1,
+                previous_violations=[],
+            )
+
+        self.assertEqual(format_call_sites.call_count, 1)
+        self.assertEqual(format_violating_args.call_count, 1)
         self.assertIn("y=0 at arg@59+1", prompt)
         self.assertIn("Use the caller context", prompt)
 
