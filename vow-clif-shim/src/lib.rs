@@ -38,7 +38,6 @@ use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use target_lexicon::{OperatingSystem, Triple};
 
 // ---------------------------------------------------------------------------
 // VowVec layout: { ptr: *mut u8, len: usize, cap: usize } = 24 bytes
@@ -776,21 +775,16 @@ impl FnScratch {
 // FFI: create / destroy
 // ---------------------------------------------------------------------------
 
-// `Triple::host()` reports macOS as `*-apple-darwin`. cranelift-object 0.132
-// maps a `Darwin` OS to Mach-O `PLATFORM_UNKNOWN` when writing its new
-// `LC_BUILD_VERSION` load command, which the macOS linker rejects with
-// "unknown platform". Rewriting `Darwin` to `MacOSX` yields `PLATFORM_MACOS`.
-// Every non-Darwin host (e.g. Linux/ELF) is returned unchanged.
-fn host_triple() -> Triple {
-    let mut triple = Triple::host();
-    if let OperatingSystem::Darwin(v) = triple.operating_system {
-        triple.operating_system = OperatingSystem::MacOSX(v);
-    }
-    triple
-}
-
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
+    create_module_context(mode, trace_mode, cranelift_native::builder())
+}
+
+fn create_module_context(
+    mode: i64,
+    trace_mode: i64,
+    isa_builder_result: Result<isa::Builder, &'static str>,
+) -> i64 {
     let mut flag_builder = settings::builder();
     if let Err(e) = flag_builder.set("use_colocated_libcalls", "false") {
         eprintln!("clif_shim: error setting use_colocated_libcalls: {e}");
@@ -807,17 +801,13 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         return 0;
     }
     let flags = settings::Flags::new(flag_builder);
-    let mut isa_builder = match isa::lookup(host_triple()) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("clif_shim: isa lookup error: {e}");
+    let isa_builder = match isa_builder_result {
+        Ok(builder) => builder,
+        Err(message) => {
+            eprintln!("clif_shim: native builder error: {message}");
             return 0;
         }
     };
-    if let Err(e) = cranelift_native::infer_native_flags(&mut isa_builder) {
-        eprintln!("clif_shim: infer native flags error: {e}");
-        return 0;
-    }
     let isa = match isa_builder.finish(flags) {
         Ok(i) => i,
         Err(e) => {
@@ -3414,6 +3404,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_returns_zero_when_native_isa_builder_fails() {
+        assert_eq!(create_module_context(0, 0, Err("unsupported host")), 0);
+    }
 
     fn vow_string(s: &str) -> VowVec {
         VowVec {
