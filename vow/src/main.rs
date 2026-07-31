@@ -1,5 +1,6 @@
 mod cache;
 mod cex_eval;
+mod cli;
 mod complexity;
 mod contract_quality;
 mod contracts;
@@ -23,347 +24,14 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter};
-use vow_verify::{
-    DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig, VerifyLimits,
-    find_esbmc,
-};
+use vow_verify::{DEFAULT_MAX_K_STEP, SolverConfig, VerifyLimits, find_esbmc};
 
 use cache::VerifyCache;
+use cli::{Args, Command, ModeArg, SkillAction};
 use frontend::{
     FrontendBundle, FrontendError, FrontendGoal, prepare_frontend, prepare_frontend_with_root,
 };
 use verify_outcome::{SkippedFunction, VerifyOutcome};
-
-// ---------------------------------------------------------------------------
-// CLI
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum ModeArg {
-    Debug,
-    Release,
-    Profile,
-    Sanitize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum TraceArg {
-    Off,
-    Calls,
-    Full,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum SolverArg {
-    Boolector,
-    Z3,
-    Bitwuzla,
-    Auto,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum EncodingArg {
-    Bv,
-    Ir,
-    Auto,
-}
-
-fn make_solver_config(
-    solver: SolverArg,
-    encoding: EncodingArg,
-    timeout: Option<u32>,
-) -> SolverConfig {
-    let s = match solver {
-        SolverArg::Boolector => Solver::Boolector,
-        SolverArg::Z3 => Solver::Z3,
-        SolverArg::Bitwuzla => Solver::Bitwuzla,
-        SolverArg::Auto => Solver::Auto,
-    };
-    let e = match encoding {
-        EncodingArg::Bv => Encoding::Bv,
-        EncodingArg::Ir => Encoding::Ir,
-        EncodingArg::Auto => Encoding::Auto,
-    };
-    let config = SolverConfig {
-        solver: s,
-        encoding: e,
-        timeout_secs: timeout,
-        memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
-    };
-    if let Err(msg) = config.validate() {
-        eprintln!("error: {msg}");
-        std::process::exit(1);
-    }
-    config
-}
-
-#[derive(Parser, Debug)]
-#[command(
-    name = "vow",
-    about = "Vow compiler",
-    disable_help_flag = true,
-    args_conflicts_with_subcommands = true
-)]
-struct Args {
-    #[command(subcommand)]
-    command: Option<Command>,
-
-    source: Option<PathBuf>,
-    #[arg(short = 'o', long)]
-    output: Option<PathBuf>,
-    #[arg(long, value_enum, default_value = "release")]
-    mode: ModeArg,
-    #[arg(long)]
-    no_verify: bool,
-    #[arg(long)]
-    dump_ir: bool,
-    #[arg(long, value_enum, default_value = "off")]
-    debug_trace: TraceArg,
-    #[arg(long)]
-    no_cache: bool,
-    #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
-    max_k_step: u32,
-    #[arg(long, value_enum, default_value = "auto")]
-    solver: SolverArg,
-    #[arg(long, value_enum, default_value = "auto")]
-    encoding: EncodingArg,
-    #[arg(long)]
-    timeout: Option<u32>,
-    #[arg(long)]
-    verify_jobs: Option<u32>,
-    /// Differential-test counterexamples against runtime semantics (issue #335).
-    #[arg(long)]
-    replay_cex: bool,
-    #[arg(long)]
-    perfetto: Option<PathBuf>,
-    #[arg(long)]
-    help: bool,
-    #[arg(long)]
-    human: bool,
-}
-
-#[derive(clap::Subcommand, Debug)]
-enum Command {
-    /// Compile source to a native executable (verifies contracts by default)
-    Build(BuildArgs),
-    /// Verify contracts without producing an executable
-    Verify(VerifyArgs),
-    /// Run tests (not yet implemented)
-    Test(TestArgs),
-    /// Emit declaration file (.vow.d) with type signatures only
-    Decl(DeclArgs),
-    /// List all contracts in a program with optional verification status
-    Contracts(ContractsArgs),
-    /// Generate or install the Claude Code skill document
-    Skill(SkillArgs),
-    /// Run mutation testing on a Vow source tree (self-hosted only)
-    Mutants(MutantsArgs),
-    /// Report per-function complexity metrics as JSON
-    Complexity(ComplexityArgs),
-}
-
-#[derive(clap::Args, Debug)]
-#[command(disable_help_flag = true)]
-struct BuildArgs {
-    source: Option<PathBuf>,
-    #[arg(short = 'o', long)]
-    output: Option<PathBuf>,
-    #[arg(long, value_enum, default_value = "release")]
-    mode: ModeArg,
-    #[arg(long)]
-    no_verify: bool,
-    #[arg(long)]
-    dump_ir: bool,
-    #[arg(long, value_enum, default_value = "off")]
-    debug_trace: TraceArg,
-    #[arg(long)]
-    no_cache: bool,
-    #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
-    max_k_step: u32,
-    #[arg(long, value_enum, default_value = "auto")]
-    solver: SolverArg,
-    #[arg(long, value_enum, default_value = "auto")]
-    encoding: EncodingArg,
-    #[arg(long)]
-    timeout: Option<u32>,
-    #[arg(long)]
-    verify_jobs: Option<u32>,
-    /// Differential-test counterexamples against runtime semantics (issue #335).
-    #[arg(long)]
-    replay_cex: bool,
-    #[arg(long)]
-    perfetto: Option<PathBuf>,
-    #[arg(long)]
-    help: bool,
-    #[arg(long)]
-    human: bool,
-}
-
-#[derive(clap::Args, Debug)]
-#[command(disable_help_flag = true)]
-struct VerifyArgs {
-    source: Option<PathBuf>,
-    #[arg(long)]
-    help: bool,
-    #[arg(long)]
-    human: bool,
-    #[arg(long)]
-    no_cache: bool,
-    #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
-    max_k_step: u32,
-    #[arg(long, value_enum, default_value = "auto")]
-    solver: SolverArg,
-    #[arg(long, value_enum, default_value = "auto")]
-    encoding: EncodingArg,
-    #[arg(long)]
-    timeout: Option<u32>,
-    #[arg(long)]
-    verify_jobs: Option<u32>,
-    #[arg(long)]
-    perfetto: Option<PathBuf>,
-    /// Differential-test counterexamples against runtime semantics (issue #335).
-    #[arg(long)]
-    replay_cex: bool,
-}
-
-#[derive(clap::Args, Debug)]
-#[command(disable_help_flag = true)]
-struct TestArgs {
-    /// Directory to scan for test files, or a single .vow file
-    path: Option<PathBuf>,
-    /// Run ESBMC verification on test files (off by default)
-    #[arg(long)]
-    verify: bool,
-    /// Only run tests whose name contains this substring
-    #[arg(long)]
-    filter: Option<String>,
-    /// Resolve `use` declarations against this directory instead of each
-    /// test file's parent. Use when running a single test file that lives
-    /// in a subdirectory: `vow test compiler/tests/test_x.vow --module-root compiler`.
-    #[arg(long)]
-    module_root: Option<PathBuf>,
-    /// Build mode (debug enables runtime vow checks)
-    #[arg(long, value_enum, default_value = "debug")]
-    mode: ModeArg,
-    /// Per-test execution timeout in milliseconds
-    #[arg(long, default_value = "30000")]
-    timeout: u64,
-    /// ESBMC max k-induction step (only with --verify)
-    #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
-    max_k_step: u32,
-    #[arg(long)]
-    verify_jobs: Option<u32>,
-    #[arg(long)]
-    help: bool,
-    #[arg(long)]
-    human: bool,
-}
-
-#[derive(clap::Args, Debug)]
-#[command(disable_help_flag = true)]
-struct DeclArgs {
-    source: Option<PathBuf>,
-    #[arg(short = 'o', long)]
-    output: Option<PathBuf>,
-    #[arg(long)]
-    help: bool,
-    #[arg(long)]
-    human: bool,
-}
-
-#[derive(clap::Args, Debug)]
-#[command(disable_help_flag = true)]
-struct ComplexityArgs {
-    source: Option<PathBuf>,
-    #[arg(long)]
-    cog_anchor: Option<i64>,
-    #[arg(long)]
-    nloc_anchor: Option<i64>,
-    #[arg(long)]
-    max_score: Option<i64>,
-    #[arg(long)]
-    max_cognitive: Option<i64>,
-    #[arg(long)]
-    max_cyclomatic: Option<i64>,
-    #[arg(long)]
-    help: bool,
-    #[arg(long)]
-    human: bool,
-}
-
-#[derive(clap::Args, Debug)]
-#[command(disable_help_flag = true)]
-struct ContractsArgs {
-    source: Option<PathBuf>,
-    #[arg(long)]
-    verify: bool,
-    #[arg(long)]
-    no_cache: bool,
-    #[arg(long)]
-    max_k_step: Option<u32>,
-    #[arg(long, value_enum, default_value = "auto")]
-    solver: SolverArg,
-    #[arg(long, value_enum, default_value = "auto")]
-    encoding: EncodingArg,
-    #[arg(long)]
-    timeout: Option<u32>,
-    /// Accepted for CLI parity with build/verify/test; ignored because
-    /// `update_contract_statuses` has no pool wiring yet (see #175 follow-ups).
-    #[arg(long)]
-    verify_jobs: Option<u32>,
-    #[arg(long)]
-    help: bool,
-    #[arg(long)]
-    human: bool,
-}
-
-#[derive(clap::Args, Debug)]
-#[command(disable_help_flag = true)]
-struct SkillArgs {
-    #[command(subcommand)]
-    action: Option<SkillAction>,
-    #[arg(long)]
-    help: bool,
-    #[arg(long)]
-    human: bool,
-}
-
-#[derive(clap::Subcommand, Debug)]
-enum SkillAction {
-    /// Print the skill document to stdout (default)
-    Print {
-        /// Print the full self-contained bundle for raw API harnesses
-        #[arg(long)]
-        bundle: bool,
-    },
-    /// Install the skill to .claude/skills/vow/
-    Install {
-        /// Install into the current git project's .claude/ directory
-        #[arg(long)]
-        local: bool,
-        /// Install into $HOME/.claude/ on Linux
-        #[arg(long)]
-        global: bool,
-    },
-}
-
-#[derive(clap::Args, Debug)]
-#[command(
-    disable_help_flag = true,
-    trailing_var_arg = true,
-    allow_hyphen_values = true
-)]
-struct MutantsArgs {
-    /// All remaining arguments forwarded verbatim
-    args: Vec<String>,
-    // `help` and `human` are absorbed by clap so flags like `--help` don't
-    // surface as parse errors; the handler below ignores them and prints
-    // a fixed redirect to the self-hosted compiler regardless.
-    #[arg(long)]
-    help: bool,
-    #[arg(long)]
-    human: bool,
-}
 
 // ---------------------------------------------------------------------------
 // Build output
@@ -924,19 +592,15 @@ pub(crate) fn run_pipeline_from_frontend(
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// User value verbatim; rejects 0 with a clear error. None → num_cpus/2 clamped to ≥1.
-fn resolve_verify_jobs(opt: Option<u32>) -> usize {
-    match opt {
-        Some(0) => {
-            eprintln!("error: --verify-jobs must be >= 1");
+/// Unwrap a CLI argument-resolution result, or report the error to stderr and
+/// exit with code 1. This keeps the exit-on-error policy at the driver edge so
+/// the resolution logic in `cli` stays pure and unit-testable.
+fn unwrap_or_exit<T>(result: Result<T, String>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(message) => {
+            eprintln!("error: {message}");
             std::process::exit(1);
-        }
-        Some(n) => n as usize,
-        None => {
-            let n = std::thread::available_parallelism()
-                .map(|p| p.get())
-                .unwrap_or(1);
-            (n / 2).max(1)
         }
     }
 }
@@ -1131,23 +795,14 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let mode = match b.mode {
-                ModeArg::Debug => BuildMode::Debug,
-                ModeArg::Release => BuildMode::Release,
-                ModeArg::Profile => BuildMode::Profile,
-                ModeArg::Sanitize => BuildMode::Sanitize,
-            };
-            let trace = match b.debug_trace {
-                TraceArg::Off => TraceMode::Off,
-                TraceArg::Calls => TraceMode::Calls,
-                TraceArg::Full => TraceMode::Full,
-            };
+            let mode = b.mode.to_build_mode();
+            let trace = b.debug_trace.to_trace_mode();
             let limits = VerifyLimits {
                 max_k_step: b.max_k_step,
                 ..VerifyLimits::default()
             };
-            let jobs = resolve_verify_jobs(b.verify_jobs);
-            let bconfig = make_solver_config(b.solver, b.encoding, b.timeout);
+            let jobs = unwrap_or_exit(cli::resolve_verify_jobs(b.verify_jobs));
+            let bconfig = unwrap_or_exit(cli::solver_config(b.solver, b.encoding, b.timeout));
             if let Ok(cwd) = std::env::current_dir() {
                 skill::maybe_auto_install(&cwd);
             }
@@ -1186,8 +841,8 @@ fn main() {
                 max_k_step: v.max_k_step,
                 ..VerifyLimits::default()
             };
-            let jobs = resolve_verify_jobs(v.verify_jobs);
-            let config = make_solver_config(v.solver, v.encoding, v.timeout);
+            let jobs = unwrap_or_exit(cli::resolve_verify_jobs(v.verify_jobs));
+            let config = unwrap_or_exit(cli::solver_config(v.solver, v.encoding, v.timeout));
             run_verify_command(
                 &source,
                 v.no_cache,
@@ -1221,7 +876,7 @@ fn main() {
                 max_k_step: t.max_k_step,
                 ..VerifyLimits::default()
             };
-            let jobs = resolve_verify_jobs(t.verify_jobs);
+            let jobs = unwrap_or_exit(cli::resolve_verify_jobs(t.verify_jobs));
             test_runner::run_test_command(
                 &path,
                 t.verify,
@@ -1272,10 +927,10 @@ fn main() {
                 ..VerifyLimits::default()
             };
             // Accepted for CLI parity; resolved via the same path as
-            // build/verify/test, then discarded because update_contract_statuses
-            // has no pool wiring today.
-            let _ = resolve_verify_jobs(c.verify_jobs);
-            let config = make_solver_config(c.solver, c.encoding, c.timeout);
+            // build/verify/test so `--verify-jobs 0` is still rejected, then
+            // discarded because update_contract_statuses has no pool wiring today.
+            unwrap_or_exit(cli::resolve_verify_jobs(c.verify_jobs));
+            let config = unwrap_or_exit(cli::solver_config(c.solver, c.encoding, c.timeout));
             contracts::run_contracts_command(&source, c.verify, c.no_cache, &limits, &config);
         }
         Some(Command::Skill(s)) => {
@@ -1352,24 +1007,16 @@ fn main() {
                 }
             };
 
-            let mode = match args.mode {
-                ModeArg::Debug => BuildMode::Debug,
-                ModeArg::Release => BuildMode::Release,
-                ModeArg::Profile => BuildMode::Profile,
-                ModeArg::Sanitize => BuildMode::Sanitize,
-            };
-            let trace = match args.debug_trace {
-                TraceArg::Off => TraceMode::Off,
-                TraceArg::Calls => TraceMode::Calls,
-                TraceArg::Full => TraceMode::Full,
-            };
+            let mode = args.mode.to_build_mode();
+            let trace = args.debug_trace.to_trace_mode();
 
             let limits = VerifyLimits {
                 max_k_step: args.max_k_step,
                 ..VerifyLimits::default()
             };
-            let jobs = resolve_verify_jobs(args.verify_jobs);
-            let config = make_solver_config(args.solver, args.encoding, args.timeout);
+            let jobs = unwrap_or_exit(cli::resolve_verify_jobs(args.verify_jobs));
+            let config =
+                unwrap_or_exit(cli::solver_config(args.solver, args.encoding, args.timeout));
             if let Ok(cwd) = std::env::current_dir() {
                 skill::maybe_auto_install(&cwd);
             }
@@ -3911,12 +3558,6 @@ fn main() -> i32 {
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(parsed.get("status").is_some());
-    }
-
-    #[test]
-    fn resolve_verify_jobs_preserves_explicit_value() {
-        assert_eq!(resolve_verify_jobs(Some(1)), 1);
-        assert_eq!(resolve_verify_jobs(Some(3)), 3);
     }
 
     #[test]
