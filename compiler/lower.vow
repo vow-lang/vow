@@ -54,6 +54,9 @@ struct LowerCtx {
     pat_aggregate_names: Vec<String>,
     pat_vec_elem_paths: Vec<Vec<String>>,
     pat_aggregate_linear: Vec<i64>,
+    question_aggregate_names: Vec<String>,
+    question_vec_elem_paths: Vec<Vec<String>>,
+    question_aggregate_linear: Vec<i64>,
     warnings: Vec<String>,
     file: String,
 }
@@ -121,6 +124,9 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         pat_aggregate_names: Vec::new(),
         pat_vec_elem_paths: Vec::new(),
         pat_aggregate_linear: Vec::new(),
+        question_aggregate_names: Vec::new(),
+        question_vec_elem_paths: Vec::new(),
+        question_aggregate_linear: Vec::new(),
         warnings: Vec::new(),
         file: String::from(""),
     }
@@ -427,6 +433,27 @@ fn lctx_get_pattern_vec_elem_path(ctx: LowerCtx, pid: i64) -> Vec<String> {
 fn lctx_pattern_is_linear(ctx: LowerCtx, pid: i64) -> i64 {
     if pid < ctx.pat_aggregate_linear.len() {
         return ctx.pat_aggregate_linear[pid];
+    }
+    0
+}
+
+fn lctx_get_question_aggregate(ctx: LowerCtx, eid: i64) -> String {
+    if eid < ctx.question_aggregate_names.len() {
+        return ctx.question_aggregate_names[eid];
+    }
+    String::from("")
+}
+
+fn lctx_get_question_vec_elem_path(ctx: LowerCtx, eid: i64) -> Vec<String> {
+    if eid < ctx.question_vec_elem_paths.len() {
+        return ctx.question_vec_elem_paths[eid];
+    }
+    Vec::new()
+}
+
+fn lctx_question_is_linear(ctx: LowerCtx, eid: i64) -> i64 {
+    if eid < ctx.question_aggregate_linear.len() {
+        return ctx.question_aggregate_linear[eid];
     }
     0
 }
@@ -2987,7 +3014,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     if tag == EXPR_MATCH() {
         let scrutinee_eid: i64 = expr_a(a, eid);
         let arms_lid: i64 = expr_b(a, eid);
-        let ptr_id: i64 = lower_consumed_expr(ctx, scrutinee_eid);
+        let ptr_id: i64 = lower_expr(ctx, scrutinee_eid);
 
         let fg_args: Vec<i64> = Vec::new();
         fg_args.push(ptr_id);
@@ -3075,6 +3102,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), arm_block, next_check, String::from(""));
 
                 lctx_switch_to_block(ctx, arm_block);
+                lctx_emit_linear_consume_if_needed(ctx, ptr_id);
                 lctx_push_scope(ctx);
 
                 let payload_ty: i64 = lctx_get_option_elem_ty(ctx, ptr_id);
@@ -3160,6 +3188,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     lctx_switch_to_block(ctx, next_check);
                 }
             } else if ptag == PAT_WILD() || ptag == PAT_IDENT() {
+                if ptag == PAT_WILD() {
+                    lctx_emit_linear_consume_if_needed(ctx, ptr_id);
+                }
                 lctx_push_scope(ctx);
                 if ptag == PAT_IDENT() {
                     let name_sid: i64 = pat_a(a, pat_id);
@@ -3209,6 +3240,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     rmi2 = rmi2 + 1;
                 }
             } else {
+                lctx_emit_linear_consume_if_needed(ctx, ptr_id);
                 let u_args: Vec<i64> = Vec::new();
                 let unit_id: i64 = lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
 
@@ -3339,7 +3371,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
     if tag == EXPR_QUESTION() {
         let inner_eid: i64 = expr_a(a, eid);
-        let inner_id: i64 = lower_expr(ctx, inner_eid);
+        let inner_id: i64 = lower_consumed_expr(ctx, inner_eid);
 
         let fg_args: Vec<i64> = Vec::new();
         fg_args.push(inner_id);
@@ -3360,7 +3392,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         lctx_switch_to_block(ctx, early_block);
         let alloc_args: Vec<i64> = Vec::new();
-        let none_ptr: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), 16, 8, String::from(""));
+        let none_ty: i64 = {
+            if ctx.func.return_ty == ITY_LPTR() { ITY_LPTR() } else { ITY_PTR() }
+        };
+        let none_ptr: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), none_ty, alloc_args, IDATA_ALLOC_SIZE(), 16, 8, String::from(""));
         let none_tag_args: Vec<i64> = Vec::new();
         let none_tag: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), none_tag_args, IDATA_CONST_I64(), 0, 0, String::from(""));
         let fs_args: Vec<i64> = Vec::new();
@@ -3375,10 +3410,27 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
 
         lctx_switch_to_block(ctx, continue_block);
-        let payload_ty: i64 = lctx_get_option_elem_ty(ctx, inner_id);
+        let aggregate_name: String = lctx_get_question_aggregate(ctx, eid);
+        let aggregate_vec_elems: Vec<String> = lctx_get_question_vec_elem_path(ctx, eid);
+        let payload_ty: i64 = {
+            if aggregate_name.len() > 0 && lctx_question_is_linear(ctx, eid) == 1 {
+                ITY_LPTR()
+            } else if aggregate_name.len() > 0 {
+                ITY_PTR()
+            } else {
+                lctx_get_option_elem_ty(ctx, inner_id)
+            }
+        };
         let payload_args: Vec<i64> = Vec::new();
         payload_args.push(inner_id);
-        return lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, IDATA_FIELD(), 1, 0, String::from(""));
+        let payload_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, IDATA_FIELD(), 1, 0, String::from(""));
+        if aggregate_name.len() > 0 {
+            lctx_tag(ctx, payload_id, aggregate_name);
+        }
+        if aggregate_vec_elems.len() > 0 {
+            lctx_tag_vec_elem_path(ctx, payload_id, aggregate_vec_elems);
+        }
+        return payload_id;
     }
 
     if tag == EXPR_BREAK() {
@@ -4050,6 +4102,9 @@ fn lower_module_vow(
     pat_aggregate_names: Vec<String>,
     pat_vec_elem_paths: Vec<Vec<String>>,
     pat_aggregate_linear: Vec<i64>,
+    question_aggregate_names: Vec<String>,
+    question_vec_elem_paths: Vec<Vec<String>>,
+    question_aggregate_linear: Vec<i64>,
     item_files: Vec<String>,
 ) -> IrModule {
     let a: AstArena = m.arena;
@@ -4322,6 +4377,9 @@ fn lower_module_vow(
     ctx.pat_aggregate_names = pat_aggregate_names;
     ctx.pat_vec_elem_paths = pat_vec_elem_paths;
     ctx.pat_aggregate_linear = pat_aggregate_linear;
+    ctx.question_aggregate_names = question_aggregate_names;
+    ctx.question_vec_elem_paths = question_vec_elem_paths;
+    ctx.question_aggregate_linear = question_aggregate_linear;
     // ctx.file is updated per FnDef inside the lowering loop below so each
     // IrFunction gets the originating source path from `item_files`.
     ctx.func_names = func_names;

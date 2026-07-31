@@ -20,7 +20,8 @@ pub struct PatternAggregateInfo {
     pub is_linear: bool,
 }
 
-/// Aggregate type metadata for identifier patterns, keyed by `*const Pat as usize`.
+/// Aggregate type metadata for identifier patterns and `?` payload results,
+/// keyed by the corresponding AST node address.
 pub type PatternAggregateMap = HashMap<usize, PatternAggregateInfo>;
 
 fn aggregate_type_name(ty: &Ty) -> Option<String> {
@@ -1850,7 +1851,7 @@ impl<'e> Checker<'e> {
             }
             ExprKind::Question { expr: inner } => {
                 let inner_ty = self.check_expr(inner);
-                match &inner_ty {
+                let payload_ty = match &inner_ty {
                     Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option") =>
                     {
                         if !matches!(
@@ -1896,7 +1897,13 @@ impl<'e> Checker<'e> {
                         );
                         Ty::Unit
                     }
+                };
+                let is_linear = crate::linear::is_linear_owner_ty(&payload_ty, &self.env);
+                if let Some(info) = pattern_aggregate_info(&payload_ty, is_linear) {
+                    self.pattern_aggregates
+                        .insert(expr as *const Expr as usize, info);
                 }
+                payload_ty
             }
             ExprKind::Assign { lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);

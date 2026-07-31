@@ -1258,6 +1258,21 @@ fn pattern_aggregate_is_linear(e: CheckEnv, tid: i64) -> i64 {
     is_linear_owner_ty(e, tid)
 }
 
+fn record_question_aggregate(e: CheckEnv, eid: i64, payload_tid: i64) {
+    let aggregate_name: String = pattern_aggregate_name(e.ts, payload_tid);
+    if aggregate_name.len() == 0 {
+        return;
+    }
+    while e.question_aggregate_names.len() <= eid {
+        e.question_aggregate_names.push(String::from(""));
+        e.question_vec_elem_paths.push(Vec::new());
+        e.question_aggregate_linear.push(0);
+    }
+    e.question_aggregate_names[eid] = aggregate_name;
+    e.question_vec_elem_paths[eid] = pattern_vec_elem_path(e.ts, payload_tid);
+    e.question_aggregate_linear[eid] = pattern_aggregate_is_linear(e, payload_tid);
+}
+
 fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
@@ -2228,7 +2243,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     }
                     let args_lid: i64 = ty_b(e.ts, inner_tid);
                     if ts_arg_len(e.ts, args_lid) > 0 {
-                        return ts_arg_get(e.ts, args_lid, 0);
+                        let payload_tid: i64 = ts_arg_get(e.ts, args_lid, 0);
+                        record_question_aggregate(e, eid, payload_tid);
+                        return payload_tid;
                     }
                     return CTY_UNIT();
                 }

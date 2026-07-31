@@ -2487,9 +2487,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ptr_id
         }
         ExprKind::Match { scrutinee, arms } => {
-            // Matching an owned linear enum wrapper transfers its obligation
-            // into the selected payload. Non-linear enums remain reusable.
-            let ptr_id = lower_consumed_expr(ctx, scrutinee);
+            // The selected arm consumes an owned wrapper. Delaying the transfer
+            // until dispatch lets an identifier catchall bind the original
+            // obligation instead of rebinding an already-consumed value.
+            let ptr_id = lower_expr(ctx, scrutinee);
             let tag_id = ctx.emit(
                 Opcode::FieldGet,
                 Ty::I64,
@@ -2564,6 +2565,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         );
 
                         ctx.switch_to_block(arm_block);
+                        ctx.emit_linear_consume_if_needed(ptr_id, span);
                         ctx.push_scope();
                         // Narrow scalar Option<T> payloads carry their real IR type.
                         // Aggregate payload metadata is tracked separately so the binding
@@ -2648,6 +2650,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             ctx.push_scope();
                             ctx.define(name.clone(), ptr_id);
                         } else {
+                            ctx.emit_linear_consume_if_needed(ptr_id, span);
                             ctx.push_scope();
                         }
                         let arm_result = lower_expr(ctx, &arm.body);
@@ -2684,6 +2687,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         ctx.restore_scope(scope_snap.clone());
                     }
                     _ => {
+                        ctx.emit_linear_consume_if_needed(ptr_id, span);
                         let arm_block = ctx.current_block;
                         let unit =
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
@@ -3189,7 +3193,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         // ? operator: unwrap Option::Some or short-circuit with None
         ExprKind::Question { expr: inner } => {
-            let ptr_id = lower_expr(ctx, inner);
+            let ptr_id = lower_consumed_expr(ctx, inner);
             // Load discriminant from field 0
             let tag_id = ctx.emit(
                 Opcode::FieldGet,
@@ -3231,7 +3235,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let none_size: u32 = 16; // discriminant + guard slot
             let none_ptr = ctx.emit(
                 Opcode::RegionAlloc,
-                Ty::Ptr,
+                if ctx.func.return_ty == Ty::LinearPtr {
+                    Ty::LinearPtr
+                } else {
+                    Ty::Ptr
+                },
                 vec![],
                 InstData::AllocSize {
                     size: none_size,
@@ -3266,18 +3274,34 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Continue: extract payload from field 1
             ctx.switch_to_block(continue_block);
-            let payload_ty = ctx
-                .inst_option_elem_ty
-                .get(&ptr_id)
-                .copied()
-                .unwrap_or(Ty::I64);
-            ctx.emit(
+            let aggregate = ctx
+                .pattern_aggregates
+                .get(&(expr as *const _ as usize))
+                .cloned();
+            let payload_ty = if aggregate.as_ref().is_some_and(|info| info.is_linear) {
+                Ty::LinearPtr
+            } else if aggregate.is_some() {
+                Ty::Ptr
+            } else {
+                ctx.inst_option_elem_ty
+                    .get(&ptr_id)
+                    .copied()
+                    .unwrap_or(Ty::I64)
+            };
+            let payload = ctx.emit(
                 Opcode::FieldGet,
                 payload_ty,
                 vec![ptr_id],
                 InstData::FieldIndex(1),
                 span,
-            )
+            );
+            if let Some(info) = aggregate {
+                ctx.inst_struct_type.insert(payload, info.type_name);
+                if !info.vec_elem_types.is_empty() {
+                    ctx.inst_vec_elem_types.insert(payload, info.vec_elem_types);
+                }
+            }
+            payload
         }
         ExprKind::Cast { expr, target_ty } => {
             let val = lower_expr(ctx, expr);
@@ -5006,9 +5030,12 @@ mod tests {
             .expect("linear enum argument");
         assert_eq!(wrapper.ty, Ty::LinearPtr);
         assert!(
-            func.blocks[0].insts.iter().any(|inst| {
-                inst.opcode == Opcode::LinearConsume && inst.args == vec![wrapper.id]
-            })
+            func.blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| {
+                    inst.opcode == Opcode::LinearConsume && inst.args == vec![wrapper.id]
+                })
         );
         let payload_get = func
             .blocks

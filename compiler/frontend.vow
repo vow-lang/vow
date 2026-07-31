@@ -39,6 +39,9 @@ struct FrontendPrep {
     pat_aggregate_names: Vec<String>,
     pat_vec_elem_paths: Vec<Vec<String>>,
     pat_aggregate_linear: Vec<i64>,
+    question_aggregate_names: Vec<String>,
+    question_vec_elem_paths: Vec<Vec<String>>,
+    question_aggregate_linear: Vec<i64>,
     // Parallel to `merged.items`: the originating source-file path for each
     // item. Threaded into `lower_module_vow` so each `IrFunction.source_file`
     // labels region diagnostics with the right file under multi-module
@@ -193,6 +196,9 @@ fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) 
         pat_aggregate_names: e.pat_aggregate_names,
         pat_vec_elem_paths: e.pat_vec_elem_paths,
         pat_aggregate_linear: e.pat_aggregate_linear,
+        question_aggregate_names: e.question_aggregate_names,
+        question_vec_elem_paths: e.question_vec_elem_paths,
+        question_aggregate_linear: e.question_aggregate_linear,
         item_files: item_files,
     }
 }
@@ -236,6 +242,9 @@ fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) ->
                 prep.pat_aggregate_names,
                 prep.pat_vec_elem_paths,
                 prep.pat_aggregate_linear,
+                prep.question_aggregate_names,
+                prep.question_vec_elem_paths,
+                prep.question_aggregate_linear,
                 prep.item_files,
             );
             trace_span(t, String::from("lower"), PID_COMPILER(), TID_MAIN(), t_lower, trace_now(t) - t_lower, String::from(""));
