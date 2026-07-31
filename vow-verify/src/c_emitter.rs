@@ -381,6 +381,7 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
             if inst.opcode == Opcode::Call
                 && let InstData::CallExtern(ref name) = inst.data
                 && (name == "__vow_string_parse_i64_opt"
+                    || name == "__vow_string_parse_i64_opt_in_arena"
                     || name == "__vow_string_parse_u64_opt"
                     || name == "__vow_string_parse_u8_opt"
                     || name == "__vow_string_parse_i32_opt"
@@ -473,6 +474,7 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_from_i64"
             | "__vow_string_from_i64_in_arena"
             | "__vow_string_parse_i64_opt"
+            | "__vow_string_parse_i64_opt_in_arena"
             | "__vow_string_parse_u64_opt"
             | "__vow_string_parse_u8_opt"
             | "__vow_string_parse_i32_opt"
@@ -1484,7 +1486,9 @@ fn emit_inst(
                              \x20 }}\n",
                         ));
                     }
-                    "__vow_string_parse_i64_opt" | "__vow_string_parse_u64_opt" => {
+                    "__vow_string_parse_i64_opt"
+                    | "__vow_string_parse_i64_opt_in_arena"
+                    | "__vow_string_parse_u64_opt" => {
                         out.push_str(&format!(
                             "  v{id}.tag = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
@@ -3266,6 +3270,47 @@ mod tests {
             summary: RegionSummary::default(),
             source_file: String::new(),
         }
+    }
+
+    #[test]
+    fn emit_arena_parse_i64_as_an_option() {
+        let func = make_func(
+            "parse",
+            vec![],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(
+                    2,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0, 1],
+                    InstData::CallExtern("__vow_string_parse_i64_opt_in_arena".to_string()),
+                ),
+                inst(
+                    3,
+                    Opcode::FieldGet,
+                    Ty::I64,
+                    vec![2],
+                    InstData::FieldIndex(0),
+                ),
+                inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+            ],
+        );
+
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(is_known_builtin("__vow_string_parse_i64_opt_in_arena"));
+        assert!(c.contains("__vow_option_t v2;"), "option declaration: {c}");
+        assert!(
+            c.contains("v2.tag = __VERIFIER_nondet_long();"),
+            "parse model: {c}"
+        );
+        assert!(c.contains("v3 = v2.tag;"), "option projection: {c}");
+        assert!(
+            !c.contains("/* opcode Call not modelled */"),
+            "arena parse must be modeled: {c}"
+        );
     }
 
     #[test]

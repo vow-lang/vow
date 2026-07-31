@@ -2253,8 +2253,14 @@ pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
-    let ptr = __vow_vec_new(8, 8) as *mut i64;
+pub unsafe extern "C" fn __vow_string_parse_i64_opt_in_arena(
+    arena: *mut VowArena,
+    s: *const u8,
+) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("parse_i64");
+    }
+    let ptr = unsafe { __vow_vec_new_in_arena(arena, 8, 8) } as *mut i64;
     if s.is_null() {
         unsafe { *ptr = 0 };
         return ptr as *mut u8;
@@ -2277,6 +2283,13 @@ pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
         }
     }
     ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_parse_i64_opt_in_arena(&raw mut __vow_root_arena, s) }
 }
 
 unsafe fn alloc_option_u8(value: Option<u8>) -> *mut u8 {
@@ -2521,20 +2534,6 @@ pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
         }
     }
     ptr as *mut u8
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_parse_i64(s: *const u8) -> i64 {
-    if s.is_null() {
-        return 0;
-    }
-    sanitize_on_read(s as usize, 0);
-    let v = unsafe { &*(s as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.trim().parse::<i64>().unwrap_or(0),
-        Err(_) => 0,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4487,6 +4486,34 @@ mod tests {
         assert_eq!(a.chunk_end, a.first_chunk as usize + normal_chunk_total());
         unsafe { __vow_arena_close(&mut a) };
         assert!(a.first_chunk.is_null());
+    }
+
+    #[test]
+    fn parse_i64_option_can_be_owned_by_a_local_arena() {
+        let mut arena = empty_arena_header();
+        unsafe { __vow_arena_open(&mut arena) };
+        let input = unsafe { __vow_string_new_in_arena(&mut arena, c"42".as_ptr(), 2) };
+        let parsed =
+            unsafe { __vow_string_parse_i64_opt_in_arena(&mut arena, input) } as *const i64;
+
+        assert_eq!(unsafe { *parsed }, 1);
+        assert_eq!(unsafe { *parsed.add(1) }, 42);
+
+        unsafe { __vow_arena_close(&mut arena) };
+        assert!(arena.first_chunk.is_null());
+    }
+
+    #[test]
+    fn parse_i64_option_root_wrapper_uses_the_root_arena() {
+        let mut input_arena = empty_arena_header();
+        unsafe { __vow_arena_open(&mut input_arena) };
+        let input = unsafe { __vow_string_new_in_arena(&mut input_arena, c"-17".as_ptr(), 3) };
+        let parsed = unsafe { __vow_string_parse_i64_opt(input) } as *const i64;
+
+        assert_eq!(unsafe { *parsed }, 1);
+        assert_eq!(unsafe { *parsed.add(1) }, -17);
+
+        unsafe { __vow_arena_close(&mut input_arena) };
     }
 
     #[test]

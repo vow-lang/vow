@@ -127,6 +127,33 @@ fn check_substring_returns_in_caller_region() -> i64 {
     0
 }
 
+fn check_parse_i64_option_returns_in_caller_region() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    let parse_args: Vec<i64> = Vec::new();
+    parse_args.push(0);
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), parse_args, String::from("__vow_string_parse_i64_opt")));
+    insts.push(mk_inst_return(2, 1));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("parse"), params, ITY_PTR(), blocks));
+
+    let dctx: DiagCtx = diag_ctx_new();
+    let result: IrModule = infer_regions_module(mk_module(funcs), dctx);
+    let expected_region: i64 = region_pack(REGION_KIND_CALLER(), 0);
+    if result.functions[0].blocks[0].insts[1].rgn != expected_region {
+        return 6;
+    }
+    if result.functions[0].rsum_return_kind != RSUM_KIND_FRESH_IN_CALLER() {
+        return 7;
+    }
+    0
+}
+
 // Mirrors `internal_call_republishes_callee_store_effect_for_parameter_target`
 // (vow-ir/src/region.rs:6469). A wrapper that forwards its parameters to an
 // internal callee (which pushes arg1 into arg0 via `__vow_vec_push_val`)
@@ -192,6 +219,8 @@ fn i64_result_to_i32(r: i64) -> i32 {
     if r == 3 { return 3; }
     if r == 4 { return 4; }
     if r == 5 { return 5; }
+    if r == 6 { return 6; }
+    if r == 7 { return 7; }
     if r != 0 { return 99; }
     0
 }
@@ -203,5 +232,7 @@ fn main() -> i32 {
     if r2 != 0 { return i64_result_to_i32(r2); }
     let r3: i64 = check_wrapper_republishes_callee_store_effect();
     if r3 != 0 { return i64_result_to_i32(r3); }
+    let r4: i64 = check_parse_i64_option_returns_in_caller_region();
+    if r4 != 0 { return i64_result_to_i32(r4); }
     0
 }

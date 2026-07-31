@@ -2268,7 +2268,9 @@ print_str(uint_to_string(small as u64));  // widen then format
 | `parse_u128`   | `fn(s: String) -> Option<u128>`          |
 
 Each `parse_X` returns `Option::None` for malformed input, empty strings, or
-values outside the target type's range.
+values outside the target type's range. Parsing never substitutes a numeric
+sentinel for failure; callers that need a fallback must choose it explicitly
+when handling `Option::None`.
 
 In particular, `parse_u8` accepts decimal values from `0` through `255` and
 returns `Option::None` for negative or larger values.
@@ -6903,7 +6905,9 @@ print_str(uint_to_string(small as u64));  // widen then format
 | `parse_u128`   | `fn(s: String) -> Option<u128>`          |
 
 Each `parse_X` returns `Option::None` for malformed input, empty strings, or
-values outside the target type's range.
+values outside the target type's range. Parsing never substitutes a numeric
+sentinel for failure; callers that need a fallback must choose it explicitly
+when handling `Option::None`.
 
 In particular, `parse_u8` accepts decimal values from `0` through `255` and
 returns `Option::None` for negative or larger values.
