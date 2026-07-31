@@ -23,7 +23,9 @@ def fail(msg: str) -> "None":
 def main() -> "None":
     args = sys.argv[1:]
     if not args:
-        fail("usage: validate_trace_gz.py <trace.json.gz> [--require a,b] [--expect-counters]")
+        fail(
+            "usage: validate_trace_gz.py <trace.json.gz> [--require a,b] [--expect-counters]"
+        )
     path = args[0]
     require = []
     expect_counters = False
@@ -53,7 +55,11 @@ def main() -> "None":
     span_names = {e.get("name") for e in events if e.get("ph") == "X"}
     for name in require:
         if name == "esbmc":
-            if not any(str(e.get("name", "")).startswith("esbmc:") for e in events if e.get("ph") == "X"):
+            if not any(
+                str(e.get("name", "")).startswith("esbmc:")
+                for e in events
+                if e.get("ph") == "X"
+            ):
                 fail("no esbmc:<fn> proof span present")
         elif name not in span_names:
             fail(f"required span '{name}' missing (have: {sorted(span_names)})")

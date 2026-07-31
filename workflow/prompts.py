@@ -27,6 +27,7 @@ def load_vow_docs(root: Path) -> str:
 
 # -- System prompts --
 
+
 def coder_system_prompt(vow_docs: str) -> str:
     return f"""You are an expert Vow programmer. Vow is a verified programming language with contracts (requires, ensures, invariant). You write correct, verified Vow code.
 
@@ -86,6 +87,7 @@ SUMMARY:
 
 # -- User prompts --
 
+
 def coder_initial_prompt(task_description: str, context: str | None = None) -> str:
     parts = [
         "Write a Vow program that implements the following task:\n",
@@ -108,7 +110,9 @@ def coder_feedback_prompt(
     parts = ["Incorporate the following feedback and return the updated .vow file:\n"]
 
     if verify_feedback:
-        parts.append(f"## Verification Feedback (HIGHEST PRIORITY)\n{verify_feedback}\n")
+        parts.append(
+            f"## Verification Feedback (HIGHEST PRIORITY)\n{verify_feedback}\n"
+        )
     if analyst_feedback:
         parts.append(f"## Property Analysis Feedback\n{analyst_feedback}\n")
     if reviewer_feedback:
@@ -211,12 +215,16 @@ def format_verify_feedback(parsed: dict) -> str:
             inputs = ce.get("inputs", {})
             vow_id = ce.get("vow_id", "?")
             source = ce.get("source", {})
-            val_str = ", ".join(f"{k}={v}" for k, v in inputs.items()) if inputs else "none"
+            val_str = (
+                ", ".join(f"{k}={v}" for k, v in inputs.items()) if inputs else "none"
+            )
             lines.append(f"Counterexample {i + 1}:")
             lines.append(f"  Violation: {violation} (vow_id={vow_id})")
             lines.append(f"  Inputs: {val_str}")
             if source:
-                lines.append(f"  Source: {source.get('file', '?')}:{source.get('offset', '?')}")
+                lines.append(
+                    f"  Source: {source.get('file', '?')}:{source.get('offset', '?')}"
+                )
         return "\n".join(lines)
 
     if status == "Timeout":

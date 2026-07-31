@@ -137,9 +137,16 @@ def main():
 
     # 5. Structural keys
     required_keys = [
-        "structs", "enums", "match_expression", "methods",
-        "where_clauses", "modules", "control_flow",
-        "type_aliases", "extern_blocks", "indexing",
+        "structs",
+        "enums",
+        "match_expression",
+        "methods",
+        "where_clauses",
+        "modules",
+        "control_flow",
+        "type_aliases",
+        "extern_blocks",
+        "indexing",
     ]
     for key in required_keys:
         if key not in lang:

@@ -17,3 +17,10 @@ repos:
         args: ["--pytest-test-first"]
       - id: trailing-whitespace
         args: ["--markdown-linebreak-ext=md"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
