@@ -1407,8 +1407,14 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
 //   - `ces`, `soft_meta`: counterexample + soft-fail accumulators threaded
 //     through to `verify_collect_and_report`.
 // Returns `[all_proven, any_skipped]`.
-fn build_verify_phase(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64, verify_origin: i64, t: TraceCtx) -> Vec<i64> [io] {
+fn build_verify_phase(
+    esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String,
+    ces: Vec<VerifyCE>, soft_meta: Vec<String>,
+    in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>,
+    max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64,
+    verify_origin: i64, t: TraceCtx
+) -> Vec<i64> [io] {
     let mut all_proven: i64 = 1;
     let mut any_skipped: i64 = 0;
     let mut fi: i64 = 0;

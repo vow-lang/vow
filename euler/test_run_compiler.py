@@ -1,6 +1,11 @@
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
+
+sys.modules.setdefault("anthropic", MagicMock())
+sys.modules.setdefault("openai", MagicMock())
 
 from run import SELF_HOSTED_MEM_LIMIT, resolve_compiler
 
