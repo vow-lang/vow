@@ -2400,6 +2400,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(source_id);
                 let clone_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_clone"));
+                lctx_set_inst_span(ctx, clone_id, expr_span(a, eid));
                 lctx_tag(ctx, clone_id, String::from("String"));
                 return clone_id;
             }

@@ -1093,6 +1093,75 @@ fn selfhosted_vec_new_root_escape_note_carries_nonzero_span_length() {
     );
 }
 
+/// Issue #331 (String::from sibling): the `String::from(...)` special case
+/// in the self-hosted `lower_expr` must also preserve its `EXPR_ECTOR` span
+/// on the emitted `__vow_string_clone` call instruction, mirroring
+/// `selfhosted_vec_new_root_escape_note_carries_nonzero_span_length` above.
+/// This fixture publishes an inline `String::from("hi")` through a parameter
+/// container, making the constructor the `RegionRootEscape` source.
+#[test]
+fn selfhosted_string_from_root_escape_note_carries_nonzero_span_length() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_string_from_root_escape_span.vow");
+    let vowc = root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
+            module_path!()
+        );
+        return;
+    }
+
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "inline String::from(...) published through a parameter container must emit \
+         a RegionRootEscape note; diagnostics: {diagnostics:?}"
+    );
+    let zero_len: Vec<_> = notes
+        .iter()
+        .filter(|n| n["span"]["length"].as_i64() == Some(0))
+        .collect();
+    assert!(
+        zero_len.is_empty(),
+        "String::from(...)-sourced RegionRootEscape notes must carry span.length > 0 \
+         (issue #331); {} of {} notes had length=0: {zero_len:?}",
+        zero_len.len(),
+        notes.len()
+    );
+}
+
 /// Issue #318 regression guard — Rust↔self-hosted RegionRootEscape
 /// note-count parity on a fixture exercising mixed store-effect source
 /// kinds (ConstantGlobal + AliasOf).
