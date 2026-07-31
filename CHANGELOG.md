@@ -1,3 +1,10 @@
+## [0.5.1](https://github.com/vow-lang/vow/compare/v0.5.0...v0.5.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* address i32 numeric tower review findings from [#976](https://github.com/vow-lang/vow/issues/976) ([#979](https://github.com/vow-lang/vow/issues/979)) ([1c065b6](https://github.com/vow-lang/vow/commit/1c065b6b1da81840af34703935c686d624224d90))
+
 # [0.5.0](https://github.com/vow-lang/vow/compare/v0.4.0...v0.5.0) (2026-07-30)
 
 
