@@ -1,0 +1,26 @@
+// TEST: stdout "42\n-2147483648\n"
+module MatchArmMergeWidth
+
+fn handle_u8(opt: Option<u8>) -> u8 {
+    match opt {
+        Option::Some(v) => v,
+        Option::None => 200,
+    }
+}
+
+fn handle_i32(opt: Option<i32>) -> i32 {
+    match opt {
+        Option::Some(v) => v + 1,
+        Option::None => -1,
+    }
+}
+
+fn main() -> i32 [io] {
+    // A narrow-typed arm (Some(v)) merging with a bare-literal arm (None => <lit>)
+    // must not produce a Cranelift width mismatch between the arms' merged values.
+    print_i64(handle_u8(parse_u8(String::from("42"))) as i64);
+    print_str(String::from("\n"));
+    print_i64(handle_i32(parse_i32(String::from("2147483647"))) as i64);
+    print_str(String::from("\n"));
+    0
+}

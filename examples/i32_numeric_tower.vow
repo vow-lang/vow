@@ -10,7 +10,8 @@ fn i32_pipeline(value: i32) -> i32 vow {
 }
 
 fn shift_with_u32_count(value: i32, count: u32) -> i32 vow {
-    ensures: true
+    requires: count < 32,
+    ensures: result == value << count
 } {
     value << count
 }

@@ -152,9 +152,13 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
             ctx.inst_struct_type.insert(result, "Vec".to_string());
         }
         "parse_u8" | "i16_to_u8_try" | "i32_to_u8_try" | "i64_to_u8_try" | "i128_to_u8_try"
-        | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" | "parse_i32"
-        | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
+        | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
             ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::U8);
+        }
+        "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
+            ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::I32);
         }
         _ => {}
     }
@@ -228,6 +232,7 @@ pub(crate) struct FuncSigInfo {
     ret_ty: Ty,
     ret_tag: Option<String>,
     ret_vec_elem: Option<String>,
+    ret_option_elem: Option<Ty>,
     param_tys: Vec<Ty>,
 }
 
@@ -255,6 +260,17 @@ fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
         AstType::Named { name, .. } if name == "str" => Some("String".to_string()),
         AstType::Named { name, .. } => Some(name.clone()),
         AstType::Generic { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+fn option_named_elem_type(ast_ty: &AstType) -> Option<Ty> {
+    match ast_ty {
+        AstType::Generic { name, args, .. } if name == "Option" => match args.first() {
+            Some(AstType::Named { name, .. }) if name == "i32" => Some(Ty::I32),
+            Some(AstType::Named { name, .. }) if name == "u8" => Some(Ty::U8),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -335,6 +351,8 @@ pub(crate) struct LowerCtx {
     loop_exit_phis: Vec<Vec<(String, InstId)>>,
     // InstId of a Vec allocation → element type name (for struct-in-Vec field access)
     inst_vec_elem_type: HashMap<InstId, String>,
+    // InstId of an Option-tagged value → its payload type (for Option::Some(v) match-arm FieldGet)
+    inst_option_elem_ty: HashMap<InstId, Ty>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     warnings: Vec<vow_diag::Diagnostic>,
@@ -407,6 +425,7 @@ impl LowerCtx {
             loop_break_upsilons: Vec::new(),
             loop_exit_phis: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
+            inst_option_elem_ty: HashMap::new(),
             struct_field_vec_elems,
             warnings: Vec::new(),
         }
@@ -969,12 +988,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Ty::U8
                 } else if contextual_narrow_literal_ty(Ty::I32) {
                     Ty::I32
+                } else if contextual_narrow_literal_ty(Ty::U32) {
+                    Ty::U32
                 } else if is_bitwise && lhs_ty == Ty::I64 {
                     if rhs_ty != Ty::I64 { rhs_ty } else { lhs_ty }
                 } else {
                     lhs_ty
                 };
-                if matches!(operand_ty, Ty::U8 | Ty::I32) {
+                if matches!(operand_ty, Ty::U8 | Ty::I32 | Ty::U32) {
                     lhs_id = lower_narrow_literal(ctx, lhs, lhs_id, operand_ty);
                     if !matches!(op, BinOp::Shl | BinOp::Shr) {
                         rhs_id = lower_narrow_literal(ctx, rhs, rhs_id, operand_ty);
@@ -1120,6 +1141,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 if let Some(ret_vec_elem) = call_info.ret_vec_elem {
                     ctx.inst_vec_elem_type.insert(result, ret_vec_elem);
+                }
+                if let Some(ret_option_elem) = call_info.ret_option_elem {
+                    ctx.inst_option_elem_ty.insert(result, ret_option_elem);
                 }
                 result
             } else if let Some((sym, ret_ty)) = vow_debug_builtin_to_runtime(&callee_name) {
@@ -2399,6 +2423,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
             let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
             let mut arm_result_markers: Vec<bool> = Vec::new();
+            // Parallel to arm_results/arm_result_markers: the arm body expr, so a marker
+            // arm's Upsilon value can be re-narrowed to phi_ty once it's known (see below).
+            let mut arm_bodies: Vec<&Expr> = Vec::new();
 
             let mut arm_iter = arms.iter().peekable();
             while let Some(arm) = arm_iter.next() {
@@ -2443,11 +2470,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
                         ctx.switch_to_block(arm_block);
                         ctx.push_scope();
+                        // The Option<T> builtins tag their result InstId with the payload's
+                        // real type; every other payload (user enums, Result, etc.) defaults
+                        // to I64 as before.
+                        let payload_ty = ctx
+                            .inst_option_elem_ty
+                            .get(&ptr_id)
+                            .copied()
+                            .unwrap_or(Ty::I64);
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
+                                let field_ty = if i == 0 { payload_ty } else { Ty::I64 };
                                 let field_val = ctx.emit(
                                     Opcode::FieldGet,
-                                    Ty::I64,
+                                    field_ty,
                                     vec![ptr_id],
                                     InstData::FieldIndex(1 + i as u32),
                                     span,
@@ -2483,6 +2519,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
+                            arm_bodies.push(&arm.body);
                         }
 
                         ctx.restore_scope(scope_snap.clone());
@@ -2526,6 +2563,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
+                            arm_bodies.push(&arm.body);
                         }
 
                         ctx.restore_scope(scope_snap.clone());
@@ -2554,6 +2592,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         );
                         arm_results.push((arm_block, up_id, Ty::Unit, arm_mut_vals));
                         arm_result_markers.push(false);
+                        arm_bodies.push(&arm.body);
                     }
                 }
             }
@@ -2588,6 +2627,64 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             let phi_ty = choose_match_result_ty(&arm_results, &arm_result_markers);
+
+            // A marker arm's Upsilon still carries its default `i64`-width value
+            // (see expr_is_coercible_int_marker). Now that the merge's real result
+            // type is known, re-narrow those arms so every Upsilon feeding the Phi
+            // shares its Cranelift register width -- otherwise a plain literal arm
+            // (e.g. `None => -1`) merging with a genuinely narrow-typed arm (e.g.
+            // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
+            if matches!(phi_ty, Ty::U8 | Ty::I32 | Ty::U32) {
+                for i in 0..arm_results.len() {
+                    let arm_block = arm_results[i].0;
+                    let up_id = arm_results[i].1;
+                    let arm_ty = arm_results[i].2;
+                    if !arm_result_markers[i] || arm_ty == phi_ty {
+                        continue;
+                    }
+                    let block_idx = arm_block.0 as usize;
+                    // Locate the arm's own result Upsilon by id rather than assuming
+                    // block position: the "Phis for mutated variables" pass above may
+                    // have already appended extra Upsilons after this arm's own
+                    // [Upsilon, Jump] pair, so it's not reliably the block's tail.
+                    let up_pos = ctx.func.blocks[block_idx]
+                        .insts
+                        .iter()
+                        .position(|inst| inst.id == up_id);
+                    let Some(up_pos) = up_pos else { continue };
+                    let old_arg = ctx.func.blocks[block_idx].insts[up_pos].args[0];
+                    ctx.switch_to_block(arm_block);
+                    let narrowed = lower_narrow_literal(ctx, arm_bodies[i], old_arg, phi_ty);
+                    if narrowed == old_arg {
+                        // arm_bodies[i] isn't a shape integer_literal_value can
+                        // evaluate; leave the original (i64-default) Upsilon as-is.
+                        continue;
+                    }
+                    let new_up_id = ctx.emit(
+                        Opcode::Upsilon,
+                        Ty::Unit,
+                        vec![narrowed],
+                        InstData::PhiTarget(InstId(u32::MAX)),
+                        span,
+                    );
+                    // lower_narrow_literal's const and the Upsilon above were both
+                    // appended at the block's current tail. Splice them back to
+                    // where the old Upsilon lived so the new value is defined
+                    // before it's referenced, and the block's Jump / any mutation
+                    // Upsilons after it keep their relative order.
+                    let insts = &mut ctx.func.blocks[block_idx].insts;
+                    let new_up_inst = insts.pop().expect("Upsilon just emitted above");
+                    let new_const_inst = insts
+                        .pop()
+                        .expect("const just emitted by lower_narrow_literal");
+                    insts.remove(up_pos);
+                    insts.insert(up_pos, new_up_inst);
+                    insts.insert(up_pos, new_const_inst);
+                    arm_results[i].1 = new_up_id;
+                }
+                ctx.switch_to_block(merge_block);
+            }
+
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
 
             for (arm_block, up_id, _, _) in &arm_results {
@@ -3051,9 +3148,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Continue: extract payload from field 1
             ctx.switch_to_block(continue_block);
+            let payload_ty = ctx
+                .inst_option_elem_ty
+                .get(&ptr_id)
+                .copied()
+                .unwrap_or(Ty::I64);
             ctx.emit(
                 Opcode::FieldGet,
-                Ty::I64,
+                payload_ty,
                 vec![ptr_id],
                 InstData::FieldIndex(1),
                 span,
@@ -3173,12 +3275,45 @@ fn integer_literal_value(expr: &Expr) -> Option<i64> {
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
-        } => match &operand.kind {
-            ExprKind::Lit(Lit::Int(v)) => Some(-(*v as i64)),
-            _ => None,
-        },
+        } => integer_literal_value(operand).map(|v| v.wrapping_neg()),
+        ExprKind::BinaryOp { op, lhs, rhs } => {
+            let l = integer_literal_value(lhs)?;
+            let r = integer_literal_value(rhs)?;
+            match op {
+                BinOp::Add | BinOp::AddChecked => Some(l.wrapping_add(r)),
+                BinOp::Sub | BinOp::SubChecked => Some(l.wrapping_sub(r)),
+                BinOp::Mul | BinOp::MulChecked => Some(l.wrapping_mul(r)),
+                BinOp::Div | BinOp::DivChecked => l.checked_div(r),
+                BinOp::Rem | BinOp::RemChecked => l.checked_rem(r),
+                BinOp::BitAnd => Some(l & r),
+                BinOp::BitOr => Some(l | r),
+                BinOp::BitXor => Some(l ^ r),
+                BinOp::Shl => Some(l.wrapping_shl(r as u32)),
+                BinOp::Shr => Some(l.wrapping_shr(r as u32)),
+                _ => None,
+            }
+        }
+        ExprKind::Block(block) => integer_literal_value_from_block(block),
         _ => None,
     }
+}
+
+/// Mirrors block_result_is_coercible_int_marker's notion of "the block's
+/// value expr", but extracts the literal value instead of just checking
+/// markerhood.
+fn integer_literal_value_from_block(block: &Block) -> Option<i64> {
+    if let Some(expr) = &block.trailing_expr {
+        return integer_literal_value(expr);
+    }
+    if let Some(Stmt::Expr {
+        expr,
+        has_semicolon: false,
+        ..
+    }) = block.stmts.last()
+    {
+        return integer_literal_value(expr);
+    }
+    None
 }
 
 /// Re-lower an integer-literal operand as a `ty`-native constant instead of
@@ -3203,6 +3338,13 @@ fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: T
             Ty::I32,
             vec![],
             InstData::ConstI32(value as i32),
+            expr.span,
+        ),
+        Ty::U32 => ctx.emit(
+            Opcode::ConstI32,
+            Ty::U32,
+            vec![],
+            InstData::ConstI32(value as u32 as i32),
             expr.span,
         ),
         _ => original,
@@ -3433,6 +3575,16 @@ pub(crate) fn lower_function(
                     ctx.inst_vec_elem_type.insert(arg_id, elem_name.clone());
                 }
             }
+            AstType::Generic { name, args, .. } if name == "Option" => {
+                ctx.inst_struct_type.insert(arg_id, "Option".to_string());
+                if let Some(elem_ty) = args.first().and_then(|t| match t {
+                    AstType::Named { name, .. } if name == "i32" => Some(Ty::I32),
+                    AstType::Named { name, .. } if name == "u8" => Some(Ty::U8),
+                    _ => None,
+                }) {
+                    ctx.inst_option_elem_ty.insert(arg_id, elem_ty);
+                }
+            }
             AstType::Named { name, .. } if ctx.struct_field_map.contains_key(name.as_str()) => {
                 ctx.inst_struct_type.insert(arg_id, name.clone());
             }
@@ -3542,6 +3694,7 @@ pub fn lower_module(
                     ret_ty: lower_ty_with_linear(&fn_def.return_ty, &linear_struct_names),
                     ret_tag: non_scalar_type_tag(&fn_def.return_ty),
                     ret_vec_elem: vec_named_elem_type(&fn_def.return_ty),
+                    ret_option_elem: option_named_elem_type(&fn_def.return_ty),
                     param_tys: fn_def
                         .params
                         .iter()
@@ -5143,6 +5296,7 @@ mod tests {
                 ret_ty: Ty::Ptr,
                 ret_tag: Some("Pair".to_string()),
                 ret_vec_elem: None,
+                ret_option_elem: None,
                 param_tys: vec![],
             },
         );
@@ -5201,6 +5355,7 @@ mod tests {
                 ret_ty: Ty::U8,
                 ret_tag: None,
                 ret_vec_elem: None,
+                ret_option_elem: None,
                 param_tys: vec![Ty::U8],
             },
         );
@@ -5276,6 +5431,7 @@ mod tests {
                 ret_ty: Ty::Ptr,
                 ret_tag: Some("B".to_string()),
                 ret_vec_elem: None,
+                ret_option_elem: None,
                 param_tys: vec![],
             },
         );

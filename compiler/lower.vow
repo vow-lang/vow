@@ -17,6 +17,7 @@ struct LowerCtx {
     func_ret_tys: Vec<i64>,
     func_ret_tags: Vec<String>,
     func_ret_vec_elems: Vec<String>,
+    func_ret_option_elems: Vec<i64>,
     func_param_tys: Vec<Vec<i64>>,
     struct_names: Vec<String>,
     linear_struct_names: Vec<String>,
@@ -48,6 +49,8 @@ struct LowerCtx {
     loop_exit_phi_ids: Vec<Vec<i64>>,
     vec_elem_inst_ids: Vec<i64>,
     vec_elem_names: Vec<String>,
+    option_elem_inst_ids: Vec<i64>,
+    option_elem_tys: Vec<i64>,
     warnings: Vec<String>,
     file: String,
 }
@@ -78,6 +81,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_ret_tys: Vec::new(),
         func_ret_tags: Vec::new(),
         func_ret_vec_elems: Vec::new(),
+        func_ret_option_elems: Vec::new(),
         func_param_tys: Vec::new(),
         struct_names: Vec::new(),
         linear_struct_names: Vec::new(),
@@ -109,6 +113,8 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         loop_exit_phi_ids: Vec::new(),
         vec_elem_inst_ids: Vec::new(),
         vec_elem_names: Vec::new(),
+        option_elem_inst_ids: Vec::new(),
+        option_elem_tys: Vec::new(),
         warnings: Vec::new(),
         file: String::from(""),
     }
@@ -350,6 +356,23 @@ fn lctx_get_vec_elem(ctx: LowerCtx, inst_id: i64) -> String {
     String::from("")
 }
 
+fn lctx_tag_option_elem(ctx: LowerCtx, inst_id: i64, elem_ty: i64) {
+    ctx.option_elem_inst_ids.push(inst_id);
+    ctx.option_elem_tys.push(elem_ty);
+}
+
+fn lctx_get_option_elem_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
+    let n: i64 = ctx.option_elem_inst_ids.len();
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.option_elem_inst_ids[i] == inst_id {
+            return ctx.option_elem_tys[i];
+        }
+    }
+    ITY_I64()
+}
+
 fn lctx_intern_str(ctx: LowerCtx, s: String) -> i64 {
     let n: i64 = ctx.string_pool.len();
     let mut i: i64 = 0;
@@ -568,6 +591,25 @@ fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
         return clone_string(arena_str(a, name_sid));
     }
     String::from("")
+}
+
+fn lower_ast_type_option_elem_ty(a: AstArena, tid: i64) -> i64 {
+    if tid == -1 { return -1; }
+    let tag: i64 = type_tag(a, tid);
+    if tag != TY_GENERIC() { return -1; }
+    let name_sid: i64 = type_a(a, tid);
+    let name: String = arena_str(a, name_sid);
+    if name != String::from("Option") { return -1; }
+    let args_lid: i64 = type_b(a, tid);
+    if list_len(a, args_lid) == 0 { return -1; }
+    let elem_tid: i64 = list_get(a, args_lid, 0);
+    let elem_tag: i64 = type_tag(a, elem_tid);
+    if elem_tag != TY_NAMED() { return -1; }
+    let elem_sid: i64 = type_a(a, elem_tid);
+    let elem_name: String = arena_str(a, elem_sid);
+    if elem_name == String::from("i32") { return ITY_I32(); }
+    if elem_name == String::from("u8") { return ITY_U8(); }
+    -1
 }
 
 fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64) -> String {
@@ -993,6 +1035,93 @@ fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i6
     result_ty
 }
 
+// Evaluates a const-int-shaped AST expr at compile time, mirroring
+// expr_is_coercible_int_marker's recognized shapes (bare literal, negation,
+// constant arithmetic/bitwise BinOps, and block-wrapped forms of any of
+// those) rather than just expr_is_const_int's narrower bare-literal-only
+// set. Sets ok[0] = false (value undefined) for anything unrecognized, or
+// for a division/remainder by a literal zero -- never panics the compiler
+// itself on an ill-formed user expression.
+fn narrow_literal_eval(a: AstArena, eid: i64, ok: Vec<bool>) -> i64 {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() {
+        return expr_a(a, eid);
+    }
+    if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return 0 - narrow_literal_eval(a, expr_b(a, eid), ok);
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        let is_marker_op: bool = op == BINOP_ADD() || op == BINOP_SUB() || op == BINOP_MUL()
+            || op == BINOP_DIV() || op == BINOP_REM()
+            || op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK() || op == BINOP_MUL_CHK()
+            || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK()
+            || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
+            || op == BINOP_SHL() || op == BINOP_SHR();
+        if !is_marker_op {
+            ok[0] = false;
+            return 0;
+        }
+        let l: i64 = narrow_literal_eval(a, expr_b(a, eid), ok);
+        let r: i64 = narrow_literal_eval(a, expr_c(a, eid), ok);
+        if op == BINOP_ADD() || op == BINOP_ADD_CHK() { return l + r; }
+        if op == BINOP_SUB() || op == BINOP_SUB_CHK() { return l - r; }
+        if op == BINOP_MUL() || op == BINOP_MUL_CHK() { return l * r; }
+        if op == BINOP_DIV() || op == BINOP_DIV_CHK() {
+            if r == 0 { ok[0] = false; return 0; }
+            return l / r;
+        }
+        if op == BINOP_REM() || op == BINOP_REM_CHK() {
+            if r == 0 { ok[0] = false; return 0; }
+            return l % r;
+        }
+        if op == BINOP_BITAND() { return l & r; }
+        if op == BINOP_BITOR() { return l | r; }
+        if op == BINOP_XOR() { return l ^ r; }
+        if op == BINOP_SHL() { return l << r; }
+        return l >> r;
+    }
+    if tag == EXPR_BLOCK() {
+        let bid: i64 = expr_a(a, eid);
+        let trail_eid: i64 = blk_trail(a, bid);
+        if trail_eid != -1 {
+            return narrow_literal_eval(a, trail_eid, ok);
+        }
+        let stmts_lid: i64 = blk_stmts(a, bid);
+        let n: i64 = list_len(a, stmts_lid);
+        if n > 0 {
+            let last_sid: i64 = list_get(a, stmts_lid, n - 1);
+            if stmt_tag(a, last_sid) == STMT_EXPR() && stmt_b(a, last_sid) == 0 {
+                return narrow_literal_eval(a, stmt_a(a, last_sid), ok);
+            }
+        }
+        ok[0] = false;
+        return 0;
+    }
+    ok[0] = false;
+    0
+}
+
+// Re-lower a const-int-shaped AST expr as a `ty`-native constant instead of
+// the default i64, so it shares a Cranelift register width with a genuinely
+// `ty`-typed sibling value (e.g. a match/if arm merge). Returns -1 if `eid`
+// isn't a const-int expr (caller should keep the original value in that case).
+fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64 {
+    if eid == -1 {
+        return -1;
+    }
+    let ok: Vec<bool> = Vec::new();
+    ok.push(true);
+    let value: i64 = narrow_literal_eval(a, eid, ok);
+    if !ok[0] {
+        return -1;
+    }
+    let narrow_op: i64 = if ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
+    let narrow_data: i64 = if ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
+    let const_args: Vec<i64> = Vec::new();
+    lctx_emit(ctx, narrow_op, ty, const_args, narrow_data, value, 0, String::from(""))
+}
+
 fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64) {
     let blk: IrBlock = ctx.func.blocks[block_id];
     let n: i64 = blk.insts.len();
@@ -1181,6 +1310,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             operand_ty = ITY_I32();
         } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_I32() {
             operand_ty = ITY_I32();
+        } else if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_U32() {
+            operand_ty = ITY_U32();
+        } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_U32() {
+            operand_ty = ITY_U32();
         } else if is_bitwise && lhs_ty == ITY_I64() {
             if rhs_ty != ITY_I64() {
                 operand_ty = rhs_ty;
@@ -1189,7 +1322,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // Re-lower a literal operand as an `operand_ty`-native constant instead
         // of the default i64, so it shares a register width with a genuinely
         // `operand_ty`-typed sibling operand in the same binary op.
-        if operand_ty == ITY_U8() || operand_ty == ITY_I32() {
+        if operand_ty == ITY_U8() || operand_ty == ITY_I32() || operand_ty == ITY_U32() {
             let narrow_op: i64 = if operand_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
             let narrow_data: i64 = if operand_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
             if expr_is_const_int(a, lhs_eid) {
@@ -1349,6 +1482,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                fn_name == String::from("u32_to_u8_try") || fn_name == String::from("u64_to_u8_try") ||
                fn_name == String::from("u128_to_u8_try") {
                 lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_U8());
+            }
+            if fn_name == String::from("parse_i32") || fn_name == String::from("i64_to_i32_try") ||
+               fn_name == String::from("u32_to_i32_try") || fn_name == String::from("u64_to_i32_try") {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_I32());
             }
             return result;
         }
@@ -1381,6 +1520,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let ret_vec_elem: String = ctx.func_ret_vec_elems[fidx];
             if ret_vec_elem.len() > 0 {
                 lctx_tag_vec_elem(ctx, result, ret_vec_elem);
+            }
+            let ret_option_elem: i64 = ctx.func_ret_option_elems[fidx];
+            if ret_option_elem != -1 {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ret_option_elem);
             }
             return result;
         }
@@ -2765,6 +2909,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let arm_up_ids: Vec<i64> = Vec::new();
         let reachable_result_tys: Vec<i64> = Vec::new();
         let reachable_result_markers: Vec<bool> = Vec::new();
+        // Parallel to the three above: the arm body's AST expr id, so a marker
+        // arm's Upsilon value can be re-narrowed to result_ty once it's known.
+        let arm_bodies: Vec<i64> = Vec::new();
         let arm_mut_ups: Vec<i64> = Vec::new();
 
         let mut ai: i64 = 0;
@@ -2814,6 +2961,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 lctx_switch_to_block(ctx, arm_block);
                 lctx_push_scope(ctx);
 
+                let payload_ty: i64 = lctx_get_option_elem_ty(ctx, ptr_id);
                 let n_inner: i64 = list_len(a, inner_lid);
                 let mut ii: i64 = 0;
                 while ii < n_inner {
@@ -2822,9 +2970,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     if inner_ptag == PAT_IDENT() {
                         let name_sid: i64 = pat_a(a, inner_pid);
                         let pname: String = arena_str(a, name_sid);
+                        let field_ty: i64 = if ii == 0 { payload_ty } else { ITY_I64() };
                         let fg2_args: Vec<i64> = Vec::new();
                         fg2_args.push(ptr_id);
-                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg2_args, IDATA_FIELD(), 1 + ii, 0, String::from(""));
+                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ty, fg2_args, IDATA_FIELD(), 1 + ii, 0, String::from(""));
                         lctx_define(ctx, pname, field_val);
                     }
                     ii = ii + 1;
@@ -2863,6 +3012,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     arm_up_ids.push(up_id);
                     reachable_result_tys.push(arm_result_ty);
                     reachable_result_markers.push(expr_is_coercible_int_marker(a, body_eid));
+                    arm_bodies.push(body_eid);
                 }
 
                 lctx_restore(ctx, snap);
@@ -2915,6 +3065,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     arm_up_ids.push(up_id);
                     reachable_result_tys.push(arm_result_ty2);
                     reachable_result_markers.push(expr_is_coercible_int_marker(a, body_eid));
+                    arm_bodies.push(body_eid);
                 }
 
                 lctx_restore(ctx, snap);
@@ -2946,6 +3097,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 arm_up_ids.push(up_id);
                 reachable_result_tys.push(ITY_UNIT());
                 reachable_result_markers.push(false);
+                arm_bodies.push(-1);
             }
 
             ai = ai + 1;
@@ -2975,6 +3127,70 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let phi_args: Vec<i64> = Vec::new();
         // Exiting arms do not push here; literal-marker arms coerce to the checked integer result.
         let result_ty: i64 = choose_match_result_ty(reachable_result_tys, reachable_result_markers);
+
+        // A marker arm's Upsilon still carries its default i64-width value (see
+        // expr_is_coercible_int_marker). Now that the merge's real result type is
+        // known, re-narrow those arms so every Upsilon feeding the Phi shares its
+        // Cranelift register width -- otherwise a plain literal arm (e.g.
+        // `None => -1`) merging with a genuinely narrow-typed arm (e.g.
+        // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
+        if result_ty == ITY_U8() || result_ty == ITY_I32() || result_ty == ITY_U32() {
+            let mut fi: i64 = 0;
+            while fi < n_merge_arms {
+                if reachable_result_markers[fi] && reachable_result_tys[fi] != result_ty {
+                    let arm_block: i64 = arm_exit_blocks[fi];
+                    let up_id: i64 = arm_up_ids[fi];
+                    let blk: IrBlock = ctx.func.blocks[arm_block];
+                    let n_insts: i64 = blk.insts.len();
+                    // Locate the arm's own result Upsilon by id rather than assuming
+                    // block position: the "Phis for mutated variables" pass above may
+                    // have already appended extra Upsilons after this arm's own
+                    // [Upsilon, Jump] pair, so it's not reliably the block's tail.
+                    let mut up_pos: i64 = -1;
+                    let mut old_arg: i64 = -1;
+                    let mut fj: i64 = 0;
+                    while fj < n_insts {
+                        let inst: IrInst = blk.insts[fj];
+                        if inst.id == up_id {
+                            up_pos = fj;
+                            old_arg = inst.args[0];
+                        }
+                        fj = fj + 1;
+                    }
+                    if up_pos != -1 {
+                        // lctx_emit refuses to append once the block's last inst is a
+                        // terminator, and the tail after the Upsilon (Jump, plus any
+                        // mutation Upsilons) must keep its relative order -- so save
+                        // that tail, truncate it off, emit the narrowed const + a
+                        // fresh Upsilon (now safely appending to a non-terminated
+                        // block), then restore the tail on top.
+                        let tail: Vec<IrInst> = Vec::new();
+                        let mut ti: i64 = up_pos + 1;
+                        while ti < n_insts {
+                            tail.push(blk.insts[ti]);
+                            ti = ti + 1;
+                        }
+                        blk.insts.truncate(up_pos);
+                        lctx_switch_to_block(ctx, arm_block);
+                        let narrowed: i64 = lower_narrow_literal(ctx, a, arm_bodies[fi], result_ty);
+                        let final_val: i64 = if narrowed != -1 { narrowed } else { old_arg };
+                        let new_up_args: Vec<i64> = Vec::new();
+                        new_up_args.push(final_val);
+                        let new_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), new_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                        let blk2: IrBlock = ctx.func.blocks[arm_block];
+                        let mut tj: i64 = 0;
+                        while tj < tail.len() {
+                            blk2.insts.push(tail[tj]);
+                            tj = tj + 1;
+                        }
+                        arm_up_ids[fi] = new_up_id;
+                    }
+                }
+                fi = fi + 1;
+            }
+            lctx_switch_to_block(ctx, merge_block);
+        }
+
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
 
         let n_results: i64 = arm_up_ids.len();
@@ -3025,9 +3241,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
 
         lctx_switch_to_block(ctx, continue_block);
+        let payload_ty: i64 = lctx_get_option_elem_ty(ctx, inner_id);
         let payload_args: Vec<i64> = Vec::new();
         payload_args.push(inner_id);
-        return lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), payload_args, IDATA_FIELD(), 1, 0, String::from(""));
+        return lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, IDATA_FIELD(), 1, 0, String::from(""));
     }
 
     if tag == EXPR_BREAK() {
@@ -3569,6 +3786,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.tag_names = Vec::new();
     ctx.vec_elem_inst_ids = Vec::new();
     ctx.vec_elem_names = Vec::new();
+    ctx.option_elem_inst_ids = Vec::new();
+    ctx.option_elem_tys = Vec::new();
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;
@@ -3620,6 +3839,12 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                             let pelem_name: String = arena_str(a, pelem_sid);
                             lctx_tag_vec_elem(ctx, arg_id, pelem_name);
                         }
+                    }
+                } else if tn == String::from("Option") {
+                    lctx_tag(ctx, arg_id, String::from("Option"));
+                    let opt_elem_ty: i64 = lower_ast_type_option_elem_ty(a, ptid);
+                    if opt_elem_ty != -1 {
+                        lctx_tag_option_elem(ctx, arg_id, opt_elem_ty);
                     }
                 }
             }
@@ -3695,6 +3920,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> I
     let func_ret_tys: Vec<i64> = Vec::new();
     let func_ret_tags: Vec<String> = Vec::new();
     let func_ret_vec_elems: Vec<String> = Vec::new();
+    let func_ret_option_elems: Vec<i64> = Vec::new();
     let func_param_tys: Vec<Vec<i64>> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
     let linear_struct_names: Vec<String> = Vec::new();
@@ -3733,6 +3959,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> I
             func_ret_tys.push(ir_ret);
             func_ret_tags.push(lower_ast_type_tag_name(a, ret_tid));
             func_ret_vec_elems.push(lower_ast_type_vec_elem_name(a, ret_tid));
+            func_ret_option_elems.push(lower_ast_type_option_elem_ty(a, ret_tid));
 
             let params_lid: i64 = fn_params_lid(a, iid);
             let nparams: i64 = list_len(a, params_lid) / 3;
@@ -3920,6 +4147,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> I
     ctx.func_ret_tys = func_ret_tys;
     ctx.func_ret_tags = func_ret_tags;
     ctx.func_ret_vec_elems = func_ret_vec_elems;
+    ctx.func_ret_option_elems = func_ret_option_elems;
     ctx.func_param_tys = func_param_tys;
     ctx.struct_names = struct_names;
     ctx.linear_struct_names = linear_struct_names;

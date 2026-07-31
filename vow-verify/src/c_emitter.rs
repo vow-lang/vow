@@ -986,6 +986,11 @@ fn emit_inst(
                 ));
                 return;
             }
+            if int_ty.width == IntegerWidth::W32 && int_ty.signedness == IntegerSignedness::Signed {
+                out.push_str(&format!(
+                    "  __ESBMC_assert(v{b} < 32, \"i32 shift count\");\n"
+                ));
+            }
             let prefix = match int_ty.signedness {
                 IntegerSignedness::Signed => "i",
                 IntegerSignedness::Unsigned => "u",
@@ -1491,6 +1496,13 @@ fn emit_inst(
                             "  v{id}.tag = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
                              \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= 0 && v{id}.payload <= 255); }}\n"
+                        ));
+                    }
+                    "__vow_string_parse_i32_opt" => {
+                        out.push_str(&format!(
+                            "  v{id}.tag = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= -2147483648 && v{id}.payload <= 2147483647); }}\n"
                         ));
                     }
                     "__vow_string_print" => {

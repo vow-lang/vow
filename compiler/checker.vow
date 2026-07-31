@@ -933,7 +933,7 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
     if is_unsigned && integer_tag_width(target_tag) >= 64 && expr_tag(a, lit_eid) == EXPR_LIT_INT() && expr_a(a, lit_eid) < 0 {
         return;
     }
-    let literal_value: i64 = expr_a(a, lit_eid);
+    let literal_value: i64 = expr_const_int_value(a, lit_eid);
     let min_value: i64 = integer_tag_min(target_tag);
     let max_value: i64 = integer_tag_max(target_tag);
     if literal_value < min_value || literal_value > max_value {
@@ -969,7 +969,7 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
                 init_tid
             } else {
                 let at_tid: i64 = resolve_ast_ty(e, m, annot_ast_tid);
-                if ty_is_integer(e.ts, at_tid) && expr_tag(a, init_eid) == EXPR_LIT_INT() {
+                if ty_is_integer(e.ts, at_tid) && expr_is_const_int(a, init_eid) {
                     check_integer_literal_range(e, a, init_eid, ty_tag(e.ts, at_tid));
                 }
                 if !is_coercible(e.ts, init_tid, at_tid) {
@@ -1311,8 +1311,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let lhs_tid: i64 = check_expr(e, m, lhs_eid);
         let rhs_tid: i64 = check_expr(e, m, rhs_eid);
         if op != BINOP_SHL() && op != BINOP_SHR() {
-            let rhs_is_real_literal: bool = ty_is_integer(e.ts, lhs_tid) && ty_is_lit_int(e.ts, rhs_tid) && expr_tag(a, rhs_eid) == EXPR_LIT_INT();
-            let lhs_is_real_literal: bool = ty_is_integer(e.ts, rhs_tid) && ty_is_lit_int(e.ts, lhs_tid) && expr_tag(a, lhs_eid) == EXPR_LIT_INT();
+            let rhs_is_real_literal: bool = ty_is_integer(e.ts, lhs_tid) && ty_is_lit_int(e.ts, rhs_tid) && expr_is_const_int(a, rhs_eid);
+            let lhs_is_real_literal: bool = ty_is_integer(e.ts, rhs_tid) && ty_is_lit_int(e.ts, lhs_tid) && expr_is_const_int(a, lhs_eid);
             if rhs_is_real_literal {
                 check_integer_literal_range(e, a, rhs_eid, ty_tag(e.ts, lhs_tid));
             }
@@ -2128,7 +2128,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let src_tag: i64 = ty_tag(e.ts, src_tid);
         let tgt_tag: i64 = ty_tag(e.ts, tgt_tid);
         if src_tag == CTY_LIT_INT() && ty_is_integer(e.ts, tgt_tid) {
-            if expr_tag(a, inner_eid) == EXPR_LIT_INT() {
+            if expr_is_const_int(a, inner_eid) {
                 check_integer_literal_range(e, a, inner_eid, tgt_tag);
             }
             return tgt_tid;

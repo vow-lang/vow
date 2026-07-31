@@ -1279,6 +1279,14 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
                 i64_to_str(iargs[0]), String::from(", v"), i64_to_str(iargs[1]),
                 String::from(");\n")
             ));
+        } else if inst.dk == IDATA_INTEGER() && inst.dv == ITY_I32() {
+            out.push_str(str3(String::from("  __ESBMC_assert(v"), i64_to_str(iargs[1]), String::from(" < 32, \"i32 shift count\");\n")));
+            let opname: String = if op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
+            out.push_str(str7(
+                String::from("  v"), i64_to_str(id), cemit_str2(String::from(" = __vow_"), cemit_str2(opname, String::from("_i32(v"))),
+                i64_to_str(iargs[0]), String::from(", v"), i64_to_str(iargs[1]),
+                String::from(");\n")
+            ));
         } else {
             let operator: String = if op == IOP_SHL() { String::from(" << ") } else { String::from(" >> ") };
             emit_cmp(out, id, iargs[0], iargs[1], operator);
@@ -2003,6 +2011,30 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
     }
     if ds == String::from("__vow_string_print") {
         out.push_str(String::from("  /* string print not modelled */\n"));
+        return;
+    }
+    if ds == String::from("__vow_string_parse_i32_opt") {
+        let ids: String = i64_to_str(id);
+        out.push_str(str3(String::from("  v"), ids, String::from(".tag = __VERIFIER_nondet_long();\n")));
+        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".tag == 0 || v")));
+        out.push_str(str3(ids, String::from(".tag == 1);\n"), String::from("")));
+        out.push_str(str3(String::from("  if (v"), ids, String::from(".tag == 1) {\n")));
+        out.push_str(str3(String::from("    v"), ids, String::from(".payload = __VERIFIER_nondet_long();\n")));
+        out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".payload >= -2147483648 && v")));
+        out.push_str(str3(ids, String::from(".payload <= 2147483647);\n"), String::from("")));
+        out.push_str(String::from("  }\n"));
+        return;
+    }
+    if ds == String::from("__vow_string_parse_u8_opt") {
+        let ids: String = i64_to_str(id);
+        out.push_str(str3(String::from("  v"), ids, String::from(".tag = __VERIFIER_nondet_long();\n")));
+        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".tag == 0 || v")));
+        out.push_str(str3(ids, String::from(".tag == 1);\n"), String::from("")));
+        out.push_str(str3(String::from("  if (v"), ids, String::from(".tag == 1) {\n")));
+        out.push_str(str3(String::from("    v"), ids, String::from(".payload = __VERIFIER_nondet_long();\n")));
+        out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".payload >= 0 && v")));
+        out.push_str(str3(ids, String::from(".payload <= 255);\n"), String::from("")));
+        out.push_str(String::from("  }\n"));
         return;
     }
     emit_unmodelled(out, inst);
