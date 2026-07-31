@@ -205,7 +205,7 @@ impl std::error::Error for AnalysisError {}
 
 const MINIMUM_R_SQUARED: f64 = 0.90;
 const NORMALIZED_TREND_TOLERANCE: f64 = 1.0e-9;
-const REQUIRED_RISING_RATIOS: usize = 2;
+const REQUIRED_RISING_SLOPE_STEPS: usize = 2;
 const CANDIDATES: [ComplexityClass; 8] = [
     ComplexityClass::Constant,
     ComplexityClass::Logarithmic,
@@ -276,19 +276,33 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
 
 fn has_rising_maximum_residual_tail(samples: &[Sample]) -> bool {
     let maximum = ComplexityClass::CubicLogarithmic;
-    samples
+    let mut slopes = samples
         .windows(2)
         .rev()
-        .take(REQUIRED_RISING_RATIOS)
-        .all(|pair| {
-            let previous = &pair[0];
-            let current = &pair[1];
-            let previous_normalized =
-                previous.operations as f64 / basis_value(maximum, previous.input_size);
-            let current_normalized =
-                current.operations as f64 / basis_value(maximum, current.input_size);
-            current_normalized > previous_normalized * (1.0 + NORMALIZED_TREND_TOLERANCE)
-        })
+        .map(|pair| normalized_interval_slope(maximum, &pair[0], &pair[1]));
+    let Some(mut newer) = slopes.next() else {
+        return false;
+    };
+
+    for _ in 0..REQUIRED_RISING_SLOPE_STEPS {
+        let Some(older) = slopes.next() else {
+            return false;
+        };
+        let scale = newer.abs().max(older.abs()).max(1.0);
+        if newer <= older + scale * NORMALIZED_TREND_TOLERANCE {
+            return false;
+        }
+        newer = older;
+    }
+
+    true
+}
+
+fn normalized_interval_slope(class: ComplexityClass, previous: &Sample, current: &Sample) -> f64 {
+    let operation_delta = (i128::from(current.operations) - i128::from(previous.operations)) as f64;
+    let basis_delta =
+        basis_value(class, current.input_size) - basis_value(class, previous.input_size);
+    operation_delta / basis_delta
 }
 
 fn r_squared(class: ComplexityClass, samples: &[Sample]) -> f64 {
