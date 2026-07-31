@@ -31,7 +31,7 @@ use cranelift_codegen::ir::{
     AbiParam, Block, FuncRef, GlobalValue, InstBuilder, MemFlagsData, Signature, StackSlot,
     StackSlotData, StackSlotKind, TrapCode, Value, types,
 };
-use cranelift_codegen::isa::TargetIsa;
+use cranelift_codegen::isa::{self, TargetIsa};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{
@@ -777,6 +777,14 @@ impl FnScratch {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
+    create_module_context(mode, trace_mode, cranelift_native::builder())
+}
+
+fn create_module_context(
+    mode: i64,
+    trace_mode: i64,
+    isa_builder_result: Result<isa::Builder, &'static str>,
+) -> i64 {
     let mut flag_builder = settings::builder();
     if let Err(e) = flag_builder.set("use_colocated_libcalls", "false") {
         eprintln!("clif_shim: error setting use_colocated_libcalls: {e}");
@@ -793,7 +801,7 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         return 0;
     }
     let flags = settings::Flags::new(flag_builder);
-    let isa_builder = match cranelift_native::builder() {
+    let isa_builder = match isa_builder_result {
         Ok(builder) => builder,
         Err(message) => {
             eprintln!("clif_shim: native builder error: {message}");
@@ -3500,6 +3508,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_returns_zero_when_native_isa_builder_fails() {
+        assert_eq!(create_module_context(0, 0, Err("unsupported host")), 0);
+    }
 
     fn vow_string(s: &str) -> VowVec {
         VowVec {
