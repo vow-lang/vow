@@ -22,6 +22,7 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
@@ -59,8 +60,11 @@ jobs:
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
-      - name: Bench Python unit tests
-        run: uv run --project bench --locked python -m unittest discover -s bench -p 'test_*.py'
+      - name: Benchmark skeleton fidelity unit tests
+        run: |
+          python3 scripts/test_benchmark_contracts.py
+          uv run --project bench --locked python -m unittest discover -s bench -p 'test_*.py'
+          PYTHONPATH=euler python3 -m unittest discover -s euler -p 'test_*.py'
       - name: Verifier-evaluation suite (#334)
         # Asserts the labelled corpus in tests/verify* against ground-truth
         # blame/vow_id, with false-accepts (incl. vacuous proofs) failing the
@@ -161,6 +165,7 @@ jobs:
 
   build-and-test-macos:
     runs-on: macos-latest
+    timeout-minutes: 60
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
