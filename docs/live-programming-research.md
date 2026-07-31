@@ -229,10 +229,14 @@ should be sized accordingly.
 target. A restart may establish the function's normal `ensures` clauses or a
 declared restart-specific postcondition. At a `handle` site, the normal edge
 exposes the normal postcondition. After the handler proves the selected
-restart's argument contract, its recovery edge exposes only that restart's
-postcondition. The verifier checks downstream obligations on every reachable
-edge; it never assumes the stronger normal postcondition after a weaker
-recovery, and it never weakens the enclosing function's contract automatically.
+restart's argument contract in the live heap state produced by the handler,
+its recovery edge exposes only that restart's postcondition. Because
+heap-backed arguments are shared, callee verification conservatively forgets
+mutable heap facts from the original failure before proving the restart; any
+such fact needed by the restart must be re-established by its argument
+contract. The verifier checks downstream obligations on every reachable edge;
+it never assumes the stronger normal postcondition after a weaker recovery,
+and it never weakens the enclosing function's contract automatically.
 The facts stay in ordinary CFG path conditions rather than becoming a new
 refinement-type axis. The complete caller-side decision, including failure
 diagnostics, is recorded in
