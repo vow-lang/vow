@@ -390,6 +390,10 @@ fn recheck_tid_btreemap_linearity(e: CheckEnv, tid: i64, span: i64) [io] {
 
 fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
     let n: i64 = m.items.len();
+    if item_files.len() != n {
+        eprintln_str("item_files must be parallel to module.items");
+        process_exit(1);
+    }
 
     let mut i: i64 = 0;
     while i < n {
