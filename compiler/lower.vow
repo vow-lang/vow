@@ -4153,7 +4153,9 @@ fn lower_module_vow(
     // adds at least one owner, so at most n_items passes are needed even for
     // forward alias chains.
     let mut owner_pass: i64 = 0;
-    while owner_pass < n_items {
+    let mut owner_changed: bool = true;
+    while owner_pass < n_items && owner_changed {
+        owner_changed = false;
         let mut oi: i64 = 0;
         while oi < n_items {
             let owner_item: i64 = m.items[oi];
@@ -4179,6 +4181,7 @@ fn lower_module_vow(
                     }
                     if owns_linear {
                         linear_owner_names.push(owner_name);
+                        owner_changed = true;
                     }
                 }
             } else if item_kind(owner_item) == ITEM_TYPE_ALIAS() {
@@ -4188,6 +4191,7 @@ fn lower_module_vow(
                     let target_tid: i64 = alias_type_tid(a, owner_aid);
                     if ast_type_is_linear_owner(a, target_tid, linear_owner_names) {
                         linear_owner_names.push(owner_name);
+                        owner_changed = true;
                     }
                 }
             }
