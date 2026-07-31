@@ -150,6 +150,17 @@ fn maximum_supported_declaration_ignores_fixed_setup_cost_for_quartic_work() {
 }
 
 #[test]
+fn maximum_supported_declaration_detects_rescaled_quartic_work() {
+    let samples = [1024_u64, 2048, 4096, 8192, 16384, 32768]
+        .map(|input_size| Sample::new(input_size, input_size.pow(4) / 1_000_000_000_000));
+
+    let analysis = analyze(ComplexityClass::CubicLogarithmic, &samples).unwrap();
+
+    assert_eq!(analysis.verdict, Verdict::Ambiguous);
+    assert_eq!(analysis.observed, Some(ComplexityClass::CubicLogarithmic));
+}
+
+#[test]
 fn maximum_supported_declaration_does_not_pass_cubic_log_squared_work() {
     let samples = [1024_u64, 2048, 4096, 8192, 16384, 32768].map(|input_size| {
         Sample::new(

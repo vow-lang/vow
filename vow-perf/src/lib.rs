@@ -290,7 +290,7 @@ fn maximum_trend_is_ambiguous(samples: &[Sample]) -> bool {
 
     for _ in 0..REQUIRED_RISING_SLOPE_STEPS {
         let older = slopes.next().expect("sample count checked above");
-        let scale = newer.abs().max(older.abs()).max(1.0);
+        let scale = newer.abs().max(older.abs());
         if newer <= older + scale * NORMALIZED_TREND_TOLERANCE {
             return false;
         }
