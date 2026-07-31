@@ -1,0 +1,28 @@
+// TEST: stdout "1\n-1\n"
+module OptionI32PayloadType
+
+fn matches_target(v: i32, target: i32) -> bool {
+    v == target
+}
+
+fn main() -> i32 [io] {
+    let target: i32 = 42;
+    match parse_i32(String::from("42")) {
+        Option::Some(v) => {
+            if matches_target(v, target) {
+                print_i64(1);
+            } else {
+                print_i64(0);
+            }
+        },
+        Option::None => print_i64(-1),
+    }
+    print_str(String::from("\n"));
+
+    match parse_i32(String::from("not a number")) {
+        Option::Some(v) => print_i64(v as i64),
+        Option::None => print_i64(-1),
+    }
+    print_str(String::from("\n"));
+    0
+}

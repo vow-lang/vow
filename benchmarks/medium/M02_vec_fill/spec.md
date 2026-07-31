@@ -13,7 +13,6 @@ fn fill_vec(n: i64) -> Vec<i64>
 ## Contracts
 
 - `requires: n >= 0` — count is non-negative
-- `requires: n <= 8` — bounded for verification
 - `ensures: result.len() == n` — resulting Vec has exactly `n` elements
 - Loop `invariant: i >= 0`
 - Loop `invariant: i <= n`
@@ -27,3 +26,4 @@ fn fill_vec(n: i64) -> Vec<i64>
 
 - Push `i` in each iteration; the Vec grows by 1 each time
 - The loop invariant tracks `i` within `[0, n]`
+- Verifier unwind and Vec-model limits are not source preconditions

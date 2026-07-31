@@ -5,9 +5,16 @@ use verifier_harness
 use verifier_ids
 
 fn check_known_nondet_calls() -> i64 {
+    if esbmc_nondet_call(ITY_I8()) != String::from("__VERIFIER_nondet_char()") { return 10; }
+    if esbmc_nondet_call(ITY_U8()) != String::from("__VERIFIER_nondet_unsigned_char()") { return 11; }
+    if esbmc_nondet_call(ITY_I16()) != String::from("__VERIFIER_nondet_short()") { return 12; }
+    if esbmc_nondet_call(ITY_U16()) != String::from("__VERIFIER_nondet_unsigned_short()") { return 13; }
     if esbmc_nondet_call(ITY_I32()) != String::from("__VERIFIER_nondet_int()") { return 1; }
+    if esbmc_nondet_call(ITY_U32()) != String::from("__VERIFIER_nondet_unsigned_int()") { return 14; }
     if esbmc_nondet_call(ITY_I64()) != String::from("__VERIFIER_nondet_long()") { return 2; }
     if esbmc_nondet_call(ITY_U64()) != String::from("__VERIFIER_nondet_unsigned_long()") { return 3; }
+    if esbmc_nondet_call(ITY_I128()) != String::from("__VERIFIER_nondet_int128()") { return 15; }
+    if esbmc_nondet_call(ITY_U128()) != String::from("__VERIFIER_nondet_uint128()") { return 16; }
     if esbmc_nondet_call(ITY_F32()) != String::from("__VERIFIER_nondet_float()") { return 4; }
     if esbmc_nondet_call(ITY_F64()) != String::from("__VERIFIER_nondet_double()") { return 5; }
     if esbmc_nondet_call(ITY_BOOL()) != String::from("__VERIFIER_nondet_bool()") { return 6; }

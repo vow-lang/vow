@@ -2,24 +2,28 @@ module FibonacciBounded
 
 fn fib(n: i64) -> i64 vow {
   requires: n >= 0,
-  requires: n <= 8,
+  requires: n <= 92,
   ensures: result >= 0
 } {
-  let mut a: i64 = 0;
-  let mut b: i64 = 1;
-  let mut i: i64 = 0;
-  while i < n vow {
-    invariant: a >= 0,
-    invariant: b >= 1,
-    invariant: i >= 0,
-    invariant: i <= n
-  } {
-    let tmp: i64 = a + b;
-    a = b;
-    b = tmp;
-    i = i + 1;
+  if n == 0 {
+    0
+  } else {
+    let mut prev: i64 = 0;
+    let mut curr: i64 = 1;
+    let mut i: i64 = 1;
+    while i < n vow {
+      invariant: prev >= 0,
+      invariant: curr >= 1,
+      invariant: i >= 1,
+      invariant: i <= n
+    } {
+      let next: i64 = prev + curr;
+      prev = curr;
+      curr = next;
+      i = i + 1;
+    }
+    curr
   }
-  a
 }
 
 fn main() -> i32 [io] {

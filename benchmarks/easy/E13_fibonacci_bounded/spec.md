@@ -1,4 +1,4 @@
-# E13: Fibonacci Bounded
+# E13: Fibonacci
 
 ## Problem
 
@@ -13,16 +13,17 @@ fn fib(n: i64) -> i64
 ## Contracts
 
 - `requires: n >= 0` — index is non-negative
-- `requires: n <= 8` — bounded to stay within unwind limit
+- `requires: n <= 92` — exact largest Fibonacci index whose result fits in `i64`
 - `ensures: result >= 0` — Fibonacci numbers are non-negative
 
 ## Constraints
 
-- Use a while loop with two accumulators
+- Handle `n == 0`, then use a while loop with two accumulators
 - Include loop invariants
 
 ## Hints
 
-- Use two variables `a = 0, b = 1`; in each iteration set `a, b = b, a + b`
-- After `n` iterations, `a` holds fib(n)
-- Loop invariants: `a >= 0`, `b >= 1`, `i >= 0`, `i <= n`
+- Use `prev = 0, curr = 1`; each iteration advances both values
+- Start at index 1 so computing `fib(92)` never computes the overflowing `fib(93)`
+- Loop invariants: `prev >= 0`, `curr >= 1`, `i >= 1`, `i <= n`
+- The upper bound prevents arithmetic overflow; it is not an unwind bound

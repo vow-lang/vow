@@ -12,8 +12,6 @@ fn count_tokens(v: Vec<i64>) -> i64
 
 ## Contracts
 
-- `requires: v.len() >= 0`
-- `requires: v.len() <= 8` — bounded for verification
 - `ensures: result >= 0` — token count is non-negative
 - `ensures: result <= v.len()` — at most as many tokens as elements
 - Loop `invariant: count >= 0`
@@ -30,3 +28,4 @@ fn count_tokens(v: Vec<i64>) -> i64
 
 - Track whether previous element was a delimiter with an `in_token` flag
 - Increment count when transitioning from `in_token == 0` to non-zero element
+- Verifier unwind and Vec-model limits are not source preconditions

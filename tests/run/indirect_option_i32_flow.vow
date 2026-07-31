@@ -1,0 +1,26 @@
+// TEST: stdout "-2147483648\n-2147483648\n"
+module IndirectOptionI32Flow
+
+fn get_i32(s: String) -> Option<i32> {
+    parse_i32(s)
+}
+
+fn handle(opt: Option<i32>) -> i32 {
+    match opt {
+        Option::Some(v) => v + 1,
+        Option::None => -1,
+    }
+}
+
+fn main() -> i32 [io] {
+    // Option<i32> payload type must survive a function-return indirection...
+    match get_i32(String::from("2147483647")) {
+        Option::Some(v) => print_i64((v + 1) as i64),
+        Option::None => print_i64(-1),
+    }
+    print_str(String::from("\n"));
+    // ...and a function-parameter indirection, not just a direct builtin call.
+    print_i64(handle(parse_i32(String::from("2147483647"))) as i64);
+    print_str(String::from("\n"));
+    0
+}

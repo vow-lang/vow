@@ -83,6 +83,7 @@ pub fn inst_effects(opcode: &Opcode) -> Effects {
             e.traps = true;
             e
         }
+        Opcode::ComplexityDescriptor => Effects::pure(),
         Opcode::Call => {
             let mut e = Effects::pure();
             e.reads.insert(AbstractHeap::Memory);
@@ -139,7 +140,7 @@ mod tests {
 
     #[test]
     fn pure_ops_have_no_effects() {
-        for opcode in [Opcode::ConstI32, Opcode::WrappingAddI32, Opcode::EqI32] {
+        for opcode in [Opcode::ConstI32, Opcode::WrappingAdd, Opcode::Eq] {
             let e = inst_effects(&opcode);
             assert!(e.is_pure(), "{opcode:?} should be pure");
         }

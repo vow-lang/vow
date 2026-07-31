@@ -1,0 +1,41 @@
+module U8NumericTower
+
+fn byte_pipeline(value: u8) -> u8 vow {
+    requires: value <= 15,
+    ensures: result == value * 2 + 2
+} {
+    let shifted: u8 = value << 1;
+    let wrapped: u8 = shifted + 1;
+    wrapped +! 1
+}
+
+fn widen_byte(value: u8) -> i64 vow {
+    ensures: result == value as i64,
+    ensures: result >= 0
+} {
+    value as i64
+}
+
+fn narrow_byte(value: i64) -> u8 vow {
+    requires: value >= 0,
+    requires: value <= 255,
+    ensures: result as i64 == value
+} {
+    i64_to_u8_wrap(value)
+}
+
+fn saturating_sum(a: u8, b: u8) -> u8 vow {
+    ensures: result >= a,
+    ensures: result >= b
+} {
+    add_sat_u8(a, b)
+}
+
+fn main() -> i32 [io] {
+    let input: u8 = 7;
+    let result: u8 = byte_pipeline(input);
+    let narrowed: u8 = narrow_byte(widen_byte(result));
+    let masked: u8 = narrowed & 31;
+    print_i64(masked as i64);
+    0
+}

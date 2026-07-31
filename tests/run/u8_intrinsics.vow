@@ -1,0 +1,49 @@
+// TEST: stdout "44\n255\n255\n0\n255\n200\n10\n128\n4\n255\n-1\n"
+module U8Intrinsics
+
+fn print_optional_byte(value: Option<u8>) [io] {
+    match value {
+        Option::Some(byte) => print_i64(byte as i64),
+        Option::None => print_i64(-1),
+    }
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io] {
+    let wide: i64 = 300;
+    let wrapped: u8 = i64_to_u8_wrap(wide);
+    let clamped: u8 = i64_to_u8_sat(wide);
+    let a: u8 = 250;
+    let b: u8 = 10;
+    let saturated: u8 = add_sat_u8(a, b);
+    let saturated_sub: u8 = sub_sat_u8(b, a);
+    let saturated_mul: u8 = mul_sat_u8(a, b);
+    let mask: u8 = 15;
+    let bits: u8 = a & mask;
+    let shifted: u8 = (1 as u8) << 7;
+    let shift_source: u8 = 2;
+    let shift_count: u32 = shift_source as u32;
+    let dynamically_shifted: u8 = (1 as u8) << shift_count;
+    print_i64(wrapped as i64);
+    print_str(String::from("\n"));
+    print_i64(clamped as i64);
+    print_str(String::from("\n"));
+    print_i64(saturated as i64);
+    print_str(String::from("\n"));
+    print_i64(saturated_sub as i64);
+    print_str(String::from("\n"));
+    print_i64(saturated_mul as i64);
+    print_str(String::from("\n"));
+    let narrowed: u8 = i64_to_u8_wrap(200);
+    print_i64(narrowed as i64);
+    print_str(String::from("\n"));
+    print_i64(bits as i64);
+    print_str(String::from("\n"));
+    print_i64(shifted as i64);
+    print_str(String::from("\n"));
+    print_i64(dynamically_shifted as i64);
+    print_str(String::from("\n"));
+    print_optional_byte(i64_to_u8_try(255));
+    print_optional_byte(i64_to_u8_try(256));
+    0
+}

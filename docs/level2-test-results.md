@@ -12,8 +12,9 @@
 **Results:**
 - Compilation: PASS (cross-module type resolution works)
 - Execution: PASS (correct output: 25, 75, 12, 14, 5, 75)
-- Verification: PASS (all contracts verified with bounded inputs)
-- CEGIS iterations: 1 (initial overflow found, fixed with `requires: r <= 1000000`)
+- Verification: PASS (all contracts verified with semantic overflow guards)
+- CEGIS iterations: 1 (initial overflow found; current source uses the exact
+  non-overflow domain rather than an arbitrary small cap)
 
 ### stack/ (3 modules)
 - **node.vow**: `Node` struct, `node_new`, `node_value`, `node_next`

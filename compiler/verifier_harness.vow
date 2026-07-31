@@ -12,9 +12,16 @@ fn verifier_harness_str3(a: String, b: String, c: String) -> String {
 }
 
 fn esbmc_nondet_call(ty: i64) -> String {
+    if ty == ITY_I8() { return String::from("__VERIFIER_nondet_char()"); }
+    if ty == ITY_U8() { return String::from("__VERIFIER_nondet_unsigned_char()"); }
+    if ty == ITY_I16() { return String::from("__VERIFIER_nondet_short()"); }
+    if ty == ITY_U16() { return String::from("__VERIFIER_nondet_unsigned_short()"); }
     if ty == ITY_I32() { return String::from("__VERIFIER_nondet_int()"); }
+    if ty == ITY_U32() { return String::from("__VERIFIER_nondet_unsigned_int()"); }
     if ty == ITY_I64() { return String::from("__VERIFIER_nondet_long()"); }
     if ty == ITY_U64() { return String::from("__VERIFIER_nondet_unsigned_long()"); }
+    if ty == ITY_I128() { return String::from("__VERIFIER_nondet_int128()"); }
+    if ty == ITY_U128() { return String::from("__VERIFIER_nondet_uint128()"); }
     if ty == ITY_F32() { return String::from("__VERIFIER_nondet_float()"); }
     if ty == ITY_F64() { return String::from("__VERIFIER_nondet_double()"); }
     if ty == ITY_BOOL() { return String::from("__VERIFIER_nondet_bool()"); }

@@ -1,0 +1,9 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 300 does not fit in u8"
+module U8BinaryLiteralOutOfRange
+
+fn main() -> i32 {
+    let byte: u8 = 1;
+    let invalid: u8 = byte + 300;
+    0
+}

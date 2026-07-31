@@ -141,10 +141,14 @@ def curate_verify_output(
     func = parsed_json.get("function", "unknown")
 
     if not counterexamples:
-        parts.append(f"Verification failed on function `{func}` but no counterexample was produced.")
+        parts.append(
+            f"Verification failed on function `{func}` but no counterexample was produced."
+        )
         parts.append(f"\nRaw output:\n```json\n{_json_compact(parsed_json)}\n```")
     else:
-        parts.append(f"**Verification failed** on function `{func}` (CEGIS iteration {iteration}).\n")
+        parts.append(
+            f"**Verification failed** on function `{func}` (CEGIS iteration {iteration}).\n"
+        )
         for i, ce in enumerate(counterexamples):
             violation = ce.get("violation", "unknown")
             blame = ce.get("blame", "unknown")
@@ -153,7 +157,9 @@ def curate_verify_output(
             vtype = _classify_violation(violation)
 
             parts.append(f"**Counterexample {i + 1}:**")
-            parts.append(f"- Violation: `{vtype}: {violation}` (vow_id={vow_id}, blame={blame})")
+            parts.append(
+                f"- Violation: `{vtype}: {violation}` (vow_id={vow_id}, blame={blame})"
+            )
             parts.append(f"- Variable values at failure: {_format_values(values)}")
 
             source = _format_source_span(ce.get("source"))
@@ -175,8 +181,10 @@ def curate_verify_output(
 
             branch_decisions = ce.get("branch_decisions", [])
             if branch_decisions:
-                decisions = [f"branch@{bd.get('condition_offset', '?')}→{bd.get('taken', '?')}"
-                             for bd in branch_decisions]
+                decisions = [
+                    f"branch@{bd.get('condition_offset', '?')}→{bd.get('taken', '?')}"
+                    for bd in branch_decisions
+                ]
                 parts.append(f"- Branch decisions: {', '.join(decisions)}")
             parts.append("")
 
@@ -185,7 +193,9 @@ def curate_verify_output(
         for j, pv in enumerate(previous_violations):
             parts.append(f"- Iteration {j + 1}: {pv}")
         parts.append("")
-        parts.append("Do NOT repeat the same approach. Try a different invariant or algorithm.")
+        parts.append(
+            "Do NOT repeat the same approach. Try a different invariant or algorithm."
+        )
         parts.append("")
 
     # Generate targeted hints based on violation type
@@ -204,9 +214,8 @@ def curate_verify_output(
             )
         elif vtype == "requires":
             context_hint = ""
-            if (
-                _format_call_sites(ce0.get("call_sites"))
-                or _format_violating_args(ce0.get("violating_args"))
+            if _format_call_sites(ce0.get("call_sites")) or _format_violating_args(
+                ce0.get("violating_args")
             ):
                 context_hint = " Use the caller context above to locate the bad call and argument values."
             parts.append(
@@ -231,6 +240,7 @@ def curate_verify_output(
 def _json_compact(d: dict) -> str:
     """Compact JSON for fallback display."""
     import json
+
     return json.dumps(d, indent=2)
 
 

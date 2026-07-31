@@ -1,0 +1,25 @@
+// TEST: stdout "1\n-1\n"
+module QuestionOperatorI32Payload
+
+fn matches_answer(v: i32) -> bool {
+    v == 42
+}
+
+fn check_answer(s: String) -> Option<bool> {
+    let v: i32 = parse_i32(s)?;
+    Option::Some(matches_answer(v))
+}
+
+fn main() -> i32 [io] {
+    match check_answer(String::from("42")) {
+        Option::Some(b) => print_i64(if b { 1 } else { 0 }),
+        Option::None => print_i64(-1),
+    }
+    print_str(String::from("\n"));
+    match check_answer(String::from("oops")) {
+        Option::Some(b) => print_i64(if b { 1 } else { 0 }),
+        Option::None => print_i64(-1),
+    }
+    print_str(String::from("\n"));
+    0
+}

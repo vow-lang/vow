@@ -12,10 +12,7 @@ fn interval_new(lo: i64, hi: i64) -> Interval vow {
 }
 
 fn interval_contains(lo: i64, hi: i64, x: i64) -> i64 vow {
-  requires: lo >= 0,
-  requires: hi >= 0,
   requires: lo <= hi,
-  requires: hi <= 1000,
   ensures: result >= 0,
   ensures: result <= 1
 } {
@@ -31,24 +28,16 @@ fn interval_contains(lo: i64, hi: i64, x: i64) -> i64 vow {
 }
 
 fn interval_width(lo: i64, hi: i64) -> i64 vow {
-  requires: lo >= 0,
-  requires: hi >= 0,
   requires: lo <= hi,
-  requires: hi <= 1000,
+  requires: lo >= 0 || hi <= 9223372036854775807 + lo,
   ensures: result >= 0
 } {
   hi - lo
 }
 
 fn intervals_overlap(a_lo: i64, a_hi: i64, b_lo: i64, b_hi: i64) -> i64 vow {
-  requires: a_lo >= 0,
-  requires: a_hi >= 0,
   requires: a_lo <= a_hi,
-  requires: a_hi <= 1000,
-  requires: b_lo >= 0,
-  requires: b_hi >= 0,
   requires: b_lo <= b_hi,
-  requires: b_hi <= 1000,
   ensures: result >= 0,
   ensures: result <= 1
 } {

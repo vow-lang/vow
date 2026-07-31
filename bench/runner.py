@@ -127,7 +127,10 @@ def run_benchmark(
                 iterations=iteration,
                 wall_clock_seconds=elapsed,
                 failure_mode="empty_response",
-                token_usage={"input_tokens": total_input, "output_tokens": total_output},
+                token_usage={
+                    "input_tokens": total_input,
+                    "output_tokens": total_output,
+                },
                 final_code="",
                 raw_responses=raw_responses,
                 verify_outputs=verify_outputs,
@@ -136,7 +139,9 @@ def run_benchmark(
         final_code = code
 
         # Verify
-        vr = run_verify(vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit)
+        vr = run_verify(
+            vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit
+        )
         verify_outputs.append(vr.raw_json)
 
         if vr.status == "Verified":
@@ -150,7 +155,10 @@ def run_benchmark(
                 iterations=iteration,
                 wall_clock_seconds=elapsed,
                 failure_mode=None,
-                token_usage={"input_tokens": total_input, "output_tokens": total_output},
+                token_usage={
+                    "input_tokens": total_input,
+                    "output_tokens": total_output,
+                },
                 final_code=final_code,
                 raw_responses=raw_responses,
                 verify_outputs=verify_outputs,
@@ -185,7 +193,13 @@ def run_benchmark(
 
     # Exhausted iterations
     elapsed = time.time() - start
-    last_vr = run_verify(vow_binary, final_code, timeout=verify_timeout, memory_limit=memory_limit) if final_code else None
+    last_vr = (
+        run_verify(
+            vow_binary, final_code, timeout=verify_timeout, memory_limit=memory_limit
+        )
+        if final_code
+        else None
+    )
     failure_mode = classify_failure(last_vr) if last_vr else "empty_response"
     status_map = {
         "CompileFailed": "compile_failed",

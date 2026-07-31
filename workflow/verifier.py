@@ -9,6 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+
 @dataclass
 class CompileResult:
     success: bool
@@ -28,9 +29,7 @@ class VerifyResult:
 
 
 def _write_temp(source: str) -> str:
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".vow", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".vow", delete=False) as f:
         f.write(source)
         return f.name
 
@@ -110,7 +109,11 @@ def run_verify(
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            parsed = {"status": "CompileFailed", "raw_stdout": raw, "stderr": result.stderr}
+            parsed = {
+                "status": "CompileFailed",
+                "raw_stdout": raw,
+                "stderr": result.stderr,
+            }
 
         return VerifyResult(
             status=parsed.get("status", "CompileFailed"),

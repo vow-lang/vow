@@ -1,0 +1,30 @@
+// TEST: stdout "42\n0\n"
+module MatchMergeWithMutation
+
+fn f(opt: Option<i32>) -> i32 {
+    let mut counter: i32 = 0;
+    let result: i32 = match opt {
+        Option::Some(v) => {
+            counter = counter + 1;
+            v
+        },
+        Option::None => {
+            counter = counter + 1;
+            -1
+        },
+    };
+    result + counter
+}
+
+fn main() -> i32 [io] {
+    // A match that both mutates an outer variable in every arm AND merges a
+    // narrow-typed arm with a literal-marker arm must not corrupt the arm's
+    // block: the mutation-Phi pass appends extra Upsilons after the arm's own
+    // [Upsilon, Jump] pair, so the merge-width fixup must locate its target
+    // Upsilon by id, not by assuming it's the block's last instruction.
+    print_i64(f(parse_i32(String::from("41"))) as i64);
+    print_str(String::from("\n"));
+    print_i64(f(parse_i32(String::from("nope"))) as i64);
+    print_str(String::from("\n"));
+    0
+}

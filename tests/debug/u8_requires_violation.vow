@@ -1,0 +1,15 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr "\"x\":5"
+module U8RequiresViolation
+
+fn takes_byte(x: u8) -> u8 vow {
+  requires: x > 200
+} {
+  x
+}
+
+fn main() -> i32 [io] {
+  takes_byte(5);
+  0
+}

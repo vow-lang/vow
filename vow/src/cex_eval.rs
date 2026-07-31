@@ -26,18 +26,9 @@ use crate::counterexample::CallSiteInfo;
 fn fold_binary_i64(inst: &vow_ir::Inst, eval_operand: impl Fn(u32) -> Option<i64>) -> Option<i64> {
     use vow_ir::Opcode;
     let op: fn(i64, i64) -> i64 = match inst.opcode {
-        Opcode::WrappingAddI32
-        | Opcode::CheckedAddI32
-        | Opcode::WrappingAddI64
-        | Opcode::CheckedAddI64 => i64::wrapping_add,
-        Opcode::WrappingSubI32
-        | Opcode::CheckedSubI32
-        | Opcode::WrappingSubI64
-        | Opcode::CheckedSubI64 => i64::wrapping_sub,
-        Opcode::WrappingMulI32
-        | Opcode::CheckedMulI32
-        | Opcode::WrappingMulI64
-        | Opcode::CheckedMulI64 => i64::wrapping_mul,
+        Opcode::WrappingAdd | Opcode::CheckedAdd => i64::wrapping_add,
+        Opcode::WrappingSub | Opcode::CheckedSub => i64::wrapping_sub,
+        Opcode::WrappingMul | Opcode::CheckedMul => i64::wrapping_mul,
         _ => return None,
     };
     let lhs = eval_operand(inst.args.first()?.0)?;
@@ -122,32 +113,32 @@ pub(crate) fn eval_callee_bool_for_call_site(
                 None
             }
         }
-        Opcode::EqI32 | Opcode::EqI64 => {
+        Opcode::Eq => {
             let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
             let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
             Some(lhs == rhs)
         }
-        Opcode::NeI32 | Opcode::NeI64 => {
+        Opcode::Ne => {
             let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
             let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
             Some(lhs != rhs)
         }
-        Opcode::LtI32 | Opcode::LtI64 => {
+        Opcode::Lt => {
             let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
             let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
             Some(lhs < rhs)
         }
-        Opcode::LeI32 | Opcode::LeI64 => {
+        Opcode::Le => {
             let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
             let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
             Some(lhs <= rhs)
         }
-        Opcode::GtI32 | Opcode::GtI64 => {
+        Opcode::Gt => {
             let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
             let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
             Some(lhs > rhs)
         }
-        Opcode::GeI32 | Opcode::GeI64 => {
+        Opcode::Ge => {
             let lhs = eval_callee_i64_for_call_site(inst.args.first()?.0, inst_by_id, call_site)?;
             let rhs = eval_callee_i64_for_call_site(inst.args.get(1)?.0, inst_by_id, call_site)?;
             Some(lhs >= rhs)
@@ -240,10 +231,27 @@ pub(crate) fn inst_constant_value_for_counterexample(inst: &vow_ir::Inst) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vow_ir::{Inst, InstData, InstId, Opcode, RegionId, Ty};
+    use vow_ir::{Inst, InstData, InstId, IntegerType, Opcode, RegionId, Ty};
     use vow_syntax::span::Span;
 
     fn inst(id: u32, opcode: Opcode, args: &[u32], data: InstData) -> Inst {
+        let data = if data == InstData::None
+            && matches!(
+                opcode,
+                Opcode::WrappingAdd
+                    | Opcode::WrappingSub
+                    | Opcode::WrappingMul
+                    | Opcode::Eq
+                    | Opcode::Ne
+                    | Opcode::Lt
+                    | Opcode::Le
+                    | Opcode::Gt
+                    | Opcode::Ge
+            ) {
+            InstData::Integer(IntegerType::I64)
+        } else {
+            data
+        };
         Inst {
             id: InstId(id),
             opcode,
@@ -357,16 +365,16 @@ mod tests {
         let insts = [
             inst(0, Opcode::ConstI64, &[], InstData::ConstI64(2)),
             inst(1, Opcode::ConstI64, &[], InstData::ConstI64(3)),
-            inst(2, Opcode::WrappingAddI64, &[0, 1], InstData::None),
+            inst(2, Opcode::WrappingAdd, &[0, 1], InstData::None),
             inst(3, Opcode::ConstI64, &[], InstData::ConstI64(10)),
             inst(4, Opcode::ConstI64, &[], InstData::ConstI64(4)),
-            inst(5, Opcode::CheckedSubI64, &[3, 4], InstData::None),
+            inst(5, Opcode::CheckedSub, &[3, 4], InstData::None),
             inst(6, Opcode::ConstI64, &[], InstData::ConstI64(6)),
             inst(7, Opcode::ConstI64, &[], InstData::ConstI64(7)),
-            inst(8, Opcode::WrappingMulI64, &[6, 7], InstData::None),
+            inst(8, Opcode::WrappingMul, &[6, 7], InstData::None),
             inst(9, Opcode::ConstI64, &[], InstData::ConstI64(i64::MAX)),
             inst(10, Opcode::ConstI64, &[], InstData::ConstI64(1)),
-            inst(11, Opcode::WrappingAddI64, &[9, 10], InstData::None),
+            inst(11, Opcode::WrappingAdd, &[9, 10], InstData::None),
         ];
         let map = index(&insts);
         assert_eq!(eval_const_i64_for_counterexample(2, &map), Some(5));
@@ -380,9 +388,9 @@ mod tests {
         let insts = [
             inst(0, Opcode::ConstI64, &[], InstData::ConstI64(2)),
             inst(1, Opcode::ConstI64, &[], InstData::ConstI64(3)),
-            inst(2, Opcode::WrappingMulI64, &[0, 1], InstData::None),
+            inst(2, Opcode::WrappingMul, &[0, 1], InstData::None),
             inst(3, Opcode::ConstI64, &[], InstData::ConstI64(4)),
-            inst(4, Opcode::WrappingAddI64, &[2, 3], InstData::None),
+            inst(4, Opcode::WrappingAdd, &[2, 3], InstData::None),
         ];
         let map = index(&insts);
         assert_eq!(eval_const_i64_for_counterexample(4, &map), Some(10));
@@ -396,7 +404,7 @@ mod tests {
         let insts = [
             inst(0, Opcode::ConstU64, &[], InstData::ConstU64(2)),
             inst(1, Opcode::ConstI64, &[], InstData::ConstI64(3)),
-            inst(2, Opcode::WrappingAddI64, &[0, 1], InstData::None),
+            inst(2, Opcode::WrappingAdd, &[0, 1], InstData::None),
         ];
         let map = index(&insts);
         assert_eq!(eval_const_i64_for_counterexample(2, &map), None);
@@ -406,7 +414,7 @@ mod tests {
     fn counterexample_is_none_for_unknown_op_or_missing_operand() {
         let insts = [
             inst(0, Opcode::Call, &[], InstData::None),
-            inst(1, Opcode::WrappingAddI64, &[0, 99], InstData::None),
+            inst(1, Opcode::WrappingAdd, &[0, 99], InstData::None),
         ];
         let map = index(&insts);
         assert_eq!(eval_const_i64_for_counterexample(0, &map), None);
@@ -460,7 +468,7 @@ mod tests {
         let insts = [
             inst(0, Opcode::GetArg, &[], InstData::ArgIndex(0)),
             inst(1, Opcode::ConstI64, &[], InstData::ConstI64(3)),
-            inst(2, Opcode::WrappingAddI64, &[0, 1], InstData::None),
+            inst(2, Opcode::WrappingAdd, &[0, 1], InstData::None),
         ];
         let map = index(&insts);
         assert_eq!(
@@ -506,13 +514,13 @@ mod tests {
             let map = index(&insts);
             eval_callee_bool_for_call_site(2, &map, &call_site(vec![]))
         };
-        assert_eq!(base(Opcode::EqI64, 3, 3), Some(true));
-        assert_eq!(base(Opcode::EqI64, 3, 4), Some(false));
-        assert_eq!(base(Opcode::NeI64, 3, 4), Some(true));
-        assert_eq!(base(Opcode::LtI64, 3, 4), Some(true));
-        assert_eq!(base(Opcode::LeI64, 4, 4), Some(true));
-        assert_eq!(base(Opcode::GtI64, 5, 4), Some(true));
-        assert_eq!(base(Opcode::GeI64, 4, 4), Some(true));
+        assert_eq!(base(Opcode::Eq, 3, 3), Some(true));
+        assert_eq!(base(Opcode::Eq, 3, 4), Some(false));
+        assert_eq!(base(Opcode::Ne, 3, 4), Some(true));
+        assert_eq!(base(Opcode::Lt, 3, 4), Some(true));
+        assert_eq!(base(Opcode::Le, 4, 4), Some(true));
+        assert_eq!(base(Opcode::Gt, 5, 4), Some(true));
+        assert_eq!(base(Opcode::Ge, 4, 4), Some(true));
     }
 
     #[test]
@@ -535,7 +543,7 @@ mod tests {
         let insts = [
             inst(0, Opcode::GetArg, &[], InstData::ArgIndex(0)),
             inst(1, Opcode::ConstI64, &[], InstData::ConstI64(5)),
-            inst(2, Opcode::LtI64, &[0, 1], InstData::None),
+            inst(2, Opcode::Lt, &[0, 1], InstData::None),
         ];
         let map = index(&insts);
         assert_eq!(

@@ -1,0 +1,15 @@
+// TEST: stdout "28\n"
+module U32LiteralComparison
+
+fn shift_with_u32_count(value: i32, count: u32) -> i32 vow {
+    requires: count < 32,
+    ensures: result == value << count
+} {
+    value << count
+}
+
+fn main() -> i32 [io] {
+    print_i64(shift_with_u32_count(7, 2) as i64);
+    print_str(String::from("\n"));
+    0
+}

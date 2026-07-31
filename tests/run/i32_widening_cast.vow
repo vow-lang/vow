@@ -1,0 +1,12 @@
+// TEST: stdout "2000000000"
+module I32WideningCast
+
+fn main() -> i32 [io] {
+    let value: i32 = 2000000000;
+    let signed_64: i64 = value as i64;
+    let signed_128: i128 = value as i128;
+    let unsigned_64: u64 = value as u64;
+    let unsigned_128: u128 = value as u128;
+    print_i64(signed_64);
+    0
+}

@@ -5,6 +5,14 @@
 **Rust compiler used:** Never (only `build/vowc` after bootstrap)
 **Program:** Safe Math + Stats Library (`examples/safemath/`)
 
+> **Historical trace.** The contracts and `PROVEN` output below are preserved
+> as recorded in March 2026. The `bounded_sum` precondition `v.len() <= 8` is a
+> verifier-driven bound, while `safe_add` used two conservative half-range
+> bounds instead of the exact relational overflow guard. Neither is valid
+> current contract guidance. The live `bounded_sum` is intentionally
+> uncontracted until Vow can express its element-wise input predicate, and the
+> live `safe_add` uses `a <= 9223372036854775807 - b`.
+
 ---
 
 ## Pre-flight

@@ -9,9 +9,9 @@ struct RingBuf {
 
 fn ring_new(capacity: i64) -> RingBuf vow {
   requires: capacity > 0,
-  requires: capacity <= 4,
   ensures: result.count == 0,
-  ensures: result.capacity == capacity
+  ensures: result.capacity == capacity,
+  ensures: result.data.len() == capacity
 } {
   let v: Vec<i64> = Vec::new();
   let mut i: i64 = 0;
@@ -26,10 +26,14 @@ fn ring_new(capacity: i64) -> RingBuf vow {
 }
 
 fn ring_write(rb: RingBuf, val: i64) -> RingBuf vow {
+  requires: rb.count >= 0,
   requires: rb.count < rb.capacity,
   requires: rb.write_pos >= 0,
   requires: rb.write_pos < rb.capacity,
-  ensures: result.count == rb.count + 1
+  requires: rb.data.len() == rb.capacity,
+  ensures: result.count == rb.count + 1,
+  ensures: result.capacity == rb.capacity,
+  ensures: result.data.len() == rb.data.len()
 } {
   let d: Vec<i64> = rb.data;
   d[rb.write_pos] = val;
@@ -38,6 +42,7 @@ fn ring_write(rb: RingBuf, val: i64) -> RingBuf vow {
 }
 
 fn ring_count(rb: RingBuf) -> i64 vow {
+  requires: rb.count >= 0,
   ensures: result >= 0
 } {
   rb.count

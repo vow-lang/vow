@@ -3497,7 +3497,7 @@ fn resolve_uninit_return(func: &Function) -> RegionConstraint {
 fn is_scalar_ty(ty: Ty) -> bool {
     matches!(
         ty,
-        Ty::I32 | Ty::I64 | Ty::U64 | Ty::F32 | Ty::F64 | Ty::Bool | Ty::Unit
+        Ty::U8 | Ty::I32 | Ty::I64 | Ty::U64 | Ty::F32 | Ty::F64 | Ty::Bool | Ty::Unit
     )
     // Ptr and LinearPtr are heap-typed and fall through to origin-based rules.
 }

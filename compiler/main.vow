@@ -256,13 +256,13 @@ fn inst_const_i64_string_by_id(f: IrFunction, inst_id: i64) -> String {
                         let lhs: i64 = str_to_i64(lhs_s);
                         let rhs: i64 = str_to_i64(rhs_s);
                         if lhs_s == i64_to_str(lhs) && rhs_s == i64_to_str(rhs) {
-                            if inst.op == IOP_WADD_I32() || inst.op == IOP_WADD_I64() || inst.op == IOP_CADD_I32() || inst.op == IOP_CADD_I64() {
+                            if inst.op == IOP_WADD() || inst.op == IOP_CADD() {
                                 return i64_to_str(lhs + rhs);
                             }
-                            if inst.op == IOP_WSUB_I32() || inst.op == IOP_WSUB_I64() || inst.op == IOP_CSUB_I32() || inst.op == IOP_CSUB_I64() {
+                            if inst.op == IOP_WSUB() || inst.op == IOP_CSUB() {
                                 return i64_to_str(lhs - rhs);
                             }
-                            if inst.op == IOP_WMUL_I32() || inst.op == IOP_WMUL_I64() || inst.op == IOP_CMUL_I32() || inst.op == IOP_CMUL_I64() {
+                            if inst.op == IOP_WMUL() || inst.op == IOP_CMUL() {
                                 return i64_to_str(lhs * rhs);
                             }
                         }
@@ -313,13 +313,13 @@ fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, c
                     if string_is_i64_literal(lhs_s) && string_is_i64_literal(rhs_s) {
                         let lhs: i64 = str_to_i64(lhs_s);
                         let rhs: i64 = str_to_i64(rhs_s);
-                        if inst.op == IOP_WADD_I32() || inst.op == IOP_WADD_I64() || inst.op == IOP_CADD_I32() || inst.op == IOP_CADD_I64() {
+                        if inst.op == IOP_WADD() || inst.op == IOP_CADD() {
                             return i64_to_str(lhs + rhs);
                         }
-                        if inst.op == IOP_WSUB_I32() || inst.op == IOP_WSUB_I64() || inst.op == IOP_CSUB_I32() || inst.op == IOP_CSUB_I64() {
+                        if inst.op == IOP_WSUB() || inst.op == IOP_CSUB() {
                             return i64_to_str(lhs - rhs);
                         }
-                        if inst.op == IOP_WMUL_I32() || inst.op == IOP_WMUL_I64() || inst.op == IOP_CMUL_I32() || inst.op == IOP_CMUL_I64() {
+                        if inst.op == IOP_WMUL() || inst.op == IOP_CMUL() {
                             return i64_to_str(lhs * rhs);
                         }
                     }
@@ -381,27 +381,27 @@ fn callee_bool_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_in
                     if string_is_i64_literal(lhs_s) && string_is_i64_literal(rhs_s) {
                         let lhs: i64 = str_to_i64(lhs_s);
                         let rhs: i64 = str_to_i64(rhs_s);
-                        if inst.op == IOP_EQ_I32() || inst.op == IOP_EQ_I64() {
+                        if inst.op == IOP_EQ() {
                             if lhs == rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_NE_I32() || inst.op == IOP_NE_I64() {
+                        if inst.op == IOP_NE() {
                             if lhs != rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_LT_I32() || inst.op == IOP_LT_I64() {
+                        if inst.op == IOP_LT() {
                             if lhs < rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_LE_I32() || inst.op == IOP_LE_I64() {
+                        if inst.op == IOP_LE() {
                             if lhs <= rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_GT_I32() || inst.op == IOP_GT_I64() {
+                        if inst.op == IOP_GT() {
                             if lhs > rhs { return 1; }
                             return 0;
                         }
-                        if inst.op == IOP_GE_I32() || inst.op == IOP_GE_I64() {
+                        if inst.op == IOP_GE() {
                             if lhs >= rhs { return 1; }
                             return 0;
                         }
@@ -3652,7 +3652,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `/`      | Div (wrapping) |\n"));
     r.push_str(String::from("| `%`      | Rem (wrapping) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Wrapping operators silently wrap on overflow. For `u64` operands, division and remainder use unsigned semantics.\n"));
+    r.push_str(String::from("Wrapping operators silently wrap on overflow. For unsigned operands, including\n"));
+    r.push_str(String::from("`u8`, division and remainder use unsigned semantics.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Checked Arithmetic\n"));
     r.push_str(String::from("\n"));
@@ -3665,6 +3666,20 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `%!`     | Rem (checked)     |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Checked operators abort with `ArithmeticOverflow` on overflow.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Saturating Arithmetic\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Saturating arithmetic uses named compiler intrinsics rather than a third\n"));
+    r.push_str(String::from("operator family. The `u8` intrinsics are:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Behavior |\n"));
+    r.push_str(String::from("|----------|-----------|----------|\n"));
+    r.push_str(String::from("| `add_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps sums above 255 to 255 |\n"));
+    r.push_str(String::from("| `sub_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps differences below 0 to 0 |\n"));
+    r.push_str(String::from("| `mul_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps products above 255 to 255 |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("These functions are pure and have direct verifier semantics; they do not\n"));
+    r.push_str(String::from("lower to wrapping arithmetic.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Comparison Operators\n"));
     r.push_str(String::from("\n"));
@@ -3784,6 +3799,14 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("These intrinsics are emitted by the compiler so ESBMC sees their semantics\n"));
     r.push_str(String::from("directly in the verification C model.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For the `u8` target, the available narrowing source types are `i16`, `i32`,\n"));
+    r.push_str(String::from("`i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three\n"));
+    r.push_str(String::from("forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For the `i32` target, the available narrowing source types are `i64`, `u32`,\n"));
+    r.push_str(String::from("and `u64`, each providing all three forms: `i64_to_i32_try`/`_wrap`/`_sat`,\n"));
+    r.push_str(String::from("`u32_to_i32_try`/`_wrap`/`_sat`, and `u64_to_i32_try`/`_wrap`/`_sat`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The\n"));
     r.push_str(String::from("operands must already have the same type. The compiler does not coerce\n"));
@@ -4307,6 +4330,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("Each `parse_X` returns `Option::None` for malformed input, empty strings, or\n"));
     r.push_str(String::from("values outside the target type's range.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("In particular, `parse_u8` accepts decimal values from `0` through `255` and\n"));
+    r.push_str(String::from("returns `Option::None` for negative or larger values.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("**Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing\n"));
     r.push_str(String::from("pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and\n"));
     r.push_str(String::from("`<src>_to_<tgt>_sat` free functions with the semantics described in that\n"));
@@ -4706,7 +4732,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
-    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, or link failure |\n"));
+    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
@@ -4785,7 +4811,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `status`           | string              | Always            | One of the four status values             |\n"));
     r.push_str(String::from("| `executable`       | string \\| null      | Always            | Path to binary, null on compile failure or library module (no main) |\n"));
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
-    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", or link error detail) |\n"));
+    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", link error detail, or \"failed to emit frontend diagnostics: {io_error}\") |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
@@ -4871,8 +4897,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| Status          | Meaning                                              |\n"));
     r.push_str(String::from("|-----------------|------------------------------------------------------|\n"));
     r.push_str(String::from("| `not_verified`  | Verification not requested (no `--verify` flag)      |\n"));
-    r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
-    r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
+    r.push_str(String::from("| `proven`        | ESBMC established this contract for the configured bounded verification model (bit-vector encoding, overflow modeled) |\n"));
+    r.push_str(String::from("| `proven-ir`     | ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
     r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
@@ -5013,6 +5039,24 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("## Semantic Contracts Are Backend-Independent\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A contract states the function's real semantic domain and result. It does not\n"));
+    r.push_str(String::from("state the limits of the tool currently used to check it. Replacing ESBMC with a\n"));
+    r.push_str(String::from("stronger verifier must not require editing Vow source contracts.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Lengths, capacities, indices, and struct fields may appear in contracts when\n"));
+    r.push_str(String::from("they express a genuine algorithmic constraint or representation invariant. For\n"));
+    r.push_str(String::from("example, an index may need to be within a vector's length, paired inputs may\n"));
+    r.push_str(String::from("need equal lengths, or a ring buffer may need to be non-full before a write.\n"));
+    r.push_str(String::from("They must not be capped merely because ESBMC uses a finite collection model or\n"));
+    r.push_str(String::from("because a smaller struct state space is easier to solve.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same distinction applies to numeric bounds. Exact overflow guards and real\n"));
+    r.push_str(String::from("problem-domain restrictions are semantic; unwind caps and arbitrary\n"));
+    r.push_str(String::from("solver-friendly ranges are not. If the current verifier cannot establish an\n"));
+    r.push_str(String::from("honest contract, report that limitation outside the contract.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Verification Pipeline\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Codegen (Cranelift) and verification run in parallel:\n"));
@@ -5026,7 +5070,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ESBMC Configuration\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("- Verification strategy: **incremental BMC** (`--incremental-bmc`) -- base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`\n"));
+    r.push_str(String::from("- Verification strategy: **incremental BMC** (`--incremental-bmc`) -- base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC completes the configured model checks; otherwise the result is `unknown`. `proven` describes the configured verification model, including its finite unwind and collection capacities, not executions outside that model.\n"));
     r.push_str(String::from("- Incremental BMC with `--max-k-step` (default: **50**) -- loops are verified incrementally up to N iterations\n"));
     r.push_str(String::from("- Architecture: 64-bit\n"));
     r.push_str(String::from("- Array bounds / pointer checks disabled (Vow handles these in its own model)\n"));
@@ -5050,7 +5094,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("language and its contracts are deliberately decoupled from what any particular\n"));
     r.push_str(String::from("prover can prove: replace ESBMC with a stronger (or unbounded) checker and the\n"));
     r.push_str(String::from("same source, the same contracts, and the same CLI keep working -- the only\n"));
-    r.push_str(String::from("difference is that proof covers more (or all) of the state space. For this\n"));
+    r.push_str(String::from("difference is that the verifier can cover more of the state space. For this\n"));
     r.push_str(String::from("reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.\n"));
     r.push_str(String::from("`requires: v.len() <= 128`); see \"Verification-Driven Bounds (Anti-Pattern)\"\n"));
     r.push_str(String::from("below and `docs/design/verifier-model-bounds.md`.\n"));
@@ -5327,7 +5371,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("} { ... }\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic, bounded collection models) -- if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification. The same rule is why the verifier's collection model capacities (see \"Collection Models for Verification\") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.\n"));
+    r.push_str(String::from("Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) -- if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see \"Collection Models for Verification\") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Interpreting Counterexamples\n"));
     r.push_str(String::from("\n"));
@@ -6924,7 +6968,6 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn fill_vec(n: i64) -> Vec<i64> vow {\n"));
     r.push_str(String::from("    requires: n >= 0,\n"));
-    r.push_str(String::from("    requires: n <= 8,\n"));
     r.push_str(String::from("    ensures: result.len() == n\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    let v: Vec<i64> = Vec::new();\n"));
@@ -6946,20 +6989,21 @@ fn skill_bundle() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("### Step 2: Build and verify\n"));
+    r.push_str(String::from("### Step 2: Verify\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```\n"));
-    r.push_str(String::from("$ vow build examples/vec_fill.vow\n"));
+    r.push_str(String::from("$ vow verify examples/vec_fill.vow\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
-    r.push_str(String::from("{\"status\":\"Verified\",\"executable\":\"examples/vec_fill\",\"diagnostics\":[],\"counterexamples\":[]}\n"));
+    r.push_str(String::from("{\"status\":\"VerifyFailed\",\"executable\":null,\"diagnostics\":[],\"function\":\"fill_vec\",\"counterexample\":\"verification result unknown: Unable to prove or falsify the program, giving up.\",\"counterexamples\":[],\"verify_status\":\"unknown\",\"verify_message\":\"Unable to prove or falsify the program, giving up.\"}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Key points:**\n"));
-    r.push_str(String::from("- `requires: n <= 8` keeps iterations tractable for verification\n"));
     r.push_str(String::from("- `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body\n"));
     r.push_str(String::from("- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`\n"));
+    r.push_str(String::from("- The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.\n"));
+    r.push_str(String::from("- `VerifyFailed` with `verify_status: \"unknown\"` records the current verifier's limit; it does not make the contract false.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("---\n"));
     r.push_str(String::from("\n"));
@@ -8256,7 +8300,8 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `/`      | Div (wrapping) |\n"));
     r.push_str(String::from("| `%`      | Rem (wrapping) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Wrapping operators silently wrap on overflow. For `u64` operands, division and remainder use unsigned semantics.\n"));
+    r.push_str(String::from("Wrapping operators silently wrap on overflow. For unsigned operands, including\n"));
+    r.push_str(String::from("`u8`, division and remainder use unsigned semantics.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Checked Arithmetic\n"));
     r.push_str(String::from("\n"));
@@ -8269,6 +8314,20 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `%!`     | Rem (checked)     |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Checked operators abort with `ArithmeticOverflow` on overflow.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### Saturating Arithmetic\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Saturating arithmetic uses named compiler intrinsics rather than a third\n"));
+    r.push_str(String::from("operator family. The `u8` intrinsics are:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Function | Signature | Behavior |\n"));
+    r.push_str(String::from("|----------|-----------|----------|\n"));
+    r.push_str(String::from("| `add_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps sums above 255 to 255 |\n"));
+    r.push_str(String::from("| `sub_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps differences below 0 to 0 |\n"));
+    r.push_str(String::from("| `mul_sat_u8` | `fn(a: u8, b: u8) -> u8` | clamps products above 255 to 255 |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("These functions are pure and have direct verifier semantics; they do not\n"));
+    r.push_str(String::from("lower to wrapping arithmetic.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Comparison Operators\n"));
     r.push_str(String::from("\n"));
@@ -8388,6 +8447,14 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("These intrinsics are emitted by the compiler so ESBMC sees their semantics\n"));
     r.push_str(String::from("directly in the verification C model.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For the `u8` target, the available narrowing source types are `i16`, `i32`,\n"));
+    r.push_str(String::from("`i64`, `i128`, `u16`, `u32`, `u64`, and `u128`. Each source provides all three\n"));
+    r.push_str(String::from("forms, for example `u16_to_u8_try`, `u16_to_u8_wrap`, and `u16_to_u8_sat`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For the `i32` target, the available narrowing source types are `i64`, `u32`,\n"));
+    r.push_str(String::from("and `u64`, each providing all three forms: `i64_to_i32_try`/`_wrap`/`_sat`,\n"));
+    r.push_str(String::from("`u32_to_i32_try`/`_wrap`/`_sat`, and `u64_to_i32_try`/`_wrap`/`_sat`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The\n"));
     r.push_str(String::from("operands must already have the same type. The compiler does not coerce\n"));
@@ -8911,6 +8978,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("Each `parse_X` returns `Option::None` for malformed input, empty strings, or\n"));
     r.push_str(String::from("values outside the target type's range.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("In particular, `parse_u8` accepts decimal values from `0` through `255` and\n"));
+    r.push_str(String::from("returns `Option::None` for negative or larger values.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("**Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing\n"));
     r.push_str(String::from("pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and\n"));
     r.push_str(String::from("`<src>_to_<tgt>_sat` free functions with the semantics described in that\n"));
@@ -9312,7 +9382,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
-    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, or link failure |\n"));
+    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
@@ -9391,7 +9461,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `status`           | string              | Always            | One of the four status values             |\n"));
     r.push_str(String::from("| `executable`       | string \\| null      | Always            | Path to binary, null on compile failure or library module (no main) |\n"));
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
-    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", or link error detail) |\n"));
+    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", link error detail, or \"failed to emit frontend diagnostics: {io_error}\") |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
@@ -9477,8 +9547,8 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| Status          | Meaning                                              |\n"));
     r.push_str(String::from("|-----------------|------------------------------------------------------|\n"));
     r.push_str(String::from("| `not_verified`  | Verification not requested (no `--verify` flag)      |\n"));
-    r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
-    r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
+    r.push_str(String::from("| `proven`        | ESBMC established this contract for the configured bounded verification model (bit-vector encoding, overflow modeled) |\n"));
+    r.push_str(String::from("| `proven-ir`     | ESBMC established this contract for the configured bounded model under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
     r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (the incremental-BMC forward condition was unable to prove or falsify), or the function's verification failed overall and ESBMC's per-clause `--multi-property` run returned no individual verdict for this clause |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
@@ -9621,6 +9691,24 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("## Semantic Contracts Are Backend-Independent\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A contract states the function's real semantic domain and result. It does not\n"));
+    r.push_str(String::from("state the limits of the tool currently used to check it. Replacing ESBMC with a\n"));
+    r.push_str(String::from("stronger verifier must not require editing Vow source contracts.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Lengths, capacities, indices, and struct fields may appear in contracts when\n"));
+    r.push_str(String::from("they express a genuine algorithmic constraint or representation invariant. For\n"));
+    r.push_str(String::from("example, an index may need to be within a vector's length, paired inputs may\n"));
+    r.push_str(String::from("need equal lengths, or a ring buffer may need to be non-full before a write.\n"));
+    r.push_str(String::from("They must not be capped merely because ESBMC uses a finite collection model or\n"));
+    r.push_str(String::from("because a smaller struct state space is easier to solve.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The same distinction applies to numeric bounds. Exact overflow guards and real\n"));
+    r.push_str(String::from("problem-domain restrictions are semantic; unwind caps and arbitrary\n"));
+    r.push_str(String::from("solver-friendly ranges are not. If the current verifier cannot establish an\n"));
+    r.push_str(String::from("honest contract, report that limitation outside the contract.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Verification Pipeline\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Codegen (Cranelift) and verification run in parallel:\n"));
@@ -9634,7 +9722,7 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ESBMC Configuration\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("- Verification strategy: **incremental BMC** (`--incremental-bmc`) -- base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC's forward condition establishes completeness within the bound; otherwise the result is `unknown`, never a false `proven`\n"));
+    r.push_str(String::from("- Verification strategy: **incremental BMC** (`--incremental-bmc`) -- base case plus forward condition, **not** k-induction (there is no inductive step). A contract is `proven` only when ESBMC completes the configured model checks; otherwise the result is `unknown`. `proven` describes the configured verification model, including its finite unwind and collection capacities, not executions outside that model.\n"));
     r.push_str(String::from("- Incremental BMC with `--max-k-step` (default: **50**) -- loops are verified incrementally up to N iterations\n"));
     r.push_str(String::from("- Architecture: 64-bit\n"));
     r.push_str(String::from("- Array bounds / pointer checks disabled (Vow handles these in its own model)\n"));
@@ -9658,7 +9746,7 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("language and its contracts are deliberately decoupled from what any particular\n"));
     r.push_str(String::from("prover can prove: replace ESBMC with a stronger (or unbounded) checker and the\n"));
     r.push_str(String::from("same source, the same contracts, and the same CLI keep working -- the only\n"));
-    r.push_str(String::from("difference is that proof covers more (or all) of the state space. For this\n"));
+    r.push_str(String::from("difference is that the verifier can cover more of the state space. For this\n"));
     r.push_str(String::from("reason a `requires`/`ensures` clause must never encode a verifier bound (e.g.\n"));
     r.push_str(String::from("`requires: v.len() <= 128`); see \"Verification-Driven Bounds (Anti-Pattern)\"\n"));
     r.push_str(String::from("below and `docs/design/verifier-model-bounds.md`.\n"));
@@ -9935,7 +10023,7 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("} { ... }\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic, bounded collection models) -- if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification. The same rule is why the verifier's collection model capacities (see \"Collection Models for Verification\") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.\n"));
+    r.push_str(String::from("Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) -- if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see \"Collection Models for Verification\") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Interpreting Counterexamples\n"));
     r.push_str(String::from("\n"));
@@ -11540,7 +11628,6 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn fill_vec(n: i64) -> Vec<i64> vow {\n"));
     r.push_str(String::from("    requires: n >= 0,\n"));
-    r.push_str(String::from("    requires: n <= 8,\n"));
     r.push_str(String::from("    ensures: result.len() == n\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    let v: Vec<i64> = Vec::new();\n"));
@@ -11562,20 +11649,21 @@ fn skill_support_content_examples_examples_md_d533c48e() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("### Step 2: Build and verify\n"));
+    r.push_str(String::from("### Step 2: Verify\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```\n"));
-    r.push_str(String::from("$ vow build examples/vec_fill.vow\n"));
+    r.push_str(String::from("$ vow verify examples/vec_fill.vow\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
-    r.push_str(String::from("{\"status\":\"Verified\",\"executable\":\"examples/vec_fill\",\"diagnostics\":[],\"counterexamples\":[]}\n"));
+    r.push_str(String::from("{\"status\":\"VerifyFailed\",\"executable\":null,\"diagnostics\":[],\"function\":\"fill_vec\",\"counterexample\":\"verification result unknown: Unable to prove or falsify the program, giving up.\",\"counterexamples\":[],\"verify_status\":\"unknown\",\"verify_message\":\"Unable to prove or falsify the program, giving up.\"}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Key points:**\n"));
-    r.push_str(String::from("- `requires: n <= 8` keeps iterations tractable for verification\n"));
     r.push_str(String::from("- `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body\n"));
     r.push_str(String::from("- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`\n"));
+    r.push_str(String::from("- The contract states the algorithmic domain. An unwind or Vec-model limit must not be added as a precondition.\n"));
+    r.push_str(String::from("- `VerifyFailed` with `verify_status: \"unknown\"` records the current verifier's limit; it does not make the contract false.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("---\n"));
     r.push_str(String::from("\n"));

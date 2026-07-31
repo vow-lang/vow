@@ -16,7 +16,7 @@ fn queue_is_full(q: Queue) -> i64
 
 ## Contracts
 
-- `queue_new`: `requires: capacity > 0, requires: capacity <= 6`
+- `queue_new`: runtime constructor for any positive capacity
 - `queue_enqueue`: `requires: q.size >= 0, requires: q.size < q.capacity`
 - `queue_size`: `requires: q.size >= 0`, `ensures: result >= 0`
 - `queue_is_full`: `ensures: result >= 0, ensures: result <= 1`
@@ -33,3 +33,4 @@ fn queue_is_full(q: Queue) -> i64
 - `queue_enqueue` pushes to data, increments size, preserves capacity
 - `queue_size` returns `q.size`
 - `queue_is_full` checks `q.size == q.capacity`
+- Verifier collection-model capacities are not queue contracts

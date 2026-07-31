@@ -3,7 +3,7 @@
 
 Reads docs/spec/grammar.md and docs/spec/cli.md (the canonical specs),
 builds the help JSON structure, and writes it into:
-  - vow/src/main.rs  (skill_json raw string literal, skill_human string literal)
+  - vow/src/skill.rs (skill_json raw string literal, skill_human string literal)
   - compiler/main.vow (skill_json push_str calls, skill_human push_str calls)
 
 Usage:
@@ -30,7 +30,7 @@ ERRORS = SPEC_DIR / "errors.md"
 EXAMPLES = SPEC_DIR / "examples.md"
 STDLIB = SPEC_DIR / "stdlib.md"
 SCHEMAS_DIR = SPEC_DIR / "schemas"
-MAIN_RS = REPO / "vow" / "src" / "main.rs"
+SKILL_RS = REPO / "vow" / "src" / "skill.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
 SKILLS_DIR = REPO / "skills" / "vow"
 
@@ -44,6 +44,7 @@ DEFAULT_ENCODING = "auto"
 # Markdown table extraction
 # ---------------------------------------------------------------------------
 
+
 def _split_table_row(line: str) -> list[str]:
     """Split a markdown table row on unescaped pipes, handling \\| escapes."""
     # Replace escaped pipes with a placeholder, split, then restore
@@ -53,7 +54,9 @@ def _split_table_row(line: str) -> list[str]:
     return [c for c in cells if c != ""]
 
 
-def extract_table(text: str, heading: str, *, heading_level: int = 3) -> list[list[str]]:
+def extract_table(
+    text: str, heading: str, *, heading_level: int = 3
+) -> list[list[str]]:
     """Extract rows from a markdown table under a heading.
     Returns list of rows, each row is a list of cell strings (backticks stripped)."""
     prefix = "#" * heading_level + " "
@@ -164,6 +167,7 @@ def normalize_option(
 # Build JSON structure from grammar.md + cli.md
 # ---------------------------------------------------------------------------
 
+
 def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
     # --- Types ---
     prim_types = extract_table_col(grammar, "Primitive Types", 0)
@@ -233,7 +237,9 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             flag,
             default,
             desc,
-            output_default="source without .vow extension" if flag == "-o, --output" else None,
+            output_default="source without .vow extension"
+            if flag == "-o, --output"
+            else None,
         )
         build_options[key] = value
         build_option_entries.append(option)
@@ -370,7 +376,12 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "usage": "vow build [OPTIONS] <source.vow>",
                 "default_when_command_omitted": True,
                 "arguments": [
-                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                    {
+                        "name": "source",
+                        "kind": "path",
+                        "required": True,
+                        "suffix": ".vow",
+                    }
                 ],
                 "options": build_option_entries,
                 "stdout": {
@@ -391,7 +402,12 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "status": "implemented",
                 "usage": "vow verify [OPTIONS] <source.vow>",
                 "arguments": [
-                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                    {
+                        "name": "source",
+                        "kind": "path",
+                        "required": True,
+                        "suffix": ".vow",
+                    }
                 ],
                 "options": verify_option_entries,
                 "stdout": {
@@ -429,7 +445,12 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "status": "implemented",
                 "usage": "vow decl [OPTIONS] <source.vow>",
                 "arguments": [
-                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                    {
+                        "name": "source",
+                        "kind": "path",
+                        "required": True,
+                        "suffix": ".vow",
+                    }
                 ],
                 "options": decl_option_entries,
                 "stdout": {"format": "none"},
@@ -444,7 +465,12 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "status": "implemented",
                 "usage": "vow contracts [OPTIONS] <source.vow>",
                 "arguments": [
-                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                    {
+                        "name": "source",
+                        "kind": "path",
+                        "required": True,
+                        "suffix": ".vow",
+                    }
                 ],
                 "options": contracts_option_entries,
                 "stdout": {
@@ -460,7 +486,12 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "status": "implemented",
                 "usage": "vow complexity [OPTIONS] <source.vow>",
                 "arguments": [
-                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                    {
+                        "name": "source",
+                        "kind": "path",
+                        "required": True,
+                        "suffix": ".vow",
+                    }
                 ],
                 "options": complexity_option_entries,
                 "stdout": {
@@ -488,7 +519,13 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "build_result": {
                 "schema_ref": "schemas/build-result.schema.json",
                 "emitted_by": ["build", "verify"],
-                "status_values": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
+                "status_values": [
+                    "Verified",
+                    "Unverified",
+                    "Skipped",
+                    "CompileFailed",
+                    "VerifyFailed",
+                ],
                 "legacy_fields": ["counterexample"],
             },
             "contracts_result": {
@@ -547,7 +584,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "integer": "42 | -1 | 42u64 (unsuffixed integers default to i64)",
                 "float": "3.14 | -0.5",
                 "bool": "true | false",
-                "string": "\"text\" with escapes \\n \\t \\r \\\\ \\\" \\0",
+                "string": '"text" with escapes \\n \\t \\r \\\\ \\" \\0',
             },
             "casts": "x as u64 or y as i64",
             "types": all_types,
@@ -598,7 +635,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "visibility": "pub fn \u2014 public functions visible to importers",
             },
             "type_aliases": "type Name = Type",
-            "extern_blocks": "extern \"C\" vow { requires: ... } { fn name(x: i64) -> i64 [unsafe] }",
+            "extern_blocks": 'extern "C" vow { requires: ... } { fn name(x: i64) -> i64 [unsafe] }',
             "methods": {
                 "Vec<T>": vec_methods,
                 "String": string_methods,
@@ -643,20 +680,29 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
 # Build human-readable help
 # ---------------------------------------------------------------------------
 
+
 def build_help_human(data: dict) -> str:
     lines: list[str] = []
     lines.append("vow \u2014 Vow compiler")
     lines.append("")
     lines.append("USAGE")
     lines.append("  vow build [OPTIONS] <source.vow>    Compile to native executable")
-    lines.append("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)")
+    lines.append(
+        "  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)"
+    )
     lines.append("  vow test [OPTIONS] [<path>]          Run tests with JSON results")
     lines.append("  vow contracts [OPTIONS] <source.vow> List all contracts")
-    lines.append("  vow complexity [OPTIONS] <source.vow> Report per-function complexity metrics (JSON)")
+    lines.append(
+        "  vow complexity [OPTIONS] <source.vow> Report per-function complexity metrics (JSON)"
+    )
     lines.append("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)")
     lines.append("  vow skill [print [--bundle]|install [--local|--global]]")
-    lines.append("                                        Generate or install Claude Code skill")
-    lines.append("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)")
+    lines.append(
+        "                                        Generate or install Claude Code skill"
+    )
+    lines.append(
+        "  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)"
+    )
     lines.append("")
 
     lines.append("BUILD OPTIONS")
@@ -704,9 +750,13 @@ def build_help_human(data: dict) -> str:
     lines.append("")
 
     lines.append("OUTPUT (JSON on stdout)")
-    lines.append("  status      : Verified | Unverified | Skipped | CompileFailed | VerifyFailed")
+    lines.append(
+        "  status      : Verified | Unverified | Skipped | CompileFailed | VerifyFailed"
+    )
     lines.append("  executable  : path to compiled binary, or null")
-    lines.append("  diagnostics : array of {error_code, message, severity, span: {file, offset, length}}")
+    lines.append(
+        "  diagnostics : array of {error_code, message, severity, span: {file, offset, length}}"
+    )
     lines.append("  message     : error detail (CompileFailed)")
     lines.append("  function    : function name (VerifyFailed)")
     lines.append("  counterexample: ESBMC counterexample (VerifyFailed)")
@@ -758,15 +808,21 @@ def build_help_human(data: dict) -> str:
         lines.append(f"            {bl_line2}")
 
     methods = lang["methods"]
+
     def short_methods(names: list[str]) -> str:
-        return "/".join(n.split("(")[0].lstrip(".") for n in names if not n.startswith("?"))
+        return "/".join(
+            n.split("(")[0].lstrip(".") for n in names if not n.startswith("?")
+        )
+
     vec_short = short_methods(methods["Vec<T>"])
     str_short = short_methods(methods["String"])
     hm_short = short_methods(methods["HashMap<K,V>"])
     bm_short = short_methods(methods["BTreeMap<K,V>"])
     opt_short = short_methods(methods["Option<T>"])
     lines.append(f"METHODS   : Vec: {vec_short}   String: {str_short}")
-    lines.append(f"            HashMap: {hm_short}   BTreeMap: {bm_short}   Option: {opt_short}")
+    lines.append(
+        f"            HashMap: {hm_short}   BTreeMap: {bm_short}   Option: {opt_short}"
+    )
 
     ops = lang["operators"]
     arith = " ".join(ops["arithmetic"])
@@ -775,23 +831,32 @@ def build_help_human(data: dict) -> str:
     logical = " ".join(ops["logical"])
     bitwise_str = " ".join(ops["bitwise"])
     unary = " ".join(ops["unary"])
-    lines.append(f"OPERATORS : {arith}   {checked} (checked)   {comp}   {logical}   {bitwise_str} (bitwise, integer-only)   unary {unary}")
+    lines.append(
+        f"OPERATORS : {arith}   {checked} (checked)   {comp}   {logical}   {bitwise_str} (bitwise, integer-only)   unary {unary}"
+    )
     lines.append("")
 
     vdefaults = data.get("verification_defaults", {})
     if vdefaults:
         lines.append("VERIFICATION DEFAULTS (--max-k-step)")
-        lines.append(f"  Strategy        : {vdefaults.get('strategy', 'incremental-bmc')} (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)")
-        lines.append(f"  Incremental BMC : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)")
+        lines.append(
+            f"  Strategy        : {vdefaults.get('strategy', 'incremental-bmc')} (incremental BMC up to --max-k-step; forward-condition completeness, no k-induction step)"
+        )
+        lines.append(
+            f"  Incremental BMC : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)"
+        )
 
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Inject into Rust main.rs
+# Inject into Rust skill.rs
 # ---------------------------------------------------------------------------
 
-def _replace_between_markers(content: str, start_marker: str, end_marker: str, replacement: str) -> str:
+
+def _replace_between_markers(
+    content: str, start_marker: str, end_marker: str, replacement: str
+) -> str:
     """Replace content between start/end marker lines (inclusive)."""
     start_idx = content.find(start_marker)
     if start_idx == -1:
@@ -803,8 +868,8 @@ def _replace_between_markers(content: str, start_marker: str, end_marker: str, r
     return content[:start_idx] + replacement + content[end_idx:]
 
 
-def inject_rust(main_rs: Path, json_str: str, human_str: str) -> str:
-    content = main_rs.read_text()
+def inject_rust(skill_rs: Path, json_str: str, human_str: str) -> str:
+    content = skill_rs.read_text()
 
     content = _replace_between_markers(
         content,
@@ -827,6 +892,7 @@ def inject_rust(main_rs: Path, json_str: str, human_str: str) -> str:
 # Inject into self-hosted main.vow
 # ---------------------------------------------------------------------------
 
+
 def _vow_pushstr_body(text: str) -> tuple[str, str]:
     """Convert a multiline string into Vow String::from first line + push_str rest.
     Returns (first_line_escaped, rest_pushstr_lines)."""
@@ -846,13 +912,19 @@ def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
     first_json, rest_json = _vow_pushstr_body(json_str)
     json_fn = f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    let r: String = String::from("{first_json}\\n");\n{rest_json}\n    r\n}}\n// GENERATE:SKILL_JSON:END'
     content = _replace_between_markers(
-        content, "// GENERATE:SKILL_JSON:START", "// GENERATE:SKILL_JSON:END", json_fn,
+        content,
+        "// GENERATE:SKILL_JSON:START",
+        "// GENERATE:SKILL_JSON:END",
+        json_fn,
     )
 
     first_human, rest_human = _vow_pushstr_body(human_str)
     human_fn = f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    let r: String = String::from("{first_human}\\n");\n{rest_human}\n    r\n}}\n// GENERATE:SKILL_HUMAN:END'
     content = _replace_between_markers(
-        content, "// GENERATE:SKILL_HUMAN:START", "// GENERATE:SKILL_HUMAN:END", human_fn,
+        content,
+        "// GENERATE:SKILL_HUMAN:START",
+        "// GENERATE:SKILL_HUMAN:END",
+        human_fn,
     )
 
     return content
@@ -885,8 +957,7 @@ def _index_for_skill() -> str:
         end_idx = index_text.find(omit_end, start_idx)
         if end_idx != -1:
             index_text = (
-                index_text[:start_idx].rstrip()
-                + index_text[end_idx + len(omit_end):]
+                index_text[:start_idx].rstrip() + index_text[end_idx + len(omit_end) :]
             )
     return index_text.rstrip()
 
@@ -922,7 +993,7 @@ def build_skill_entrypoint() -> str:
             "module Hello",
             "",
             "fn main() -> i32 [io] {",
-            "    print_str(\"Hello, world!\");",
+            '    print_str("Hello, world!");',
             "    0",
             "}",
             "```",
@@ -1012,7 +1083,7 @@ def _vow_skill_support_content_fn_name(path: str) -> str:
 def inject_skill_rust(
     content: str, entrypoint_md: str, bundle_md: str, support_files: dict[str, str]
 ) -> str:
-    """Inject generated skill helpers into Rust main.rs."""
+    """Inject generated skill helpers into Rust skill.rs."""
     # Emit each tuple in rustfmt's preferred multi-line form (with trailing
     # comma after the last entry) so the GENERATE block stays clean under
     # `cargo fmt --check`.
@@ -1025,7 +1096,7 @@ def inject_skill_rust(
         )
         for path, body in support_files.items()
     ).rstrip()
-    replacement = f'''// GENERATE:SKILL_FULL:START
+    replacement = f"""// GENERATE:SKILL_FULL:START
 fn skill_entrypoint_markdown() -> String {{
     {_rust_raw_string(entrypoint_md)}
     .to_string()
@@ -1041,9 +1112,12 @@ fn skill_support_files() -> &'static [(&'static str, &'static str)] {{
         {entries}
     ]
 }}
-// GENERATE:SKILL_FULL:END'''
+// GENERATE:SKILL_FULL:END"""
     return _replace_between_markers(
-        content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", replacement,
+        content,
+        "// GENERATE:SKILL_FULL:START",
+        "// GENERATE:SKILL_FULL:END",
+        replacement,
     )
 
 
@@ -1082,7 +1156,9 @@ def inject_skill_vow(
     ]
     for idx, (path, _, _) in enumerate(support_entries):
         escaped = path.replace("\\", "\\\\").replace('"', '\\"')
-        sections.append(f'    if index == {idx} {{ return String::from("{escaped}"); }}')
+        sections.append(
+            f'    if index == {idx} {{ return String::from("{escaped}"); }}'
+        )
     sections.extend(['    String::from("")', "}", ""])
 
     for _, body, fn_name in support_entries:
@@ -1116,7 +1192,10 @@ def inject_skill_vow(
 
     fn_body = "\n".join(sections)
     return _replace_between_markers(
-        content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", fn_body,
+        content,
+        "// GENERATE:SKILL_FULL:START",
+        "// GENERATE:SKILL_FULL:END",
+        fn_body,
     )
 
 
@@ -1124,7 +1203,10 @@ def inject_skill_vow(
 # skills/vow/ on-disk mirror
 # ---------------------------------------------------------------------------
 
-def _expected_skills_files(entrypoint_md: str, support_files: dict[str, str]) -> dict[str, str]:
+
+def _expected_skills_files(
+    entrypoint_md: str, support_files: dict[str, str]
+) -> dict[str, str]:
     files = {"SKILL.md": entrypoint_md}
     files.update(support_files)
     return files
@@ -1171,6 +1253,7 @@ def check_skills_dir(entrypoint_md: str, support_files: dict[str, str]) -> list[
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     check_only = "--check" in sys.argv
 
@@ -1211,22 +1294,30 @@ def main() -> None:
         return
 
     # Inject into Rust
-    new_rs = inject_rust(MAIN_RS, json_str, human_str)
-    new_rs = inject_skill_rust(new_rs, skill_entrypoint_md, skill_bundle_md, skill_support_files)
-    MAIN_RS.write_text(new_rs)
-    print(f"Updated {MAIN_RS}")
+    new_rs = inject_rust(SKILL_RS, json_str, human_str)
+    new_rs = inject_skill_rust(
+        new_rs, skill_entrypoint_md, skill_bundle_md, skill_support_files
+    )
+    SKILL_RS.write_text(new_rs)
+    print(f"Updated {SKILL_RS}")
 
     # Inject into self-hosted
     new_vow = inject_vow(MAIN_VOW, json_str, human_str)
-    new_vow = inject_skill_vow(new_vow, skill_entrypoint_md, skill_bundle_md, skill_support_files)
+    new_vow = inject_skill_vow(
+        new_vow, skill_entrypoint_md, skill_bundle_md, skill_support_files
+    )
     MAIN_VOW.write_text(new_vow)
     print(f"Updated {MAIN_VOW}")
 
     # Write the checked-in skill mirror that `npx skills add vow-lang/vow` reads.
     write_skills_dir(skill_entrypoint_md, skill_support_files)
-    print(f"Updated {SKILLS_DIR.relative_to(REPO)}/ ({len(skill_support_files) + 1} files)")
+    print(
+        f"Updated {SKILLS_DIR.relative_to(REPO)}/ ({len(skill_support_files) + 1} files)"
+    )
 
-    print("\nDone. Run 'cargo build --release -p vow' and 'scripts/bootstrap.sh --no-verify --skip-cargo' to rebuild.")
+    print(
+        "\nDone. Run 'cargo build --release -p vow' and 'scripts/bootstrap.sh --no-verify --skip-cargo' to rebuild."
+    )
 
 
 if __name__ == "__main__":
