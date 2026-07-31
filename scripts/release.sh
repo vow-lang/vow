@@ -41,7 +41,7 @@ echo "Current version: $CURRENT  (from origin/main)"
 echo "Next version:    $NEXT  ($BUMP bump)"
 echo "Triggers: .github/workflows/release.yml on main"
 echo
-read -r -p "Proceed? [y/N] " reply
+read -r -p "Proceed? [yes/No] " reply
 case "$reply" in
     y|Y|yes|YES) ;;
     *) echo "Aborted." >&2; exit 1 ;;
