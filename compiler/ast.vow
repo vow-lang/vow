@@ -82,6 +82,7 @@ fn ITEM_FN() -> i64 { 0 }
 fn ITEM_STRUCT() -> i64 { 1 }
 fn ITEM_ENUM() -> i64 { 2 }
 fn ITEM_CONST() -> i64 { 3 }
+fn ITEM_TYPE_ALIAS() -> i64 { 4 }
 
 fn EFF_IO() -> i64 { 1 }
 fn EFF_PANIC() -> i64 { 2 }
@@ -104,6 +105,7 @@ struct AstArena {
     list_size: Vec<i64>,
     vow_data: Vec<i64>,
     cdef_data: Vec<i64>,
+    alias_data: Vec<i64>,
 }
 
 fn arena_new() -> AstArena {
@@ -122,6 +124,7 @@ fn arena_new() -> AstArena {
         list_size: Vec::new(),
         vow_data: Vec::new(),
         cdef_data: Vec::new(),
+        alias_data: Vec::new(),
     }
 }
 
@@ -229,6 +232,9 @@ fn cdef_name_sid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4] }
 fn cdef_type_tid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4 + 1] }
 fn cdef_value_eid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4 + 2] }
 
+fn alias_name_sid(a: AstArena, aid: i64) -> i64 { a.alias_data[aid * 3] }
+fn alias_type_tid(a: AstArena, aid: i64) -> i64 { a.alias_data[aid * 3 + 1] }
+
 fn clone_string(src: String) -> String {
     let out: String = String::from("");
     let n: i64 = src.len();
@@ -251,6 +257,7 @@ fn pat_span(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 3] }
 fn sdef_span(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 3] }
 fn edef_span(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 2] }
 fn cdef_span(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4 + 3] }
+fn alias_span(a: AstArena, aid: i64) -> i64 { a.alias_data[aid * 3 + 2] }
 
 fn arena_add_stmt(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
     let sid: i64 = a.stmt_data.len() / 5;
@@ -328,9 +335,17 @@ fn arena_add_cdef(a: AstArena, name_sid: i64, type_tid: i64, value_eid: i64, spa
     cid
 }
 
+fn arena_add_alias(a: AstArena, name_sid: i64, type_tid: i64, span: i64) -> i64 {
+    let aid: i64 = a.alias_data.len() / 3;
+    a.alias_data.push(name_sid);
+    a.alias_data.push(type_tid);
+    a.alias_data.push(span);
+    aid
+}
+
 fn item_pack(kind: i64, id: i64) -> i64 vow {
     requires: kind >= 0,
-    requires: kind <= 3,
+    requires: kind <= 4,
     requires: id >= 0
 } {
     kind * 4294967296 + id

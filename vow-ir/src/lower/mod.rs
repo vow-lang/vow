@@ -234,22 +234,26 @@ fn collect_linear_owner_names(module: &AstModule) -> HashSet<String> {
             .items
             .iter()
             .filter_map(|item| {
-                let Item::Enum(enum_def) = item else {
-                    return None;
-                };
-                if names.contains(&enum_def.name) {
-                    return None;
-                }
-                let owns_linear = enum_def.variants.iter().any(|variant| match &variant.kind {
-                    VariantKind::Unit => false,
-                    VariantKind::Tuple(types) => {
-                        types.iter().any(|ty| ast_type_is_linear_owner(ty, &names))
+                let (name, owns_linear) = match item {
+                    Item::Enum(enum_def) => {
+                        let owns_linear =
+                            enum_def.variants.iter().any(|variant| match &variant.kind {
+                                VariantKind::Unit => false,
+                                VariantKind::Tuple(types) => {
+                                    types.iter().any(|ty| ast_type_is_linear_owner(ty, &names))
+                                }
+                                VariantKind::Struct(fields) => fields
+                                    .iter()
+                                    .any(|field| ast_type_is_linear_owner(&field.ty, &names)),
+                            });
+                        (&enum_def.name, owns_linear)
                     }
-                    VariantKind::Struct(fields) => fields
-                        .iter()
-                        .any(|field| ast_type_is_linear_owner(&field.ty, &names)),
-                });
-                owns_linear.then(|| enum_def.name.clone())
+                    Item::TypeAlias(alias) => {
+                        (&alias.name, ast_type_is_linear_owner(&alias.ty, &names))
+                    }
+                    _ => return None,
+                };
+                (!names.contains(name) && owns_linear).then(|| name.clone())
             })
             .collect();
         if newly_linear.is_empty() {
@@ -3851,8 +3855,8 @@ pub fn lower_module_with_pattern_aggregates(
         })
         .collect();
 
-    // A direct linear struct owns its obligation. Enums, Option, and Result
-    // become owners when an owned payload is linear; references and collection
+    // A direct linear struct owns its obligation. Enums, Option, Result, and
+    // aliases to those owners inherit linearity; references and collection
     // types deliberately do not propagate ownership.
     let linear_owner_names = collect_linear_owner_names(module);
 
@@ -4196,6 +4200,27 @@ mod tests {
             assert_eq!(vow_debug_builtin_to_runtime(name), Some((symbol, ty)));
         }
         assert_eq!(vow_debug_builtin_to_runtime("debug_missing"), None);
+    }
+
+    #[test]
+    fn type_alias_chain_to_linear_option_is_a_linear_owner() {
+        let source = r#"
+module LinearAlias
+
+linear struct Token {
+    id: i64,
+}
+
+type MaybeToken = Option<Token>;
+type ForwardedToken = MaybeToken;
+"#;
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, "linear_alias.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let owners = collect_linear_owner_names(&ast);
+        assert!(owners.contains("Token"));
+        assert!(owners.contains("MaybeToken"));
+        assert!(owners.contains("ForwardedToken"));
     }
 
     #[test]

@@ -4149,8 +4149,9 @@ fn lower_module_vow(
         lsi = lsi + 1;
     }
 
-    // Close the set over enum payloads. Each successful pass adds at least one
-    // enum, so at most n_items passes are needed even for forward references.
+    // Close the set over enum payloads and type aliases. Each successful pass
+    // adds at least one owner, so at most n_items passes are needed even for
+    // forward alias chains.
     let mut owner_pass: i64 = 0;
     while owner_pass < n_items {
         let mut oi: i64 = 0;
@@ -4177,6 +4178,15 @@ fn lower_module_vow(
                         vi = vi + 1;
                     }
                     if owns_linear {
+                        linear_owner_names.push(owner_name);
+                    }
+                }
+            } else if item_kind(owner_item) == ITEM_TYPE_ALIAS() {
+                let owner_aid: i64 = item_id(owner_item);
+                let owner_name: String = arena_str(a, alias_name_sid(a, owner_aid));
+                if !vec_contains_str(linear_owner_names, owner_name) {
+                    let target_tid: i64 = alias_type_tid(a, owner_aid);
+                    if ast_type_is_linear_owner(a, target_tid, linear_owner_names) {
                         linear_owner_names.push(owner_name);
                     }
                 }

@@ -246,6 +246,10 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         if eidx != -1 {
             return ts_make_enum(e.ts, name);
         }
+        let alias_tid: i64 = env_lookup_alias(e, name);
+        if alias_tid != -1 {
+            return alias_tid;
+        }
         let err_msg: String = String::from("unknown type: ");
         err_msg.push_str(name);
         env_emit_error(e, err_msg, type_span(a, ast_tid));
@@ -483,6 +487,19 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
+        if kind == ITEM_TYPE_ALIAS() {
+            register_alias(e, m, id);
+        }
+        i = i + 1;
+    }
+
+    i = 0;
+    while i < n {
+        let cur: String = item_files[i];
+        e.cur_file = cur;
+        let item: i64 = m.items[i];
+        let kind: i64 = item_kind(item);
+        let id: i64 = item_id(item);
         if kind == ITEM_STRUCT() {
             register_struct(e, m, id);
         } else if kind == ITEM_ENUM() {
@@ -533,6 +550,12 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
                     vi = vi + 1;
                 }
             }
+        } else if kind == ITEM_TYPE_ALIAS() {
+            let a: AstArena = m.arena;
+            let alias_tid: i64 = env_lookup_alias(e, arena_str(a, alias_name_sid(a, id)));
+            if alias_tid != -1 {
+                recheck_tid_btreemap_linearity(e, alias_tid, alias_span(a, id));
+            }
         }
         i = i + 1;
     }
@@ -575,6 +598,13 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         }
         i = i + 1;
     }
+}
+
+fn register_alias(e: CheckEnv, m: Module, aid: i64) [io] {
+    let a: AstArena = m.arena;
+    let name: String = arena_str(a, alias_name_sid(a, aid));
+    let tid: i64 = resolve_ast_ty(e, m, alias_type_tid(a, aid));
+    env_define_alias(e, name, tid);
 }
 
 fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {

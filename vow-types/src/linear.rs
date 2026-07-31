@@ -109,6 +109,9 @@ pub(crate) fn is_linear_owner_ty(ty: &Ty, env: &TypeEnv) -> bool {
                 visiting.remove(&key);
                 result
             }
+            // Option and Result are synthesized by TypeEnv::resolve rather than
+            // registered in enum_defs, while user enums are found through the
+            // environment. Keep both paths explicit here.
             Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(name) if name == "Option" || name == "Result" || env.lookup_enum(name).is_some()) => {
                 visit(base, env, visiting)
                     || args.iter().any(|payload| visit(payload, env, visiting))
