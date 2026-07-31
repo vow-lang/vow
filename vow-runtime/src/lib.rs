@@ -4467,6 +4467,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_i64_option_root_wrapper_uses_the_root_arena() {
+        let mut input_arena = empty_arena_header();
+        unsafe { __vow_arena_open(&mut input_arena) };
+        let input = unsafe { __vow_string_new_in_arena(&mut input_arena, c"-17".as_ptr(), 3) };
+        let parsed = unsafe { __vow_string_parse_i64_opt(input) } as *const i64;
+
+        assert_eq!(unsafe { *parsed }, 1);
+        assert_eq!(unsafe { *parsed.add(1) }, -17);
+
+        unsafe { __vow_arena_close(&mut input_arena) };
+    }
+
+    #[test]
     fn arena_open_on_open_arena_is_noop() {
         let mut a = empty_arena_header();
         unsafe { __vow_arena_init_closed(&mut a) };
@@ -5523,6 +5536,13 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena string from_i64 did NOT trap");
             std::process::exit(42);
         }
+        if op == "String::parse_i64_in_arena_null" {
+            let _ = unsafe {
+                __vow_string_parse_i64_opt_in_arena(std::ptr::null_mut(), std::ptr::null())
+            };
+            eprintln!("rodata_trap_worker: null arena string parse_i64 did NOT trap");
+            std::process::exit(42);
+        }
         if op == "String::split_in_arena_null" {
             let _ = unsafe {
                 __vow_string_split_in_arena(
@@ -5850,6 +5870,11 @@ mod tests {
     #[test]
     fn explicit_arena_string_from_i64_null_arena_traps() {
         assert_runtime_invariant_null_arena("String::from_i64_in_arena_null", "String::from_i64");
+    }
+
+    #[test]
+    fn explicit_arena_string_parse_i64_null_arena_traps() {
+        assert_runtime_invariant_null_arena("String::parse_i64_in_arena_null", "parse_i64");
     }
 
     #[test]

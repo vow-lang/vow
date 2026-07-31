@@ -4624,6 +4624,37 @@ mod tests {
     }
 
     #[test]
+    fn root_region_parse_i64_option_keeps_wrapper_symbol() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::Unit,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_parse_i64_opt".to_string()),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let symbols = compiled_object_symbols(result.unwrap().bytes.as_slice());
+        assert!(symbols.contains("__vow_string_parse_i64_opt"));
+        assert!(!symbols.contains("__vow_string_parse_i64_opt_in_arena"));
+    }
+
+    #[test]
     fn root_region_string_from_cstr_keeps_wrapper_symbol() {
         let module = make_module(
             "test",

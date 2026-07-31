@@ -3527,6 +3527,40 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 mod tests {
     use super::*;
 
+    #[test]
+    fn parse_i64_option_routes_to_its_allocation_region() {
+        let root = region_root();
+        assert_eq!(
+            routed_vec_extern("__vow_string_parse_i64_opt", root, root),
+            ("__vow_string_parse_i64_opt", None),
+        );
+
+        let block = region_pack(REGION_KIND_BLOCK, 7);
+        assert_eq!(
+            routed_vec_extern("__vow_string_parse_i64_opt", block, root),
+            ("__vow_string_parse_i64_opt_in_arena", Some(block)),
+        );
+    }
+
+    #[test]
+    fn parse_i64_option_arena_extern_accepts_arena_and_string() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+        let sig = make_extern_sig(
+            "__vow_string_parse_i64_opt_in_arena",
+            &module_ctx.obj_module,
+        );
+
+        assert_eq!(sig.params.len(), 2);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.params[1].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
     fn vow_string(s: &str) -> VowVec {
         VowVec {
             ptr: s.as_ptr() as *mut u8,
