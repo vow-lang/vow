@@ -388,6 +388,7 @@ print_summary() {
     return $(( FAIL > 0 ? 1 : 0 ))
 }
 
+# The boundary test recursively invokes this script with fake VOW_FULL_TEST_RUST/VOW_FULL_TEST_CONCAT tools to isolate bootstrap failure handling.
 if [ "${VOW_FULL_TEST_BOOTSTRAP_ONLY:-0}" = "1" ]; then
     echo -e "${BOLD}=== Phase 20.1: Full Test Suite ===${RESET}"
     echo ""
