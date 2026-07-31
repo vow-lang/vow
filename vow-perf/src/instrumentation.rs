@@ -1,4 +1,9 @@
 //! Operation-count instrumentation for a dedicated performance artifact.
+//!
+//! This module deliberately exposes no in-place mutation API. Instrumentation
+//! allocates fresh function-unique IDs and applies [`InsertionSet`] to cloned
+//! blocks, so existing IR references and canonical `.vmod` serialization stay
+//! stable.
 
 use std::fmt;
 use vow_ir::{InsertionSet, Inst, InstData, InstId, Module, Opcode, RegionId, Ty};
@@ -48,6 +53,10 @@ impl std::error::Error for InstrumentationError {}
 
 /// Clone `source` and insert an operation-counter call before each executable
 /// IR instruction in the clone.
+///
+/// Contract and complexity descriptors are non-executable metadata and are not
+/// counted. Runtime-helper internals require their own counter coverage rather
+/// than being inferred from the caller-side `Call` instruction.
 pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, InstrumentationError> {
     let mut module = source.clone();
 

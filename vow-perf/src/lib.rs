@@ -1,9 +1,20 @@
 //! Empirical complexity classification for Vow performance contracts.
 //!
-//! This crate owns the fixed single-variable candidate set and the pure
-//! statistical analysis core. IR instrumentation, input generation, and CLI
-//! integration are separate concerns tracked by the `vow-perf` implementation
-//! roadmap.
+//! This crate owns the fixed single-variable candidate set, the pure
+//! statistical analysis core, and operation-count instrumentation for a
+//! dedicated performance-test artifact.
+//!
+//! [`instrument_module`] accepts immutable typed IR, clones it, and uses
+//! [`vow_ir::InsertionSet`] only on the clone. Production codegen must continue
+//! to consume the original module; the returned [`InstrumentedModule`] is a
+//! separate compilation input. Each inserted counter call receives a fresh
+//! function-unique instruction ID, while existing IDs and references remain
+//! unchanged. Consequently, instrumented IR retains deterministic
+//! `encode -> decode -> encode` stability without involving the source-level
+//! `parse -> print -> parse` canonical-form invariant.
+//!
+//! Input generation and CLI integration remain separate concerns tracked by
+//! the `vow-perf` implementation roadmap.
 
 mod instrumentation;
 
