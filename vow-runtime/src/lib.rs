@@ -4298,6 +4298,96 @@ pub extern "C" fn __vow_sanitize_check_generation(vec: *const u8, index: usize, 
 mod tests {
     use super::*;
 
+    fn borrowed_vow_string(text: &str) -> VowVec {
+        VowVec {
+            ptr: text.as_ptr() as *mut u8,
+            len: text.len(),
+            cap: text.len(),
+        }
+    }
+
+    unsafe fn option_parts(ptr: *const u8) -> (i64, i64) {
+        let words = ptr as *const i64;
+        unsafe { (*words, *words.add(1)) }
+    }
+
+    #[test]
+    fn narrow_payload_tags_preserve_signedness_and_width() {
+        assert_eq!(fmt_payload(TAG_I8, (-128_i8) as u8 as u64), "-128");
+        assert_eq!(fmt_payload(TAG_I16, (-32768_i16) as u16 as u64), "-32768");
+        assert_eq!(fmt_payload(TAG_U16, u64::from(u16::MAX)), "65535");
+        assert_eq!(fmt_payload(TAG_U32, u64::from(u32::MAX)), "4294967295");
+    }
+
+    #[test]
+    fn narrow_parsers_accept_bounds_and_reject_out_of_range_values() {
+        type ParseFn = unsafe extern "C" fn(*const u8) -> *mut u8;
+        let cases: [(ParseFn, &str, i64, &str); 4] = [
+            (__vow_string_parse_i8_opt, "-128", -128, "128"),
+            (__vow_string_parse_i16_opt, "-32768", -32768, "32768"),
+            (__vow_string_parse_u16_opt, "65535", 65535, "65536"),
+            (
+                __vow_string_parse_u32_opt,
+                "4294967295",
+                4294967295,
+                "4294967296",
+            ),
+        ];
+
+        for (parse, valid, expected, invalid) in cases {
+            let valid = borrowed_vow_string(valid);
+            assert_eq!(
+                unsafe { option_parts(parse(&raw const valid as *const u8)) },
+                (1, expected)
+            );
+
+            let invalid = borrowed_vow_string(invalid);
+            assert_eq!(
+                unsafe { option_parts(parse(&raw const invalid as *const u8)) },
+                (0, 0)
+            );
+        }
+
+        assert_eq!(
+            unsafe { option_parts(__vow_string_parse_i8_opt(std::ptr::null())) },
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn narrow_conversions_distinguish_try_wrap_and_saturate() {
+        assert_eq!(unsafe { option_parts(__vow_i16_to_i8_try(127)) }, (1, 127));
+        assert_eq!(unsafe { option_parts(__vow_i16_to_i8_try(128)) }, (0, 0));
+        assert_eq!(__vow_i16_to_i8_wrap(130), -126);
+        assert_eq!(__vow_i16_to_i8_sat(128), i8::MAX);
+        assert_eq!(__vow_i16_to_i8_sat(-129), i8::MIN);
+
+        assert_eq!(unsafe { option_parts(__vow_u16_to_i8_try(127)) }, (1, 127));
+        assert_eq!(unsafe { option_parts(__vow_u16_to_i8_try(128)) }, (0, 0));
+        assert_eq!(__vow_u16_to_i8_wrap(255), -1);
+        assert_eq!(__vow_u16_to_i8_sat(128), i8::MAX);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_i32_to_u16_try(65535)) },
+            (1, 65535)
+        );
+        assert_eq!(unsafe { option_parts(__vow_i32_to_u16_try(-1)) }, (0, 0));
+        assert_eq!(__vow_i32_to_u16_wrap(-1), u16::MAX);
+        assert_eq!(__vow_i32_to_u16_sat(-1), 0);
+        assert_eq!(__vow_i32_to_u16_sat(70000), u16::MAX);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_u64_to_u32_try(u64::from(u32::MAX))) },
+            (1, i64::from(u32::MAX))
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_u64_to_u32_try(u64::from(u32::MAX) + 1)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_u64_to_u32_wrap(u64::from(u32::MAX) + 1), 0);
+        assert_eq!(__vow_u64_to_u32_sat(u64::from(u32::MAX) + 1), u32::MAX);
+    }
+
     #[test]
     fn collect_proc_samples_reports_compiler_self() {
         let procs = vec![ProcInfo {

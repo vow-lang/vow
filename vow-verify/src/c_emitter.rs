@@ -3323,6 +3323,167 @@ mod tests {
     }
 
     #[test]
+    fn phase3_narrowing_targets_have_exact_c_ranges() {
+        let cases = [
+            ("__vow_i16_to_i8_try", "int8_t", "-128", "127"),
+            ("__vow_i16_to_u8_try", "uint8_t", "0", "255"),
+            ("__vow_i32_to_i16_try", "int16_t", "-32768", "32767"),
+            ("__vow_i32_to_u16_try", "uint16_t", "0", "65535"),
+            (
+                "__vow_i64_to_i32_try",
+                "int32_t",
+                "-2147483648",
+                "2147483647",
+            ),
+            ("__vow_i64_to_u32_try", "uint32_t", "0", "4294967295ULL"),
+        ];
+
+        for (name, c_ty, min, max) in cases {
+            let model = narrow_target_model(name).expect(name);
+            assert_eq!(model.c_ty, c_ty, "{name}");
+            assert_eq!(model.min, min, "{name}");
+            assert_eq!(model.max, max, "{name}");
+        }
+        for name in [
+            "i16_to_i8_try",
+            "__vow_i16_to_i8_checked",
+            "__vow_i16_to_i64_try",
+        ] {
+            assert!(narrow_target_model(name).is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn emit_phase3_narrowing_modes_and_saturating_u8_arithmetic() {
+        let func = make_func(
+            "narrow",
+            vec![Ty::I64, Ty::U64],
+            Ty::Unit,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::U64, vec![], InstData::ArgIndex(1)),
+                inst(
+                    2,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::CallExtern("__vow_i64_to_i8_try".to_string()),
+                ),
+                inst(
+                    3,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![1],
+                    InstData::CallExtern("__vow_u64_to_i8_try".to_string()),
+                ),
+                inst(
+                    4,
+                    Opcode::Call,
+                    Ty::U16,
+                    vec![0],
+                    InstData::CallExtern("__vow_i64_to_u16_wrap".to_string()),
+                ),
+                inst(
+                    5,
+                    Opcode::Call,
+                    Ty::I16,
+                    vec![0],
+                    InstData::CallExtern("__vow_i64_to_i16_sat".to_string()),
+                ),
+                inst(
+                    6,
+                    Opcode::Call,
+                    Ty::U32,
+                    vec![1],
+                    InstData::CallExtern("__vow_u64_to_u32_sat".to_string()),
+                ),
+                inst(7, Opcode::ConstU8, Ty::U8, vec![], InstData::ConstU8(250)),
+                inst(8, Opcode::ConstU8, Ty::U8, vec![], InstData::ConstU8(10)),
+                inst(
+                    9,
+                    Opcode::Call,
+                    Ty::U8,
+                    vec![7, 8],
+                    InstData::CallExtern("__vow_add_sat_u8".to_string()),
+                ),
+                inst(
+                    10,
+                    Opcode::Call,
+                    Ty::U8,
+                    vec![7, 8],
+                    InstData::CallExtern("__vow_sub_sat_u8".to_string()),
+                ),
+                inst(
+                    11,
+                    Opcode::Call,
+                    Ty::U8,
+                    vec![7, 8],
+                    InstData::CallExtern("__vow_mul_sat_u8".to_string()),
+                ),
+                inst(12, Opcode::Return, Ty::Unit, vec![], InstData::None),
+            ],
+        );
+
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        for expected in [
+            "v2.tag = (v0 >= -128 && v0 <= 127);",
+            "v3.tag = (v1 <= 127);",
+            "v4 = (uint16_t)v0;",
+            "v5 = v0 < -32768 ? -32768 : (v0 > 32767 ? 32767 : (int16_t)v0);",
+            "v6 = v1 > 4294967295ULL ? 4294967295ULL : (uint32_t)v1;",
+            "uint16_t __sat_9 = (uint16_t)v7 + (uint16_t)v8;",
+            "v10 = (uint8_t)(v7 < v8 ? 0 : v7 - v8);",
+            "uint16_t __sat_11 = (uint16_t)v7 * (uint16_t)v8;",
+        ] {
+            assert!(c.contains(expected), "missing `{expected}` in:\n{c}");
+        }
+    }
+
+    #[test]
+    fn emit_phase3_parser_models_bound_each_payload() {
+        let mut insts = vec![inst(
+            0,
+            Opcode::GetArg,
+            Ty::Ptr,
+            vec![],
+            InstData::ArgIndex(0),
+        )];
+        for (id, name) in [
+            "__vow_string_parse_i8_opt",
+            "__vow_string_parse_i16_opt",
+            "__vow_string_parse_u16_opt",
+            "__vow_string_parse_u32_opt",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            insts.push(inst(
+                id as u32 + 1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern(name.to_string()),
+            ));
+        }
+        insts.push(inst(5, Opcode::Return, Ty::Unit, vec![], InstData::None));
+        let func = make_func("parse_narrow", vec![Ty::Ptr], Ty::Unit, insts);
+
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        for expected in [
+            "v1.payload >= -128 && v1.payload <= 127",
+            "v2.payload >= -32768 && v2.payload <= 32767",
+            "v3.payload >= 0 && v3.payload <= 65535",
+            "v4.payload >= 0 && v4.payload <= 4294967295ULL",
+        ] {
+            assert!(c.contains(expected), "missing `{expected}` in:\n{c}");
+        }
+        assert!(
+            c.contains("v4.payload = __VERIFIER_nondet_ulong()"),
+            "u32 parse payload must use the unsigned nondeterministic model:\n{c}"
+        );
+    }
+
+    #[test]
     fn emit_const_variants() {
         let func = make_func(
             "f",

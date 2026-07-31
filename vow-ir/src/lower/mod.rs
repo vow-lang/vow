@@ -4022,6 +4022,13 @@ mod tests {
         }
     }
 
+    fn named_ty(name: &str) -> Type {
+        Type::Named {
+            name: name.to_string(),
+            span: sp(),
+        }
+    }
+
     fn string_ty() -> Type {
         Type::Named {
             name: "String".to_string(),
@@ -4224,6 +4231,206 @@ mod tests {
             assert_eq!(vow_builtin_to_runtime(name), Some((symbol.to_string(), ty)));
         }
         assert_eq!(vow_builtin_to_runtime("missing_builtin"), None);
+    }
+
+    #[test]
+    fn phase3_narrowing_builtins_lower_only_supported_pairs() {
+        let cases = [
+            ("i16_to_i8_try", "__vow_i16_to_i8_try", Ty::Ptr),
+            ("u64_to_i8_wrap", "__vow_u64_to_i8_wrap", Ty::I8),
+            ("i32_to_i16_sat", "__vow_i32_to_i16_sat", Ty::I16),
+            ("u64_to_u16_try", "__vow_u64_to_u16_try", Ty::Ptr),
+            ("i64_to_u32_wrap", "__vow_i64_to_u32_wrap", Ty::U32),
+        ];
+        for (name, symbol, ty) in cases {
+            assert_eq!(vow_builtin_to_runtime(name), Some((symbol.to_string(), ty)));
+        }
+
+        for name in [
+            "i8_to_i8_try",
+            "i16_to_u32_wrap",
+            "i64_to_i8_checked",
+            "not_a_conversion",
+        ] {
+            assert_eq!(narrow_intrinsic_target(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn phase3_parser_calls_preserve_runtime_symbols() {
+        let mut stmts: Vec<Stmt> = ["parse_i8", "parse_i16", "parse_u16", "parse_u32"]
+            .into_iter()
+            .map(|name| Stmt::Expr {
+                expr: call_expr(name, vec![string_expr("0")]),
+                has_semicolon: true,
+                span: sp(),
+            })
+            .collect();
+        stmts.push(Stmt::Expr {
+            expr: call_expr("i16_to_i8_try", vec![int_expr(0)]),
+            has_semicolon: true,
+            span: sp(),
+        });
+        let fn_def = make_fn(
+            "parse_all_narrow",
+            vec![],
+            unit_ty(),
+            Block {
+                stmts,
+                trailing_expr: None,
+                span: sp(),
+            },
+            vec![],
+        );
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let symbols: Vec<&str> = func
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter_map(|inst| match &inst.data {
+                InstData::CallExtern(symbol) => Some(symbol.as_str()),
+                _ => None,
+            })
+            .collect();
+        for symbol in [
+            "__vow_string_parse_i8_opt",
+            "__vow_string_parse_i16_opt",
+            "__vow_string_parse_u16_opt",
+            "__vow_string_parse_u32_opt",
+            "__vow_i16_to_i8_try",
+        ] {
+            assert!(symbols.contains(&symbol), "missing {symbol}: {symbols:?}");
+        }
+    }
+
+    #[test]
+    fn phase3_literals_lower_at_their_native_ir_width() {
+        let cases = [
+            ("i8", Ty::I8, Opcode::ConstU8, InstData::ConstU8(7)),
+            ("i16", Ty::I16, Opcode::ConstI32, InstData::ConstI32(7)),
+            ("u16", Ty::U16, Opcode::ConstI32, InstData::ConstI32(7)),
+            ("u32", Ty::U32, Opcode::ConstI32, InstData::ConstI32(7)),
+        ];
+
+        for (name, expected_ty, expected_op, expected_data) in cases {
+            let fn_def = make_fn(
+                &format!("return_{name}"),
+                vec![],
+                named_ty(name),
+                Block {
+                    stmts: vec![Stmt::Let {
+                        pattern: Pat {
+                            kind: PatKind::Ident {
+                                name: "local".to_string(),
+                                is_mut: false,
+                            },
+                            span: sp(),
+                        },
+                        ty: Some(named_ty(name)),
+                        init: Box::new(int_expr(7)),
+                        span: sp(),
+                    }],
+                    trailing_expr: Some(Box::new(int_expr(7))),
+                    span: sp(),
+                },
+                vec![],
+            );
+            let (func, _, warnings) = lower_function(
+                &fn_def,
+                "test.vow",
+                &HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                &HashSet::new(),
+                HashMap::new(),
+                HashMap::new(),
+                &HashSet::new(),
+                &HashMap::new(),
+            );
+
+            assert!(warnings.is_empty(), "{name}: {warnings:?}");
+            assert_eq!(func.return_ty, expected_ty, "{name}");
+            assert!(
+                func.blocks
+                    .iter()
+                    .flat_map(|block| &block.insts)
+                    .any(|inst| {
+                        inst.opcode == expected_op
+                            && inst.ty == expected_ty
+                            && inst.data == expected_data
+                    }),
+                "missing native {name} constant in {func:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn phase3_binary_literals_follow_the_typed_operand() {
+        for (name, expected_ty) in [
+            ("i8", Ty::I8),
+            ("i16", Ty::I16),
+            ("u16", Ty::U16),
+            ("u32", Ty::U32),
+        ] {
+            let sum = Expr {
+                kind: ExprKind::BinaryOp {
+                    op: BinOp::Add,
+                    lhs: Box::new(ident_expr("value")),
+                    rhs: Box::new(int_expr(1)),
+                },
+                span: sp(),
+            };
+            let fn_def = make_fn(
+                &format!("add_{name}"),
+                vec![make_param("value", named_ty(name))],
+                named_ty(name),
+                Block {
+                    stmts: vec![],
+                    trailing_expr: Some(Box::new(sum)),
+                    span: sp(),
+                },
+                vec![],
+            );
+            let (func, _, warnings) = lower_function(
+                &fn_def,
+                "test.vow",
+                &HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                &HashSet::new(),
+                HashMap::new(),
+                HashMap::new(),
+                &HashSet::new(),
+                &HashMap::new(),
+            );
+
+            assert!(warnings.is_empty(), "{name}: {warnings:?}");
+            let add = func
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .find(|inst| inst.opcode == Opcode::WrappingAdd)
+                .expect("wrapping add");
+            assert_eq!(add.ty, expected_ty, "{name}");
+            assert_eq!(
+                add.data,
+                InstData::Integer(integer_type_for_ir_ty(expected_ty)),
+                "{name}"
+            );
+        }
     }
 
     #[test]

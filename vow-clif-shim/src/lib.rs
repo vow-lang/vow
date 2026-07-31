@@ -3592,6 +3592,24 @@ mod tests {
         }
     }
 
+    fn declare_test_function_with_params(ctx: i64, name: &str, param_tys: &[i64], ret_ty: i64) {
+        let name_vec = vow_string(name);
+        let param_tys_vec = vow_i64_vec(param_tys);
+        unsafe {
+            __vow_clif_declare_function(
+                ctx,
+                0,
+                &name_vec as *const VowVec as i64,
+                &param_tys_vec as *const VowVec as i64,
+                param_tys.len() as i64,
+                ret_ty,
+                0,
+                RSUM_KIND_CONSTANT_GLOBAL,
+                0,
+            );
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn add_test_inst(
         ctx: i64,
@@ -3615,6 +3633,36 @@ mod tests {
                     dv,
                     dv2,
                     0,
+                    &args_vec as *const VowVec as i64,
+                    region_root(),
+                ),
+                0
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_test_string_inst(
+        ctx: i64,
+        id: i64,
+        op: i64,
+        ty: i64,
+        dk: i64,
+        data: &VowVec,
+        args: &[i64],
+    ) {
+        let args_vec = vow_i64_vec(args);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_inst(
+                    ctx,
+                    id,
+                    op,
+                    ty,
+                    dk,
+                    0,
+                    0,
+                    data as *const VowVec as i64,
                     &args_vec as *const VowVec as i64,
                     region_root(),
                 ),
@@ -3717,6 +3765,333 @@ mod tests {
             2.5f32.to_bits() as i64,
             1.0f32.to_bits() as i64,
         );
+    }
+
+    #[test]
+    fn phase3_narrow_intrinsic_signatures_use_native_abi_widths() {
+        for (name, expected) in [
+            ("i8", Some(types::I8)),
+            ("u8", Some(types::I8)),
+            ("i16", Some(types::I16)),
+            ("u16", Some(types::I16)),
+            ("i32", Some(types::I32)),
+            ("u32", Some(types::I32)),
+            ("i64", Some(types::I64)),
+            ("u64", Some(types::I64)),
+            ("i128", Some(types::I128)),
+            ("u128", Some(types::I128)),
+            ("unknown", None),
+        ] {
+            assert_eq!(narrow_integer_clif_type(name), expected, "{name}");
+        }
+
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_i16_to_i8_try"),
+            Some((types::I16, types::I64))
+        );
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_u64_to_u32_wrap"),
+            Some((types::I64, types::I32))
+        );
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_i32_to_u16_sat"),
+            Some((types::I32, types::I16))
+        );
+        for name in [
+            "i16_to_i8_try",
+            "__vow_i16_i8_try",
+            "__vow_i16_to_i8_checked",
+            "__vow_unknown_to_i8_wrap",
+            "__vow_i16_to_unknown_wrap",
+        ] {
+            assert_eq!(narrow_intrinsic_signature(name), None, "{name}");
+        }
+
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        for symbol in [
+            "__vow_i16_to_i8_try",
+            "__vow_u64_to_u32_wrap",
+            "__vow_string_parse_i8_opt",
+            "__vow_string_parse_i16_opt",
+            "__vow_string_parse_u16_opt",
+            "__vow_string_parse_u32_opt",
+        ] {
+            let symbol = vow_string(symbol);
+            unsafe {
+                __vow_clif_declare_extern(ctx, &raw const symbol as i64);
+            }
+        }
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
+    #[test]
+    fn phase3_native_width_constants_compile_through_streamed_ffi() {
+        for (name, ty, op, data_kind) in [
+            ("i8_const", ITY_I8, IOP_CONST_U8, IDATA_CONST_U8),
+            ("i16_const", ITY_I16, IOP_CONST_I32, IDATA_CONST_I32),
+            ("u16_const", ITY_U16, IOP_CONST_I32, IDATA_CONST_I32),
+            ("u32_const", ITY_U32, IOP_CONST_I32, IDATA_CONST_I32),
+        ] {
+            let ctx = __vow_clif_create(0, 0);
+            assert_ne!(ctx, 0);
+            declare_test_function(ctx, name, ty);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, ty, 0), 0);
+            }
+            add_test_block(ctx);
+            add_test_inst(ctx, 0, op, ty, data_kind, 7, 0, &[]);
+            add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+            unsafe {
+                assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
+                __vow_clif_destroy(ctx);
+            }
+        }
+    }
+
+    #[test]
+    fn phase3_vow_captures_compile_through_streamed_ffi() {
+        let param_tys = [ITY_I8, ITY_U8, ITY_I16, ITY_U16, ITY_U32, ITY_U64];
+        let ctx = __vow_clif_create(1, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function_with_params(ctx, "capture_narrow", &param_tys, ITY_UNIT);
+        let param_tys_vec = vow_i64_vec(&param_tys);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_begin(ctx, 0, ITY_UNIT, &param_tys_vec as *const VowVec as i64,),
+                0
+            );
+        }
+        add_test_block(ctx);
+        for (id, ty) in param_tys.into_iter().enumerate() {
+            add_test_inst(
+                ctx,
+                id as i64,
+                IOP_GET_ARG,
+                ty,
+                IDATA_ARG_INDEX,
+                id as i64,
+                0,
+                &[],
+            );
+        }
+        add_test_inst(
+            ctx,
+            6,
+            IOP_CONST_BOOL,
+            ITY_BOOL,
+            IDATA_CONST_BOOL,
+            1,
+            0,
+            &[],
+        );
+        add_test_inst(ctx, 7, IOP_VOW_REQ, ITY_UNIT, IDATA_VOW_ID, 7, 0, &[6]);
+        add_test_inst(ctx, 8, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+
+        let description = vow_string("narrow captures");
+        let binding_ids = [0, 1, 2, 3, 4, 5];
+        let binding_ids_vec = vow_i64_vec(&binding_ids);
+        let binding_names = [
+            vow_string("i8v"),
+            vow_string("u8v"),
+            vow_string("i16v"),
+            vow_string("u16v"),
+            vow_string("u32v"),
+            vow_string("u64v"),
+        ];
+        let binding_name_ptrs: Vec<i64> = binding_names
+            .iter()
+            .map(|name| name as *const VowVec as i64)
+            .collect();
+        let binding_names_vec = vow_i64_vec(&binding_name_ptrs);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_vow(
+                    ctx,
+                    7,
+                    &description as *const VowVec as i64,
+                    &binding_ids_vec as *const VowVec as i64,
+                    &binding_names_vec as *const VowVec as i64,
+                ),
+                0
+            );
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn phase3_call_debug_and_field_width_coercions_compile_through_streamed_ffi() {
+        let ctx = __vow_clif_create(1, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, "phase3_coercions", ITY_U32);
+
+        let narrow_sym = vow_string("__vow_i16_to_i8_wrap");
+        let widen_sym = vow_string("__vow_u64_to_u32_wrap");
+        let debug_sym = vow_string("__vow_debug_i64");
+        for symbol in [&narrow_sym, &widen_sym, &debug_sym] {
+            unsafe {
+                __vow_clif_declare_extern(ctx, symbol as *const VowVec as i64);
+            }
+        }
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_U32, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 0, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 7, 0, &[]);
+        add_test_string_inst(
+            ctx,
+            1,
+            IOP_CALL,
+            ITY_I8,
+            IDATA_CALL_EXTERN,
+            &narrow_sym,
+            &[0],
+        );
+        add_test_inst(ctx, 2, IOP_CONST_U8, ITY_U8, IDATA_CONST_U8, 7, 0, &[]);
+        add_test_string_inst(
+            ctx,
+            3,
+            IOP_CALL,
+            ITY_U32,
+            IDATA_CALL_EXTERN,
+            &widen_sym,
+            &[2],
+        );
+        add_test_inst(ctx, 4, IOP_CONST_I32, ITY_I16, IDATA_CONST_I32, -7, 0, &[]);
+        add_test_string_inst(
+            ctx,
+            5,
+            IOP_DEBUG_CALL,
+            ITY_UNIT,
+            IDATA_CALL_EXTERN,
+            &debug_sym,
+            &[4],
+        );
+        add_test_inst(
+            ctx,
+            6,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            8,
+            8,
+            &[],
+        );
+        add_test_inst(ctx, 7, IOP_FIELD_SET, ITY_UNIT, IDATA_FIELD, 0, 0, &[6, 4]);
+        add_test_inst(ctx, 8, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn phase3_i16_phi_uses_typed_cross_block_slots() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, "i16_phi", ITY_I16);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I16, 0), 0);
+        }
+
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_CONST_BOOL,
+            ITY_BOOL,
+            IDATA_CONST_BOOL,
+            1,
+            0,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            1,
+            IOP_BRANCH,
+            ITY_UNIT,
+            IDATA_BRANCH_TARGETS,
+            1,
+            2,
+            &[0],
+        );
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 2, IOP_CONST_I32, ITY_I16, IDATA_CONST_I32, -1, 0, &[]);
+        add_test_inst(ctx, 3, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 8, 0, &[2]);
+        add_test_inst(ctx, 4, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 3, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 5, IOP_CONST_I32, ITY_I16, IDATA_CONST_I32, 1, 0, &[]);
+        add_test_inst(ctx, 6, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 8, 0, &[5]);
+        add_test_inst(ctx, 7, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 3, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 8, IOP_PHI, ITY_I16, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 9, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[8]);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn phase3_return_values_coerce_across_native_integer_widths() {
+        for (name, return_ty, value_ty, const_op, data_kind) in [
+            (
+                "i64_to_i16_return",
+                ITY_I16,
+                ITY_I64,
+                IOP_CONST_I64,
+                IDATA_CONST_I64,
+            ),
+            (
+                "i32_to_i16_return",
+                ITY_I16,
+                ITY_I32,
+                IOP_CONST_I32,
+                IDATA_CONST_I32,
+            ),
+            (
+                "i16_to_i8_return",
+                ITY_I8,
+                ITY_I16,
+                IOP_CONST_I32,
+                IDATA_CONST_I32,
+            ),
+            (
+                "i16_to_i32_return",
+                ITY_I32,
+                ITY_I16,
+                IOP_CONST_I32,
+                IDATA_CONST_I32,
+            ),
+            (
+                "i16_to_i64_return",
+                ITY_I64,
+                ITY_I16,
+                IOP_CONST_I32,
+                IDATA_CONST_I32,
+            ),
+        ] {
+            let ctx = __vow_clif_create(0, 0);
+            assert_ne!(ctx, 0);
+            declare_test_function(ctx, name, return_ty);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, return_ty, 0), 0);
+            }
+            add_test_block(ctx);
+            add_test_inst(ctx, 0, const_op, value_ty, data_kind, 7, 0, &[]);
+            add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+            unsafe {
+                assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
+                __vow_clif_destroy(ctx);
+            }
+        }
     }
 
     #[test]

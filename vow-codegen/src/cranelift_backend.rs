@@ -3152,7 +3152,11 @@ mod tests {
             return data;
         }
         InstData::Integer(match ty {
+            Ty::I8 => IntegerType::I8,
             Ty::I32 => IntegerType::I32,
+            Ty::I16 => IntegerType::I16,
+            Ty::U16 => IntegerType::U16,
+            Ty::U32 => IntegerType::U32,
             Ty::U64 => IntegerType::U64,
             Ty::U8 => IntegerType::U8,
             _ => IntegerType::I64,
@@ -6098,6 +6102,205 @@ mod tests {
                 ],
             )],
         );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn phase3_narrow_intrinsic_signatures_use_native_abi_widths() {
+        for (name, expected) in [
+            ("i8", Some(types::I8)),
+            ("u8", Some(types::I8)),
+            ("i16", Some(types::I16)),
+            ("u16", Some(types::I16)),
+            ("i32", Some(types::I32)),
+            ("u32", Some(types::I32)),
+            ("i64", Some(types::I64)),
+            ("u64", Some(types::I64)),
+            ("i128", Some(types::I128)),
+            ("u128", Some(types::I128)),
+            ("unknown", None),
+        ] {
+            assert_eq!(narrow_integer_clif_type(name), expected, "{name}");
+        }
+
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_i16_to_i8_try"),
+            Some((types::I16, types::I64))
+        );
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_u64_to_u32_wrap"),
+            Some((types::I64, types::I32))
+        );
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_i32_to_u16_sat"),
+            Some((types::I32, types::I16))
+        );
+        for name in [
+            "i16_to_i8_try",
+            "__vow_i16_i8_try",
+            "__vow_i16_to_i8_checked",
+            "__vow_unknown_to_i8_wrap",
+            "__vow_i16_to_unknown_wrap",
+        ] {
+            assert_eq!(narrow_intrinsic_signature(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn compile_phase3_native_width_constants_and_arithmetic() {
+        let cases = [
+            ("i8_native", Ty::I8, Opcode::ConstU8, InstData::ConstU8(7)),
+            (
+                "i16_native",
+                Ty::I16,
+                Opcode::ConstI32,
+                InstData::ConstI32(7),
+            ),
+            (
+                "u16_native",
+                Ty::U16,
+                Opcode::ConstI32,
+                InstData::ConstI32(7),
+            ),
+            (
+                "u32_native",
+                Ty::U32,
+                Opcode::ConstI32,
+                InstData::ConstI32(7),
+            ),
+        ];
+        let functions = cases
+            .into_iter()
+            .enumerate()
+            .map(|(id, (name, ty, const_op, const_data))| {
+                simple_fn(
+                    id as u32,
+                    name,
+                    vec![ty],
+                    ty,
+                    vec![
+                        inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                        inst(1, const_op, ty, vec![], const_data),
+                        inst(2, Opcode::WrappingAdd, ty, vec![0, 1], InstData::None),
+                        inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                )
+            })
+            .collect();
+        let module = make_module("test", functions);
+
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_vow_captures_all_phase3_integer_widths() {
+        let bindings = ["i8v", "u8v", "i16v", "u16v", "u32v", "u64v"]
+            .into_iter()
+            .enumerate()
+            .map(|(id, name)| (name.to_string(), InstId(id as u32)))
+            .collect();
+        let module = make_module(
+            "test",
+            vec![Function {
+                id: FuncId(0),
+                name: "capture_narrow".to_string(),
+                params: vec![Ty::I8, Ty::U8, Ty::I16, Ty::U16, Ty::U32, Ty::U64],
+                param_names: vec![],
+                return_ty: Ty::Unit,
+                effects: vec![],
+                vows: vec![VowEntry {
+                    id: VowId(0),
+                    description: "narrow captures".to_string(),
+                    blame: vow_diag::Blame::Caller,
+                    bindings,
+                    file: "test.vow".to_string(),
+                    offset: 1,
+                }],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::I8, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::GetArg, Ty::U8, vec![], InstData::ArgIndex(1)),
+                        inst(2, Opcode::GetArg, Ty::I16, vec![], InstData::ArgIndex(2)),
+                        inst(3, Opcode::GetArg, Ty::U16, vec![], InstData::ArgIndex(3)),
+                        inst(4, Opcode::GetArg, Ty::U32, vec![], InstData::ArgIndex(4)),
+                        inst(5, Opcode::GetArg, Ty::U64, vec![], InstData::ArgIndex(5)),
+                        inst(
+                            6,
+                            Opcode::ConstBool,
+                            Ty::Bool,
+                            vec![],
+                            InstData::ConstBool(true),
+                        ),
+                        inst(
+                            7,
+                            Opcode::VowRequires,
+                            Ty::Unit,
+                            vec![6],
+                            InstData::VowId(VowId(0)),
+                        ),
+                        inst(8, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                    ],
+                }],
+                local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
+                source_file: "test.vow".to_string(),
+            }],
+        );
+
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_phase3_extern_calls_debug_widening_and_i16_field_storage() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "phase3_abi",
+                vec![Ty::I16],
+                Ty::I8,
+                vec![
+                    inst(0, Opcode::GetArg, Ty::I16, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::DebugCall,
+                        Ty::Unit,
+                        vec![0],
+                        InstData::CallExtern("__vow_debug_i64".to_string()),
+                    ),
+                    inst(
+                        2,
+                        Opcode::RegionAlloc,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::AllocSize { size: 8, align: 8 },
+                    ),
+                    inst(
+                        3,
+                        Opcode::FieldSet,
+                        Ty::Unit,
+                        vec![2, 0],
+                        InstData::FieldIndex(0),
+                    ),
+                    inst(
+                        4,
+                        Opcode::Call,
+                        Ty::I8,
+                        vec![0],
+                        InstData::CallExtern("__vow_i16_to_i8_wrap".to_string()),
+                    ),
+                    inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            )],
+        );
+
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
