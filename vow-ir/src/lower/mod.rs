@@ -55,7 +55,7 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "string_to_lower" => Some(("__vow_string_to_lower", Ty::Ptr)),
         "string_replace" => Some(("__vow_string_replace", Ty::Ptr)),
         "string_join" => Some(("__vow_string_join", Ty::Ptr)),
-        "parse_i64" => Some(("__vow_parse_i64", Ty::I64)),
+        "parse_i64" => Some(("__vow_string_parse_i64_opt", Ty::Ptr)),
         "parse_u8" => Some(("__vow_string_parse_u8_opt", Ty::Ptr)),
         "i16_to_u8_try" => Some(("__vow_i16_to_u8_try", Ty::Ptr)),
         "i16_to_u8_wrap" => Some(("__vow_i16_to_u8_wrap", Ty::U8)),
@@ -94,7 +94,8 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "u64_to_i32_try" => Some(("__vow_u64_to_i32_try", Ty::Ptr)),
         "u64_to_i32_wrap" => Some(("__vow_u64_to_i32_wrap", Ty::I32)),
         "u64_to_i32_sat" => Some(("__vow_u64_to_i32_sat", Ty::I32)),
-        "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
+        "int_to_string" | "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
+        "uint_to_string" => Some(("__vow_string_from_u64", Ty::Ptr)),
         "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
         "time_unix" => Some(("__vow_time_unix", Ty::I64)),
         "time_unix_ms" => Some(("__vow_time_unix_ms", Ty::I64)),
@@ -144,8 +145,9 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
     match name {
         "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
         | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
-        | "string_join" | "i64_to_string" | "hex_encode" | "process_get_stdout"
-        | "process_get_stderr" | "process_stdout_for" | "process_stderr_for" => {
+        | "string_join" | "int_to_string" | "uint_to_string" | "i64_to_string" | "hex_encode"
+        | "process_get_stdout" | "process_get_stderr" | "process_stdout_for"
+        | "process_stderr_for" => {
             ctx.inst_struct_type.insert(result, "String".to_string());
         }
         "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
@@ -159,6 +161,10 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
         "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
             ctx.inst_struct_type.insert(result, "Option".to_string());
             ctx.inst_option_elem_ty.insert(result, Ty::I32);
+        }
+        "parse_i64" => {
+            ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::I64);
         }
         _ => {}
     }
@@ -4223,7 +4229,9 @@ mod tests {
             ("string_to_lower", "__vow_string_to_lower", Ty::Ptr),
             ("string_replace", "__vow_string_replace", Ty::Ptr),
             ("string_join", "__vow_string_join", Ty::Ptr),
-            ("parse_i64", "__vow_parse_i64", Ty::I64),
+            ("parse_i64", "__vow_string_parse_i64_opt", Ty::Ptr),
+            ("int_to_string", "__vow_string_from_i64", Ty::Ptr),
+            ("uint_to_string", "__vow_string_from_u64", Ty::Ptr),
             ("i64_to_string", "__vow_string_from_i64", Ty::Ptr),
             ("vec_sort", "__vow_vec_sort", Ty::Ptr),
             ("time_unix", "__vow_time_unix", Ty::I64),
@@ -4289,6 +4297,44 @@ mod tests {
             assert_eq!(vow_builtin_to_runtime(name), Some((symbol, ty)));
         }
         assert_eq!(vow_builtin_to_runtime("missing_builtin"), None);
+    }
+
+    #[test]
+    fn free_parse_i64_lowers_an_option_i64_result() {
+        let source = r#"
+module ParseI64Lowering
+
+fn parse_or_default(s: String) -> i64 {
+    match parse_i64(s) {
+        Option::Some(value) => value,
+        Option::None => 0,
+    }
+}
+"#;
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, "parse_i64.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let item_files = vec!["parse_i64.vow".to_string(); ast.items.len()];
+        let module = lower_module(&ast, &item_files, &StringExprSet::new());
+        let instructions: Vec<&Inst> = module.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .collect();
+        let parse_call = instructions
+            .iter()
+            .find(|inst| {
+                inst.data == InstData::CallExtern("__vow_string_parse_i64_opt".to_string())
+            })
+            .expect("free parse_i64 must use the option-returning runtime entry point");
+
+        assert_eq!(parse_call.ty, Ty::Ptr);
+        assert!(instructions.iter().any(|inst| {
+            inst.opcode == Opcode::FieldGet
+                && inst.ty == Ty::I64
+                && inst.args == vec![parse_call.id]
+                && inst.data == InstData::FieldIndex(1)
+        }));
     }
 
     #[test]

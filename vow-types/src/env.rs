@@ -372,7 +372,23 @@ impl TypeEnv {
             "parse_i64",
             FnSig {
                 params: vec![Ty::Str],
-                return_ty: Ty::I64,
+                return_ty: Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I64]),
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "int_to_string",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "uint_to_string",
+            FnSig {
+                params: vec![Ty::U64],
+                return_ty: Ty::Str,
                 effects: BTreeSet::new(),
             },
         );

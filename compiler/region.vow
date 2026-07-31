@@ -4282,6 +4282,8 @@ fn string_creation_extern(sym: String) -> bool {
         || sym == String::from("__vow_string_substring_in_arena")
         || sym == String::from("__vow_string_from_i64")
         || sym == String::from("__vow_string_from_i64_in_arena")
+        || sym == String::from("__vow_string_from_u64")
+        || sym == String::from("__vow_string_from_u64_in_arena")
         || sym == String::from("__vow_string_split")
         || sym == String::from("__vow_string_split_in_arena")
         || sym == String::from("__vow_string_trim")
@@ -4296,6 +4298,11 @@ fn string_creation_extern(sym: String) -> bool {
         || sym == String::from("__vow_string_join_in_arena")
 }
 
+fn option_creation_extern(sym: String) -> bool {
+    sym == String::from("__vow_string_parse_i64_opt")
+        || sym == String::from("__vow_string_parse_i64_opt_in_arena")
+}
+
 fn map_creation_extern(sym: String) -> bool {
     sym == String::from("__vow_map_new")
         || sym == String::from("__vow_map_new_in_arena")
@@ -4305,6 +4312,7 @@ fn heap_producing_extern(sym: String) -> bool {
     extern_fresh_in_caller(sym)
         || vec_creation_extern(sym)
         || string_creation_extern(sym)
+        || option_creation_extern(sym)
         || map_creation_extern(sym)
 }
 

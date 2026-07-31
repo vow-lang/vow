@@ -194,6 +194,10 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_string_substring_in_arena")
     || name == String::from("__vow_string_from_i64")
     || name == String::from("__vow_string_from_i64_in_arena")
+    || name == String::from("__vow_string_from_u64")
+    || name == String::from("__vow_string_from_u64_in_arena")
+    || name == String::from("__vow_string_parse_i64_opt")
+    || name == String::from("__vow_string_parse_i64_opt_in_arena")
     || name == String::from("__vow_string_parse_u8_opt")
     || name == String::from("__vow_string_parse_i32_opt")
     || name == String::from("__vow_string_print")
@@ -601,6 +605,8 @@ fn is_string_model_constructor(name: String) -> bool {
     || name == String::from("__vow_string_substring_in_arena")
     || name == String::from("__vow_string_from_i64")
     || name == String::from("__vow_string_from_i64_in_arena")
+    || name == String::from("__vow_string_from_u64")
+    || name == String::from("__vow_string_from_u64_in_arena")
 }
 
 fn is_map_model_constructor(name: String) -> bool {
@@ -854,6 +860,7 @@ fn collect_btreemap_vars(f: IrFunction) -> Vec<i64> {
 
 fn is_option_returning_extern(name: String) -> bool {
     name == String::from("__vow_string_parse_i64_opt")
+    || name == String::from("__vow_string_parse_i64_opt_in_arena")
     || name == String::from("__vow_string_parse_u64_opt")
     || name == String::from("__vow_string_parse_u8_opt")
     || name == String::from("__vow_string_parse_i32_opt")
@@ -1784,12 +1791,22 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
             String::from(" = v"), i64_to_str(src), String::from(";\n")));
         return;
     }
-    if ds == String::from("__vow_string_from_i64") || ds == String::from("__vow_string_from_i64_in_arena") {
+    if ds == String::from("__vow_string_from_i64") || ds == String::from("__vow_string_from_i64_in_arena") || ds == String::from("__vow_string_from_u64") || ds == String::from("__vow_string_from_u64_in_arena") {
         let ids: String = i64_to_str(id);
         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
         out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
             String::from(".len >= 0 && v"), ids,
             str3(String::from(".len < "), i64_to_str(string_max), String::from(");\n"))));
+        return;
+    }
+    if ds == String::from("__vow_string_parse_i64_opt")
+        || ds == String::from("__vow_string_parse_i64_opt_in_arena") {
+        let ids: String = i64_to_str(id);
+        out.push_str(str3(String::from("  v"), ids, String::from(".tag = __VERIFIER_nondet_long();\n")));
+        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".tag == 0 || v")));
+        out.push_str(str3(ids, String::from(".tag == 1);\n"), String::from("")));
+        out.push_str(str3(String::from("  if (v"), ids, String::from(".tag == 1) { v")));
+        out.push_str(str3(ids, String::from(".payload = __VERIFIER_nondet_long(); }\n"), String::from("")));
         return;
     }
     if is_string_fresh_helper(ds) {

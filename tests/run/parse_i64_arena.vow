@@ -1,0 +1,40 @@
+// TEST: stdout "ok"
+module parse_i64_arena
+
+fn parse_or_zero(s: String) -> i64 {
+    let mut value: i64 = 0;
+    match parse_i64(s) {
+        Option::Some(parsed) => {
+            value = parsed;
+        },
+        Option::None => {},
+    }
+    value
+}
+
+fn main() -> i32 [io] {
+    let input: String = String::from("42");
+    let _warmup: i64 = parse_or_zero(input);
+
+    let before: u64 = memory_root_arena_bytes();
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    let iterations: i64 = 50000;
+    while i < iterations {
+        total = total + parse_or_zero(input);
+        i = i + 1;
+    }
+    let after: u64 = memory_root_arena_bytes();
+
+    let delta: u64 = after - before;
+    let limit: u64 = 1u64 * 1024u64 * 1024u64;
+    if total == 42 * iterations && delta < limit {
+        print_str("ok");
+    } else {
+        print_str("total=");
+        print_i64(total);
+        print_str(" delta=");
+        print_u64(delta);
+    }
+    0
+}

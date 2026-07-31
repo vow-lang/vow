@@ -1105,7 +1105,10 @@ fn resolve_verify_jobs(argv: Vec<String>) -> i64 [io] {
         let n: i64 = num_cpus() / 2;
         if n < 1 { 1 } else { n }
     } else {
-        let n: i64 = parse_i64(raw);
+        let n: i64 = match parse_i64(raw) {
+            Option::Some(value) => { value },
+            Option::None => { 0 },
+        };
         if n < 1 {
             eprintln_str(String::from("error: --verify-jobs must be >= 1"));
             process_exit(1);
@@ -1802,7 +1805,12 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     };
     let timeout_str: String = get_flag_arg(argv, "--timeout");
     let timeout_ms: i64 = {
-        if timeout_str.len() > 0 { parse_i64(timeout_str) }
+        if timeout_str.len() > 0 {
+            match parse_i64(timeout_str) {
+                Option::Some(value) => { value },
+                Option::None => { 0 },
+            }
+        }
         else { 30000 }
     };
     let do_verify: bool = has_flag(argv, "--verify");
@@ -3566,9 +3574,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's\n"));
     r.push_str(String::from("`I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may\n"));
-    r.push_str(String::from("exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips\n"));
-    r.push_str(String::from("verification for functions whose contracts mention 128-bit values while still\n"));
-    r.push_str(String::from("generating native code for them.\n"));
+    r.push_str(String::from("exceed configured SMT solver timeouts. Such proofs use the ordinary verifier\n"));
+    r.push_str(String::from("controls and retain fail-closed `timeout` or `unknown` outcomes; there is no\n"));
+    r.push_str(String::from("type-specific verification opt-out. Never weaken contracts to fit the verifier.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Struct field layout:** every struct field up to 64 bits wide occupies one\n"));
     r.push_str(String::from("8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`\n"));
@@ -3763,7 +3771,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Operator | Meaning    |\n"));
     r.push_str(String::from("|----------|------------|\n"));
-    r.push_str(String::from("| `-`      | Negation (not allowed on `u64`) |\n"));
+    r.push_str(String::from("| `-`      | Negation (not allowed on unsigned types) |\n"));
     r.push_str(String::from("| `!`      | Logical NOT|\n"));
     r.push_str(String::from("| `&`      | Borrow     |\n"));
     r.push_str(String::from("| `?`      | Unwrap (propagate error) |\n"));
@@ -4355,7 +4363,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `parse_u128`   | `fn(s: String) -> Option<u128>`          |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Each `parse_X` returns `Option::None` for malformed input, empty strings, or\n"));
-    r.push_str(String::from("values outside the target type's range.\n"));
+    r.push_str(String::from("values outside the target type's range. Parsing never substitutes a numeric\n"));
+    r.push_str(String::from("sentinel for failure; callers that need a fallback must choose it explicitly\n"));
+    r.push_str(String::from("when handling `Option::None`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("In particular, `parse_u8` accepts decimal values from `0` through `255` and\n"));
     r.push_str(String::from("returns `Option::None` for negative or larger values.\n"));
@@ -8239,9 +8249,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's\n"));
     r.push_str(String::from("`I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may\n"));
-    r.push_str(String::from("exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips\n"));
-    r.push_str(String::from("verification for functions whose contracts mention 128-bit values while still\n"));
-    r.push_str(String::from("generating native code for them.\n"));
+    r.push_str(String::from("exceed configured SMT solver timeouts. Such proofs use the ordinary verifier\n"));
+    r.push_str(String::from("controls and retain fail-closed `timeout` or `unknown` outcomes; there is no\n"));
+    r.push_str(String::from("type-specific verification opt-out. Never weaken contracts to fit the verifier.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Struct field layout:** every struct field up to 64 bits wide occupies one\n"));
     r.push_str(String::from("8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`\n"));
@@ -8436,7 +8446,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Operator | Meaning    |\n"));
     r.push_str(String::from("|----------|------------|\n"));
-    r.push_str(String::from("| `-`      | Negation (not allowed on `u64`) |\n"));
+    r.push_str(String::from("| `-`      | Negation (not allowed on unsigned types) |\n"));
     r.push_str(String::from("| `!`      | Logical NOT|\n"));
     r.push_str(String::from("| `&`      | Borrow     |\n"));
     r.push_str(String::from("| `?`      | Unwrap (propagate error) |\n"));
@@ -9028,7 +9038,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `parse_u128`   | `fn(s: String) -> Option<u128>`          |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Each `parse_X` returns `Option::None` for malformed input, empty strings, or\n"));
-    r.push_str(String::from("values outside the target type's range.\n"));
+    r.push_str(String::from("values outside the target type's range. Parsing never substitutes a numeric\n"));
+    r.push_str(String::from("sentinel for failure; callers that need a fallback must choose it explicitly\n"));
+    r.push_str(String::from("when handling `Option::None`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("In particular, `parse_u8` accepts decimal values from `0` through `255` and\n"));
     r.push_str(String::from("returns `Option::None` for negative or larger values.\n"));
@@ -13360,7 +13372,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     // Fail closed: `vow contracts --verify` exits non-zero when any contract is
     // not proven, matching `vow build --verify` / `vow verify` (#479). A vacuous
     // contract is a hollow proof, so it fails closed too (#81 PR-B).
-    if n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 || n_vacuous > 0 {
+    if do_verify && (n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 || n_vacuous > 0) {
         exit_code = 1;
     }
 

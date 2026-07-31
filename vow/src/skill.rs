@@ -1490,9 +1490,9 @@ reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-na
 
 **128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
 `I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
-exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
-verification for functions whose contracts mention 128-bit values while still
-generating native code for them.
+exceed configured SMT solver timeouts. Such proofs use the ordinary verifier
+controls and retain fail-closed `timeout` or `unknown` outcomes; there is no
+type-specific verification opt-out. Never weaken contracts to fit the verifier.
 
 **Struct field layout:** every struct field up to 64 bits wide occupies one
 8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
@@ -1687,7 +1687,7 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 
 | Operator | Meaning    |
 |----------|------------|
-| `-`      | Negation (not allowed on `u64`) |
+| `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
 | `&`      | Borrow     |
 | `?`      | Unwrap (propagate error) |
@@ -2279,7 +2279,9 @@ print_str(uint_to_string(small as u64));  // widen then format
 | `parse_u128`   | `fn(s: String) -> Option<u128>`          |
 
 Each `parse_X` returns `Option::None` for malformed input, empty strings, or
-values outside the target type's range.
+values outside the target type's range. Parsing never substitutes a numeric
+sentinel for failure; callers that need a fallback must choose it explicitly
+when handling `Option::None`.
 
 In particular, `parse_u8` accepts decimal values from `0` through `255` and
 returns `Option::None` for negative or larger values.
@@ -6141,9 +6143,9 @@ reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-na
 
 **128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
 `I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
-exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
-verification for functions whose contracts mention 128-bit values while still
-generating native code for them.
+exceed configured SMT solver timeouts. Such proofs use the ordinary verifier
+controls and retain fail-closed `timeout` or `unknown` outcomes; there is no
+type-specific verification opt-out. Never weaken contracts to fit the verifier.
 
 **Struct field layout:** every struct field up to 64 bits wide occupies one
 8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
@@ -6338,7 +6340,7 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 
 | Operator | Meaning    |
 |----------|------------|
-| `-`      | Negation (not allowed on `u64`) |
+| `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
 | `&`      | Borrow     |
 | `?`      | Unwrap (propagate error) |
@@ -6930,7 +6932,9 @@ print_str(uint_to_string(small as u64));  // widen then format
 | `parse_u128`   | `fn(s: String) -> Option<u128>`          |
 
 Each `parse_X` returns `Option::None` for malformed input, empty strings, or
-values outside the target type's range.
+values outside the target type's range. Parsing never substitutes a numeric
+sentinel for failure; callers that need a fallback must choose it explicitly
+when handling `Option::None`.
 
 In particular, `parse_u8` accepts decimal values from `0` through `255` and
 returns `Option::None` for negative or larger values.

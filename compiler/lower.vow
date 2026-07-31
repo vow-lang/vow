@@ -837,7 +837,7 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("string_to_lower") { return String::from("__vow_string_to_lower"); }
     if name == String::from("string_replace") { return String::from("__vow_string_replace"); }
     if name == String::from("string_join") { return String::from("__vow_string_join"); }
-    if name == String::from("parse_i64") { return String::from("__vow_parse_i64"); }
+    if name == String::from("parse_i64") { return String::from("__vow_string_parse_i64_opt"); }
     if name == String::from("parse_u8") { return String::from("__vow_string_parse_u8_opt"); }
     if name == String::from("i16_to_u8_try") { return String::from("__vow_i16_to_u8_try"); }
     if name == String::from("i16_to_u8_wrap") { return String::from("__vow_i16_to_u8_wrap"); }
@@ -876,6 +876,8 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("u64_to_i32_try") { return String::from("__vow_u64_to_i32_try"); }
     if name == String::from("u64_to_i32_wrap") { return String::from("__vow_u64_to_i32_wrap"); }
     if name == String::from("u64_to_i32_sat") { return String::from("__vow_u64_to_i32_sat"); }
+    if name == String::from("int_to_string") { return String::from("__vow_string_from_i64"); }
+    if name == String::from("uint_to_string") { return String::from("__vow_string_from_u64"); }
     if name == String::from("i64_to_string") { return String::from("__vow_string_from_i64"); }
     if name == String::from("vec_sort") { return String::from("__vow_vec_sort"); }
     if name == String::from("time_unix") { return String::from("__vow_time_unix"); }
@@ -942,7 +944,7 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("string_to_lower") { return ITY_PTR(); }
     if name == String::from("string_replace") { return ITY_PTR(); }
     if name == String::from("string_join") { return ITY_PTR(); }
-    if name == String::from("parse_i64") { return ITY_I64(); }
+    if name == String::from("parse_i64") { return ITY_PTR(); }
     if name == String::from("parse_u8") || name == String::from("i16_to_u8_try") || name == String::from("i32_to_u8_try") ||
        name == String::from("i64_to_u8_try") || name == String::from("i128_to_u8_try") || name == String::from("u16_to_u8_try") ||
        name == String::from("u32_to_u8_try") || name == String::from("u64_to_u8_try") || name == String::from("u128_to_u8_try") ||
@@ -966,6 +968,8 @@ fn builtin_ret_ty(name: String) -> i64 {
        name == String::from("u64_to_i32_wrap") || name == String::from("u64_to_i32_sat") {
         return ITY_I32();
     }
+    if name == String::from("int_to_string") { return ITY_PTR(); }
+    if name == String::from("uint_to_string") { return ITY_PTR(); }
     if name == String::from("i64_to_string") { return ITY_PTR(); }
     if name == String::from("vec_sort") { return ITY_PTR(); }
     if name == String::from("time_unix") { return ITY_I64(); }
@@ -1591,7 +1595,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if fn_name == String::from("fs_listdir") {
                 lctx_tag(ctx, result, String::from("Vec"));
             }
-            if fn_name == String::from("string_substr") || fn_name == String::from("string_trim") || fn_name == String::from("string_to_upper") || fn_name == String::from("string_to_lower") || fn_name == String::from("string_replace") || fn_name == String::from("string_join") || fn_name == String::from("i64_to_string") {
+            if fn_name == String::from("string_substr") || fn_name == String::from("string_trim") || fn_name == String::from("string_to_upper") || fn_name == String::from("string_to_lower") || fn_name == String::from("string_replace") || fn_name == String::from("string_join") || fn_name == String::from("int_to_string") || fn_name == String::from("uint_to_string") || fn_name == String::from("i64_to_string") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("string_split") {
@@ -1618,6 +1622,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                fn_name == String::from("u32_to_i32_try") || fn_name == String::from("u64_to_i32_try") {
                 lctx_tag(ctx, result, String::from("Option"));
                 lctx_tag_option_elem(ctx, result, ITY_I32());
+            }
+            if fn_name == String::from("parse_i64") {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_I64());
             }
             return result;
         }

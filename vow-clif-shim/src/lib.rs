@@ -38,7 +38,6 @@ use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use target_lexicon::{OperatingSystem, Triple};
 
 // ---------------------------------------------------------------------------
 // VowVec layout: { ptr: *mut u8, len: usize, cap: usize } = 24 bytes
@@ -512,6 +511,20 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
                 ("__vow_string_from_i64_in_arena", Some(inst_rgn))
             }
         }
+        "__vow_string_from_u64" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_from_u64_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_parse_i64_opt" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_parse_i64_opt_in_arena", Some(inst_rgn))
+            }
+        }
         "__vow_string_split" => {
             if (inst_rgn & 3) == REGION_KIND_ROOT {
                 (sym, None)
@@ -776,21 +789,16 @@ impl FnScratch {
 // FFI: create / destroy
 // ---------------------------------------------------------------------------
 
-// `Triple::host()` reports macOS as `*-apple-darwin`. cranelift-object 0.132
-// maps a `Darwin` OS to Mach-O `PLATFORM_UNKNOWN` when writing its new
-// `LC_BUILD_VERSION` load command, which the macOS linker rejects with
-// "unknown platform". Rewriting `Darwin` to `MacOSX` yields `PLATFORM_MACOS`.
-// Every non-Darwin host (e.g. Linux/ELF) is returned unchanged.
-fn host_triple() -> Triple {
-    let mut triple = Triple::host();
-    if let OperatingSystem::Darwin(v) = triple.operating_system {
-        triple.operating_system = OperatingSystem::MacOSX(v);
-    }
-    triple
-}
-
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
+    create_module_context(mode, trace_mode, cranelift_native::builder())
+}
+
+fn create_module_context(
+    mode: i64,
+    trace_mode: i64,
+    isa_builder_result: Result<isa::Builder, &'static str>,
+) -> i64 {
     let mut flag_builder = settings::builder();
     if let Err(e) = flag_builder.set("use_colocated_libcalls", "false") {
         eprintln!("clif_shim: error setting use_colocated_libcalls: {e}");
@@ -807,17 +815,13 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         return 0;
     }
     let flags = settings::Flags::new(flag_builder);
-    let mut isa_builder = match isa::lookup(host_triple()) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("clif_shim: isa lookup error: {e}");
+    let isa_builder = match isa_builder_result {
+        Ok(builder) => builder,
+        Err(message) => {
+            eprintln!("clif_shim: native builder error: {message}");
             return 0;
         }
     };
-    if let Err(e) = cranelift_native::infer_native_flags(&mut isa_builder) {
-        eprintln!("clif_shim: infer native flags error: {e}");
-        return 0;
-    }
     let isa = match isa_builder.finish(flags) {
         Ok(i) => i,
         Err(e) => {
@@ -3000,11 +3004,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
-        "__vow_string_from_i64" => {
+        "__vow_string_from_i64" | "__vow_string_from_u64" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_from_i64_in_arena" => {
+        "__vow_string_from_i64_in_arena" | "__vow_string_from_u64_in_arena" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -3103,6 +3107,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_parse_i64_opt_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_split" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3151,10 +3160,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_string_join_in_arena" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_parse_i64" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -3414,6 +3419,45 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_i64_option_routes_to_its_allocation_region() {
+        let root = region_root();
+        assert_eq!(
+            routed_vec_extern("__vow_string_parse_i64_opt", root, root),
+            ("__vow_string_parse_i64_opt", None),
+        );
+
+        let block = region_pack(REGION_KIND_BLOCK, 7);
+        assert_eq!(
+            routed_vec_extern("__vow_string_parse_i64_opt", block, root),
+            ("__vow_string_parse_i64_opt_in_arena", Some(block)),
+        );
+    }
+
+    #[test]
+    fn parse_i64_option_arena_extern_accepts_arena_and_string() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+        let sig = make_extern_sig(
+            "__vow_string_parse_i64_opt_in_arena",
+            &module_ctx.obj_module,
+        );
+
+        assert_eq!(sig.params.len(), 2);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.params[1].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
+    #[test]
+    fn create_returns_zero_when_native_isa_builder_fails() {
+        assert_eq!(create_module_context(0, 0, Err("unsupported host")), 0);
+    }
 
     fn vow_string(s: &str) -> VowVec {
         VowVec {
@@ -3724,10 +3768,7 @@ mod tests {
         );
     }
 
-    // Directly exercises the shim's copy of region inference (issue #367). It is
-    // otherwise only hit indirectly via vow-codegen end-to-end tests and the
-    // bootstrap binary, so divergence from the Rust/self-hosted mirrors would go
-    // unnoticed until a fixed-point break.
+    // Guards shim/Rust/self-hosted region-inference parity against fixed-point-breaking drift.
     #[test]
     fn inst_region_for_value_routes_hidden_arg_and_falls_back() {
         let no_phi: HashMap<i64, Vec<i64>> = HashMap::new();

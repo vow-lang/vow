@@ -10,10 +10,13 @@ ESBMC ?= esbmc
 # (arena_try_free_oversized_chunk can walk all 5 chunks); 4 fails its unwinding
 # assertion.
 #
-# Solver choice matters a lot here: Bitwuzla (the ESBMC default) balloons to
-# ~4.5 GB on this bitvector/points-to-heavy formula at --unwind 5, and Z3 does
-# not finish; Boolector proves it in ~90s at ~290 MB RSS — comfortably inside the
-# 2 GB ulimit full_test.sh runs verification under (#546).
+# Solver choice and ESBMC version matter a lot here: Bitwuzla (the ESBMC
+# default) balloons to ~4.5 GB on this bitvector/points-to-heavy formula at
+# --unwind 5, and Z3 does not finish. With Boolector, ESBMC 8.3.0 proves it in
+# ~86s at ~290 MB RSS, while the project-pinned ESBMC 8.1.0 needs ~6m04s at
+# 519,672 KB (~508 MiB) max RSS. Both fit inside the 2 GB ulimit enforced by
+# scripts/verify_arena.sh; the pinned-version CI run guards that headroom
+# against future drift (#546, #747).
 UNWIND ?= 5
 
 .PHONY: verify

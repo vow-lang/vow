@@ -45,7 +45,10 @@ fn main() [io] {
     print_str(joined);
     print_str(String::from("\n"));
 
-    let parsed: i64 = parse_i64(String::from("42"));
+    let parsed: i64 = match parse_i64(String::from("42")) {
+        Option::Some(value) => { value },
+        Option::None => { 0 },
+    };
     print_str(String::from("parsed: "));
     print_i64(parsed);
     print_str(String::from("\n"));
