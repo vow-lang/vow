@@ -204,6 +204,8 @@ impl fmt::Display for AnalysisError {
 impl std::error::Error for AnalysisError {}
 
 const MINIMUM_R_SQUARED: f64 = 0.90;
+const HIGH_QUALITY_R_SQUARED: f64 = 0.99;
+const NEAR_TIE_R_SQUARED_DELTA: f64 = 0.001;
 const NORMALIZED_TREND_TOLERANCE: f64 = 1.0e-9;
 const REQUIRED_RISING_RATIOS: usize = 2;
 const CANDIDATES: [ComplexityClass; 8] = [
@@ -238,17 +240,19 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
         }
     }
 
-    let mut fits = CANDIDATES
-        .into_iter()
-        .map(|candidate| (candidate, r_squared(candidate, samples)));
-    let first_fit = fits.next().expect("fixed candidate set is non-empty");
-    let (observed, best_r_squared) = fits.fold(first_fit, |best, candidate| {
-        if candidate.1 > best.1 {
-            candidate
-        } else {
-            best
-        }
-    });
+    let fits = CANDIDATES.map(|candidate| (candidate, r_squared(candidate, samples)));
+    let first_fit = fits[0];
+    let (observed, best_r_squared) =
+        fits.iter()
+            .copied()
+            .skip(1)
+            .fold(first_fit, |best, candidate| {
+                if candidate.1 > best.1 {
+                    candidate
+                } else {
+                    best
+                }
+            });
 
     if best_r_squared < MINIMUM_R_SQUARED {
         return Ok(Analysis {
@@ -257,6 +261,11 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
         });
     }
 
+    let declared_r_squared = fits
+        .iter()
+        .find(|(candidate, _)| *candidate == declared)
+        .expect("declared class belongs to the fixed candidate set")
+        .1;
     let verdict = if observed == ComplexityClass::CubicLogarithmic
         && observed <= declared
         && has_rising_maximum_residual_tail(samples)
@@ -264,6 +273,10 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
         Verdict::Ambiguous
     } else if observed <= declared {
         Verdict::Pass
+    } else if declared_r_squared >= HIGH_QUALITY_R_SQUARED
+        && best_r_squared - declared_r_squared <= NEAR_TIE_R_SQUARED_DELTA
+    {
+        Verdict::Ambiguous
     } else {
         Verdict::Fail
     };

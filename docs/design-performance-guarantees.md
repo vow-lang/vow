@@ -283,6 +283,8 @@ Two complementary tests:
 
 - **FAIL rule.** The verdict is `FAIL` when the best-fit class (R² ≥ 0.90) is asymptotically **strictly greater** than the declared class — the data exceeds the declared upper bound.
 
+- **Cross-boundary near-tie guard.** Before reporting `FAIL`, compare the best-fit R² with the declared class's R². If the declared class is also a high-quality fit (R² ≥ 0.99) and trails the best fit by at most 0.001, report `AMBIGUOUS`. This prevents a tiny numerical advantage for an adjacent higher class from turning finite-grid threshold effects into a false failure. It also conservatively treats the documented `O(n²)` versus `O(n² log n)` overlap as non-passing but inconclusive.
+
 - **Maximum-class trend guard.** A class beyond the fixed set can still fit the largest candidate with a deceptively high R² (for example, `n⁴` or `n³ log² n` can fit `n³ log n` closely over a finite geometric grid). When `O(n³ log n)` is the best fit for an equally permissive declaration, divide the final three operation counts by the `n³ log n` basis. If that normalized residual rises across both final intervals, report `AMBIGUOUS` rather than `PASS`. Inspecting only the tail avoids letting small-input warmup noise determine the verdict. `AMBIGUOUS` is deliberately conservative: finite samples cannot prove whether a rising residual comes from a genuinely higher class or from lower-order threshold effects in a valid `O(n³ log n)` implementation. This guard does not make declarations with another log factor or polynomial degree 4 valid; the parse-time caps remain one log factor and polynomial degree 3.
 
 - **AMBIGUOUS rule.** When **no** candidate class fits with R² ≥ 0.90, the data is too noisy or non-power-law to conclude either way; report `AMBIGUOUS` with the per-candidate R² values for the user to inspect.
@@ -293,7 +295,7 @@ Two complementary tests:
   - declared `O(n)`, best fit `O(n)` (R²=0.98) → **PASS** (tight).
   - declared `O(n)`, best fit `O(n log n)` (R²=0.98) → **FAIL** (suggested replacement `O(n log n)`).
   - declared `O(n)`, best fit `O(n²)` (R²=0.97) → **FAIL** (suggested replacement `O(n²)`).
-  - declared `O(n²)`, best fit `O(n² log n)` (R²=0.99) → **FAIL** (suggested replacement `O(n² log n)`).
+  - declared `O(n²)`, best fit `O(n² log n)` with a near-tied high-quality quadratic fit → **AMBIGUOUS**.
   - declared `O(n³ log n)`, best fit `O(n³ log n)` with a rising normalized tail → **AMBIGUOUS** (possible growth beyond the supported range).
   - declared `O(n)`, no candidate reaches R² ≥ 0.90 → **AMBIGUOUS**.
 
