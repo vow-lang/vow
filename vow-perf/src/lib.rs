@@ -5,7 +5,11 @@
 //! integration are separate concerns tracked by the `vow-perf` implementation
 //! roadmap.
 
+mod instrumentation;
+
 use std::fmt;
+
+pub use instrumentation::{InstrumentationError, InstrumentedModule, instrument_module};
 
 /// A canonical single-variable complexity class.
 ///

@@ -4,3 +4,8 @@ version = "0.5.1"
 edition = "2024"
 
 [dependencies]
+vow-ir = { path = "../vow-ir" }
+
+[dev-dependencies]
+vow-codegen = { path = "../vow-codegen" }
+vow-syntax = { path = "../vow-syntax" }

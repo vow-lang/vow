@@ -1035,6 +1035,11 @@ dependencies = [
 [[package]]
 name = "vow-perf"
 version = "0.5.1"
+dependencies = [
+ "vow-codegen",
+ "vow-ir",
+ "vow-syntax",
+]
 
 [[package]]
 name = "vow-runtime"
