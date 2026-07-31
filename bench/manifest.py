@@ -34,19 +34,21 @@ def load_manifest(root: Path) -> list[BenchmarkInfo]:
         with open(meta_path, "rb") as f:
             meta = tomllib.load(f)["benchmark"]
 
-        benchmarks.append(BenchmarkInfo(
-            id=entry["id"],
-            name=entry["name"],
-            difficulty=entry["difficulty"],
-            path=entry["path"],
-            expected_status=entry["expected_status"],
-            max_cegis_iterations=meta.get("max_cegis_iterations", 5),
-            tags=meta.get("tags", []),
-            contract_fidelity=meta.get("contract_fidelity", "n/a"),
-            spec_md=(bench_dir / "spec.md").read_text(),
-            skeleton_vow=(bench_dir / "skeleton.vow").read_text(),
-            reference_vow=(bench_dir / "reference.vow").read_text(),
-        ))
+        benchmarks.append(
+            BenchmarkInfo(
+                id=entry["id"],
+                name=entry["name"],
+                difficulty=entry["difficulty"],
+                path=entry["path"],
+                expected_status=entry["expected_status"],
+                max_cegis_iterations=meta.get("max_cegis_iterations", 5),
+                tags=meta.get("tags", []),
+                contract_fidelity=meta.get("contract_fidelity", "n/a"),
+                spec_md=(bench_dir / "spec.md").read_text(),
+                skeleton_vow=(bench_dir / "skeleton.vow").read_text(),
+                reference_vow=(bench_dir / "reference.vow").read_text(),
+            )
+        )
 
     return benchmarks
 

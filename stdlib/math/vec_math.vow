@@ -173,4 +173,3 @@ pub fn vec_reverse(v: Vec<i64>) -> Vec<i64> vow {
     }
     out
 }
-

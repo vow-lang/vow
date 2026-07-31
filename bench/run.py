@@ -51,7 +51,10 @@ def find_self_hosted_binary(root: Path) -> Path:
             text=True,
         )
         if result.returncode != 0:
-            print(f"Error building self-hosted compiler:\n{result.stderr}", file=sys.stderr)
+            print(
+                f"Error building self-hosted compiler:\n{result.stderr}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         print("Self-hosted compiler built.", file=sys.stderr)
     return binary
@@ -115,12 +118,24 @@ def cmd_run(args: argparse.Namespace) -> None:
 
         for i, bench in enumerate(applicable, 1):
             if bench.id in existing_results:
-                print(f"  [{i}/{len(applicable)}] {bench.id} {bench.name} — skipped (already done)")
+                print(
+                    f"  [{i}/{len(applicable)}] {bench.id} {bench.name} — skipped (already done)"
+                )
                 results.append(_dict_to_result(existing_results[bench.id]))
                 continue
 
-            print(f"  [{i}/{len(applicable)}] {bench.id} {bench.name} ...", end=" ", flush=True)
-            result = run_benchmark(bench, model_config, system_prompt, vow_binary, memory_limit=memory_limit)
+            print(
+                f"  [{i}/{len(applicable)}] {bench.id} {bench.name} ...",
+                end=" ",
+                flush=True,
+            )
+            result = run_benchmark(
+                bench,
+                model_config,
+                system_prompt,
+                vow_binary,
+                memory_limit=memory_limit,
+            )
             results.append(result)
             status_str = result.status.upper()
             if result.status == "verified":
@@ -128,7 +143,9 @@ def cmd_run(args: argparse.Namespace) -> None:
             print(f"{status_str} [{result.wall_clock_seconds:.1f}s]")
 
             # Save incrementally
-            _save_results(output_file, model_id, run_id, results, stretch_results, args.compiler)
+            _save_results(
+                output_file, model_id, run_id, results, stretch_results, args.compiler
+            )
 
         # Run stretch benchmarks (informational)
         if not args.benchmark:
@@ -137,11 +154,19 @@ def cmd_run(args: argparse.Namespace) -> None:
                 if args.resume and bid in {r["benchmark_id"] for r in stretch_results}:
                     continue
                 print(f"  [stretch] {bid} {bench.name} ...", end=" ", flush=True)
-                result = run_benchmark(bench, model_config, system_prompt, vow_binary, memory_limit=memory_limit)
+                result = run_benchmark(
+                    bench,
+                    model_config,
+                    system_prompt,
+                    vow_binary,
+                    memory_limit=memory_limit,
+                )
                 stretch_results.append(asdict(result))
                 print(f"{result.status.upper()} [{result.wall_clock_seconds:.1f}s]")
 
-        _save_results(output_file, model_id, run_id, results, stretch_results, args.compiler)
+        _save_results(
+            output_file, model_id, run_id, results, stretch_results, args.compiler
+        )
         print(f"\nResults saved to {output_file}")
 
 
@@ -211,7 +236,9 @@ def _validate_compare(root: Path, benchmarks: list) -> None:
         rust_str = "OK" if rust_ok else f"FAIL ({rust_vr.status})"
         self_str = "OK" if self_ok else f"FAIL ({self_vr.status})"
         match_str = "YES" if match else "NO"
-        print(f"  {bench.id:<5} {bench.name:<35} {rust_str:<12} {self_str:<12} {match_str}")
+        print(
+            f"  {bench.id:<5} {bench.name:<35} {rust_str:<12} {self_str:<12} {match_str}"
+        )
 
     total = len(benchmarks)
     matched = total - mismatches
@@ -306,12 +333,20 @@ def main() -> None:
     # run
     run_parser = subparsers.add_parser("run", help="Run benchmarks")
     run_parser.add_argument("--model", help="Model ID (e.g. claude-sonnet-4-20250514)")
-    run_parser.add_argument("--all", action="store_true", help="Run all configured models")
+    run_parser.add_argument(
+        "--all", action="store_true", help="Run all configured models"
+    )
     run_parser.add_argument("--benchmark", help="Run single benchmark by ID (e.g. E01)")
-    run_parser.add_argument("--resume", action="store_true", help="Skip already-completed benchmarks")
+    run_parser.add_argument(
+        "--resume", action="store_true", help="Skip already-completed benchmarks"
+    )
     run_parser.add_argument("--run-id", help="Run ID (default: timestamp)")
-    run_parser.add_argument("--compiler", choices=["rust", "self-hosted"], default="rust",
-                            help="Which compiler to use for verification (default: rust)")
+    run_parser.add_argument(
+        "--compiler",
+        choices=["rust", "self-hosted"],
+        default="rust",
+        help="Which compiler to use for verification (default: rust)",
+    )
     run_parser.set_defaults(func=cmd_run)
 
     # report
@@ -321,11 +356,20 @@ def main() -> None:
     report_parser.set_defaults(func=cmd_report)
 
     # validate-references
-    val_parser = subparsers.add_parser("validate-references", help="Verify all reference.vow files")
-    val_parser.add_argument("--compiler", choices=["rust", "self-hosted"], default="rust",
-                            help="Which compiler to use for verification (default: rust)")
-    val_parser.add_argument("--compare", action="store_true",
-                            help="Run both compilers and compare results side-by-side")
+    val_parser = subparsers.add_parser(
+        "validate-references", help="Verify all reference.vow files"
+    )
+    val_parser.add_argument(
+        "--compiler",
+        choices=["rust", "self-hosted"],
+        default="rust",
+        help="Which compiler to use for verification (default: rust)",
+    )
+    val_parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Run both compilers and compare results side-by-side",
+    )
     val_parser.set_defaults(func=cmd_validate_references)
 
     args = parser.parse_args()

@@ -47,7 +47,9 @@ class ComplexityCalibrateTests(unittest.TestCase):
     def make_source_dir(self, tmp: Path) -> Path:
         src = tmp / "src"
         src.mkdir()
-        (src / "sample.vow").write_text("fn tiny() -> i64 { return 1; }\n", encoding="utf-8")
+        (src / "sample.vow").write_text(
+            "fn tiny() -> i64 { return 1; }\n", encoding="utf-8"
+        )
         return src
 
     def run_calibrate(self, tmp: Path, *args: str) -> subprocess.CompletedProcess:

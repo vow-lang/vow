@@ -62,7 +62,9 @@ def _try_compile_fix(
 ) -> tuple[str, bool]:
     """Attempt to fix compilation errors by feeding them back to the Coder."""
     for attempt in range(max_attempts):
-        cr = run_compile(vow_binary, code, timeout=compile_timeout, memory_limit=memory_limit)
+        cr = run_compile(
+            vow_binary, code, timeout=compile_timeout, memory_limit=memory_limit
+        )
         if cr.success:
             return code, True
 
@@ -77,7 +79,9 @@ def _try_compile_fix(
         code = new_code
 
     # Final check
-    cr = run_compile(vow_binary, code, timeout=compile_timeout, memory_limit=memory_limit)
+    cr = run_compile(
+        vow_binary, code, timeout=compile_timeout, memory_limit=memory_limit
+    )
     return code, cr.success
 
 
@@ -154,17 +158,29 @@ def run_workflow(
 
         # Pre-round compilation fix
         code, compile_ok = _try_compile_fix(
-            coder, code, vow_binary, memory_limit,
-            compile_fix_attempts, verify_timeout, on_event,
+            coder,
+            code,
+            vow_binary,
+            memory_limit,
+            compile_fix_attempts,
+            verify_timeout,
+            on_event,
         )
 
         if not compile_ok:
-            rounds.append(RoundResult(
-                round_num=round_num, code=code, compile_ok=False,
-                verify_status=None, analyst_verdict=None,
-                analyst_suggestions=[], reviewer_verdict=None,
-                reviewer_issues=[], converged=False,
-            ))
+            rounds.append(
+                RoundResult(
+                    round_num=round_num,
+                    code=code,
+                    compile_ok=False,
+                    verify_status=None,
+                    analyst_verdict=None,
+                    analyst_suggestions=[],
+                    reviewer_verdict=None,
+                    reviewer_issues=[],
+                    converged=False,
+                )
+            )
             if on_event:
                 on_event("round_end", {"round": round_num, "compile_ok": False})
             continue
@@ -173,7 +189,9 @@ def run_workflow(
         if on_event:
             on_event("verify", {"round": round_num})
 
-        vr = run_verify(vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit)
+        vr = run_verify(
+            vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit
+        )
         verify_status = vr.status
 
         # Analysis
@@ -215,14 +233,17 @@ def run_workflow(
         rounds.append(round_result)
 
         if on_event:
-            on_event("round_end", {
-                "round": round_num,
-                "compile_ok": True,
-                "verify_status": verify_status,
-                "analyst_verdict": analyst_result.verdict,
-                "reviewer_verdict": reviewer_result.verdict,
-                "converged": converged,
-            })
+            on_event(
+                "round_end",
+                {
+                    "round": round_num,
+                    "compile_ok": True,
+                    "verify_status": verify_status,
+                    "analyst_verdict": analyst_result.verdict,
+                    "reviewer_verdict": reviewer_result.verdict,
+                    "converged": converged,
+                },
+            )
 
         if converged:
             elapsed = time.time() - start
