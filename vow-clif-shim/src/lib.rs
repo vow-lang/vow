@@ -3647,28 +3647,6 @@ mod tests {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn assert_cross_block_float_phi_compiles(
-        name: &str,
-        float_ty: i64,
-        const_op: i64,
-        const_kind: i64,
-        add_op: i64,
-        lhs_bits: i64,
-        rhs_bits: i64,
-        add_bits: i64,
-    ) {
-        let ctx = __vow_clif_create(0, 0);
-        assert_ne!(ctx, 0);
-        declare_test_function(ctx, 0, name, float_ty, false);
-        compile_cross_block_float_phi(
-            ctx, float_ty, const_op, const_kind, add_op, lhs_bits, rhs_bits, add_bits,
-        );
-        unsafe {
-            __vow_clif_destroy(ctx);
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn assert_cross_block_float_phi_runtime_value(
         name: &str,
         float_ty: i64,
@@ -3759,16 +3737,18 @@ mod tests {
     }
 
     #[test]
-    fn f32_phi_loaded_from_cross_block_slot_keeps_float_type() {
-        assert_cross_block_float_phi_compiles(
+    fn f32_phi_loaded_from_cross_block_slot_returns_expected_runtime_value() {
+        assert_cross_block_float_phi_runtime_value(
             "cross_block_f32",
             ITY_F32,
             IOP_CONST_F32,
             IDATA_CONST_F32,
             IOP_ADD_F32,
+            IOP_NE_F32,
             1.5f32.to_bits() as i64,
             2.5f32.to_bits() as i64,
             1.0f32.to_bits() as i64,
+            2.5f32.to_bits() as i64,
         );
     }
 
