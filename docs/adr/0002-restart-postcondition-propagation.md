@@ -40,9 +40,10 @@ completion; restart contracts do not create an implicit call-time snapshot.
 
 Every successful completion of a function, normal or recovered, must establish
 the function's ordinary postcondition `Q`. A restart-specific postcondition is
-an additional path-local fact, not a replacement for `Q`. Restart expressions
-and restart-specific contract clauses are restricted to heap-read-only
-computation so recovery does not require a new write-footprint summary.
+an additional path-local fact, not a replacement for `Q`. A function that
+declares restarts opts its ordinary contracts, restart expressions, and
+restart-specific contracts into a structurally heap-read-only subset so
+recovery does not require a new write-footprint summary.
 
 The exported guarantee of recovery through `r` is therefore:
 
@@ -83,28 +84,35 @@ object to establish `Q`, that fact must be included in `A_r`, and the handler
 must prove it at the invocation site.
 
 For the initial feature, heap-read-only is a structural restriction on the
-lowered instructions of the restart expression, `A_r`, and `R_r`. Literals,
-scalar operators, callee/restart arguments, and reads through those arguments
-are permitted. Assignments, field or indexed writes, mutable allocation, and
-user-defined function or method calls are rejected in all three places. Known
-read-only compiler builtins may be admitted directly. Applying one validator
-to the body and both restart-specific clauses prevents a nominally effect-free
-helper from hiding a write during either contract phase. It requires only
-local opcode validation, not transitive write or escape analysis. The subset
-may be widened later only when existing compiler summaries can prove the same
-read-only property without adding a new verifier mechanism.
+lowered instructions of every `P` and `Q` clause of a restart-capable function,
+every restart expression, and every `A_r` and `R_r` clause. Literals, scalar
+operators, callee/restart arguments, and reads through those arguments are
+permitted. Assignments, field or indexed writes, mutable allocation, and
+user-defined function or method calls are rejected in all of those places.
+Known read-only compiler builtins may be admitted directly.
 
-This ADR does not retroactively strengthen purity rules for ordinary functions
-or their existing `P` and `Q` clauses. If those rules are independently found
-insufficient, that is a general soundness issue and must not be hidden inside
-the restart feature.
+Applying one validator to the complete restart verification boundary prevents
+a nominally effect-free helper from hiding a write during dispatch, restart
+execution, or contract evaluation. In particular, release-mode `handle` must
+evaluate `P` to choose the normal or recovery edge, while an ordinary release
+call omits contract checks. Requiring `P` to be structurally read-only prevents
+the presence of `handle` from changing program state. The validator requires
+only local opcode inspection, not transitive write or escape analysis. The
+subset may be widened later only when existing compiler summaries can prove
+the same read-only property without adding a new verifier mechanism.
+
+This is an admission rule only for functions that opt into restarts; it does
+not retroactively change ordinary functions. A pre-existing `P` or `Q` that is
+accepted by the general effect rules but falls outside the structural subset
+must be rewritten before restarts can be added.
 
 ### Facts exposed at a handle site
 
 A handled call lowers to ordinary verifier control flow:
 
-1. The normal edge proves `P`, executes the ordinary call, and exposes `Q` by
-   the existing modular call rule.
+1. The normal edge evaluates and proves the structurally read-only `P`,
+   executes the ordinary call, and exposes `Q` by the existing modular call
+   rule.
 2. A selected handler arm runs in the caller's current state.
 3. Immediately before invoking restart `r`, the caller proves `A_r` with the
    selected restart arguments and the then-current callee arguments.
@@ -132,6 +140,35 @@ restart-refined result type is introduced.
 An unhandled call keeps today's rule: the caller proves `P`, invokes `f`, and
 uses `Q`. Merely declaring a restart does not weaken or otherwise change an
 ordinary call.
+
+### Region and lifetime propagation
+
+Heap-read-only does not mean region-neutral. A restart may return an existing
+heap-backed callee argument or restart argument, so its result can alias storage
+owned by the handler arm.
+
+Each synthetic restart target therefore runs Vow's existing region inference
+and publishes an ordinary `RegionSummary`, including `return_region`. At a
+handled call, lowering instantiates the normal function summary on the normal
+edge and the selected restart target's summary on each recovery edge. The
+handled result's CFG join combines the normal and every selectable recovery
+`return_region` with the existing region join-semilattice described in
+[`arena_memory.md` section 4.3](../design/arena_memory.md#43-fixed-point-for-recursion).
+
+For example, a restart that returns restart argument `v` publishes
+`AliasOf(restart_param_index_for_v)` in its synthetic parameter space. At the
+handle site, that alias is substituted with the actual handler value, so the
+caller propagates the result's `must_outlive` requirements back to `v`. A normal
+`ConstantGlobal` result joined with that alias widens according to the existing
+lattice (to `FreshInCaller`), rather than retaining the ordinary body's
+summary and dropping the recovery alias.
+
+Compiled interface metadata must carry the ordinary region summary for every
+synthetic restart target so cross-module callers can perform the same
+substitution and join without inlining restart expressions. No new region kind
+or ownership rule is introduced. Existing lifetime extension and
+`RegionConflict` diagnostics apply unchanged when a handler-provided value
+cannot safely outlive its arena.
 
 ### Handler and enclosing-function contracts
 
@@ -275,6 +312,14 @@ verification and make the validity of a restart depend on its current callers.
 Restart argument contracts retain modularity: the callee proves `Q` under
 `A_r`, and each handler separately proves the chosen arguments satisfy `A_r`.
 
+### Reuse only the ordinary body's return-region summary
+
+This is unsound when a recovery returns an alias of a handler-owned restart
+argument. The ordinary summary says nothing about that value's arena, so the
+arena could close while the handled result remains live. Giving each synthetic
+restart target an ordinary `RegionSummary` and joining the instantiated
+outcomes reuses Vow's existing lifetime machinery and preserves modularity.
+
 ## Deferred implementation choices
 
 The following remain part of the broader condition/restart feature design:
@@ -284,7 +329,9 @@ The following remain part of the broader condition/restart feature design:
   exhaustiveness;
 - runtime selection and parameter-passing ABI;
 - continuation representation and whether restart invocation returns locally;
-- exact IR representation of the heap-read-only synthetic restart target.
+- exact IR representation of the heap-read-only synthetic restart target; and
+- module-metadata naming and ordering for synthetic restart targets and their
+  existing `RegionSummary` records.
 
 Those choices may change without changing this ADR's invariant: every
 successful outcome establishes `Q`, and a restart adds only path-local facts.
@@ -304,7 +351,13 @@ public-interface tests must cover:
 7. retention of `Q`, but not an unguarded `R_r`, after control-flow joins;
 8. no automatic weakening of an enclosing function's contract;
 9. existing ensures diagnostics identifying a restart that cannot establish
-   `Q`; and
-10. rejection of writes or user-defined calls in a restart expression, `A_r`,
-    or `R_r`; and
-11. Rust/self-hosted parity for all restart verification and diagnostics.
+   `Q`;
+10. rejection of writes or user-defined calls in `P`, `Q`, a restart
+    expression, `A_r`, or `R_r` for a restart-capable function;
+11. a restart returning a heap-backed restart argument propagating
+    `must_outlive` to the handler's actual value;
+12. joining `ConstantGlobal`, `AliasOf`, `AliasOfAny`, and `FreshInCaller`
+    normal/recovery outcomes with the existing region lattice;
+13. cross-module serialization and use of each synthetic restart target's
+    `RegionSummary`; and
+14. Rust/self-hosted parity for all restart verification and diagnostics.
