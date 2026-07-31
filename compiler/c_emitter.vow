@@ -194,6 +194,8 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_string_substring_in_arena")
     || name == String::from("__vow_string_from_i64")
     || name == String::from("__vow_string_from_i64_in_arena")
+    || name == String::from("__vow_string_from_u64")
+    || name == String::from("__vow_string_from_u64_in_arena")
     || name == String::from("__vow_string_parse_u8_opt")
     || name == String::from("__vow_string_parse_i32_opt")
     || name == String::from("__vow_string_print")
@@ -601,6 +603,8 @@ fn is_string_model_constructor(name: String) -> bool {
     || name == String::from("__vow_string_substring_in_arena")
     || name == String::from("__vow_string_from_i64")
     || name == String::from("__vow_string_from_i64_in_arena")
+    || name == String::from("__vow_string_from_u64")
+    || name == String::from("__vow_string_from_u64_in_arena")
 }
 
 fn is_map_model_constructor(name: String) -> bool {
@@ -1784,7 +1788,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
             String::from(" = v"), i64_to_str(src), String::from(";\n")));
         return;
     }
-    if ds == String::from("__vow_string_from_i64") || ds == String::from("__vow_string_from_i64_in_arena") {
+    if ds == String::from("__vow_string_from_i64") || ds == String::from("__vow_string_from_i64_in_arena") || ds == String::from("__vow_string_from_u64") || ds == String::from("__vow_string_from_u64_in_arena") {
         let ids: String = i64_to_str(id);
         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
         out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,

@@ -181,6 +181,8 @@ fn is_string_model_creator(name: &str) -> bool {
                 | "__vow_string_substring_in_arena"
                 | "__vow_string_from_i64"
                 | "__vow_string_from_i64_in_arena"
+                | "__vow_string_from_u64"
+                | "__vow_string_from_u64_in_arena"
         )
 }
 
@@ -472,6 +474,8 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_substring_in_arena"
             | "__vow_string_from_i64"
             | "__vow_string_from_i64_in_arena"
+            | "__vow_string_from_u64"
+            | "__vow_string_from_u64_in_arena"
             | "__vow_string_parse_i64_opt"
             | "__vow_string_parse_u64_opt"
             | "__vow_string_parse_u8_opt"
@@ -1321,7 +1325,10 @@ fn emit_inst(
                         let s = inst.args[0].0;
                         out.push_str(&format!("  v{id} = v{s}.len;\n"));
                     }
-                    "__vow_string_from_i64" | "__vow_string_from_i64_in_arena" => {
+                    "__vow_string_from_i64"
+                    | "__vow_string_from_i64_in_arena"
+                    | "__vow_string_from_u64"
+                    | "__vow_string_from_u64_in_arena" => {
                         emit_nondet_string_len(id, limits.string_max, out);
                     }
                     name if is_string_fresh_helper(name) => {
@@ -5405,6 +5412,65 @@ mod tests {
         );
         assert!(c.contains("__vow_string_t v2;"), "clone decl: {c}");
         assert!(c.contains("v2 = v1;"), "clone preserves source model: {c}");
+    }
+
+    #[test]
+    fn emit_unsigned_integer_formatters_as_bounded_nondet_strings() {
+        let (func, module) = one_block_func_module(
+            "format_unsigned",
+            Ty::Ptr,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstU64,
+                    Ty::U64,
+                    vec![],
+                    InstData::ConstU64(u64::MAX),
+                ),
+                inst(
+                    1,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::CallExtern("__vow_string_from_u64".to_string()),
+                ),
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                inst(
+                    3,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![2, 0],
+                    InstData::CallExtern("__vow_string_from_u64_in_arena".to_string()),
+                ),
+                inst(4, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+
+        assert_eq!(
+            non_modelable_reason(&func, &module, &HashMap::new()),
+            None,
+            "unsigned formatters must remain modelable"
+        );
+
+        let limits = VerifyLimits::default();
+        let c = emit_c_function(&func, &HashMap::new(), &limits);
+        for id in [1, 3] {
+            assert!(
+                c.contains(&format!("__vow_string_t v{id};")),
+                "string result: {c}"
+            );
+            assert!(
+                c.contains(&format!("v{id}.len = __VERIFIER_nondet_long();")),
+                "nondeterministic length: {c}"
+            );
+            assert!(
+                c.contains(&format!(
+                    "__ESBMC_assume(v{id}.len >= 0 && v{id}.len < {});",
+                    limits.string_max
+                )),
+                "bounded length: {c}"
+            );
+        }
     }
 
     #[test]

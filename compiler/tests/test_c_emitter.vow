@@ -186,6 +186,39 @@ fn check_complexity_descriptor_routing() -> i64 {
     0
 }
 
+fn check_unsigned_formatter_models() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(ir_inst_new(0, IOP_CONST_U64(), ITY_U64(), Vec::new(), IDATA_CONST_U64(), 42, 0, String::from("")));
+    let root_args: Vec<i64> = Vec::new();
+    root_args.push(0);
+    insts.push(mk_inst_call_extern(1, ITY_PTR(), root_args, String::from("__vow_string_from_u64")));
+    insts.push(mk_inst_const_i64(2, 0));
+    let arena_args: Vec<i64> = Vec::new();
+    arena_args.push(2);
+    arena_args.push(0);
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), arena_args, String::from("__vow_string_from_u64_in_arena")));
+    insts.push(mk_inst_return(4, 1));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let f: IrFunction = mk_function(13, String::from("format_unsigned"), Vec::new(), ITY_PTR(), blocks);
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(f);
+    let m: IrModule = mk_module(funcs);
+    if non_modelable_reason(f, m, Vec::new()) != String::from("") {
+        return 30;
+    }
+
+    let c: String = emit_c_module(m, 16, 16, 16, 16);
+    if !c.contains(String::from("__vow_string_t v1;")) { return 31; }
+    if !c.contains(String::from("__vow_string_t v3;")) { return 32; }
+    if !c.contains(String::from("v1.len = __VERIFIER_nondet_long();")) { return 33; }
+    if !c.contains(String::from("v3.len = __VERIFIER_nondet_long();")) { return 34; }
+    if !c.contains(String::from("__ESBMC_assume(v1.len >= 0 && v1.len < 16);")) { return 35; }
+    if !c.contains(String::from("__ESBMC_assume(v3.len >= 0 && v3.len < 16);")) { return 36; }
+    0
+}
+
 fn i64_result_to_i32(r: i64) -> i32 {
     if r == 1 { return 1; }
     if r == 2 { return 2; }
@@ -209,6 +242,13 @@ fn i64_result_to_i32(r: i64) -> i32 {
     if r == 27 { return 27; }
     if r == 28 { return 28; }
     if r == 29 { return 29; }
+    if r == 30 { return 30; }
+    if r == 31 { return 31; }
+    if r == 32 { return 32; }
+    if r == 33 { return 33; }
+    if r == 34 { return 34; }
+    if r == 35 { return 35; }
+    if r == 36 { return 36; }
     if r != 0 { return 99; }
     0
 }
@@ -226,5 +266,7 @@ fn main() -> i32 {
     if r5 != 0 { return i64_result_to_i32(r5); }
     let r6: i64 = check_complexity_descriptor_routing();
     if r6 != 0 { return i64_result_to_i32(r6); }
+    let r7: i64 = check_unsigned_formatter_models();
+    if r7 != 0 { return i64_result_to_i32(r7); }
     0
 }
