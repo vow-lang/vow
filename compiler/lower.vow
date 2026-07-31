@@ -764,6 +764,7 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("u64_to_i32_wrap") { return String::from("__vow_u64_to_i32_wrap"); }
     if name == String::from("u64_to_i32_sat") { return String::from("__vow_u64_to_i32_sat"); }
     if name == String::from("int_to_string") { return String::from("__vow_string_from_i64"); }
+    if name == String::from("uint_to_string") { return String::from("__vow_string_from_u64"); }
     if name == String::from("i64_to_string") { return String::from("__vow_string_from_i64"); }
     if name == String::from("vec_sort") { return String::from("__vow_vec_sort"); }
     if name == String::from("time_unix") { return String::from("__vow_time_unix"); }
@@ -855,6 +856,7 @@ fn builtin_ret_ty(name: String) -> i64 {
         return ITY_I32();
     }
     if name == String::from("int_to_string") { return ITY_PTR(); }
+    if name == String::from("uint_to_string") { return ITY_PTR(); }
     if name == String::from("i64_to_string") { return ITY_PTR(); }
     if name == String::from("vec_sort") { return ITY_PTR(); }
     if name == String::from("time_unix") { return ITY_I64(); }
@@ -1463,7 +1465,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if fn_name == String::from("fs_listdir") {
                 lctx_tag(ctx, result, String::from("Vec"));
             }
-            if fn_name == String::from("string_substr") || fn_name == String::from("string_trim") || fn_name == String::from("string_to_upper") || fn_name == String::from("string_to_lower") || fn_name == String::from("string_replace") || fn_name == String::from("string_join") || fn_name == String::from("int_to_string") || fn_name == String::from("i64_to_string") {
+            if fn_name == String::from("string_substr") || fn_name == String::from("string_trim") || fn_name == String::from("string_to_upper") || fn_name == String::from("string_to_lower") || fn_name == String::from("string_replace") || fn_name == String::from("string_join") || fn_name == String::from("int_to_string") || fn_name == String::from("uint_to_string") || fn_name == String::from("i64_to_string") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("string_split") {

@@ -512,6 +512,13 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
                 ("__vow_string_from_i64_in_arena", Some(inst_rgn))
             }
         }
+        "__vow_string_from_u64" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_from_u64_in_arena", Some(inst_rgn))
+            }
+        }
         "__vow_string_split" => {
             if (inst_rgn & 3) == REGION_KIND_ROOT {
                 (sym, None)
@@ -3111,11 +3118,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
-        "__vow_string_from_i64" => {
+        "__vow_string_from_i64" | "__vow_string_from_u64" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_from_i64_in_arena" => {
+        "__vow_string_from_i64_in_arena" | "__vow_string_from_u64_in_arena" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));

@@ -95,6 +95,7 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "u64_to_i32_wrap" => Some(("__vow_u64_to_i32_wrap", Ty::I32)),
         "u64_to_i32_sat" => Some(("__vow_u64_to_i32_sat", Ty::I32)),
         "int_to_string" | "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
+        "uint_to_string" => Some(("__vow_string_from_u64", Ty::Ptr)),
         "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
         "time_unix" => Some(("__vow_time_unix", Ty::I64)),
         "time_unix_ms" => Some(("__vow_time_unix_ms", Ty::I64)),
@@ -144,7 +145,7 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
     match name {
         "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
         | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
-        | "string_join" | "int_to_string" | "i64_to_string" | "hex_encode"
+        | "string_join" | "int_to_string" | "uint_to_string" | "i64_to_string" | "hex_encode"
         | "process_get_stdout" | "process_get_stderr" | "process_stdout_for"
         | "process_stderr_for" => {
             ctx.inst_struct_type.insert(result, "String".to_string());
@@ -4058,6 +4059,7 @@ mod tests {
             ("string_join", "__vow_string_join", Ty::Ptr),
             ("parse_i64", "__vow_parse_i64", Ty::I64),
             ("int_to_string", "__vow_string_from_i64", Ty::Ptr),
+            ("uint_to_string", "__vow_string_from_u64", Ty::Ptr),
             ("i64_to_string", "__vow_string_from_i64", Ty::Ptr),
             ("vec_sort", "__vow_vec_sort", Ty::Ptr),
             ("time_unix", "__vow_time_unix", Ty::I64),

@@ -1,8 +1,12 @@
-// TEST: stdout "0\n-42\n-9223372036854775808\n-42\n"
+// TEST: stdout "0\n-42\n-9223372036854775808\n-42\n42\n0\n18446744073709551615\n"
 module IntegerFormatters
 
 fn format_signed(value: i64) -> String {
     int_to_string(value)
+}
+
+fn format_unsigned(value: u64) -> String {
+    uint_to_string(value)
 }
 
 fn main() -> i32 [io] {
@@ -13,6 +17,13 @@ fn main() -> i32 [io] {
     print_str(format_signed(-9223372036854775807 - 1));
     print_str("\n");
     print_str(i64_to_string(-42));
+    print_str("\n");
+    let small: u8 = 42;
+    print_str(format_unsigned(small as u64));
+    print_str("\n");
+    print_str(format_unsigned(0u64));
+    print_str("\n");
+    print_str(format_unsigned(18446744073709551615u64));
     print_str("\n");
     0
 }
