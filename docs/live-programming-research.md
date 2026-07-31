@@ -236,7 +236,13 @@ mutable heap facts from the original failure before proving the restart; any
 such fact needed by the restart must be re-established by its argument
 contract. The verifier checks downstream obligations on every reachable edge;
 it never assumes the stronger normal postcondition after a weaker recovery,
-and it never weakens the enclosing function's contract automatically.
+and it never weakens the enclosing function's contract automatically. A
+restart's modular interface also carries a sound over-approximation of its heap
+writes. Caller lowering havocs those shared locations before assuming the
+restart postcondition, so handler aliases cannot retain stale pre-restart
+facts; an imprecise summary must conservatively include all mutable memory
+reachable through heap-backed call and restart arguments.
+
 The facts stay in ordinary CFG path conditions rather than becoming a new
 refinement-type axis. The complete caller-side decision, including failure
 diagnostics, is recorded in
