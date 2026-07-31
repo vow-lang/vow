@@ -6,6 +6,7 @@ members = [
     "vow-codegen",
     "vow-linker",
     "vow-verify",
+    "vow-perf",
     "vow-diag",
     "vow-runtime",
     "vow",
