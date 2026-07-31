@@ -26,7 +26,7 @@ fn vow_debug_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     }
 }
 
-fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
+fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     match name {
         "print_str" => Some(("__vow_string_print", Ty::Unit)),
         "print_i64" => Some(("__vow_print_i64", Ty::Unit)),
@@ -57,6 +57,10 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "string_join" => Some(("__vow_string_join", Ty::Ptr)),
         "parse_i64" => Some(("__vow_parse_i64", Ty::I64)),
         "parse_u8" => Some(("__vow_string_parse_u8_opt", Ty::Ptr)),
+        "parse_i8" => Some(("__vow_string_parse_i8_opt", Ty::Ptr)),
+        "parse_i16" => Some(("__vow_string_parse_i16_opt", Ty::Ptr)),
+        "parse_u16" => Some(("__vow_string_parse_u16_opt", Ty::Ptr)),
+        "parse_u32" => Some(("__vow_string_parse_u32_opt", Ty::Ptr)),
         "i16_to_u8_try" => Some(("__vow_i16_to_u8_try", Ty::Ptr)),
         "i16_to_u8_wrap" => Some(("__vow_i16_to_u8_wrap", Ty::U8)),
         "i16_to_u8_sat" => Some(("__vow_i16_to_u8_sat", Ty::U8)),
@@ -138,9 +142,54 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     }
 }
 
+fn narrow_intrinsic_target(name: &str) -> Option<Ty> {
+    let (source, rest) = name.split_once("_to_")?;
+    let (target, mode) = rest.rsplit_once('_')?;
+    if !matches!(mode, "try" | "wrap" | "sat") {
+        return None;
+    }
+    let supported = matches!(
+        (source, target),
+        ("i16" | "u16" | "i32" | "u32" | "i64" | "u64", "i8")
+            | ("i32" | "u32" | "i64" | "u64", "i16" | "u16")
+            | ("i64" | "u64", "u32")
+    );
+    if !supported {
+        return None;
+    }
+    match target {
+        "i8" => Some(Ty::I8),
+        "i16" => Some(Ty::I16),
+        "u16" => Some(Ty::U16),
+        "u32" => Some(Ty::U32),
+        _ => None,
+    }
+}
+
+fn vow_builtin_to_runtime(name: &str) -> Option<(String, Ty)> {
+    if let Some((symbol, ty)) = vow_static_builtin_to_runtime(name) {
+        return Some((symbol.to_string(), ty));
+    }
+    narrow_intrinsic_target(name).map(|target| {
+        let return_ty = if name.ends_with("_try") {
+            Ty::Ptr
+        } else {
+            target
+        };
+        (format!("__vow_{name}"), return_ty)
+    })
+}
+
 // Keep this list in sync with the builtin result tags in compiler/lower.vow.
 // pin_to_root depends on these heap tags for direct builtin call results.
 fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
+    if name.ends_with("_try")
+        && let Some(target) = narrow_intrinsic_target(name)
+    {
+        ctx.inst_struct_type.insert(result, "Option".to_string());
+        ctx.inst_option_elem_ty.insert(result, target);
+        return;
+    }
     match name {
         "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
         | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
@@ -150,6 +199,22 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
         }
         "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
             ctx.inst_struct_type.insert(result, "Vec".to_string());
+        }
+        "parse_i8" => {
+            ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::I8);
+        }
+        "parse_i16" => {
+            ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::I16);
+        }
+        "parse_u16" => {
+            ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::U16);
+        }
+        "parse_u32" => {
+            ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::U32);
         }
         "parse_u8" | "i16_to_u8_try" | "i32_to_u8_try" | "i64_to_u8_try" | "i128_to_u8_try"
         | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
@@ -267,8 +332,12 @@ fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
 fn option_named_elem_type(ast_ty: &AstType) -> Option<Ty> {
     match ast_ty {
         AstType::Generic { name, args, .. } if name == "Option" => match args.first() {
+            Some(AstType::Named { name, .. }) if name == "i8" => Some(Ty::I8),
+            Some(AstType::Named { name, .. }) if name == "i16" => Some(Ty::I16),
             Some(AstType::Named { name, .. }) if name == "i32" => Some(Ty::I32),
             Some(AstType::Named { name, .. }) if name == "u8" => Some(Ty::U8),
+            Some(AstType::Named { name, .. }) if name == "u16" => Some(Ty::U16),
+            Some(AstType::Named { name, .. }) if name == "u32" => Some(Ty::U32),
             _ => None,
         },
         _ => None,
@@ -984,8 +1053,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     (expr_is_integer_literal(lhs) && rhs_ty == narrow_ty)
                         || (expr_is_integer_literal(rhs) && lhs_ty == narrow_ty)
                 };
-                let operand_ty = if contextual_narrow_literal_ty(Ty::U8) {
+                let operand_ty = if contextual_narrow_literal_ty(Ty::I8) {
+                    Ty::I8
+                } else if contextual_narrow_literal_ty(Ty::U8) {
                     Ty::U8
+                } else if contextual_narrow_literal_ty(Ty::I16) {
+                    Ty::I16
+                } else if contextual_narrow_literal_ty(Ty::U16) {
+                    Ty::U16
                 } else if contextual_narrow_literal_ty(Ty::I32) {
                     Ty::I32
                 } else if contextual_narrow_literal_ty(Ty::U32) {
@@ -995,7 +1070,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 } else {
                     lhs_ty
                 };
-                if matches!(operand_ty, Ty::U8 | Ty::I32 | Ty::U32) {
+                if matches!(
+                    operand_ty,
+                    Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                ) {
                     lhs_id = lower_narrow_literal(ctx, lhs, lhs_id, operand_ty);
                     if !matches!(op, BinOp::Shl | BinOp::Shr) {
                         rhs_id = lower_narrow_literal(ctx, rhs, rhs_id, operand_ty);
@@ -1071,16 +1149,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .enumerate()
                 .map(|(i, a)| {
                     if let Some(info) = &call_info
-                        && info.param_tys.get(i) == Some(&Ty::U8)
-                        && let ExprKind::Lit(Lit::Int(value)) = a.kind
-                    {
-                        ctx.emit(
-                            Opcode::ConstU8,
-                            Ty::U8,
-                            vec![],
-                            InstData::ConstU8(value as u8),
-                            a.span,
+                        && let Some(&param_ty) = info.param_tys.get(i)
+                        && matches!(
+                            param_ty,
+                            Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
                         )
+                    {
+                        let original = lower_consumed_expr(ctx, a);
+                        lower_narrow_literal(ctx, a, original, param_ty)
                     } else {
                         lower_consumed_expr(ctx, a)
                     }
@@ -1344,7 +1420,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Return { value } => {
             if let Some(val_expr) = value {
-                let val = lower_expr(ctx, val_expr);
+                let original = lower_expr(ctx, val_expr);
+                let val = lower_narrow_literal(ctx, val_expr, original, ctx.func.return_ty);
                 if let Some(vow_block) = ctx.vow_block.clone() {
                     vow::lower_ensures(ctx, &vow_block, val);
                 }
@@ -1363,7 +1440,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Ident(name) => {
                     if let Some(current) = ctx.lookup(name) {
                         let current_ty = ctx.inst_ty(current);
-                        if matches!(current_ty, Ty::U8 | Ty::I32) {
+                        if matches!(
+                            current_ty,
+                            Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                        ) {
                             new_val = lower_narrow_literal(ctx, rhs, new_val, current_ty);
                         }
                     }
@@ -2634,7 +2714,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // shares its Cranelift register width -- otherwise a plain literal arm
             // (e.g. `None => -1`) merging with a genuinely narrow-typed arm (e.g.
             // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
-            if matches!(phi_ty, Ty::U8 | Ty::I32 | Ty::U32) {
+            if matches!(
+                phi_ty,
+                Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+            ) {
                 for i in 0..arm_results.len() {
                     let arm_block = arm_results[i].0;
                     let up_id = arm_results[i].1;
@@ -3318,19 +3401,38 @@ fn integer_literal_value_from_block(block: &Block) -> Option<i64> {
 
 /// Re-lower an integer-literal operand as a `ty`-native constant instead of
 /// the default `ConstI64`, so it shares a Cranelift register width with a
-/// genuinely `ty`-typed sibling operand in the same binary op. Only `U8` and
-/// `I32` are narrow enough to need this today; other widths still default
-/// to `ConstI64` via `lower_expr`.
+/// genuinely `ty`-typed sibling operand in the same binary op.
 fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
     let Some(value) = integer_literal_value(expr) else {
         return original;
     };
     match ty {
+        Ty::I8 => ctx.emit(
+            Opcode::ConstU8,
+            Ty::I8,
+            vec![],
+            InstData::ConstU8(value as u8),
+            expr.span,
+        ),
         Ty::U8 => ctx.emit(
             Opcode::ConstU8,
             Ty::U8,
             vec![],
             InstData::ConstU8(value as u8),
+            expr.span,
+        ),
+        Ty::I16 => ctx.emit(
+            Opcode::ConstI32,
+            Ty::I16,
+            vec![],
+            InstData::ConstI32(value as i32),
+            expr.span,
+        ),
+        Ty::U16 => ctx.emit(
+            Opcode::ConstI32,
+            Ty::U16,
+            vec![],
+            InstData::ConstI32(value as i32),
             expr.span,
         ),
         Ty::I32 => ctx.emit(
@@ -3402,8 +3504,14 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                 name: type_name, ..
             }) = ty
             {
-                if type_name == "u8" {
+                if type_name == "i8" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::I8);
+                } else if type_name == "u8" {
                     val = lower_narrow_literal(ctx, init, val, Ty::U8);
+                } else if type_name == "i16" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::I16);
+                } else if type_name == "u16" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::U16);
                 } else if type_name == "i32" {
                     val = lower_narrow_literal(ctx, init, val, Ty::I32);
                 }
@@ -3604,17 +3712,12 @@ pub(crate) fn lower_function(
     let mut trailing = lower_block_inner(&mut ctx, &fn_def.body);
     ctx.pop_scope();
 
-    if return_ty == Ty::U8
-        && let Some(expr) = &fn_def.body.trailing_expr
-        && let ExprKind::Lit(Lit::Int(value)) = expr.kind
+    if matches!(
+        return_ty,
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+    ) && let Some(expr) = &fn_def.body.trailing_expr
     {
-        trailing = ctx.emit(
-            Opcode::ConstU8,
-            Ty::U8,
-            vec![],
-            InstData::ConstU8(value as u8),
-            expr.span,
-        );
+        trailing = lower_narrow_literal(&mut ctx, expr, trailing, return_ty);
     }
 
     let has_return = {
@@ -4118,7 +4221,7 @@ mod tests {
             ("__vow_clif_destroy", "__vow_clif_destroy", Ty::Unit),
         ];
         for (name, symbol, ty) in cases {
-            assert_eq!(vow_builtin_to_runtime(name), Some((symbol, ty)));
+            assert_eq!(vow_builtin_to_runtime(name), Some((symbol.to_string(), ty)));
         }
         assert_eq!(vow_builtin_to_runtime("missing_builtin"), None);
     }

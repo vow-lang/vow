@@ -668,7 +668,9 @@ fn lower_inst(
         // ------------------------------------------------------------------
         Opcode::ConstI32 => {
             if let InstData::ConstI32(v) = inst.data {
-                let val = builder.ins().iconst(types::I32, v as i64);
+                let ty = ir_ty_to_cranelift(inst.ty)
+                    .expect("ConstI32 instructions must have an integer result type");
+                let val = builder.ins().iconst(ty, v as i64);
                 ctx.value_map.insert(inst.id, val);
             }
         }
@@ -686,7 +688,9 @@ fn lower_inst(
         }
         Opcode::ConstU8 => {
             if let InstData::ConstU8(v) = inst.data {
-                let val = builder.ins().iconst(types::I8, i64::from(v));
+                let ty = ir_ty_to_cranelift(inst.ty)
+                    .expect("ConstU8 instructions must have an integer result type");
+                let val = builder.ins().iconst(ty, i64::from(v));
                 ctx.value_map.insert(inst.id, val);
             }
         }
@@ -1221,6 +1225,12 @@ fn lower_inst(
                             if actual_ty == types::I8 && expected_ty == types::I64 {
                                 return builder.ins().uextend(types::I64, v);
                             }
+                            if actual_ty.is_int()
+                                && expected_ty.is_int()
+                                && actual_ty.bits() < expected_ty.bits()
+                            {
+                                return builder.ins().uextend(expected_ty, v);
+                            }
                         }
                         v
                     })
@@ -1333,6 +1343,16 @@ fn lower_inst(
                         builder.ins().uextend(types::I64, v)
                     } else if actual_ty == types::I64 && expected_ty == types::I32 {
                         builder.ins().ireduce(types::I32, v)
+                    } else if actual_ty.bits() > expected_ty.bits()
+                        && actual_ty.is_int()
+                        && expected_ty.is_int()
+                    {
+                        builder.ins().ireduce(expected_ty, v)
+                    } else if actual_ty.bits() < expected_ty.bits()
+                        && actual_ty.is_int()
+                        && expected_ty.is_int()
+                    {
+                        builder.ins().uextend(expected_ty, v)
                     } else {
                         v
                     }
@@ -1517,6 +1537,7 @@ fn lower_inst(
                 let offset = (idx as i32) * 8;
                 let src_ty = builder.func.dfg.value_type(new_val);
                 let store_val = match src_ty {
+                    types::I16 => builder.ins().sextend(types::I64, new_val),
                     types::I32 => builder.ins().sextend(types::I64, new_val),
                     types::I8 => builder.ins().uextend(types::I64, new_val),
                     types::F32 => {
@@ -1571,7 +1592,12 @@ fn tag_for_ir_ty(ty: IrTy) -> u8 {
         IrTy::F32 => 2,
         IrTy::F64 => 3,
         IrTy::Bool => 4,
+        IrTy::U64 => 5,
         IrTy::U8 => 6,
+        IrTy::I8 => 7,
+        IrTy::I16 => 8,
+        IrTy::U16 => 9,
+        IrTy::U32 => 10,
         _ => 0,
     }
 }
@@ -1669,8 +1695,13 @@ fn emit_vow_violation_body(
                     .ins()
                     .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
                 let payload: Value = match ir_ty {
+                    IrTy::I8 => builder.ins().sextend(types::I64, *cl_val),
+                    IrTy::U8 => builder.ins().uextend(types::I64, *cl_val),
+                    IrTy::I16 => builder.ins().sextend(types::I64, *cl_val),
+                    IrTy::U16 => builder.ins().uextend(types::I64, *cl_val),
                     IrTy::I32 => builder.ins().sextend(types::I64, *cl_val),
-                    IrTy::I64 => *cl_val,
+                    IrTy::U32 => builder.ins().uextend(types::I64, *cl_val),
+                    IrTy::I64 | IrTy::U64 => *cl_val,
                     IrTy::F32 => {
                         let bits = builder
                             .ins()
@@ -1681,7 +1712,6 @@ fn emit_vow_violation_body(
                         .ins()
                         .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     IrTy::Bool => *cl_val,
-                    IrTy::U8 => builder.ins().uextend(types::I64, *cl_val),
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder
@@ -2056,45 +2086,39 @@ fn compile_ir_function(
     Ok(())
 }
 
+fn narrow_integer_clif_type(name: &str) -> Option<types::Type> {
+    match name {
+        "i8" | "u8" => Some(types::I8),
+        "i16" | "u16" => Some(types::I16),
+        "i32" | "u32" => Some(types::I32),
+        "i64" | "u64" => Some(types::I64),
+        "i128" | "u128" => Some(types::I128),
+        _ => None,
+    }
+}
+
+fn narrow_intrinsic_signature(sym: &str) -> Option<(types::Type, types::Type)> {
+    let name = sym.strip_prefix("__vow_")?;
+    let (source, rest) = name.split_once("_to_")?;
+    let (target, mode) = rest.rsplit_once('_')?;
+    if !matches!(mode, "try" | "wrap" | "sat") {
+        return None;
+    }
+    let source_ty = narrow_integer_clif_type(source)?;
+    let target_ty = if mode == "try" {
+        types::I64
+    } else {
+        narrow_integer_clif_type(target)?
+    };
+    Some((source_ty, target_ty))
+}
+
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
-    let narrow_source_ty =
-        if sym.starts_with("__vow_i16_to_u8_") || sym.starts_with("__vow_u16_to_u8_") {
-            Some(types::I16)
-        } else if sym.starts_with("__vow_i32_to_u8_") || sym.starts_with("__vow_u32_to_u8_") {
-            Some(types::I32)
-        } else if sym.starts_with("__vow_i64_to_u8_") || sym.starts_with("__vow_u64_to_u8_") {
-            Some(types::I64)
-        } else if sym.starts_with("__vow_i128_to_u8_") || sym.starts_with("__vow_u128_to_u8_") {
-            Some(types::I128)
-        } else {
-            None
-        };
-    if let Some(source_ty) = narrow_source_ty {
+    if let Some((source_ty, return_ty)) = narrow_intrinsic_signature(sym) {
         sig.params.push(AbiParam::new(source_ty));
-        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
-            types::I64
-        } else {
-            types::I8
-        }));
-        return sig;
-    }
-    let i32_narrow_source_ty =
-        if sym.starts_with("__vow_i64_to_i32_") || sym.starts_with("__vow_u64_to_i32_") {
-            Some(types::I64)
-        } else if sym.starts_with("__vow_u32_to_i32_") {
-            Some(types::I32)
-        } else {
-            None
-        };
-    if let Some(source_ty) = i32_narrow_source_ty {
-        sig.params.push(AbiParam::new(source_ty));
-        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
-            types::I64
-        } else {
-            types::I32
-        }));
+        sig.returns.push(AbiParam::new(return_ty));
         return sig;
     }
     if matches!(
@@ -2374,7 +2398,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_string_parse_i64_opt"
         | "__vow_string_parse_u64_opt"
+        | "__vow_string_parse_i8_opt"
         | "__vow_string_parse_u8_opt"
+        | "__vow_string_parse_i16_opt"
+        | "__vow_string_parse_u16_opt"
+        | "__vow_string_parse_u32_opt"
         | "__vow_string_parse_i32_opt" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)

@@ -1091,10 +1091,15 @@ impl<'e> Checker<'e> {
                     BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
                         self.check_same_integer(lhs_ty, rhs_ty, expr.span)
                     }
-                    BinOp::Shl | BinOp::Shr if matches!(lhs_ty, Ty::U8 | Ty::I32) => {
+                    BinOp::Shl | BinOp::Shr
+                        if matches!(
+                            lhs_ty,
+                            Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                        ) =>
+                    {
                         let width = lhs_ty
                             .integer_width()
-                            .expect("U8 and I32 both have an integer width");
+                            .expect("narrow shift types have an integer width");
                         if rhs_ty != Ty::U32 && !rhs_ty.is_lit_int() && rhs_ty != Ty::Never {
                             self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
@@ -4465,7 +4470,7 @@ mod tests {
     #[test]
     fn all_fn_names_returns_defined_fns() {
         let env = TypeEnv::new();
-        let names = env.all_fn_names(64, 64);
+        let names = env.all_fn_names(256, 64);
         assert!(names.contains(&"print_str".to_string()));
         assert!(names.contains(&"print_i64".to_string()));
     }

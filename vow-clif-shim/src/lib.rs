@@ -1768,7 +1768,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             match op {
                 IOP_CONST_I32 => {
                     if dk == IDATA_CONST_I32 {
-                        let val = builder.ins().iconst(types::I32, dv as i32 as i64);
+                        let val = builder.ins().iconst(
+                            ity_to_cranelift(ity)
+                                .expect("ConstI32 instructions must have an integer type"),
+                            dv as i32 as i64,
+                        );
                         set_val!(iid, val);
                     }
                 }
@@ -2126,22 +2130,29 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             let blame_byte: i64 = if op == IOP_VOW_REQ { 0 } else { 1 };
 
                             // Collect captures
-                            let captures: Vec<(GlobalValue, Value, i64)> =
-                                if let Some(bindings) = vow_bindings.get(&vow_id) {
-                                    bindings
-                                        .iter()
-                                        .filter_map(|b| {
-                                            let ir_ty = *inst_ty_map.get(&b.inst_id)?;
-                                            if matches!(ir_ty, ITY_PTR | ITY_LPTR | ITY_UNIT) {
-                                                return None;
-                                            }
-                                            let cl_val = *value_map.get(&b.inst_id)?;
-                                            Some((b.name_gv, cl_val, ir_ty))
-                                        })
-                                        .collect()
-                                } else {
-                                    vec![]
-                                };
+                            let mut captures: Vec<(GlobalValue, Value, i64)> = Vec::new();
+                            if let Some(bindings) = vow_bindings.get(&vow_id) {
+                                for binding in bindings {
+                                    let Some(&ir_ty) = inst_ty_map.get(&binding.inst_id) else {
+                                        continue;
+                                    };
+                                    if matches!(ir_ty, ITY_PTR | ITY_LPTR | ITY_UNIT) {
+                                        continue;
+                                    }
+                                    let cl_val = if let Some(&slot) = slot_map.get(&binding.inst_id)
+                                    {
+                                        let Some(value_ty) = ity_to_cranelift(ir_ty) else {
+                                            continue;
+                                        };
+                                        load_slotted_value(&mut builder, slot, value_ty)
+                                    } else if let Some(&value) = value_map.get(&binding.inst_id) {
+                                        value
+                                    } else {
+                                        continue;
+                                    };
+                                    captures.push((binding.name_gv, cl_val, ir_ty));
+                                }
+                            }
 
                             emit_vow_check(
                                 &mut builder,
@@ -2269,6 +2280,16 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                     builder.ins().uextend(types::I64, v)
                                 } else if actual_ty == types::I64 && expected_ty == types::I32 {
                                     builder.ins().ireduce(types::I32, v)
+                                } else if actual_ty.bits() > expected_ty.bits()
+                                    && actual_ty.is_int()
+                                    && expected_ty.is_int()
+                                {
+                                    builder.ins().ireduce(expected_ty, v)
+                                } else if actual_ty.bits() < expected_ty.bits()
+                                    && actual_ty.is_int()
+                                    && expected_ty.is_int()
+                                {
+                                    builder.ins().uextend(expected_ty, v)
                                 } else {
                                     v
                                 }
@@ -2365,6 +2386,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                         }
                                         if actual_ty == types::I8 && expected_ty == types::I64 {
                                             return builder.ins().uextend(types::I64, v);
+                                        }
+                                        if actual_ty.is_int()
+                                            && expected_ty.is_int()
+                                            && actual_ty.bits() < expected_ty.bits()
+                                        {
+                                            return builder.ins().uextend(expected_ty, v);
                                         }
                                     }
                                     v
@@ -2470,6 +2497,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         let offset = (idx as i32) * 8;
                         let src_ty = builder.func.dfg.value_type(new_val);
                         let store_val = match src_ty {
+                            types::I16 => builder.ins().sextend(types::I64, new_val),
                             types::I32 => builder.ins().sextend(types::I64, new_val),
                             types::I8 => builder.ins().uextend(types::I64, new_val),
                             types::F32 => {
@@ -2732,9 +2760,9 @@ fn load_slotted_value(
 ) -> Value {
     match value_ty {
         types::F32 | types::F64 => builder.ins().stack_load(types::I64, value_ty, slot, 0),
-        types::I32 => {
+        types::I16 | types::I32 => {
             let raw = builder.ins().stack_load(types::I64, types::I64, slot, 0);
-            builder.ins().ireduce(types::I32, raw)
+            builder.ins().ireduce(value_ty, raw)
         }
         types::I8 => {
             let raw = builder.ins().stack_load(types::I64, types::I64, slot, 0);
@@ -2746,7 +2774,7 @@ fn load_slotted_value(
 
 fn store_slotted_value(builder: &mut FunctionBuilder<'_>, slot: StackSlot, value: Value) {
     let store_val = match builder.func.dfg.value_type(value) {
-        types::I32 => builder.ins().sextend(types::I64, value),
+        types::I16 | types::I32 => builder.ins().sextend(types::I64, value),
         types::I8 => builder.ins().uextend(types::I64, value),
         _ => value,
     };
@@ -2760,7 +2788,12 @@ fn tag_for_ir_ty(ty: i64) -> i64 {
         ITY_F32 => 2,
         ITY_F64 => 3,
         ITY_BOOL => 4,
+        ITY_U64 => 5,
         ITY_U8 => 6,
+        ITY_I8 => 7,
+        ITY_I16 => 8,
+        ITY_U16 => 9,
+        ITY_U32 => 10,
         _ => 0,
     }
 }
@@ -2821,8 +2854,13 @@ fn emit_vow_check(
                     .ins()
                     .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
                 let payload: Value = match *ir_ty {
+                    ITY_I8 => builder.ins().sextend(types::I64, *cl_val),
+                    ITY_U8 => builder.ins().uextend(types::I64, *cl_val),
+                    ITY_I16 => builder.ins().sextend(types::I64, *cl_val),
+                    ITY_U16 => builder.ins().uextend(types::I64, *cl_val),
                     ITY_I32 => builder.ins().sextend(types::I64, *cl_val),
-                    ITY_I64 => *cl_val,
+                    ITY_U32 => builder.ins().uextend(types::I64, *cl_val),
+                    ITY_I64 | ITY_U64 => *cl_val,
                     ITY_F32 => {
                         let bits = builder
                             .ins()
@@ -2833,7 +2871,6 @@ fn emit_vow_check(
                         .ins()
                         .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     ITY_BOOL => *cl_val,
-                    ITY_U8 => builder.ins().uextend(types::I64, *cl_val),
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder
@@ -2884,7 +2921,12 @@ fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, ret_ty: i6
     let target = ity_to_cranelift(ret_ty);
     match (val_ty, target) {
         (types::I64, Some(types::I32)) => builder.ins().ireduce(types::I32, val),
+        (types::I64, Some(types::I16)) => builder.ins().ireduce(types::I16, val),
         (types::I64, Some(types::I8)) => builder.ins().ireduce(types::I8, val),
+        (types::I32, Some(types::I16)) => builder.ins().ireduce(types::I16, val),
+        (types::I16, Some(types::I8)) => builder.ins().ireduce(types::I8, val),
+        (types::I16, Some(types::I32)) => builder.ins().sextend(types::I32, val),
+        (types::I16, Some(types::I64)) => builder.ins().sextend(types::I64, val),
         (types::I32, Some(types::I64)) => builder.ins().sextend(types::I64, val),
         (types::I8, Some(types::I64)) => builder.ins().uextend(types::I64, val),
         (types::I32, Some(types::I8)) => builder.ins().ireduce(types::I8, val),
@@ -2893,45 +2935,39 @@ fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, ret_ty: i6
     }
 }
 
+fn narrow_integer_clif_type(name: &str) -> Option<types::Type> {
+    match name {
+        "i8" | "u8" => Some(types::I8),
+        "i16" | "u16" => Some(types::I16),
+        "i32" | "u32" => Some(types::I32),
+        "i64" | "u64" => Some(types::I64),
+        "i128" | "u128" => Some(types::I128),
+        _ => None,
+    }
+}
+
+fn narrow_intrinsic_signature(sym: &str) -> Option<(types::Type, types::Type)> {
+    let name = sym.strip_prefix("__vow_")?;
+    let (source, rest) = name.split_once("_to_")?;
+    let (target, mode) = rest.rsplit_once('_')?;
+    if !matches!(mode, "try" | "wrap" | "sat") {
+        return None;
+    }
+    let source_ty = narrow_integer_clif_type(source)?;
+    let target_ty = if mode == "try" {
+        types::I64
+    } else {
+        narrow_integer_clif_type(target)?
+    };
+    Some((source_ty, target_ty))
+}
+
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
-    let narrow_source_ty =
-        if sym.starts_with("__vow_i16_to_u8_") || sym.starts_with("__vow_u16_to_u8_") {
-            Some(types::I16)
-        } else if sym.starts_with("__vow_i32_to_u8_") || sym.starts_with("__vow_u32_to_u8_") {
-            Some(types::I32)
-        } else if sym.starts_with("__vow_i64_to_u8_") || sym.starts_with("__vow_u64_to_u8_") {
-            Some(types::I64)
-        } else if sym.starts_with("__vow_i128_to_u8_") || sym.starts_with("__vow_u128_to_u8_") {
-            Some(types::I128)
-        } else {
-            None
-        };
-    if let Some(source_ty) = narrow_source_ty {
+    if let Some((source_ty, return_ty)) = narrow_intrinsic_signature(sym) {
         sig.params.push(AbiParam::new(source_ty));
-        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
-            types::I64
-        } else {
-            types::I8
-        }));
-        return sig;
-    }
-    let i32_narrow_source_ty =
-        if sym.starts_with("__vow_i64_to_i32_") || sym.starts_with("__vow_u64_to_i32_") {
-            Some(types::I64)
-        } else if sym.starts_with("__vow_u32_to_i32_") {
-            Some(types::I32)
-        } else {
-            None
-        };
-    if let Some(source_ty) = i32_narrow_source_ty {
-        sig.params.push(AbiParam::new(source_ty));
-        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
-            types::I64
-        } else {
-            types::I32
-        }));
+        sig.returns.push(AbiParam::new(return_ty));
         return sig;
     }
     if matches!(
@@ -3209,7 +3245,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_string_parse_i64_opt"
         | "__vow_string_parse_u64_opt"
+        | "__vow_string_parse_i8_opt"
         | "__vow_string_parse_u8_opt"
+        | "__vow_string_parse_i16_opt"
+        | "__vow_string_parse_u16_opt"
+        | "__vow_string_parse_u32_opt"
         | "__vow_string_parse_i32_opt" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));

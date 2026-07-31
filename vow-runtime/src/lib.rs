@@ -56,6 +56,10 @@ const TAG_F64: u8 = 3;
 const TAG_BOOL: u8 = 4;
 const TAG_U64: u8 = 5;
 const TAG_U8: u8 = 6;
+const TAG_I8: u8 = 7;
+const TAG_I16: u8 = 8;
+const TAG_U16: u8 = 9;
+const TAG_U32: u8 = 10;
 
 /// Reserved process exit status for any runtime abort — a contract
 /// violation, checked-arithmetic overflow, unwrap-on-None, index-out-of-bounds,
@@ -86,6 +90,10 @@ fn fmt_payload(tag: u8, payload: u64) -> String {
         TAG_BOOL => if payload != 0 { "true" } else { "false" }.to_string(),
         TAG_U64 => format!("{payload}"),
         TAG_U8 => format!("{}", payload as u8),
+        TAG_I8 => format!("{}", payload as i8),
+        TAG_I16 => format!("{}", payload as i16),
+        TAG_U16 => format!("{}", payload as u16),
+        TAG_U32 => format!("{}", payload as u32),
         _ => format!("0x{payload:x}"),
     }
 }
@@ -2281,6 +2289,44 @@ pub unsafe extern "C" fn __vow_string_parse_u8_opt(s: *const u8) -> *mut u8 {
     unsafe { alloc_option_u8(value) }
 }
 
+macro_rules! define_narrow_parser {
+    ($alloc_name:ident, $parse_name:ident, $ty:ty) => {
+        unsafe fn $alloc_name(value: Option<$ty>) -> *mut u8 {
+            let ptr = __vow_vec_new(8, 8) as *mut i64;
+            match value {
+                Some(value) => unsafe {
+                    *ptr = 1;
+                    *ptr.add(1) = i64::from(value);
+                },
+                None => unsafe {
+                    *ptr = 0;
+                    *ptr.add(1) = 0;
+                },
+            }
+            ptr as *mut u8
+        }
+
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $parse_name(s: *const u8) -> *mut u8 {
+            if s.is_null() {
+                return unsafe { $alloc_name(None) };
+            }
+            sanitize_on_read(s as usize, 0);
+            let v = unsafe { &*(s as *const VowVec) };
+            let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+            let value = std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|text| text.trim().parse::<$ty>().ok());
+            unsafe { $alloc_name(value) }
+        }
+    };
+}
+
+define_narrow_parser!(alloc_option_i8, __vow_string_parse_i8_opt, i8);
+define_narrow_parser!(alloc_option_i16, __vow_string_parse_i16_opt, i16);
+define_narrow_parser!(alloc_option_u16, __vow_string_parse_u16_opt, u16);
+define_narrow_parser!(alloc_option_u32, __vow_string_parse_u32_opt, u32);
+
 unsafe fn alloc_option_i32(value: Option<i32>) -> *mut u8 {
     let ptr = __vow_vec_new(8, 8) as *mut i64;
     match value {
@@ -2452,6 +2498,214 @@ define_unsigned_to_i32!(
     __vow_u64_to_i32_wrap,
     __vow_u64_to_i32_sat,
     u64
+);
+
+macro_rules! define_narrowing_intrinsic {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident, $sat:expr) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $try_name(value: $source) -> *mut u8 {
+            unsafe { $alloc(<$target>::try_from(value).ok()) }
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $wrap_name(value: $source) -> $target {
+            value as $target
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $sat_name(value: $source) -> $target {
+            ($sat)(value)
+        }
+    };
+}
+
+macro_rules! define_signed_to_signed {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+        define_narrowing_intrinsic!(
+            $try_name,
+            $wrap_name,
+            $sat_name,
+            $source,
+            $target,
+            $alloc,
+            |value: $source| value.clamp(<$target>::MIN as $source, <$target>::MAX as $source)
+                as $target
+        );
+    };
+}
+
+macro_rules! define_unsigned_to_signed {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+        define_narrowing_intrinsic!(
+            $try_name,
+            $wrap_name,
+            $sat_name,
+            $source,
+            $target,
+            $alloc,
+            |value: $source| value.min(<$target>::MAX as $source) as $target
+        );
+    };
+}
+
+macro_rules! define_signed_to_unsigned {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+        define_narrowing_intrinsic!(
+            $try_name,
+            $wrap_name,
+            $sat_name,
+            $source,
+            $target,
+            $alloc,
+            |value: $source| value.clamp(0, <$target>::MAX as $source) as $target
+        );
+    };
+}
+
+macro_rules! define_unsigned_to_unsigned {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+        define_narrowing_intrinsic!(
+            $try_name,
+            $wrap_name,
+            $sat_name,
+            $source,
+            $target,
+            $alloc,
+            |value: $source| value.min(<$target>::MAX as $source) as $target
+        );
+    };
+}
+
+define_signed_to_signed!(
+    __vow_i16_to_i8_try,
+    __vow_i16_to_i8_wrap,
+    __vow_i16_to_i8_sat,
+    i16,
+    i8,
+    alloc_option_i8
+);
+define_unsigned_to_signed!(
+    __vow_u16_to_i8_try,
+    __vow_u16_to_i8_wrap,
+    __vow_u16_to_i8_sat,
+    u16,
+    i8,
+    alloc_option_i8
+);
+define_signed_to_signed!(
+    __vow_i32_to_i8_try,
+    __vow_i32_to_i8_wrap,
+    __vow_i32_to_i8_sat,
+    i32,
+    i8,
+    alloc_option_i8
+);
+define_unsigned_to_signed!(
+    __vow_u32_to_i8_try,
+    __vow_u32_to_i8_wrap,
+    __vow_u32_to_i8_sat,
+    u32,
+    i8,
+    alloc_option_i8
+);
+define_signed_to_signed!(
+    __vow_i64_to_i8_try,
+    __vow_i64_to_i8_wrap,
+    __vow_i64_to_i8_sat,
+    i64,
+    i8,
+    alloc_option_i8
+);
+define_unsigned_to_signed!(
+    __vow_u64_to_i8_try,
+    __vow_u64_to_i8_wrap,
+    __vow_u64_to_i8_sat,
+    u64,
+    i8,
+    alloc_option_i8
+);
+
+define_signed_to_signed!(
+    __vow_i32_to_i16_try,
+    __vow_i32_to_i16_wrap,
+    __vow_i32_to_i16_sat,
+    i32,
+    i16,
+    alloc_option_i16
+);
+define_unsigned_to_signed!(
+    __vow_u32_to_i16_try,
+    __vow_u32_to_i16_wrap,
+    __vow_u32_to_i16_sat,
+    u32,
+    i16,
+    alloc_option_i16
+);
+define_signed_to_signed!(
+    __vow_i64_to_i16_try,
+    __vow_i64_to_i16_wrap,
+    __vow_i64_to_i16_sat,
+    i64,
+    i16,
+    alloc_option_i16
+);
+define_unsigned_to_signed!(
+    __vow_u64_to_i16_try,
+    __vow_u64_to_i16_wrap,
+    __vow_u64_to_i16_sat,
+    u64,
+    i16,
+    alloc_option_i16
+);
+
+define_signed_to_unsigned!(
+    __vow_i32_to_u16_try,
+    __vow_i32_to_u16_wrap,
+    __vow_i32_to_u16_sat,
+    i32,
+    u16,
+    alloc_option_u16
+);
+define_unsigned_to_unsigned!(
+    __vow_u32_to_u16_try,
+    __vow_u32_to_u16_wrap,
+    __vow_u32_to_u16_sat,
+    u32,
+    u16,
+    alloc_option_u16
+);
+define_signed_to_unsigned!(
+    __vow_i64_to_u16_try,
+    __vow_i64_to_u16_wrap,
+    __vow_i64_to_u16_sat,
+    i64,
+    u16,
+    alloc_option_u16
+);
+define_unsigned_to_unsigned!(
+    __vow_u64_to_u16_try,
+    __vow_u64_to_u16_wrap,
+    __vow_u64_to_u16_sat,
+    u64,
+    u16,
+    alloc_option_u16
+);
+
+define_signed_to_unsigned!(
+    __vow_i64_to_u32_try,
+    __vow_i64_to_u32_wrap,
+    __vow_i64_to_u32_sat,
+    i64,
+    u32,
+    alloc_option_u32
+);
+define_unsigned_to_unsigned!(
+    __vow_u64_to_u32_try,
+    __vow_u64_to_u32_wrap,
+    __vow_u64_to_u32_sat,
+    u64,
+    u32,
+    alloc_option_u32
 );
 
 #[unsafe(no_mangle)]

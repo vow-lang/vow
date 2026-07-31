@@ -382,10 +382,13 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
                 && let InstData::CallExtern(ref name) = inst.data
                 && (name == "__vow_string_parse_i64_opt"
                     || name == "__vow_string_parse_u64_opt"
+                    || name == "__vow_string_parse_i8_opt"
                     || name == "__vow_string_parse_u8_opt"
+                    || name == "__vow_string_parse_i16_opt"
+                    || name == "__vow_string_parse_u16_opt"
+                    || name == "__vow_string_parse_u32_opt"
                     || name == "__vow_string_parse_i32_opt"
-                    || (name.contains("_to_u8_") && name.ends_with("_try"))
-                    || (name.contains("_to_i32_") && name.ends_with("_try"))
+                    || (narrow_target_model(name).is_some() && name.ends_with("_try"))
                     || name == "__vow_btreemap_insert"
                     || name == "__vow_btreemap_get")
             {
@@ -424,10 +427,7 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
 // ---------------------------------------------------------------------------
 
 fn is_known_builtin(name: &str) -> bool {
-    if is_string_fresh_helper(name)
-        || is_u8_numeric_intrinsic(name)
-        || is_i32_numeric_intrinsic(name)
-    {
+    if is_string_fresh_helper(name) || is_numeric_intrinsic(name) {
         return true;
     }
 
@@ -474,7 +474,11 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_from_i64_in_arena"
             | "__vow_string_parse_i64_opt"
             | "__vow_string_parse_u64_opt"
+            | "__vow_string_parse_i8_opt"
             | "__vow_string_parse_u8_opt"
+            | "__vow_string_parse_i16_opt"
+            | "__vow_string_parse_u16_opt"
+            | "__vow_string_parse_u32_opt"
             | "__vow_string_parse_i32_opt"
             | "__vow_string_print"
             | "__vow_map_new"
@@ -494,20 +498,66 @@ fn is_known_builtin(name: &str) -> bool {
     )
 }
 
-fn is_u8_numeric_intrinsic(name: &str) -> bool {
-    (name.starts_with("__vow_")
-        && name.contains("_to_u8_")
+#[derive(Clone, Copy)]
+struct NarrowTargetModel {
+    c_ty: &'static str,
+    min: &'static str,
+    max: &'static str,
+}
+
+fn narrow_target_model(name: &str) -> Option<NarrowTargetModel> {
+    if !(name.starts_with("__vow_")
         && (name.ends_with("_try") || name.ends_with("_wrap") || name.ends_with("_sat")))
+    {
+        return None;
+    }
+    if name.contains("_to_i8_") {
+        Some(NarrowTargetModel {
+            c_ty: "int8_t",
+            min: "-128",
+            max: "127",
+        })
+    } else if name.contains("_to_u8_") {
+        Some(NarrowTargetModel {
+            c_ty: "uint8_t",
+            min: "0",
+            max: "255",
+        })
+    } else if name.contains("_to_i16_") {
+        Some(NarrowTargetModel {
+            c_ty: "int16_t",
+            min: "-32768",
+            max: "32767",
+        })
+    } else if name.contains("_to_u16_") {
+        Some(NarrowTargetModel {
+            c_ty: "uint16_t",
+            min: "0",
+            max: "65535",
+        })
+    } else if name.contains("_to_i32_") {
+        Some(NarrowTargetModel {
+            c_ty: "int32_t",
+            min: "-2147483648",
+            max: "2147483647",
+        })
+    } else if name.contains("_to_u32_") {
+        Some(NarrowTargetModel {
+            c_ty: "uint32_t",
+            min: "0",
+            max: "4294967295ULL",
+        })
+    } else {
+        None
+    }
+}
+
+fn is_numeric_intrinsic(name: &str) -> bool {
+    narrow_target_model(name).is_some()
         || matches!(
             name,
             "__vow_add_sat_u8" | "__vow_sub_sat_u8" | "__vow_mul_sat_u8"
         )
-}
-
-fn is_i32_numeric_intrinsic(name: &str) -> bool {
-    name.starts_with("__vow_")
-        && name.contains("_to_i32_")
-        && (name.ends_with("_try") || name.ends_with("_wrap") || name.ends_with("_sat"))
 }
 
 fn is_reserved_verifier_symbol(name: &str) -> bool {
@@ -975,22 +1025,10 @@ fn emit_inst(
                 InstData::Integer(ty) => ty,
                 _ => IntegerType::I64,
             };
-            if int_ty.width == IntegerWidth::W8 {
-                let operator = if inst.opcode == Opcode::Shl {
-                    "<<"
-                } else {
-                    ">>"
-                };
-                out.push_str(&format!(
-                    "  __ESBMC_assert(v{b} < 8, \"u8 shift count\");\n  v{id} = (uint8_t)(v{a} {operator} v{b});\n"
-                ));
-                return;
-            }
-            if int_ty.width == IntegerWidth::W32 && int_ty.signedness == IntegerSignedness::Signed {
-                out.push_str(&format!(
-                    "  __ESBMC_assert(v{b} < 32, \"i32 shift count\");\n"
-                ));
-            }
+            out.push_str(&format!(
+                "  __ESBMC_assert(v{b} < {}, \"integer shift count\");\n",
+                int_ty.width.bits()
+            ));
             let prefix = match int_ty.signedness {
                 IntegerSignedness::Signed => "i",
                 IntegerSignedness::Unsigned => "u",
@@ -1119,73 +1157,65 @@ fn emit_inst(
         }
 
         // Vec operations — modeled as abstract struct with len + data array
-        Opcode::Call if matches!(&inst.data, InstData::CallExtern(name) if is_u8_numeric_intrinsic(name)) =>
+        Opcode::Call
+            if matches!(
+                &inst.data,
+                InstData::CallExtern(name)
+                    if matches!(
+                        name.as_str(),
+                        "__vow_add_sat_u8" | "__vow_sub_sat_u8" | "__vow_mul_sat_u8"
+                    )
+            ) =>
         {
             let InstData::CallExtern(name) = &inst.data else {
                 unreachable!()
             };
             let a = inst.args[0].0;
-            if name.ends_with("_try") {
-                let signed_guard = if name.starts_with("__vow_i") {
-                    format!("v{a} >= 0 && ")
-                } else {
-                    String::new()
-                };
-                out.push_str(&format!(
-                    "  v{id}.tag = ({signed_guard}v{a} <= 255);\n  v{id}.payload = v{id}.tag ? (uint8_t)v{a} : 0;\n"
-                ));
-            } else if name.ends_with("_wrap") {
-                out.push_str(&format!("  v{id} = (uint8_t)v{a};\n"));
-            } else if name.contains("_to_u8_sat") {
-                if name.starts_with("__vow_i") {
-                    out.push_str(&format!(
-                        "  v{id} = v{a} < 0 ? 0 : (v{a} > 255 ? 255 : (uint8_t)v{a});\n"
-                    ));
-                } else {
-                    out.push_str(&format!("  v{id} = v{a} > 255 ? 255 : (uint8_t)v{a};\n"));
-                }
+            let b = inst.args[1].0;
+            let expression = match name.as_str() {
+                "__vow_add_sat_u8" => format!("(uint16_t)v{a} + (uint16_t)v{b}"),
+                "__vow_sub_sat_u8" => format!("v{a} < v{b} ? 0 : v{a} - v{b}"),
+                "__vow_mul_sat_u8" => format!("(uint16_t)v{a} * (uint16_t)v{b}"),
+                _ => unreachable!(),
+            };
+            if name == "__vow_sub_sat_u8" {
+                out.push_str(&format!("  v{id} = (uint8_t)({expression});\n"));
             } else {
-                let b = inst.args[1].0;
-                let expression = match name.as_str() {
-                    "__vow_add_sat_u8" => format!("(uint16_t)v{a} + (uint16_t)v{b}"),
-                    "__vow_sub_sat_u8" => format!("v{a} < v{b} ? 0 : v{a} - v{b}"),
-                    "__vow_mul_sat_u8" => format!("(uint16_t)v{a} * (uint16_t)v{b}"),
-                    _ => unreachable!(),
-                };
-                if name == "__vow_sub_sat_u8" {
-                    out.push_str(&format!("  v{id} = (uint8_t)({expression});\n"));
-                } else {
-                    out.push_str(&format!(
-                        "  uint16_t __sat_{id} = {expression};\n  v{id} = __sat_{id} > 255 ? 255 : (uint8_t)__sat_{id};\n"
-                    ));
-                }
+                out.push_str(&format!(
+                    "  uint16_t __sat_{id} = {expression};\n  v{id} = __sat_{id} > 255 ? 255 : (uint8_t)__sat_{id};\n"
+                ));
             }
         }
 
-        Opcode::Call if matches!(&inst.data, InstData::CallExtern(name) if is_i32_numeric_intrinsic(name)) =>
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(name) if narrow_target_model(name).is_some()) =>
         {
             let InstData::CallExtern(name) = &inst.data else {
                 unreachable!()
             };
+            let target = narrow_target_model(name).expect("guarded by match");
             let a = inst.args[0].0;
+            let source_signed = name.starts_with("__vow_i");
             if name.ends_with("_try") {
-                let guard = if name.starts_with("__vow_i") {
-                    format!("v{a} >= -2147483648 && v{a} <= 2147483647")
+                let guard = if source_signed {
+                    format!("v{a} >= {} && v{a} <= {}", target.min, target.max)
                 } else {
-                    format!("v{a} <= 2147483647")
+                    format!("v{a} <= {}", target.max)
                 };
                 out.push_str(&format!(
-                    "  v{id}.tag = ({guard});\n  v{id}.payload = v{id}.tag ? (int32_t)v{a} : 0;\n"
+                    "  v{id}.tag = ({guard});\n  v{id}.payload = v{id}.tag ? ({})v{a} : 0;\n",
+                    target.c_ty
                 ));
             } else if name.ends_with("_wrap") {
-                out.push_str(&format!("  v{id} = (int32_t)v{a};\n"));
-            } else if name.starts_with("__vow_i") {
+                out.push_str(&format!("  v{id} = ({})v{a};\n", target.c_ty));
+            } else if source_signed {
                 out.push_str(&format!(
-                    "  v{id} = v{a} < -2147483648 ? -2147483648 : (v{a} > 2147483647 ? 2147483647 : (int32_t)v{a});\n"
+                    "  v{id} = v{a} < {} ? {} : (v{a} > {} ? {} : ({})v{a});\n",
+                    target.min, target.min, target.max, target.max, target.c_ty
                 ));
             } else {
                 out.push_str(&format!(
-                    "  v{id} = v{a} > 2147483647 ? 2147483647 : (int32_t)v{a};\n"
+                    "  v{id} = v{a} > {} ? {} : ({})v{a};\n",
+                    target.max, target.max, target.c_ty
                 ));
             }
         }
@@ -1496,6 +1526,34 @@ fn emit_inst(
                             "  v{id}.tag = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
                              \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= 0 && v{id}.payload <= 255); }}\n"
+                        ));
+                    }
+                    "__vow_string_parse_i8_opt" => {
+                        out.push_str(&format!(
+                            "  v{id}.tag = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= -128 && v{id}.payload <= 127); }}\n"
+                        ));
+                    }
+                    "__vow_string_parse_i16_opt" => {
+                        out.push_str(&format!(
+                            "  v{id}.tag = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= -32768 && v{id}.payload <= 32767); }}\n"
+                        ));
+                    }
+                    "__vow_string_parse_u16_opt" => {
+                        out.push_str(&format!(
+                            "  v{id}.tag = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= 0 && v{id}.payload <= 65535); }}\n"
+                        ));
+                    }
+                    "__vow_string_parse_u32_opt" => {
+                        out.push_str(&format!(
+                            "  v{id}.tag = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_ulong(); __ESBMC_assume(v{id}.payload >= 0 && v{id}.payload <= 4294967295ULL); }}\n"
                         ));
                     }
                     "__vow_string_parse_i32_opt" => {
@@ -2327,9 +2385,7 @@ pub fn emit_c_function_full(
 }
 
 /// Set of `(is_shl, signedness, width)` shift-helper flavors actually used by
-/// the module. `W8` is excluded — `u8` shifts are modelled inline with an
-/// explicit range assert (see the `Opcode::Shl | Opcode::Shr` arm below), not
-/// via a generated helper.
+/// the module.
 type ShiftNeeds = std::collections::BTreeSet<(bool, IntegerSignedness, IntegerWidth)>;
 
 fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
@@ -2342,9 +2398,7 @@ fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
                     Opcode::Shr => false,
                     _ => continue,
                 };
-                if let InstData::Integer(IntegerType { width, signedness }) = inst.data
-                    && width != IntegerWidth::W8
-                {
+                if let InstData::Integer(IntegerType { width, signedness }) = inst.data {
                     needs.insert((is_shl, signedness, width));
                 }
             }
