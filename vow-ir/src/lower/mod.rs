@@ -1088,18 +1088,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             match op {
                 UnOp::Not => ctx.emit(Opcode::Not, Ty::Bool, vec![val], InstData::None, span),
                 UnOp::Neg => {
-                    let zero = ctx.emit(
-                        Opcode::ConstI64,
-                        Ty::I64,
-                        vec![],
-                        InstData::ConstI64(0),
-                        span,
-                    );
+                    let operand_ty = ctx.inst_ty(val);
+                    let result_ty = if matches!(
+                        operand_ty,
+                        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I64 | Ty::U64
+                    ) {
+                        operand_ty
+                    } else {
+                        Ty::I64
+                    };
+                    let zero = emit_integer_zero(ctx, result_ty, span);
                     ctx.emit(
                         Opcode::WrappingSub,
-                        Ty::I64,
+                        result_ty,
                         vec![zero, val],
-                        InstData::Integer(IntegerType::I64),
+                        InstData::Integer(integer_type_for_ir_ty(result_ty)),
                         span,
                     )
                 }
@@ -3382,6 +3385,28 @@ fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: i64, ty: Ty, span: Sp
             span,
         ),
         _ => unreachable!("non-narrow integer context: {ty:?}"),
+    }
+}
+
+fn emit_integer_zero(ctx: &mut LowerCtx, ty: Ty, span: Span) -> InstId {
+    match ty {
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 => {
+            emit_narrow_integer_constant(ctx, 0, ty, span)
+        }
+        Ty::U64 => ctx.emit(
+            Opcode::ConstU64,
+            Ty::U64,
+            vec![],
+            InstData::ConstU64(0),
+            span,
+        ),
+        _ => ctx.emit(
+            Opcode::ConstI64,
+            Ty::I64,
+            vec![],
+            InstData::ConstI64(0),
+            span,
+        ),
     }
 }
 
