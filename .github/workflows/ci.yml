@@ -51,6 +51,10 @@ jobs:
           unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
           rm "/tmp/$ESBMC_ZIP"
       - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+      - name: Arena verification runner tests
+        run: python3 scripts/test_verify_arena.py
+      - name: Arena primitive verification
+        run: scripts/verify_arena.sh
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py

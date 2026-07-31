@@ -12,9 +12,19 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER = REPO_ROOT / "scripts" / "verify_arena.sh"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 
 class VerifyArenaTest(unittest.TestCase):
+    def test_pull_request_ci_runs_the_arena_proof(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "      - name: Arena primitive verification\n"
+            "        run: scripts/verify_arena.sh\n",
+            workflow,
+        )
+
     def test_runner_caps_memory_and_invokes_the_arena_proof(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
