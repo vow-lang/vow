@@ -4,7 +4,7 @@ use cranelift_codegen::ir::{
     AbiParam, Block, BlockArg, FuncRef, GlobalValue, InstBuilder, MemFlagsData, Signature,
     StackSlot, StackSlotData, StackSlotKind, TrapCode, Value, types,
 };
-use cranelift_codegen::isa::{self, TargetIsa};
+use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{
@@ -13,7 +13,6 @@ use cranelift_module::{
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
-use target_lexicon::{OperatingSystem, Triple};
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, HiddenRegionIdx, Inst, InstData, InstId,
     IntegerSignedness, IntegerType, IntegerWidth, Module as IrModule, Opcode, RegionConstraint,
@@ -155,26 +154,11 @@ fn make_isa(mode: BuildMode) -> Result<Arc<dyn TargetIsa>, CodegenError> {
             .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
     }
     let flags = settings::Flags::new(flag_builder);
-    let mut isa_builder =
-        isa::lookup(host_triple()).map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
-    cranelift_native::infer_native_flags(&mut isa_builder)
-        .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
+    let isa_builder =
+        cranelift_native::builder().map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
     isa_builder
         .finish(flags)
         .map_err(|e| CodegenError::IsaBuild(e.to_string()))
-}
-
-// `Triple::host()` reports macOS as `*-apple-darwin`. cranelift-object 0.132
-// maps a `Darwin` OS to Mach-O `PLATFORM_UNKNOWN` when writing its new
-// `LC_BUILD_VERSION` load command, which the macOS linker rejects with
-// "unknown platform". Rewriting `Darwin` to `MacOSX` yields `PLATFORM_MACOS`.
-// Every non-Darwin host (e.g. Linux/ELF) is returned unchanged.
-fn host_triple() -> Triple {
-    let mut triple = Triple::host();
-    if let OperatingSystem::Darwin(v) = triple.operating_system {
-        triple.operating_system = OperatingSystem::MacOSX(v);
-    }
-    triple
 }
 
 fn ir_ty_to_cranelift(ty: IrTy) -> Option<types::Type> {
@@ -2702,7 +2686,14 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_profile_enter" => {
             sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
         }
-        "__vow_profile_init" | "__vow_init_stack_guard" | "__vow_stack_exit" => {}
+        "__vow_perf_counter_read" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_perf_count"
+        | "__vow_perf_counter_reset"
+        | "__vow_profile_init"
+        | "__vow_init_stack_guard"
+        | "__vow_stack_exit" => {}
         "__vow_stack_enter" => {
             sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
         }

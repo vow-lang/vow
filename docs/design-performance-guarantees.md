@@ -420,6 +420,22 @@ skips that opcode, so it can never be treated as a refinement predicate; normal
 code generation skips it as non-executable metadata. `vow-perf` is the sole
 consumer responsible for interpreting the descriptor.
 
+**Separate-compilation invariant.** Production code generation always consumes
+the original typed IR. `vow-perf` clones that IR, inserts operation-counter
+calls only in the clone, and compiles the clone as a dedicated, byte-distinct
+test artifact. The instrumented artifact is never installed as the production
+executable, placed in the production build cache, or used by the bootstrap
+triple test. Requesting performance analysis therefore cannot change the bytes
+of the non-`--perf` output and adds no counter calls to production execution.
+
+**Instrumented-IR canonicality.** Counter calls are inserted with
+`InsertionSet` using fresh function-unique instruction IDs. Stable insertion
+preserves every existing instruction ID and reference, including arguments,
+Phi/Upsilon targets, vow bindings, and local-name metadata. The source-level
+`parse -> print -> parse` invariant does not apply after lowering; the relevant
+check is that the instrumented module remains valid and its deterministic
+`.vmod` encoding satisfies `encode -> decode -> encode` byte stability.
+
 ### CLI Integration
 
 ```bash
@@ -460,6 +476,11 @@ Performance testing is **opt-in** (`--perf` flag or `perf` subcommand). It does 
 - Parse `complexity` clause in vow block
 - Support `O(1)`, `O(n)`, `O(n * n)`, `O(n * n * n)` with `where n = v.len()`
 - Operation-counting instrumentation in IR
+- Compile counters only into a cloned, dedicated test artifact; a CLI
+  regression must prove `vowc build --perf -o <path>` leaves the bytes produced
+  by the equivalent non-`--perf` build unchanged
+- Preserve function-unique IDs and deterministic `.vmod` round trips when
+  inserting counters with `InsertionSet`
 - Doubling ratio test
 - `vowc perf` subcommand
 - Random inputs only (no adversarial search)
