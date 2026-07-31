@@ -33,26 +33,30 @@ fn sat_u32(value: i64) -> u32 vow {
     i64_to_u32_sat(value)
 }
 
-fn shift_i8(value: i8, count: u32 where count == 0) -> i8 vow {
-    ensures: result == value
+fn shift_i8(value: i8, count: u32) -> i8 vow {
+    requires: count < 8
+    ensures: result == value >> count
 } {
     value >> count
 }
 
-fn shift_i16(value: i16, count: u32 where count == 0) -> i16 vow {
-    ensures: result == value
+fn shift_i16(value: i16, count: u32) -> i16 vow {
+    requires: count < 16
+    ensures: result == value >> count
 } {
     value >> count
 }
 
-fn shift_u16(value: u16, count: u32 where count == 0) -> u16 vow {
-    ensures: result == value
+fn shift_u16(value: u16, count: u32) -> u16 vow {
+    requires: count < 16
+    ensures: result == value >> count
 } {
     value >> count
 }
 
-fn shift_u32(value: u32, count: u32 where count == 0) -> u32 vow {
-    ensures: result == value
+fn shift_u32(value: u32, count: u32) -> u32 vow {
+    requires: count < 32
+    ensures: result == value >> count
 } {
     value >> count
 }
