@@ -1864,6 +1864,22 @@ pub unsafe extern "C" fn __vow_string_from_i64(v: i64) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_from_u64_in_arena(arena: *mut VowArena, v: u64) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::from_u64");
+    }
+    let s = v.to_string();
+    unsafe { __vow_string_new_in_arena(arena, s.as_ptr() as *const c_char, s.len()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_from_u64(v: u64) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_from_u64_in_arena(&raw mut __vow_root_arena, v) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_print(s: *const u8) {
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
@@ -4860,6 +4876,19 @@ mod tests {
             unsafe { std::slice::from_raw_parts(digits_header.ptr, digits_header.len) };
         assert_eq!(digits_bytes, b"-42");
 
+        let unsigned_zero = unsafe { __vow_string_from_u64_in_arena(&mut a, 0) };
+        let unsigned_zero_header = unsafe { &*(unsigned_zero as *const VowVec) };
+        let unsigned_zero_bytes = unsafe {
+            std::slice::from_raw_parts(unsigned_zero_header.ptr, unsigned_zero_header.len)
+        };
+        assert_eq!(unsigned_zero_bytes, b"0");
+
+        let unsigned_max = unsafe { __vow_string_from_u64_in_arena(&mut a, u64::MAX) };
+        let unsigned_max_header = unsafe { &*(unsigned_max as *const VowVec) };
+        let unsigned_max_bytes =
+            unsafe { std::slice::from_raw_parts(unsigned_max_header.ptr, unsigned_max_header.len) };
+        assert_eq!(unsigned_max_bytes, b"18446744073709551615");
+
         unsafe { __vow_arena_close(&mut a) };
     }
 
@@ -5509,6 +5538,11 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena string from_i64 did NOT trap");
             std::process::exit(42);
         }
+        if op == "String::from_u64_in_arena_null" {
+            let _ = unsafe { __vow_string_from_u64_in_arena(std::ptr::null_mut(), 1) };
+            eprintln!("rodata_trap_worker: null arena string from_u64 did NOT trap");
+            std::process::exit(42);
+        }
         if op == "String::split_in_arena_null" {
             let _ = unsafe {
                 __vow_string_split_in_arena(
@@ -5836,6 +5870,11 @@ mod tests {
     #[test]
     fn explicit_arena_string_from_i64_null_arena_traps() {
         assert_runtime_invariant_null_arena("String::from_i64_in_arena_null", "String::from_i64");
+    }
+
+    #[test]
+    fn explicit_arena_string_from_u64_null_arena_traps() {
+        assert_runtime_invariant_null_arena("String::from_u64_in_arena_null", "String::from_u64");
     }
 
     #[test]
