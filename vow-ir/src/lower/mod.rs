@@ -55,7 +55,7 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "string_to_lower" => Some(("__vow_string_to_lower", Ty::Ptr)),
         "string_replace" => Some(("__vow_string_replace", Ty::Ptr)),
         "string_join" => Some(("__vow_string_join", Ty::Ptr)),
-        "parse_i64" => Some(("__vow_parse_i64", Ty::I64)),
+        "parse_i64" => Some(("__vow_string_parse_i64_opt", Ty::Ptr)),
         "parse_u8" => Some(("__vow_string_parse_u8_opt", Ty::Ptr)),
         "i16_to_u8_try" => Some(("__vow_i16_to_u8_try", Ty::Ptr)),
         "i16_to_u8_wrap" => Some(("__vow_i16_to_u8_wrap", Ty::U8)),
@@ -159,6 +159,10 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
         "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
             ctx.inst_struct_type.insert(result, "Option".to_string());
             ctx.inst_option_elem_ty.insert(result, Ty::I32);
+        }
+        "parse_i64" => {
+            ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, Ty::I64);
         }
         _ => {}
     }
@@ -4055,7 +4059,7 @@ mod tests {
             ("string_to_lower", "__vow_string_to_lower", Ty::Ptr),
             ("string_replace", "__vow_string_replace", Ty::Ptr),
             ("string_join", "__vow_string_join", Ty::Ptr),
-            ("parse_i64", "__vow_parse_i64", Ty::I64),
+            ("parse_i64", "__vow_string_parse_i64_opt", Ty::Ptr),
             ("i64_to_string", "__vow_string_from_i64", Ty::Ptr),
             ("vec_sort", "__vow_vec_sort", Ty::Ptr),
             ("time_unix", "__vow_time_unix", Ty::I64),

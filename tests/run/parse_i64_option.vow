@@ -1,0 +1,27 @@
+// TEST: stdout "some 42\nsome 0\nsome -9223372036854775808\nsome 9223372036854775807\nnone\nnone\nnone\nnone\n"
+module parse_i64_option
+
+fn print_parsed(result: Option<i64>) [io] {
+    match result {
+        Option::Some(value) => {
+            print_str("some ");
+            print_i64(value);
+            print_str("\n");
+        },
+        Option::None => {
+            print_str("none\n");
+        },
+    }
+}
+
+fn main() -> i32 [io] {
+    print_parsed(parse_i64(String::from("42")));
+    print_parsed(parse_i64(String::from("0")));
+    print_parsed(parse_i64(String::from("-9223372036854775808")));
+    print_parsed(parse_i64(String::from("9223372036854775807")));
+    print_parsed(parse_i64(String::from("-9223372036854775809")));
+    print_parsed(parse_i64(String::from("9223372036854775808")));
+    print_parsed(parse_i64(String::from("")));
+    print_parsed(parse_i64(String::from("not-a-number")));
+    0
+}

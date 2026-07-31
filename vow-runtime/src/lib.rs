@@ -2496,20 +2496,6 @@ pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
     ptr as *mut u8
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_parse_i64(s: *const u8) -> i64 {
-    if s.is_null() {
-        return 0;
-    }
-    sanitize_on_read(s as usize, 0);
-    let v = unsafe { &*(s as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.trim().parse::<i64>().unwrap_or(0),
-        Err(_) => 0,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Utility builtins
 // ---------------------------------------------------------------------------

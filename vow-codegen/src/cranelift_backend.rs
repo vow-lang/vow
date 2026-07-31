@@ -2451,10 +2451,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_parse_i64" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // parsed value
-        }
         "__vow_vec_sort" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.returns.push(AbiParam::new(types::I64)); // new sorted vec ptr
