@@ -1,0 +1,15 @@
+// TEST: stdout ""
+// Issue #331 regression: an inline String::from(...) is published through a
+// parameter container, so its allocation must surface as a RegionRootEscape
+// note anchored to the constructor expression (not span.length == 0).
+module RegionStringFromRootEscapeSpan
+
+fn push_hi(strs: Vec<String>) {
+    strs.push(String::from("hi"));
+}
+
+fn main() -> i32 {
+    let strs: Vec<String> = Vec::new();
+    push_hi(strs);
+    0
+}

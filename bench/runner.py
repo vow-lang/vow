@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import json
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from benchmark_contracts import compare_skeleton
 from llm import LLMResponse, ModelConfig, chat
 from manifest import BenchmarkInfo
-from prompts import build_cegis_user_prompt, build_initial_user_prompt
+from prompts import (
+    build_cegis_user_prompt,
+    build_initial_user_prompt,
+    build_skeleton_mismatch_prompt,
+)
 from verifier import VerifyResult, run_verify
 
 
@@ -19,7 +30,7 @@ class BenchmarkResult:
     benchmark_name: str
     difficulty: str
     contract_fidelity: str
-    status: str  # verified / verify_failed / compile_failed / timeout / max_iterations / empty_response
+    status: str  # verified / contracts_weakened / verify_failed / compile_failed / timeout / max_iterations / empty_response
     iterations: int
     wall_clock_seconds: float
     failure_mode: str | None
@@ -137,6 +148,45 @@ def run_benchmark(
             )
 
         final_code = code
+
+        fidelity = compare_skeleton(bench.skeleton_vow, code)
+        if not fidelity.matches:
+            mismatch_output = json.dumps(
+                {
+                    "status": "ContractsWeakened",
+                    "message": fidelity.message,
+                }
+            )
+            verify_outputs.append(mismatch_output)
+            if iteration < max_iters:
+                previous_violations.append(
+                    f"skeleton mismatch: {fidelity.message}"
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": build_skeleton_mismatch_prompt(fidelity.message),
+                    }
+                )
+                continue
+            elapsed = time.time() - start
+            return BenchmarkResult(
+                benchmark_id=bench.id,
+                benchmark_name=bench.name,
+                difficulty=bench.difficulty,
+                contract_fidelity=bench.contract_fidelity,
+                status="contracts_weakened",
+                iterations=iteration,
+                wall_clock_seconds=elapsed,
+                failure_mode="contracts_weakened",
+                token_usage={
+                    "input_tokens": total_input,
+                    "output_tokens": total_output,
+                },
+                final_code=final_code,
+                raw_responses=raw_responses,
+                verify_outputs=verify_outputs,
+            )
 
         # Verify
         vr = run_verify(

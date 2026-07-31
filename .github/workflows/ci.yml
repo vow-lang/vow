@@ -54,6 +54,11 @@ jobs:
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
+      - name: Benchmark skeleton fidelity unit tests
+        run: |
+          python3 scripts/test_benchmark_contracts.py
+          PYTHONPATH=bench python3 -m unittest discover -s bench -p 'test_*.py'
+          PYTHONPATH=euler python3 -m unittest discover -s euler -p 'test_*.py'
       - name: Verifier-evaluation suite (#334)
         # Asserts the labelled corpus in tests/verify* against ground-truth
         # blame/vow_id, with false-accepts (incl. vacuous proofs) failing the
