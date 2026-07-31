@@ -8,4 +8,5 @@ vow-ir = { path = "../vow-ir" }
 
 [dev-dependencies]
 vow-codegen = { path = "../vow-codegen" }
+vow-diag = { path = "../vow-diag" }
 vow-syntax = { path = "../vow-syntax" }

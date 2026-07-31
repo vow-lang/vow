@@ -1037,6 +1037,7 @@ name = "vow-perf"
 version = "0.5.1"
 dependencies = [
  "vow-codegen",
+ "vow-diag",
  "vow-ir",
  "vow-syntax",
 ]
