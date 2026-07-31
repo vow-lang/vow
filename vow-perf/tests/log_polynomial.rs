@@ -176,7 +176,7 @@ fn maximum_supported_declaration_does_not_pass_cubic_log_squared_work() {
 }
 
 #[test]
-fn maximum_supported_declaration_does_not_fail_thresholded_cubic_log_work() {
+fn maximum_supported_declaration_is_ambiguous_for_thresholded_cubic_log_work() {
     let samples = [16_u64, 32, 64, 128, 256, 512, 1024, 2048].map(|input_size| {
         Sample::new(
             input_size,
