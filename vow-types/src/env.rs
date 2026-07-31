@@ -377,6 +377,14 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "int_to_string",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
             "i64_to_string",
             FnSig {
                 params: vec![Ty::I64],

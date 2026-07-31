@@ -1,0 +1,18 @@
+// TEST: stdout "0\n-42\n-9223372036854775808\n-42\n"
+module IntegerFormatters
+
+fn format_signed(value: i64) -> String {
+    int_to_string(value)
+}
+
+fn main() -> i32 [io] {
+    print_str(format_signed(0));
+    print_str("\n");
+    print_str(format_signed(-42));
+    print_str("\n");
+    print_str(format_signed(-9223372036854775807 - 1));
+    print_str("\n");
+    print_str(i64_to_string(-42));
+    print_str("\n");
+    0
+}
