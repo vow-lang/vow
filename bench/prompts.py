@@ -41,6 +41,16 @@ Fill in the function bodies so that all contracts verify. Return ONLY the comple
 Return the complete .vow file with function bodies filled in. Do not change the module name, function signatures, or contracts."""
 
 
+def build_skeleton_mismatch_prompt(message: str) -> str:
+    return f"""The response changed an immutable part of the supplied skeleton:
+
+{message}
+
+Restore the exact module name, skeleton function signatures, and contracts.
+Change function bodies only; additional helper functions are allowed. Return
+ONLY the complete updated .vow file, no explanation."""
+
+
 def _classify_violation(violation: str) -> str:
     """Classify a violation string as requires/ensures/invariant."""
     v = violation.lower()
