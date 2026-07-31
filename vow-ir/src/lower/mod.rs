@@ -3687,13 +3687,9 @@ pub(crate) fn lower_function(
                     ctx.inst_vec_elem_type.insert(arg_id, elem_name.clone());
                 }
             }
-            AstType::Generic { name, args, .. } if name == "Option" => {
+            AstType::Generic { name, .. } if name == "Option" => {
                 ctx.inst_struct_type.insert(arg_id, "Option".to_string());
-                if let Some(elem_ty) = args.first().and_then(|t| match t {
-                    AstType::Named { name, .. } if name == "i32" => Some(Ty::I32),
-                    AstType::Named { name, .. } if name == "u8" => Some(Ty::U8),
-                    _ => None,
-                }) {
+                if let Some(elem_ty) = option_named_elem_type(&param.ty) {
                     ctx.inst_option_elem_ty.insert(arg_id, elem_ty);
                 }
             }
