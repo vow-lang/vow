@@ -217,9 +217,10 @@ This is a caller precondition failure at the restart invocation. It uses the
 existing `VerifyFailed` / `VowRequiresViolated` family, points at the invalid
 argument and failed restart clause, identifies the selected restart, and uses
 `blame: "caller"`. The verifier does not enter the recovery edge or assume
-`R_r` after this failure. Its counterexample also includes `recovery_path`
-context so the callee, restart, call site, and handler arm remain
-machine-readable.
+`R_r` after this failure. Its counterexample also appends an attempted
+selection to `recovery_path`, with `entered: false`, so the callee, restart,
+call site, and handler arm remain machine-readable without claiming that the
+recovery guarantee became available.
 
 ### A caller relies on a guarantee absent from a recovery path
 
@@ -230,28 +231,36 @@ Selecting a restart is not a precondition violation, so this must not be
 reported as generic Caller blame.
 
 Every counterexample whose trace crosses a recovery edge must add structured
-`recovery_path` context. The future schema addition has this minimum shape:
+`recovery_path` context. This is an array in execution order, with one entry
+for every selected restart; nested, sequential, and repeated recoveries are
+retained rather than collapsed. Successfully entered recovery edges use
+`entered: true`. A restart argument-contract failure may add one final
+`entered: false` entry for the attempted selection. The future schema addition
+has this minimum shape:
 
 ```json
 {
   "function": "read_strictly_positive",
   "violation": "ensures result > 0",
   "blame": "callee",
-  "recovery_path": {
-    "callee": "read_positive",
-    "restart": "use_zero",
-    "postcondition": "result == 0",
-    "call_site": {
-      "file": "reader.vow",
-      "offset": 120,
-      "length": 42
-    },
-    "handler_arm": {
-      "file": "reader.vow",
-      "offset": 150,
-      "length": 12
+  "recovery_path": [
+    {
+      "callee": "read_positive",
+      "restart": "use_zero",
+      "postcondition": "result == 0",
+      "entered": true,
+      "call_site": {
+        "file": "reader.vow",
+        "offset": 120,
+        "length": 42
+      },
+      "handler_arm": {
+        "file": "reader.vow",
+        "offset": 150,
+        "length": 12
+      }
     }
-  }
+  ]
 }
 ```
 
@@ -260,9 +269,10 @@ defined by `counterexample.schema.json`. Debug-mode runtime `VowViolation`
 output is a separate schema and retains its capitalized `"Caller"` and
 `"Callee"` values.
 
-Human output should explain the same path directly: `recovery through
-read_positive::use_zero guarantees result == 0; this path does not establish
-ensures result > 0`.
+Human output must render the whole recovery path in the same order, then relate
+the relevant guarantee to the failed obligation. For a single entry:
+`recovery through read_positive::use_zero guarantees result == 0; this path
+does not establish ensures result > 0`.
 
 This ADR does not allocate a new error code. The failure is produced by the
 existing verifier, not the parser or type checker. The condition/restart
@@ -359,5 +369,7 @@ public-interface tests must cover:
 7. rejection of invalid restart arguments before their postcondition becomes
    available;
 8. handler mutation through an aliased call argument invalidating a stale
-   failure-state fact unless `A_r` re-establishes it; and
-9. Rust/self-hosted parity for `recovery_path` diagnostics.
+   failure-state fact unless `A_r` re-establishes it;
+9. sequential and nested recoveries retaining every selected restart in
+   execution order, including repeated edges; and
+10. Rust/self-hosted parity for `recovery_path` diagnostics.
