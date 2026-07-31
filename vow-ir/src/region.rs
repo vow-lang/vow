@@ -243,6 +243,12 @@ fn check_function_linear_regions(func: &Function, diagnostics: &mut Vec<Diagnost
         let mut live = incoming;
         let mut consumed = consumed_in.get(&block.id).cloned().unwrap_or_default();
         for inst in &block.insts {
+            if matches!(
+                inst.opcode,
+                Opcode::LinearConsume | Opcode::Upsilon | Opcode::Return
+            ) {
+                emit_consumed_linear_error(func, inst, &consumed, &inst_lookup, diagnostics);
+            }
             match inst.opcode {
                 Opcode::Return => {
                     if let Some(&arg) = inst.args.first() {
@@ -255,15 +261,6 @@ fn check_function_linear_regions(func: &Function, diagnostics: &mut Vec<Diagnost
                     live.clear();
                 }
                 _ => {
-                    if inst.opcode == Opcode::LinearConsume {
-                        emit_consumed_linear_error(
-                            func,
-                            inst,
-                            &consumed,
-                            &inst_lookup,
-                            diagnostics,
-                        );
-                    }
                     apply_linear_transfer(inst, &mut live, &inst_lookup);
                     apply_linear_consumed_transfer(inst, &mut consumed, &inst_lookup);
                 }
@@ -3907,6 +3904,76 @@ mod tests {
             "duplicate",
             vec![Ty::LinearPtr],
             Ty::Unit,
+            vec![block(0, insts)],
+        );
+        func.local_names.insert(0, "value".to_string());
+        let mut diagnostics = Vec::new();
+
+        check_function_linear_regions(&func, &mut diagnostics);
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.code == ErrorCode::LinearTypeViolation
+                && diag.message == "linear value `value` already consumed"
+        }));
+    }
+
+    #[test]
+    fn linear_upsilon_reports_transfer_after_consume() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::GetArg,
+                Ty::LinearPtr,
+                vec![],
+                InstData::ArgIndex(0),
+            ),
+            inst(1, Opcode::LinearConsume, Ty::Unit, vec![0], InstData::None),
+            inst(
+                2,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![0],
+                InstData::PhiTarget(InstId(3)),
+            ),
+            inst(3, Opcode::Phi, Ty::LinearPtr, vec![], InstData::None),
+            return_unit_inst(4),
+        ];
+        let mut func = function(
+            0,
+            "transfer_after_consume",
+            vec![Ty::LinearPtr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        func.local_names.insert(0, "value".to_string());
+        let mut diagnostics = Vec::new();
+
+        check_function_linear_regions(&func, &mut diagnostics);
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.code == ErrorCode::LinearTypeViolation
+                && diag.message == "linear value `value` already consumed"
+        }));
+    }
+
+    #[test]
+    fn linear_return_reports_transfer_after_consume() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::GetArg,
+                Ty::LinearPtr,
+                vec![],
+                InstData::ArgIndex(0),
+            ),
+            inst(1, Opcode::LinearConsume, Ty::Unit, vec![0], InstData::None),
+            inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+        ];
+        let mut func = function(
+            0,
+            "return_after_consume",
+            vec![Ty::LinearPtr],
+            Ty::LinearPtr,
             vec![block(0, insts)],
         );
         func.local_names.insert(0, "value".to_string());

@@ -431,6 +431,9 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: D
         let mut ii: i64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_LINEAR_CONSUME() || inst.op == IOP_UPSILON() || inst.op == IOP_RETURN() {
+                linear_emit_consumed_error(f, inst, consumed, id_to_inst, dctx);
+            }
             if inst.op == IOP_RETURN() {
                 if inst.args.len() > 0 {
                     linear_remove_origins(live, inst.args[0], id_to_inst);
@@ -440,9 +443,6 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: D
             } else if inst.op == IOP_UNREACHABLE() {
                 live.clear();
             } else {
-                if inst.op == IOP_LINEAR_CONSUME() {
-                    linear_emit_consumed_error(f, inst, consumed, id_to_inst, dctx);
-                }
                 linear_apply_inst(inst, live, id_to_inst);
                 linear_apply_consumed_inst(inst, consumed, id_to_inst);
             }

@@ -1,0 +1,30 @@
+// TEST: error-code LinearTypeViolation
+// TEST: stderr "already consumed"
+module LinearMatchPayloadReturnAfterConsume
+
+linear struct Token {
+    id: i64,
+}
+
+enum Payload {
+    Token(Token),
+}
+
+fn consume(token: Token) -> () {
+    let sink: Vec<Token> = Vec::new();
+    sink.push(token);
+}
+
+fn consume_then_return(value: Payload) -> Token {
+    match value {
+        Payload::Token(token) => {
+            consume(token);
+            token
+        },
+    }
+}
+
+fn main() -> i32 {
+    consume(consume_then_return(Payload::Token(Token { id: 1 })));
+    0
+}
