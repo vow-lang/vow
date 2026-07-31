@@ -124,7 +124,9 @@ complexity: O(log(n)) where n = v.len()           // logarithmic
 complexity: O(n) where n = v.len()                // linear
 complexity: O(n * log(n)) where n = v.len()       // linearithmic
 complexity: O(n * n) where n = v.len()            // quadratic
+complexity: O(n * n * log(n)) where n = v.len()   // quadratic-logarithmic
 complexity: O(n * n * n) where n = v.len()        // cubic
+complexity: O(n * n * n * log(n)) where n = v.len()  // cubic-logarithmic
 complexity: O(n * m) where n = a.len(), m = b.len()  // multi-variable
 ```
 
@@ -138,12 +140,13 @@ Using `n * n` instead of `n^2` avoids introducing a power operator. The fixed se
 | `O(n * n * n)` | `n^3` | Cubic in `n` |
 | `O(n * n * m)` | `n^2 * m^1` | Quadratic in `n`, linear in `m` |
 | `O(n * log(n))` | `n * log(n)` | `log(...)` is its own factor, not folded into the exponent |
+| `O(n * n * log(n))` | `n^2 * log(n)` | Quadratic-logarithmic in `n` |
 
-**Accepted exponent range.** Each variable may appear at most **3 times** (max degree 3); the total polynomial degree across all variables in one product is also capped at **3**. Higher degrees (`O(n*n*n*n)`, `O(n*n*n*m)`) are rejected at parse time with a clear error pointing implementers to the enumerated fixed set. This keeps the set finite and the statistical separation between adjacent classes meaningful (see "Distinguishing O(n) from O(n log n)" below).
+**Accepted exponent range.** Each variable may appear at most **3 times** (max degree 3); the total polynomial degree across all variables in one product is also capped at **3**. Higher degrees (`O(n*n*n*n)`, `O(n*n*n*m)`) are rejected at parse time with a clear error pointing implementers to the enumerated fixed set. This keeps the set finite and the statistical separation between adjacent classes meaningful (see "Distinguishing adjacent logarithmic factors" below).
 
-At most one `log(...)` factor per product is allowed (e.g. `O(n * log(n))` ok, `O(n * log(n) * log(n))` rejected). The accepted multivariate forms are exactly:
+At most one `log(...)` factor per product is allowed (e.g. `O(n * log(n))` ok, `O(n * log(n) * log(n))` rejected). For a single size variable, that optional logarithmic factor may multiply every supported polynomial degree from 0 through 3. The accepted forms are exactly:
 
-- `O(1)`, `O(log(n))`, `O(n)`, `O(n * log(n))`, `O(n*n)`, `O(n*n*n)` (single-variable)
+- `O(1)`, `O(log(n))`, `O(n)`, `O(n * log(n))`, `O(n*n)`, `O(n*n * log(n))`, `O(n*n*n)`, `O(n*n*n * log(n))` (single-variable)
 - `O(n * m)`, `O(n*n * m)`, `O(n * m * k)` (multi-variable, total degree ≤ 3)
 
 
@@ -156,9 +159,11 @@ Supported forms:
 | `O(n)` | 2.0 | Linear |
 | `O(n * log(n))` | 2·log(2n)/log(n) (~2.125–2.50 over n=16..65536) | Linearithmic; **n-dependent** ratio |
 | `O(n * n)` | 4.0 | Quadratic |
+| `O(n * n * log(n))` | 4·log(2n)/log(n) (~4.25–5.00 over n=16..65536) | Quadratic-logarithmic; **n-dependent** ratio |
 | `O(n * n * n)` | 8.0 | Cubic |
+| `O(n * n * n * log(n))` | 8·log(2n)/log(n) (~8.50–10.00 over n=16..65536) | Cubic-logarithmic; **n-dependent** ratio |
 
-Note that the doubling ratio for `O(log n)` and `O(n log n)` is itself a function of `n` — it is not a single constant. The pass criterion in Step 3 below uses these class-specific functions, not a flat tolerance around 2.0.
+The doubling ratio for every class with a logarithmic factor is itself a function of `n` — it is not a single constant. The pass criterion in Step 3 below uses these class-specific functions, not a flat tolerance around the underlying power class.
 
 ### The `where` clause
 
@@ -259,9 +264,11 @@ Two complementary tests:
   | `O(n)` | 2.0 | Independent of n. |
   | `O(n log n)` | 2·log(2n)/log(n) | ~2.50 at n=16, ~2.20 at n=1024, ~2.125 at n=65536. |
   | `O(n²)` | 4.0 | Independent of n. |
+  | `O(n² log n)` | 4·log(2n)/log(n) | ~5.00 at n=16, ~4.40 at n=1024, ~4.25 at n=65536. |
   | `O(n³)` | 8.0 | Independent of n. |
+  | `O(n³ log n)` | 8·log(2n)/log(n) | ~10.00 at n=16, ~8.80 at n=1024, ~8.50 at n=65536. |
 
-- **Tolerance** is class-specific too: ±15% relative to r_class(n) for power classes, and a narrower band (±10%) where adjacent classes overlap — notably between `O(n)` and `O(n log n)`. The flat "±20% around 2.0" rule is *not* sufficient: at n=1024 the expected ratio for `O(n log n)` is exactly 2.20, which sits inside `[1.6, 2.4]` for `O(n)`. Either of (a) using r_class(n), or (b) excluding the smallest two sizes and relying on least-squares as the tiebreaker, must be used to discriminate adjacent classes.
+- **Tolerance** is class-specific too: ±15% relative to r_class(n) for power classes, and a narrower band (±10%) where adjacent power/log-polynomial classes overlap — notably `O(n)` vs. `O(n log n)` and `O(n²)` vs. `O(n² log n)`. A flat band is not sufficient: at n=1024 the expected ratio is 2.20 for `O(n log n)`, inside a ±20% linear band `[1.6, 2.4]`, and 4.40 for `O(n² log n)`, inside a ±15% quadratic band `[3.4, 4.6]`. The fixed candidate set therefore includes the logarithmic intermediate at every supported polynomial degree, and least-squares fitting is the tiebreaker in overlap zones.
 - **Small-n exclusion.** The first one or two sizes in the progression are typically excluded from the strict pass criterion — at n=16 the `O(n log n)` ratio is 2.5, which a flat ±20% window around 2.0 would reject. The harness still records those points (the example JSON includes them) but flags them as "warmup" rather than failing on them.
 - The doubling-ratio test alone **cannot** reliably separate `O(n)` from `O(n log n)`. When the observed ratios fall in the overlap zone, the verdict falls back to least-squares curve fitting (below) as the tiebreaker; if curve fitting is also ambiguous, the harness reports `AMBIGUOUS` rather than `PASS` or `FAIL`.
 
@@ -270,7 +277,7 @@ Two complementary tests:
 - Compute R² for each candidate.
 - **PASS rule (best-fit-driven).** The verdict is `PASS` when:
   1. *Some* candidate class fits the data with R² ≥ 0.90 (call it the **best-fit class**), **and**
-  2. The best-fit class is asymptotically **less-than-or-equal** to the declared class under the fixed ordering `O(1) ≺ O(log n) ≺ O(n) ≺ O(n log n) ≺ O(n²) ≺ O(n³)`.
+  2. The best-fit class is asymptotically **less-than-or-equal** to the declared class under the fixed ordering `O(1) ≺ O(log n) ≺ O(n) ≺ O(n log n) ≺ O(n²) ≺ O(n² log n) ≺ O(n³) ≺ O(n³ log n)`.
 
   Note: the **declared class's own R² is not the gate.** `O(n³)` is a mathematically valid upper bound for an `O(n)` function — the cubic model just fits noisily because the data is far below cubic growth. Penalizing declared R² there would reject correct (if loose) upper bounds, contradicting the WARN-only tightness rule below.
 
@@ -284,6 +291,7 @@ Two complementary tests:
   - declared `O(n)`, best fit `O(n)` (R²=0.98) → **PASS** (tight).
   - declared `O(n)`, best fit `O(n log n)` (R²=0.98) → **FAIL** (suggested replacement `O(n log n)`).
   - declared `O(n)`, best fit `O(n²)` (R²=0.97) → **FAIL** (suggested replacement `O(n²)`).
+  - declared `O(n²)`, best fit `O(n² log n)` (R²=0.99) → **FAIL** (suggested replacement `O(n² log n)`).
   - declared `O(n)`, no candidate reaches R² ≥ 0.90 → **AMBIGUOUS**.
 
 **Tightness check (WARN-only):**
@@ -375,13 +383,13 @@ Arguments not bound as size parameters need random generation. This requires **t
 
 The `requires` clauses constrain the generation space. Generators that produce values violating preconditions are filtered (rejection sampling) or guided (constraint-based generation, future work).
 
-### Distinguishing O(n) from O(n log n)
+### Distinguishing adjacent logarithmic factors
 
-This is genuinely hard empirically — the log factor grows slowly. Strategies:
+Distinguishing `O(n^p)` from `O(n^p log n)` is genuinely hard empirically because the log factor grows slowly. The same overlap occurs at each supported polynomial degree, including `O(n²)` vs. `O(n² log n)`. Strategies:
 
 1. **Use large size ranges:** n from 64 to 65536 (10 doublings). The *multiplicative* gap in `n log n` vs `n` over this range is only `log(65536) / log(64) = 16 / 6 ≈ 2.67`× (not ~16×). A wide range helps, but the shape separation remains modest — large ranges alone cannot reliably distinguish the two classes.
 2. **Use operation counts, not wall-clock time:** Eliminates measurement noise, which is much larger than the ~2.67× shape gap above.
-3. **Pair with class-specific expected ratios + curve fitting:** The expected doubling ratio for `O(n log n)` is `r(n) = 2·log(2n)/log(n)`, which decreases from ~2.50 at n=16 to ~2.06 at n=65536. Tracking that *trend* — not just the absolute value — is what separates the two classes in practice. See the doubling-ratio table in Step 3.
+3. **Pair with class-specific expected ratios + curve fitting:** For polynomial degree `p`, the log-polynomial ratio is `r(n) = 2^p·log(2n)/log(n)`. For example, `O(n² log n)` decreases from ~5.00 at n=16 to ~4.25 at n=65536, and is 4.40 at n=1024 versus 4.00 for `O(n²)`. Including both candidates in least-squares fitting is essential because those absolute ratios overlap the tolerance band.
 4. **Accept ambiguity:** If both classes fit with R² ≥ 0.95 and the trend is inconclusive, the verifier reports `AMBIGUOUS` rather than picking one. The practical difference is rarely consequential, but the verifier should not pretend to certainty it doesn't have.
 5. **Future:** If RAML-style static analysis is added later, it can disambiguate.
 
@@ -454,7 +462,7 @@ Performance testing is **opt-in** (`--perf` flag or `perf` subcommand). It does 
 - Random inputs only (no adversarial search)
 
 ### Phase 2: Extended complexity classes (single-variable)
-- Add `O(log(n))`, `O(n * log(n))`
+- Add the optional logarithmic factor across polynomial degrees 0–3: `O(log(n))`, `O(n * log(n))`, `O(n*n * log(n))`, and `O(n*n*n * log(n))`
 - Least-squares curve fitting + R^2 reporting
 - Tightness warnings
 - Single-variable only — multi-parameter forms (`where n = ..., m = ...`) deferred to Phase 3
