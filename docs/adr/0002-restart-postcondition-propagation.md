@@ -83,6 +83,16 @@ aliased memory unless `A_r` states that fact. Proving `R_r` under `A_r` does
 not make `R_r` available for restart arguments or invocation states that
 violate `A_r`.
 
+Evaluating `A_r` and `R_r` must be observationally read-only. In addition to
+the existing contract rule that rejects declared effects, restart-contract
+validation derives the transitive heap-write footprint of every called helper
+and rejects a clause that can write pre-existing shared state. A helper may
+mutate private fresh storage only when that storage cannot escape the helper or
+alias a contract binding. Thus an effect-free helper that assigns through a
+struct argument is not valid in a restart contract, while a helper that only
+reads that struct is. This uses the same footprint analysis required for
+outcome summaries; it does not add a new effect or type-system axis.
+
 The function's ordinary body is checked against `Q`, and its writes are checked
 against `W_f`. A weaker `R_r` does not weaken those checks, and proving the
 ordinary body does not prove the restart.
@@ -100,7 +110,8 @@ A handled call lowers to explicit verifier control-flow edges:
 3. Immediately before invoking restart `r`, lowering creates the caller
    obligation
    `assert(A_r(H_r, actual_args, selected_restart_args))` in the resulting live
-   heap state.
+   heap state. Its observationally read-only evaluation leaves `H_r`
+   unchanged.
 4. Only after that obligation succeeds does the restart execute from `H_r`.
    Modular caller lowering constructs `H'_r` by havocing every location in the
    imported `W_r`; all aliases observe the same havoc, while facts about
@@ -293,19 +304,19 @@ Each binding has a `role` (`restart_argument`, `callee_argument`,
 `reachable_state`, or `result`), its source `name`, and its counterexample
 `value` using the same string encoding as the top-level `values` map. The same
 source may appear in both arrays with different values when the restart writes
-it. The read-dependency closure expands calls to pure contract helpers
-transitively, so a clause `is_valid(state)` also records a field such as
-`state.last` when `is_valid` reads it. It is instantiated for the concrete
-counterexample: projection names include concrete indices, and distinct
-projections reached by repeated or recursive helper calls remain distinct.
-Within each array, selected restart arguments appear in declaration order,
-followed by other observations in deterministic depth-first evaluation order
-after substituting helper arguments; the first occurrence of an identical
-observation wins. No selected argument or contract observation may be omitted.
-Keeping the two phases on the individual occurrence makes repeated selections
-distinguishable and identifies the exact instantiations of `A_r` and `R_r`;
-the top-level `values` map describes the failed proof obligation and is not a
-substitute for this occurrence-local context.
+it. The read-dependency closure expands calls to observationally read-only
+contract helpers transitively, so a clause `is_valid(state)` also records a
+field such as `state.last` when `is_valid` reads it. It is instantiated for the
+concrete counterexample: projection names include concrete indices, and
+distinct projections reached by repeated or recursive helper calls remain
+distinct. Within each array, selected restart arguments appear in declaration
+order, followed by other observations in deterministic depth-first evaluation
+order after substituting helper arguments; the first occurrence of an
+identical observation wins. No selected argument or contract observation may
+be omitted. Keeping the two phases on the individual occurrence makes
+repeated selections distinguishable and identifies the exact instantiations
+of `A_r` and `R_r`; the top-level `values` map describes the failed proof
+obligation and is not a substitute for this occurrence-local context.
 
 The future schema addition contains the following field. This is an
 illustrative counterexample fragment, not a complete schema-valid object;
@@ -370,7 +381,8 @@ The decision satisfies Vow's language-design constraints:
   outcome branches. Propagating a different verified assumption per branch
   uses existing CFG and SMT machinery rather than refinement typing. Modeling
   handler interference and outcome writes conservatively havocs existing heap
-  state; it does not add a borrow or alias axis to the type system.
+  state, while validating observational contract purity reuses the same write
+  footprints; neither adds a borrow or alias axis to the type system.
 - **It eliminates an agent bug class.** An agent cannot accidentally consume a
   degraded recovery as though normal success occurred; the false assumption
   becomes a counterexample on the exact recovery path.
@@ -424,6 +436,16 @@ or effect distinction for memory reachable from handled-call arguments. The
 conservative invocation-state rule uses Vow's existing alias semantics and
 allows safe mutations whenever the handler can re-establish `A_r` afterward.
 
+### Allow restart contract evaluation to mutate shared state
+
+This would require another write transition before and after each `A_r` and
+`R_r` evaluation, plus corresponding interface metadata. More importantly,
+debug builds evaluate runtime contract checks while release builds omit them,
+so a mutating contract helper would make program behavior depend on build mode.
+Restart contracts are observations, not state transitions; rejecting shared
+writes preserves that boundary. Private fresh, non-escaping helper storage
+remains an implementation detail and is harmless.
+
 ## Deferred implementation choices
 
 The following remain part of the broader condition/restart feature design:
@@ -460,8 +482,10 @@ public-interface tests must cover:
 10. sequential and nested recoveries retaining every selected restart in
     execution order, including repeated selections with identical restart
     arguments but distinct invocation or completion bindings;
-11. recovery diagnostics capturing heap observations made transitively by pure
-    helpers called from `A_r` or `R_r`;
-12. restart mutation invalidating aliased pre-invocation facts unless `R_r`
+11. recovery diagnostics capturing heap observations made transitively by
+    observationally read-only helpers called from `A_r` or `R_r`;
+12. rejection of an effect-free contract helper that mutates shared heap state,
+    while accepting an observationally read-only helper;
+13. restart mutation invalidating aliased pre-invocation facts unless `R_r`
     re-establishes them; and
-13. Rust/self-hosted parity for `recovery_path` diagnostics.
+14. Rust/self-hosted parity for `recovery_path` diagnostics.

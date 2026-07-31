@@ -236,15 +236,18 @@ postcondition. Because
 heap-backed arguments are shared, callee verification conservatively forgets
 mutable heap facts from the original failure before proving the restart; any
 such fact needed by the restart must be re-established by its argument
-contract. The verifier checks downstream obligations on every reachable edge;
-it never assumes the stronger normal postcondition after a weaker recovery,
-and it never weakens the enclosing function's contract automatically. Every
-normal and recovery outcome's modular interface carries a sound
-over-approximation of its heap writes. Caller lowering havocs those shared
-locations before assuming the corresponding postcondition, so aliases cannot
-retain stale pre-outcome facts; an imprecise normal summary must include all
-mutable memory reachable through heap-backed call arguments, and an imprecise
-restart summary must also include memory reachable through restart arguments.
+contract. Restart argument and postcondition helpers must be observationally
+read-only even when they are effect-free; the verifier rejects transitive
+writes to shared heap state during clause evaluation. The verifier checks
+downstream obligations on every reachable edge; it never assumes the stronger
+normal postcondition after a weaker recovery, and it never weakens the
+enclosing function's contract automatically. Every normal and recovery
+outcome's modular interface carries a sound over-approximation of its heap
+writes. Caller lowering havocs those shared locations before assuming the
+corresponding postcondition, so aliases cannot retain stale pre-outcome facts;
+an imprecise normal summary must include all mutable memory reachable through
+heap-backed call arguments, and an imprecise restart summary must also include
+memory reachable through restart arguments.
 
 The facts stay in ordinary CFG path conditions rather than becoming a new
 refinement-type axis. The complete caller-side decision, including failure
