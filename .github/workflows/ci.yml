@@ -30,7 +30,7 @@ jobs:
           working-directory: bench
           python-version: "3.13"
           enable-cache: true
-          cache-dependency-glob: bench/uv.lock
+          cache-dependency-glob: uv.lock
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
