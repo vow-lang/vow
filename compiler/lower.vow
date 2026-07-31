@@ -53,9 +53,11 @@ struct LowerCtx {
     option_elem_tys: Vec<i64>,
     pat_aggregate_names: Vec<String>,
     pat_vec_elem_paths: Vec<Vec<String>>,
+    pat_option_elem_tys: Vec<i64>,
     pat_aggregate_linear: Vec<i64>,
     question_aggregate_names: Vec<String>,
     question_vec_elem_paths: Vec<Vec<String>>,
+    question_option_elem_tys: Vec<i64>,
     question_aggregate_linear: Vec<i64>,
     warnings: Vec<String>,
     file: String,
@@ -123,9 +125,11 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         option_elem_tys: Vec::new(),
         pat_aggregate_names: Vec::new(),
         pat_vec_elem_paths: Vec::new(),
+        pat_option_elem_tys: Vec::new(),
         pat_aggregate_linear: Vec::new(),
         question_aggregate_names: Vec::new(),
         question_vec_elem_paths: Vec::new(),
+        question_option_elem_tys: Vec::new(),
         question_aggregate_linear: Vec::new(),
         warnings: Vec::new(),
         file: String::from(""),
@@ -430,6 +434,13 @@ fn lctx_get_pattern_vec_elem_path(ctx: LowerCtx, pid: i64) -> Vec<String> {
     Vec::new()
 }
 
+fn lctx_get_pattern_option_elem_ty(ctx: LowerCtx, pid: i64) -> i64 {
+    if pid < ctx.pat_option_elem_tys.len() {
+        return ctx.pat_option_elem_tys[pid];
+    }
+    -1
+}
+
 fn lctx_pattern_is_linear(ctx: LowerCtx, pid: i64) -> i64 {
     if pid < ctx.pat_aggregate_linear.len() {
         return ctx.pat_aggregate_linear[pid];
@@ -449,6 +460,13 @@ fn lctx_get_question_vec_elem_path(ctx: LowerCtx, eid: i64) -> Vec<String> {
         return ctx.question_vec_elem_paths[eid];
     }
     Vec::new()
+}
+
+fn lctx_get_question_option_elem_ty(ctx: LowerCtx, eid: i64) -> i64 {
+    if eid < ctx.question_option_elem_tys.len() {
+        return ctx.question_option_elem_tys[eid];
+    }
+    -1
 }
 
 fn lctx_question_is_linear(ctx: LowerCtx, eid: i64) -> i64 {
@@ -3124,6 +3142,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let pname: String = arena_str(a, name_sid);
                         let aggregate_struct: String = lctx_get_pattern_aggregate(ctx, inner_pid);
                         let aggregate_vec_elems: Vec<String> = lctx_get_pattern_vec_elem_path(ctx, inner_pid);
+                        let aggregate_option_elem: i64 = lctx_get_pattern_option_elem_ty(ctx, inner_pid);
                         let field_ty: i64 = {
                             if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
                                 ITY_LPTR()
@@ -3143,6 +3162,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         }
                         if aggregate_vec_elems.len() > 0 {
                             lctx_tag_vec_elem_path(ctx, field_val, aggregate_vec_elems);
+                        }
+                        if aggregate_option_elem != -1 {
+                            lctx_tag_option_elem(ctx, field_val, aggregate_option_elem);
                         }
                         lctx_define(ctx, pname, field_val);
                     }
@@ -3420,6 +3442,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_switch_to_block(ctx, continue_block);
         let aggregate_name: String = lctx_get_question_aggregate(ctx, eid);
         let aggregate_vec_elems: Vec<String> = lctx_get_question_vec_elem_path(ctx, eid);
+        let aggregate_option_elem: i64 = lctx_get_question_option_elem_ty(ctx, eid);
         let payload_ty: i64 = {
             if aggregate_name.len() > 0 && lctx_question_is_linear(ctx, eid) == 1 {
                 ITY_LPTR()
@@ -3437,6 +3460,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         if aggregate_vec_elems.len() > 0 {
             lctx_tag_vec_elem_path(ctx, payload_id, aggregate_vec_elems);
+        }
+        if aggregate_option_elem != -1 {
+            lctx_tag_option_elem(ctx, payload_id, aggregate_option_elem);
         }
         return payload_id;
     }
@@ -4109,9 +4135,11 @@ fn lower_module_vow(
     str_eids: Vec<i64>,
     pat_aggregate_names: Vec<String>,
     pat_vec_elem_paths: Vec<Vec<String>>,
+    pat_option_elem_tys: Vec<i64>,
     pat_aggregate_linear: Vec<i64>,
     question_aggregate_names: Vec<String>,
     question_vec_elem_paths: Vec<Vec<String>>,
+    question_option_elem_tys: Vec<i64>,
     question_aggregate_linear: Vec<i64>,
     item_files: Vec<String>,
 ) -> IrModule {
@@ -4398,9 +4426,11 @@ fn lower_module_vow(
     let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
     ctx.pat_aggregate_names = pat_aggregate_names;
     ctx.pat_vec_elem_paths = pat_vec_elem_paths;
+    ctx.pat_option_elem_tys = pat_option_elem_tys;
     ctx.pat_aggregate_linear = pat_aggregate_linear;
     ctx.question_aggregate_names = question_aggregate_names;
     ctx.question_vec_elem_paths = question_vec_elem_paths;
+    ctx.question_option_elem_tys = question_option_elem_tys;
     ctx.question_aggregate_linear = question_aggregate_linear;
     // ctx.file is updated per FnDef inside the lowering loop below so each
     // IrFunction gets the originating source path from `item_files`.

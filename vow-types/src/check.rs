@@ -17,7 +17,25 @@ pub type StringExprSet = HashSet<usize>;
 pub struct PatternAggregateInfo {
     pub type_name: String,
     pub vec_elem_types: Vec<String>,
+    pub option_elem_type: Option<PatternScalarType>,
     pub is_linear: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatternScalarType {
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    F32,
+    F64,
+    Bool,
 }
 
 /// Aggregate type metadata for identifier patterns and `?` payload results,
@@ -53,11 +71,38 @@ fn vec_element_type_names(ty: &Ty) -> Vec<String> {
     }
 }
 
+fn option_element_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
+    let elem = match ty {
+        Ty::Reference(inner) => return option_element_scalar_type(inner),
+        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Option") => {
+            args.first()?
+        }
+        _ => return None,
+    };
+    match elem {
+        Ty::I8 => Some(PatternScalarType::I8),
+        Ty::I16 => Some(PatternScalarType::I16),
+        Ty::I32 => Some(PatternScalarType::I32),
+        Ty::I64 => Some(PatternScalarType::I64),
+        Ty::I128 => Some(PatternScalarType::I128),
+        Ty::U8 => Some(PatternScalarType::U8),
+        Ty::U16 => Some(PatternScalarType::U16),
+        Ty::U32 => Some(PatternScalarType::U32),
+        Ty::U64 => Some(PatternScalarType::U64),
+        Ty::U128 => Some(PatternScalarType::U128),
+        Ty::F32 => Some(PatternScalarType::F32),
+        Ty::F64 => Some(PatternScalarType::F64),
+        Ty::Bool => Some(PatternScalarType::Bool),
+        _ => None,
+    }
+}
+
 fn pattern_aggregate_info(ty: &Ty, is_linear: bool) -> Option<PatternAggregateInfo> {
     let type_name = aggregate_type_name(ty)?;
     Some(PatternAggregateInfo {
         type_name,
         vec_elem_types: vec_element_type_names(ty),
+        option_elem_type: option_element_scalar_type(ty),
         is_linear,
     })
 }
@@ -2608,6 +2653,53 @@ mod tests {
 
         assert_eq!(info.type_name, "Vec");
         assert_eq!(info.vec_elem_types, ["Vec", "Box"]);
+    }
+
+    #[test]
+    fn pattern_option_metadata_preserves_nested_scalar_payload_types() {
+        let cases = [
+            (Ty::I8, PatternScalarType::I8),
+            (Ty::I16, PatternScalarType::I16),
+            (Ty::I32, PatternScalarType::I32),
+            (Ty::I64, PatternScalarType::I64),
+            (Ty::I128, PatternScalarType::I128),
+            (Ty::U8, PatternScalarType::U8),
+            (Ty::U16, PatternScalarType::U16),
+            (Ty::U32, PatternScalarType::U32),
+            (Ty::U64, PatternScalarType::U64),
+            (Ty::U128, PatternScalarType::U128),
+            (Ty::F32, PatternScalarType::F32),
+            (Ty::F64, PatternScalarType::F64),
+            (Ty::Bool, PatternScalarType::Bool),
+        ];
+
+        for (elem_type, expected) in cases {
+            let option = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![elem_type]);
+            let info =
+                pattern_aggregate_info(&option, false).expect("Option is aggregate metadata");
+
+            assert_eq!(info.type_name, "Option");
+            assert_eq!(info.option_elem_type, Some(expected));
+        }
+
+        let referenced = Ty::Reference(Box::new(Ty::Applied(
+            Box::new(Ty::Enum("Option".to_string())),
+            vec![Ty::U8],
+        )));
+        let referenced_info = pattern_aggregate_info(&referenced, false)
+            .expect("reference-wrapped Option is aggregate metadata");
+        assert_eq!(
+            referenced_info.option_elem_type,
+            Some(PatternScalarType::U8)
+        );
+
+        let aggregate = Ty::Applied(
+            Box::new(Ty::Enum("Option".to_string())),
+            vec![Ty::Struct("Box".to_string())],
+        );
+        let aggregate_info = pattern_aggregate_info(&aggregate, false)
+            .expect("aggregate Option is aggregate metadata");
+        assert_eq!(aggregate_info.option_elem_type, None);
     }
 
     #[test]

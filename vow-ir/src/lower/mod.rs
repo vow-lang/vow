@@ -9,7 +9,7 @@ use vow_syntax::ast::{
     Type as AstType, UnOp, VariantKind, VowBlock,
 };
 use vow_syntax::span::Span;
-pub use vow_types::check::{PatternAggregateMap, StringExprSet};
+pub use vow_types::check::{PatternAggregateMap, PatternScalarType, StringExprSet};
 
 use crate::types::{
     BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId,
@@ -180,6 +180,24 @@ fn propagate_vec_element_metadata(ctx: &mut LowerCtx, source: InstId, result: In
     ctx.inst_struct_type.insert(result, elem_name.clone());
     if !remaining.is_empty() {
         ctx.inst_vec_elem_types.insert(result, remaining.to_vec());
+    }
+}
+
+fn pattern_scalar_ir_type(ty: PatternScalarType) -> Ty {
+    match ty {
+        PatternScalarType::I8 => Ty::I8,
+        PatternScalarType::I16 => Ty::I16,
+        PatternScalarType::I32 => Ty::I32,
+        PatternScalarType::I64 => Ty::I64,
+        PatternScalarType::I128 => Ty::I128,
+        PatternScalarType::U8 => Ty::U8,
+        PatternScalarType::U16 => Ty::U16,
+        PatternScalarType::U32 => Ty::U32,
+        PatternScalarType::U64 => Ty::U64,
+        PatternScalarType::U128 => Ty::U128,
+        PatternScalarType::F32 => Ty::F32,
+        PatternScalarType::F64 => Ty::F64,
+        PatternScalarType::Bool => Ty::Bool,
     }
 }
 
@@ -2614,6 +2632,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                         ctx.inst_vec_elem_types
                                             .insert(field_val, info.vec_elem_types);
                                     }
+                                    if let Some(elem_type) = info.option_elem_type {
+                                        ctx.inst_option_elem_ty
+                                            .insert(field_val, pattern_scalar_ir_type(elem_type));
+                                    }
                                 }
                                 ctx.define(name.clone(), field_val);
                             }
@@ -3309,6 +3331,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.inst_struct_type.insert(payload, info.type_name);
                 if !info.vec_elem_types.is_empty() {
                     ctx.inst_vec_elem_types.insert(payload, info.vec_elem_types);
+                }
+                if let Some(elem_type) = info.option_elem_type {
+                    ctx.inst_option_elem_ty
+                        .insert(payload, pattern_scalar_ir_type(elem_type));
                 }
             }
             payload
@@ -4100,6 +4126,14 @@ mod tests {
     fn string_ty() -> Type {
         Type::Named {
             name: "String".to_string(),
+            span: sp(),
+        }
+    }
+
+    fn option_ty(elem: Type) -> Type {
+        Type::Generic {
+            name: "Option".to_string(),
+            args: vec![elem],
             span: sp(),
         }
     }
@@ -5078,6 +5112,7 @@ fn parse_or_default(s: String) -> i64 {
             vow_types::check::PatternAggregateInfo {
                 type_name: "Token".to_string(),
                 vec_elem_types: vec![],
+                option_elem_type: None,
                 is_linear: true,
             },
         )]));
@@ -5196,6 +5231,7 @@ fn parse_or_default(s: String) -> i64 {
             vow_types::check::PatternAggregateInfo {
                 type_name: "Vec".to_string(),
                 vec_elem_types: vec!["Vec".to_string(), "Box".to_string()],
+                option_elem_type: None,
                 is_linear: false,
             },
         )]));
@@ -5241,6 +5277,138 @@ fn parse_or_default(s: String) -> i64 {
             })
             .expect("field access after nested Vec indexes");
         assert_eq!(field_get.ty, Ty::I64);
+    }
+
+    #[test]
+    fn pattern_scalar_types_map_to_their_exact_ir_types() {
+        let cases = [
+            (PatternScalarType::I8, Ty::I8),
+            (PatternScalarType::I16, Ty::I16),
+            (PatternScalarType::I32, Ty::I32),
+            (PatternScalarType::I64, Ty::I64),
+            (PatternScalarType::I128, Ty::I128),
+            (PatternScalarType::U8, Ty::U8),
+            (PatternScalarType::U16, Ty::U16),
+            (PatternScalarType::U32, Ty::U32),
+            (PatternScalarType::U64, Ty::U64),
+            (PatternScalarType::U128, Ty::U128),
+            (PatternScalarType::F32, Ty::F32),
+            (PatternScalarType::F64, Ty::F64),
+            (PatternScalarType::Bool, Ty::Bool),
+        ];
+
+        for (pattern_type, ir_type) in cases {
+            assert_eq!(pattern_scalar_ir_type(pattern_type), ir_type);
+        }
+    }
+
+    #[test]
+    fn nested_option_pattern_metadata_preserves_payload_width() {
+        let byte_pattern = Pat {
+            kind: PatKind::Ident {
+                name: "byte".to_string(),
+                is_mut: false,
+            },
+            span: sp(),
+        };
+        let inner_match = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("inner")),
+                arms: vec![MatchArm {
+                    pattern: Pat {
+                        kind: PatKind::EnumVariant {
+                            path: vec!["Option".to_string(), "Some".to_string()],
+                            inner: vec![byte_pattern],
+                        },
+                        span: sp(),
+                    },
+                    body: ident_expr("byte"),
+                    span: sp(),
+                }],
+            },
+            span: sp(),
+        };
+        let outer_match = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("value")),
+                arms: vec![MatchArm {
+                    pattern: Pat {
+                        kind: PatKind::EnumVariant {
+                            path: vec!["Option".to_string(), "Some".to_string()],
+                            inner: vec![Pat {
+                                kind: PatKind::Ident {
+                                    name: "inner".to_string(),
+                                    is_mut: false,
+                                },
+                                span: sp(),
+                            }],
+                        },
+                        span: sp(),
+                    },
+                    body: inner_match,
+                    span: sp(),
+                }],
+            },
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "unwrap_nested",
+            vec![make_param("value", option_ty(option_ty(u8_ty())))],
+            u8_ty(),
+            Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(outer_match)),
+                span: sp(),
+            },
+            vec![],
+        );
+        let pattern_key = match &fn_def.body.trailing_expr.as_ref().unwrap().kind {
+            ExprKind::Match { arms, .. } => match &arms[0].pattern.kind {
+                PatKind::EnumVariant { inner, .. } => &inner[0] as *const Pat as usize,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let patterns = Rc::new(HashMap::from([(
+            pattern_key,
+            vow_types::check::PatternAggregateInfo {
+                type_name: "Option".to_string(),
+                vec_elem_types: vec![],
+                option_elem_type: Some(PatternScalarType::U8),
+                is_linear: false,
+            },
+        )]));
+        let enum_variant_map = HashMap::from([(
+            "Option".to_string(),
+            vec!["None".to_string(), "Some".to_string()],
+        )]);
+
+        let (func, _, warnings) = lower_function_with_pattern_aggregates(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            enum_variant_map,
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &patterns,
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert!(
+            func.blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| {
+                    inst.opcode == Opcode::FieldGet
+                        && inst.data == InstData::FieldIndex(1)
+                        && inst.ty == Ty::U8
+                }),
+            "the nested Some payload must retain its u8 width"
+        );
     }
 
     #[test]

@@ -1,0 +1,34 @@
+// TEST: exit 0
+module NestedOptionPayloadWidth
+
+fn unwrap_nested(value: Option<Option<u8>>) -> u8 {
+    match value {
+        Option::Some(inner) => {
+            match inner {
+                Option::Some(byte) => { byte },
+                Option::None => { 0 },
+            }
+        },
+        Option::None => { 0 },
+    }
+}
+
+fn propagate_nested(value: Option<Option<u8>>) -> Option<u8> {
+    let inner: Option<u8> = value?;
+    match inner {
+        Option::Some(byte) => { Option::Some(byte) },
+        Option::None => { Option::None },
+    }
+}
+
+fn main() -> i32 {
+    let value: u8 = unwrap_nested(Option::Some(Option::Some(7)));
+    let propagated: Option<u8> = propagate_nested(Option::Some(Option::Some(9)));
+    let propagated_value: u8 = match propagated {
+        Option::Some(byte) => { byte },
+        Option::None => { 0 },
+    };
+    if value != 7 { return 1; }
+    if propagated_value != 9 { return 2; }
+    0
+}

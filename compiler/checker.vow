@@ -3,6 +3,7 @@ module Checker
 use ast
 use types
 use env
+use ir
 
 fn primitive_tid(ts: TyStore, name: String) -> i64 {
     if name == String::from("i8") { return CTY_I8(); }
@@ -1292,6 +1293,38 @@ fn pattern_aggregate_is_linear(e: CheckEnv, tid: i64) -> i64 {
     is_linear_owner_ty(e, tid)
 }
 
+fn pattern_option_elem_ir_ty(ts: TyStore, tid: i64) -> i64 {
+    if ty_tag(ts, tid) == CTY_REF() {
+        return pattern_option_elem_ir_ty(ts, ty_a(ts, tid));
+    }
+    if ty_tag(ts, tid) != CTY_APPLIED() {
+        return -1;
+    }
+    let base: i64 = ty_a(ts, tid);
+    if ty_tag(ts, base) != CTY_ENUM() || ty_struct_name(ts, base) != String::from("Option") {
+        return -1;
+    }
+    let args_lid: i64 = ty_b(ts, tid);
+    if ts_arg_len(ts, args_lid) == 0 {
+        return -1;
+    }
+    let elem_tag: i64 = ty_tag(ts, ts_arg_get(ts, args_lid, 0));
+    if elem_tag == CTY_I8() { return ITY_I8(); }
+    if elem_tag == CTY_I16() { return ITY_I16(); }
+    if elem_tag == CTY_I32() { return ITY_I32(); }
+    if elem_tag == CTY_I64() { return ITY_I64(); }
+    if elem_tag == CTY_I128() { return ITY_I128(); }
+    if elem_tag == CTY_U8() { return ITY_U8(); }
+    if elem_tag == CTY_U16() { return ITY_U16(); }
+    if elem_tag == CTY_U32() { return ITY_U32(); }
+    if elem_tag == CTY_U64() { return ITY_U64(); }
+    if elem_tag == CTY_U128() { return ITY_U128(); }
+    if elem_tag == CTY_F32() { return ITY_F32(); }
+    if elem_tag == CTY_F64() { return ITY_F64(); }
+    if elem_tag == CTY_BOOL() { return ITY_BOOL(); }
+    -1
+}
+
 fn record_question_aggregate(e: CheckEnv, eid: i64, payload_tid: i64) {
     let aggregate_name: String = pattern_aggregate_name(e.ts, payload_tid);
     if aggregate_name.len() == 0 {
@@ -1300,10 +1333,12 @@ fn record_question_aggregate(e: CheckEnv, eid: i64, payload_tid: i64) {
     while e.question_aggregate_names.len() <= eid {
         e.question_aggregate_names.push(String::from(""));
         e.question_vec_elem_paths.push(Vec::new());
+        e.question_option_elem_tys.push(-1);
         e.question_aggregate_linear.push(0);
     }
     e.question_aggregate_names[eid] = aggregate_name;
     e.question_vec_elem_paths[eid] = pattern_vec_elem_path(e.ts, payload_tid);
+    e.question_option_elem_tys[eid] = pattern_option_elem_ir_ty(e.ts, payload_tid);
     e.question_aggregate_linear[eid] = pattern_aggregate_is_linear(e, payload_tid);
 }
 
@@ -1321,10 +1356,12 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
             while e.pat_aggregate_names.len() <= pid {
                 e.pat_aggregate_names.push(String::from(""));
                 e.pat_vec_elem_paths.push(Vec::new());
+                e.pat_option_elem_tys.push(-1);
                 e.pat_aggregate_linear.push(0);
             }
             e.pat_aggregate_names[pid] = aggregate_name;
             e.pat_vec_elem_paths[pid] = pattern_vec_elem_path(e.ts, scrutinee_tid);
+            e.pat_option_elem_tys[pid] = pattern_option_elem_ir_ty(e.ts, scrutinee_tid);
             e.pat_aggregate_linear[pid] = pattern_aggregate_is_linear(e, scrutinee_tid);
         }
         env_define_var(e, name, scrutinee_tid);
