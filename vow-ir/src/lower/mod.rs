@@ -839,6 +839,12 @@ fn choose_match_result_ty(
     arm_results: &[(BlockId, InstId, Ty, Vec<InstId>)],
     arm_result_markers: &[bool],
 ) -> Ty {
+    if arm_results.iter().any(|(_, _, ty, _)| *ty == Ty::LinearPtr) {
+        // Empty generic variants have no payload value from which lowering can
+        // infer ownership. A linear sibling carries the checker-resolved
+        // wrapper type for the merge, so the Phi must retain that obligation.
+        return Ty::LinearPtr;
+    }
     let Some((_, _, first_ty, _)) = arm_results.first() else {
         return Ty::I64;
     };
@@ -856,6 +862,14 @@ fn choose_match_result_ty(
     }
 
     result_ty
+}
+
+fn merge_phi_ty(primary: Ty, sibling: Ty) -> Ty {
+    if primary == Ty::LinearPtr || sibling == Ty::LinearPtr {
+        Ty::LinearPtr
+    } else {
+        primary
+    }
 }
 
 /// Return variables that are assigned in `then_branch` or `else_branch` AND
@@ -1353,7 +1367,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     // Variable unchanged by both branches — no phi needed.
                     continue;
                 }
-                let phi_ty = ctx.inst_ty(t_val);
+                let phi_ty = merge_phi_ty(ctx.inst_ty(t_val), ctx.inst_ty(e_val));
                 let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                 if !then_terminated {
                     ctx.switch_to_block(then_upsilon_block);
@@ -1398,7 +1412,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     phi_id
                 }
                 (Some(t_up), Some(e_up)) => {
-                    let phi_ty = ctx.inst_ty(then_val);
+                    let phi_ty = merge_phi_ty(ctx.inst_ty(then_val), ctx.inst_ty(else_val));
                     let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                     backpatch_upsilon(ctx, then_upsilon_block, t_up, phi_id);
                     backpatch_upsilon(ctx, else_upsilon_block, e_up, phi_id);
@@ -2711,7 +2725,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 if !changed {
                     continue;
                 }
-                let phi_ty = ctx.inst_ty(arm_results[0].3[i]);
+                let phi_ty = arm_results
+                    .iter()
+                    .skip(1)
+                    .fold(ctx.inst_ty(arm_results[0].3[i]), |ty, (_, _, _, values)| {
+                        merge_phi_ty(ty, ctx.inst_ty(values[i]))
+                    });
                 let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                 for (exit_block, _, _, arm_mut_vals) in &arm_results {
                     ctx.switch_to_block(*exit_block);

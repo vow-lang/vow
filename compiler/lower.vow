@@ -1104,6 +1104,16 @@ fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i6
     if result_tys.len() == 0 {
         return ITY_I64();
     }
+    let mut linear_i: i64 = 0;
+    while linear_i < result_tys.len() {
+        if result_tys[linear_i] == ITY_LPTR() {
+            // Empty Option/Result variants have no payload from which lowering
+            // can infer ownership. Preserve the linear sibling's checked
+            // wrapper type on the merge Phi.
+            return ITY_LPTR();
+        }
+        linear_i = linear_i + 1;
+    }
     let mut result_ty: i64 = result_tys[0];
     let mut result_is_marker: bool = result_markers[0];
     let mut i: i64 = 1;
@@ -1119,6 +1129,13 @@ fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i6
         i = i + 1;
     }
     result_ty
+}
+
+fn merge_phi_ty(primary: i64, sibling: i64) -> i64 {
+    if primary == ITY_LPTR() || sibling == ITY_LPTR() {
+        return ITY_LPTR();
+    }
+    primary
 }
 
 // Evaluates a const-int-shaped AST expr at compile time, mirroring
@@ -1768,7 +1785,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             return phi_id;
         }
         let phi_args: Vec<i64> = Vec::new();
-        let result_ty: i64 = lctx_inst_ty(ctx, then_result);
+        let result_ty: i64 = merge_phi_ty(lctx_inst_ty(ctx, then_result), lctx_inst_ty(ctx, else_result));
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
         backpatch_upsilon(ctx, then_exit_block, then_up_id, phi_id);
         backpatch_upsilon(ctx, else_exit_block, else_up_id, phi_id);

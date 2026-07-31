@@ -185,12 +185,14 @@ fn is_linear_owner_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
             let mut pi: i64 = 0;
             while pi < ts_arg_len(e.ts, payload_lid) {
                 if is_linear_owner_ty_rec(e, ts_arg_get(e.ts, payload_lid, pi), visited) == 1 {
+                    visited.pop();
                     return 1;
                 }
                 pi = pi + 1;
             }
             vi = vi + 1;
         }
+        visited.pop();
         return 0;
     }
     if tag == CTY_APPLIED() {

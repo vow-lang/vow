@@ -231,10 +231,17 @@ fn check_function_linear_regions(func: &Function, diagnostics: &mut Vec<Diagnost
         }
     }
 
+    // `block_in` is a may-live set used for leak diagnostics. Double-consume
+    // diagnostics need the dual fact: an origin consumed on any incoming path
+    // is unavailable on that path. Track that separately with a forward union
+    // so a sibling path cannot hide the earlier consumption.
+    let consumed_in = linear_consumed_block_inputs(func, &predecessors, &inst_lookup, bound);
+
     let mut emitted: BTreeSet<InstId> = BTreeSet::new();
     for block in &func.blocks {
         let incoming = block_in.get(&block.id).cloned().unwrap_or_default();
         let mut live = incoming;
+        let mut consumed = consumed_in.get(&block.id).cloned().unwrap_or_default();
         for inst in &block.insts {
             match inst.opcode {
                 Opcode::Return => {
@@ -249,13 +256,71 @@ fn check_function_linear_regions(func: &Function, diagnostics: &mut Vec<Diagnost
                 }
                 _ => {
                     if inst.opcode == Opcode::LinearConsume {
-                        emit_consumed_linear_error(func, inst, &live, &inst_lookup, diagnostics);
+                        emit_consumed_linear_error(
+                            func,
+                            inst,
+                            &consumed,
+                            &inst_lookup,
+                            diagnostics,
+                        );
                     }
                     apply_linear_transfer(inst, &mut live, &inst_lookup);
+                    apply_linear_consumed_transfer(inst, &mut consumed, &inst_lookup);
                 }
             }
         }
     }
+}
+
+fn linear_consumed_block_inputs(
+    func: &Function,
+    predecessors: &BTreeMap<BlockId, Vec<BlockId>>,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    bound: usize,
+) -> BTreeMap<BlockId, BTreeSet<InstId>> {
+    let mut block_in: BTreeMap<BlockId, BTreeSet<InstId>> = func
+        .blocks
+        .iter()
+        .map(|block| (block.id, BTreeSet::new()))
+        .collect();
+    let mut block_out = block_in.clone();
+    let mut changed = true;
+    let mut iters = 0usize;
+    while changed && iters <= bound {
+        iters += 1;
+        changed = false;
+        for block in &func.blocks {
+            let mut incoming = BTreeSet::new();
+            if let Some(preds) = predecessors.get(&block.id) {
+                for pred in preds {
+                    if let Some(out) = block_out.get(pred) {
+                        incoming.extend(out.iter().copied());
+                    }
+                }
+            }
+            let previous_in = block_in.insert(block.id, incoming.clone());
+            if previous_in.as_ref() != Some(&incoming) {
+                changed = true;
+            }
+            let out = transfer_linear_consumed_block(&incoming, block, inst_lookup);
+            if block_out.insert(block.id, out.clone()) != Some(out) {
+                changed = true;
+            }
+        }
+    }
+    block_in
+}
+
+fn transfer_linear_consumed_block(
+    incoming: &BTreeSet<InstId>,
+    block: &crate::types::BasicBlock,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+) -> BTreeSet<InstId> {
+    let mut consumed = incoming.clone();
+    for inst in &block.insts {
+        apply_linear_consumed_transfer(inst, &mut consumed, inst_lookup);
+    }
+    consumed
 }
 
 fn transfer_linear_block(
@@ -284,18 +349,7 @@ fn apply_linear_transfer(
     live: &mut BTreeSet<InstId>,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
 ) {
-    let is_owned_field_transfer = inst.opcode == Opcode::FieldGet
-        && inst.args.first().is_some_and(|base| {
-            inst_lookup
-                .get(base)
-                .is_some_and(|(_, base_inst)| base_inst.ty == Ty::LinearPtr)
-        });
-    if inst.ty == Ty::LinearPtr
-        && (matches!(
-            inst.opcode,
-            Opcode::GetArg | Opcode::RegionAlloc | Opcode::Call | Opcode::Phi
-        ) || is_owned_field_transfer)
-    {
+    if inst_starts_linear_origin(inst, inst_lookup) {
         // LinearPtr Phi is its own fresh origin (arms are transferred in via Upsilon).
         live.insert(inst.id);
     }
@@ -315,10 +369,46 @@ fn apply_linear_transfer(
     }
 }
 
+fn inst_starts_linear_origin(
+    inst: &Inst,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+) -> bool {
+    let is_owned_field_transfer = inst.opcode == Opcode::FieldGet
+        && inst.args.first().is_some_and(|base| {
+            inst_lookup
+                .get(base)
+                .is_some_and(|(_, base_inst)| base_inst.ty == Ty::LinearPtr)
+        });
+    inst.ty == Ty::LinearPtr
+        && (matches!(
+            inst.opcode,
+            Opcode::GetArg | Opcode::RegionAlloc | Opcode::Call | Opcode::Phi
+        ) || is_owned_field_transfer)
+}
+
+fn apply_linear_consumed_transfer(
+    inst: &Inst,
+    consumed: &mut BTreeSet<InstId>,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+) {
+    if inst_starts_linear_origin(inst, inst_lookup) {
+        // Static instruction IDs may execute again on a loop back-edge; each
+        // origin-producing execution starts a fresh dynamic obligation.
+        consumed.remove(&inst.id);
+    }
+    if matches!(
+        inst.opcode,
+        Opcode::LinearConsume | Opcode::Upsilon | Opcode::Return
+    ) && let Some(&arg) = inst.args.first()
+    {
+        consumed.extend(linear_origins(arg, inst_lookup));
+    }
+}
+
 fn emit_consumed_linear_error(
     func: &Function,
     consume: &Inst,
-    live: &BTreeSet<InstId>,
+    consumed: &BTreeSet<InstId>,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -327,7 +417,7 @@ fn emit_consumed_linear_error(
     };
     let Some(origin) = linear_origins(arg, inst_lookup)
         .into_iter()
-        .find(|origin| !live.contains(origin))
+        .find(|origin| consumed.contains(origin))
     else {
         return;
     };
@@ -3856,6 +3946,93 @@ mod tests {
             diagnostics.is_empty(),
             "unexpected diagnostics: {diagnostics:?}"
         );
+    }
+
+    #[test]
+    fn linear_consume_on_one_predecessor_makes_merge_consume_invalid() {
+        let entry = block(
+            0,
+            vec![
+                inst(
+                    0,
+                    Opcode::GetArg,
+                    Ty::LinearPtr,
+                    vec![],
+                    InstData::ArgIndex(0),
+                ),
+                inst(1, Opcode::LinearConsume, Ty::Unit, vec![0], InstData::None),
+                inst(
+                    2,
+                    Opcode::FieldGet,
+                    Ty::LinearPtr,
+                    vec![0],
+                    InstData::FieldIndex(1),
+                ),
+                inst(
+                    3,
+                    Opcode::ConstBool,
+                    Ty::Bool,
+                    vec![],
+                    InstData::ConstBool(true),
+                ),
+                inst(
+                    4,
+                    Opcode::Branch,
+                    Ty::Unit,
+                    vec![3],
+                    InstData::BranchTargets {
+                        then_block: BlockId(1),
+                        else_block: BlockId(2),
+                    },
+                ),
+            ],
+        );
+        let then_block = block(
+            1,
+            vec![
+                inst(5, Opcode::LinearConsume, Ty::Unit, vec![2], InstData::None),
+                inst(
+                    6,
+                    Opcode::Jump,
+                    Ty::Unit,
+                    vec![],
+                    InstData::JumpTarget(BlockId(3)),
+                ),
+            ],
+        );
+        let else_block = block(
+            2,
+            vec![inst(
+                7,
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(BlockId(3)),
+            )],
+        );
+        let merge = block(
+            3,
+            vec![
+                inst(8, Opcode::LinearConsume, Ty::Unit, vec![2], InstData::None),
+                return_unit_inst(9),
+            ],
+        );
+        let mut func = function(
+            0,
+            "partial_duplicate",
+            vec![Ty::LinearPtr],
+            Ty::Unit,
+            vec![entry, then_block, else_block, merge],
+        );
+        func.local_names.insert(2, "token".to_string());
+        let mut diagnostics = Vec::new();
+
+        check_function_linear_regions(&func, &mut diagnostics);
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.code == ErrorCode::LinearTypeViolation
+                && diag.message == "linear value `token` already consumed"
+        }));
     }
 
     /// Build `fn id(s: String) -> String { s }`. Pizlo IR: GetArg(0); Return(GetArg).
