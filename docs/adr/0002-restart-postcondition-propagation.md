@@ -83,15 +83,19 @@ aliased memory unless `A_r` states that fact. Proving `R_r` under `A_r` does
 not make `R_r` available for restart arguments or invocation states that
 violate `A_r`.
 
-Evaluating `A_r` and `R_r` must be observationally read-only. In addition to
-the existing contract rule that rejects declared effects, restart-contract
-validation derives the transitive heap-write footprint of every called helper
-and rejects a clause that can write pre-existing shared state. A helper may
-mutate private fresh storage only when that storage cannot escape the helper or
-alias a contract binding. Thus an effect-free helper that assigns through a
-struct argument is not valid in a restart contract, while a helper that only
+Evaluating `P`, `Q`, `A_r`, and `R_r` must be observationally read-only. In
+addition to the existing contract rule that rejects declared effects, the
+condition/restart implementation must derive the transitive heap-write
+footprint of every called helper and reject a clause that can write
+pre-existing shared state. A helper may mutate private fresh storage only when
+that storage cannot escape the helper or alias a contract binding. Thus an
+effect-free helper that assigns through a struct argument is not valid in any
+contract participating in these outcome summaries, while a helper that only
 reads that struct is. This uses the same footprint analysis required for
-outcome summaries; it does not add a new effect or type-system axis.
+outcome summaries; it does not add a new effect or type-system axis. Enforcing
+this stronger meaning of contract purity for the existing `P` and `Q` clauses
+is a prerequisite of condition/restart implementation, not a change to current
+compiler behavior made by this documentation-only ADR.
 
 The function's ordinary body is checked against `Q`, and its writes are checked
 against `W_f`. A weaker `R_r` does not weaken those checks, and proving the
@@ -104,7 +108,8 @@ A handled call lowers to explicit verifier control-flow edges:
 1. Modular caller lowering constructs `H'_f` on the normal edge by havocing
    every location in the imported `W_f`, with the same alias-aware rule used
    for restart writes. It then carries
-   `assume(Q(H'_f, actual_args, call_result))`.
+   `assume(Q(H'_f, actual_args, call_result))`; observational evaluation of
+   `Q` does not add writes to `W_f` or change `H'_f`.
 2. The selected handler arm runs, including any mutations it makes through
    aliases of the handled call's heap-backed arguments.
 3. Immediately before invoking restart `r`, lowering creates the caller
@@ -152,9 +157,9 @@ The implementation must not replace this summary with an unconditional
 coarse return type. Existing branch reasoning is sufficient; no
 restart-refined type or new type-system axis is introduced.
 
-An unhandled call keeps today's rule: its caller must prove `P`, apply `W_f`,
-and then use `Q` on the normal edge. Declaring a restart does not weaken
-ordinary calls.
+An unhandled call keeps today's rule: its caller must prove `P` without
+changing the heap, apply `W_f`, and then use `Q` on the normal edge. Declaring
+a restart does not weaken ordinary calls.
 
 ### Handler and enclosing-function contracts
 
@@ -249,6 +254,10 @@ failure are not carried across handler execution unless the argument contract
 re-establishes them, and facts about locations in `W_r` are not carried across
 restart execution unless `R_r` re-establishes them.
 
+Clause evaluation itself adds no heap transition: observational validation
+guarantees that `P`, `Q`, `A_r`, and `R_r` leave their respective input heaps
+unchanged in verification and in debug-mode runtime checks.
+
 ## Diagnostics
 
 There are three distinct failures, and their blame must remain distinct.
@@ -289,34 +298,50 @@ retained rather than collapsed. Successfully entered recovery edges use
 `entered: false` entry for the attempted selection.
 
 Every entry records the values that instantiate its contracts in two ordered
-binding arrays:
+binding arrays and two ordered helper-evaluation arrays:
 
 - `invocation_bindings` contains every selected restart argument, whether or
-  not `A_r` mentions it, plus every callee argument and heap projection in the
-  transitive read-dependency closure of `A_r`. Values are observed in `H_r`.
+  not `A_r` mentions it, every callee argument free in `A_r`, and every heap
+  projection that `A_r` reads directly outside a helper call. Values are
+  observed in `H_r`.
+- `invocation_evaluations` contains the counterexample value of every maximal
+  scalar helper-derived expression evaluated from `A_r` on the concrete path,
+  after substituting its actual arguments. For `score(state) >= minimum`, it
+  records the value of `score(state)`, not every field or collection element
+  read inside `score`.
 - `completion_bindings` contains every selected restart argument plus every
-  callee argument and heap projection in the transitive read-dependency closure
-  of `R_r`, plus `result` when referenced. Values are observed in `H'_r`.
-  This array is empty when `entered` is false because no completion guarantee
-  became available.
+  callee argument free in `R_r`, every heap projection that `R_r` reads
+  directly outside a helper call, and `result` when referenced. Values are
+  observed in `H'_r`.
+- `completion_evaluations` contains the corresponding helper-derived scalar
+  values for `R_r` in `H'_r`.
+
+Both completion arrays are empty when `entered` is false because no completion
+guarantee became available.
 
 Each binding has a `role` (`restart_argument`, `callee_argument`,
 `reachable_state`, or `result`), its source `name`, and its counterexample
 `value` using the same string encoding as the top-level `values` map. The same
 source may appear in both arrays with different values when the restart writes
-it. The read-dependency closure expands calls to observationally read-only
-contract helpers transitively, so a clause `is_valid(state)` also records a
-field such as `state.last` when `is_valid` reads it. It is instantiated for the
-concrete counterexample: projection names include concrete indices, and
-distinct projections reached by repeated or recursive helper calls remain
-distinct. Within each array, selected restart arguments appear in declaration
-order, followed by other observations in deterministic depth-first evaluation
-order after substituting helper arguments; the first occurrence of an
-identical observation wins. No selected argument or contract observation may
-be omitted. Keeping the two phases on the individual occurrence makes
-repeated selections distinguishable and identifies the exact instantiations
-of `A_r` and `R_r`; the top-level `values` map describes the failed proof
-obligation and is not a substitute for this occurrence-local context.
+it. A heap-backed argument's value is a stable identity local to the
+counterexample, not a recursive serialization of its reachable graph. Each
+helper evaluation has its source `expression`, counterexample `value`, and
+source span. If a helper returns an aggregate and the clause projects from it,
+the evaluation records the scalar projection used by the clause. Within each
+phase, selected restart arguments appear in declaration order, followed by
+direct bindings and helper evaluations in lexical first-use order; the first
+occurrence of an identical observation wins.
+
+The transitive read closure is used to prove that a helper is observationally
+read-only, but it is deliberately not materialized in the diagnostic. Direct
+bindings plus boundary evaluation values are sufficient to reconstruct the
+instantiated clause while bounding each entry by the clause's surface size,
+independent of the collection or heap-graph size traversed inside a helper.
+No selected argument, direct observation, or boundary evaluation may be
+omitted. Keeping both phases on the individual occurrence makes repeated
+selections distinguishable and identifies the exact instantiations of `A_r`
+and `R_r`; the top-level `values` map describes the failed proof obligation
+and is not a substitute for this occurrence-local context.
 
 The future schema addition contains the following field. This is an
 illustrative counterexample fragment, not a complete schema-valid object;
@@ -329,16 +354,28 @@ unchanged required fields such as `values`, `vow_id`, and `source` are omitted:
       "callee": "read_positive",
       "restart": "use_value",
       "argument_contract": "value >= minimum",
-      "postcondition": "result == value && state.last == result",
+      "postcondition": "result == value && is_valid(state)",
       "entered": true,
       "invocation_bindings": [
         { "role": "restart_argument", "name": "value", "value": "0" },
         { "role": "callee_argument", "name": "minimum", "value": "0" }
       ],
+      "invocation_evaluations": [],
       "completion_bindings": [
         { "role": "restart_argument", "name": "value", "value": "0" },
-        { "role": "reachable_state", "name": "state.last", "value": "0" },
+        { "role": "callee_argument", "name": "state", "value": "heap#1" },
         { "role": "result", "name": "result", "value": "0" }
+      ],
+      "completion_evaluations": [
+        {
+          "expression": "is_valid(state)",
+          "value": "true",
+          "source": {
+            "file": "reader.vow",
+            "offset": 88,
+            "length": 15
+          }
+        }
       ],
       "call_site": {
         "file": "reader.vow",
@@ -362,11 +399,11 @@ output is a separate schema and retains its capitalized `"Caller"` and
 
 Human output must render the whole recovery path in the same order, then relate
 the relevant guarantee to the failed obligation. It must show invocation and
-completion bindings separately when both are present. For a single entry:
-`recovery through read_positive::use_value with invocation {value = 0,
-minimum = 0} and completion {value = 0, state.last = 0, result = 0} guarantees
-result == value && state.last == result; this path does not establish ensures
-result > 0`.
+completion bindings and evaluations separately when present. For a single
+entry: `recovery through read_positive::use_value with invocation {value = 0,
+minimum = 0}, completion {value = 0, state = heap#1, result = 0}, and completion
+evaluation {is_valid(state) = true} guarantees result == value &&
+is_valid(state); this path does not establish ensures result > 0`.
 
 This ADR does not allocate a new error code. The failure is produced by the
 existing verifier, not the parser or type checker. The condition/restart
@@ -436,15 +473,23 @@ or effect distinction for memory reachable from handled-call arguments. The
 conservative invocation-state rule uses Vow's existing alias semantics and
 allows safe mutations whenever the handler can re-establish `A_r` afterward.
 
-### Allow restart contract evaluation to mutate shared state
+### Materialize every transitive helper read in diagnostics
 
-This would require another write transition before and after each `A_r` and
-`R_r` evaluation, plus corresponding interface metadata. More importantly,
-debug builds evaluate runtime contract checks while release builds omit them,
-so a mutating contract helper would make program behavior depend on build mode.
-Restart contracts are observations, not state transitions; rejecting shared
-writes preserves that boundary. Private fresh, non-escaping helper storage
-remains an implementation detail and is harmless.
+This can make one recovery entry linear in the size of a collection or heap
+graph traversed by a contract helper. Recording the scalar value observed at
+the clause/helper boundary preserves the exact instantiated predicate with
+space bounded by contract surface size. The helper's transitive read closure
+is still analyzed for observational purity, but it is not diagnostic payload.
+
+### Allow contract evaluation to mutate shared state
+
+This would require another write transition before and after each `P`, `Q`,
+`A_r`, and `R_r` evaluation, plus corresponding interface metadata. More
+importantly, debug builds evaluate runtime contract checks while release builds
+omit them, so a mutating contract helper would make program behavior depend on
+build mode. Contracts are observations, not state transitions; rejecting
+shared writes preserves that boundary. Private fresh, non-escaping helper
+storage remains an implementation detail and is harmless.
 
 ## Deferred implementation choices
 
@@ -482,10 +527,12 @@ public-interface tests must cover:
 10. sequential and nested recoveries retaining every selected restart in
     execution order, including repeated selections with identical restart
     arguments but distinct invocation or completion bindings;
-11. recovery diagnostics capturing heap observations made transitively by
-    observationally read-only helpers called from `A_r` or `R_r`;
-12. rejection of an effect-free contract helper that mutates shared heap state,
-    while accepting an observationally read-only helper;
-13. restart mutation invalidating aliased pre-invocation facts unless `R_r`
+11. recovery diagnostics capturing helper-derived scalar evaluations without
+    expanding the helper's internal heap reads;
+12. diagnostic size remaining bounded by contract surface size when a helper
+    scans a large collection or recursively traverses a heap graph;
+13. rejection of effect-free helpers that mutate shared heap state from `P`,
+    `Q`, `A_r`, or `R_r`, while accepting observationally read-only helpers;
+14. restart mutation invalidating aliased pre-invocation facts unless `R_r`
     re-establishes them; and
-14. Rust/self-hosted parity for `recovery_path` diagnostics.
+15. Rust/self-hosted parity for `recovery_path` diagnostics.
