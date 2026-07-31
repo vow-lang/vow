@@ -1024,6 +1024,13 @@ if bash tests/bootstrap/tests.sh >"$bootstrap_log" 2>&1; then
 else
     fail "bootstrap/smoke" "$(tail -20 "$bootstrap_log")"
 fi
+
+measure_bootstrap_rss_log="$TMPDIR/measure_bootstrap_rss_tests.log"
+if bash tests/measure_bootstrap_rss/tests.sh >"$measure_bootstrap_rss_log" 2>&1; then
+    pass "measure-bootstrap-rss/smoke"
+else
+    fail "measure-bootstrap-rss/smoke" "$(tail -20 "$measure_bootstrap_rss_log")"
+fi
 echo ""
 
 # ─── Section 8c: Contract Quality ─────────────────────────────────
