@@ -67,6 +67,27 @@ fn answer(x: i64) -> i64 vow {
                 self.assertFalse(result.matches)
                 self.assertEqual(result.message, expected_message)
 
+    def test_accepts_reordered_but_equivalent_clauses(self):
+        skeleton = """\
+module Example
+
+fn answer(x: i64, y: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: y >= 0,
+  ensures: result >= x
+} {
+  0
+}
+"""
+        candidate = skeleton.replace(
+            "requires: x >= 0,\n  requires: y >= 0,",
+            "requires: y >= 0,\n  requires: x >= 0,",
+        )
+
+        result = compare_skeleton(skeleton, candidate)
+
+        self.assertTrue(result.matches, result.message)
+
     def test_rejects_contract_deletion(self):
         skeleton = """\
 module Example

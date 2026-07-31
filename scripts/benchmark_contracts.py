@@ -57,7 +57,9 @@ def compare_skeleton(skeleton: str, candidate: str) -> FidelityResult:
             return FidelityResult(False, f"skeleton function `{name}` is missing")
         if actual_function.signature != expected_function.signature:
             return FidelityResult(False, f"signature of `{name}` changed")
-        if actual_function.clauses != expected_function.clauses:
+        # requires/ensures/invariant clauses are combined with logical AND, so
+        # a harmless reorder must not be flagged as a weakened contract.
+        if sorted(actual_function.clauses) != sorted(expected_function.clauses):
             return FidelityResult(False, f"contracts of `{name}` changed")
 
     return FidelityResult(True, "")
@@ -82,9 +84,7 @@ def _parse_program(source: str) -> _ProgramShape:
                 index += 1
             continue
 
-        name, shape, index = _parse_function(
-            tokens, function_start, function_token
-        )
+        name, shape, index = _parse_function(tokens, function_start, function_token)
         if name in functions:
             raise _StructureError(f"duplicate top-level function `{name}`")
         functions[name] = shape
@@ -182,7 +182,9 @@ def _parse_clauses(
             index += 1
 
         if delimiters:
-            raise _StructureError(f"unclosed delimiter in contracts of `{function_name}`")
+            raise _StructureError(
+                f"unclosed delimiter in contracts of `{function_name}`"
+            )
         if not expression:
             raise _StructureError(f"empty `{kind}` clause in `{function_name}`")
         clauses.append((kind, tuple(expression)))
@@ -222,9 +224,7 @@ def _tokenize(source: str) -> list[str]:
             continue
         if char.isalnum() or char == "_":
             end = index + 1
-            while end < len(source) and (
-                source[end].isalnum() or source[end] == "_"
-            ):
+            while end < len(source) and (source[end].isalnum() or source[end] == "_"):
                 end += 1
             tokens.append(source[index:end])
             index = end
@@ -266,6 +266,8 @@ def _token_at(tokens: list[str], index: int) -> str:
 
 
 def _is_identifier(token: str) -> bool:
-    return bool(token) and (token[0].isalpha() or token[0] == "_") and all(
-        char.isalnum() or char == "_" for char in token[1:]
+    return (
+        bool(token)
+        and (token[0].isalpha() or token[0] == "_")
+        and all(char.isalnum() or char == "_" for char in token[1:])
     )
