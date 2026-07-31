@@ -106,20 +106,73 @@ fn decreasing_work_does_not_fit_a_growing_complexity_class() {
 }
 
 #[test]
-fn maximum_supported_declaration_rejects_quartic_work() {
+fn maximum_supported_declaration_does_not_pass_quartic_work() {
     let samples = [16_u64, 32, 64, 128, 256, 512]
         .map(|input_size| Sample::new(input_size, input_size.pow(4)));
 
     let analysis = analyze(ComplexityClass::CubicLogarithmic, &samples).unwrap();
 
-    assert_eq!(analysis.verdict, Verdict::Fail);
-    assert_eq!(analysis.observed, None);
+    assert_eq!(analysis.verdict, Verdict::Ambiguous);
+    assert_eq!(analysis.observed, Some(ComplexityClass::CubicLogarithmic));
+}
+
+#[test]
+fn maximum_supported_declaration_does_not_pass_cubic_log_squared_work() {
+    let samples = [1024_u64, 2048, 4096, 8192, 16384, 32768].map(|input_size| {
+        Sample::new(
+            input_size,
+            input_size.pow(3) * u64::from(input_size.ilog2()).pow(2),
+        )
+    });
+
+    let analysis = analyze(ComplexityClass::CubicLogarithmic, &samples).unwrap();
+
+    assert_eq!(analysis.verdict, Verdict::Ambiguous);
+    assert_eq!(analysis.observed, Some(ComplexityClass::CubicLogarithmic));
+}
+
+#[test]
+fn maximum_supported_declaration_does_not_fail_thresholded_cubic_log_work() {
+    let samples = [16_u64, 32, 64, 128, 256, 512, 1024, 2048].map(|input_size| {
+        Sample::new(
+            input_size,
+            input_size.saturating_sub(100).pow(3) * u64::from(input_size.ilog2()),
+        )
+    });
+
+    let analysis = analyze(ComplexityClass::CubicLogarithmic, &samples).unwrap();
+
+    assert_eq!(analysis.verdict, Verdict::Ambiguous);
+    assert_eq!(analysis.observed, Some(ComplexityClass::CubicLogarithmic));
 }
 
 #[test]
 fn maximum_supported_declaration_accepts_cubic_logarithmic_work() {
     let samples = [16_u64, 32, 64, 128, 256, 512]
         .map(|input_size| Sample::new(input_size, input_size.pow(3) * input_size.ilog2() as u64));
+
+    let analysis = analyze(ComplexityClass::CubicLogarithmic, &samples).unwrap();
+
+    assert_eq!(analysis.verdict, Verdict::Pass);
+    assert_eq!(analysis.observed, Some(ComplexityClass::CubicLogarithmic));
+}
+
+#[test]
+fn maximum_supported_declaration_ignores_an_early_rising_residual() {
+    let samples = [
+        (16_u64, 1_u64),
+        (32, 2),
+        (64, 4),
+        (128, 1),
+        (256, 1),
+        (512, 1),
+    ]
+    .map(|(input_size, early_multiplier)| {
+        Sample::new(
+            input_size,
+            input_size.pow(3) * u64::from(input_size.ilog2()) * early_multiplier,
+        )
+    });
 
     let analysis = analyze(ComplexityClass::CubicLogarithmic, &samples).unwrap();
 
