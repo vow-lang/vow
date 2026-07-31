@@ -4736,7 +4736,7 @@ mod tests {
     }
 
     #[test]
-    fn projected_parameter_region_string_push_byte_keeps_default_variant() {
+    fn projected_parameter_region_string_mutations_keep_default_variants() {
         let grow_projection = Function {
             id: FuncId(0),
             name: "grow_projection".to_string(),
@@ -4793,7 +4793,21 @@ mod tests {
                         vec![4, 7],
                         InstData::CallExtern("__vow_string_push_byte".to_string()),
                     ),
-                    inst(9, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                    inst(
+                        9,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![2, 4],
+                        InstData::CallExtern("__vow_string_push_str".to_string()),
+                    ),
+                    inst(
+                        10,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![4, 2],
+                        InstData::CallExtern("__vow_string_push_str".to_string()),
+                    ),
+                    inst(11, Opcode::Return, Ty::Unit, vec![], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
@@ -4822,6 +4836,8 @@ mod tests {
         let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_string_push_byte"));
         assert!(!symbols.contains("__vow_string_push_byte_in_arena"));
+        assert!(symbols.contains("__vow_string_push_str"));
+        assert!(!symbols.contains("__vow_string_push_str_in_arena"));
     }
 
     #[test]

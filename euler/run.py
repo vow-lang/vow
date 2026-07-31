@@ -20,6 +20,12 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from benchmark_contracts import compare_skeleton
+
 # ---------------------------------------------------------------------------
 # LLM abstraction (inline, no dependency on bench/)
 # ---------------------------------------------------------------------------
@@ -191,6 +197,16 @@ def build_cegis_prompt(verify_output: str) -> str:
 Fix the implementation so all contracts verify. Return ONLY the complete updated .vow file, no explanation."""
 
 
+def build_skeleton_mismatch_prompt(message: str) -> str:
+    return f"""The response changed an immutable part of the supplied skeleton:
+
+{message}
+
+Restore the exact module name, skeleton function signatures, and contracts.
+Change function bodies only; additional helper functions are allowed. Return
+ONLY the complete updated .vow file, no explanation."""
+
+
 # ---------------------------------------------------------------------------
 # Verifier + executor
 # ---------------------------------------------------------------------------
@@ -334,7 +350,7 @@ class ProblemResult:
     name: str
     difficulty: str
     expected_answer: int
-    status: str  # verified / verify_failed / compile_failed / timeout / max_iterations / empty_response
+    status: str  # verified / contracts_weakened / verify_failed / compile_failed / timeout / max_iterations / empty_response
     answer_correct: bool | None  # None if couldn't execute
     actual_output: str | None
     iterations: int
@@ -397,6 +413,40 @@ def run_problem(
             )
 
         final_code = code
+        fidelity = compare_skeleton(problem.skeleton_vow, code)
+        if not fidelity.matches:
+            mismatch_output = json.dumps(
+                {
+                    "status": "ContractsWeakened",
+                    "message": fidelity.message,
+                }
+            )
+            verify_outputs.append(mismatch_output)
+            if iteration < max_cegis:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": build_skeleton_mismatch_prompt(fidelity.message),
+                    }
+                )
+                continue
+            return ProblemResult(
+                problem.id,
+                problem.euler_number,
+                problem.name,
+                problem.difficulty,
+                problem.answer,
+                "contracts_weakened",
+                None,
+                None,
+                iteration,
+                time.time() - start,
+                {"input_tokens": total_in, "output_tokens": total_out},
+                final_code,
+                raw_responses,
+                verify_outputs,
+            )
+
         unwind_arg = problem.unwind if supports_unwind else None
         vr = run_verify(
             vow_binary,
@@ -555,7 +605,7 @@ def find_root() -> Path:
 
 def resolve_compiler(root: Path) -> tuple[Path, int | None, bool]:
     # Prefer self-hosted vowc (supports --unwind)
-    vowc = root / "vowc"
+    vowc = root / "build" / "vowc"
     if vowc.exists():
         return vowc, SELF_HOSTED_MEM_LIMIT, True
     # Fall back to Rust stage-0 binary (does NOT accept --unwind)
