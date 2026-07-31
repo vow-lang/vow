@@ -982,7 +982,6 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "cranelift-object",
- "target-lexicon",
  "tempfile",
 ]
 
@@ -997,7 +996,6 @@ dependencies = [
  "cranelift-object",
  "object",
  "proptest",
- "target-lexicon",
  "tempfile",
  "vow-diag",
  "vow-ir",
