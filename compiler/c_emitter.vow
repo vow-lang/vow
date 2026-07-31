@@ -1343,37 +1343,21 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
              inst.dv == ITY_U16() || inst.dv == ITY_U32());
         if narrow_shift {
             let width: i64 = if inst.dv == ITY_I8() || inst.dv == ITY_U8() { 8 } else if inst.dv == ITY_I16() || inst.dv == ITY_U16() { 16 } else { 32 };
-            let c_ty: String = if inst.dv == ITY_I8() { String::from("int8_t") }
-                else if inst.dv == ITY_U8() { String::from("uint8_t") }
-                else if inst.dv == ITY_I16() { String::from("int16_t") }
-                else if inst.dv == ITY_U16() { String::from("uint16_t") }
-                else { String::from("uint32_t") };
-            let u_ty: String = if width == 8 { String::from("uint8_t") }
-                else if width == 16 { String::from("uint16_t") }
-                else { String::from("uint32_t") };
             out.push_str(str5(String::from("  __ESBMC_assert(v"), i64_to_str(iargs[1]), String::from(" < "), i64_to_str(width), String::from(", \"integer shift count\");\n")));
+            let opname: String = if op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
+            let prefix: String = if inst.dv == ITY_I8() || inst.dv == ITY_I16() { String::from("i") } else { String::from("u") };
             let expr: String = String::from("  v");
             expr.push_str(i64_to_str(id));
-            expr.push_str(String::from(" = (")); expr.push_str(c_ty);
-            if op == IOP_SHL() {
-                expr.push_str(String::from(")((((")); expr.push_str(u_ty);
-                expr.push_str(String::from(")v")); expr.push_str(i64_to_str(iargs[0]));
-                expr.push_str(String::from(") << v")); expr.push_str(i64_to_str(iargs[1]));
-                expr.push_str(String::from("));\n"));
-            } else if inst.dv == ITY_I8() || inst.dv == ITY_I16() {
-                expr.push_str(String::from(")((((")); expr.push_str(u_ty);
-                expr.push_str(String::from(")v")); expr.push_str(i64_to_str(iargs[0]));
-                expr.push_str(String::from(") >> v")); expr.push_str(i64_to_str(iargs[1]));
-                expr.push_str(String::from(") | (v")); expr.push_str(i64_to_str(iargs[0]));
-                expr.push_str(String::from(" < 0 ? (")); expr.push_str(u_ty);
-                expr.push_str(String::from(")~(((")); expr.push_str(u_ty);
-                expr.push_str(String::from(")~0) >> v")); expr.push_str(i64_to_str(iargs[1]));
-                expr.push_str(String::from(") : 0));\n"));
-            } else {
-                expr.push_str(String::from(")(v")); expr.push_str(i64_to_str(iargs[0]));
-                expr.push_str(String::from(" >> v")); expr.push_str(i64_to_str(iargs[1]));
-                expr.push_str(String::from(");\n"));
-            }
+            expr.push_str(String::from(" = __vow_"));
+            expr.push_str(opname);
+            expr.push_str(String::from("_"));
+            expr.push_str(prefix);
+            expr.push_str(i64_to_str(width));
+            expr.push_str(String::from("(v"));
+            expr.push_str(i64_to_str(iargs[0]));
+            expr.push_str(String::from(", v"));
+            expr.push_str(i64_to_str(iargs[1]));
+            expr.push_str(String::from(");\n"));
             out.push_str(expr);
         } else if inst.dk == IDATA_INTEGER() && inst.dv == ITY_I64() {
             let opname: String = if op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
@@ -2803,6 +2787,123 @@ fn scan_shift_needs_in_fns(fns: Vec<IrFunction>, start: i64, end: i64, target_op
     0
 }
 
+fn narrow_shift_ty_at(index: i64) -> i64 {
+    if index == 0 { return ITY_I8(); }
+    if index == 1 { return ITY_U8(); }
+    if index == 2 { return ITY_I16(); }
+    if index == 3 { return ITY_U16(); }
+    ITY_U32()
+}
+
+fn cemit_narrow_shift_helper(target_op: i64, target_ty: i64) -> String {
+    let bits: i64 = if target_ty == ITY_I8() || target_ty == ITY_U8() { 8 }
+        else if target_ty == ITY_I16() || target_ty == ITY_U16() { 16 }
+        else { 32 };
+    let mask: i64 = bits - 1;
+    let signed: bool = target_ty == ITY_I8() || target_ty == ITY_I16();
+    let c_ty: String = ir_ty_to_c(target_ty);
+    let u_ty: String = if bits == 8 { String::from("uint8_t") }
+        else if bits == 16 { String::from("uint16_t") }
+        else { String::from("uint32_t") };
+    let opname: String = if target_op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
+    let prefix: String = if signed { String::from("i") } else { String::from("u") };
+    let out: String = String::from("static inline ");
+    out.push_str(c_ty);
+    out.push_str(String::from(" __vow_"));
+    out.push_str(opname);
+    out.push_str(String::from("_"));
+    out.push_str(prefix);
+    out.push_str(i64_to_str(bits));
+    out.push_str(String::from("("));
+    out.push_str(c_ty);
+    out.push_str(String::from(" value, "));
+    out.push_str(c_ty);
+    out.push_str(String::from(" count) {\n"));
+    if signed {
+        out.push_str(String::from("  "));
+        out.push_str(u_ty);
+        out.push_str(String::from(" shift = (("));
+        out.push_str(u_ty);
+        out.push_str(String::from(")count) & "));
+        out.push_str(i64_to_str(mask));
+        out.push_str(String::from(";\n"));
+        if target_op == IOP_SHL() {
+            out.push_str(String::from("  return ("));
+            out.push_str(c_ty);
+            out.push_str(String::from(")((("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")value) << shift);\n"));
+        } else {
+            out.push_str(String::from("  "));
+            out.push_str(u_ty);
+            out.push_str(String::from(" raw_bits = ("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")value;\n  "));
+            out.push_str(u_ty);
+            out.push_str(String::from(" logical = raw_bits >> shift;\n  "));
+            out.push_str(u_ty);
+            out.push_str(String::from(" ones = ~(("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")0);\n  "));
+            out.push_str(u_ty);
+            out.push_str(String::from(" sign_fill = value < 0 ? (("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")~(ones >> shift)) : ("));
+            out.push_str(u_ty);
+            out.push_str(String::from(")0;\n  return ("));
+            out.push_str(c_ty);
+            out.push_str(String::from(")(logical | sign_fill);\n"));
+        }
+    } else {
+        out.push_str(String::from("  return value "));
+        if target_op == IOP_SHL() { out.push_str(String::from("<<")); }
+        else { out.push_str(String::from(">>")); }
+        out.push_str(String::from(" (count & "));
+        out.push_str(i64_to_str(mask));
+        out.push_str(String::from(");\n"));
+    }
+    out.push_str(String::from("}\n"));
+    out
+}
+
+fn append_narrow_shift_helpers_for_fns(out: String, fns: Vec<IrFunction>, start: i64, end: i64) {
+    let mut emitted: bool = false;
+    let mut ti: i64 = 0;
+    while ti < 5 {
+        let ty: i64 = narrow_shift_ty_at(ti);
+        let mut oi: i64 = 0;
+        while oi < 2 {
+            let op: i64 = if oi == 0 { IOP_SHL() } else { IOP_SHR() };
+            if scan_shift_needs_in_fns(fns, start, end, op, ty) == 1 {
+                out.push_str(cemit_narrow_shift_helper(op, ty));
+                emitted = true;
+            }
+            oi = oi + 1;
+        }
+        ti = ti + 1;
+    }
+    if emitted { out.push_byte(10); }
+}
+
+fn append_narrow_shift_helpers_for_function(out: String, f: IrFunction) {
+    let mut emitted: bool = false;
+    let mut ti: i64 = 0;
+    while ti < 5 {
+        let ty: i64 = narrow_shift_ty_at(ti);
+        let mut oi: i64 = 0;
+        while oi < 2 {
+            let op: i64 = if oi == 0 { IOP_SHL() } else { IOP_SHR() };
+            if func_has_integer_shift_op(f, op, ty) == 1 {
+                out.push_str(cemit_narrow_shift_helper(op, ty));
+                emitted = true;
+            }
+            oi = oi + 1;
+        }
+        ti = ti + 1;
+    }
+    if emitted { out.push_byte(10); }
+}
+
 fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_shr_u64: i64,
                               need_shl_i32: i64, need_shr_i32: i64,
                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
@@ -2962,6 +3063,7 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
     let need_shl_i32: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL(), ITY_I32());
     let need_shr_i32: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR(), ITY_I32());
     let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, need_shl_i32, need_shr_i32, vec_max, model_string_max, hashmap_max, btreemap_max);
+    append_narrow_shift_helpers_for_fns(out, fns, 0, n);
 
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let empty_modelable: Vec<i64> = Vec::new();
@@ -2997,6 +3099,25 @@ fn scan_shift_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis:
     0
 }
 
+fn append_narrow_shift_helpers_for_module_fns(out: String, fns: Vec<IrFunction>, target_fi: i64, callee_fis: Vec<i64>) {
+    let mut emitted: bool = false;
+    let mut ti: i64 = 0;
+    while ti < 5 {
+        let ty: i64 = narrow_shift_ty_at(ti);
+        let mut oi: i64 = 0;
+        while oi < 2 {
+            let op: i64 = if oi == 0 { IOP_SHL() } else { IOP_SHR() };
+            if scan_shift_op_in_module_fns(fns, target_fi, callee_fis, op, ty) == 1 {
+                out.push_str(cemit_narrow_shift_helper(op, ty));
+                emitted = true;
+            }
+            oi = oi + 1;
+        }
+        ti = ti + 1;
+    }
+    if emitted { out.push_byte(10); }
+}
+
 fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>, modelable_fi_set: Vec<i64>,
                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, target_reach_label: bool, target_body_replace: bool) -> String {
     let fns: Vec<IrFunction> = m.functions;
@@ -3008,6 +3129,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     let need_shl_i32: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL(), ITY_I32());
     let need_shr_i32: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR(), ITY_I32());
     let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, need_shl_i32, need_shr_i32, vec_max, model_string_max, hashmap_max, btreemap_max);
+    append_narrow_shift_helpers_for_module_fns(out, fns, target_fi, callee_fis);
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
 
     let mut ci: i64 = 0;

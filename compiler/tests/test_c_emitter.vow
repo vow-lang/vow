@@ -186,6 +186,55 @@ fn check_complexity_descriptor_routing() -> i64 {
     0
 }
 
+fn shift_function(id: i64, name: String, ty: i64, op: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ty, 0));
+    insts.push(mk_inst_arg(1, ITY_U32(), 1));
+    let shift_args: Vec<i64> = Vec::new();
+    shift_args.push(0);
+    shift_args.push(1);
+    insts.push(ir_inst_new(
+        2,
+        op,
+        ty,
+        shift_args,
+        IDATA_INTEGER(),
+        ty,
+        0,
+        String::from("")
+    ));
+    insts.push(mk_inst_return(3, 2));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ty);
+    params.push(ITY_U32());
+    mk_function(id, name, params, ty, blocks)
+}
+
+fn check_narrow_shifts_use_helpers() -> i64 {
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(shift_function(30, String::from("shl_i8"), ITY_I8(), IOP_SHL()));
+    funcs.push(shift_function(31, String::from("shr_u8"), ITY_U8(), IOP_SHR()));
+    funcs.push(shift_function(32, String::from("shl_i16"), ITY_I16(), IOP_SHL()));
+    funcs.push(shift_function(33, String::from("shr_u16"), ITY_U16(), IOP_SHR()));
+    funcs.push(shift_function(34, String::from("shl_u32"), ITY_U32(), IOP_SHL()));
+
+    let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
+    if !c.contains(String::from("static inline int8_t __vow_shl_i8")) { return 30; }
+    if !c.contains(String::from("static inline uint8_t __vow_shr_u8")) { return 31; }
+    if !c.contains(String::from("static inline int16_t __vow_shl_i16")) { return 32; }
+    if !c.contains(String::from("static inline uint16_t __vow_shr_u16")) { return 33; }
+    if !c.contains(String::from("static inline uint32_t __vow_shl_u32")) { return 34; }
+    if !c.contains(String::from("__vow_shl_i8(v0, v1)")) { return 35; }
+    if !c.contains(String::from("__vow_shr_u8(v0, v1)")) { return 36; }
+    if !c.contains(String::from("__vow_shl_i16(v0, v1)")) { return 37; }
+    if !c.contains(String::from("__vow_shr_u16(v0, v1)")) { return 38; }
+    if !c.contains(String::from("__vow_shl_u32(v0, v1)")) { return 39; }
+    0
+}
+
 fn i64_result_to_i32(r: i64) -> i32 {
     if r == 1 { return 1; }
     if r == 2 { return 2; }
@@ -209,6 +258,16 @@ fn i64_result_to_i32(r: i64) -> i32 {
     if r == 27 { return 27; }
     if r == 28 { return 28; }
     if r == 29 { return 29; }
+    if r == 30 { return 30; }
+    if r == 31 { return 31; }
+    if r == 32 { return 32; }
+    if r == 33 { return 33; }
+    if r == 34 { return 34; }
+    if r == 35 { return 35; }
+    if r == 36 { return 36; }
+    if r == 37 { return 37; }
+    if r == 38 { return 38; }
+    if r == 39 { return 39; }
     if r != 0 { return 99; }
     0
 }
@@ -226,5 +285,7 @@ fn main() -> i32 {
     if r5 != 0 { return i64_result_to_i32(r5); }
     let r6: i64 = check_complexity_descriptor_routing();
     if r6 != 0 { return i64_result_to_i32(r6); }
+    let r7: i64 = check_narrow_shifts_use_helpers();
+    if r7 != 0 { return i64_result_to_i32(r7); }
     0
 }
