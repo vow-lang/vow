@@ -8,6 +8,10 @@
 use std::fmt;
 
 /// A canonical single-variable complexity class.
+///
+/// Variant order is asymptotic order and drives the derived comparison used by
+/// [`analyze`]. Keep it aligned with the fixed ordering in the performance
+/// guarantees design.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ComplexityClass {
     Constant,
@@ -117,7 +121,7 @@ impl fmt::Display for DoublingRatioError {
             Self::InputSizeTooSmall { input_size } => {
                 write!(
                     formatter,
-                    "input size {input_size} is too small for a logarithmic ratio"
+                    "input size {input_size} is too small for a doubling ratio"
                 )
             }
         }
@@ -290,6 +294,9 @@ fn r_squared(class: ComplexityClass, samples: &[Sample]) -> f64 {
     }
 
     let slope = covariance / variance_x;
+    if slope < 0.0 {
+        return 0.0;
+    }
     let intercept = mean_y - slope * mean_x;
     let (residual_sum, total_sum) = samples.iter().fold((0.0, 0.0), |acc, sample| {
         let actual = sample.operations as f64;
