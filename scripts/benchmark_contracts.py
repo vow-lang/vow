@@ -1,13 +1,17 @@
 """Structural fidelity checks shared by the benchmark runners.
 
 The runners deliberately compare only the immutable parts of a benchmark
-skeleton: its module name and each top-level skeleton function's signature and
-vow clauses. Function bodies and additional helper functions remain free for a
-model to implement.
+skeleton: its module name, each top-level (or extern-block) function's
+signature and top-level vow clauses, and any nested loop-invariant vow
+clauses inside its body. Nested clauses are compared as a per-function
+multiset, so a preserved invariant may move to a different loop or pick up
+siblings; only dropping or weakening one is rejected. Ordinary body code and
+additional helper functions remain free for a model to implement.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
 
@@ -21,6 +25,7 @@ class FidelityResult:
 class _FunctionShape:
     signature: tuple[str, ...]
     clauses: tuple[tuple[str, tuple[str, ...]], ...]
+    nested_clauses: tuple[tuple[str, tuple[str, ...]], ...]
 
 
 @dataclass(frozen=True)
@@ -61,8 +66,22 @@ def compare_skeleton(skeleton: str, candidate: str) -> FidelityResult:
         # a harmless reorder must not be flagged as a weakened contract.
         if sorted(actual_function.clauses) != sorted(expected_function.clauses):
             return FidelityResult(False, f"contracts of `{name}` changed")
+        if not _is_multiset_subset(
+            expected_function.nested_clauses, actual_function.nested_clauses
+        ):
+            return FidelityResult(False, f"nested contracts of `{name}` changed")
 
     return FidelityResult(True, "")
+
+
+def _is_multiset_subset(
+    expected: tuple[tuple[str, tuple[str, ...]], ...],
+    actual: tuple[tuple[str, tuple[str, ...]], ...],
+) -> bool:
+    actual_counts = Counter(actual)
+    return all(
+        count <= actual_counts[clause] for clause, count in Counter(expected).items()
+    )
 
 
 def _parse_program(source: str) -> _ProgramShape:
@@ -73,6 +92,14 @@ def _parse_program(source: str) -> _ProgramShape:
     functions: dict[str, _FunctionShape] = {}
     index = 2
     while index < len(tokens):
+        if tokens[index] == "extern":
+            extern_functions, index = _parse_extern_block(tokens, index)
+            for name, shape in extern_functions:
+                if name in functions:
+                    raise _StructureError(f"duplicate top-level function `{name}`")
+                functions[name] = shape
+            continue
+
         function_start = index
         function_token = index
         if tokens[index] == "pub" and _token_at(tokens, index + 1) == "fn":
@@ -90,6 +117,58 @@ def _parse_program(source: str) -> _ProgramShape:
         functions[name] = shape
 
     return _ProgramShape(tokens[1], functions)
+
+
+def _parse_extern_block(
+    tokens: list[str], start: int
+) -> tuple[list[tuple[str, _FunctionShape]], int]:
+    """Parse ``extern "C" { [vow { ... }] fn ...; fn ...; }``.
+
+    A single outer brace pair holds an optional shared vow clause block
+    followed by the function declarations. All declarations in one extern
+    block share that one vow clause block, so each declared function's
+    effective clauses are that shared set — if the shared contract changes,
+    every function in the block is treated as changed.
+    """
+    index = start + 1
+    if _token_at(tokens, index).startswith('"'):
+        index += 1
+    if _token_at(tokens, index) != "{":
+        raise _StructureError('expected `{` after `extern "C"`')
+    block_end = _matching_delimiter(tokens, index)
+    index += 1
+
+    clauses: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    if _token_at(tokens, index) == "vow":
+        vow_start = index + 1
+        if _token_at(tokens, vow_start) != "{":
+            raise _StructureError("expected vow block in extern block")
+        vow_end = _matching_delimiter(tokens, vow_start)
+        clauses = _parse_clauses(tokens[vow_start + 1 : vow_end], "extern block")
+        index = vow_end + 1
+
+    functions: list[tuple[str, _FunctionShape]] = []
+    while index < block_end:
+        if tokens[index] != "fn":
+            raise _StructureError("expected `fn` in extern block")
+        fn_start = index
+        name = _token_at(tokens, index + 1)
+        if not _is_identifier(name):
+            raise _StructureError("expected a function name after `fn`")
+        params_start = index + 2
+        if _token_at(tokens, params_start) != "(":
+            raise _StructureError(f"expected parameter list for `{name}`")
+        decl_end = _matching_delimiter(tokens, params_start) + 1
+        while decl_end < block_end and tokens[decl_end] != ";":
+            decl_end += 1
+        if decl_end >= block_end:
+            raise _StructureError(f"expected `;` after extern declaration of `{name}`")
+        functions.append(
+            (name, _FunctionShape(tuple(tokens[fn_start:decl_end]), clauses, ()))
+        )
+        index = decl_end + 1
+
+    return functions, block_end + 1
 
 
 def _parse_function(
@@ -127,7 +206,7 @@ def _parse_function(
             signature_end = index
             return (
                 name,
-                _FunctionShape(tuple(tokens[start:signature_end]), clauses),
+                _FunctionShape(tuple(tokens[start:signature_end]), clauses, ()),
                 index + 1,
             )
         index += 1
@@ -138,11 +217,34 @@ def _parse_function(
         raise _StructureError(f"expected body for `{name}`")
 
     body_end = _matching_delimiter(tokens, body_start)
+    nested_clauses = _collect_nested_clauses(tokens, body_start, body_end)
     return (
         name,
-        _FunctionShape(tuple(tokens[start:signature_end]), clauses),
+        _FunctionShape(tuple(tokens[start:signature_end]), clauses, nested_clauses),
         body_end + 1,
     )
+
+
+def _collect_nested_clauses(
+    tokens: list[str], body_start: int, body_end: int
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Flatten every ``<stmt> vow { ... }`` block inside a function body.
+
+    Only loops carry a nested vow block (loop invariants), and ``vow`` is a
+    reserved keyword, so any ``vow`` token in body range starts one.
+    """
+    clauses: list[tuple[str, tuple[str, ...]]] = []
+    index = body_start
+    while index < body_end:
+        if tokens[index] == "vow" and _token_at(tokens, index + 1) == "{":
+            vow_end = _matching_delimiter(tokens, index + 1)
+            clauses.extend(
+                _parse_clauses(tokens[index + 2 : vow_end], "nested vow block")
+            )
+            index = vow_end + 1
+            continue
+        index += 1
+    return tuple(clauses)
 
 
 def _parse_clauses(
