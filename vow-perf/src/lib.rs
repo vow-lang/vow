@@ -155,6 +155,10 @@ pub enum Verdict {
 }
 
 /// Result of fitting measured operation counts to the fixed candidate set.
+///
+/// `observed` is `None` when no in-range class can be reported. The verdict
+/// distinguishes inconclusive data (`Ambiguous`) from growth beyond the fixed
+/// maximum (`Fail`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Analysis {
     pub verdict: Verdict,
@@ -199,6 +203,8 @@ impl fmt::Display for AnalysisError {
 impl std::error::Error for AnalysisError {}
 
 const MINIMUM_R_SQUARED: f64 = 0.90;
+const MAXIMUM_GROWTH_TOLERANCE: f64 = 0.10;
+const REQUIRED_EXCESSIVE_RATIOS: usize = 2;
 const CANDIDATES: [ComplexityClass; 8] = [
     ComplexityClass::Constant,
     ComplexityClass::Logarithmic,
@@ -231,6 +237,13 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
         }
     }
 
+    if exceeds_maximum_growth(samples) {
+        return Ok(Analysis {
+            verdict: Verdict::Fail,
+            observed: None,
+        });
+    }
+
     let mut fits = CANDIDATES
         .into_iter()
         .map(|candidate| (candidate, r_squared(candidate, samples)));
@@ -258,6 +271,31 @@ pub fn analyze(declared: ComplexityClass, samples: &[Sample]) -> Result<Analysis
         },
         observed: Some(observed),
     })
+}
+
+fn exceeds_maximum_growth(samples: &[Sample]) -> bool {
+    let maximum = ComplexityClass::CubicLogarithmic;
+    let mut consecutive_excessive_ratios = 0;
+
+    for pair in samples.windows(2) {
+        let previous = &pair[0];
+        let current = &pair[1];
+        if previous.operations == 0 {
+            consecutive_excessive_ratios = 0;
+            continue;
+        }
+
+        let observed_ratio = current.operations as f64 / previous.operations as f64;
+        let expected_ratio =
+            basis_value(maximum, current.input_size) / basis_value(maximum, previous.input_size);
+        if observed_ratio > expected_ratio * (1.0 + MAXIMUM_GROWTH_TOLERANCE) {
+            consecutive_excessive_ratios += 1;
+        } else {
+            consecutive_excessive_ratios = 0;
+        }
+    }
+
+    consecutive_excessive_ratios >= REQUIRED_EXCESSIVE_RATIOS
 }
 
 fn r_squared(class: ComplexityClass, samples: &[Sample]) -> f64 {

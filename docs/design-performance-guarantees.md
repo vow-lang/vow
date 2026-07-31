@@ -283,6 +283,8 @@ Two complementary tests:
 
 - **FAIL rule.** The verdict is `FAIL` when the best-fit class (R² ≥ 0.90) is asymptotically **strictly greater** than the declared class — the data exceeds the declared upper bound.
 
+- **Maximum-class boundary guard.** A class beyond the fixed set can still fit the largest candidate with a deceptively high R² (for example, `n⁴` fits `n³ log n` closely over a finite geometric grid). Before returning `PASS`, compare the final two observed growth ratios with the ratios of the maximum supported class, `O(n³ log n)`, over the same input intervals. If both observed ratios exceed the maximum-class expectation by more than 10%, report `FAIL` with growth above the supported range rather than aliasing it to `O(n³ log n)`. This guard does not make degree-4 declarations valid; the parse-time polynomial degree cap remains 3.
+
 - **AMBIGUOUS rule.** When **no** candidate class fits with R² ≥ 0.90, the data is too noisy or non-power-law to conclude either way; report `AMBIGUOUS` with the per-candidate R² values for the user to inspect.
 
 - **Examples** against the fixed ordering above:
@@ -292,6 +294,7 @@ Two complementary tests:
   - declared `O(n)`, best fit `O(n log n)` (R²=0.98) → **FAIL** (suggested replacement `O(n log n)`).
   - declared `O(n)`, best fit `O(n²)` (R²=0.97) → **FAIL** (suggested replacement `O(n²)`).
   - declared `O(n²)`, best fit `O(n² log n)` (R²=0.99) → **FAIL** (suggested replacement `O(n² log n)`).
+  - declared `O(n³ log n)`, sustained ratios above the maximum-class boundary → **FAIL** (growth exceeds the supported range).
   - declared `O(n)`, no candidate reaches R² ≥ 0.90 → **AMBIGUOUS**.
 
 **Tightness check (WARN-only):**

@@ -86,7 +86,7 @@ fn canonicalization_extends_each_supported_polynomial_degree_with_one_log_factor
 
 #[test]
 fn equal_quality_fits_choose_the_simplest_complexity_class() {
-    let samples = [16, 32, 64, 128, 256, 512].map(|input_size| Sample::new(input_size, 7));
+    let samples = [16, 32, 64, 128, 256, 512].map(|input_size| Sample::new(input_size, 0));
 
     let analysis = analyze(ComplexityClass::Constant, &samples).unwrap();
 
@@ -103,6 +103,28 @@ fn decreasing_work_does_not_fit_a_growing_complexity_class() {
 
     assert_eq!(analysis.verdict, Verdict::Ambiguous);
     assert_eq!(analysis.observed, None);
+}
+
+#[test]
+fn maximum_supported_declaration_rejects_quartic_work() {
+    let samples = [16_u64, 32, 64, 128, 256, 512]
+        .map(|input_size| Sample::new(input_size, input_size.pow(4)));
+
+    let analysis = analyze(ComplexityClass::CubicLogarithmic, &samples).unwrap();
+
+    assert_eq!(analysis.verdict, Verdict::Fail);
+    assert_eq!(analysis.observed, None);
+}
+
+#[test]
+fn maximum_supported_declaration_accepts_cubic_logarithmic_work() {
+    let samples = [16_u64, 32, 64, 128, 256, 512]
+        .map(|input_size| Sample::new(input_size, input_size.pow(3) * input_size.ilog2() as u64));
+
+    let analysis = analyze(ComplexityClass::CubicLogarithmic, &samples).unwrap();
+
+    assert_eq!(analysis.verdict, Verdict::Pass);
+    assert_eq!(analysis.observed, Some(ComplexityClass::CubicLogarithmic));
 }
 
 #[test]
