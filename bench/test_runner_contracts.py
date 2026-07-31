@@ -1,6 +1,10 @@
 import unittest
+import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+sys.modules.setdefault("anthropic", MagicMock())
+sys.modules.setdefault("openai", MagicMock())
 
 from llm import LLMResponse, ModelConfig
 from manifest import BenchmarkInfo

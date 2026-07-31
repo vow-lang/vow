@@ -35,6 +35,62 @@ fn answer(x: i64) -> i64 vow {
 
         self.assertTrue(result.matches, result.message)
 
+    def test_rejects_module_signature_and_contract_changes(self):
+        skeleton = """\
+module Example
+
+fn answer(x: i64) -> i64 vow {
+  requires: x >= 0,
+  ensures: result >= x
+} {
+  0
+}
+"""
+        changed_sources = {
+            "module changed: expected `Example`, found `Other`": skeleton.replace(
+                "module Example", "module Other"
+            ),
+            "signature of `answer` changed": skeleton.replace(
+                "answer(x: i64) -> i64", "answer(x: i32) -> i64"
+            ),
+            "contracts of `answer` changed": skeleton.replace(
+                "requires: x >= 0", "requires: true"
+            ),
+            "skeleton function `answer` is missing": skeleton.replace(
+                "fn answer", "fn renamed"
+            ),
+        }
+
+        for expected_message, candidate in changed_sources.items():
+            with self.subTest(expected_message):
+                result = compare_skeleton(skeleton, candidate)
+                self.assertFalse(result.matches)
+                self.assertEqual(result.message, expected_message)
+
+    def test_rejects_contract_deletion(self):
+        skeleton = """\
+module Example
+
+fn answer(x: i64) -> i64 vow {
+  requires: x >= 0,
+  ensures: result >= x
+} {
+  0
+}
+"""
+        candidate = """\
+module Example
+
+fn answer(x: i64) -> i64 {
+  x
+}
+"""
+
+        result = compare_skeleton(skeleton, candidate)
+
+        self.assertFalse(result.matches)
+        self.assertEqual(result.message, "contracts of `answer` changed")
+
 
 if __name__ == "__main__":
     unittest.main()
