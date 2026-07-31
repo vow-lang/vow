@@ -59,10 +59,7 @@ fn link_executable_with_reproducibility<'a>(
     command.args(inputs);
     command.arg("-o").arg(output);
     command.args(platform_link_args_for(std::env::consts::OS));
-    if reproducible && cfg!(target_os = "macos") {
-        // Stabilise LC_UUID and CDHash across different -o names; see #500.
-        command.args(["-Wl,-reproducible", "-Wl,-final_output,vow"]);
-    }
+    add_reproducibility_args(&mut command, reproducible);
 
     let status = command.status().map_err(LinkError::Invoke)?;
     if status.success() {
@@ -71,6 +68,17 @@ fn link_executable_with_reproducibility<'a>(
         Err(LinkError::Failed(status))
     }
 }
+
+#[cfg(target_os = "macos")]
+fn add_reproducibility_args(command: &mut Command, reproducible: bool) {
+    if reproducible {
+        // Stabilise LC_UUID and CDHash across different -o names; see #500.
+        command.args(["-Wl,-reproducible", "-Wl,-final_output,vow"]);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn add_reproducibility_args(_command: &mut Command, _reproducible: bool) {}
 
 /// Returns the native libraries needed to link the Vow runtime on `os`.
 pub fn platform_link_args_for(os: &str) -> &'static [&'static str] {
