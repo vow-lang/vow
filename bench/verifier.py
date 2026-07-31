@@ -22,7 +22,10 @@ class VerifyResult:
 
 
 def run_verify(
-    vow_binary: Path, vow_source: str, timeout: int = 120, memory_limit: int | None = None
+    vow_binary: Path,
+    vow_source: str,
+    timeout: int = 120,
+    memory_limit: int | None = None,
 ) -> VerifyResult:
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".vow", delete=False, dir="/tmp"
@@ -46,7 +49,11 @@ def run_verify(
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            parsed = {"status": "CompileFailed", "raw_stdout": raw, "stderr": result.stderr}
+            parsed = {
+                "status": "CompileFailed",
+                "raw_stdout": raw,
+                "stderr": result.stderr,
+            }
 
         return VerifyResult(
             status=parsed.get("status", "CompileFailed"),

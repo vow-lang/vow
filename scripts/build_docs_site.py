@@ -12,6 +12,7 @@ the hand-written pages (home, tutorial, reference/index) are committed.
 
     python scripts/build_docs_site.py
 """
+
 from __future__ import annotations
 
 import shutil

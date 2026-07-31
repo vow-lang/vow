@@ -28,7 +28,9 @@ def generate_report(results_dir: Path, run_id: str) -> str:
     easy_total = by_diff.get("easy", {}).get("total", 0)
     medium_total = by_diff.get("medium", {}).get("total", 0)
     hard_total = by_diff.get("hard", {}).get("total", 0)
-    grand_total = first_summary.get("total_applicable", easy_total + medium_total + hard_total)
+    grand_total = first_summary.get(
+        "total_applicable", easy_total + medium_total + hard_total
+    )
 
     header_cols = [
         "Language/Model",
@@ -72,17 +74,20 @@ def generate_report(results_dir: Path, run_id: str) -> str:
             f"| {rate:.0%} |"
         )
 
-    lines.extend([
-        "| Verus/Rust (paper) | — | — | — | — | 44% |",
-        "| Lean (paper)       | — | — | — | — | 27% |",
-        "",
-    ])
+    lines.extend(
+        [
+            "| Verus/Rust (paper) | — | — | — | — | 44% |",
+            "| Lean (paper)       | — | — | — | — | 27% |",
+            "",
+        ]
+    )
 
     # Per-model detail sections
     for model_name, data in models.items():
         lines.extend(_model_details(model_name, data, grand_total))
 
     return "\n".join(lines)
+
 
 def _short_name(model_id: str) -> str:
     parts = model_id.split("-")
@@ -107,7 +112,9 @@ def _model_details(model_name: str, data: dict, grand_total: int) -> list[str]:
     if verified_iters:
         mean_iters = sum(verified_iters) / len(verified_iters)
         lines.append(f"**Mean CEGIS iterations (verified):** {mean_iters:.1f}")
-    lines.append(f"**Total verified:** {summary.get('verified', 0)}/{summary.get('total_applicable', grand_total)}")
+    lines.append(
+        f"**Total verified:** {summary.get('verified', 0)}/{summary.get('total_applicable', grand_total)}"
+    )
     lines.append("")
 
     # Failure modes
@@ -123,10 +130,12 @@ def _model_details(model_name: str, data: dict, grand_total: int) -> list[str]:
         lines.append("")
 
     # Per-benchmark table
-    lines.extend([
-        "| ID | Name | Fidelity | Status | Iters | Time (s) | Failure |",
-        "|----|------|----------|--------|-------|----------|---------|",
-    ])
+    lines.extend(
+        [
+            "| ID | Name | Fidelity | Status | Iters | Time (s) | Failure |",
+            "|----|------|----------|--------|-------|----------|---------|",
+        ]
+    )
     for r in results:
         status_icon = "pass" if r["status"] == "verified" else "FAIL"
         fidelity = r.get("contract_fidelity", "n/a")
@@ -142,14 +151,18 @@ def _model_details(model_name: str, data: dict, grand_total: int) -> list[str]:
     # Stretch results
     stretch = [r for r in data.get("stretch_results", [])]
     if stretch:
-        lines.extend([
-            "### Stretch benchmarks (not counted in rate)",
-            "",
-            "| ID | Name | Status | Iters |",
-            "|----|------|--------|-------|",
-        ])
+        lines.extend(
+            [
+                "### Stretch benchmarks (not counted in rate)",
+                "",
+                "| ID | Name | Status | Iters |",
+                "|----|------|--------|-------|",
+            ]
+        )
         for r in stretch:
-            lines.append(f"| {r['benchmark_id']} | {r['benchmark_name']} | {r['status']} | {r['iterations']} |")
+            lines.append(
+                f"| {r['benchmark_id']} | {r['benchmark_name']} | {r['status']} | {r['iterations']} |"
+            )
         lines.append("")
 
     return lines

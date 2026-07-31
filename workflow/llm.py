@@ -68,7 +68,9 @@ def _get_provider(model_id: str) -> str:
     raise ValueError(f"Cannot infer provider for model: {model_id}")
 
 
-def make_config(model_id: str, max_tokens: int = 8192, temperature: float = 0.0) -> ModelConfig:
+def make_config(
+    model_id: str, max_tokens: int = 8192, temperature: float = 0.0
+) -> ModelConfig:
     return ModelConfig(
         provider=_get_provider(model_id),
         model_id=model_id,

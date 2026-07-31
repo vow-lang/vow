@@ -59,7 +59,9 @@ def run_complexity(vowc, path, extra):
     """Returns the parsed report, or None if the file does not compile
     standalone (some modules rely on the concat build's global namespace and
     omit `use` declarations, so they cannot be a module-loaded entry point)."""
-    res = subprocess.run([vowc, "complexity", path, *extra], capture_output=True, text=True)
+    res = subprocess.run(
+        [vowc, "complexity", path, *extra], capture_output=True, text=True
+    )
     out = res.stdout.strip()
     if not out:
         return None
@@ -117,12 +119,20 @@ def spearman(xs, ys):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--vowc", default="target/release/vow", help="compiler binary")
-    ap.add_argument("--dir", default="compiler", help="directory of *.vow to score (test_* excluded)")
+    ap.add_argument(
+        "--dir",
+        default="compiler",
+        help="directory of *.vow to score (test_* excluded)",
+    )
     ap.add_argument("--threshold", type=int, default=80)
     ap.add_argument("--cog-anchor", type=int, default=15)
     ap.add_argument("--nloc-anchor", type=int, default=60)
     ap.add_argument("--out", default="reports.out/complexity-calibration.md")
-    ap.add_argument("--date", default="", help="report date stamp (caller-supplied; no clock in-script)")
+    ap.add_argument(
+        "--date",
+        default="",
+        help="report date stamp (caller-supplied; no clock in-script)",
+    )
     ap.add_argument(
         "--retention-class",
         choices=RETENTION_CLASSES,
@@ -132,9 +142,15 @@ def main():
     args = ap.parse_args()
     validate_report_output(ap, args)
 
-    extra = ["--cog-anchor", str(args.cog_anchor), "--nloc-anchor", str(args.nloc_anchor)]
+    extra = [
+        "--cog-anchor",
+        str(args.cog_anchor),
+        "--nloc-anchor",
+        str(args.nloc_anchor),
+    ]
     files = sorted(
-        p for p in glob.glob(os.path.join(args.dir, "*.vow"))
+        p
+        for p in glob.glob(os.path.join(args.dir, "*.vow"))
         if not os.path.basename(p).startswith("test_")
     )
     funcs, skipped = collect(args.vowc, files, extra)
@@ -153,17 +169,21 @@ def main():
     s_sorted = sorted(scores)
     # Beats-size: functions the score ranks much higher/lower than NLOC alone.
     rscore, rnloc = ranks(scores), ranks(nlocs)
-    diverg = sorted(
-        range(n), key=lambda i: abs(rscore[i] - rnloc[i]), reverse=True
-    )
+    diverg = sorted(range(n), key=lambda i: abs(rscore[i] - rnloc[i]), reverse=True)
     tangled = [i for i in diverg if rscore[i] > rnloc[i]][:8]  # high score, low NLOC
-    bulky = [i for i in diverg if rscore[i] < rnloc[i]][:8]    # low score, high NLOC
+    bulky = [i for i in diverg if rscore[i] < rnloc[i]][:8]  # low score, high NLOC
 
-    verdict_rate = "OK" if 5.0 <= over_pct <= 15.0 else ("HIGH" if over_pct > 15.0 else "LOW")
+    verdict_rate = (
+        "OK" if 5.0 <= over_pct <= 15.0 else ("HIGH" if over_pct > 15.0 else "LOW")
+    )
     cog_p50 = pct_rank(sorted(cogs), 50)
     # High overall rho is expected when most functions are simple (cognitive 0),
     # since size then legitimately drives the score. The signal is in the tail.
-    verdict_size = "adds signal" if rho < 0.97 else "size-dominated (cognitive differentiates the tail)"
+    verdict_size = (
+        "adds signal"
+        if rho < 0.97
+        else "size-dominated (cognitive differentiates the tail)"
+    )
 
     lines = []
     lines.append("# `vow complexity` gate calibration")
@@ -171,50 +191,85 @@ def main():
     generated = "Generated"
     if args.date:
         generated += f" {args.date}"
-    lines.append(f"_{generated} by scripts/complexity_calibrate.py over `{args.dir}/*.vow` ({len(files)} files)._")
+    lines.append(
+        f"_{generated} by scripts/complexity_calibrate.py over `{args.dir}/*.vow` ({len(files)} files)._"
+    )
     lines.append("")
     if out_targets_reports(args.out):
-        lines.append(f"_Retention: `{args.retention_class}` for the `complexity-calibration` stream.")
+        lines.append(
+            f"_Retention: `{args.retention_class}` for the `complexity-calibration` stream."
+        )
         if args.retention_class == "current-baseline":
             lines.append("Replace")
-            lines.append("this snapshot in the same PR as the next committed complexity calibration")
-            lines.append("snapshot unless a reviewer reclassifies it as `release-evidence`._")
+            lines.append(
+                "this snapshot in the same PR as the next committed complexity calibration"
+            )
+            lines.append(
+                "snapshot unless a reviewer reclassifies it as `release-evidence`._"
+            )
         else:
             lines[-1] += "_"
         lines.append("")
-    lines.append("> Validation target is comprehensibility / refactor priority, NOT correctness")
+    lines.append(
+        "> Validation target is comprehensibility / refactor priority, NOT correctness"
+    )
     lines.append("> (docs/design Part 4). Correctness is the job of contracts + tests.")
     lines.append("")
     lines.append("## Threshold calibration")
     lines.append("")
-    lines.append(f"- Functions scored: **{n}** (from {len(files) - len(skipped)}/{len(files)} files; {len(skipped)} skipped — don't compile standalone)")
-    lines.append(f"- Over threshold (`score > {args.threshold}`): **{len(over)}** ({over_pct:.1f}%) — target 5–15% → **{verdict_rate}**")
-    lines.append(f"- complexity_score p50/p90/max: {pct_rank(s_sorted,50)} / {pct_rank(s_sorted,90)} / {s_sorted[-1]}")
-    lines.append(f"- cognitive p50/p90/max: {pct_rank(sorted(cogs),50)} / {pct_rank(sorted(cogs),90)} / {sorted(cogs)[-1]}")
-    lines.append(f"- nloc p50/p90/max: {pct_rank(sorted(nlocs),50)} / {pct_rank(sorted(nlocs),90)} / {sorted(nlocs)[-1]}")
+    lines.append(
+        f"- Functions scored: **{n}** (from {len(files) - len(skipped)}/{len(files)} files; {len(skipped)} skipped — don't compile standalone)"
+    )
+    lines.append(
+        f"- Over threshold (`score > {args.threshold}`): **{len(over)}** ({over_pct:.1f}%) — target 5–15% → **{verdict_rate}**"
+    )
+    lines.append(
+        f"- complexity_score p50/p90/max: {pct_rank(s_sorted, 50)} / {pct_rank(s_sorted, 90)} / {s_sorted[-1]}"
+    )
+    lines.append(
+        f"- cognitive p50/p90/max: {pct_rank(sorted(cogs), 50)} / {pct_rank(sorted(cogs), 90)} / {sorted(cogs)[-1]}"
+    )
+    lines.append(
+        f"- nloc p50/p90/max: {pct_rank(sorted(nlocs), 50)} / {pct_rank(sorted(nlocs), 90)} / {sorted(nlocs)[-1]}"
+    )
     lines.append("")
-    lines.append("Anchors: cog=%d, nloc=%d. If the rate is far off target, adjust these (not the 0-100 scale)." % (args.cog_anchor, args.nloc_anchor))
+    lines.append(
+        "Anchors: cog=%d, nloc=%d. If the rate is far off target, adjust these (not the 0-100 scale)."
+        % (args.cog_anchor, args.nloc_anchor)
+    )
     lines.append("")
     lines.append("## Beats-size check")
     lines.append("")
-    lines.append(f"- Spearman(score, nloc) = **{rho:.3f}** → score is **{verdict_size}**.")
-    lines.append(f"- Median cognitive is **{cog_p50}**: ~half the functions have no control flow, so size correctly drives their score. The cognitive factor only reorders the complex tail (below); judge the metric there, not on the global correlation.")
+    lines.append(
+        f"- Spearman(score, nloc) = **{rho:.3f}** → score is **{verdict_size}**."
+    )
+    lines.append(
+        f"- Median cognitive is **{cog_p50}**: ~half the functions have no control flow, so size correctly drives their score. The cognitive factor only reorders the complex tail (below); judge the metric there, not on the global correlation."
+    )
     lines.append("")
-    lines.append("Functions the score prioritizes ABOVE their size rank (tangled, not just long):")
+    lines.append(
+        "Functions the score prioritizes ABOVE their size rank (tangled, not just long):"
+    )
     lines.append("")
     lines.append("| function | line | score | cognitive | nloc |")
     lines.append("|---|--:|--:|--:|--:|")
     for i in tangled:
         f = funcs[i]
-        lines.append(f"| `{f['name']}` | {f['line']} | {f['complexity_score']} | {f['structural']['cognitive']} | {f['size']['nloc']} |")
+        lines.append(
+            f"| `{f['name']}` | {f['line']} | {f['complexity_score']} | {f['structural']['cognitive']} | {f['size']['nloc']} |"
+        )
     lines.append("")
-    lines.append("Functions the score DEPRIORITIZES below their size rank (long but flat):")
+    lines.append(
+        "Functions the score DEPRIORITIZES below their size rank (long but flat):"
+    )
     lines.append("")
     lines.append("| function | line | score | cognitive | nloc |")
     lines.append("|---|--:|--:|--:|--:|")
     for i in bulky:
         f = funcs[i]
-        lines.append(f"| `{f['name']}` | {f['line']} | {f['complexity_score']} | {f['structural']['cognitive']} | {f['size']['nloc']} |")
+        lines.append(
+            f"| `{f['name']}` | {f['line']} | {f['complexity_score']} | {f['structural']['cognitive']} | {f['size']['nloc']} |"
+        )
     lines.append("")
     lines.append("## Worst functions by score")
     lines.append("")
@@ -222,7 +277,9 @@ def main():
     lines.append("|---|--:|--:|--:|--:|--:|")
     for f in sorted(funcs, key=lambda f: f["complexity_score"], reverse=True)[:15]:
         st = f["structural"]
-        lines.append(f"| `{f['name']}` | {f['line']} | {f['complexity_score']} | {st['cyclomatic']} | {st['cognitive']} | {f['size']['nloc']} |")
+        lines.append(
+            f"| `{f['name']}` | {f['line']} | {f['complexity_score']} | {st['cyclomatic']} | {st['cognitive']} | {f['size']['nloc']} |"
+        )
     lines.append("")
     report = "\n".join(lines) + "\n"
 

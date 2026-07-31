@@ -55,7 +55,9 @@ def make_config(model_id: str) -> ModelConfig:
     return ModelConfig(provider=_infer_provider(model_id), model_id=model_id)
 
 
-def chat(config: ModelConfig, system: str, messages: list[dict[str, str]]) -> LLMResponse:
+def chat(
+    config: ModelConfig, system: str, messages: list[dict[str, str]]
+) -> LLMResponse:
     if config.provider == "anthropic":
         client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         resp = client.messages.create(
@@ -78,7 +80,11 @@ def chat(config: ModelConfig, system: str, messages: list[dict[str, str]]) -> LL
         )
         content = resp.choices[0].message.content or ""
         usage = resp.usage
-        return LLMResponse(content, usage.prompt_tokens if usage else 0, usage.completion_tokens if usage else 0)
+        return LLMResponse(
+            content,
+            usage.prompt_tokens if usage else 0,
+            usage.completion_tokens if usage else 0,
+        )
     raise ValueError(f"Unknown provider: {config.provider}")
 
 
@@ -118,17 +124,19 @@ def load_problems(root: Path, problem_id: str | None = None) -> list[EulerProble
         prob_dir = root / "euler" / "problems" / f"{pid}_{entry['name']}"
         spec = (prob_dir / "spec.md").read_text()
         skeleton = (prob_dir / "skeleton.vow").read_text()
-        problems.append(EulerProblem(
-            id=pid,
-            euler_number=entry["euler_number"],
-            name=entry["name"],
-            difficulty=entry["difficulty"],
-            tags=entry.get("tags", []),
-            unwind=entry.get("unwind", 10),
-            answer=entry["answer"],
-            spec_md=spec,
-            skeleton_vow=skeleton,
-        ))
+        problems.append(
+            EulerProblem(
+                id=pid,
+                euler_number=entry["euler_number"],
+                name=entry["name"],
+                difficulty=entry["difficulty"],
+                tags=entry.get("tags", []),
+                unwind=entry.get("unwind", 10),
+                answer=entry["answer"],
+                spec_md=spec,
+                skeleton_vow=skeleton,
+            )
+        )
     return problems
 
 
@@ -136,7 +144,14 @@ def load_problems(root: Path, problem_id: str | None = None) -> list[EulerProble
 # Prompts
 # ---------------------------------------------------------------------------
 
-SKILL_FILES = ["index.md", "grammar.md", "contracts.md", "cli.md", "errors.md", "examples.md"]
+SKILL_FILES = [
+    "index.md",
+    "grammar.md",
+    "contracts.md",
+    "cli.md",
+    "errors.md",
+    "examples.md",
+]
 
 
 def build_system_prompt(root: Path) -> str:
@@ -192,8 +207,16 @@ class VerifyResult:
     timed_out: bool
 
 
-def run_verify(vow_binary: Path, source: str, timeout: int = 120, memory_limit: int | None = None, unwind: int | None = None) -> VerifyResult:
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".vow", delete=False, dir="/tmp") as f:
+def run_verify(
+    vow_binary: Path,
+    source: str,
+    timeout: int = 120,
+    memory_limit: int | None = None,
+    unwind: int | None = None,
+) -> VerifyResult:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".vow", delete=False, dir="/tmp"
+    ) as f:
         f.write(source)
         tmp = f.name
 
@@ -209,24 +232,36 @@ def run_verify(vow_binary: Path, source: str, timeout: int = 120, memory_limit: 
     try:
         result = subprocess.run(
             cmd,
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
             preexec_fn=_limit if memory_limit else None,
         )
         raw = result.stdout.strip()
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            parsed = {"status": "CompileFailed", "raw_stdout": raw, "stderr": result.stderr}
-        return VerifyResult(parsed.get("status", "CompileFailed"), raw, parsed, result.returncode, False)
+            parsed = {
+                "status": "CompileFailed",
+                "raw_stdout": raw,
+                "stderr": result.stderr,
+            }
+        return VerifyResult(
+            parsed.get("status", "CompileFailed"), raw, parsed, result.returncode, False
+        )
     except subprocess.TimeoutExpired:
         return VerifyResult("Timeout", "", {"status": "Timeout"}, -1, True)
     finally:
         Path(tmp).unlink(missing_ok=True)
 
 
-def run_execute(vow_binary: Path, source: str, memory_limit: int | None = None, timeout: int = 60) -> tuple[int | None, str]:
+def run_execute(
+    vow_binary: Path, source: str, memory_limit: int | None = None, timeout: int = 60
+) -> tuple[int | None, str]:
     """Compile and execute, returning (exit_code, stdout)."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".vow", delete=False, dir="/tmp") as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".vow", delete=False, dir="/tmp"
+    ) as f:
         f.write(source)
         src_path = f.name
 
@@ -240,7 +275,9 @@ def run_execute(vow_binary: Path, source: str, memory_limit: int | None = None, 
         # Compile
         comp = subprocess.run(
             [str(vow_binary), "build", "--no-verify", src_path, "-o", out_path],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
             preexec_fn=_limit if memory_limit else None,
         )
         if comp.returncode != 0:
@@ -248,7 +285,10 @@ def run_execute(vow_binary: Path, source: str, memory_limit: int | None = None, 
 
         # Execute
         exe = subprocess.run(
-            [out_path], capture_output=True, text=True, timeout=timeout,
+            [out_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
             preexec_fn=_limit if memory_limit else None,
         )
         return exe.returncode, exe.stdout.strip()
@@ -262,6 +302,7 @@ def run_execute(vow_binary: Path, source: str, memory_limit: int | None = None, 
 # ---------------------------------------------------------------------------
 # Code extraction
 # ---------------------------------------------------------------------------
+
 
 def extract_vow_code(response: str) -> str | None:
     if not response.strip():
@@ -284,6 +325,7 @@ def extract_vow_code(response: str) -> str | None:
 # ---------------------------------------------------------------------------
 # CEGIS runner
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ProblemResult:
@@ -321,7 +363,12 @@ def run_problem(
     final_code = ""
     vr: VerifyResult | None = None
 
-    messages.append({"role": "user", "content": build_initial_prompt(problem.spec_md, problem.skeleton_vow)})
+    messages.append(
+        {
+            "role": "user",
+            "content": build_initial_prompt(problem.spec_md, problem.skeleton_vow),
+        }
+    )
 
     for iteration in range(1, max_cegis + 1):
         resp = chat(model_config, system_prompt, messages)
@@ -333,15 +380,31 @@ def run_problem(
         code = extract_vow_code(resp.content)
         if code is None:
             return ProblemResult(
-                problem.id, problem.euler_number, problem.name, problem.difficulty,
-                problem.answer, "empty_response", None, None, iteration,
-                time.time() - start, {"input_tokens": total_in, "output_tokens": total_out},
-                "", raw_responses, verify_outputs,
+                problem.id,
+                problem.euler_number,
+                problem.name,
+                problem.difficulty,
+                problem.answer,
+                "empty_response",
+                None,
+                None,
+                iteration,
+                time.time() - start,
+                {"input_tokens": total_in, "output_tokens": total_out},
+                "",
+                raw_responses,
+                verify_outputs,
             )
 
         final_code = code
         unwind_arg = problem.unwind if supports_unwind else None
-        vr = run_verify(vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit, unwind=unwind_arg)
+        vr = run_verify(
+            vow_binary,
+            code,
+            timeout=verify_timeout,
+            memory_limit=memory_limit,
+            unwind=unwind_arg,
+        )
         verify_outputs.append(vr.raw_json)
 
         if vr.status == "Verified":
@@ -358,14 +421,26 @@ def run_problem(
                     answer_correct = False
 
             return ProblemResult(
-                problem.id, problem.euler_number, problem.name, problem.difficulty,
-                problem.answer, "verified", answer_correct, actual_output, iteration,
-                time.time() - start, {"input_tokens": total_in, "output_tokens": total_out},
-                final_code, raw_responses, verify_outputs,
+                problem.id,
+                problem.euler_number,
+                problem.name,
+                problem.difficulty,
+                problem.answer,
+                "verified",
+                answer_correct,
+                actual_output,
+                iteration,
+                time.time() - start,
+                {"input_tokens": total_in, "output_tokens": total_out},
+                final_code,
+                raw_responses,
+                verify_outputs,
             )
 
         if iteration < max_cegis:
-            messages.append({"role": "user", "content": build_cegis_prompt(vr.raw_json)})
+            messages.append(
+                {"role": "user", "content": build_cegis_prompt(vr.raw_json)}
+            )
 
     # Exhausted iterations — preserve the terminal verifier failure mode
     # instead of collapsing every outcome into "max_iterations".
@@ -375,18 +450,33 @@ def run_problem(
         "VerifyFailed": "verify_failed",
         "Timeout": "timeout",
     }
-    terminal_status = verifier_status_map.get(vr.status, "max_iterations") if vr is not None else "max_iterations"
+    terminal_status = (
+        verifier_status_map.get(vr.status, "max_iterations")
+        if vr is not None
+        else "max_iterations"
+    )
     return ProblemResult(
-        problem.id, problem.euler_number, problem.name, problem.difficulty,
-        problem.answer, terminal_status, None, None, max_cegis,
-        elapsed, {"input_tokens": total_in, "output_tokens": total_out},
-        final_code, raw_responses, verify_outputs,
+        problem.id,
+        problem.euler_number,
+        problem.name,
+        problem.difficulty,
+        problem.answer,
+        terminal_status,
+        None,
+        None,
+        max_cegis,
+        elapsed,
+        {"input_tokens": total_in, "output_tokens": total_out},
+        final_code,
+        raw_responses,
+        verify_outputs,
     )
 
 
 # ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
+
 
 def generate_report(results: list[dict], model_id: str) -> str:
     lines = []
@@ -397,8 +487,10 @@ def generate_report(results: list[dict], model_id: str) -> str:
     verified = sum(1 for r in results if r["status"] == "verified")
     correct = sum(1 for r in results if r.get("answer_correct") is True)
 
-    lines.append(f"**Verified:** {verified}/{total} ({100*verified/total:.0f}%)")
-    lines.append(f"**Correct answer:** {correct}/{total} ({100*correct/total:.0f}%)")
+    lines.append(f"**Verified:** {verified}/{total} ({100 * verified / total:.0f}%)")
+    lines.append(
+        f"**Correct answer:** {correct}/{total} ({100 * correct / total:.0f}%)"
+    )
     lines.append("")
 
     # By difficulty
@@ -408,16 +500,26 @@ def generate_report(results: list[dict], model_id: str) -> str:
             continue
         v = sum(1 for r in subset if r["status"] == "verified")
         c = sum(1 for r in subset if r.get("answer_correct") is True)
-        lines.append(f"**{diff.title()}:** {v}/{len(subset)} verified, {c}/{len(subset)} correct")
+        lines.append(
+            f"**{diff.title()}:** {v}/{len(subset)} verified, {c}/{len(subset)} correct"
+        )
 
     lines.append("")
     lines.append("## Per-Problem Results")
     lines.append("")
-    lines.append(f"| {'#':>3} | {'Euler':>5} | {'Problem':<25} | {'Diff':<6} | {'Status':<15} | {'Answer':>15} | {'Correct':<7} | {'Iters':>5} | {'Time':>6} |")
-    lines.append(f"|{'---':>5}|{'---':>7}|{'---':<27}|{'---':<8}|{'---':<17}|{'---':>17}|{'---':<9}|{'---':>7}|{'---':>8}|")
+    lines.append(
+        f"| {'#':>3} | {'Euler':>5} | {'Problem':<25} | {'Diff':<6} | {'Status':<15} | {'Answer':>15} | {'Correct':<7} | {'Iters':>5} | {'Time':>6} |"
+    )
+    lines.append(
+        f"|{'---':>5}|{'---':>7}|{'---':<27}|{'---':<8}|{'---':<17}|{'---':>17}|{'---':<9}|{'---':>7}|{'---':>8}|"
+    )
 
     for i, r in enumerate(results, 1):
-        correct_str = "Y" if r.get("answer_correct") is True else ("N" if r.get("answer_correct") is False else "?")
+        correct_str = (
+            "Y"
+            if r.get("answer_correct") is True
+            else ("N" if r.get("answer_correct") is False else "?")
+        )
         actual = r.get("actual_output", "")
         if actual and "\n" in actual:
             actual = actual.split("\n")[0]
@@ -446,6 +548,7 @@ def generate_report(results: list[dict], model_id: str) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def find_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
@@ -459,7 +562,10 @@ def resolve_compiler(root: Path) -> tuple[Path, int | None, bool]:
     binary = root / "target" / "release" / "vow"
     if binary.exists():
         return binary, None, False
-    print("Error: no vow compiler found. Run scripts/bootstrap.sh or cargo build --release", file=sys.stderr)
+    print(
+        "Error: no vow compiler found. Run scripts/bootstrap.sh or cargo build --release",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 
@@ -499,13 +605,22 @@ def cmd_run(args: argparse.Namespace) -> None:
     results: list[ProblemResult] = []
     for i, prob in enumerate(problems, 1):
         if prob.id in existing:
-            print(f"  [{i}/{len(problems)}] Euler #{prob.euler_number} {prob.name} — skipped (resume)")
+            print(
+                f"  [{i}/{len(problems)}] Euler #{prob.euler_number} {prob.name} — skipped (resume)"
+            )
             results.append(_dict_to_result(existing[prob.id]))
             continue
 
-        print(f"  [{i}/{len(problems)}] Euler #{prob.euler_number} {prob.name} ...", end=" ", flush=True)
+        print(
+            f"  [{i}/{len(problems)}] Euler #{prob.euler_number} {prob.name} ...",
+            end=" ",
+            flush=True,
+        )
         result = run_problem(
-            prob, model_config, system_prompt, vow_binary,
+            prob,
+            model_config,
+            system_prompt,
+            vow_binary,
             max_cegis=args.max_cegis,
             memory_limit=memory_limit,
             supports_unwind=supports_unwind,
@@ -553,7 +668,9 @@ def cmd_report(args: argparse.Namespace) -> None:
             print(report)
 
 
-def _save(output_file: Path, model_id: str, run_id: str, results: list[ProblemResult]) -> None:
+def _save(
+    output_file: Path, model_id: str, run_id: str, results: list[ProblemResult]
+) -> None:
     result_dicts = [asdict(r) for r in results]
     total = len(result_dicts)
     verified = sum(1 for r in result_dicts if r["status"] == "verified")
@@ -594,15 +711,21 @@ def _dict_to_result(d: dict) -> ProblemResult:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Euler problems demo: AI agent solves + verifies in Vow")
+    parser = argparse.ArgumentParser(
+        description="Euler problems demo: AI agent solves + verifies in Vow"
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     run_p = subparsers.add_parser("run", help="Run problems against an LLM")
     run_p.add_argument("--model", default="claude-sonnet-4-20250514", help="Model ID")
     run_p.add_argument("--problem", help="Run single problem by ID (e.g. E001)")
-    run_p.add_argument("--resume", action="store_true", help="Skip already-completed problems")
+    run_p.add_argument(
+        "--resume", action="store_true", help="Skip already-completed problems"
+    )
     run_p.add_argument("--run-id", help="Run ID (default: timestamp)")
-    run_p.add_argument("--max-cegis", type=int, default=5, help="Max CEGIS iterations (default: 5)")
+    run_p.add_argument(
+        "--max-cegis", type=int, default=5, help="Max CEGIS iterations (default: 5)"
+    )
     run_p.set_defaults(func=cmd_run)
 
     rep_p = subparsers.add_parser("report", help="Generate report from results")

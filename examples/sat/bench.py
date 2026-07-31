@@ -7,7 +7,6 @@ import lzma
 import os
 import shutil
 import subprocess
-import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -197,12 +196,22 @@ def parse_dimacs(path: Path) -> tuple[int, list[list[int]]]:
 def assignment_satisfies(path: Path, assignment: dict[int, bool]) -> bool:
     _, clauses = parse_dimacs(path)
     for clause in clauses:
-        if not any((assignment[abs(lit)] if lit > 0 else not assignment[abs(lit)]) for lit in clause):
+        if not any(
+            (assignment[abs(lit)] if lit > 0 else not assignment[abs(lit)])
+            for lit in clause
+        ):
             return False
     return True
 
 
-def classify_vow_result(entry: dict, bench_path: Path, status: str | None, stdout: str, stderr: str, code: int) -> str:
+def classify_vow_result(
+    entry: dict,
+    bench_path: Path,
+    status: str | None,
+    stdout: str,
+    stderr: str,
+    code: int,
+) -> str:
     if code == 1 and status is None:
         return "parse_error"
     if status is None:
@@ -238,7 +247,9 @@ def classify_baseline_result(entry: dict, status: str | None, code: int) -> str:
     return "bad_output"
 
 
-def run_command(command: list[str], timeout_s: int) -> tuple[int | None, str, str, float, bool]:
+def run_command(
+    command: list[str], timeout_s: int
+) -> tuple[int | None, str, str, float, bool]:
     start = time.perf_counter()
     try:
         proc = subprocess.run(
@@ -266,7 +277,9 @@ def tier_timeout(entry: dict, override: int | None) -> int:
 def run_benchmarks(entries: list[dict], args: argparse.Namespace) -> dict:
     ensure_dirs()
     baselines = detect_baselines()
-    vow_solver = Path(args.solver) if args.solver else build_vow_solver(force=args.rebuild)
+    vow_solver = (
+        Path(args.solver) if args.solver else build_vow_solver(force=args.rebuild)
+    )
 
     solver_commands: dict[str, list[str]] = {"vow-sat": [str(vow_solver)]}
     for label, path in baselines.items():
@@ -289,18 +302,34 @@ def run_benchmarks(entries: list[dict], args: argparse.Namespace) -> dict:
 
         for solver_name, command in solver_commands.items():
             timeout_s = tier_timeout(entry, args.timeout)
-            code, stdout, stderr, elapsed, timed_out = run_command(command + [str(bench_path)], timeout_s)
+            code, stdout, stderr, elapsed, timed_out = run_command(
+                command + [str(bench_path)], timeout_s
+            )
             if timed_out:
                 classification = "timeout"
                 status = None
             else:
-                status = parse_solver_status(stdout, stderr, code if code is not None else 1)
+                status = parse_solver_status(
+                    stdout, stderr, code if code is not None else 1
+                )
                 if solver_name == "vow-sat":
-                    classification = classify_vow_result(entry, bench_path, status, stdout, stderr, code if code is not None else 1)
+                    classification = classify_vow_result(
+                        entry,
+                        bench_path,
+                        status,
+                        stdout,
+                        stderr,
+                        code if code is not None else 1,
+                    )
                 else:
-                    classification = classify_baseline_result(entry, status, code if code is not None else 1)
+                    classification = classify_baseline_result(
+                        entry, status, code if code is not None else 1
+                    )
 
-            if entry["expected"] == "UNKNOWN" and classification in {"solved_sat", "solved_unsat"}:
+            if entry["expected"] == "UNKNOWN" and classification in {
+                "solved_sat",
+                "solved_unsat",
+            }:
                 classification = f"{classification}_unknown_expected"
 
             results.append(
@@ -357,18 +386,45 @@ def print_summary(report: dict) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Local benchmark helper for examples/sat")
+    parser = argparse.ArgumentParser(
+        description="Local benchmark helper for examples/sat"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    download = sub.add_parser("download", help="download and decompress the selected benchmark subset")
-    download.add_argument("--tier", action="append", choices=["smoke", "core", "stretch"], help="repeatable tier filter")
-    download.add_argument("--force", action="store_true", help="redownload benchmarks even if already present")
+    download = sub.add_parser(
+        "download", help="download and decompress the selected benchmark subset"
+    )
+    download.add_argument(
+        "--tier",
+        action="append",
+        choices=["smoke", "core", "stretch"],
+        help="repeatable tier filter",
+    )
+    download.add_argument(
+        "--force",
+        action="store_true",
+        help="redownload benchmarks even if already present",
+    )
 
-    run = sub.add_parser("run", help="run the Vow SAT solver and any detected baselines on the selected subset")
-    run.add_argument("--tier", action="append", choices=["smoke", "core", "stretch"], help="repeatable tier filter")
-    run.add_argument("--timeout", type=int, help="override per-instance timeout in seconds")
+    run = sub.add_parser(
+        "run",
+        help="run the Vow SAT solver and any detected baselines on the selected subset",
+    )
+    run.add_argument(
+        "--tier",
+        action="append",
+        choices=["smoke", "core", "stretch"],
+        help="repeatable tier filter",
+    )
+    run.add_argument(
+        "--timeout", type=int, help="override per-instance timeout in seconds"
+    )
     run.add_argument("--solver", help="path to an already-built SAT solver binary")
-    run.add_argument("--rebuild", action="store_true", help="force a fresh build of the Vow SAT solver")
+    run.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="force a fresh build of the Vow SAT solver",
+    )
 
     sub.add_parser("list", help="print the curated manifest")
     return parser.parse_args()

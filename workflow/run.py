@@ -46,18 +46,22 @@ def _event_printer(event: str, data: dict) -> None:
     elif event == "round_start":
         print(f"\n--- Round {data['round']} ---", file=sys.stderr)
     elif event == "compile_fix":
-        print(f"  Fixing compilation (attempt {data['attempt']})...", file=sys.stderr, flush=True)
+        print(
+            f"  Fixing compilation (attempt {data['attempt']})...",
+            file=sys.stderr,
+            flush=True,
+        )
     elif event == "verify":
-        print(f"  Verifying...", file=sys.stderr, flush=True)
+        print("  Verifying...", file=sys.stderr, flush=True)
     elif event == "analyst":
-        print(f"  Analyst reviewing...", file=sys.stderr, flush=True)
+        print("  Analyst reviewing...", file=sys.stderr, flush=True)
     elif event == "reviewer":
-        print(f"  Reviewer reviewing...", file=sys.stderr, flush=True)
+        print("  Reviewer reviewing...", file=sys.stderr, flush=True)
     elif event == "coder_feedback":
-        print(f"  Coder incorporating feedback...", file=sys.stderr, flush=True)
+        print("  Coder incorporating feedback...", file=sys.stderr, flush=True)
     elif event == "round_end":
         if not data.get("compile_ok"):
-            print(f"  Result: compilation failed", file=sys.stderr)
+            print("  Result: compilation failed", file=sys.stderr)
         else:
             parts = [
                 f"verify={data.get('verify_status', '?')}",
@@ -91,11 +95,17 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     # Override agent models if specified
     if args.coder_model:
-        config.setdefault("agents", {}).setdefault("coder", {})["model"] = args.coder_model
+        config.setdefault("agents", {}).setdefault("coder", {})["model"] = (
+            args.coder_model
+        )
     if args.analyst_model:
-        config.setdefault("agents", {}).setdefault("analyst", {})["model"] = args.analyst_model
+        config.setdefault("agents", {}).setdefault("analyst", {})["model"] = (
+            args.analyst_model
+        )
     if args.reviewer_model:
-        config.setdefault("agents", {}).setdefault("reviewer", {})["model"] = args.reviewer_model
+        config.setdefault("agents", {}).setdefault("reviewer", {})["model"] = (
+            args.reviewer_model
+        )
     if args.max_rounds:
         config.setdefault("defaults", {})["max_rounds"] = args.max_rounds
 
@@ -139,7 +149,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     print(f"Output: {output_path}", file=sys.stderr)
 
     if result.final_code:
-        print(f"\n--- Final Code ---", file=sys.stderr)
+        print("\n--- Final Code ---", file=sys.stderr)
         print(result.final_code)
 
 
@@ -168,18 +178,22 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     usage = data.get("token_usage", {})
     for agent, u in usage.items():
-        print(f"  {agent}: {u.get('input_tokens', 0)} in / {u.get('output_tokens', 0)} out")
+        print(
+            f"  {agent}: {u.get('input_tokens', 0)} in / {u.get('output_tokens', 0)} out"
+        )
 
-    print(f"\nRound history:")
+    print("\nRound history:")
     for r in data.get("rounds", []):
         vs = r.get("verify_status", "n/a")
         av = r.get("analyst_verdict", "n/a")
         rv = r.get("reviewer_verdict", "n/a")
         conv = "CONVERGED" if r.get("converged") else ""
-        print(f"  Round {r['round_num']}: verify={vs} analyst={av} reviewer={rv} {conv}")
+        print(
+            f"  Round {r['round_num']}: verify={vs} analyst={av} reviewer={rv} {conv}"
+        )
 
     if args.code and data.get("final_code"):
-        print(f"\n--- Final Code ---")
+        print("\n--- Final Code ---")
         print(data["final_code"])
 
 
@@ -195,17 +209,27 @@ def main() -> None:
     run_parser.add_argument("--task-file", help="Task description file")
     run_parser.add_argument("--context-file", help="Additional context file")
     run_parser.add_argument("--output", "-o", help="Output JSON file")
-    run_parser.add_argument("--max-rounds", type=int, help="Override max convergence rounds")
+    run_parser.add_argument(
+        "--max-rounds", type=int, help="Override max convergence rounds"
+    )
     run_parser.add_argument("--coder-model", help="Override Coder agent model")
     run_parser.add_argument("--analyst-model", help="Override Analyst agent model")
     run_parser.add_argument("--reviewer-model", help="Override Reviewer agent model")
-    run_parser.add_argument("--quiet", "-q", action="store_true", help="Suppress progress output")
+    run_parser.add_argument(
+        "--quiet", "-q", action="store_true", help="Suppress progress output"
+    )
     run_parser.set_defaults(func=cmd_run)
 
     # show
-    show_parser = subparsers.add_parser("show", help="Display results from a previous run")
-    show_parser.add_argument("run_file", nargs="?", help="Result JSON file (default: most recent)")
-    show_parser.add_argument("--code", action="store_true", help="Also print the final code")
+    show_parser = subparsers.add_parser(
+        "show", help="Display results from a previous run"
+    )
+    show_parser.add_argument(
+        "run_file", nargs="?", help="Result JSON file (default: most recent)"
+    )
+    show_parser.add_argument(
+        "--code", action="store_true", help="Also print the final code"
+    )
     show_parser.set_defaults(func=cmd_show)
 
     args = parser.parse_args()

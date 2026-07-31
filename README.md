@@ -27,6 +27,22 @@ build/vowc verify examples/divide.vow              # verify contracts only
 build/vowc build --mode debug examples/divide.vow  # runtime vow checks
 ```
 
+## Development checks
+
+Install the pinned repository hooks once per checkout:
+
+```bash
+uv tool install pre-commit
+pre-commit install
+```
+
+Run every hook against the full repository when changing hook configuration or
+tooling:
+
+```bash
+pre-commit run --all-files
+```
+
 ## Standard Library
 
 `stdlib/` holds reusable, contract-annotated Vow modules — `math` (arithmetic,

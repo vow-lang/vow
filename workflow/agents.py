@@ -38,7 +38,9 @@ def parse_structured_response(text: str) -> ParsedResponse:
         verdict = m.group(1).upper()
 
     # Extract SUGGESTIONS section
-    m = re.search(r"SUGGESTIONS:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL | re.IGNORECASE)
+    m = re.search(
+        r"SUGGESTIONS:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL | re.IGNORECASE
+    )
     if m:
         for line in m.group(1).strip().split("\n"):
             line = line.strip()
@@ -55,7 +57,9 @@ def parse_structured_response(text: str) -> ParsedResponse:
 
     # Extract REASONING or SUMMARY
     for header in ("REASONING", "SUMMARY"):
-        m = re.search(rf"{header}:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL | re.IGNORECASE)
+        m = re.search(
+            rf"{header}:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL | re.IGNORECASE
+        )
         if m:
             reasoning = m.group(1).strip()
             break
@@ -107,7 +111,9 @@ class CoderAgent:
 
     llm: AgentLLM
 
-    def generate_initial(self, task_description: str, context: str | None = None) -> str:
+    def generate_initial(
+        self, task_description: str, context: str | None = None
+    ) -> str:
         prompt = coder_initial_prompt(task_description, context)
         resp = self.llm.chat(prompt)
         return resp.content
@@ -118,7 +124,9 @@ class CoderAgent:
         analyst_feedback: str | None = None,
         reviewer_feedback: str | None = None,
     ) -> str:
-        prompt = coder_feedback_prompt(verify_feedback, analyst_feedback, reviewer_feedback)
+        prompt = coder_feedback_prompt(
+            verify_feedback, analyst_feedback, reviewer_feedback
+        )
         resp = self.llm.chat(prompt)
         return resp.content
 
