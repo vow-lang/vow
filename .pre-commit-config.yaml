@@ -32,3 +32,8 @@ repos:
         entry: typos
         args: []
         exclude: ^(CHANGELOG\.md|docs/audit-20260610/vow-analysis\.md)$
+
+  - repo: https://github.com/jsh9/pydoclint
+    rev: 0.8.4
+    hooks:
+      - id: pydoclint
