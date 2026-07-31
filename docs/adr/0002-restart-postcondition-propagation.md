@@ -236,18 +236,26 @@ Every counterexample whose trace crosses a recovery edge must add structured
 for every selected restart; nested, sequential, and repeated recoveries are
 retained rather than collapsed. Successfully entered recovery edges use
 `entered: true`. A restart argument-contract failure may add one final
-`entered: false` entry for the attempted selection. The future schema addition
-contains the following field. This is an illustrative counterexample fragment,
-not a complete schema-valid object; unchanged required fields such as `values`,
-`vow_id`, and `source` are omitted:
+`entered: false` entry for the attempted selection. Every entry also records
+the selected restart arguments as a name-to-counterexample-value map. This map
+is empty for a parameterless restart and contains the attempted values when
+`entered` is false. Keeping arguments on the individual entry makes repeated
+selections distinguishable and identifies the exact instantiation of `A_r` and
+`R_r`; the top-level `values` map describes the failed proof obligation and is
+not a substitute for this occurrence-local context.
+
+The future schema addition contains the following field. This is an
+illustrative counterexample fragment, not a complete schema-valid object;
+unchanged required fields such as `values`, `vow_id`, and `source` are omitted:
 
 ```json
 {
   "recovery_path": [
     {
       "callee": "read_positive",
-      "restart": "use_zero",
-      "postcondition": "result == 0",
+      "restart": "use_value",
+      "arguments": { "value": "0" },
+      "postcondition": "result == value",
       "entered": true,
       "call_site": {
         "file": "reader.vow",
@@ -271,7 +279,8 @@ output is a separate schema and retains its capitalized `"Caller"` and
 
 Human output must render the whole recovery path in the same order, then relate
 the relevant guarantee to the failed obligation. For a single entry:
-`recovery through read_positive::use_zero guarantees result == 0; this path
+`recovery through read_positive::use_value(value = 0) guarantees result ==
+value; this path
 does not establish ensures result > 0`.
 
 This ADR does not allocate a new error code. The failure is produced by the
@@ -371,5 +380,6 @@ public-interface tests must cover:
 8. handler mutation through an aliased call argument invalidating a stale
    failure-state fact unless `A_r` re-establishes it;
 9. sequential and nested recoveries retaining every selected restart in
-   execution order, including repeated edges; and
+   execution order, including repeated parameterized edges with distinct
+   per-entry argument values; and
 10. Rust/self-hosted parity for `recovery_path` diagnostics.
