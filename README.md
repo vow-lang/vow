@@ -36,6 +36,12 @@ uv tool install pre-commit
 pre-commit install
 ```
 
+`pre-commit install` only wires up the hook types present in this repo's
+config at the time you run it. If you installed hooks before the
+`commit-msg` stage was added, rerun `pre-commit install` — otherwise your
+checkout keeps linting file contents but silently skips the commit message
+check.
+
 Run every hook against the full repository when changing hook configuration or
 tooling:
 
