@@ -13328,7 +13328,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     // Fail closed: `vow contracts --verify` exits non-zero when any contract is
     // not proven, matching `vow build --verify` / `vow verify` (#479). A vacuous
     // contract is a hollow proof, so it fails closed too (#81 PR-B).
-    if n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 || n_vacuous > 0 {
+    if do_verify && (n_failed > 0 || n_timeout > 0 || n_unknown > 0 || n_error > 0 || n_skipped > 0 || n_vacuous > 0) {
         exit_code = 1;
     }
 
