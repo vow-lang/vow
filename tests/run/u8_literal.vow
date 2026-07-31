@@ -1,0 +1,11 @@
+// TEST: exit 0
+module U8Literal
+
+fn byte() -> u8 {
+    255
+}
+
+fn main() -> i32 {
+    let x: u8 = byte();
+    0
+}

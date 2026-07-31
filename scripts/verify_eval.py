@@ -212,7 +212,7 @@ def parse_directives(path, default_status):
                 exp.replay_expect = rm.group(1)
             elif body.startswith("cex"):
                 cex = {}
-                for key, q, bare in CEX_KV.findall(body[len("cex"):]):
+                for key, q, bare in CEX_KV.findall(body[len("cex") :]):
                     val = q if q != "" or bare == "" else bare
                     if key == "fn":
                         cex["fn"] = val
@@ -243,6 +243,7 @@ def run_json(verifier, args):
     timeout keeps a hung verifier (e.g. ESBMC stuck in a solver) from hanging
     the whole harness — the gating corpus programs are small, so 120s is ample.
     """
+
     def _forward_stderr(proc):
         if proc.stderr.strip():
             print(
@@ -363,7 +364,10 @@ def vacuity_check(verifier, path):
             "`summary` object (schema regression?)"
         )
     if summary.get("vacuous", 0):
-        return SOUNDNESS, f"vacuous proof: {summary['vacuous']} contract(s) proven vacuously"
+        return (
+            SOUNDNESS,
+            f"vacuous proof: {summary['vacuous']} contract(s) proven vacuously",
+        )
     if summary.get("failed", 0):
         return SOUNDNESS, (
             f"verify/contracts divergence: `contracts --verify` disproved "
@@ -568,21 +572,29 @@ def evaluate(verifier, filter_name, output_dir):
         print(f"  (!) unknown category: {', '.join(bad_category)}")
 
     if buckets[SOUNDNESS]:
-        banner("SOUNDNESS REGRESSIONS — false-accepts (verifier trusted a bad program)",
-               buckets[SOUNDNESS])
+        banner(
+            "SOUNDNESS REGRESSIONS — false-accepts (verifier trusted a bad program)",
+            buckets[SOUNDNESS],
+        )
     if buckets[PRECISION]:
-        banner("PRECISION REGRESSIONS — false-rejects (verifier rejected a good program)",
-               buckets[PRECISION])
+        banner(
+            "PRECISION REGRESSIONS — false-rejects (verifier rejected a good program)",
+            buckets[PRECISION],
+        )
     if buckets[BLAME]:
         banner("BLAME / VOW_ID REGRESSIONS", buckets[BLAME])
     if buckets[STATUS]:
         banner("STATUS MISMATCHES", buckets[STATUS])
     if buckets[REPLAY]:
-        banner("REPLAY MISMATCHES — --replay-cex outcome differs from ground truth",
-               buckets[REPLAY])
+        banner(
+            "REPLAY MISMATCHES — --replay-cex outcome differs from ground truth",
+            buckets[REPLAY],
+        )
     if buckets[GAP_FIXED]:
-        banner("KNOWN GAP APPEARS FIXED — promote to a verify-fail program",
-               buckets[GAP_FIXED])
+        banner(
+            "KNOWN GAP APPEARS FIXED — promote to a verify-fail program",
+            buckets[GAP_FIXED],
+        )
     if buckets[HARNESS]:
         banner("HARNESS ERRORS", buckets[HARNESS])
     if known_gaps:
@@ -614,7 +626,9 @@ def evaluate(verifier, filter_name, output_dir):
     if failures:
         problems.append(f"{failures} regression(s) — see banners above")
     if missing_category:
-        problems.append(f"{len(missing_category)} program(s) missing a category directive")
+        problems.append(
+            f"{len(missing_category)} program(s) missing a category directive"
+        )
     if bad_category:
         problems.append(f"{len(bad_category)} program(s) with an unknown category")
     print(f"\nFAILED: {'; '.join(problems)}.")
@@ -628,7 +642,9 @@ def main():
         default=os.path.join(REPO_ROOT, "target", "release", "vow"),
         help="path to the verifier binary (default: target/release/vow)",
     )
-    ap.add_argument("--filter", default=None, help="only programs whose name contains this")
+    ap.add_argument(
+        "--filter", default=None, help="only programs whose name contains this"
+    )
     ap.add_argument(
         "--discover",
         action="store_true",

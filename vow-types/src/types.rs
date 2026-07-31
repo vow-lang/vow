@@ -71,6 +71,17 @@ impl Ty {
         matches!(self, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64 | Ty::U128)
     }
 
+    pub fn integer_width(&self) -> Option<u16> {
+        match self {
+            Ty::I8 | Ty::U8 => Some(8),
+            Ty::I16 | Ty::U16 => Some(16),
+            Ty::I32 | Ty::U32 => Some(32),
+            Ty::I64 | Ty::U64 => Some(64),
+            Ty::I128 | Ty::U128 => Some(128),
+            _ => None,
+        }
+    }
+
     pub fn from_primitive_name(name: &str) -> Option<Ty> {
         match name {
             "i8" => Some(Ty::I8),
@@ -186,6 +197,10 @@ mod tests {
         assert!(Ty::U32.is_unsigned());
         assert!(!Ty::I32.is_unsigned());
         assert!(!Ty::F64.is_unsigned());
+
+        assert_eq!(Ty::U8.integer_width(), Some(8));
+        assert_eq!(Ty::I128.integer_width(), Some(128));
+        assert_eq!(Ty::Bool.integer_width(), None);
     }
 
     #[test]

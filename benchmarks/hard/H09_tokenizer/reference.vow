@@ -1,8 +1,6 @@
 module Tokenizer
 
 fn count_tokens(v: Vec<i64>) -> i64 vow {
-  requires: v.len() >= 0,
-  requires: v.len() <= 8,
   ensures: result >= 0,
   ensures: result <= v.len()
 } {

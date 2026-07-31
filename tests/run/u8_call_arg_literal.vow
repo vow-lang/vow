@@ -1,0 +1,18 @@
+// TEST: stdout "1\n42\n"
+module U8CallArgLiteral
+
+fn id_u8(x: u8) -> u8 {
+    x
+}
+
+fn add_one_u8(x: u8) -> u8 {
+    x + 1
+}
+
+fn main() -> i32 [io] {
+    print_i64(id_u8(1) as i64);
+    print_str(String::from("\n"));
+    print_i64(add_one_u8(41) as i64);
+    print_str(String::from("\n"));
+    0
+}

@@ -2,7 +2,7 @@ module CollatzBounded
 
 fn collatz_steps(n: i64) -> i64 vow {
   requires: n >= 1,
-  requires: n <= 4,
+  requires: n <= 27,
   ensures: result >= 0
 } {
   let mut val: i64 = n;

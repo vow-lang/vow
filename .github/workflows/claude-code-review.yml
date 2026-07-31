@@ -59,8 +59,8 @@ jobs:
             ### Dual Compiler Sync
             Vow has TWO compilers that must stay in sync:
             - **Rust stage 0**: workspace crates `vow-syntax/`, `vow-types/`, `vow-ir/`,
-              `vow-codegen/`, `vow-verify/`, `vow-diag/`, `vow-runtime/`, `vow/`,
-              `vow-clif-shim/` (all `.rs` files)
+              `vow-codegen/`, `vow-linker/`, `vow-verify/`, `vow-diag/`,
+              `vow-runtime/`, `vow/`, `vow-clif-shim/` (all `.rs` files)
             - **Self-hosted**: `compiler/*.vow` modules (span, token, lexer, ast, parser,
               types, env, checker, ir, ir_printer, lower, clif, c_emitter, verifier, diag,
               main)

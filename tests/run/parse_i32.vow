@@ -1,0 +1,21 @@
+// TEST: stdout "2147483647\n0\n"
+module ParseI32
+
+fn show(value: Option<i32>) [io] {
+    match value {
+        Option::Some(v) => {
+            print_i64(v as i64);
+            print_str(String::from("\n"));
+        },
+        Option::None => {
+            print_i64(0);
+            print_str(String::from("\n"));
+        },
+    }
+}
+
+fn main() -> i32 [io] {
+    show(parse_i32(String::from("2147483647")));
+    show(parse_i32(String::from("2147483648")));
+    0
+}

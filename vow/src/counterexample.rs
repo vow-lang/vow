@@ -1478,7 +1478,7 @@ mod tests {
                     },
                     Inst {
                         id: InstId(2),
-                        opcode: Opcode::GtI64,
+                        opcode: Opcode::Gt,
                         ty: Ty::Bool,
                         args: vec![InstId(0), InstId(1)],
                         data: InstData::None,
@@ -1559,7 +1559,7 @@ mod tests {
                     },
                     Inst {
                         id: InstId(14),
-                        opcode: Opcode::WrappingSubI64,
+                        opcode: Opcode::WrappingSub,
                         ty: Ty::I64,
                         args: vec![InstId(12), InstId(13)],
                         data: InstData::None,

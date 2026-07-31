@@ -1,0 +1,25 @@
+[files]
+extend-exclude = [
+  "CHANGELOG.md",
+  "docs/audit-20260610/vow-analysis.md",
+]
+
+[default.extend-words]
+CLOS = "CLOS"
+FO = "FO"
+NAM = "NAM"
+Shepperd = "Shepperd"
+als = "als"
+ba = "ba"
+clen = "clen"
+coutner = "coutner"
+fo = "fo"
+lits = "lits"
+mis = "mis"
+nd = "nd"
+pn = "pn"
+slin = "slin"
+thr = "thr"
+unparseable = "unparseable"
+vai = "vai"
+vas = "vas"

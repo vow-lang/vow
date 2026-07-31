@@ -14,18 +14,16 @@ fn bisect(lo: i64, hi: i64) -> i64
 
 - `requires: lo >= 0` — lower bound is non-negative
 - `requires: hi >= lo` — valid range
-- `requires: hi <= 100` — bounded to prevent overflow
 - Loop `invariant: lo >= 0`
 - Loop `invariant: hi >= lo`
-- Loop `invariant: hi <= 100`
 
 ## Constraints
 
-- Use a while loop with `lo + 1 < hi` condition
+- Use a while loop with the overflow-safe `lo < hi - 1` condition
 - Compute midpoint as `lo + (hi - lo) / 2`
 - Return `lo` after convergence
 
 ## Hints
 
 - The midpoint formula avoids overflow
-- Bounds on `lo` and `hi` are needed so the invariant `hi >= lo` is provable without overflow
+- `hi - 1` is safe because `lo >= 0` and `hi >= lo`

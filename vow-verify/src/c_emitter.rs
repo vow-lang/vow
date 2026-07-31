@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use vow_ir::{FuncId, Function, Inst, InstData, Module, Opcode, Ty};
+use vow_ir::{
+    FuncId, Function, Inst, InstData, IntegerSignedness, IntegerType, IntegerWidth, Module, Opcode,
+    Ty,
+};
 
 // ---------------------------------------------------------------------------
 // Constant-function detection (for cross-function verification inlining)
@@ -113,9 +116,16 @@ impl Default for VerifyLimits {
 
 fn ir_ty_to_c(ty: Ty) -> &'static str {
     match ty {
+        Ty::I8 => "int8_t",
+        Ty::U8 => "uint8_t",
+        Ty::I16 => "int16_t",
+        Ty::U16 => "uint16_t",
         Ty::I32 => "int32_t",
+        Ty::U32 => "uint32_t",
         Ty::I64 => "int64_t",
         Ty::U64 => "uint64_t",
+        Ty::I128 => "__int128",
+        Ty::U128 => "unsigned __int128",
         Ty::F32 => "float",
         Ty::F64 => "double",
         Ty::Bool => "_Bool",
@@ -372,6 +382,10 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
                 && let InstData::CallExtern(ref name) = inst.data
                 && (name == "__vow_string_parse_i64_opt"
                     || name == "__vow_string_parse_u64_opt"
+                    || name == "__vow_string_parse_u8_opt"
+                    || name == "__vow_string_parse_i32_opt"
+                    || (name.contains("_to_u8_") && name.ends_with("_try"))
+                    || (name.contains("_to_i32_") && name.ends_with("_try"))
                     || name == "__vow_btreemap_insert"
                     || name == "__vow_btreemap_get")
             {
@@ -410,7 +424,10 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
 // ---------------------------------------------------------------------------
 
 fn is_known_builtin(name: &str) -> bool {
-    if is_string_fresh_helper(name) {
+    if is_string_fresh_helper(name)
+        || is_u8_numeric_intrinsic(name)
+        || is_i32_numeric_intrinsic(name)
+    {
         return true;
     }
 
@@ -457,6 +474,8 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_from_i64_in_arena"
             | "__vow_string_parse_i64_opt"
             | "__vow_string_parse_u64_opt"
+            | "__vow_string_parse_u8_opt"
+            | "__vow_string_parse_i32_opt"
             | "__vow_string_print"
             | "__vow_map_new"
             | "__vow_map_new_in_arena"
@@ -473,6 +492,22 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_btreemap_get"
             | "__vow_btreemap_contains"
     )
+}
+
+fn is_u8_numeric_intrinsic(name: &str) -> bool {
+    (name.starts_with("__vow_")
+        && name.contains("_to_u8_")
+        && (name.ends_with("_try") || name.ends_with("_wrap") || name.ends_with("_sat")))
+        || matches!(
+            name,
+            "__vow_add_sat_u8" | "__vow_sub_sat_u8" | "__vow_mul_sat_u8"
+        )
+}
+
+fn is_i32_numeric_intrinsic(name: &str) -> bool {
+    name.starts_with("__vow_")
+        && name.contains("_to_i32_")
+        && (name.ends_with("_try") || name.ends_with("_wrap") || name.ends_with("_sat"))
 }
 
 fn is_reserved_verifier_symbol(name: &str) -> bool {
@@ -525,26 +560,28 @@ pub fn is_modelable(
                 | Opcode::ConstUnit
                 | Opcode::ConstStr
                 | Opcode::GetArg
-                | Opcode::WrappingAddI32
-                | Opcode::WrappingAddI64
-                | Opcode::CheckedAddI32
-                | Opcode::CheckedAddI64
-                | Opcode::WrappingSubI32
-                | Opcode::WrappingSubI64
-                | Opcode::CheckedSubI32
-                | Opcode::CheckedSubI64
-                | Opcode::WrappingMulI32
-                | Opcode::WrappingMulI64
-                | Opcode::CheckedMulI32
-                | Opcode::CheckedMulI64
-                | Opcode::WrappingDivI32
-                | Opcode::WrappingDivI64
-                | Opcode::CheckedDivI32
-                | Opcode::CheckedDivI64
-                | Opcode::WrappingRemI32
-                | Opcode::WrappingRemI64
-                | Opcode::CheckedRemI32
-                | Opcode::CheckedRemI64
+                | Opcode::WrappingAdd
+                | Opcode::WrappingSub
+                | Opcode::WrappingMul
+                | Opcode::WrappingDiv
+                | Opcode::WrappingRem
+                | Opcode::CheckedAdd
+                | Opcode::CheckedSub
+                | Opcode::CheckedMul
+                | Opcode::CheckedDiv
+                | Opcode::CheckedRem
+                | Opcode::Eq
+                | Opcode::Ne
+                | Opcode::Lt
+                | Opcode::Le
+                | Opcode::Gt
+                | Opcode::Ge
+                | Opcode::BitAnd
+                | Opcode::BitOr
+                | Opcode::BitXor
+                | Opcode::Shl
+                | Opcode::Shr
+                | Opcode::IntCast
                 | Opcode::AddF32
                 | Opcode::AddF64
                 | Opcode::SubF32
@@ -553,66 +590,27 @@ pub fn is_modelable(
                 | Opcode::MulF64
                 | Opcode::DivF32
                 | Opcode::DivF64
-                | Opcode::EqI32
-                | Opcode::EqI64
                 | Opcode::EqF32
                 | Opcode::EqF64
-                | Opcode::NeI32
-                | Opcode::NeI64
                 | Opcode::NeF32
                 | Opcode::NeF64
-                | Opcode::LtI32
-                | Opcode::LtI64
                 | Opcode::LtF32
                 | Opcode::LtF64
-                | Opcode::LeI32
-                | Opcode::LeI64
                 | Opcode::LeF32
                 | Opcode::LeF64
-                | Opcode::GtI32
-                | Opcode::GtI64
                 | Opcode::GtF32
                 | Opcode::GtF64
-                | Opcode::GeI32
-                | Opcode::GeI64
                 | Opcode::GeF32
                 | Opcode::GeF64
                 | Opcode::Not
                 | Opcode::And
                 | Opcode::Or
-                | Opcode::BitAndI64
-                | Opcode::BitOrI64
-                | Opcode::XorI32
-                | Opcode::XorI64
-                | Opcode::ShlI64
-                | Opcode::ShrI64
-                | Opcode::WrappingAddU64
-                | Opcode::WrappingSubU64
-                | Opcode::WrappingMulU64
-                | Opcode::WrappingDivU64
-                | Opcode::WrappingRemU64
-                | Opcode::CheckedAddU64
-                | Opcode::CheckedSubU64
-                | Opcode::CheckedMulU64
-                | Opcode::CheckedDivU64
-                | Opcode::CheckedRemU64
-                | Opcode::EqU64
-                | Opcode::NeU64
-                | Opcode::LtU64
-                | Opcode::LeU64
-                | Opcode::GtU64
-                | Opcode::GeU64
-                | Opcode::BitAndU64
-                | Opcode::BitOrU64
-                | Opcode::XorU64
-                | Opcode::ShlU64
-                | Opcode::ShrU64
                 | Opcode::ConstU64
-                | Opcode::CastI64ToU64
-                | Opcode::CastU64ToI64
+                | Opcode::ConstU8
                 | Opcode::VowRequires
                 | Opcode::VowEnsures
                 | Opcode::VowInvariant
+                | Opcode::ComplexityDescriptor
                 | Opcode::Branch
                 | Opcode::Jump
                 | Opcode::Return
@@ -871,49 +869,33 @@ fn emit_inst(
         // Arguments — emitted as parameter names at function top
         Opcode::GetArg => {}
 
+        Opcode::IntCast => {
+            out.push_str(&format!(
+                "  v{} = ({})v{};\n",
+                id,
+                ir_ty_to_c(inst.ty),
+                inst.args[0].0
+            ));
+        }
+
         // Arithmetic
-        Opcode::WrappingAddI32
-        | Opcode::WrappingAddI64
-        | Opcode::CheckedAddI32
-        | Opcode::CheckedAddI64
-        | Opcode::WrappingAddU64
-        | Opcode::CheckedAddU64 => {
+        Opcode::WrappingAdd | Opcode::CheckedAdd => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} + v{};\n", id, a, b));
         }
-        Opcode::WrappingSubI32
-        | Opcode::WrappingSubI64
-        | Opcode::CheckedSubI32
-        | Opcode::CheckedSubI64
-        | Opcode::WrappingSubU64
-        | Opcode::CheckedSubU64 => {
+        Opcode::WrappingSub | Opcode::CheckedSub => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} - v{};\n", id, a, b));
         }
-        Opcode::WrappingMulI32
-        | Opcode::WrappingMulI64
-        | Opcode::CheckedMulI32
-        | Opcode::CheckedMulI64
-        | Opcode::WrappingMulU64
-        | Opcode::CheckedMulU64 => {
+        Opcode::WrappingMul | Opcode::CheckedMul => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} * v{};\n", id, a, b));
         }
-        Opcode::WrappingDivI32
-        | Opcode::WrappingDivI64
-        | Opcode::CheckedDivI32
-        | Opcode::CheckedDivI64
-        | Opcode::WrappingDivU64
-        | Opcode::CheckedDivU64 => {
+        Opcode::WrappingDiv | Opcode::CheckedDiv => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} / v{};\n", id, a, b));
         }
-        Opcode::WrappingRemI32
-        | Opcode::WrappingRemI64
-        | Opcode::CheckedRemI32
-        | Opcode::CheckedRemI64
-        | Opcode::WrappingRemU64
-        | Opcode::CheckedRemU64 => {
+        Opcode::WrappingRem | Opcode::CheckedRem => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} % v{};\n", id, a, b));
         }
@@ -937,27 +919,27 @@ fn emit_inst(
         }
 
         // Integer comparisons
-        Opcode::EqI32 | Opcode::EqI64 | Opcode::EqF32 | Opcode::EqF64 | Opcode::EqU64 => {
+        Opcode::Eq | Opcode::EqF32 | Opcode::EqF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} == v{});\n", id, a, b));
         }
-        Opcode::NeI32 | Opcode::NeI64 | Opcode::NeF32 | Opcode::NeF64 | Opcode::NeU64 => {
+        Opcode::Ne | Opcode::NeF32 | Opcode::NeF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} != v{});\n", id, a, b));
         }
-        Opcode::LtI32 | Opcode::LtI64 | Opcode::LtF32 | Opcode::LtF64 | Opcode::LtU64 => {
+        Opcode::Lt | Opcode::LtF32 | Opcode::LtF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} < v{});\n", id, a, b));
         }
-        Opcode::LeI32 | Opcode::LeI64 | Opcode::LeF32 | Opcode::LeF64 | Opcode::LeU64 => {
+        Opcode::Le | Opcode::LeF32 | Opcode::LeF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} <= v{});\n", id, a, b));
         }
-        Opcode::GtI32 | Opcode::GtI64 | Opcode::GtF32 | Opcode::GtF64 | Opcode::GtU64 => {
+        Opcode::Gt | Opcode::GtF32 | Opcode::GtF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} > v{});\n", id, a, b));
         }
-        Opcode::GeI32 | Opcode::GeI64 | Opcode::GeF32 | Opcode::GeF64 | Opcode::GeU64 => {
+        Opcode::Ge | Opcode::GeF32 | Opcode::GeF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} >= v{});\n", id, a, b));
         }
@@ -975,33 +957,58 @@ fn emit_inst(
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} || v{});\n", id, a, b));
         }
-        Opcode::BitAndI64 | Opcode::BitAndU64 => {
+        Opcode::BitAnd => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} & v{});\n", id, a, b));
         }
-        Opcode::BitOrI64 | Opcode::BitOrU64 => {
+        Opcode::BitOr => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} | v{});\n", id, a, b));
         }
-        Opcode::XorI32 | Opcode::XorI64 | Opcode::XorU64 => {
+        Opcode::BitXor => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} ^ v{});\n", id, a, b));
         }
-        Opcode::ShlI64 => {
+        Opcode::Shl | Opcode::Shr => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  v{} = __vow_shl_i64(v{}, v{});\n", id, a, b));
-        }
-        Opcode::ShrI64 => {
-            let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  v{} = __vow_shr_i64(v{}, v{});\n", id, a, b));
-        }
-        Opcode::ShlU64 => {
-            let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  v{} = __vow_shl_u64(v{}, v{});\n", id, a, b));
-        }
-        Opcode::ShrU64 => {
-            let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  v{} = __vow_shr_u64(v{}, v{});\n", id, a, b));
+            let int_ty = match inst.data {
+                InstData::Integer(ty) => ty,
+                _ => IntegerType::I64,
+            };
+            if int_ty.width == IntegerWidth::W8 {
+                let operator = if inst.opcode == Opcode::Shl {
+                    "<<"
+                } else {
+                    ">>"
+                };
+                out.push_str(&format!(
+                    "  __ESBMC_assert(v{b} < 8, \"u8 shift count\");\n  v{id} = (uint8_t)(v{a} {operator} v{b});\n"
+                ));
+                return;
+            }
+            if int_ty.width == IntegerWidth::W32 && int_ty.signedness == IntegerSignedness::Signed {
+                out.push_str(&format!(
+                    "  __ESBMC_assert(v{b} < 32, \"i32 shift count\");\n"
+                ));
+            }
+            let prefix = match int_ty.signedness {
+                IntegerSignedness::Signed => "i",
+                IntegerSignedness::Unsigned => "u",
+            };
+            let op = if inst.opcode == Opcode::Shl {
+                "shl"
+            } else {
+                "shr"
+            };
+            out.push_str(&format!(
+                "  v{} = __vow_{}_{}{}(v{}, v{});\n",
+                id,
+                op,
+                prefix,
+                int_ty.width.bits(),
+                a,
+                b
+            ));
         }
 
         Opcode::ConstU64 => {
@@ -1009,14 +1016,10 @@ fn emit_inst(
                 out.push_str(&format!("  v{} = {}ULL;\n", id, v));
             }
         }
-
-        Opcode::CastI64ToU64 => {
-            let a = inst.args[0].0;
-            out.push_str(&format!("  v{} = (uint64_t)v{};\n", id, a));
-        }
-        Opcode::CastU64ToI64 => {
-            let a = inst.args[0].0;
-            out.push_str(&format!("  v{} = (int64_t)v{};\n", id, a));
+        Opcode::ConstU8 => {
+            if let InstData::ConstU8(v) = inst.data {
+                out.push_str(&format!("  v{} = UINT8_C({});\n", id, v));
+            }
         }
 
         // Vow checks → ESBMC intrinsics
@@ -1055,6 +1058,11 @@ fn emit_inst(
                 "  __ESBMC_assert(v{}, \"vow:{}\");\n",
                 pred, vow_id
             ));
+        }
+
+        Opcode::ComplexityDescriptor => {
+            // Performance-contract metadata belongs to vow-perf and produces
+            // no correctness verification condition.
         }
 
         // Control flow
@@ -1111,6 +1119,77 @@ fn emit_inst(
         }
 
         // Vec operations — modeled as abstract struct with len + data array
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(name) if is_u8_numeric_intrinsic(name)) =>
+        {
+            let InstData::CallExtern(name) = &inst.data else {
+                unreachable!()
+            };
+            let a = inst.args[0].0;
+            if name.ends_with("_try") {
+                let signed_guard = if name.starts_with("__vow_i") {
+                    format!("v{a} >= 0 && ")
+                } else {
+                    String::new()
+                };
+                out.push_str(&format!(
+                    "  v{id}.tag = ({signed_guard}v{a} <= 255);\n  v{id}.payload = v{id}.tag ? (uint8_t)v{a} : 0;\n"
+                ));
+            } else if name.ends_with("_wrap") {
+                out.push_str(&format!("  v{id} = (uint8_t)v{a};\n"));
+            } else if name.contains("_to_u8_sat") {
+                if name.starts_with("__vow_i") {
+                    out.push_str(&format!(
+                        "  v{id} = v{a} < 0 ? 0 : (v{a} > 255 ? 255 : (uint8_t)v{a});\n"
+                    ));
+                } else {
+                    out.push_str(&format!("  v{id} = v{a} > 255 ? 255 : (uint8_t)v{a};\n"));
+                }
+            } else {
+                let b = inst.args[1].0;
+                let expression = match name.as_str() {
+                    "__vow_add_sat_u8" => format!("(uint16_t)v{a} + (uint16_t)v{b}"),
+                    "__vow_sub_sat_u8" => format!("v{a} < v{b} ? 0 : v{a} - v{b}"),
+                    "__vow_mul_sat_u8" => format!("(uint16_t)v{a} * (uint16_t)v{b}"),
+                    _ => unreachable!(),
+                };
+                if name == "__vow_sub_sat_u8" {
+                    out.push_str(&format!("  v{id} = (uint8_t)({expression});\n"));
+                } else {
+                    out.push_str(&format!(
+                        "  uint16_t __sat_{id} = {expression};\n  v{id} = __sat_{id} > 255 ? 255 : (uint8_t)__sat_{id};\n"
+                    ));
+                }
+            }
+        }
+
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(name) if is_i32_numeric_intrinsic(name)) =>
+        {
+            let InstData::CallExtern(name) = &inst.data else {
+                unreachable!()
+            };
+            let a = inst.args[0].0;
+            if name.ends_with("_try") {
+                let guard = if name.starts_with("__vow_i") {
+                    format!("v{a} >= -2147483648 && v{a} <= 2147483647")
+                } else {
+                    format!("v{a} <= 2147483647")
+                };
+                out.push_str(&format!(
+                    "  v{id}.tag = ({guard});\n  v{id}.payload = v{id}.tag ? (int32_t)v{a} : 0;\n"
+                ));
+            } else if name.ends_with("_wrap") {
+                out.push_str(&format!("  v{id} = (int32_t)v{a};\n"));
+            } else if name.starts_with("__vow_i") {
+                out.push_str(&format!(
+                    "  v{id} = v{a} < -2147483648 ? -2147483648 : (v{a} > 2147483647 ? 2147483647 : (int32_t)v{a});\n"
+                ));
+            } else {
+                out.push_str(&format!(
+                    "  v{id} = v{a} > 2147483647 ? 2147483647 : (int32_t)v{a};\n"
+                ));
+            }
+        }
+
         Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_vec_")) => {
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
@@ -1410,6 +1489,20 @@ fn emit_inst(
                             "  v{id}.tag = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
                              \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); }}\n"
+                        ));
+                    }
+                    "__vow_string_parse_u8_opt" => {
+                        out.push_str(&format!(
+                            "  v{id}.tag = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= 0 && v{id}.payload <= 255); }}\n"
+                        ));
+                    }
+                    "__vow_string_parse_i32_opt" => {
+                        out.push_str(&format!(
+                            "  v{id}.tag = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); __ESBMC_assume(v{id}.payload >= -2147483648 && v{id}.payload <= 2147483647); }}\n"
                         ));
                     }
                     "__vow_string_print" => {
@@ -1816,9 +1909,16 @@ fn emit_unsupported_for_verification(inst: &Inst, out: &mut String) {
 
 fn c_nondet_suffix(ty: Ty) -> &'static str {
     match ty {
+        Ty::I8 => "char",
+        Ty::U8 => "unsigned_char",
+        Ty::I16 => "short",
+        Ty::U16 => "unsigned_short",
         Ty::I32 => "int",
+        Ty::U32 => "unsigned_int",
         Ty::I64 => "long",
         Ty::U64 => "unsigned_long",
+        Ty::I128 => "int128",
+        Ty::U128 => "uint128",
         Ty::F32 => "float",
         Ty::F64 => "double",
         Ty::Bool => "bool",
@@ -2226,30 +2326,100 @@ pub fn emit_c_function_full(
     out
 }
 
-#[derive(Default)]
-struct ShiftNeeds {
-    shl_i64: bool,
-    shr_i64: bool,
-    shl_u64: bool,
-    shr_u64: bool,
-}
+/// Set of `(is_shl, signedness, width)` shift-helper flavors actually used by
+/// the module. `W8` is excluded — `u8` shifts are modelled inline with an
+/// explicit range assert (see the `Opcode::Shl | Opcode::Shr` arm below), not
+/// via a generated helper.
+type ShiftNeeds = std::collections::BTreeSet<(bool, IntegerSignedness, IntegerWidth)>;
 
 fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
-    let mut needs = ShiftNeeds::default();
+    let mut needs = ShiftNeeds::new();
     for func in funcs {
         for block in &func.blocks {
             for inst in &block.insts {
-                match inst.opcode {
-                    Opcode::ShlI64 => needs.shl_i64 = true,
-                    Opcode::ShrI64 => needs.shr_i64 = true,
-                    Opcode::ShlU64 => needs.shl_u64 = true,
-                    Opcode::ShrU64 => needs.shr_u64 = true,
-                    _ => {}
+                let is_shl = match inst.opcode {
+                    Opcode::Shl => true,
+                    Opcode::Shr => false,
+                    _ => continue,
+                };
+                if let InstData::Integer(IntegerType { width, signedness }) = inst.data
+                    && width != IntegerWidth::W8
+                {
+                    needs.insert((is_shl, signedness, width));
                 }
             }
         }
     }
     needs
+}
+
+fn c_uint_type(width: IntegerWidth) -> &'static str {
+    match width {
+        IntegerWidth::W8 => "uint8_t",
+        IntegerWidth::W16 => "uint16_t",
+        IntegerWidth::W32 => "uint32_t",
+        IntegerWidth::W64 => "uint64_t",
+        IntegerWidth::W128 => "unsigned __int128",
+    }
+}
+
+fn c_int_type(width: IntegerWidth) -> &'static str {
+    match width {
+        IntegerWidth::W8 => "int8_t",
+        IntegerWidth::W16 => "int16_t",
+        IntegerWidth::W32 => "int32_t",
+        IntegerWidth::W64 => "int64_t",
+        IntegerWidth::W128 => "__int128",
+    }
+}
+
+/// Emits one `__vow_{shl,shr}_{i,u}<bits>` helper. Mirrors hardware shift
+/// semantics for any shift count (masked to `width - 1`, matching Cranelift's
+/// `ishl`/`sshr`/`ushr`) rather than C's undefined behavior for
+/// out-of-range/negative shift counts.
+fn emit_shift_helper(
+    out: &mut String,
+    is_shl: bool,
+    signedness: IntegerSignedness,
+    width: IntegerWidth,
+) {
+    let bits = width.bits();
+    let mask = bits - 1;
+    let uint_ty = c_uint_type(width);
+    let int_ty = c_int_type(width);
+    let prefix = match signedness {
+        IntegerSignedness::Signed => "i",
+        IntegerSignedness::Unsigned => "u",
+    };
+    let op = if is_shl { "shl" } else { "shr" };
+    match (is_shl, signedness) {
+        (true, IntegerSignedness::Signed) => out.push_str(&format!(
+            "static inline {int_ty} __vow_{op}_{prefix}{bits}({int_ty} value, {int_ty} count) {{\n\
+             \x20 {uint_ty} shift = (({uint_ty})count) & {mask};\n\
+             \x20 return ({int_ty})((({uint_ty})value) << shift);\n\
+             }}\n"
+        )),
+        (false, IntegerSignedness::Signed) => out.push_str(&format!(
+            "static inline {int_ty} __vow_{op}_{prefix}{bits}({int_ty} value, {int_ty} count) {{\n\
+             \x20 {uint_ty} shift = (({uint_ty})count) & {mask};\n\
+             \x20 {uint_ty} raw_bits = ({uint_ty})value;\n\
+             \x20 {uint_ty} logical = raw_bits >> shift;\n\
+             \x20 {uint_ty} ones = ~(({uint_ty})0);\n\
+             \x20 {uint_ty} sign_fill = value < 0 ? (({uint_ty})~(ones >> shift)) : ({uint_ty})0;\n\
+             \x20 return ({int_ty})(logical | sign_fill);\n\
+             }}\n"
+        )),
+        (true, IntegerSignedness::Unsigned) => out.push_str(&format!(
+            "static inline {uint_ty} __vow_{op}_{prefix}{bits}({uint_ty} value, {uint_ty} count) {{\n\
+             \x20 return value << (count & {mask});\n\
+             }}\n"
+        )),
+        (false, IntegerSignedness::Unsigned) => out.push_str(&format!(
+            "static inline {uint_ty} __vow_{op}_{prefix}{bits}({uint_ty} value, {uint_ty} count) {{\n\
+             \x20 return value >> (count & {mask});\n\
+             }}\n"
+        )),
+    }
 }
 
 fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits) {
@@ -2259,8 +2429,18 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     out.push_str("extern void __ESBMC_assume(_Bool);\n");
     out.push_str("extern void __ESBMC_assert(_Bool, const char*);\n");
     out.push_str("extern int __VERIFIER_nondet_int(void);\n");
+    out.push_str("extern char __VERIFIER_nondet_char(void);\n");
+    out.push_str("extern unsigned char __VERIFIER_nondet_uchar(void);\n");
+    out.push_str("extern unsigned char __VERIFIER_nondet_unsigned_char(void);\n");
+    out.push_str("extern short __VERIFIER_nondet_short(void);\n");
+    out.push_str("extern unsigned short __VERIFIER_nondet_ushort(void);\n");
+    out.push_str("extern unsigned short __VERIFIER_nondet_unsigned_short(void);\n");
+    out.push_str("extern unsigned int __VERIFIER_nondet_uint(void);\n");
+    out.push_str("extern unsigned int __VERIFIER_nondet_unsigned_int(void);\n");
     out.push_str("extern long __VERIFIER_nondet_long(void);\n");
     out.push_str("extern unsigned long __VERIFIER_nondet_unsigned_long(void);\n");
+    out.push_str("extern __int128 __VERIFIER_nondet_int128(void);\n");
+    out.push_str("extern unsigned __int128 __VERIFIER_nondet_uint128(void);\n");
     out.push_str("extern float __VERIFIER_nondet_float(void);\n");
     out.push_str("extern double __VERIFIER_nondet_double(void);\n");
     out.push_str("extern _Bool __VERIFIER_nondet_bool(void);\n\n");
@@ -2281,40 +2461,10 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
         "typedef struct {{ int64_t len; int64_t keys[{btreemap_max}]; int64_t vals[{btreemap_max}]; }} __vow_btreemap_t;\n",
     ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
-    if shifts.shl_i64 {
-        out.push_str(
-            "static inline int64_t __vow_shl_i64(int64_t value, int64_t count) {\n\
-             \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
-             \x20 return (int64_t)(((uint64_t)value) << shift);\n\
-             }\n",
-        );
+    for &(is_shl, signedness, width) in shifts {
+        emit_shift_helper(out, is_shl, signedness, width);
     }
-    if shifts.shr_i64 {
-        out.push_str(
-            "static inline int64_t __vow_shr_i64(int64_t value, int64_t count) {\n\
-             \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
-             \x20 uint64_t bits = (uint64_t)value;\n\
-             \x20 uint64_t logical = bits >> shift;\n\
-             \x20 uint64_t sign_fill = value < 0 ? ~(~0ULL >> shift) : 0ULL;\n\
-             \x20 return (int64_t)(logical | sign_fill);\n\
-             }\n",
-        );
-    }
-    if shifts.shl_u64 {
-        out.push_str(
-            "static inline uint64_t __vow_shl_u64(uint64_t value, uint64_t count) {\n\
-             \x20 return value << (count & 63ULL);\n\
-             }\n",
-        );
-    }
-    if shifts.shr_u64 {
-        out.push_str(
-            "static inline uint64_t __vow_shr_u64(uint64_t value, uint64_t count) {\n\
-             \x20 return value >> (count & 63ULL);\n\
-             }\n",
-        );
-    }
-    if shifts.shl_i64 || shifts.shr_i64 || shifts.shl_u64 || shifts.shr_u64 {
+    if !shifts.is_empty() {
         out.push('\n');
     }
 }
@@ -2461,6 +2611,7 @@ mod tests {
     }
 
     fn inst(id: u32, op: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
+        let data = integer_test_data(op, ty, data);
         Inst {
             id: InstId(id),
             opcode: op,
@@ -2470,6 +2621,43 @@ mod tests {
             origin: sp(),
             region: RegionId::Root,
         }
+    }
+
+    fn integer_test_data(op: Opcode, ty: Ty, data: InstData) -> InstData {
+        if data != InstData::None
+            || !matches!(
+                op,
+                Opcode::WrappingAdd
+                    | Opcode::WrappingSub
+                    | Opcode::WrappingMul
+                    | Opcode::WrappingDiv
+                    | Opcode::WrappingRem
+                    | Opcode::CheckedAdd
+                    | Opcode::CheckedSub
+                    | Opcode::CheckedMul
+                    | Opcode::CheckedDiv
+                    | Opcode::CheckedRem
+                    | Opcode::Eq
+                    | Opcode::Ne
+                    | Opcode::Lt
+                    | Opcode::Le
+                    | Opcode::Gt
+                    | Opcode::Ge
+                    | Opcode::BitAnd
+                    | Opcode::BitOr
+                    | Opcode::BitXor
+                    | Opcode::Shl
+                    | Opcode::Shr
+            )
+        {
+            return data;
+        }
+        InstData::Integer(match ty {
+            Ty::I32 => IntegerType::I32,
+            Ty::U64 => IntegerType::U64,
+            Ty::U8 => IntegerType::U8,
+            _ => IntegerType::I64,
+        })
     }
 
     #[test]
@@ -2608,13 +2796,7 @@ mod tests {
                 insts: vec![
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                     inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                    inst(
-                        2,
-                        Opcode::WrappingAddI64,
-                        Ty::I64,
-                        vec![0, 1],
-                        InstData::None,
-                    ),
+                    inst(2, Opcode::WrappingAdd, Ty::I64, vec![0, 1], InstData::None),
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
@@ -2782,7 +2964,7 @@ mod tests {
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                     inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
                     inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-                    inst(3, Opcode::NeI64, Ty::Bool, vec![1, 2], InstData::None),
+                    inst(3, Opcode::Ne, Ty::Bool, vec![1, 2], InstData::None),
                     Inst {
                         id: InstId(4),
                         opcode: Opcode::VowRequires,
@@ -2792,13 +2974,7 @@ mod tests {
                         origin: sp(),
                         region: RegionId::Root,
                     },
-                    inst(
-                        5,
-                        Opcode::WrappingDivI64,
-                        Ty::I64,
-                        vec![0, 1],
-                        InstData::None,
-                    ),
+                    inst(5, Opcode::WrappingDiv, Ty::I64, vec![0, 1], InstData::None),
                     inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
@@ -2834,7 +3010,7 @@ mod tests {
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                     inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
                     inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-                    inst(3, Opcode::NeI64, Ty::Bool, vec![1, 2], InstData::None),
+                    inst(3, Opcode::Ne, Ty::Bool, vec![1, 2], InstData::None),
                     Inst {
                         id: InstId(4),
                         opcode: Opcode::VowRequires,
@@ -2903,7 +3079,7 @@ mod tests {
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                     inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
                     inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-                    inst(3, Opcode::NeI64, Ty::Bool, vec![1, 2], InstData::None),
+                    inst(3, Opcode::Ne, Ty::Bool, vec![1, 2], InstData::None),
                     Inst {
                         id: InstId(4),
                         opcode: Opcode::VowRequires,
@@ -2913,13 +3089,7 @@ mod tests {
                         origin: sp(),
                         region: RegionId::Root,
                     },
-                    inst(
-                        5,
-                        Opcode::WrappingDivI64,
-                        Ty::I64,
-                        vec![0, 1],
-                        InstData::None,
-                    ),
+                    inst(5, Opcode::WrappingDiv, Ty::I64, vec![0, 1], InstData::None),
                     inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
@@ -2974,7 +3144,7 @@ mod tests {
         // #81 PR-C: in body-replace mode the returned value is overwritten with
         // the type-default right after it is computed, so the `ensures` is
         // checked against a trivial `return 0` body; absent on the normal path.
-        // g(x) { x + 1 }: result is %5 (WrappingAddI64), referenced by the
+        // g(x) { x + 1 }: result is %5 (WrappingAdd[i64]), referenced by the
         // ensures and the Return.
         let func = Function {
             id: FuncId(0),
@@ -2996,15 +3166,9 @@ mod tests {
                 insts: vec![
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                     inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
-                    inst(
-                        5,
-                        Opcode::WrappingAddI64,
-                        Ty::I64,
-                        vec![0, 4],
-                        InstData::None,
-                    ),
+                    inst(5, Opcode::WrappingAdd, Ty::I64, vec![0, 4], InstData::None),
                     inst(6, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-                    inst(7, Opcode::GeI64, Ty::Bool, vec![5, 6], InstData::None),
+                    inst(7, Opcode::Ge, Ty::Bool, vec![5, 6], InstData::None),
                     Inst {
                         id: InstId(8),
                         opcode: Opcode::VowEnsures,
@@ -3194,69 +3358,15 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(
-                    2,
-                    Opcode::WrappingSubI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
-                inst(
-                    3,
-                    Opcode::WrappingMulI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
-                inst(
-                    4,
-                    Opcode::WrappingDivI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
-                inst(
-                    5,
-                    Opcode::WrappingRemI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
-                inst(
-                    6,
-                    Opcode::WrappingAddI32,
-                    Ty::I32,
-                    vec![0, 1],
-                    InstData::None,
-                ),
-                inst(
-                    7,
-                    Opcode::WrappingSubI32,
-                    Ty::I32,
-                    vec![0, 1],
-                    InstData::None,
-                ),
-                inst(
-                    8,
-                    Opcode::WrappingMulI32,
-                    Ty::I32,
-                    vec![0, 1],
-                    InstData::None,
-                ),
-                inst(
-                    9,
-                    Opcode::WrappingDivI32,
-                    Ty::I32,
-                    vec![0, 1],
-                    InstData::None,
-                ),
-                inst(
-                    10,
-                    Opcode::WrappingRemI32,
-                    Ty::I32,
-                    vec![0, 1],
-                    InstData::None,
-                ),
+                inst(2, Opcode::WrappingSub, Ty::I64, vec![0, 1], InstData::None),
+                inst(3, Opcode::WrappingMul, Ty::I64, vec![0, 1], InstData::None),
+                inst(4, Opcode::WrappingDiv, Ty::I64, vec![0, 1], InstData::None),
+                inst(5, Opcode::WrappingRem, Ty::I64, vec![0, 1], InstData::None),
+                inst(6, Opcode::WrappingAdd, Ty::I32, vec![0, 1], InstData::None),
+                inst(7, Opcode::WrappingSub, Ty::I32, vec![0, 1], InstData::None),
+                inst(8, Opcode::WrappingMul, Ty::I32, vec![0, 1], InstData::None),
+                inst(9, Opcode::WrappingDiv, Ty::I32, vec![0, 1], InstData::None),
+                inst(10, Opcode::WrappingRem, Ty::I32, vec![0, 1], InstData::None),
                 inst(11, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
@@ -3307,18 +3417,18 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(2, Opcode::EqI64, Ty::Bool, vec![0, 1], InstData::None),
-                inst(3, Opcode::NeI64, Ty::Bool, vec![0, 1], InstData::None),
-                inst(4, Opcode::LtI64, Ty::Bool, vec![0, 1], InstData::None),
-                inst(5, Opcode::LeI64, Ty::Bool, vec![0, 1], InstData::None),
-                inst(6, Opcode::GtI64, Ty::Bool, vec![0, 1], InstData::None),
-                inst(7, Opcode::GeI64, Ty::Bool, vec![0, 1], InstData::None),
-                inst(8, Opcode::EqI32, Ty::Bool, vec![0, 1], InstData::None),
-                inst(9, Opcode::NeI32, Ty::Bool, vec![0, 1], InstData::None),
-                inst(10, Opcode::LtI32, Ty::Bool, vec![0, 1], InstData::None),
-                inst(11, Opcode::LeI32, Ty::Bool, vec![0, 1], InstData::None),
-                inst(12, Opcode::GtI32, Ty::Bool, vec![0, 1], InstData::None),
-                inst(13, Opcode::GeI32, Ty::Bool, vec![0, 1], InstData::None),
+                inst(2, Opcode::Eq, Ty::Bool, vec![0, 1], InstData::None),
+                inst(3, Opcode::Ne, Ty::Bool, vec![0, 1], InstData::None),
+                inst(4, Opcode::Lt, Ty::Bool, vec![0, 1], InstData::None),
+                inst(5, Opcode::Le, Ty::Bool, vec![0, 1], InstData::None),
+                inst(6, Opcode::Gt, Ty::Bool, vec![0, 1], InstData::None),
+                inst(7, Opcode::Ge, Ty::Bool, vec![0, 1], InstData::None),
+                inst(8, Opcode::Eq, Ty::Bool, vec![0, 1], InstData::None),
+                inst(9, Opcode::Ne, Ty::Bool, vec![0, 1], InstData::None),
+                inst(10, Opcode::Lt, Ty::Bool, vec![0, 1], InstData::None),
+                inst(11, Opcode::Le, Ty::Bool, vec![0, 1], InstData::None),
+                inst(12, Opcode::Gt, Ty::Bool, vec![0, 1], InstData::None),
+                inst(13, Opcode::Ge, Ty::Bool, vec![0, 1], InstData::None),
                 inst(14, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
@@ -3361,11 +3471,11 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(2, Opcode::BitAndI64, Ty::I64, vec![0, 1], InstData::None),
-                inst(3, Opcode::BitOrI64, Ty::I64, vec![0, 1], InstData::None),
-                inst(4, Opcode::XorI64, Ty::I64, vec![0, 1], InstData::None),
-                inst(5, Opcode::ShlI64, Ty::I64, vec![0, 1], InstData::None),
-                inst(6, Opcode::ShrI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(2, Opcode::BitAnd, Ty::I64, vec![0, 1], InstData::None),
+                inst(3, Opcode::BitOr, Ty::I64, vec![0, 1], InstData::None),
+                inst(4, Opcode::BitXor, Ty::I64, vec![0, 1], InstData::None),
+                inst(5, Opcode::Shl, Ty::I64, vec![0, 1], InstData::None),
+                inst(6, Opcode::Shr, Ty::I64, vec![0, 1], InstData::None),
                 inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
             ],
         );
@@ -3386,8 +3496,8 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(2, Opcode::ShlI64, Ty::I64, vec![0, 1], InstData::None),
-                inst(3, Opcode::ShrU64, Ty::U64, vec![0, 1], InstData::None),
+                inst(2, Opcode::Shl, Ty::I64, vec![0, 1], InstData::None),
+                inst(3, Opcode::Shr, Ty::U64, vec![0, 1], InstData::None),
                 inst(4, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
@@ -3419,13 +3529,7 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(
-                    2,
-                    Opcode::WrappingAddI64,
-                    Ty::I64,
-                    vec![0, 1],
-                    InstData::None,
-                ),
+                inst(2, Opcode::WrappingAdd, Ty::I64, vec![0, 1], InstData::None),
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
@@ -4660,6 +4764,12 @@ mod tests {
             assert!(
                 matches!(reason.as_deref(), Some(text) if text.contains(name)),
                 "{name} should stay non-modelable until its expanding length semantics are modeled; reason: {reason:?}"
+            );
+
+            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                c.contains("/* opcode Call not modelled */"),
+                "{name} should fall through to the unmodelled-call path: {c}"
             );
         }
     }
@@ -6634,13 +6744,7 @@ mod tests {
                 insts: vec![
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                     inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                    inst(
-                        2,
-                        Opcode::WrappingAddI64,
-                        Ty::I64,
-                        vec![0, 1],
-                        InstData::None,
-                    ),
+                    inst(2, Opcode::WrappingAdd, Ty::I64, vec![0, 1], InstData::None),
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],

@@ -36,9 +36,11 @@ Contracts express **semantic correctness** — what is mathematically required f
 
 - **Write the true contract.** `gcd(a, b)` requires `a >= 0, b >= 0, a + b > 0`. It does not require `a <= 50` — that is a verifier limitation, not a property of Euclid's algorithm.
 - **ESBMC bounds are not contracts.** Bounds like `n <= 10` (to fit within `--unwind 10`) or `a <= 100` (to help the SMT solver) are verification artifacts. They do not belong in `requires`/`ensures` clauses.
+- **Collection and representation facts follow the same rule.** Lengths, capacities, indices, and struct fields belong in contracts only when they express the function's real domain, result, or representation invariant. Never cap a collection, struct, or capacity merely to fit the verifier's model or reduce its state space.
 - **Postconditions should be tight.** `min(a, b)` must ensure `result == a || result == b`, not just `result <= a && result <= b`. A weak postcondition that admits incorrect implementations is a bad contract.
 - **If ESBMC can't prove a correct contract, that's ESBMC's problem.** Mark the function as unverifiable or skip it in the verification pass. Do not distort the contract to accommodate the tool.
 - **Only add bounds that reflect genuine semantic constraints.** Overflow guards (e.g., `requires: x > -9223372036854775807` for `abs`) are legitimate — they prevent undefined behavior in the implementation. Loop iteration caps for ESBMC are not.
+- **Use the backend-independence test.** Replacing ESBMC with a stronger verifier must not require editing a source contract.
 
 ## Pull Requests
 
@@ -136,7 +138,9 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - **`vow-types`** — type checker and effect checker. Decidable base types only; refinement predicates go to `vow-verify`.
 - **`vow-ir`** — Pizlo-style SSA IR with instruction-value uniformity. Every `Inst` is a value. Phi/Upsilon nodes (not traditional SSA Phi). `InsertionSet` is the standard IR mutation primitive.
 - **`vow-codegen`** — `Backend` trait + Cranelift backend. Debug builds emit runtime vow checks via `__vow_violation`; release builds omit them entirely.
+- **`vow-linker`** — shared platform-specific native library policy used by both linker paths.
 - **`vow-verify`** — ESBMC integration. Extracts verification conditions from IR, invokes ESBMC, maps counterexamples back to source via `Origin` metadata.
+- **`vow-perf`** — fixed complexity-class canonicalization, least-squares classification, and cloned-IR operation-count instrumentation for a separate performance-test artifact. Parser, generator, and CLI integration remain tracked by the performance-guarantees roadmap.
 - **`vow-clif-shim`** — `extern "C"` FFI shims wrapping Cranelift for the self-hosted compiler. The self-hosted `clif.vow` calls these shims to produce native object files directly. Uses stack slots (not SSA) to bypass Cranelift dominance requirements for cross-block references in the self-hosted IR.
 - **`vow-runtime`** — vow violation handler (`__vow_violation`), print helpers (`__vow_print_str`, `__vow_print_i64`), arithmetic overflow handler.
 - **`vow`** — CLI driver (`vowc`). Orchestrates the parallel codegen + verification pipeline. Structured JSON build output.

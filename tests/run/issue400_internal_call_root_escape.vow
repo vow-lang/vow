@@ -47,6 +47,12 @@ fn consume(x: i64, y: i64) -> i64 {
     acc
 }
 
+fn memory_growth_within_limit(before: u64, after: u64, limit: u64) -> bool {
+    // A decreasing snapshot is invalid for this bounded-growth oracle. Reject
+    // it before wrapping subtraction can turn it into a spuriously small delta.
+    after >= before && after - before < limit
+}
+
 fn main() -> i32 [io] {
     let _warmup: i64 = consume(1, 2);
 
@@ -64,19 +70,25 @@ fn main() -> i32 [io] {
     // elimination of the loop body; the substantive assertion is the
     // memory bound.
     let expected_total: i64 = iters * iters;
-    let delta: u64 = after - before;
     // Generous bound: a fixed couple of pages of root growth is fine
     // (codegen may emit a few non-Vec root allocations); the bug case
     // is unbounded growth of ~90 bytes per iteration (~4.5 MB at
     // iters=50_000). 1 MB sits comfortably between the two regimes.
     let limit: u64 = 1u64 * 1024u64 * 1024u64;
-    if total == expected_total && delta < limit {
+    let decreasing_pair_rejected: bool =
+        !memory_growth_within_limit(18446744073709551615u64, 0u64, limit);
+    if total == expected_total
+        && memory_growth_within_limit(before, after, limit)
+        && decreasing_pair_rejected
+    {
         print_str("ok");
     } else {
         print_str("total=");
         print_i64(total);
-        print_str(" delta=");
-        print_u64(delta);
+        print_str(" before=");
+        print_u64(before);
+        print_str(" after=");
+        print_u64(after);
     }
 
     0

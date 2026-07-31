@@ -19,9 +19,9 @@ Operations are encoded as integers:
 
 ## Contracts
 
-- `requires: ops.len() >= 0`
-- `requires: ops.len() <= 6` — bounded for verification
-- `ensures: result >= 0` — final stack value is non-negative (given non-negative inputs)
+- `requires: ops.len() >= 1` — an expression must contain at least one operation
+- No result postcondition is stated until the contract language can express
+  validity and semantics of the encoded operation sequence
 - Loop `invariant: i >= 0`
 - Loop `invariant: i <= ops.len()`
 - Loop `invariant: sp >= 0`
@@ -30,10 +30,12 @@ Operations are encoded as integers:
 
 - Use a Vec as a stack with a stack pointer `sp`
 - This is a Stretch problem — verifying stack depth consistency across operations is complex
+- The previous non-negativity postcondition was false for the negate operation
 
 ## Hints
 
-- Pre-allocate stack Vec to max size
+- Pre-allocate the stack Vec to `ops.len()`
 - Track stack pointer `sp` for push/pop
 - Push: `stack[sp] = val; sp = sp + 1`
 - Add: `sp = sp - 1; stack[sp-1] = stack[sp-1] + stack[sp]`
+- Verifier unwind and Vec-model limits are not source preconditions

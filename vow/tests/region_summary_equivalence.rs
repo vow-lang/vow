@@ -438,7 +438,11 @@ fn rust_internal_call_fresh_return_emits_region_root_escape_note() {
 /// compilers fire on the same input, and the shell-suite mechanism only
 /// asserts runtime stdout, not diagnostic content. Skips when `build/vowc`
 /// is not yet built (pre-bootstrap), consistent with the project's pattern
-/// of tolerating optional artifacts.
+/// of tolerating optional artifacts. Also tolerates a standalone `cargo test`
+/// run without a prior full bootstrap, where the link step fails for lack of
+/// `libvow_runtime.a` (see `self_hosted_runtime_link_failure` below) — but
+/// only when diagnostics are genuinely absent; when present, they are still
+/// checked (issue #332).
 #[test]
 fn selfhosted_internal_call_fresh_return_emits_region_root_escape_note() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -467,9 +471,18 @@ fn selfhosted_internal_call_fresh_return_emits_region_root_escape_note() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
     });
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
     let notes: Vec<_> = diagnostics
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
@@ -650,6 +663,44 @@ fn rust_param_field_mutation_emits_root_escape_note() {
     );
 }
 
+fn self_hosted_runtime_link_failure(parsed: &serde_json::Value, stderr: &str) -> bool {
+    parsed["status"].as_str() == Some("CompileFailed")
+        && (parsed["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("libvow_runtime.a"))
+            || stderr.contains("libvow_runtime.a"))
+}
+
+#[test]
+fn self_hosted_runtime_link_failure_classifier_is_narrow() {
+    let current_shape = serde_json::json!({ "status": "CompileFailed" });
+    assert!(self_hosted_runtime_link_failure(
+        &current_shape,
+        "link failed: missing libvow_runtime.a",
+    ));
+
+    let message_shape = serde_json::json!({
+        "status": "CompileFailed",
+        "message": "link failed: missing libvow_runtime.a",
+    });
+    assert!(self_hosted_runtime_link_failure(&message_shape, ""));
+
+    let unrelated_failure = serde_json::json!({
+        "status": "CompileFailed",
+        "message": "type checking failed",
+    });
+    assert!(!self_hosted_runtime_link_failure(
+        &unrelated_failure,
+        "unrelated compiler error",
+    ));
+
+    let successful_status = serde_json::json!({ "status": "Unverified" });
+    assert!(!self_hosted_runtime_link_failure(
+        &successful_status,
+        "libvow_runtime.a",
+    ));
+}
+
 /// Issue #319 regression (self-hosted parity): confirms the self-hosted
 /// `collect_returned_ids` mirrors the Rust gate. Without this, a regression
 /// where the self-hosted FieldSet edge was inadvertently un-gated (or the
@@ -682,9 +733,18 @@ fn self_hosted_param_field_mutation_emits_root_escape_note() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
     });
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
     let notes: Vec<_> = diagnostics
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
@@ -777,9 +837,18 @@ fn self_hosted_field_overwrite_emits_root_escape_note() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
     });
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
     let notes: Vec<_> = diagnostics
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
@@ -822,9 +891,18 @@ fn self_hosted_struct_field_initializer_alloc_skipped() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
     });
-    let diagnostics = parsed["diagnostics"]
-        .as_array()
-        .expect("diagnostics should be an array");
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
     let notes: Vec<_> = diagnostics
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
@@ -943,6 +1021,142 @@ fn selfhosted_region_root_escape_notes_carry_nonzero_span_length() {
         zero_len.is_empty(),
         "every RegionRootEscape note must carry span.length > 0 (issue #316 \
          acceptance #1); {} of {} notes had length=0: {zero_len:?}",
+        zero_len.len(),
+        notes.len()
+    );
+}
+
+/// Issue #331: constructor special cases in the self-hosted `lower_expr`
+/// must preserve their `EXPR_ECTOR` span on the emitted call instruction.
+/// This fixture publishes an inline `Vec::new()` through a parameter
+/// container, making the constructor the `RegionRootEscape` source.
+#[test]
+fn selfhosted_vec_new_root_escape_note_carries_nonzero_span_length() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_vec_new_root_escape_span.vow");
+    let vowc = root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
+            module_path!()
+        );
+        return;
+    }
+
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "inline Vec::new() published through a parameter container must emit \
+         a RegionRootEscape note; diagnostics: {diagnostics:?}"
+    );
+    let zero_len: Vec<_> = notes
+        .iter()
+        .filter(|n| n["span"]["length"].as_i64() == Some(0))
+        .collect();
+    assert!(
+        zero_len.is_empty(),
+        "Vec::new()-sourced RegionRootEscape notes must carry span.length > 0 \
+         (issue #331); {} of {} notes had length=0: {zero_len:?}",
+        zero_len.len(),
+        notes.len()
+    );
+}
+
+/// Issue #331 (String::from sibling): the `String::from(...)` special case
+/// in the self-hosted `lower_expr` must also preserve its `EXPR_ECTOR` span
+/// on the emitted `__vow_string_clone` call instruction, mirroring
+/// `selfhosted_vec_new_root_escape_note_carries_nonzero_span_length` above.
+/// This fixture publishes an inline `String::from("hi")` through a parameter
+/// container, making the constructor the `RegionRootEscape` source.
+#[test]
+fn selfhosted_string_from_root_escape_note_carries_nonzero_span_length() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_string_from_root_escape_span.vow");
+    let vowc = root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
+            module_path!()
+        );
+        return;
+    }
+
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "inline String::from(...) published through a parameter container must emit \
+         a RegionRootEscape note; diagnostics: {diagnostics:?}"
+    );
+    let zero_len: Vec<_> = notes
+        .iter()
+        .filter(|n| n["span"]["length"].as_i64() == Some(0))
+        .collect();
+    assert!(
+        zero_len.is_empty(),
+        "String::from(...)-sourced RegionRootEscape notes must carry span.length > 0 \
+         (issue #331); {} of {} notes had length=0: {zero_len:?}",
         zero_len.len(),
         notes.len()
     );

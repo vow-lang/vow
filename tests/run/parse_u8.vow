@@ -1,0 +1,21 @@
+// TEST: stdout "255\n0\n"
+module ParseU8
+
+fn show(value: Option<u8>) [io] {
+    match value {
+        Option::Some(byte) => {
+            print_i64(byte as i64);
+            print_str(String::from("\n"));
+        },
+        Option::None => {
+            print_i64(0);
+            print_str(String::from("\n"));
+        },
+    }
+}
+
+fn main() -> i32 [io] {
+    show(parse_u8(String::from("255")));
+    show(parse_u8(String::from("256")));
+    0
+}

@@ -23,6 +23,7 @@ fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64
 
 - Single addition expression
 - The function is pure
+- The `[0, 100]` range is the benchmark's functional domain, not a verifier bound
 
 ## Hints
 

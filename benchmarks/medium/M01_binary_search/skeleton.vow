@@ -2,8 +2,7 @@ module BinarySearch
 
 fn bisect(lo: i64, hi: i64) -> i64 vow {
   requires: lo >= 0,
-  requires: hi >= lo,
-  requires: hi <= 100
+  requires: hi >= lo
 } {
   0
 }

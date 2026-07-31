@@ -2,8 +2,7 @@ module VecMax
 
 fn vec_max(v: Vec<i64>) -> i64 vow {
   requires: v.len() > 0,
-  requires: v.len() <= 8,
-  ensures: result >= 0
+  ensures: result >= v[0]
 } {
   0
 }

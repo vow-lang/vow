@@ -1,0 +1,74 @@
+module I32NumericTower
+
+fn i32_pipeline(value: i32) -> i32 vow {
+    requires: value >= 0 && value <= 1000,
+    ensures: result == value * 2 + 2
+} {
+    let shifted: i32 = value << 1;
+    let wrapped: i32 = shifted + 1;
+    wrapped +! 1
+}
+
+fn shift_with_u32_count(value: i32, count: u32) -> i32 vow {
+    requires: count < 32,
+    ensures: result == value << count
+} {
+    value << count
+}
+
+fn widen_to_i64(value: i32) -> i64 vow {
+    ensures: result == value as i64
+} {
+    value as i64
+}
+
+fn widen_to_u64(value: i32) -> u64 vow {
+    requires: value >= 0,
+    ensures: result == value as u64
+} {
+    value as u64
+}
+
+fn narrow_from_i64(value: i64) -> i32 vow {
+    requires: value >= -2147483648,
+    requires: value <= 2147483647,
+    ensures: result as i64 == value
+} {
+    i64_to_i32_wrap(value)
+}
+
+fn clamp_from_i64(value: i64) -> i32 vow {
+    ensures: result >= -2147483648 && result <= 2147483647
+} {
+    i64_to_i32_sat(value)
+}
+
+fn main() -> i32 [io] {
+    let input: i32 = 7;
+    let result: i32 = i32_pipeline(input);
+    let widened: i64 = widen_to_i64(result);
+    let widened_u: u64 = widen_to_u64(result);
+    let narrowed: i32 = narrow_from_i64(widened);
+    let masked: i32 = shift_with_u32_count(narrowed, 2) & 63;
+    print_i64(masked as i64);
+    print_str(String::from("\n"));
+    print_i64(widened_u as i64);
+    print_str(String::from("\n"));
+
+    print_i64(clamp_from_i64(99999999999) as i64);
+    print_str(String::from("\n"));
+
+    match i64_to_i32_try(2147483648) {
+        Option::Some(v) => print_i64(v as i64),
+        Option::None => print_str(String::from("out of range")),
+    }
+    print_str(String::from("\n"));
+
+    match parse_i32(String::from("42")) {
+        Option::Some(v) => print_i64(v as i64),
+        Option::None => print_i64(-1),
+    }
+    print_str(String::from("\n"));
+
+    0
+}

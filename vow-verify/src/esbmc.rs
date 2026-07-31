@@ -89,9 +89,16 @@ fn which(name: &str) -> Option<PathBuf> {
 
 fn esbmc_nondet_call(ty: Ty) -> &'static str {
     match ty {
+        Ty::I8 => "__VERIFIER_nondet_char()",
+        Ty::I16 => "__VERIFIER_nondet_short()",
         Ty::I32 => "__VERIFIER_nondet_int()",
+        Ty::U16 => "__VERIFIER_nondet_ushort()",
+        Ty::U32 => "__VERIFIER_nondet_uint()",
         Ty::I64 => "__VERIFIER_nondet_long()",
         Ty::U64 => "__VERIFIER_nondet_unsigned_long()",
+        Ty::U8 => "__VERIFIER_nondet_uchar()",
+        Ty::I128 => "__VERIFIER_nondet_int128()",
+        Ty::U128 => "__VERIFIER_nondet_uint128()",
         Ty::F32 => "__VERIFIER_nondet_float()",
         Ty::F64 => "__VERIFIER_nondet_double()",
         Ty::Bool => "__VERIFIER_nondet_bool()",
@@ -986,8 +993,8 @@ mod tests {
     use super::*;
     use vow_diag::Blame;
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, RegionId, RegionSummary,
-        VowEntry, VowId,
+        BasicBlock, BlockId, FuncId, Inst, InstData, InstId, IntegerType, Opcode, RegionId,
+        RegionSummary, VowEntry, VowId,
     };
     use vow_syntax::span::Span;
 
@@ -995,23 +1002,52 @@ mod tests {
         Span::new(0, 0)
     }
 
-    // find_esbmc must agree with a fresh PATH lookup, with no machine-specific
-    // shortcuts that could shadow it. A hardcoded fallback to one developer's
-    // install path silently shipped to main once (commit ee14b5c1) and stuck
-    // around for months; this test exists so that the next time someone is
-    // tempted, CI catches it.
     #[test]
-    fn find_esbmc_agrees_with_path_lookup() {
-        let from_path = which("esbmc");
-        assert_eq!(find_esbmc(), from_path);
+    fn find_esbmc_returns_none_when_path_is_empty() {
+        const CHILD_SENTINEL: &str = "VOW_TEST_FIND_ESBMC_EMPTY_PATH_CHILD";
+        const CHILD_MARKER: &str = "find_esbmc empty-PATH child executed";
+
+        // Run the PATH override in a child process so other tests cannot race
+        // with process-global environment mutation. The sentinel prevents the
+        // selected child test from recursively spawning itself.
+        if std::env::var_os(CHILD_SENTINEL).is_some() {
+            println!("{CHILD_MARKER}");
+            assert!(find_esbmc().is_none());
+            return;
+        }
+
+        let empty_path = tempfile::tempdir().expect("empty PATH tempdir");
+        let output = Command::new(std::env::current_exe().expect("current test executable"))
+            .arg("--exact")
+            .arg("esbmc::tests::find_esbmc_returns_none_when_path_is_empty")
+            .arg("--nocapture")
+            .env("PATH", empty_path.path())
+            .env(CHILD_SENTINEL, "1")
+            .output()
+            .expect("run empty-PATH child test");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            output.status.success() && stdout.contains(CHILD_MARKER),
+            "empty-PATH child did not execute successfully\nstatus: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status
+        );
     }
 
     #[test]
     fn esbmc_nondet_call_all_current_variants() {
         let cases = [
+            (Ty::I8, "__VERIFIER_nondet_char()"),
+            (Ty::U8, "__VERIFIER_nondet_uchar()"),
+            (Ty::I16, "__VERIFIER_nondet_short()"),
+            (Ty::U16, "__VERIFIER_nondet_ushort()"),
             (Ty::I32, "__VERIFIER_nondet_int()"),
+            (Ty::U32, "__VERIFIER_nondet_uint()"),
             (Ty::I64, "__VERIFIER_nondet_long()"),
             (Ty::U64, "__VERIFIER_nondet_unsigned_long()"),
+            (Ty::I128, "__VERIFIER_nondet_int128()"),
+            (Ty::U128, "__VERIFIER_nondet_uint128()"),
             (Ty::F32, "__VERIFIER_nondet_float()"),
             (Ty::F64, "__VERIFIER_nondet_double()"),
             (Ty::Bool, "__VERIFIER_nondet_bool()"),
@@ -1026,6 +1062,7 @@ mod tests {
     }
 
     fn inst(id: u32, op: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
+        let data = integer_test_data(op, ty, data);
         Inst {
             id: InstId(id),
             opcode: op,
@@ -1035,6 +1072,43 @@ mod tests {
             origin: sp(),
             region: RegionId::Root,
         }
+    }
+
+    fn integer_test_data(op: Opcode, ty: Ty, data: InstData) -> InstData {
+        if data != InstData::None
+            || !matches!(
+                op,
+                Opcode::WrappingAdd
+                    | Opcode::WrappingSub
+                    | Opcode::WrappingMul
+                    | Opcode::WrappingDiv
+                    | Opcode::WrappingRem
+                    | Opcode::CheckedAdd
+                    | Opcode::CheckedSub
+                    | Opcode::CheckedMul
+                    | Opcode::CheckedDiv
+                    | Opcode::CheckedRem
+                    | Opcode::Eq
+                    | Opcode::Ne
+                    | Opcode::Lt
+                    | Opcode::Le
+                    | Opcode::Gt
+                    | Opcode::Ge
+                    | Opcode::BitAnd
+                    | Opcode::BitOr
+                    | Opcode::BitXor
+                    | Opcode::Shl
+                    | Opcode::Shr
+            )
+        {
+            return data;
+        }
+        InstData::Integer(match ty {
+            Ty::I32 => IntegerType::I32,
+            Ty::U64 => IntegerType::U64,
+            Ty::U8 => IntegerType::U8,
+            _ => IntegerType::I64,
+        })
     }
 
     fn trivially_true_func() -> Function {
@@ -1137,6 +1211,107 @@ mod tests {
             struct_layouts: vec![],
             enum_layouts: vec![],
             warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn complexity_descriptor_only_produces_no_verification_conditions() {
+        let func = Function {
+            id: FuncId(0),
+            name: "linear_identity".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["n".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::ComplexityDescriptor,
+                        Ty::Unit,
+                        vec![],
+                        InstData::None,
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+
+        let c = emit_verify_c_source(
+            &func,
+            &module_of(&func),
+            &HashMap::new(),
+            &VerifyLimits::default(),
+        );
+
+        assert!(!c.contains("  __ESBMC_assume("), "unexpected VC:\n{c}");
+        assert!(!c.contains("  __ESBMC_assert("), "unexpected VC:\n{c}");
+    }
+
+    #[test]
+    fn complexity_descriptor_does_not_hide_ensures_verification() {
+        let func = Function {
+            id: FuncId(0),
+            name: "identity_with_ensures".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["n".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result == n".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::ComplexityDescriptor,
+                        Ty::Unit,
+                        vec![],
+                        InstData::None,
+                    ),
+                    inst(2, Opcode::Eq, Ty::Bool, vec![0, 0], InstData::None),
+                    inst(
+                        3,
+                        Opcode::VowEnsures,
+                        Ty::Unit,
+                        vec![2],
+                        InstData::VowId(VowId(0)),
+                    ),
+                    inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+
+        let module = module_of(&func);
+        let c = emit_verify_c_source(&func, &module, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("  __ESBMC_assert(v2, \"vow:0\");"),
+            "ensures VC was not emitted:\n{c}"
+        );
+
+        match verify(&VerifyRequest::new(
+            &func,
+            &module,
+            &VerifyLimits::default(),
+        )) {
+            VerificationResult::Proven | VerificationResult::ToolNotFound => {}
+            other => panic!("expected ensures to remain verifiable, got {other:?}"),
         }
     }
 
@@ -1347,7 +1522,7 @@ mod tests {
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                     inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
                     inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-                    inst(3, Opcode::NeI64, Ty::Bool, vec![1, 2], InstData::None),
+                    inst(3, Opcode::Ne, Ty::Bool, vec![1, 2], InstData::None),
                     Inst {
                         id: InstId(4),
                         opcode: Opcode::VowRequires,
@@ -1357,13 +1532,7 @@ mod tests {
                         origin: sp(),
                         region: RegionId::Root,
                     },
-                    inst(
-                        5,
-                        Opcode::WrappingDivI64,
-                        Ty::I64,
-                        vec![0, 1],
-                        InstData::None,
-                    ),
+                    inst(5, Opcode::WrappingDiv, Ty::I64, vec![0, 1], InstData::None),
                     inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
@@ -1912,7 +2081,7 @@ VERIFICATION FAILED";
                     // v6 = 1
                     inst(6, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
                     // v7 = (v5 == v6)
-                    inst(7, Opcode::EqI64, Ty::Bool, vec![5, 6], InstData::None),
+                    inst(7, Opcode::Eq, Ty::Bool, vec![5, 6], InstData::None),
                     // ensures: v7
                     Inst {
                         id: InstId(8),
@@ -1976,7 +2145,7 @@ VERIFICATION FAILED";
                         region: RegionId::Root,
                     },
                     inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
-                    inst(5, Opcode::EqI64, Ty::Bool, vec![3, 4], InstData::None),
+                    inst(5, Opcode::Eq, Ty::Bool, vec![3, 4], InstData::None),
                     Inst {
                         id: InstId(6),
                         opcode: Opcode::VowEnsures,
@@ -2084,7 +2253,7 @@ VERIFICATION FAILED";
                     // v5 = 0
                     inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
                     // v6 = (v4 > v5)
-                    inst(6, Opcode::GtI64, Ty::Bool, vec![4, 5], InstData::None),
+                    inst(6, Opcode::Gt, Ty::Bool, vec![4, 5], InstData::None),
                     // ensures: v6
                     Inst {
                         id: InstId(7),
@@ -2147,7 +2316,7 @@ VERIFICATION FAILED";
                         region: RegionId::Root,
                     },
                     inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
-                    inst(4, Opcode::GtI64, Ty::Bool, vec![2, 3], InstData::None),
+                    inst(4, Opcode::Gt, Ty::Bool, vec![2, 3], InstData::None),
                     Inst {
                         id: InstId(5),
                         opcode: Opcode::VowEnsures,
@@ -2267,7 +2436,7 @@ VERIFICATION FAILED";
                         InstData::ConstBool(true),
                     ),
                     // v7 = (v5 == v6)
-                    inst(7, Opcode::EqI64, Ty::Bool, vec![5, 6], InstData::None),
+                    inst(7, Opcode::Eq, Ty::Bool, vec![5, 6], InstData::None),
                     // ensures: v7
                     Inst {
                         id: InstId(8),
@@ -2346,7 +2515,7 @@ VERIFICATION FAILED";
                     // v5 = 1
                     inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
                     // v6 = (v4 == v5)
-                    inst(6, Opcode::EqI64, Ty::Bool, vec![4, 5], InstData::None),
+                    inst(6, Opcode::Eq, Ty::Bool, vec![4, 5], InstData::None),
                     // ensures: v6
                     Inst {
                         id: InstId(7),
@@ -2411,7 +2580,7 @@ VERIFICATION FAILED";
                     // v2 = 1
                     inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
                     // v3 = (v1 == v2)
-                    inst(3, Opcode::EqI64, Ty::Bool, vec![1, 2], InstData::None),
+                    inst(3, Opcode::Eq, Ty::Bool, vec![1, 2], InstData::None),
                     // ensures: v3
                     Inst {
                         id: InstId(4),
@@ -2655,13 +2824,7 @@ VERIFICATION FAILED";
                     insts: vec![
                         inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                         inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
-                        inst(
-                            2,
-                            Opcode::WrappingAddI64,
-                            Ty::I64,
-                            vec![0, 1],
-                            InstData::None,
-                        ),
+                        inst(2, Opcode::WrappingAdd, Ty::I64, vec![0, 1], InstData::None),
                         inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                     ],
                 },
@@ -2702,13 +2865,7 @@ VERIFICATION FAILED";
                 insts: vec![
                     inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                     inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
-                    inst(
-                        2,
-                        Opcode::WrappingAddI64,
-                        Ty::I64,
-                        vec![0, 1],
-                        InstData::None,
-                    ),
+                    inst(2, Opcode::WrappingAdd, Ty::I64, vec![0, 1], InstData::None),
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],

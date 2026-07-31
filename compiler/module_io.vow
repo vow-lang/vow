@@ -528,6 +528,36 @@ fn read_region_summary(r: ModuleReader) -> WireRegionSummary [panic] {
     }
 }
 
+fn write_integer_ty(out: Vec<i64>, ty: i64) {
+    if ty == ITY_I8() { write_u8(out, 0); write_u8(out, 0); return; }
+    if ty == ITY_U8() { write_u8(out, 0); write_u8(out, 1); return; }
+    if ty == ITY_I16() { write_u8(out, 1); write_u8(out, 0); return; }
+    if ty == ITY_U16() { write_u8(out, 1); write_u8(out, 1); return; }
+    if ty == ITY_I32() { write_u8(out, 2); write_u8(out, 0); return; }
+    if ty == ITY_U32() { write_u8(out, 2); write_u8(out, 1); return; }
+    if ty == ITY_I64() { write_u8(out, 3); write_u8(out, 0); return; }
+    if ty == ITY_U64() { write_u8(out, 3); write_u8(out, 1); return; }
+    if ty == ITY_I128() { write_u8(out, 4); write_u8(out, 0); return; }
+    if ty == ITY_U128() { write_u8(out, 4); write_u8(out, 1); return; }
+    write_u8(out, reject_encode_u8());
+}
+
+fn read_integer_ty(r: ModuleReader) -> i64 [panic] {
+    let width: i64 = reader_read_u8(r);
+    let signedness: i64 = reader_read_u8(r);
+    if width == 0 && signedness == 0 { return ITY_I8(); }
+    if width == 0 && signedness == 1 { return ITY_U8(); }
+    if width == 1 && signedness == 0 { return ITY_I16(); }
+    if width == 1 && signedness == 1 { return ITY_U16(); }
+    if width == 2 && signedness == 0 { return ITY_I32(); }
+    if width == 2 && signedness == 1 { return ITY_U32(); }
+    if width == 3 && signedness == 0 { return ITY_I64(); }
+    if width == 3 && signedness == 1 { return ITY_U64(); }
+    if width == 4 && signedness == 0 { return ITY_I128(); }
+    if width == 4 && signedness == 1 { return ITY_U128(); }
+    reject_decode_i64()
+}
+
 fn write_inst_data(out: Vec<i64>, inst: IrInst) {
     let dk: i64 = inst.dk;
     if dk == IDATA_NONE() { write_u8(out, 0); return; }
@@ -561,6 +591,26 @@ fn write_inst_data(out: Vec<i64>, inst: IrInst) {
         return;
     }
     if dk == IDATA_FIELD() { write_u8(out, 16); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_INTEGER() {
+        write_u8(out, 17);
+        if inst.dv == ITY_I8() { write_u8(out, 0); write_u8(out, 0); return; }
+        if inst.dv == ITY_U8() { write_u8(out, 0); write_u8(out, 1); return; }
+        if inst.dv == ITY_I16() { write_u8(out, 1); write_u8(out, 0); return; }
+        if inst.dv == ITY_U16() { write_u8(out, 1); write_u8(out, 1); return; }
+        if inst.dv == ITY_I32() { write_u8(out, 2); write_u8(out, 0); return; }
+        if inst.dv == ITY_U32() { write_u8(out, 2); write_u8(out, 1); return; }
+        if inst.dv == ITY_I64() { write_u8(out, 3); write_u8(out, 0); return; }
+        if inst.dv == ITY_U64() { write_u8(out, 3); write_u8(out, 1); return; }
+        if inst.dv == ITY_I128() { write_u8(out, 4); write_u8(out, 0); return; }
+        if inst.dv == ITY_U128() { write_u8(out, 4); write_u8(out, 1); return; }
+    }
+    if dk == IDATA_CONST_U8() { write_u8(out, 18); write_u8(out, inst.dv); return; }
+    if dk == IDATA_INTEGER_CAST() {
+        write_u8(out, 19);
+        write_integer_ty(out, inst.dv);
+        write_integer_ty(out, inst.dv2);
+        return;
+    }
     write_u8(out, reject_encode_u8());
 }
 
@@ -618,6 +668,28 @@ fn read_inst_data(r: ModuleReader) -> WireInstData [panic] {
     } else if tag == 16 {
         data.dk = IDATA_FIELD();
         data.dv = reader_read_u32_le(r);
+    } else if tag == 17 {
+        data.dk = IDATA_INTEGER();
+        let width: i64 = reader_read_u8(r);
+        let signedness: i64 = reader_read_u8(r);
+        if width == 0 && signedness == 0 { data.dv = ITY_I8(); }
+        else if width == 0 && signedness == 1 { data.dv = ITY_U8(); }
+        else if width == 1 && signedness == 0 { data.dv = ITY_I16(); }
+        else if width == 1 && signedness == 1 { data.dv = ITY_U16(); }
+        else if width == 2 && signedness == 0 { data.dv = ITY_I32(); }
+        else if width == 2 && signedness == 1 { data.dv = ITY_U32(); }
+        else if width == 3 && signedness == 0 { data.dv = ITY_I64(); }
+        else if width == 3 && signedness == 1 { data.dv = ITY_U64(); }
+        else if width == 4 && signedness == 0 { data.dv = ITY_I128(); }
+        else if width == 4 && signedness == 1 { data.dv = ITY_U128(); }
+        else { data.dk = reject_decode_i64(); }
+    } else if tag == 18 {
+        data.dk = IDATA_CONST_U8();
+        data.dv = reader_read_u8(r);
+    } else if tag == 19 {
+        data.dk = IDATA_INTEGER_CAST();
+        data.dv = read_integer_ty(r);
+        data.dv2 = read_integer_ty(r);
     } else {
         return WireInstData { dk: reject_decode_i64(), dv: 0, dv2: 0, ds: String::from("") };
     }

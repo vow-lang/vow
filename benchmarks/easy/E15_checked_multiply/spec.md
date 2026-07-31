@@ -2,7 +2,8 @@
 
 ## Problem
 
-Implement a function `checked_mul` that multiplies two bounded non-negative integers.
+Implement a function `checked_mul` that multiplies two non-negative integers
+when their product fits in `i64`.
 
 ## Signature
 
@@ -12,16 +13,17 @@ fn checked_mul(a: i64, b: i64) -> i64
 
 ## Contracts
 
-- `requires: a >= 0, a <= 1000` — `a` is bounded non-negative
-- `requires: b >= 0, b <= 1000` — `b` is bounded non-negative
+- `requires: a >= 0` — `a` is non-negative
+- `requires: b >= 0` — `b` is non-negative
+- `requires: b == 0 || a <= 9223372036854775807 / b` — exact overflow guard
 - `ensures: result == a * b` — result equals the product
 
 ## Constraints
 
 - Single multiplication expression
-- Bounds prevent overflow
+- The precondition prevents overflow for the complete non-negative `i64` domain
 - The function is pure
 
 ## Hints
 
-- With `a, b` in `[0, 1000]`, the product is at most 1,000,000, well within i64 range
+- Guard division by zero before comparing `a` with `i64::MAX / b`

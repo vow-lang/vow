@@ -27,6 +27,28 @@ build/vowc verify examples/divide.vow              # verify contracts only
 build/vowc build --mode debug examples/divide.vow  # runtime vow checks
 ```
 
+## Development checks
+
+Install the pinned repository hooks once per checkout:
+
+```bash
+uv tool install pre-commit
+pre-commit install
+```
+
+`pre-commit install` only wires up the hook types present in this repo's
+config at the time you run it. If you installed hooks before the
+`commit-msg` stage was added, rerun `pre-commit install` — otherwise your
+checkout keeps linting file contents but silently skips the commit message
+check.
+
+Run every hook against the full repository when changing hook configuration or
+tooling:
+
+```bash
+pre-commit run --all-files
+```
+
 ## Standard Library
 
 `stdlib/` holds reusable, contract-annotated Vow modules — `math` (arithmetic,
@@ -43,7 +65,8 @@ enforced at runtime in `--mode debug` while static verifiability is improved. Se
 [docs/spec/stdlib.md](docs/spec/stdlib.md) (full API + verification reference).
 
 `examples/` keeps the language demos (contracts, blame, CEGIS, IO) and the larger
-showcases (`sat/`, `chess/`).
+showcase (`sat/`). The chess engine showcase moved to
+[vow-lang/chess](https://github.com/vow-lang/chess).
 
 ## Agent Setup (Claude Code Skill)
 

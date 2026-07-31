@@ -219,10 +219,12 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
             emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label, body_replace)
         } else {
             let preamble: String = cemit_preamble_with_limits(
-                func_has_shift_op(f, IOP_SHL_I64()),
-                func_has_shift_op(f, IOP_SHR_I64()),
-                func_has_shift_op(f, IOP_SHL_U64()),
-                func_has_shift_op(f, IOP_SHR_U64()),
+                func_has_integer_shift_op(f, IOP_SHL(), ITY_I64()),
+                func_has_integer_shift_op(f, IOP_SHR(), ITY_I64()),
+                func_has_integer_shift_op(f, IOP_SHL(), ITY_U64()),
+                func_has_integer_shift_op(f, IOP_SHR(), ITY_U64()),
+                func_has_integer_shift_op(f, IOP_SHL(), ITY_I32()),
+                func_has_integer_shift_op(f, IOP_SHR(), ITY_I32()),
                 vec_max, model_string_max, hashmap_max, btreemap_max
             );
             let empty_modelable: Vec<i64> = Vec::new();
@@ -243,18 +245,26 @@ fn esbmc_path() -> String [io] {
     let pargs: Vec<String> = Vec::new();
     pargs.push(String::from("-c"));
     pargs.push(String::from("command -v esbmc"));
-    let rc: i64 = process_run(String::from("sh"), pargs);
-    if rc != 0 {
+    let handle: i64 = process_start(String::from("sh"), pargs);
+    if handle == -1 {
         return String::from("");
     }
-    string_trim(process_get_stdout())
+    let rc: i64 = process_wait(handle);
+    if rc != 0 {
+        process_kill(handle);
+        return String::from("");
+    }
+    let stdout: String = process_stdout_for(handle);
+    // Evict the completed process and its captured buffers after copying stdout.
+    process_kill(handle);
+    string_trim(stdout)
 }
 
-fn esbmc_exists() -> bool [io] {
+fn esbmc_exists(esbmc_bin: String) -> bool {
     // `command -v esbmc` exits non-zero when nothing is found, so a non-empty
     // resolved path already proves the binary is on PATH — no need for a
     // follow-up fs_exists check.
-    esbmc_path().len() > 0
+    esbmc_bin.len() > 0
 }
 
 // Allocate a fresh secure scratch path for an ESBMC invocation. mktemp -d
@@ -318,7 +328,7 @@ fn cleanup_verify_tmp_path(tmp_path: String) [io] {
     }
 }
 
-fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func_name: String, memlimit_arg: String, debug: bool) [io] {
+fn save_esbmc_debug(esbmc_bin: String, c_source: String, tmp_path: String, max_k_step: String, func_name: String, memlimit_arg: String, debug: bool) [io] {
     // Self-hosted VOW_VERIFY_DEBUG is not wired yet: compiler code has no
     // getenv builtin, so callers pass false. Keep this template aligned with
     // the real ESBMC args for the future env-var hook.
@@ -334,7 +344,7 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func
     cmd_path.push_str(func_name);
     cmd_path.push_str(String::from(".cmd"));
     let cmd: String = String::from("");
-    cmd.push_str(esbmc_path());
+    cmd.push_str(esbmc_bin);
     cmd.push_str(String::from(" "));
     cmd.push_str(c_path);
     cmd.push_str(String::from(" --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step "));
@@ -392,10 +402,10 @@ fn append_memlimit_arg(args: Vec<String>, memlimit_arg: String) {
     args.push(memlimit_arg);
 }
 
-fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String, extra_args: Vec<String>) -> EsbmcRun [io] {
+fn run_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String, extra_args: Vec<String>) -> EsbmcRun [io] {
     fs_write(tmp_path, c_source);
     let memlimit_arg: String = DEFAULT_ESBMC_MEMLIMIT_ARG();
-    save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, memlimit_arg, false);
+    save_esbmc_debug(esbmc_bin, c_source, tmp_path, max_k_step, func_name, memlimit_arg, false);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
@@ -413,7 +423,6 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     append_timeout_arg(esbmc_args, timeout_secs);
     append_memlimit_arg(esbmc_args, memlimit_arg);
     // Kernel watchdog kills the child if ESBMC's own --timeout doesn't fire.
-    let esbmc_bin: String = esbmc_path();
     if esbmc_bin.len() == 0 {
         cleanup_verify_tmp_path(tmp_path);
         return EsbmcRun { exit_code: -3, combined: String::from("") };
@@ -442,10 +451,10 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     EsbmcRun { exit_code: exit_code, combined: combined }
 }
 
-fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
+fn start_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
     let memlimit_arg: String = DEFAULT_ESBMC_MEMLIMIT_ARG();
-    save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, memlimit_arg, false);
+    save_esbmc_debug(esbmc_bin, c_source, tmp_path, max_k_step, func_name, memlimit_arg, false);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
@@ -457,7 +466,6 @@ fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name
     append_solver_args(esbmc_args, solver, encoding);
     append_timeout_arg(esbmc_args, timeout_secs);
     append_memlimit_arg(esbmc_args, memlimit_arg);
-    let esbmc_bin: String = esbmc_path();
     if esbmc_bin.len() == 0 {
         // Cleanup is handled by the caller: verify_collect or run_test's sentinel branch.
         return -3;
@@ -699,7 +707,7 @@ fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>
 // an individual PASSED/FAILED verdict. Unlike verify_function_full this does not
 // retry under integer (IR) encoding — per-clause precision, not throughput, is
 // the goal here; this mirrors run_esbmc_multi_property in vow-verify (#81 PR-A).
-fn verify_function_multi_property(f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+fn verify_function_multi_property(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
                                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> MultiPropertyResult [io] {
     let ids: Vec<i64> = Vec::new();
     let proven: Vec<i64> = Vec::new();
@@ -713,7 +721,7 @@ fn verify_function_multi_property(f: IrFunction, m: IrModule, max_k_step: String
     let tmp_path: String = verify_tmp_path();
     let extra: Vec<String> = Vec::new();
     extra.push(String::from("--multi-property"));
-    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, extra);
+    let r: EsbmcRun = run_esbmc(esbmc_bin, c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, extra);
     if r.exit_code == -3 {
         return MultiPropertyResult { status: VERIFY_NOT_FOUND(), verdict_ids: ids, verdict_proven: proven };
     }
@@ -756,7 +764,7 @@ fn function_has_requires(f: IrFunction) -> bool {
 // claim vacuity on an undecided probe). Only meaningful for functions with a
 // `requires`. Returns 1 when vacuous, 0 otherwise. Mirrors run_esbmc_reach in
 // vow-verify/src/esbmc.rs.
-fn verify_function_vacuity(f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+fn verify_function_vacuity(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
                            vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
     if !function_has_requires(f) {
         return 0;
@@ -768,7 +776,7 @@ fn verify_function_vacuity(f: IrFunction, m: IrModule, max_k_step: String, solve
     let extra: Vec<String> = Vec::new();
     extra.push(String::from("--error-label"));
     extra.push(String::from("vow_reach"));
-    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, extra);
+    let r: EsbmcRun = run_esbmc(esbmc_bin, c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, extra);
     if r.exit_code == -3 {
         return 0;
     }
@@ -874,7 +882,7 @@ fn body_replaceable_result(f: IrFunction) -> bool {
 // pin down the implementation. Returns 1 then, 0 otherwise. One-sided: an
 // inconclusive probe is reported as not trivially satisfiable. Mirrors
 // run_esbmc_bodyreplace in vow-verify/src/esbmc.rs.
-fn verify_function_trivial(f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+fn verify_function_trivial(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
                            vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
     if !function_has_ensures(f) {
         return 0;
@@ -890,7 +898,7 @@ fn verify_function_trivial(f: IrFunction, m: IrModule, max_k_step: String, solve
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let tmp_path: String = verify_tmp_path();
     let no_extra: Vec<String> = Vec::new();
-    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, no_extra);
+    let r: EsbmcRun = run_esbmc(esbmc_bin, c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout, no_extra);
     if r.exit_code == -3 {
         return 0;
     }
@@ -1133,7 +1141,7 @@ fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyRe
     }
 }
 
-fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, timeout_secs: String,
+fn verify_function_ir_fallback(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, timeout_secs: String,
                                vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
@@ -1160,7 +1168,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     // Rust toolchain but has no effect.
     let tmp_path: String = verify_tmp_path();
     let no_extra: Vec<String> = Vec::new();
-    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, ir_solver, ir_encoding, ir_timeout, no_extra);
+    let r: EsbmcRun = run_esbmc(esbmc_bin, c_source, max_k_step, tmp_path, fn_name, ir_solver, ir_encoding, ir_timeout, no_extra);
     if r.exit_code == -3 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
@@ -1187,7 +1195,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     build_verify_result(f, status, combined)
 }
 
-fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                 vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> EsbmcStart [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
@@ -1203,7 +1211,7 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     let tmp_path: String = verify_tmp_path();
     let fn_name: String = f.name;
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
-    let handle: i64 = start_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
+    let handle: i64 = start_esbmc(esbmc_bin, c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
     EsbmcStart { handle: handle, tmp_path: tmp_path }
 }
 

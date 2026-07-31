@@ -2,7 +2,8 @@
 
 A contract is a `vow` block attached to a function. It states what must be true on the
 way **in** (`requires`, a precondition) and on the way **out** (`ensures`, a
-postcondition). The verifier proves these hold for *all* inputs — not just the ones
+postcondition). Static verification explores symbolic inputs and paths under
+the configured verifier model, rather than checking only the concrete inputs
 you happened to test.
 
 ## A precondition
@@ -29,8 +30,10 @@ $ ulimit -v 2000000; build/vowc build divide.vow
 {"status":"Verified","executable":"divide","diagnostics":[],"counterexamples":[]}
 ```
 
-`Verified` means the verifier proved that, given the contract, the body is safe — and
-that `main`'s call `divide(10, 2)` satisfies `y != 0`.
+`Verified` means the verifier established that, given the contract, the body is
+safe — and that `main`'s call `divide(10, 2)` satisfies `y != 0` — within its
+configured bounded model. The source contract still describes the function's
+real domain; verifier limits do not belong in `requires`.
 
 ## Blame: who is at fault?
 
@@ -66,7 +69,8 @@ here `y` was `0`. Blame is `Caller`, because a `requires` was broken.
 !!! note "Debug vs release"
     `--mode debug` inserts these runtime checks; release builds omit them entirely.
     Static verification (`vow verify`, or the default `vow build`) is the stronger
-    guarantee — it proves the contract for all inputs instead of checking one run.
+    check because it explores symbolic inputs and paths under the configured model
+    instead of checking one run.
 
 ## Tighten the postcondition
 
@@ -75,7 +79,7 @@ admits only correct implementations:
 
 ```vow
 fn abs(x: i64) -> i64 vow {
-    requires: x > -9223372036854775807,
+    requires: x > -9223372036854775807 - 1,
     ensures: result >= 0,
     ensures: result == x || result == 0 - x
 } {

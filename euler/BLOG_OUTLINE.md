@@ -19,8 +19,9 @@ a harder question: **can you prove it never produces the wrong output?**
 - Vow workflow: write code + contracts → ESBMC proves correctness → ship
 
 The agent doesn't just solve Euler #1 — it writes a postcondition
-(`ensures: result >= 0`) and a loop invariant, and the bounded model
-checker *proves* these hold for all inputs in the contract's domain.
+(`ensures: result >= 0`) and a loop invariant, and the bounded model checker
+checks these symbolically across its configured model rather than only on the
+benchmark's concrete answer.
 
 ### The constraint: skill docs only
 

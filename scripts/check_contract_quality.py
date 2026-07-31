@@ -31,7 +31,9 @@ TAUTOLOGICAL_MAX = 0
 try:
     data = json.load(sys.stdin)
 except json.JSONDecodeError as exc:
-    print(f"check_contract_quality: invalid `vow contracts` JSON: {exc}", file=sys.stderr)
+    print(
+        f"check_contract_quality: invalid `vow contracts` JSON: {exc}", file=sys.stderr
+    )
     sys.exit(2)
 
 summary = data.get("summary")

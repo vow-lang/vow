@@ -1,0 +1,17 @@
+// TEST: stdout "200\n"
+module U8StructField
+
+struct B {
+    x: u8,
+}
+
+fn byte() -> u8 {
+    let b: B = B { x: 200 };
+    b.x
+}
+
+fn main() -> i32 [io] {
+    print_i64(byte() as i64);
+    print_str(String::from("\n"));
+    0
+}

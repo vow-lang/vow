@@ -3167,7 +3167,7 @@ fn slot_of_store_target(rsum_return_kind: i64, se_targets: Vec<i64>, target_para
 }
 
 fn is_scalar_ity(ty: i64) -> bool {
-    ty == ITY_I32() || ty == ITY_I64() || ty == ITY_U64()
+    ty == ITY_U8() || ty == ITY_I32() || ty == ITY_I64() || ty == ITY_U64()
         || ty == ITY_F32() || ty == ITY_F64()
         || ty == ITY_BOOL() || ty == ITY_UNIT()
     // Ptr / LinearPtr are heap-typed — they fall through.

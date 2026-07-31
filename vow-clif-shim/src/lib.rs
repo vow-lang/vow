@@ -38,7 +38,6 @@ use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use target_lexicon::{OperatingSystem, Triple};
 
 // ---------------------------------------------------------------------------
 // VowVec layout: { ptr: *mut u8, len: usize, cap: usize } = 24 bytes
@@ -83,18 +82,45 @@ const ITY_UNIT: i64 = 5;
 const ITY_PTR: i64 = 6;
 const ITY_LPTR: i64 = 7;
 const ITY_U64: i64 = 8;
+const ITY_U8: i64 = 9;
+const ITY_I8: i64 = 10;
+const ITY_I16: i64 = 11;
+const ITY_U16: i64 = 12;
+const ITY_U32: i64 = 13;
+const ITY_I128: i64 = 14;
+const ITY_U128: i64 = 15;
 
 fn ity_to_cranelift(ty: i64) -> Option<types::Type> {
     match ty {
+        ITY_I8 => Some(types::I8),
         ITY_I32 => Some(types::I32),
         ITY_I64 => Some(types::I64),
         ITY_F32 => Some(types::F32),
         ITY_F64 => Some(types::F64),
         ITY_BOOL => Some(types::I64),
         ITY_U64 => Some(types::I64),
+        ITY_U8 => Some(types::I8),
+        ITY_I16 | ITY_U16 => Some(types::I16),
+        ITY_U32 => Some(types::I32),
+        ITY_I128 | ITY_U128 => Some(types::I128),
         ITY_UNIT => None,
         ITY_PTR | ITY_LPTR => Some(types::I64),
         _ => None,
+    }
+}
+
+fn ity_is_signed(ty: i64) -> bool {
+    matches!(ty, ITY_I8 | ITY_I16 | ITY_I32 | ITY_I64 | ITY_I128)
+}
+
+fn ity_bits(ty: i64) -> i64 {
+    match ty {
+        ITY_I8 | ITY_U8 => 8,
+        ITY_I16 | ITY_U16 => 16,
+        ITY_I32 | ITY_U32 => 32,
+        ITY_I64 | ITY_U64 => 64,
+        ITY_I128 | ITY_U128 => 128,
+        _ => 0,
     }
 }
 
@@ -114,40 +140,6 @@ const IOP_CONST_BOOL: i64 = 4;
 const IOP_CONST_STR: i64 = 5;
 const IOP_CONST_UNIT: i64 = 6;
 const IOP_GET_ARG: i64 = 7;
-
-const IOP_WADD_I32: i64 = 8;
-const IOP_WSUB_I32: i64 = 9;
-const IOP_WMUL_I32: i64 = 10;
-const IOP_WDIV_I32: i64 = 11;
-const IOP_WREM_I32: i64 = 12;
-const IOP_CADD_I32: i64 = 13;
-const IOP_CSUB_I32: i64 = 14;
-const IOP_CMUL_I32: i64 = 15;
-const IOP_CDIV_I32: i64 = 16;
-const IOP_CREM_I32: i64 = 17;
-const IOP_EQ_I32: i64 = 18;
-const IOP_NE_I32: i64 = 19;
-const IOP_LT_I32: i64 = 20;
-const IOP_LE_I32: i64 = 21;
-const IOP_GT_I32: i64 = 22;
-const IOP_GE_I32: i64 = 23;
-
-const IOP_WADD_I64: i64 = 24;
-const IOP_WSUB_I64: i64 = 25;
-const IOP_WMUL_I64: i64 = 26;
-const IOP_WDIV_I64: i64 = 27;
-const IOP_WREM_I64: i64 = 28;
-const IOP_CADD_I64: i64 = 29;
-const IOP_CSUB_I64: i64 = 30;
-const IOP_CMUL_I64: i64 = 31;
-const IOP_CDIV_I64: i64 = 32;
-const IOP_CREM_I64: i64 = 33;
-const IOP_EQ_I64: i64 = 34;
-const IOP_NE_I64: i64 = 35;
-const IOP_LT_I64: i64 = 36;
-const IOP_LE_I64: i64 = 37;
-const IOP_GT_I64: i64 = 38;
-const IOP_GE_I64: i64 = 39;
 
 const IOP_ADD_F32: i64 = 40;
 const IOP_SUB_F32: i64 = 41;
@@ -386,7 +378,7 @@ fn block_arena_slot(
         // Cranelift reserve the complete declared slot, not just the pointer.
         let zero = builder.ins().iconst(types::I64, 0);
         for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
-            builder.ins().stack_store(zero, slot, offset);
+            builder.ins().stack_store(types::I64, zero, slot, offset);
         }
     }
     slot
@@ -419,7 +411,7 @@ fn arena_value_for_region(
     let kind = rgn & 3;
     let payload = rgn >> 2;
     match kind {
-        REGION_KIND_ROOT => Some(builder.ins().global_value(types::I64, root_arena_gv)),
+        REGION_KIND_ROOT => Some(builder.ins().symbol_value(types::I64, root_arena_gv)),
         REGION_KIND_BLOCK => Some(block_arena_value(builder, block_arena_slots, payload)),
         REGION_KIND_CALLER => {
             // Route to the value's hidden caller-arena slot. Multi-slot
@@ -617,38 +609,8 @@ const IOP_LINEAR_BORROW: i64 = 80;
 const IOP_FIELD_GET: i64 = 81;
 const IOP_FIELD_SET: i64 = 82;
 
-const IOP_XOR_I32: i64 = 83;
-const IOP_XOR_I64: i64 = 84;
-
-const IOP_WADD_U64: i64 = 85;
-const IOP_WSUB_U64: i64 = 86;
-const IOP_WMUL_U64: i64 = 87;
-const IOP_WDIV_U64: i64 = 88;
-const IOP_WREM_U64: i64 = 89;
-const IOP_CADD_U64: i64 = 90;
-const IOP_CSUB_U64: i64 = 91;
-const IOP_CMUL_U64: i64 = 92;
-const IOP_CDIV_U64: i64 = 93;
-const IOP_CREM_U64: i64 = 94;
-const IOP_EQ_U64: i64 = 95;
-const IOP_NE_U64: i64 = 96;
-const IOP_LT_U64: i64 = 97;
-const IOP_LE_U64: i64 = 98;
-const IOP_GT_U64: i64 = 99;
-const IOP_GE_U64: i64 = 100;
-const IOP_XOR_U64: i64 = 101;
 const IOP_CONST_U64: i64 = 102;
-const IOP_CAST_I64_TO_U64: i64 = 103;
-const IOP_CAST_U64_TO_I64: i64 = 104;
 const IOP_DEBUG_CALL: i64 = 105;
-const IOP_BITAND_I64: i64 = 106;
-const IOP_BITOR_I64: i64 = 107;
-const IOP_SHL_I64: i64 = 108;
-const IOP_SHR_I64: i64 = 109;
-const IOP_BITAND_U64: i64 = 110;
-const IOP_BITOR_U64: i64 = 111;
-const IOP_SHL_U64: i64 = 112;
-const IOP_SHR_U64: i64 = 113;
 // Phase 2: declared but never emitted. Phase 4 wires arena open/close to
 // __vow_arena_open / __vow_arena_close. If one leaks into the shim today
 // it is a defensive no-op rather than a misdispatch (see compile_function
@@ -657,6 +619,29 @@ const IOP_SHR_U64: i64 = 113;
 const IOP_REGION_OPEN: i64 = 114;
 #[allow(dead_code)]
 const IOP_REGION_CLOSE: i64 = 115;
+const IOP_WADD: i64 = 117;
+const IOP_WSUB: i64 = 118;
+const IOP_WMUL: i64 = 119;
+const IOP_WDIV: i64 = 120;
+const IOP_WREM: i64 = 121;
+const IOP_CADD: i64 = 122;
+const IOP_CSUB: i64 = 123;
+const IOP_CMUL: i64 = 124;
+const IOP_CDIV: i64 = 125;
+const IOP_CREM: i64 = 126;
+const IOP_EQ: i64 = 127;
+const IOP_NE: i64 = 128;
+const IOP_LT: i64 = 129;
+const IOP_LE: i64 = 130;
+const IOP_GT: i64 = 131;
+const IOP_GE: i64 = 132;
+const IOP_BITAND: i64 = 133;
+const IOP_BITOR: i64 = 134;
+const IOP_BITXOR: i64 = 135;
+const IOP_SHL: i64 = 136;
+const IOP_SHR: i64 = 137;
+const IOP_CONST_U8: i64 = 138;
+const IOP_INT_CAST: i64 = 139;
 
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
@@ -679,6 +664,9 @@ const IDATA_VOW_ID: i64 = 14;
 const IDATA_ALLOC_SIZE: i64 = 15;
 const IDATA_FIELD: i64 = 16;
 const IDATA_CONST_U64: i64 = 17;
+const IDATA_INTEGER: i64 = 18;
+const IDATA_CONST_U8: i64 = 19;
+const IDATA_INTEGER_CAST: i64 = 20;
 
 // ---------------------------------------------------------------------------
 // Module context (opaque handle passed through FFI)
@@ -787,21 +775,16 @@ impl FnScratch {
 // FFI: create / destroy
 // ---------------------------------------------------------------------------
 
-// `Triple::host()` reports macOS as `*-apple-darwin`. cranelift-object 0.132
-// maps a `Darwin` OS to Mach-O `PLATFORM_UNKNOWN` when writing its new
-// `LC_BUILD_VERSION` load command, which the macOS linker rejects with
-// "unknown platform". Rewriting `Darwin` to `MacOSX` yields `PLATFORM_MACOS`.
-// Every non-Darwin host (e.g. Linux/ELF) is returned unchanged.
-fn host_triple() -> Triple {
-    let mut triple = Triple::host();
-    if let OperatingSystem::Darwin(v) = triple.operating_system {
-        triple.operating_system = OperatingSystem::MacOSX(v);
-    }
-    triple
-}
-
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
+    create_module_context(mode, trace_mode, cranelift_native::builder())
+}
+
+fn create_module_context(
+    mode: i64,
+    trace_mode: i64,
+    isa_builder_result: Result<isa::Builder, &'static str>,
+) -> i64 {
     let mut flag_builder = settings::builder();
     if let Err(e) = flag_builder.set("use_colocated_libcalls", "false") {
         eprintln!("clif_shim: error setting use_colocated_libcalls: {e}");
@@ -818,17 +801,13 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         return 0;
     }
     let flags = settings::Flags::new(flag_builder);
-    let mut isa_builder = match isa::lookup(host_triple()) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("clif_shim: isa lookup error: {e}");
+    let isa_builder = match isa_builder_result {
+        Ok(builder) => builder,
+        Err(message) => {
+            eprintln!("clif_shim: native builder error: {message}");
             return 0;
         }
     };
-    if let Err(e) = cranelift_native::infer_native_flags(&mut isa_builder) {
-        eprintln!("clif_shim: infer native flags error: {e}");
-        return 0;
-    }
     let isa = match isa_builder.finish(flags) {
         Ok(i) => i,
         Err(e) => {
@@ -1607,7 +1586,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             hidden_region_values.extend(entry_params[cl_idx..].iter().copied());
         }
         if ctx.func_decls[fi].is_main {
-            let root_arena = builder.ins().global_value(types::I64, root_arena_gv);
+            let root_arena = builder.ins().symbol_value(types::I64, root_arena_gv);
             hidden_region_values.push(root_arena);
         }
     }
@@ -1665,7 +1644,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     if nb > 0 {
         let zero = builder.ins().iconst(types::I64, 0);
         for &slot in slot_map.values() {
-            builder.ins().stack_store(zero, slot, 0);
+            builder.ins().stack_store(types::I64, zero, slot, 0);
         }
         for payload in block_arena_ids {
             let slot = block_arena_slot(&mut builder, &mut block_arena_slots, payload);
@@ -1684,7 +1663,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
         // Emit trace_enter at function entry
         if let (Some(gv), Some(enter_ref)) = (fn_name_gv, trace_enter_ref) {
-            let name_ptr = builder.ins().global_value(types::I64, gv);
+            let name_ptr = builder.ins().symbol_value(types::I64, gv);
             builder.ins().call(enter_ref, &[name_ptr]);
         }
         // Emit profile_init in main, profile_enter at all function entries
@@ -1694,12 +1673,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             builder.ins().call(init_ref, &[]);
         }
         if let (Some(gv), Some(prof_ref)) = (fn_name_gv, profile_enter_ref) {
-            let name_ptr = builder.ins().global_value(types::I64, gv);
+            let name_ptr = builder.ins().symbol_value(types::I64, gv);
             builder.ins().call(prof_ref, &[name_ptr]);
         }
         // Emit stack_enter at function entry (debug/sanitize mode)
         if let (Some(gv), Some(se_ref)) = (fn_name_gv, stack_enter_ref) {
-            let name_ptr = builder.ins().global_value(types::I64, gv);
+            let name_ptr = builder.ins().symbol_value(types::I64, gv);
             builder.ins().call(se_ref, &[name_ptr]);
         }
         // Emit sanitize_init at main entry
@@ -1764,7 +1743,9 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     // Widen i8 (booleans from icmp/fcmp/const_bool) to i64 so
                     // value_map always holds i64 for booleans, matching slot loads.
                     let norm = match src_ty {
-                        types::I8 => builder.ins().uextend(types::I64, val_),
+                        types::I8 if ity != ITY_I8 && ity != ITY_U8 => {
+                            builder.ins().uextend(types::I64, val_)
+                        }
                         _ => val_,
                     };
                     value_map.insert(id_, norm);
@@ -1784,6 +1765,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 IOP_CONST_I64 => {
                     if dk == IDATA_CONST_I64 {
                         let val = builder.ins().iconst(types::I64, dv);
+                        set_val!(iid, val);
+                    }
+                }
+                IOP_CONST_U8 => {
+                    if dk == IDATA_CONST_U8 {
+                        let val = builder.ins().iconst(types::I8, dv);
                         set_val!(iid, val);
                     }
                 }
@@ -1808,7 +1795,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     if dk == IDATA_CONST_STR {
                         let str_idx = dv;
                         if let Some(&gv) = string_global_values.get(&str_idx) {
-                            let ptr = builder.ins().global_value(types::I64, gv);
+                            let ptr = builder.ins().symbol_value(types::I64, gv);
                             set_val!(iid, ptr);
                         } else {
                             let null = builder.ins().iconst(types::I64, 0);
@@ -1832,90 +1819,113 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     }
                 }
 
-                // Wrapping arithmetic
-                IOP_WADD_I32 | IOP_WADD_I64 => {
+                IOP_WADD => {
                     let val = builder.ins().iadd(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_WSUB_I32 | IOP_WSUB_I64 => {
+                IOP_WSUB => {
                     let val = builder.ins().isub(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_WMUL_I32 | IOP_WMUL_I64 => {
+                IOP_WMUL => {
                     let val = builder.ins().imul(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_WDIV_I32 | IOP_WDIV_I64 => {
-                    let val = builder.ins().sdiv(arg!(0), arg!(1));
+                IOP_WDIV | IOP_WREM => {
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let val = match (op, signed) {
+                        (IOP_WDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
+                        (IOP_WDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
+                        (IOP_WREM, true) => builder.ins().srem(arg!(0), arg!(1)),
+                        (IOP_WREM, false) => builder.ins().urem(arg!(0), arg!(1)),
+                        _ => unreachable!(),
+                    };
                     set_val!(iid, val);
                 }
-                IOP_WREM_I32 | IOP_WREM_I64 => {
-                    let val = builder.ins().srem(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
-                // Checked arithmetic
-                IOP_CADD_I32 | IOP_CADD_I64 => {
-                    let (result, overflow) = builder.ins().sadd_overflow(arg!(0), arg!(1));
+                IOP_CADD | IOP_CSUB | IOP_CMUL => {
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let (result, overflow) = match (op, signed) {
+                        (IOP_CADD, true) => builder.ins().sadd_overflow(arg!(0), arg!(1)),
+                        (IOP_CADD, false) => builder.ins().uadd_overflow(arg!(0), arg!(1)),
+                        (IOP_CSUB, true) => builder.ins().ssub_overflow(arg!(0), arg!(1)),
+                        (IOP_CSUB, false) => builder.ins().usub_overflow(arg!(0), arg!(1)),
+                        (IOP_CMUL, true) => builder.ins().smul_overflow(arg!(0), arg!(1)),
+                        (IOP_CMUL, false) => builder.ins().umul_overflow(arg!(0), arg!(1)),
+                        _ => unreachable!(),
+                    };
                     emit_overflow_check(&mut builder, overflow, overflow_ref);
                     set_val!(iid, result);
                 }
-                IOP_CSUB_I32 | IOP_CSUB_I64 => {
-                    let (result, overflow) = builder.ins().ssub_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CMUL_I32 | IOP_CMUL_I64 => {
-                    let (result, overflow) = builder.ins().smul_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CDIV_I32 | IOP_CDIV_I64 => {
-                    let cl_ty = ity_to_cranelift(ity).unwrap_or(types::I64);
+                IOP_CDIV | IOP_CREM => {
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let cl_ty = builder.func.dfg.value_type(arg!(1));
                     let zero = builder.ins().iconst(cl_ty, 0);
                     let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
                     emit_overflow_check(&mut builder, is_zero, overflow_ref);
-                    let val = builder.ins().sdiv(arg!(0), arg!(1));
+                    let val = match (op, signed) {
+                        (IOP_CDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
+                        (IOP_CDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
+                        (IOP_CREM, true) => builder.ins().srem(arg!(0), arg!(1)),
+                        (IOP_CREM, false) => builder.ins().urem(arg!(0), arg!(1)),
+                        _ => unreachable!(),
+                    };
                     set_val!(iid, val);
                 }
-                IOP_CREM_I32 | IOP_CREM_I64 => {
-                    let cl_ty = ity_to_cranelift(ity).unwrap_or(types::I64);
-                    let zero = builder.ins().iconst(cl_ty, 0);
-                    let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-                    emit_overflow_check(&mut builder, is_zero, overflow_ref);
-                    let val = builder.ins().srem(arg!(0), arg!(1));
+                IOP_EQ | IOP_NE | IOP_LT | IOP_LE | IOP_GT | IOP_GE => {
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let cc = match (op, signed) {
+                        (IOP_EQ, _) => IntCC::Equal,
+                        (IOP_NE, _) => IntCC::NotEqual,
+                        (IOP_LT, true) => IntCC::SignedLessThan,
+                        (IOP_LT, false) => IntCC::UnsignedLessThan,
+                        (IOP_LE, true) => IntCC::SignedLessThanOrEqual,
+                        (IOP_LE, false) => IntCC::UnsignedLessThanOrEqual,
+                        (IOP_GT, true) => IntCC::SignedGreaterThan,
+                        (IOP_GT, false) => IntCC::UnsignedGreaterThan,
+                        (IOP_GE, true) => IntCC::SignedGreaterThanOrEqual,
+                        (IOP_GE, false) => IntCC::UnsignedGreaterThanOrEqual,
+                        _ => unreachable!(),
+                    };
+                    let val = builder.ins().icmp(cc, arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-
-                // Integer comparisons
-                IOP_EQ_I32 | IOP_EQ_I64 => {
-                    let val = builder.ins().icmp(IntCC::Equal, arg!(0), arg!(1));
+                IOP_BITAND => {
+                    let val = builder.ins().band(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_NE_I32 | IOP_NE_I64 => {
-                    let val = builder.ins().icmp(IntCC::NotEqual, arg!(0), arg!(1));
+                IOP_BITOR => {
+                    let val = builder.ins().bor(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_LT_I32 | IOP_LT_I64 => {
-                    let val = builder.ins().icmp(IntCC::SignedLessThan, arg!(0), arg!(1));
+                IOP_BITXOR => {
+                    let val = builder.ins().bxor(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_LE_I32 | IOP_LE_I64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::SignedLessThanOrEqual, arg!(0), arg!(1));
+                IOP_SHL => {
+                    if dk == IDATA_INTEGER && dv == ITY_U8 {
+                        let out_of_range =
+                            builder
+                                .ins()
+                                .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
+                        emit_overflow_check(&mut builder, out_of_range, overflow_ref);
+                    }
+                    let val = builder.ins().ishl(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
-                IOP_GT_I32 | IOP_GT_I64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::SignedGreaterThan, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_GE_I32 | IOP_GE_I64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::SignedGreaterThanOrEqual, arg!(0), arg!(1));
+                IOP_SHR => {
+                    if dk == IDATA_INTEGER && dv == ITY_U8 {
+                        let out_of_range =
+                            builder
+                                .ins()
+                                .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, arg!(1), 8);
+                        emit_overflow_check(&mut builder, out_of_range, overflow_ref);
+                    }
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let val = if signed {
+                        builder.ins().sshr(arg!(0), arg!(1))
+                    } else {
+                        builder.ins().ushr(arg!(0), arg!(1))
+                    };
                     set_val!(iid, val);
                 }
 
@@ -1986,119 +1996,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, val);
                 }
 
-                IOP_BITAND_I64 | IOP_BITAND_U64 => {
-                    let val = builder.ins().band(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_BITOR_I64 | IOP_BITOR_U64 => {
-                    let val = builder.ins().bor(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_XOR_I32 | IOP_XOR_I64 | IOP_XOR_U64 => {
-                    let val = builder.ins().bxor(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_SHL_I64 | IOP_SHL_U64 => {
-                    let val = builder.ins().ishl(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_SHR_I64 => {
-                    let val = builder.ins().sshr(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_SHR_U64 => {
-                    let val = builder.ins().ushr(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
-                // U64 wrapping arithmetic
-                IOP_WADD_U64 => {
-                    let val = builder.ins().iadd(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_WSUB_U64 => {
-                    let val = builder.ins().isub(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_WMUL_U64 => {
-                    let val = builder.ins().imul(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_WDIV_U64 => {
-                    let val = builder.ins().udiv(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_WREM_U64 => {
-                    let val = builder.ins().urem(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
-                // U64 checked arithmetic
-                IOP_CADD_U64 => {
-                    let (result, overflow) = builder.ins().uadd_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CSUB_U64 => {
-                    let (result, overflow) = builder.ins().usub_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CMUL_U64 => {
-                    let (result, overflow) = builder.ins().umul_overflow(arg!(0), arg!(1));
-                    emit_overflow_check(&mut builder, overflow, overflow_ref);
-                    set_val!(iid, result);
-                }
-                IOP_CDIV_U64 => {
-                    let zero = builder.ins().iconst(types::I64, 0);
-                    let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-                    emit_overflow_check(&mut builder, is_zero, overflow_ref);
-                    let val = builder.ins().udiv(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_CREM_U64 => {
-                    let zero = builder.ins().iconst(types::I64, 0);
-                    let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-                    emit_overflow_check(&mut builder, is_zero, overflow_ref);
-                    let val = builder.ins().urem(arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
-                // U64 comparisons
-                IOP_EQ_U64 => {
-                    let val = builder.ins().icmp(IntCC::Equal, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_NE_U64 => {
-                    let val = builder.ins().icmp(IntCC::NotEqual, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_LT_U64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_LE_U64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::UnsignedLessThanOrEqual, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_GT_U64 => {
-                    let val = builder
-                        .ins()
-                        .icmp(IntCC::UnsignedGreaterThan, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-                IOP_GE_U64 => {
-                    let val =
-                        builder
-                            .ins()
-                            .icmp(IntCC::UnsignedGreaterThanOrEqual, arg!(0), arg!(1));
-                    set_val!(iid, val);
-                }
-
                 // ConstU64
                 IOP_CONST_U64 => {
                     if dk == IDATA_CONST_U64 {
@@ -2107,10 +2004,28 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     }
                 }
 
-                // Cast (no-op at machine level)
-                IOP_CAST_I64_TO_U64 | IOP_CAST_U64_TO_I64 => {
-                    let val = arg!(0);
-                    set_val!(iid, val);
+                IOP_INT_CAST => {
+                    if dk != IDATA_INTEGER_CAST {
+                        return -1;
+                    }
+                    let value = arg!(0);
+                    let from_bits = ity_bits(dv);
+                    let to_bits = ity_bits(dv2);
+                    let result = if from_bits == to_bits {
+                        value
+                    } else if to_bits > from_bits {
+                        let Some(target_ty) = ity_to_cranelift(dv2) else {
+                            return -1;
+                        };
+                        if ity_is_signed(dv) {
+                            builder.ins().sextend(target_ty, value)
+                        } else {
+                            builder.ins().uextend(target_ty, value)
+                        }
+                    } else {
+                        return -1;
+                    };
+                    set_val!(iid, result);
                 }
 
                 // Memory
@@ -2147,7 +2062,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 }
                 IOP_RETURN => {
                     if let (Some(gv), Some(exit_ref)) = (fn_name_gv, trace_exit_ref) {
-                        let name_ptr = builder.ins().global_value(types::I64, gv);
+                        let name_ptr = builder.ins().symbol_value(types::I64, gv);
                         builder.ins().call(exit_ref, &[name_ptr]);
                     }
                     if let Some(se_ref) = stack_exit_ref {
@@ -2274,7 +2189,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                     );
                                     return -1;
                                 };
-                                let ptr = builder.ins().global_value(types::I64, gv);
+                                let ptr = builder.ins().symbol_value(types::I64, gv);
                                 set_val!(iid, ptr);
                                 continue;
                             }
@@ -2342,6 +2257,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                     builder.ins().sextend(types::I64, v)
                                 } else if actual_ty == types::I8 && expected_ty == types::I64 {
                                     builder.ins().uextend(types::I64, v)
+                                } else if actual_ty == types::I64 && expected_ty == types::I32 {
+                                    builder.ins().ireduce(types::I32, v)
                                 } else {
                                     v
                                 }
@@ -2576,7 +2493,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     }
 
     builder.seal_all_blocks();
-    builder.finalize();
+    builder.finalize(ctx.obj_module.isa().frontend_config());
 
     // Verify function for debugging
     if let Err(errs) = cranelift_codegen::verify_function(&cl_ctx.func, ctx.isa.as_ref()) {
@@ -2631,7 +2548,7 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
     let obj_path = unsafe { read_vow_string(obj_path_ptr) };
     let output_path = unsafe { read_vow_string(output_path_ptr) };
 
-    let runtime_lib = match find_lib("libvow_runtime.a") {
+    let runtime_lib = match vow_linker::find_runtime_lib() {
         Some(p) => p,
         None => {
             eprintln!(
@@ -2640,35 +2557,22 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
             return -1;
         }
     };
-    let shim_lib = find_lib("libvow_clif_shim.a");
+    let shim_lib = vow_linker::find_shim_lib();
+    let inputs = std::iter::once(std::path::Path::new(obj_path))
+        .chain(std::iter::once(runtime_lib.as_path()))
+        .chain(shim_lib.as_deref());
 
-    let mut cmd = std::process::Command::new("cc");
-    cmd.arg(obj_path);
-    cmd.arg(&runtime_lib);
-    if let Some(ref sl) = shim_lib {
-        cmd.arg(sl);
-    }
-    cmd.arg("-o").arg(output_path);
-    // On macOS the dl* symbols live in libc (no separate libdl), so -ldl
-    // would cause "library not found" — only pass it on platforms that
-    // actually ship libdl as a standalone library.
-    cmd.args(platform_link_args_for(std::env::consts::OS));
-    if cfg!(target_os = "macos") {
-        // Stabilise LC_UUID and CDHash across different -o names; see #500.
-        cmd.args(["-Wl,-reproducible", "-Wl,-final_output,vow"]);
-    }
-
-    match cmd.status() {
-        Ok(s) if s.success() => {
+    match vow_linker::link_reproducible_executable(inputs, std::path::Path::new(output_path)) {
+        Ok(()) => {
             let _ = std::fs::remove_file(obj_path);
             0
         }
-        Ok(s) => {
-            eprintln!("clif_shim: cc exited with {s}");
+        Err(vow_linker::LinkError::Failed(status)) => {
+            eprintln!("clif_shim: cc exited with {status}");
             -1
         }
-        Err(e) => {
-            eprintln!("clif_shim: failed to invoke cc: {e}");
+        Err(vow_linker::LinkError::Invoke(error)) => {
+            eprintln!("clif_shim: failed to invoke cc: {error}");
             -1
         }
     }
@@ -2677,104 +2581,6 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn find_lib(name: &str) -> Option<String> {
-    let env_key = if name.contains("runtime") {
-        "VOW_RUNTIME_PATH"
-    } else {
-        "VOW_CLIF_SHIM_PATH"
-    };
-    let exe = std::env::current_exe().ok();
-    find_lib_from_parts(name, std::env::var_os(env_key), exe.as_deref())
-}
-
-// Keep in sync with vow-codegen/src/linker.rs; both linker paths must agree on
-// platform library flags.
-fn platform_link_args_for(os: &str) -> &'static [&'static str] {
-    match os {
-        "linux" => &["-lpthread", "-ldl", "-lm"],
-        "macos" => &["-lpthread", "-lm"],
-        _ => &["-lpthread", "-lm"],
-    }
-}
-
-fn find_lib_from_parts(
-    name: &str,
-    env_value: Option<std::ffi::OsString>,
-    exe: Option<&std::path::Path>,
-) -> Option<String> {
-    let target_dir = cargo_target_dir();
-    find_lib_from_parts_with_target_dir(name, env_value, exe, &target_dir)
-}
-
-fn find_lib_from_parts_with_target_dir(
-    name: &str,
-    env_value: Option<std::ffi::OsString>,
-    exe: Option<&std::path::Path>,
-    target_dir: &std::path::Path,
-) -> Option<String> {
-    if let Some(p) = env_value {
-        let path = std::path::PathBuf::from(p);
-        if path.exists() {
-            return Some(path.to_string_lossy().into_owned());
-        }
-    }
-
-    if let Some(exe) = exe
-        && let Some(path) = find_installed_lib_for_exe(name, exe)
-    {
-        return Some(path);
-    }
-
-    find_lib_in_cargo_target(name, target_dir)
-}
-
-fn find_installed_lib_for_exe(name: &str, exe: &std::path::Path) -> Option<String> {
-    if let Some(dir) = exe.parent() {
-        // Preserve the legacy adjacent-to-exe lookup before prefix paths so
-        // manual installs that co-locate the static libraries with vowc keep
-        // working.
-        let p = dir.join(name);
-        if p.exists() {
-            return Some(p.to_string_lossy().into_owned());
-        }
-        if let Some(prefix) = dir.parent() {
-            let p = prefix.join("lib").join("vow").join(name);
-            if p.exists() {
-                return Some(p.to_string_lossy().into_owned());
-            }
-            let p = prefix.join("lib").join(name);
-            if p.exists() {
-                return Some(p.to_string_lossy().into_owned());
-            }
-        }
-    }
-
-    None
-}
-
-fn cargo_target_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target"))
-}
-
-fn find_lib_in_cargo_target(name: &str, target_dir: &std::path::Path) -> Option<String> {
-    // Development fallback only: env overrides and installed-prefix libraries
-    // are checked first. Prefer `release` over `debug`: the bootstrap
-    // (`cargo build --release --all`, scripts/bootstrap.sh) produces the
-    // release archives, so a stale pre-existing `target/debug/*.a` (left over
-    // from an earlier `cargo build`/`cargo test`) must not shadow the fresh
-    // release runtime — otherwise a newly added `__vow_*` builtin links against
-    // the older debug archive and fails with undefined references. A
-    // debug-only checkout (no release archive) still resolves to debug.
-    for profile in &["release", "debug"] {
-        let p = target_dir.join(profile).join(name);
-        if p.exists() {
-            return Some(p.to_string_lossy().into_owned());
-        }
-    }
-
-    None
-}
 
 fn emit_overflow_check(
     builder: &mut FunctionBuilder,
@@ -2804,16 +2610,16 @@ fn load_slotted_value(
     value_ty: types::Type,
 ) -> Value {
     match value_ty {
-        types::F32 | types::F64 => builder.ins().stack_load(value_ty, slot, 0),
+        types::F32 | types::F64 => builder.ins().stack_load(types::I64, value_ty, slot, 0),
         types::I32 => {
-            let raw = builder.ins().stack_load(types::I64, slot, 0);
+            let raw = builder.ins().stack_load(types::I64, types::I64, slot, 0);
             builder.ins().ireduce(types::I32, raw)
         }
         types::I8 => {
-            let raw = builder.ins().stack_load(types::I64, slot, 0);
+            let raw = builder.ins().stack_load(types::I64, types::I64, slot, 0);
             builder.ins().ireduce(types::I8, raw)
         }
-        _ => builder.ins().stack_load(types::I64, slot, 0),
+        _ => builder.ins().stack_load(types::I64, types::I64, slot, 0),
     }
 }
 
@@ -2823,7 +2629,7 @@ fn store_slotted_value(builder: &mut FunctionBuilder<'_>, slot: StackSlot, value
         types::I8 => builder.ins().uextend(types::I64, value),
         _ => value,
     };
-    builder.ins().stack_store(store_val, slot, 0);
+    builder.ins().stack_store(types::I64, store_val, slot, 0);
 }
 
 fn tag_for_ir_ty(ty: i64) -> i64 {
@@ -2833,6 +2639,7 @@ fn tag_for_ir_ty(ty: i64) -> i64 {
         ITY_F32 => 2,
         ITY_F64 => 3,
         ITY_BOOL => 4,
+        ITY_U8 => 6,
         _ => 0,
     }
 }
@@ -2862,7 +2669,7 @@ fn emit_vow_check(
     builder.seal_block(violation_block);
     // Trace vow failure (full mode)
     if let (Some(tv_ref), Some(gv)) = (trace_vow_ref, fn_name_gv) {
-        let name_ptr = builder.ins().global_value(types::I64, gv);
+        let name_ptr = builder.ins().symbol_value(types::I64, gv);
         let vid = builder.ins().iconst(types::I64, vow_id);
         let passed = builder.ins().iconst(types::I64, 0);
         builder.ins().call(tv_ref, &[name_ptr, vid, passed]);
@@ -2871,7 +2678,7 @@ fn emit_vow_check(
         let vow_id_val = builder.ins().iconst(types::I32, vow_id);
         let blame_val = builder.ins().iconst(types::I8, blame);
         let desc_ptr = if let Some(&gv) = vow_desc_gvs.get(&vow_id) {
-            builder.ins().global_value(types::I64, gv)
+            builder.ins().symbol_value(types::I64, gv)
         } else {
             builder.ins().iconst(types::I64, 0)
         };
@@ -2884,12 +2691,14 @@ fn emit_vow_check(
                 3,
             ));
             for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
-                let name_ptr = builder.ins().global_value(types::I64, *name_gv);
-                builder.ins().stack_store(name_ptr, slot, (i * 24) as i32);
+                let name_ptr = builder.ins().symbol_value(types::I64, *name_gv);
+                builder
+                    .ins()
+                    .stack_store(types::I64, name_ptr, slot, (i * 24) as i32);
                 let tag_val = builder.ins().iconst(types::I8, tag_for_ir_ty(*ir_ty));
                 builder
                     .ins()
-                    .stack_store(tag_val, slot, (i * 24 + 8) as i32);
+                    .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
                 let payload: Value = match *ir_ty {
                     ITY_I32 => builder.ins().sextend(types::I64, *cl_val),
                     ITY_I64 => *cl_val,
@@ -2903,11 +2712,12 @@ fn emit_vow_check(
                         .ins()
                         .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     ITY_BOOL => *cl_val,
+                    ITY_U8 => builder.ins().uextend(types::I64, *cl_val),
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder
                     .ins()
-                    .stack_store(payload, slot, (i * 24 + 16) as i32);
+                    .stack_store(types::I64, payload, slot, (i * 24 + 16) as i32);
             }
             let base = builder.ins().stack_addr(types::I64, slot, 0);
             let cnt = builder.ins().iconst(types::I32, n as i64);
@@ -2941,7 +2751,7 @@ fn emit_vow_check(
     builder.seal_block(cont_block);
     // Trace vow pass (full mode)
     if let (Some(tv_ref), Some(gv)) = (trace_vow_ref, fn_name_gv) {
-        let name_ptr = builder.ins().global_value(types::I64, gv);
+        let name_ptr = builder.ins().symbol_value(types::I64, gv);
         let vid = builder.ins().iconst(types::I64, vow_id);
         let passed = builder.ins().iconst(types::I64, 1);
         builder.ins().call(tv_ref, &[name_ptr, vid, passed]);
@@ -2965,6 +2775,53 @@ fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, ret_ty: i6
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
+    let narrow_source_ty =
+        if sym.starts_with("__vow_i16_to_u8_") || sym.starts_with("__vow_u16_to_u8_") {
+            Some(types::I16)
+        } else if sym.starts_with("__vow_i32_to_u8_") || sym.starts_with("__vow_u32_to_u8_") {
+            Some(types::I32)
+        } else if sym.starts_with("__vow_i64_to_u8_") || sym.starts_with("__vow_u64_to_u8_") {
+            Some(types::I64)
+        } else if sym.starts_with("__vow_i128_to_u8_") || sym.starts_with("__vow_u128_to_u8_") {
+            Some(types::I128)
+        } else {
+            None
+        };
+    if let Some(source_ty) = narrow_source_ty {
+        sig.params.push(AbiParam::new(source_ty));
+        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
+            types::I64
+        } else {
+            types::I8
+        }));
+        return sig;
+    }
+    let i32_narrow_source_ty =
+        if sym.starts_with("__vow_i64_to_i32_") || sym.starts_with("__vow_u64_to_i32_") {
+            Some(types::I64)
+        } else if sym.starts_with("__vow_u32_to_i32_") {
+            Some(types::I32)
+        } else {
+            None
+        };
+    if let Some(source_ty) = i32_narrow_source_ty {
+        sig.params.push(AbiParam::new(source_ty));
+        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
+            types::I64
+        } else {
+            types::I32
+        }));
+        return sig;
+    }
+    if matches!(
+        sym,
+        "__vow_add_sat_u8" | "__vow_sub_sat_u8" | "__vow_mul_sat_u8"
+    ) {
+        sig.params.push(AbiParam::new(types::I8));
+        sig.params.push(AbiParam::new(types::I8));
+        sig.returns.push(AbiParam::new(types::I8));
+        return sig;
+    }
     match sym {
         "__vow_print_str" => {
             sig.params.push(AbiParam::new(types::I64));
@@ -3229,7 +3086,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "__vow_string_parse_i64_opt" | "__vow_string_parse_u64_opt" => {
+        "__vow_string_parse_i64_opt"
+        | "__vow_string_parse_u64_opt"
+        | "__vow_string_parse_u8_opt"
+        | "__vow_string_parse_i32_opt" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -3461,7 +3321,14 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_profile_enter" => {
             sig.params.push(AbiParam::new(types::I64));
         }
-        "__vow_profile_init" | "__vow_init_stack_guard" | "__vow_stack_exit" => {}
+        "__vow_perf_counter_read" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_perf_count"
+        | "__vow_perf_counter_reset"
+        | "__vow_profile_init"
+        | "__vow_init_stack_guard"
+        | "__vow_stack_exit" => {}
         "__vow_stack_enter" => {
             sig.params.push(AbiParam::new(types::I64));
         }
@@ -3538,6 +3405,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 mod tests {
     use super::*;
 
+    #[test]
+    fn create_returns_zero_when_native_isa_builder_fails() {
+        assert_eq!(create_module_context(0, 0, Err("unsupported host")), 0);
+    }
+
     fn vow_string(s: &str) -> VowVec {
         VowVec {
             ptr: s.as_ptr() as *mut u8,
@@ -3554,17 +3426,52 @@ mod tests {
         }
     }
 
-    fn declare_test_function(ctx: i64, name: &str, ret_ty: i64) {
+    fn link_float_phi_test_object(
+        object_path: &std::path::Path,
+        executable_path: &std::path::Path,
+    ) {
+        let support_path = object_path.with_extension("support.c");
+        std::fs::write(
+            &support_path,
+            "void __vow_runtime_start(void) {}\nvoid __vow_init_stack_guard(void) {}\n",
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to write float-Phi runtime support {}: {error}",
+                support_path.display()
+            )
+        });
+
+        let mut command = std::process::Command::new("cc");
+        command
+            .arg(object_path)
+            .arg(&support_path)
+            .arg("-o")
+            .arg(executable_path);
+        let output = command
+            .output()
+            .unwrap_or_else(|error| panic!("failed to invoke {command:?}: {error}"));
+        let link_failure = format!(
+            "failed to link float-Phi test object {}\ncommand: {command:?}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            object_path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(output.status.success(), "{link_failure}");
+    }
+
+    fn declare_test_function(ctx: i64, func_idx: i64, name: &str, ret_ty: i64, is_main: bool) {
         let name_vec = vow_string(name);
         unsafe {
             __vow_clif_declare_function(
                 ctx,
-                0,
+                func_idx,
                 &name_vec as *const VowVec as i64,
                 0,
                 0,
                 ret_ty,
-                0,
+                i64::from(is_main),
                 RSUM_KIND_CONSTANT_GLOBAL,
                 0,
             );
@@ -3608,8 +3515,8 @@ mod tests {
         }
     }
 
-    fn assert_cross_block_float_phi_compiles(
-        name: &str,
+    fn compile_cross_block_float_phi(
+        ctx: i64,
         float_ty: i64,
         const_op: i64,
         const_kind: i64,
@@ -3618,10 +3525,6 @@ mod tests {
         rhs_bits: i64,
         add_bits: i64,
     ) {
-        let ctx = __vow_clif_create(0, 0);
-        assert_ne!(ctx, 0);
-        declare_test_function(ctx, name, float_ty);
-
         unsafe {
             assert_eq!(__vow_clif_fn_begin(ctx, 0, float_ty, 0), 0);
         }
@@ -3666,36 +3569,133 @@ mod tests {
 
         unsafe {
             assert_eq!(__vow_clif_fn_end(ctx), 0);
-            __vow_clif_destroy(ctx);
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn assert_cross_block_float_phi_runtime_value(
+        name: &str,
+        float_ty: i64,
+        const_op: i64,
+        const_kind: i64,
+        add_op: i64,
+        compare_op: i64,
+        lhs_bits: i64,
+        rhs_bits: i64,
+        add_bits: i64,
+        expected_bits: i64,
+    ) {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, name, float_ty, false);
+        declare_test_function(ctx, 1, "main", ITY_I32, true);
+
+        compile_cross_block_float_phi(
+            ctx, float_ty, const_op, const_kind, add_op, lhs_bits, rhs_bits, add_bits,
+        );
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 1, ITY_I32, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 1, IOP_CALL, float_ty, IDATA_CALL_TARGET, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            2,
+            const_op,
+            float_ty,
+            const_kind,
+            expected_bits,
+            0,
+            &[],
+        );
+        add_test_inst(ctx, 3, compare_op, ITY_BOOL, IDATA_NONE, 0, 0, &[1, 2]);
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join(format!("{name}.o"));
+        let executable_path = temp_dir.path().join(name);
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        unsafe {
+            assert_eq!(
+                __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64),
+                0
+            );
+        }
+        link_float_phi_test_object(&object_path, &executable_path);
+
+        let output = std::process::Command::new(&executable_path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "generated executable returned the wrong float value\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
     #[test]
-    fn f64_phi_loaded_from_cross_block_slot_keeps_float_type() {
-        assert_cross_block_float_phi_compiles(
+    fn f64_phi_loaded_from_cross_block_slot_returns_expected_runtime_value() {
+        assert_cross_block_float_phi_runtime_value(
             "cross_block_f64",
             ITY_F64,
             IOP_CONST_F64,
             IDATA_CONST_F64,
             IOP_ADD_F64,
+            IOP_NE_F64,
             1.5f64.to_bits() as i64,
             2.5f64.to_bits() as i64,
             1.0f64.to_bits() as i64,
+            2.5f64.to_bits() as i64,
         );
     }
 
     #[test]
-    fn f32_phi_loaded_from_cross_block_slot_keeps_float_type() {
-        assert_cross_block_float_phi_compiles(
+    fn f32_phi_loaded_from_cross_block_slot_returns_expected_runtime_value() {
+        assert_cross_block_float_phi_runtime_value(
             "cross_block_f32",
             ITY_F32,
             IOP_CONST_F32,
             IDATA_CONST_F32,
             IOP_ADD_F32,
+            IOP_NE_F32,
             1.5f32.to_bits() as i64,
             2.5f32.to_bits() as i64,
             1.0f32.to_bits() as i64,
+            2.5f32.to_bits() as i64,
         );
+    }
+
+    #[test]
+    fn link_failure_returns_error_status() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let object = std::env::temp_dir().join(format!(
+            "vow-clif-link-missing-object-{}-{unique}.o",
+            std::process::id()
+        ));
+        let output = object.with_extension("out");
+        let object_path = object.to_str().unwrap();
+        let output_path = output.to_str().unwrap();
+        let object_vec = vow_string(object_path);
+        let output_vec = vow_string(output_path);
+
+        let status = unsafe {
+            __vow_clif_link(
+                &object_vec as *const VowVec as i64,
+                &output_vec as *const VowVec as i64,
+            )
+        };
+
+        assert_eq!(status, -1);
+        assert!(!output.exists());
     }
 
     #[test]
@@ -3717,144 +3717,6 @@ mod tests {
             hidden_region_for_store_target(RSUM_KIND_FRESH_IN_CALLER, &flat, 1),
             Some(region_pack(REGION_KIND_CALLER, 2))
         );
-    }
-
-    #[test]
-    fn finds_lib_in_installed_lib_vow_dir() {
-        let root = tempfile::TempDir::new().unwrap();
-        let bin_dir = root.path().join("bin");
-        let lib_dir = root.path().join("lib").join("vow");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        std::fs::create_dir_all(&lib_dir).unwrap();
-        let exe = bin_dir.join("vowc");
-        let lib = lib_dir.join("libvow_runtime.a");
-        std::fs::write(&exe, b"").unwrap();
-        std::fs::write(&lib, b"").unwrap();
-
-        let found = find_lib_from_parts_with_target_dir(
-            "libvow_runtime.a",
-            None,
-            Some(&exe),
-            &root.path().join("target"),
-        );
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn finds_lib_in_installed_lib_dir() {
-        let root = tempfile::TempDir::new().unwrap();
-        let bin_dir = root.path().join("bin");
-        let lib_dir = root.path().join("lib");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        std::fs::create_dir_all(&lib_dir).unwrap();
-        let exe = bin_dir.join("vowc");
-        let lib = lib_dir.join("libvow_runtime.a");
-        std::fs::write(&exe, b"").unwrap();
-        std::fs::write(&lib, b"").unwrap();
-
-        let found = find_lib_from_parts_with_target_dir(
-            "libvow_runtime.a",
-            None,
-            Some(&exe),
-            &root.path().join("target"),
-        );
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn env_override_does_not_require_current_exe() {
-        let root = tempfile::TempDir::new().unwrap();
-        let lib = root.path().join("libvow_runtime.a");
-        std::fs::write(&lib, b"").unwrap();
-
-        let found =
-            find_lib_from_parts("libvow_runtime.a", Some(lib.clone().into_os_string()), None);
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn cargo_target_fallback_does_not_require_current_exe() {
-        let root = tempfile::TempDir::new().unwrap();
-        let debug_dir = root.path().join("debug");
-        std::fs::create_dir_all(&debug_dir).unwrap();
-        let lib = debug_dir.join("libvow_runtime.a");
-        std::fs::write(&lib, b"").unwrap();
-
-        let found =
-            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn cargo_target_fallback_accepts_release_when_debug_missing() {
-        let root = tempfile::TempDir::new().unwrap();
-        let release_dir = root.path().join("release");
-        std::fs::create_dir_all(&release_dir).unwrap();
-        let lib = release_dir.join("libvow_runtime.a");
-        std::fs::write(&lib, b"").unwrap();
-
-        let found =
-            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn cargo_target_fallback_prefers_release_before_debug() {
-        // A stale pre-existing target/debug archive must not shadow the fresh
-        // release archive produced by the bootstrap; otherwise a newly added
-        // __vow_* runtime symbol links against the older debug build and fails
-        // with undefined references. See find_lib_in_cargo_target.
-        let root = tempfile::TempDir::new().unwrap();
-        let debug_dir = root.path().join("debug");
-        let release_dir = root.path().join("release");
-        std::fs::create_dir_all(&debug_dir).unwrap();
-        std::fs::create_dir_all(&release_dir).unwrap();
-        let debug_lib = debug_dir.join("libvow_runtime.a");
-        let release_lib = release_dir.join("libvow_runtime.a");
-        std::fs::write(&debug_lib, b"debug").unwrap();
-        std::fs::write(&release_lib, b"release").unwrap();
-
-        let found =
-            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
-        let expected = release_lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn cargo_target_fallback_accepts_debug_when_release_missing() {
-        let root = tempfile::TempDir::new().unwrap();
-        let debug_dir = root.path().join("debug");
-        std::fs::create_dir_all(&debug_dir).unwrap();
-        let lib = debug_dir.join("libvow_runtime.a");
-        std::fs::write(&lib, b"debug").unwrap();
-
-        let found =
-            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn linux_link_args_include_dl() {
-        assert_eq!(
-            platform_link_args_for("linux"),
-            ["-lpthread", "-ldl", "-lm"]
-        );
-    }
-
-    #[test]
-    fn macos_link_args_omit_dl() {
-        assert_eq!(platform_link_args_for("macos"), ["-lpthread", "-lm"]);
-    }
-
-    #[test]
-    fn other_link_args_omit_dl() {
-        assert_eq!(platform_link_args_for("freebsd"), ["-lpthread", "-lm"]);
     }
 
     // Directly exercises the shim's copy of region inference (issue #367). It is

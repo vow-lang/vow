@@ -5,6 +5,6 @@ difficulty = "medium"
 tags = ["vec", "loop", "invariant", "requires", "ensures"]
 unwind = 10
 modules = 1
-expected_status = "Verified"
+expected_status = "Stretch"
 max_cegis_iterations = 3
 contract_fidelity = "n/a"

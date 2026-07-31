@@ -13,7 +13,6 @@ fn count_steps(n: i64) -> i64
 ## Contracts
 
 - `requires: n >= 0` — `n` is non-negative
-- `requires: n <= 8` — bounded for verification
 - `ensures: result == n` — result equals `n`
 - Loop `invariant: i >= 0`
 - Loop `invariant: i <= n`
@@ -27,3 +26,4 @@ fn count_steps(n: i64) -> i64
 
 - The loop condition is `i < n`; after the loop `i == n`
 - The invariant `i <= n` is key to proving the ensures clause
+- Verifier unwind limits are not source preconditions

@@ -1,0 +1,15 @@
+// TEST: category bounds
+module StringPushStrLiteral
+
+fn cat() -> i64 vow {
+  ensures: result == 8
+} {
+  let s: String = String::from("hi");
+  s.push_str(String::from(" there"));
+  s.len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(cat());
+  0
+}
