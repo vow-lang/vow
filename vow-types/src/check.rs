@@ -1306,6 +1306,7 @@ impl<'e> Checker<'e> {
                 }
                 for (arg, expected_ty) in args.iter().zip(param_tys.iter()) {
                     let arg_ty = self.check_expr(arg);
+                    self.check_integer_literal_range(arg, expected_ty);
                     if !can_context_coerce(&arg_ty, expected_ty) {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,

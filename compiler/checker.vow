@@ -1481,6 +1481,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let ptid: i64 = ts_arg_get(e.ts, plid, ai);
                     let atid: i64 = arg_tids[ai];
                     let aeid: i64 = list_get(a, args_lid, ai);
+                    if ty_is_integer(e.ts, ptid) && expr_is_const_int(a, aeid) {
+                        check_integer_literal_range(e, a, aeid, ty_tag(e.ts, ptid));
+                    }
                     if !is_coercible(e.ts, atid, ptid) {
                         env_emit_error(e, String::from("argument has wrong type"), expr_span(a, aeid));
                     }
