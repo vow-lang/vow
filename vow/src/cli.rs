@@ -410,13 +410,12 @@ mod tests {
         // Boolector has no integer mode; ir encoding requires z3. The exact
         // message is the verifier's documented rejection (solver_strategy.rs).
         // SolverConfig has no PartialEq, so assert on the error arm directly.
-        match solver_config(SolverArg::Boolector, EncodingArg::Ir, None) {
-            Err(msg) => assert_eq!(
-                msg,
-                "--encoding ir requires --solver z3 (Boolector does not support integer mode)"
-            ),
-            Ok(_) => panic!("boolector + ir encoding must be rejected"),
-        }
+        let err = solver_config(SolverArg::Boolector, EncodingArg::Ir, None)
+            .expect_err("boolector + ir encoding must be rejected");
+        assert_eq!(
+            err,
+            "--encoding ir requires --solver z3 (Boolector does not support integer mode)"
+        );
     }
 
     #[test]
@@ -436,5 +435,28 @@ mod tests {
         assert_eq!(config.solver, Solver::Auto);
         assert_eq!(config.encoding, Encoding::Auto);
         assert_eq!(config.timeout_secs, None);
+    }
+
+    #[test]
+    fn solver_config_accepts_bitwuzla_and_bv_encoding() {
+        let config = solver_config(SolverArg::Bitwuzla, EncodingArg::Bv, None)
+            .expect("bitwuzla + bv is a valid combination");
+        assert_eq!(config.solver, Solver::Bitwuzla);
+        assert_eq!(config.encoding, Encoding::Bv);
+    }
+
+    #[test]
+    fn to_build_mode_translates_every_variant() {
+        assert_eq!(ModeArg::Debug.to_build_mode(), BuildMode::Debug);
+        assert_eq!(ModeArg::Release.to_build_mode(), BuildMode::Release);
+        assert_eq!(ModeArg::Profile.to_build_mode(), BuildMode::Profile);
+        assert_eq!(ModeArg::Sanitize.to_build_mode(), BuildMode::Sanitize);
+    }
+
+    #[test]
+    fn to_trace_mode_translates_every_variant() {
+        assert_eq!(TraceArg::Off.to_trace_mode(), TraceMode::Off);
+        assert_eq!(TraceArg::Calls.to_trace_mode(), TraceMode::Calls);
+        assert_eq!(TraceArg::Full.to_trace_mode(), TraceMode::Full);
     }
 }
