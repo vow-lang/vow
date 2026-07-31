@@ -1,14 +1,17 @@
 name: Release
 
-# Hybrid semantic-release: on every push to main, `plan` runs semantic-release in
-# dry-run to decide whether a release is due and at what version; `build-package`
-# builds the full cross-platform toolchain (Linux x86_64/aarch64 + macOS, with
-# ESBMC verification) at that version; `publish` runs semantic-release for real to
-# tag, generate the CHANGELOG + notes, and create the GitHub Release with the
-# pre-built toolchains attached. Replaces the previous manual workflow_dispatch.
+# Hybrid semantic-release, batched on a weekly schedule (Sundays 00:00 UTC):
+# `plan` runs semantic-release in dry-run to decide whether a release is due
+# and at what version, based on Conventional Commits accumulated on main
+# since the last release; `build-package` builds the full cross-platform
+# toolchain (Linux x86_64/aarch64 + macOS, with ESBMC verification) at that
+# version; `publish` runs semantic-release for real to tag, generate the
+# CHANGELOG + notes, and create the GitHub Release with the pre-built
+# toolchains attached. No-op if nothing releasable landed that week. Use
+# workflow_dispatch to cut a release on demand between scheduled runs.
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: "0 0 * * 0"
   workflow_dispatch: {}
 
 concurrency:
