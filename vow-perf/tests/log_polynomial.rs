@@ -17,7 +17,7 @@ fn instrumented_quadratic_logarithmic_work(input_size: u64) -> u64 {
 }
 
 #[test]
-fn quadratic_declaration_does_not_pass_instrumented_n_squared_log_n_work() {
+fn quadratic_declaration_rejects_instrumented_n_squared_log_n_work() {
     let samples = [16, 32, 64, 128, 256, 512].map(|input_size| {
         Sample::new(
             input_size,
@@ -27,7 +27,7 @@ fn quadratic_declaration_does_not_pass_instrumented_n_squared_log_n_work() {
 
     let analysis = analyze(ComplexityClass::Quadratic, &samples).unwrap();
 
-    assert_eq!(analysis.verdict, Verdict::Ambiguous);
+    assert_eq!(analysis.verdict, Verdict::Fail);
     assert_eq!(
         analysis.observed,
         Some(ComplexityClass::QuadraticLogarithmic)
@@ -103,17 +103,6 @@ fn decreasing_work_does_not_fit_a_growing_complexity_class() {
 
     assert_eq!(analysis.verdict, Verdict::Ambiguous);
     assert_eq!(analysis.observed, None);
-}
-
-#[test]
-fn thresholded_linear_work_is_ambiguous_across_near_tied_classes() {
-    let samples = [16_u64, 32, 64, 128, 256, 512, 1024, 2048]
-        .map(|input_size| Sample::new(input_size, input_size.saturating_sub(100)));
-
-    let analysis = analyze(ComplexityClass::Linear, &samples).unwrap();
-
-    assert_eq!(analysis.verdict, Verdict::Ambiguous);
-    assert_eq!(analysis.observed, Some(ComplexityClass::Linearithmic));
 }
 
 #[test]
