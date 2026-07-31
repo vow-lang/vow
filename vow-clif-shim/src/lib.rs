@@ -3535,6 +3535,41 @@ mod tests {
         }
     }
 
+    fn link_float_phi_test_object(
+        object_path: &std::path::Path,
+        executable_path: &std::path::Path,
+    ) {
+        let support_path = object_path.with_extension("support.c");
+        std::fs::write(
+            &support_path,
+            "void __vow_runtime_start(void) {}\nvoid __vow_init_stack_guard(void) {}\n",
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to write float-Phi runtime support {}: {error}",
+                support_path.display()
+            )
+        });
+
+        let mut command = std::process::Command::new("cc");
+        command
+            .arg(object_path)
+            .arg(&support_path)
+            .arg("-o")
+            .arg(executable_path);
+        let output = command
+            .output()
+            .unwrap_or_else(|error| panic!("failed to invoke {command:?}: {error}"));
+        assert!(
+            output.status.success(),
+            "failed to link float-Phi test object {}\ncommand: {command:?}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            object_path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
     fn declare_test_function(ctx: i64, func_idx: i64, name: &str, ret_ty: i64, is_main: bool) {
         let name_vec = vow_string(name);
         unsafe {
@@ -3693,20 +3728,13 @@ mod tests {
         let object_path = temp_dir.path().join(format!("{name}.o"));
         let executable_path = temp_dir.path().join(name);
         let object_path_vec = vow_string(object_path.to_str().unwrap());
-        let executable_path_vec = vow_string(executable_path.to_str().unwrap());
         unsafe {
             assert_eq!(
                 __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64),
                 0
             );
-            assert_eq!(
-                __vow_clif_link(
-                    &object_path_vec as *const VowVec as i64,
-                    &executable_path_vec as *const VowVec as i64,
-                ),
-                0
-            );
         }
+        link_float_phi_test_object(&object_path, &executable_path);
 
         let output = std::process::Command::new(&executable_path)
             .output()
