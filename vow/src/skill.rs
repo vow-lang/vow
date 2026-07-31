@@ -1490,9 +1490,9 @@ reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-na
 
 **128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
 `I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
-exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
-verification for functions whose contracts mention 128-bit values while still
-generating native code for them.
+exceed configured SMT solver timeouts. Such proofs use the ordinary verifier
+controls and retain fail-closed `timeout` or `unknown` outcomes; there is no
+type-specific verification opt-out. Never weaken contracts to fit the verifier.
 
 **Struct field layout:** every struct field up to 64 bits wide occupies one
 8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
@@ -6125,9 +6125,9 @@ reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-na
 
 **128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
 `I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
-exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
-verification for functions whose contracts mention 128-bit values while still
-generating native code for them.
+exceed configured SMT solver timeouts. Such proofs use the ordinary verifier
+controls and retain fail-closed `timeout` or `unknown` outcomes; there is no
+type-specific verification opt-out. Never weaken contracts to fit the verifier.
 
 **Struct field layout:** every struct field up to 64 bits wide occupies one
 8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`

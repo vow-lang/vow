@@ -3566,9 +3566,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's\n"));
     r.push_str(String::from("`I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may\n"));
-    r.push_str(String::from("exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips\n"));
-    r.push_str(String::from("verification for functions whose contracts mention 128-bit values while still\n"));
-    r.push_str(String::from("generating native code for them.\n"));
+    r.push_str(String::from("exceed configured SMT solver timeouts. Such proofs use the ordinary verifier\n"));
+    r.push_str(String::from("controls and retain fail-closed `timeout` or `unknown` outcomes; there is no\n"));
+    r.push_str(String::from("type-specific verification opt-out. Never weaken contracts to fit the verifier.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Struct field layout:** every struct field up to 64 bits wide occupies one\n"));
     r.push_str(String::from("8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`\n"));
@@ -8223,9 +8223,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's\n"));
     r.push_str(String::from("`I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may\n"));
-    r.push_str(String::from("exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips\n"));
-    r.push_str(String::from("verification for functions whose contracts mention 128-bit values while still\n"));
-    r.push_str(String::from("generating native code for them.\n"));
+    r.push_str(String::from("exceed configured SMT solver timeouts. Such proofs use the ordinary verifier\n"));
+    r.push_str(String::from("controls and retain fail-closed `timeout` or `unknown` outcomes; there is no\n"));
+    r.push_str(String::from("type-specific verification opt-out. Never weaken contracts to fit the verifier.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Struct field layout:** every struct field up to 64 bits wide occupies one\n"));
     r.push_str(String::from("8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`\n"));

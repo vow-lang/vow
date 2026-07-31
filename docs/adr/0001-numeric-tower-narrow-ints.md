@@ -61,9 +61,11 @@ Decimal / Rational) work are separate subprojects and out of scope here.
 
 7. **128-bit verification.** `i128`/`u128` are first-class for source, IR,
    codegen (Cranelift `I128`), and ESBMC (`__int128`). Predicates over 128-bit
-   values may time out in the SMT solver; a `--no-128-verify` opt-out is
-   provided. Contract authoring rules (CLAUDE.md "Contract Authoring") still
-   apply — never weaken contracts to fit the verifier.
+   values may time out in the SMT solver; those proofs use the ordinary
+   verifier controls and retain fail-closed `timeout` or `unknown` outcomes.
+   Vow provides no type-specific verification opt-out. Contract authoring rules
+   (CLAUDE.md "Contract Authoring") still apply — never weaken contracts to fit
+   the verifier.
 
 8. **Format / parse.** Two formatter baselines: `int_to_string(x: i64) -> String`
    and `uint_to_string(x: u64) -> String`. Agents widen via `as` before
@@ -124,3 +126,14 @@ BigInt subprojects.
 - Validate Cranelift `I128` codegen on the supported backends.
 - Benchmark ESBMC `__int128` predicate complexity on real Vow contracts.
 - Floats and BigInt subprojects: separate ADRs.
+
+## Amendments
+
+- **2026-07-31 — Decision 7.** The original decision promised a
+  `--no-128-verify` flag. Issue #697 retired that unimplemented, type-specific
+  opt-out. The later normative verifier-decoupling decision in
+  `docs/design/verifier-model-bounds.md` requires prover limitations to remain
+  internal to the verifier rather than create language or CLI escape hatches.
+  Resource-limited 128-bit proofs therefore use the ordinary fail-closed
+  verifier outcomes; users may still skip static verification for an entire
+  build with the existing `vow build --no-verify` option.
