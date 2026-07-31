@@ -556,6 +556,13 @@ linear struct FileHandle {
 
 Linear struct values carry a linear obligation. The obligation must either be consumed before the value's owning region closes or transferred to the caller by returning the value.
 
+Owned enum wrappers inherit that obligation transitively. A user enum,
+`Option<T>`, or `Result<T, E>` is linear when one of its owned payload paths is
+linear; matching such a value consumes the wrapper exactly once and transfers
+the obligation to the selected bound payload. References remain borrows and do
+not become linear owners. Collection types do not acquire linear ownership from
+their element type; their separate non-linear-element restrictions still apply.
+
 ### Struct Literals
 
 Struct literal names must be PascalCase:
@@ -595,7 +602,11 @@ fn main() -> i32 [io] {
 
 This enables in-place mutation patterns (e.g., make/unmake in search trees) without cloning. The same aliasing semantics apply when structs are stored in containers — see [Indexing](#indexing). To avoid aliasing, construct a fresh struct literal with the desired field values.
 
-**Note:** For `linear struct` types, passing the value to a function consumes it; the caller cannot access it afterward. Returning a linear value transfers the obligation to the caller, so this is the normal way to hand an updated linear value back out of a function.
+**Note:** For linear owner types (a `linear struct` or an owned enum wrapper that
+contains one), passing the value to a function consumes it; the caller cannot
+access it afterward. Returning a linear value transfers the obligation to the
+caller, so this is the normal way to hand an updated linear value back out of a
+function.
 
 ## Enum Definitions
 

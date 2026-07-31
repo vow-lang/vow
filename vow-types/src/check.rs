@@ -2352,13 +2352,7 @@ impl<'e> Checker<'e> {
     fn bind_arm_pattern(&mut self, pat: &Pat, scrutinee_ty: &Ty) {
         match &pat.kind {
             PatKind::Ident { name, .. } => {
-                let is_linear = match scrutinee_ty {
-                    Ty::Struct(name) => self
-                        .env
-                        .lookup_struct(name)
-                        .is_some_and(|info| info.is_linear),
-                    _ => false,
-                };
+                let is_linear = crate::linear::is_linear_owner_ty(scrutinee_ty, &self.env);
                 if let Some(info) = pattern_aggregate_info(scrutinee_ty, is_linear) {
                     self.pattern_aggregates
                         .insert(pat as *const Pat as usize, info);

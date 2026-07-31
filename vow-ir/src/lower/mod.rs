@@ -177,7 +177,17 @@ fn propagate_vec_element_metadata(ctx: &mut LowerCtx, source: InstId, result: In
     }
 }
 
-fn lower_ty_with_linear(ast_ty: &AstType, linear_struct_names: &HashSet<String>) -> Ty {
+fn ast_type_is_linear_owner(ast_ty: &AstType, linear_owner_names: &HashSet<String>) -> bool {
+    match ast_ty {
+        AstType::Named { name, .. } => linear_owner_names.contains(name),
+        AstType::Generic { name, args, .. } if name == "Option" || name == "Result" => args
+            .iter()
+            .any(|arg| ast_type_is_linear_owner(arg, linear_owner_names)),
+        _ => false,
+    }
+}
+
+fn lower_ty_with_linear(ast_ty: &AstType, linear_owner_names: &HashSet<String>) -> Ty {
     match ast_ty {
         AstType::Named { name, .. } => match name.as_str() {
             "i8" => Ty::I8,
@@ -193,12 +203,53 @@ fn lower_ty_with_linear(ast_ty: &AstType, linear_struct_names: &HashSet<String>)
             "f32" => Ty::F32,
             "f64" => Ty::F64,
             "bool" => Ty::Bool,
-            _ if linear_struct_names.contains(name) => Ty::LinearPtr,
+            _ if linear_owner_names.contains(name) => Ty::LinearPtr,
             _ => Ty::Ptr,
         },
         AstType::Unit { .. } => Ty::Unit,
         AstType::Never { .. } => Ty::Unit,
+        _ if ast_type_is_linear_owner(ast_ty, linear_owner_names) => Ty::LinearPtr,
         _ => Ty::Ptr,
+    }
+}
+
+fn collect_linear_owner_names(module: &AstModule) -> HashSet<String> {
+    let mut names: HashSet<String> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Struct(s) if s.is_linear => Some(s.name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    loop {
+        let newly_linear: Vec<String> = module
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Enum(enum_def) = item else {
+                    return None;
+                };
+                if names.contains(&enum_def.name) {
+                    return None;
+                }
+                let owns_linear = enum_def.variants.iter().any(|variant| match &variant.kind {
+                    VariantKind::Unit => false,
+                    VariantKind::Tuple(types) => {
+                        types.iter().any(|ty| ast_type_is_linear_owner(ty, &names))
+                    }
+                    VariantKind::Struct(fields) => fields
+                        .iter()
+                        .any(|field| ast_type_is_linear_owner(&field.ty, &names)),
+                });
+                owns_linear.then(|| enum_def.name.clone())
+            })
+            .collect();
+        if newly_linear.is_empty() {
+            return names;
+        }
+        names.extend(newly_linear);
     }
 }
 
@@ -332,7 +383,7 @@ pub(crate) struct LowerCtx {
     pub(super) struct_field_map: HashMap<String, Vec<String>>,
     // enum name → variant names in declaration order (index = tag)
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
-    linear_struct_names: HashSet<String>,
+    linear_owner_names: HashSet<String>,
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
     inst_ty_cache: HashMap<InstId, Ty>,
@@ -387,7 +438,7 @@ impl LowerCtx {
         func_index: HashMap<String, FuncSigInfo>,
         struct_field_map: HashMap<String, Vec<String>>,
         enum_variant_map: HashMap<String, Vec<String>>,
-        linear_struct_names: HashSet<String>,
+        linear_owner_names: HashSet<String>,
         struct_field_type_names: HashMap<String, Vec<String>>,
         struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
@@ -428,7 +479,7 @@ impl LowerCtx {
             func_index,
             struct_field_map,
             enum_variant_map,
-            linear_struct_names,
+            linear_owner_names,
             inst_struct_type: HashMap::new(),
             inst_ty_cache: HashMap::new(),
             file,
@@ -2166,7 +2217,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 vec![]
             };
             let n_fields = field_names.len().max(fields.len());
-            let result_ty = if ctx.linear_struct_names.contains(name) {
+            let result_ty = if ctx.linear_owner_names.contains(name) {
                 Ty::LinearPtr
             } else {
                 Ty::Ptr
@@ -2375,11 +2426,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .get(enum_name)
                 .and_then(|vs| vs.iter().position(|v| v == variant_name))
                 .unwrap_or(0) as i64;
-            let n_payload = fields.len();
+            // Evaluate and transfer payloads before allocating the wrapper so
+            // built-in Option/Result constructors can inherit linear ownership
+            // from their type-erased payload expression.
+            let payload_values: Vec<InstId> = fields
+                .iter()
+                .map(|field| lower_consumed_expr(ctx, field))
+                .collect();
+            let owns_linear = ctx.linear_owner_names.contains(enum_name)
+                || payload_values
+                    .iter()
+                    .any(|value| ctx.inst_ty(*value) == Ty::LinearPtr);
+            let n_payload = payload_values.len();
             let size = (2 + n_payload) as u32 * 8;
             let ptr_id = ctx.emit(
                 Opcode::RegionAlloc,
-                Ty::Ptr,
+                if owns_linear { Ty::LinearPtr } else { Ty::Ptr },
                 vec![],
                 InstData::AllocSize { size, align: 8 },
                 span,
@@ -2399,8 +2461,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::FieldIndex(0),
                 span,
             );
-            for (i, field_expr) in fields.iter().enumerate() {
-                let val_id = lower_consumed_expr(ctx, field_expr);
+            for (i, val_id) in payload_values.into_iter().enumerate() {
                 ctx.emit(
                     Opcode::FieldSet,
                     Ty::Unit,
@@ -2412,7 +2473,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ptr_id
         }
         ExprKind::Match { scrutinee, arms } => {
-            let ptr_id = lower_expr(ctx, scrutinee);
+            // Matching an owned linear enum wrapper transfers its obligation
+            // into the selected payload. Non-linear enums remain reusable.
+            let ptr_id = lower_consumed_expr(ctx, scrutinee);
             let tag_id = ctx.emit(
                 Opcode::FieldGet,
                 Ty::I64,
@@ -3200,7 +3263,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::Cast { expr, target_ty } => {
             let val = lower_expr(ctx, expr);
             let src_ty = ctx.inst_ty(val);
-            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_struct_names);
+            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names);
             if let ExprKind::Lit(Lit::Int(v)) = &expr.kind {
                 match tgt {
                     Ty::U8 => ctx.emit(
@@ -3542,7 +3605,7 @@ fn lower_function_with_pattern_aggregates(
     func_index: &HashMap<String, FuncSigInfo>,
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
-    linear_struct_names: &HashSet<String>,
+    linear_owner_names: &HashSet<String>,
     struct_field_type_names: HashMap<String, Vec<String>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
@@ -3552,10 +3615,10 @@ fn lower_function_with_pattern_aggregates(
     let params: Vec<Ty> = fn_def
         .params
         .iter()
-        .map(|p| lower_ty_with_linear(&p.ty, linear_struct_names))
+        .map(|p| lower_ty_with_linear(&p.ty, linear_owner_names))
         .collect();
     let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
-    let return_ty = lower_ty_with_linear(&fn_def.return_ty, linear_struct_names);
+    let return_ty = lower_ty_with_linear(&fn_def.return_ty, linear_owner_names);
     let effects = fn_def.effects.clone();
 
     let mut ctx = LowerCtx::new(
@@ -3568,7 +3631,7 @@ fn lower_function_with_pattern_aggregates(
         func_index.clone(),
         struct_field_map,
         enum_variant_map,
-        linear_struct_names.clone(),
+        linear_owner_names.clone(),
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs.clone(),
@@ -3689,7 +3752,7 @@ fn lower_function(
     func_index: &HashMap<String, FuncSigInfo>,
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
-    linear_struct_names: &HashSet<String>,
+    linear_owner_names: &HashSet<String>,
     struct_field_type_names: HashMap<String, Vec<String>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
@@ -3701,7 +3764,7 @@ fn lower_function(
         func_index,
         struct_field_map,
         enum_variant_map,
-        linear_struct_names,
+        linear_owner_names,
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs,
@@ -3739,19 +3802,10 @@ pub fn lower_module_with_pattern_aggregates(
         })
         .collect();
 
-    let linear_struct_names: HashSet<String> = module
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Struct(s) = item
-                && s.is_linear
-            {
-                Some(s.name.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
+    // A direct linear struct owns its obligation. Enums, Option, and Result
+    // become owners when an owned payload is linear; references and collection
+    // types deliberately do not propagate ownership.
+    let linear_owner_names = collect_linear_owner_names(module);
 
     let func_index: HashMap<String, FuncSigInfo> = fn_items
         .iter()
@@ -3761,14 +3815,14 @@ pub fn lower_module_with_pattern_aggregates(
                 fn_def.name.clone(),
                 FuncSigInfo {
                     id: FuncId(idx as u32),
-                    ret_ty: lower_ty_with_linear(&fn_def.return_ty, &linear_struct_names),
+                    ret_ty: lower_ty_with_linear(&fn_def.return_ty, &linear_owner_names),
                     ret_tag: non_scalar_type_tag(&fn_def.return_ty),
                     ret_vec_elem: vec_named_elem_type(&fn_def.return_ty),
                     ret_option_elem: option_named_elem_type(&fn_def.return_ty),
                     param_tys: fn_def
                         .params
                         .iter()
-                        .map(|p| lower_ty_with_linear(&p.ty, &linear_struct_names))
+                        .map(|p| lower_ty_with_linear(&p.ty, &linear_owner_names))
                         .collect(),
                 },
             )
@@ -3794,7 +3848,7 @@ pub fn lower_module_with_pattern_aggregates(
                 }
                 _ => 0,
             };
-            let ty = lower_ty_with_linear(&c.ty, &linear_struct_names);
+            let ty = lower_ty_with_linear(&c.ty, &linear_owner_names);
             const_map.insert(c.name.clone(), (val, ty));
         }
     }
@@ -3810,7 +3864,7 @@ pub fn lower_module_with_pattern_aggregates(
                 .iter()
                 .map(|f| FieldLayout {
                     name: f.name.clone(),
-                    ty: lower_ty_with_linear(&f.ty, &linear_struct_names),
+                    ty: lower_ty_with_linear(&f.ty, &linear_owner_names),
                 })
                 .collect();
             struct_field_map.insert(s.name.clone(), field_names);
@@ -3880,14 +3934,14 @@ pub fn lower_module_with_pattern_aggregates(
                             .enumerate()
                             .map(|(i, ty)| FieldLayout {
                                 name: i.to_string(),
-                                ty: lower_ty_with_linear(ty, &linear_struct_names),
+                                ty: lower_ty_with_linear(ty, &linear_owner_names),
                             })
                             .collect(),
                         VariantKind::Struct(fields) => fields
                             .iter()
                             .map(|f| FieldLayout {
                                 name: f.name.clone(),
-                                ty: lower_ty_with_linear(&f.ty, &linear_struct_names),
+                                ty: lower_ty_with_linear(&f.ty, &linear_owner_names),
                             })
                             .collect(),
                     };
@@ -3918,7 +3972,7 @@ pub fn lower_module_with_pattern_aggregates(
                 &func_index,
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
-                &linear_struct_names,
+                &linear_owner_names,
                 struct_field_type_names.clone(),
                 struct_field_vec_elems.clone(),
                 string_exprs,
@@ -4909,7 +4963,7 @@ mod tests {
             },
         )]));
         let enum_variant_map = HashMap::from([("Payload".to_string(), vec!["Token".to_string()])]);
-        let linear_structs = HashSet::from(["Token".to_string()]);
+        let linear_structs = HashSet::from(["Token".to_string(), "Payload".to_string()]);
 
         let (func, _, warnings) = lower_function_with_pattern_aggregates(
             &fn_def,
@@ -4926,6 +4980,17 @@ mod tests {
         );
 
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        let wrapper = func.blocks[0]
+            .insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::GetArg)
+            .expect("linear enum argument");
+        assert_eq!(wrapper.ty, Ty::LinearPtr);
+        assert!(
+            func.blocks[0].insts.iter().any(|inst| {
+                inst.opcode == Opcode::LinearConsume && inst.args == vec![wrapper.id]
+            })
+        );
         let payload_get = func
             .blocks
             .iter()

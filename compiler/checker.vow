@@ -153,6 +153,70 @@ fn is_linear_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
     0
 }
 
+// Returns 1 only when `tid` owns a linear obligation. Enum-like wrappers
+// inherit ownership from owned payloads; references remain borrows and
+// collections do not become linear merely because an element type is linear.
+fn is_linear_owner_ty(e: CheckEnv, tid: i64) -> i64 {
+    let visited: Vec<i64> = Vec::new();
+    is_linear_owner_ty_rec(e, tid, visited)
+}
+
+fn is_linear_owner_ty_rec(e: CheckEnv, tid: i64, visited: Vec<i64>) -> i64 {
+    let tag: i64 = ty_tag(e.ts, tid);
+    if tag == CTY_STRUCT() {
+        return env_struct_is_linear(e, ty_struct_name(e.ts, tid));
+    }
+    if tag == CTY_ENUM() {
+        let name: String = ty_struct_name(e.ts, tid);
+        let eidx: i64 = env_lookup_enum(e, name);
+        if eidx == -1 {
+            return 0;
+        }
+        let key: i64 = eidx * 2 + 1;
+        if linear_visited_has(visited, key) == 1 {
+            return 0;
+        }
+        visited.push(key);
+        let nv: i64 = e.edef_variant_count[eidx];
+        let payloads_lid: i64 = e.edef_vpayload_lids[eidx];
+        let mut vi: i64 = 0;
+        while vi < nv {
+            let payload_lid: i64 = ts_arg_get(e.ts, payloads_lid, vi);
+            let mut pi: i64 = 0;
+            while pi < ts_arg_len(e.ts, payload_lid) {
+                if is_linear_owner_ty_rec(e, ts_arg_get(e.ts, payload_lid, pi), visited) == 1 {
+                    return 1;
+                }
+                pi = pi + 1;
+            }
+            vi = vi + 1;
+        }
+        return 0;
+    }
+    if tag == CTY_APPLIED() {
+        let base: i64 = ty_a(e.ts, tid);
+        if ty_tag(e.ts, base) != CTY_ENUM() {
+            return 0;
+        }
+        let name: String = ty_struct_name(e.ts, base);
+        if name != String::from("Option") && name != String::from("Result") && env_lookup_enum(e, name) == -1 {
+            return 0;
+        }
+        if is_linear_owner_ty_rec(e, base, visited) == 1 {
+            return 1;
+        }
+        let args_lid: i64 = ty_b(e.ts, tid);
+        let mut ai: i64 = 0;
+        while ai < ts_arg_len(e.ts, args_lid) {
+            if is_linear_owner_ty_rec(e, ts_arg_get(e.ts, args_lid, ai), visited) == 1 {
+                return 1;
+            }
+            ai = ai + 1;
+        }
+    }
+    0
+}
+
 fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
     if ast_tid == -1 {
         return CTY_UNIT();
@@ -1189,10 +1253,7 @@ fn pattern_vec_elem_path(ts: TyStore, tid: i64) -> Vec<String> {
 }
 
 fn pattern_aggregate_is_linear(e: CheckEnv, tid: i64) -> i64 {
-    if ty_tag(e.ts, tid) != CTY_STRUCT() {
-        return 0;
-    }
-    env_struct_is_linear(e, ty_struct_name(e.ts, tid))
+    is_linear_owner_ty(e, tid)
 }
 
 fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {

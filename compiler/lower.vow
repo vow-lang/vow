@@ -20,7 +20,7 @@ struct LowerCtx {
     func_ret_option_elems: Vec<i64>,
     func_param_tys: Vec<Vec<i64>>,
     struct_names: Vec<String>,
-    linear_struct_names: Vec<String>,
+    linear_owner_names: Vec<String>,
     struct_field_lists: Vec<Vec<String>>,
     struct_field_type_names: Vec<Vec<String>>,
     struct_field_vec_elems: Vec<Vec<String>>,
@@ -87,7 +87,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_ret_option_elems: Vec::new(),
         func_param_tys: Vec::new(),
         struct_names: Vec::new(),
-        linear_struct_names: Vec::new(),
+        linear_owner_names: Vec::new(),
         struct_field_lists: Vec::new(),
         struct_field_type_names: Vec::new(),
         struct_field_vec_elems: Vec::new(),
@@ -592,6 +592,31 @@ fn ity_for_scalar_type_name(name: String) -> i64 {
     ITY_I64()
 }
 
+fn ast_type_is_linear_owner(a: AstArena, tid: i64, linear_names: Vec<String>) -> bool {
+    if tid == -1 {
+        return false;
+    }
+    let tag: i64 = type_tag(a, tid);
+    if tag == TY_NAMED() {
+        return vec_contains_str(linear_names, arena_str(a, type_a(a, tid)));
+    }
+    if tag == TY_GENERIC() {
+        let name: String = arena_str(a, type_a(a, tid));
+        if name != String::from("Option") && name != String::from("Result") {
+            return false;
+        }
+        let args_lid: i64 = type_b(a, tid);
+        let mut i: i64 = 0;
+        while i < list_len(a, args_lid) {
+            if ast_type_is_linear_owner(a, list_get(a, args_lid, i), linear_names) {
+                return true;
+            }
+            i = i + 1;
+        }
+    }
+    false
+}
+
 fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>) -> i64 {
     if tid == -1 { return ITY_UNIT(); }
     let tag: i64 = type_tag(a, tid);
@@ -618,7 +643,10 @@ fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>) -> i64 
         if vec_contains_str(linear_names, name) { return ITY_LPTR(); }
         return ITY_PTR();
     }
-    if tag == TY_GENERIC() { return ITY_PTR(); }
+    if tag == TY_GENERIC() {
+        if ast_type_is_linear_owner(a, tid, linear_names) { return ITY_LPTR(); }
+        return ITY_PTR();
+    }
     if tag == TY_REF() { return ITY_PTR(); }
     if tag == TY_SLICE() { return ITY_PTR(); }
     if tag == TY_TUPLE() { return ITY_PTR(); }
@@ -626,7 +654,7 @@ fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>) -> i64 
 }
 
 fn lctx_lower_ast_ty(ctx: LowerCtx, tid: i64) -> i64 {
-    lower_ast_ty_linear(ctx.arena, tid, ctx.linear_struct_names)
+    lower_ast_ty_linear(ctx.arena, tid, ctx.linear_owner_names)
 }
 
 fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
@@ -2399,7 +2427,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_size: i64 = (actual_n + 1) * 8;
         let alloc_args: Vec<i64> = Vec::new();
         let alloc_ty: i64 = {
-            if vec_contains_str(ctx.linear_struct_names, struct_name) {
+            if vec_contains_str(ctx.linear_owner_names, struct_name) {
                 ITY_LPTR()
             } else {
                 ITY_PTR()
@@ -2545,9 +2573,22 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let tag_val: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
         let n_payload: i64 = list_len(a, fields_lid);
+        let payload_values: Vec<i64> = Vec::new();
+        let mut owns_linear: bool = vec_contains_str(ctx.linear_owner_names, enum_name);
+        let mut pvi: i64 = 0;
+        while pvi < n_payload {
+            let payload_eid0: i64 = list_get(a, fields_lid, pvi);
+            let payload_value: i64 = lower_consumed_expr(ctx, payload_eid0);
+            payload_values.push(payload_value);
+            if lctx_inst_ty(ctx, payload_value) == ITY_LPTR() {
+                owns_linear = true;
+            }
+            pvi = pvi + 1;
+        }
         let size: i64 = (2 + n_payload) * 8;
         let alloc_args: Vec<i64> = Vec::new();
-        let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
+        let alloc_ty: i64 = if owns_linear { ITY_LPTR() } else { ITY_PTR() };
+        let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), alloc_ty, alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, enum_name);
 
         let tag_args: Vec<i64> = Vec::new();
@@ -2559,8 +2600,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let mut pi: i64 = 0;
         while pi < n_payload {
-            let payload_eid: i64 = list_get(a, fields_lid, pi);
-            let val_id: i64 = lower_consumed_expr(ctx, payload_eid);
+            let val_id: i64 = payload_values[pi];
             let pfs_args: Vec<i64> = Vec::new();
             pfs_args.push(ptr_id);
             pfs_args.push(val_id);
@@ -2923,7 +2963,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     if tag == EXPR_MATCH() {
         let scrutinee_eid: i64 = expr_a(a, eid);
         let arms_lid: i64 = expr_b(a, eid);
-        let ptr_id: i64 = lower_expr(ctx, scrutinee_eid);
+        let ptr_id: i64 = lower_consumed_expr(ctx, scrutinee_eid);
 
         let fg_args: Vec<i64> = Vec::new();
         fg_args.push(ptr_id);
@@ -4000,7 +4040,7 @@ fn lower_module_vow(
     let func_ret_option_elems: Vec<i64> = Vec::new();
     let func_param_tys: Vec<Vec<i64>> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
-    let linear_struct_names: Vec<String> = Vec::new();
+    let linear_owner_names: Vec<String> = Vec::new();
     let struct_field_lists: Vec<Vec<String>> = Vec::new();
     let struct_field_type_names: Vec<Vec<String>> = Vec::new();
     let struct_field_vec_elems: Vec<Vec<String>> = Vec::new();
@@ -4016,10 +4056,47 @@ fn lower_module_vow(
             let is_linear0: i64 = a.sdef_data[sid0 * 4 + 2];
             if is_linear0 == 1 {
                 let sname_sid0: i64 = sdef_name_sid(a, sid0);
-                linear_struct_names.push(arena_str(a, sname_sid0));
+                linear_owner_names.push(arena_str(a, sname_sid0));
             }
         }
         lsi = lsi + 1;
+    }
+
+    // Close the set over enum payloads. Each successful pass adds at least one
+    // enum, so at most n_items passes are needed even for forward references.
+    let mut owner_pass: i64 = 0;
+    while owner_pass < n_items {
+        let mut oi: i64 = 0;
+        while oi < n_items {
+            let owner_item: i64 = m.items[oi];
+            if item_kind(owner_item) == ITEM_ENUM() {
+                let owner_eid: i64 = item_id(owner_item);
+                let owner_name: String = arena_str(a, edef_name_sid(a, owner_eid));
+                if !vec_contains_str(linear_owner_names, owner_name) {
+                    let variants_lid: i64 = edef_variants_lid(a, owner_eid);
+                    let nv: i64 = list_len(a, variants_lid) / 2;
+                    let mut vi: i64 = 0;
+                    let mut owns_linear: bool = false;
+                    while vi < nv && !owns_linear {
+                        let payload_lid: i64 = list_get(a, variants_lid, vi * 2 + 1);
+                        let mut pi: i64 = 0;
+                        while pi < list_len(a, payload_lid) && !owns_linear {
+                            let payload_tid: i64 = list_get(a, payload_lid, pi);
+                            if ast_type_is_linear_owner(a, payload_tid, linear_owner_names) {
+                                owns_linear = true;
+                            }
+                            pi = pi + 1;
+                        }
+                        vi = vi + 1;
+                    }
+                    if owns_linear {
+                        linear_owner_names.push(owner_name);
+                    }
+                }
+            }
+            oi = oi + 1;
+        }
+        owner_pass = owner_pass + 1;
     }
 
     let mut ii: i64 = 0;
@@ -4031,7 +4108,7 @@ fn lower_module_vow(
             let name_sid: i64 = fn_name_sid(a, iid);
             let name: String = arena_str(a, name_sid);
             let ret_tid: i64 = fn_ret_ast_tid(a, iid);
-            let ir_ret: i64 = lower_ast_ty_linear(a, ret_tid, linear_struct_names);
+            let ir_ret: i64 = lower_ast_ty_linear(a, ret_tid, linear_owner_names);
             func_names.push(name);
             func_ret_tys.push(ir_ret);
             func_ret_tags.push(lower_ast_type_tag_name(a, ret_tid));
@@ -4044,7 +4121,7 @@ fn lower_module_vow(
             let mut pi: i64 = 0;
             while pi < nparams {
                 let ptid: i64 = list_get(a, params_lid, pi * 3 + 1);
-                param_tys.push(lower_ast_ty_linear(a, ptid, linear_struct_names));
+                param_tys.push(lower_ast_ty_linear(a, ptid, linear_owner_names));
                 pi = pi + 1;
             }
             func_param_tys.push(param_tys);
@@ -4113,7 +4190,7 @@ fn lower_module_vow(
                     }
                 };
                 fvec_elems.push(fve);
-                let ir_ty: i64 = lower_ast_ty_linear(a, ftid, linear_struct_names);
+                let ir_ty: i64 = lower_ast_ty_linear(a, ftid, linear_owner_names);
                 let fl: IrFieldLayout = IrFieldLayout { name: fname, ty: ir_ty };
                 ir_fields.push(fl);
                 fi = fi + 1;
@@ -4144,7 +4221,7 @@ fn lower_module_vow(
                 let mut pi: i64 = 0;
                 while pi < n_payload {
                     let p_ast_tid: i64 = list_get(a, payload_lid, pi);
-                    let p_ir_ty: i64 = lower_ast_ty_linear(a, p_ast_tid, linear_struct_names);
+                    let p_ir_ty: i64 = lower_ast_ty_linear(a, p_ast_tid, linear_owner_names);
                     let fl: IrFieldLayout = IrFieldLayout { name: String::from(""), ty: p_ir_ty };
                     payload.push(fl);
                     pi = pi + 1;
@@ -4230,7 +4307,7 @@ fn lower_module_vow(
     ctx.func_ret_option_elems = func_ret_option_elems;
     ctx.func_param_tys = func_param_tys;
     ctx.struct_names = struct_names;
-    ctx.linear_struct_names = linear_struct_names;
+    ctx.linear_owner_names = linear_owner_names;
     ctx.struct_field_lists = struct_field_lists;
     ctx.struct_field_type_names = struct_field_type_names;
     ctx.struct_field_vec_elems = struct_field_vec_elems;

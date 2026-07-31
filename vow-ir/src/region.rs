@@ -247,7 +247,12 @@ fn check_function_linear_regions(func: &Function, diagnostics: &mut Vec<Diagnost
                 Opcode::Unreachable => {
                     live.clear();
                 }
-                _ => apply_linear_transfer(inst, &mut live, &inst_lookup),
+                _ => {
+                    if inst.opcode == Opcode::LinearConsume {
+                        emit_consumed_linear_error(func, inst, &live, &inst_lookup, diagnostics);
+                    }
+                    apply_linear_transfer(inst, &mut live, &inst_lookup);
+                }
             }
         }
     }
@@ -279,11 +284,17 @@ fn apply_linear_transfer(
     live: &mut BTreeSet<InstId>,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
 ) {
+    let is_owned_field_transfer = inst.opcode == Opcode::FieldGet
+        && inst.args.first().is_some_and(|base| {
+            inst_lookup
+                .get(base)
+                .is_some_and(|(_, base_inst)| base_inst.ty == Ty::LinearPtr)
+        });
     if inst.ty == Ty::LinearPtr
-        && matches!(
+        && (matches!(
             inst.opcode,
             Opcode::GetArg | Opcode::RegionAlloc | Opcode::Call | Opcode::Phi
-        )
+        ) || is_owned_field_transfer)
     {
         // LinearPtr Phi is its own fresh origin (arms are transferred in via Upsilon).
         live.insert(inst.id);
@@ -302,6 +313,44 @@ fn apply_linear_transfer(
     {
         remove_linear_origins(live, arg, inst_lookup);
     }
+}
+
+fn emit_consumed_linear_error(
+    func: &Function,
+    consume: &Inst,
+    live: &BTreeSet<InstId>,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(&arg) = consume.args.first() else {
+        return;
+    };
+    let Some(origin) = linear_origins(arg, inst_lookup)
+        .into_iter()
+        .find(|origin| !live.contains(origin))
+    else {
+        return;
+    };
+    let name = func
+        .local_names
+        .get(&origin.0)
+        .cloned()
+        .unwrap_or_else(|| format!("%{}", origin.0));
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        code: ErrorCode::LinearTypeViolation,
+        message: format!("linear value `{name}` already consumed"),
+        primary: SourceLocation {
+            file: func.source_file.clone(),
+            byte_offset: consume.origin.start,
+            byte_len: consume.origin.len,
+        },
+        secondary: vec![],
+        blame: Blame::None,
+        hints: vec![format!(
+            "`{name}` was already consumed; restructure to use it only once"
+        )],
+    });
 }
 
 fn remove_linear_origins(
@@ -331,7 +380,14 @@ fn linear_origins(
         };
         match inst.opcode {
             Opcode::Upsilon => stack.extend(inst.args.iter().copied()),
-            _ if inst.ty == Ty::LinearPtr => {
+            _ if inst.ty == Ty::LinearPtr
+                && (inst.opcode != Opcode::FieldGet
+                    || inst.args.first().is_some_and(|base| {
+                        inst_lookup
+                            .get(base)
+                            .is_some_and(|(_, base_inst)| base_inst.ty == Ty::LinearPtr)
+                    })) =>
+            {
                 out.insert(cur);
             }
             _ => {}
@@ -3731,6 +3787,76 @@ mod tests {
     }
 
     // ---------- Helpers for the tests ----------
+
+    #[test]
+    fn linear_consume_reports_second_use() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::GetArg,
+                Ty::LinearPtr,
+                vec![],
+                InstData::ArgIndex(0),
+            ),
+            inst(1, Opcode::LinearConsume, Ty::Unit, vec![0], InstData::None),
+            inst(2, Opcode::LinearConsume, Ty::Unit, vec![0], InstData::None),
+            return_unit_inst(3),
+        ];
+        let mut func = function(
+            0,
+            "duplicate",
+            vec![Ty::LinearPtr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        func.local_names.insert(0, "value".to_string());
+        let mut diagnostics = Vec::new();
+
+        check_function_linear_regions(&func, &mut diagnostics);
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.code == ErrorCode::LinearTypeViolation
+                && diag.message == "linear value `value` already consumed"
+        }));
+    }
+
+    #[test]
+    fn linear_field_get_starts_transferred_payload_obligation() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::GetArg,
+                Ty::LinearPtr,
+                vec![],
+                InstData::ArgIndex(0),
+            ),
+            inst(1, Opcode::LinearConsume, Ty::Unit, vec![0], InstData::None),
+            inst(
+                2,
+                Opcode::FieldGet,
+                Ty::LinearPtr,
+                vec![0],
+                InstData::FieldIndex(1),
+            ),
+            inst(3, Opcode::LinearConsume, Ty::Unit, vec![2], InstData::None),
+            return_unit_inst(4),
+        ];
+        let func = function(
+            0,
+            "extract",
+            vec![Ty::LinearPtr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut diagnostics = Vec::new();
+
+        check_function_linear_regions(&func, &mut diagnostics);
+
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+    }
 
     /// Build `fn id(s: String) -> String { s }`. Pizlo IR: GetArg(0); Return(GetArg).
     fn build_identity_fn() -> Function {

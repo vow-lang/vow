@@ -148,7 +148,12 @@ fn f() -> () {
 ### LinearTypeViolation
 
 **Phase:** Type Checker
-**Meaning:** A value of a `linear struct` type is used in a way that is immediately invalid before region inference runs, such as consuming it twice, consuming it inside a loop that may execute more than once, or consuming it after only some control-flow paths already consumed it.
+**Meaning:** A linear owner value is used in a way that is immediately invalid,
+such as consuming it twice, consuming it inside a loop that may execute more
+than once, or consuming it after only some control-flow paths already consumed
+it. Linear owners include `linear struct` values and owned enum, `Option`, or
+`Result` wrappers that transitively contain one; matching such a wrapper
+consumes it and transfers the obligation to the selected payload.
 
 ```vow
 linear struct Handle { fd: i64 }
