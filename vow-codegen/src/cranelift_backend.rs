@@ -546,6 +546,10 @@ fn routed_vec_extern<'a>(
             RegionId::Root => (sym, None),
             region => ("__vow_string_from_i64_in_arena", Some(region)),
         },
+        "__vow_string_from_u64" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_from_u64_in_arena", Some(region)),
+        },
         "__vow_string_parse_i64_opt" => match inst.region {
             RegionId::Root => (sym, None),
             region => ("__vow_string_parse_i64_opt_in_arena", Some(region)),
@@ -2263,11 +2267,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // byte value
         }
-        "__vow_string_from_i64" => {
+        "__vow_string_from_i64" | "__vow_string_from_u64" => {
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_from_i64_in_arena" => {
+        "__vow_string_from_i64_in_arena" | "__vow_string_from_u64_in_arena" => {
             sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>

@@ -1797,6 +1797,8 @@ fn string_creation_extern(sym: &str) -> bool {
             | "__vow_string_substring_in_arena"
             | "__vow_string_from_i64"
             | "__vow_string_from_i64_in_arena"
+            | "__vow_string_from_u64"
+            | "__vow_string_from_u64_in_arena"
             | "__vow_string_split"
             | "__vow_string_split_in_arena"
             | "__vow_string_trim"
