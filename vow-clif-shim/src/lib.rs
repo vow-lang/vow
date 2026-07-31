@@ -3761,10 +3761,7 @@ mod tests {
         );
     }
 
-    // Directly exercises the shim's copy of region inference (issue #367). It is
-    // otherwise only hit indirectly via vow-codegen end-to-end tests and the
-    // bootstrap binary, so divergence from the Rust/self-hosted mirrors would go
-    // unnoticed until a fixed-point break.
+    // Guards shim/Rust/self-hosted region-inference parity against fixed-point-breaking drift.
     #[test]
     fn inst_region_for_value_routes_hidden_arg_and_falls_back() {
         let no_phi: HashMap<i64, Vec<i64>> = HashMap::new();
