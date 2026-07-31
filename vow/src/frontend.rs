@@ -241,7 +241,7 @@ pub(crate) fn prepare_frontend_with_root(
                 &ast,
                 &item_files,
                 &string_exprs,
-                &pattern_aggregates,
+                pattern_aggregates,
             );
             record("lower", t_lower);
             // Track lower-warning count so region inference does not see them

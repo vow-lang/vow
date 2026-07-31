@@ -48,11 +48,12 @@ struct LowerCtx {
     loop_exit_phi_names: Vec<Vec<String>>,
     loop_exit_phi_ids: Vec<Vec<i64>>,
     vec_elem_inst_ids: Vec<i64>,
-    vec_elem_names: Vec<String>,
+    vec_elem_paths: Vec<Vec<String>>,
     option_elem_inst_ids: Vec<i64>,
     option_elem_tys: Vec<i64>,
     pat_aggregate_names: Vec<String>,
-    pat_vec_elem_names: Vec<String>,
+    pat_vec_elem_paths: Vec<Vec<String>>,
+    pat_aggregate_linear: Vec<i64>,
     warnings: Vec<String>,
     file: String,
 }
@@ -114,11 +115,12 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         loop_exit_phi_names: Vec::new(),
         loop_exit_phi_ids: Vec::new(),
         vec_elem_inst_ids: Vec::new(),
-        vec_elem_names: Vec::new(),
+        vec_elem_paths: Vec::new(),
         option_elem_inst_ids: Vec::new(),
         option_elem_tys: Vec::new(),
         pat_aggregate_names: Vec::new(),
-        pat_vec_elem_names: Vec::new(),
+        pat_vec_elem_paths: Vec::new(),
+        pat_aggregate_linear: Vec::new(),
         warnings: Vec::new(),
         file: String::from(""),
     }
@@ -344,20 +346,51 @@ fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
 }
 
 fn lctx_tag_vec_elem(ctx: LowerCtx, inst_id: i64, elem_name: String) {
-    ctx.vec_elem_inst_ids.push(inst_id);
-    ctx.vec_elem_names.push(elem_name);
+    let path: Vec<String> = Vec::new();
+    path.push(elem_name);
+    lctx_tag_vec_elem_path(ctx, inst_id, path);
 }
 
-fn lctx_get_vec_elem(ctx: LowerCtx, inst_id: i64) -> String {
+fn lctx_tag_vec_elem_path(ctx: LowerCtx, inst_id: i64, path: Vec<String>) {
+    ctx.vec_elem_inst_ids.push(inst_id);
+    ctx.vec_elem_paths.push(path);
+}
+
+fn lctx_get_vec_elem_path(ctx: LowerCtx, inst_id: i64) -> Vec<String> {
     let n: i64 = ctx.vec_elem_inst_ids.len();
     let mut i: i64 = n;
     while i > 0 {
         i = i - 1;
         if ctx.vec_elem_inst_ids[i] == inst_id {
-            return ctx.vec_elem_names[i];
+            return ctx.vec_elem_paths[i];
         }
     }
+    Vec::new()
+}
+
+fn lctx_get_vec_elem(ctx: LowerCtx, inst_id: i64) -> String {
+    let path: Vec<String> = lctx_get_vec_elem_path(ctx, inst_id);
+    if path.len() > 0 {
+        return path[0];
+    }
     String::from("")
+}
+
+fn lctx_propagate_vec_elem(ctx: LowerCtx, source_id: i64, result_id: i64) {
+    let path: Vec<String> = lctx_get_vec_elem_path(ctx, source_id);
+    if path.len() == 0 {
+        return;
+    }
+    lctx_tag(ctx, result_id, path[0]);
+    if path.len() > 1 {
+        let remaining: Vec<String> = Vec::new();
+        let mut i: i64 = 1;
+        while i < path.len() {
+            remaining.push(path[i]);
+            i = i + 1;
+        }
+        lctx_tag_vec_elem_path(ctx, result_id, remaining);
+    }
 }
 
 fn lctx_tag_option_elem(ctx: LowerCtx, inst_id: i64, elem_ty: i64) {
@@ -384,11 +417,18 @@ fn lctx_get_pattern_aggregate(ctx: LowerCtx, pid: i64) -> String {
     String::from("")
 }
 
-fn lctx_get_pattern_vec_elem(ctx: LowerCtx, pid: i64) -> String {
-    if pid < ctx.pat_vec_elem_names.len() {
-        return ctx.pat_vec_elem_names[pid];
+fn lctx_get_pattern_vec_elem_path(ctx: LowerCtx, pid: i64) -> Vec<String> {
+    if pid < ctx.pat_vec_elem_paths.len() {
+        return ctx.pat_vec_elem_paths[pid];
     }
-    String::from("")
+    Vec::new()
+}
+
+fn lctx_pattern_is_linear(ctx: LowerCtx, pid: i64) -> i64 {
+    if pid < ctx.pat_aggregate_linear.len() {
+        return ctx.pat_aggregate_linear[pid];
+    }
+    0
 }
 
 fn lctx_intern_str(ctx: LowerCtx, s: String) -> i64 {
@@ -1403,9 +1443,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     call_args.push(source_id);
                     let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_pin_to_root_val"));
                     lctx_tag(ctx, result, String::from("Vec"));
-                    let elem_name: String = lctx_get_vec_elem(ctx, source_id);
-                    if elem_name.len() > 0 {
-                        lctx_tag_vec_elem(ctx, result, elem_name);
+                    let elem_path: Vec<String> = lctx_get_vec_elem_path(ctx, source_id);
+                    if elem_path.len() > 0 {
+                        lctx_tag_vec_elem_path(ctx, result, elem_path);
                     }
                     return result;
                 }
@@ -2133,10 +2173,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         get_args.push(iter_id);
         get_args.push(idx_phi);
         let elem_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), get_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
-        let elem_tag: String = lctx_get_vec_elem(ctx, iter_id);
-        if elem_tag.len() > 0 {
-            lctx_tag(ctx, elem_id, elem_tag);
-        }
+        lctx_propagate_vec_elem(ctx, iter_id, elem_id);
 
         let for_scope_depth: i64 = ctx.scope_vars.len();
         lctx_push_scope(ctx);
@@ -2879,10 +2916,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         call_args.push(vec_ptr);
         call_args.push(idx_id);
         let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
-        let elem_name: String = lctx_get_vec_elem(ctx, vec_ptr);
-        if elem_name.len() > 0 {
-            lctx_tag(ctx, result, elem_name);
-        }
+        lctx_propagate_vec_elem(ctx, vec_ptr, result);
         return result;
     }
 
@@ -2989,9 +3023,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let name_sid: i64 = pat_a(a, inner_pid);
                         let pname: String = arena_str(a, name_sid);
                         let aggregate_struct: String = lctx_get_pattern_aggregate(ctx, inner_pid);
-                        let aggregate_vec_elem: String = lctx_get_pattern_vec_elem(ctx, inner_pid);
+                        let aggregate_vec_elems: Vec<String> = lctx_get_pattern_vec_elem_path(ctx, inner_pid);
                         let field_ty: i64 = {
-                            if aggregate_struct.len() > 0 {
+                            if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
+                                ITY_LPTR()
+                            } else if aggregate_struct.len() > 0 {
                                 ITY_PTR()
                             } else if ii == 0 {
                                 payload_ty
@@ -3005,8 +3041,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         if aggregate_struct.len() > 0 {
                             lctx_tag(ctx, field_val, aggregate_struct);
                         }
-                        if aggregate_vec_elem.len() > 0 {
-                            lctx_tag_vec_elem(ctx, field_val, aggregate_vec_elem);
+                        if aggregate_vec_elems.len() > 0 {
+                            lctx_tag_vec_elem_path(ctx, field_val, aggregate_vec_elems);
                         }
                         lctx_define(ctx, pname, field_val);
                     }
@@ -3819,7 +3855,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.tag_inst_ids = Vec::new();
     ctx.tag_names = Vec::new();
     ctx.vec_elem_inst_ids = Vec::new();
-    ctx.vec_elem_names = Vec::new();
+    ctx.vec_elem_paths = Vec::new();
     ctx.option_elem_inst_ids = Vec::new();
     ctx.option_elem_tys = Vec::new();
 
@@ -3948,7 +3984,8 @@ fn lower_module_vow(
     m: Module,
     str_eids: Vec<i64>,
     pat_aggregate_names: Vec<String>,
-    pat_vec_elem_names: Vec<String>,
+    pat_vec_elem_paths: Vec<Vec<String>>,
+    pat_aggregate_linear: Vec<i64>,
     item_files: Vec<String>,
 ) -> IrModule {
     let a: AstArena = m.arena;
@@ -4182,7 +4219,8 @@ fn lower_module_vow(
 
     let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
     ctx.pat_aggregate_names = pat_aggregate_names;
-    ctx.pat_vec_elem_names = pat_vec_elem_names;
+    ctx.pat_vec_elem_paths = pat_vec_elem_paths;
+    ctx.pat_aggregate_linear = pat_aggregate_linear;
     // ctx.file is updated per FnDef inside the lowering loop below so each
     // IrFunction gets the originating source path from `item_files`.
     ctx.func_names = func_names;

@@ -48,7 +48,7 @@ fn parse_typecheck_and_lower(src: &str) -> bool {
         &module,
         &item_files,
         &string_exprs,
-        &pattern_aggregates,
+        pattern_aggregates,
     );
     true
 }
@@ -172,10 +172,10 @@ proptest! {
 
             if e1.diagnostics.is_empty() && e2.diagnostics.is_empty() {
                 let ir1 = vow_ir::lower::lower_module_with_pattern_aggregates(
-                    &module1, &item_files1, &se1, &pa1,
+                    &module1, &item_files1, &se1, pa1,
                 );
                 let ir2 = vow_ir::lower::lower_module_with_pattern_aggregates(
-                    &module2, &item_files2, &se2, &pa2,
+                    &module2, &item_files2, &se2, pa2,
                 );
 
                 prop_assert_eq!(

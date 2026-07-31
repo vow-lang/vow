@@ -16,7 +16,8 @@ pub type StringExprSet = HashSet<usize>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatternAggregateInfo {
     pub type_name: String,
-    pub vec_elem_type: Option<String>,
+    pub vec_elem_types: Vec<String>,
+    pub is_linear: bool,
 }
 
 /// Aggregate type metadata for identifier patterns, keyed by `*const Pat as usize`.
@@ -31,15 +32,32 @@ fn aggregate_type_name(ty: &Ty) -> Option<String> {
     }
 }
 
-fn pattern_aggregate_info(ty: &Ty) -> Option<PatternAggregateInfo> {
+fn vec_element_type_names(ty: &Ty) -> Vec<String> {
+    match ty {
+        Ty::Reference(inner) => vec_element_type_names(inner),
+        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Vec") => {
+            let Some(elem_ty) = args.first() else {
+                return Vec::new();
+            };
+            let Some(elem_name) = aggregate_type_name(elem_ty) else {
+                return Vec::new();
+            };
+            let mut names = vec![elem_name.clone()];
+            if elem_name == "Vec" {
+                names.extend(vec_element_type_names(elem_ty));
+            }
+            names
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn pattern_aggregate_info(ty: &Ty, is_linear: bool) -> Option<PatternAggregateInfo> {
     let type_name = aggregate_type_name(ty)?;
-    let vec_elem_type = match ty {
-        Ty::Applied(_, args) if type_name == "Vec" => args.first().and_then(aggregate_type_name),
-        _ => None,
-    };
     Some(PatternAggregateInfo {
         type_name,
-        vec_elem_type,
+        vec_elem_types: vec_element_type_names(ty),
+        is_linear,
     })
 }
 
@@ -302,10 +320,6 @@ impl<'e> Checker<'e> {
 
     pub fn into_lowering_metadata(self) -> (StringExprSet, PatternAggregateMap) {
         (self.string_exprs, self.pattern_aggregates)
-    }
-
-    pub fn into_string_exprs(self) -> StringExprSet {
-        self.string_exprs
     }
 
     pub fn has_errors(&self) -> bool {
@@ -2338,7 +2352,14 @@ impl<'e> Checker<'e> {
     fn bind_arm_pattern(&mut self, pat: &Pat, scrutinee_ty: &Ty) {
         match &pat.kind {
             PatKind::Ident { name, .. } => {
-                if let Some(info) = pattern_aggregate_info(scrutinee_ty) {
+                let is_linear = match scrutinee_ty {
+                    Ty::Struct(name) => self
+                        .env
+                        .lookup_struct(name)
+                        .is_some_and(|info| info.is_linear),
+                    _ => false,
+                };
+                if let Some(info) = pattern_aggregate_info(scrutinee_ty, is_linear) {
                     self.pattern_aggregates
                         .insert(pat as *const Pat as usize, info);
                 }
@@ -2557,6 +2578,79 @@ mod tests {
             kind,
             span: dummy_span(),
         }
+    }
+
+    #[test]
+    fn pattern_vec_metadata_recurses_through_reference() {
+        let vec_of_box = Ty::Applied(
+            Box::new(Ty::Struct("Vec".to_string())),
+            vec![Ty::Struct("Box".to_string())],
+        );
+        let info = pattern_aggregate_info(&Ty::Reference(Box::new(vec_of_box)), false)
+            .expect("reference-wrapped Vec is aggregate metadata");
+
+        assert_eq!(info.type_name, "Vec");
+        assert_eq!(info.vec_elem_types, ["Box"]);
+        assert!(!info.is_linear);
+    }
+
+    #[test]
+    fn pattern_vec_metadata_preserves_nested_aggregate_path() {
+        let nested = Ty::Applied(
+            Box::new(Ty::Struct("Vec".to_string())),
+            vec![Ty::Applied(
+                Box::new(Ty::Struct("Vec".to_string())),
+                vec![Ty::Struct("Box".to_string())],
+            )],
+        );
+        let info = pattern_aggregate_info(&nested, false).expect("nested Vec is aggregate");
+
+        assert_eq!(info.type_name, "Vec");
+        assert_eq!(info.vec_elem_types, ["Vec", "Box"]);
+    }
+
+    #[test]
+    fn pattern_vec_metadata_ignores_missing_and_scalar_elements() {
+        assert_eq!(aggregate_type_name(&Ty::Str).as_deref(), Some("String"));
+
+        let empty = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![]);
+        let empty_info = pattern_aggregate_info(&empty, false).expect("empty Vec is aggregate");
+        assert!(empty_info.vec_elem_types.is_empty());
+
+        let scalar = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]);
+        let scalar_info = pattern_aggregate_info(&scalar, false).expect("scalar Vec is aggregate");
+        assert!(scalar_info.vec_elem_types.is_empty());
+    }
+
+    #[test]
+    fn arm_pattern_metadata_marks_direct_linear_struct() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::Ident {
+                name: "token".to_string(),
+                is_mut: false,
+            },
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Struct("Token".to_string()));
+
+        let info = checker
+            .pattern_aggregates
+            .get(&(&pattern as *const Pat as usize))
+            .expect("linear pattern metadata");
+        assert_eq!(info.type_name, "Token");
+        assert!(info.vec_elem_types.is_empty());
+        assert!(info.is_linear);
     }
 
     #[test]

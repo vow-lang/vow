@@ -1,6 +1,7 @@
 pub mod vow;
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use vow_diag::Blame;
 use vow_syntax::ast::{
@@ -160,6 +161,19 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
             ctx.inst_option_elem_ty.insert(result, Ty::I32);
         }
         _ => {}
+    }
+}
+
+fn propagate_vec_element_metadata(ctx: &mut LowerCtx, source: InstId, result: InstId) {
+    let Some(elem_types) = ctx.inst_vec_elem_types.get(&source).cloned() else {
+        return;
+    };
+    let Some((elem_name, remaining)) = elem_types.split_first() else {
+        return;
+    };
+    ctx.inst_struct_type.insert(result, elem_name.clone());
+    if !remaining.is_empty() {
+        ctx.inst_vec_elem_types.insert(result, remaining.to_vec());
     }
 }
 
@@ -348,12 +362,14 @@ pub(crate) struct LowerCtx {
     // Per-loop exit-block Phi IDs for mutation variables.  Break emits Upsilons
     // targeting these so the exit block receives updated values.
     loop_exit_phis: Vec<Vec<(String, InstId)>>,
-    // InstId of a Vec allocation → element type name (for struct-in-Vec field access)
-    inst_vec_elem_type: HashMap<InstId, String>,
+    // InstId of a Vec allocation → aggregate element type names, outermost first.
+    // A Vec<Vec<Box>> carries ["Vec", "Box"], so each index can consume one
+    // name and retain the rest for deeper indexing.
+    inst_vec_elem_types: HashMap<InstId, Vec<String>>,
     // InstId of an Option-tagged value → its payload type (for Option::Some(v) match-arm FieldGet)
     inst_option_elem_ty: HashMap<InstId, Ty>,
     // Identifier-pattern address → checker-resolved aggregate metadata.
-    pattern_aggregates: PatternAggregateMap,
+    pattern_aggregates: Rc<PatternAggregateMap>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     warnings: Vec<vow_diag::Diagnostic>,
@@ -375,7 +391,7 @@ impl LowerCtx {
         struct_field_type_names: HashMap<String, Vec<String>>,
         struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
-        pattern_aggregates: PatternAggregateMap,
+        pattern_aggregates: Rc<PatternAggregateMap>,
     ) -> Self {
         let entry = BasicBlock {
             id: BlockId(0),
@@ -426,7 +442,7 @@ impl LowerCtx {
             loop_continue_scope_depth: Vec::new(),
             loop_break_upsilons: Vec::new(),
             loop_exit_phis: Vec::new(),
-            inst_vec_elem_type: HashMap::new(),
+            inst_vec_elem_types: HashMap::new(),
             inst_option_elem_ty: HashMap::new(),
             pattern_aggregates,
             struct_field_vec_elems,
@@ -1121,8 +1137,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                     ctx.inst_struct_type.insert(result, "Vec".to_string());
-                    if let Some(elem_name) = ctx.inst_vec_elem_type.get(&source_id).cloned() {
-                        ctx.inst_vec_elem_type.insert(result, elem_name);
+                    if let Some(elem_types) = ctx.inst_vec_elem_types.get(&source_id).cloned() {
+                        ctx.inst_vec_elem_types.insert(result, elem_types);
                     }
                     return result;
                 }
@@ -1143,7 +1159,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     ctx.inst_struct_type.insert(result, ret_tag);
                 }
                 if let Some(ret_vec_elem) = call_info.ret_vec_elem {
-                    ctx.inst_vec_elem_type.insert(result, ret_vec_elem);
+                    ctx.inst_vec_elem_types.insert(result, vec![ret_vec_elem]);
                 }
                 if let Some(ret_option_elem) = call_info.ret_option_elem {
                     ctx.inst_option_elem_ty.insert(result, ret_option_elem);
@@ -1737,9 +1753,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
-            if let Some(elem_name) = ctx.inst_vec_elem_type.get(&iter_id).cloned() {
-                ctx.inst_struct_type.insert(elem_id, elem_name);
-            }
+            propagate_vec_element_metadata(ctx, iter_id, elem_id);
 
             // Save scope depth before pushing the for-each binding scope.
             // Loop-carried phis track outer mutation variables whose bindings
@@ -2132,7 +2146,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     && let Some(elem_name) = vec_elems.get(field_idx as usize)
                     && !elem_name.is_empty()
                 {
-                    ctx.inst_vec_elem_type.insert(result_id, elem_name.clone());
+                    ctx.inst_vec_elem_types
+                        .insert(result_id, vec![elem_name.clone()]);
                 }
                 result_id
             }
@@ -2487,13 +2502,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     .pattern_aggregates
                                     .get(&(inner_pat as *const _ as usize))
                                     .cloned();
-                                let field_ty = if aggregate.is_some() {
-                                    Ty::Ptr
-                                } else if i == 0 {
-                                    payload_ty
-                                } else {
-                                    Ty::I64
-                                };
+                                let field_ty =
+                                    if aggregate.as_ref().is_some_and(|info| info.is_linear) {
+                                        Ty::LinearPtr
+                                    } else if aggregate.is_some() {
+                                        Ty::Ptr
+                                    } else if i == 0 {
+                                        payload_ty
+                                    } else {
+                                        Ty::I64
+                                    };
                                 let field_val = ctx.emit(
                                     Opcode::FieldGet,
                                     field_ty,
@@ -2503,8 +2521,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 );
                                 if let Some(info) = aggregate {
                                     ctx.inst_struct_type.insert(field_val, info.type_name);
-                                    if let Some(elem_name) = info.vec_elem_type {
-                                        ctx.inst_vec_elem_type.insert(field_val, elem_name);
+                                    if !info.vec_elem_types.is_empty() {
+                                        ctx.inst_vec_elem_types
+                                            .insert(field_val, info.vec_elem_types);
                                     }
                                 }
                                 ctx.define(name.clone(), field_val);
@@ -3083,9 +3102,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
-            if let Some(elem_name) = ctx.inst_vec_elem_type.get(&vec_ptr).cloned() {
-                ctx.inst_struct_type.insert(result, elem_name);
-            }
+            propagate_vec_element_metadata(ctx, vec_ptr, result);
             result
         }
         // ? operator: unwrap Option::Some or short-circuit with None
@@ -3471,7 +3488,7 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                                     "i32" | "i64" | "u8" | "u64" | "f32" | "f64" | "bool"
                                 )
                             {
-                                ctx.inst_vec_elem_type.insert(val, elem_name.clone());
+                                ctx.inst_vec_elem_types.insert(val, vec![elem_name.clone()]);
                             }
                         }
                         _ => {}
@@ -3529,7 +3546,7 @@ fn lower_function_with_pattern_aggregates(
     struct_field_type_names: HashMap<String, Vec<String>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
-    pattern_aggregates: &PatternAggregateMap,
+    pattern_aggregates: &Rc<PatternAggregateMap>,
     const_map: &HashMap<String, (i64, Ty)>,
 ) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
     let params: Vec<Ty> = fn_def
@@ -3555,7 +3572,7 @@ fn lower_function_with_pattern_aggregates(
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs.clone(),
-        pattern_aggregates.clone(),
+        Rc::clone(pattern_aggregates),
     );
 
     ctx.const_map = const_map.clone();
@@ -3593,7 +3610,8 @@ fn lower_function_with_pattern_aggregates(
                         "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
                     )
                 {
-                    ctx.inst_vec_elem_type.insert(arg_id, elem_name.clone());
+                    ctx.inst_vec_elem_types
+                        .insert(arg_id, vec![elem_name.clone()]);
                 }
             }
             AstType::Generic { name, args, .. } if name == "Option" => {
@@ -3687,21 +3705,8 @@ fn lower_function(
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs,
-        &PatternAggregateMap::new(),
+        &Rc::new(PatternAggregateMap::new()),
         const_map,
-    )
-}
-
-pub fn lower_module(
-    module: &AstModule,
-    item_files: &[String],
-    string_exprs: &StringExprSet,
-) -> Module {
-    lower_module_with_pattern_aggregates(
-        module,
-        item_files,
-        string_exprs,
-        &PatternAggregateMap::new(),
     )
 }
 
@@ -3709,13 +3714,14 @@ pub fn lower_module_with_pattern_aggregates(
     module: &AstModule,
     item_files: &[String],
     string_exprs: &StringExprSet,
-    pattern_aggregates: &PatternAggregateMap,
+    pattern_aggregates: PatternAggregateMap,
 ) -> Module {
     debug_assert_eq!(
         module.items.len(),
         item_files.len(),
         "item_files must be parallel to module.items"
     );
+    let pattern_aggregates = Rc::new(pattern_aggregates);
     // Walk module.items keeping the original index so each retained FnDef
     // can be paired with its source-file path from `item_files`.
     let fn_items: Vec<(&FnDef, &str)> = module
@@ -3916,7 +3922,7 @@ pub fn lower_module_with_pattern_aggregates(
                 struct_field_type_names.clone(),
                 struct_field_vec_elems.clone(),
                 string_exprs,
-                pattern_aggregates,
+                &pattern_aggregates,
                 &const_map,
             );
             func.id = FuncId(idx as u32);
@@ -4843,6 +4849,214 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_match_payload_preserves_linear_pointer_type() {
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("payload")),
+                arms: vec![MatchArm {
+                    pattern: Pat {
+                        kind: PatKind::EnumVariant {
+                            path: vec!["Payload".to_string(), "Token".to_string()],
+                            inner: vec![Pat {
+                                kind: PatKind::Ident {
+                                    name: "token".to_string(),
+                                    is_mut: false,
+                                },
+                                span: sp(),
+                            }],
+                        },
+                        span: sp(),
+                    },
+                    body: ident_expr("token"),
+                    span: sp(),
+                }],
+            },
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "unwrap_token",
+            vec![make_param(
+                "payload",
+                Type::Named {
+                    name: "Payload".to_string(),
+                    span: sp(),
+                },
+            )],
+            Type::Named {
+                name: "Token".to_string(),
+                span: sp(),
+            },
+            Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(match_expr)),
+                span: sp(),
+            },
+            vec![],
+        );
+        let pattern_key = match &fn_def.body.trailing_expr.as_ref().unwrap().kind {
+            ExprKind::Match { arms, .. } => match &arms[0].pattern.kind {
+                PatKind::EnumVariant { inner, .. } => &inner[0] as *const Pat as usize,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let patterns = Rc::new(HashMap::from([(
+            pattern_key,
+            vow_types::check::PatternAggregateInfo {
+                type_name: "Token".to_string(),
+                vec_elem_types: vec![],
+                is_linear: true,
+            },
+        )]));
+        let enum_variant_map = HashMap::from([("Payload".to_string(), vec!["Token".to_string()])]);
+        let linear_structs = HashSet::from(["Token".to_string()]);
+
+        let (func, _, warnings) = lower_function_with_pattern_aggregates(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            enum_variant_map,
+            &linear_structs,
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &patterns,
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        let payload_get = func
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("enum payload FieldGet");
+        assert_eq!(payload_get.ty, Ty::LinearPtr);
+    }
+
+    #[test]
+    fn aggregate_match_payload_preserves_nested_vec_path() {
+        let row_at_zero = Expr {
+            kind: ExprKind::Index {
+                base: Box::new(ident_expr("rows")),
+                index: Box::new(int_expr(0)),
+            },
+            span: sp(),
+        };
+        let box_at_zero = Expr {
+            kind: ExprKind::Index {
+                base: Box::new(row_at_zero),
+                index: Box::new(int_expr(0)),
+            },
+            span: sp(),
+        };
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("payload")),
+                arms: vec![MatchArm {
+                    pattern: Pat {
+                        kind: PatKind::EnumVariant {
+                            path: vec!["Payload".to_string(), "Rows".to_string()],
+                            inner: vec![Pat {
+                                kind: PatKind::Ident {
+                                    name: "rows".to_string(),
+                                    is_mut: false,
+                                },
+                                span: sp(),
+                            }],
+                        },
+                        span: sp(),
+                    },
+                    body: Expr {
+                        kind: ExprKind::FieldAccess {
+                            base: Box::new(box_at_zero),
+                            field: "v".to_string(),
+                        },
+                        span: sp(),
+                    },
+                    span: sp(),
+                }],
+            },
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "get_nested",
+            vec![make_param(
+                "payload",
+                Type::Named {
+                    name: "Payload".to_string(),
+                    span: sp(),
+                },
+            )],
+            i64_ty(),
+            Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(match_expr)),
+                span: sp(),
+            },
+            vec![],
+        );
+        let pattern_key = match &fn_def.body.trailing_expr.as_ref().unwrap().kind {
+            ExprKind::Match { arms, .. } => match &arms[0].pattern.kind {
+                PatKind::EnumVariant { inner, .. } => &inner[0] as *const Pat as usize,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let patterns = Rc::new(HashMap::from([(
+            pattern_key,
+            vow_types::check::PatternAggregateInfo {
+                type_name: "Vec".to_string(),
+                vec_elem_types: vec!["Vec".to_string(), "Box".to_string()],
+                is_linear: false,
+            },
+        )]));
+        let enum_variant_map = HashMap::from([("Payload".to_string(), vec!["Rows".to_string()])]);
+        let struct_field_map = HashMap::from([(
+            "Box".to_string(),
+            vec!["marker".to_string(), "v".to_string()],
+        )]);
+        let struct_field_types = HashMap::from([(
+            "Box".to_string(),
+            vec!["i64".to_string(), "i64".to_string()],
+        )]);
+
+        let (func, _, warnings) = lower_function_with_pattern_aggregates(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            struct_field_map,
+            enum_variant_map,
+            &HashSet::new(),
+            struct_field_types,
+            HashMap::new(),
+            &HashSet::new(),
+            &patterns,
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        let insts: Vec<_> = func.blocks.iter().flat_map(|block| &block.insts).collect();
+        let field_get = insts
+            .iter()
+            .find(|inst| {
+                if inst.opcode != Opcode::FieldGet || inst.data != InstData::FieldIndex(1) {
+                    return false;
+                }
+                let Some(source) = inst.args.first() else {
+                    return false;
+                };
+                insts.iter().any(|candidate| {
+                    candidate.id == *source
+                        && candidate.data == InstData::CallExtern("__vow_vec_get_val".to_string())
+                })
+            })
+            .expect("field access after nested Vec indexes");
+        assert_eq!(field_get.ty, Ty::I64);
+    }
+
+    #[test]
     fn lower_empty_function() {
         let fn_def = make_fn("empty_fn", vec![], unit_ty(), empty_block(), vec![]);
         let (func, _, _) = lower_function(
@@ -4908,6 +5122,56 @@ mod tests {
                 .any(|inst| inst.data
                     == InstData::CallExtern("__vow_string_pin_to_root".to_string())),
             "direct pin_to_root(process_get_stdout()) must lower to string pin"
+        );
+    }
+
+    #[test]
+    fn pin_to_root_preserves_vec_element_metadata() {
+        let vec_box_ty = Type::Generic {
+            name: "Vec".to_string(),
+            args: vec![Type::Named {
+                name: "Box".to_string(),
+                span: sp(),
+            }],
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr(
+                "pin_to_root",
+                vec![ident_expr("values")],
+            ))),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "pin_values",
+            vec![make_param("values", vec_box_ty.clone())],
+            vec_box_ty,
+            body,
+            vec![],
+        );
+
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert!(
+            func.blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| {
+                    inst.data == InstData::CallExtern("__vow_vec_pin_to_root_val".to_string())
+                })
         );
     }
 
