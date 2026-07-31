@@ -3569,6 +3569,33 @@ mod tests {
     }
 
     #[test]
+    fn link_failure_returns_error_status() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let object = std::env::temp_dir().join(format!(
+            "vow-clif-link-missing-object-{}-{unique}.o",
+            std::process::id()
+        ));
+        let output = object.with_extension("out");
+        let object_path = object.to_str().unwrap();
+        let output_path = output.to_str().unwrap();
+        let object_vec = vow_string(object_path);
+        let output_vec = vow_string(output_path);
+
+        let status = unsafe {
+            __vow_clif_link(
+                &object_vec as *const VowVec as i64,
+                &output_vec as *const VowVec as i64,
+            )
+        };
+
+        assert_eq!(status, -1);
+        assert!(!output.exists());
+    }
+
+    #[test]
     fn hidden_region_for_store_target_uses_sorted_target_slots() {
         let flat = [1, RSUM_KIND_CONSTANT_GLOBAL, 0, RSUM_KIND_CONSTANT_GLOBAL];
         assert_eq!(
