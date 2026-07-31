@@ -35,6 +35,10 @@ jobs:
         with:
           version: ${{ env.ESBMC_VERSION }}
           sha256: ${{ env.ESBMC_SHA256 }}
+      - name: Arena verification runner tests
+        run: python3 scripts/test_verify_arena.py
+      - name: Arena primitive verification
+        run: scripts/verify_arena.sh
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
