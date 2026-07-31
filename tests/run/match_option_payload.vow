@@ -1,7 +1,7 @@
-// TEST: stdout "10\n-1\n55\n-1\n"
+// TEST: stdout "10\n-1\n55\n55\n-1\n"
 // Regression: `match` on a built-in `Option` must bind the variant payload.
 // Covers Option<i64> (Some/None) and Option<struct> returned from a match
-// (exercising structural match-arm typing for struct-valued arms).
+// (exercising direct field access and structural match-arm typing).
 module match_option_payload
 
 struct Box {
@@ -22,6 +22,13 @@ fn opt_box_or_default(m: BTreeMap<i64, Box>, k: i64) -> Box {
     }
 }
 
+fn opt_box_field(m: BTreeMap<i64, Box>, k: i64) -> i64 {
+    match m.get(k) {
+        Option::Some(b) => { b.v },
+        Option::None => { -1 },
+    }
+}
+
 fn main() -> i32 [io] {
     let mi: BTreeMap<i64, i64> = BTreeMap::new();
     mi.insert(1, 10);
@@ -32,6 +39,8 @@ fn main() -> i32 [io] {
 
     let ms: BTreeMap<i64, Box> = BTreeMap::new();
     ms.insert(5, Box { v: 55 });
+    print_i64(opt_box_field(ms, 5));
+    print_str(String::from("\n"));
     let found: Box = opt_box_or_default(ms, 5);
     print_i64(found.v);
     print_str(String::from("\n"));

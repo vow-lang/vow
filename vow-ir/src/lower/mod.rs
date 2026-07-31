@@ -353,6 +353,12 @@ pub(crate) struct LowerCtx {
     inst_vec_elem_type: HashMap<InstId, String>,
     // InstId of an Option-tagged value → its payload type (for Option::Some(v) match-arm FieldGet)
     inst_option_elem_ty: HashMap<InstId, Ty>,
+    // (enum InstId, variant tag, payload index) → aggregate type metadata.
+    // Match bindings copy these tags onto their payload FieldGet instructions.
+    inst_enum_payload_struct_type: HashMap<(InstId, u32, u32), String>,
+    // BTreeMap InstId → aggregate value metadata, propagated through get/insert
+    // to the returned Option::Some payload.
+    inst_btreemap_value_struct_type: HashMap<InstId, String>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     warnings: Vec<vow_diag::Diagnostic>,
@@ -426,6 +432,8 @@ impl LowerCtx {
             loop_exit_phis: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
             inst_option_elem_ty: HashMap::new(),
+            inst_enum_payload_struct_type: HashMap::new(),
+            inst_btreemap_value_struct_type: HashMap::new(),
             struct_field_vec_elems,
             warnings: Vec::new(),
         }
@@ -2470,9 +2478,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
                         ctx.switch_to_block(arm_block);
                         ctx.push_scope();
-                        // The Option<T> builtins tag their result InstId with the payload's
-                        // real type; every other payload (user enums, Result, etc.) defaults
-                        // to I64 as before.
+                        // Narrow scalar Option<T> payloads carry their real IR type.
+                        // Aggregate payload metadata is tracked separately so the binding
+                        // retains the struct/Vec tag needed by field and index lowering.
                         let payload_ty = ctx
                             .inst_option_elem_ty
                             .get(&ptr_id)
@@ -2480,7 +2488,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             .unwrap_or(Ty::I64);
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
-                                let field_ty = if i == 0 { payload_ty } else { Ty::I64 };
+                                let payload_key = (ptr_id, expected_tag as u32, i as u32);
+                                let aggregate_type =
+                                    ctx.inst_enum_payload_struct_type.get(&payload_key).cloned();
+                                let field_ty = if aggregate_type.is_some() {
+                                    Ty::Ptr
+                                } else if i == 0 {
+                                    payload_ty
+                                } else {
+                                    Ty::I64
+                                };
                                 let field_val = ctx.emit(
                                     Opcode::FieldGet,
                                     field_ty,
@@ -2488,6 +2505,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     InstData::FieldIndex(1 + i as u32),
                                     span,
                                 );
+                                if let Some(type_name) = aggregate_type {
+                                    ctx.inst_struct_type.insert(field_val, type_name);
+                                }
                                 ctx.define(name.clone(), field_val);
                             }
                         }
@@ -2889,6 +2909,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                     ctx.inst_struct_type.insert(result, "Option".to_string());
+                    if let Some(type_name) =
+                        ctx.inst_btreemap_value_struct_type.get(&recv_id).cloned()
+                    {
+                        ctx.inst_enum_payload_struct_type
+                            .insert((result, 1, 0), type_name);
+                    }
                     result
                 }
                 (Some("BTreeMap"), "get") => {
@@ -2906,6 +2932,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                     ctx.inst_struct_type.insert(result, "Option".to_string());
+                    if let Some(type_name) =
+                        ctx.inst_btreemap_value_struct_type.get(&recv_id).cloned()
+                    {
+                        ctx.inst_enum_payload_struct_type
+                            .insert((result, 1, 0), type_name);
+                    }
                     result
                 }
                 (Some("BTreeMap"), "contains") => {
@@ -3559,8 +3591,14 @@ pub(crate) fn lower_function(
             AstType::Generic { name, .. } if name == "HashMap" => {
                 ctx.inst_struct_type.insert(arg_id, "HashMap".to_string());
             }
-            AstType::Generic { name, .. } if name == "BTreeMap" => {
+            AstType::Generic { name, args, .. } if name == "BTreeMap" => {
                 ctx.inst_struct_type.insert(arg_id, "BTreeMap".to_string());
+                if let Some(value_ty) = args.get(1) {
+                    if let Some(type_name) = non_scalar_type_tag(value_ty) {
+                        ctx.inst_btreemap_value_struct_type
+                            .insert(arg_id, type_name);
+                    }
+                }
             }
             AstType::Generic { name, args, .. } if name == "Vec" => {
                 ctx.inst_struct_type.insert(arg_id, "Vec".to_string());
