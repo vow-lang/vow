@@ -455,6 +455,12 @@ if [ -z "$self_json" ]; then
 else
     check_unsigned_long_preamble_capture "verifier-preamble/self" "$self_capture" "$self_json" "$self_exit"
 fi
+
+if VOWC_BIN="$SELF" bash tests/esbmc-path-cache/tests.sh >"$TMPDIR/esbmc-path-cache.log" 2>&1; then
+    pass "verifier/esbmc-path-cache"
+else
+    fail "verifier/esbmc-path-cache" "$(tail -10 "$TMPDIR/esbmc-path-cache.log")"
+fi
 echo ""
 
 # ─── Section 3: Runtime Execution ──────────────────────────────────
@@ -1023,6 +1029,26 @@ if bash tests/bootstrap/tests.sh >"$bootstrap_log" 2>&1; then
     pass "bootstrap/smoke"
 else
     fail "bootstrap/smoke" "$(tail -20 "$bootstrap_log")"
+fi
+
+release_log="$TMPDIR/release_tests.log"
+if python3 tests/test_release.py >"$release_log" 2>&1; then
+    pass "release/smoke"
+else
+    fail "release/smoke" "$(tail -20 "$release_log")"
+fi
+
+measure_bootstrap_rss_probe="$TMPDIR/measure_bootstrap_rss_time_probe.log"
+if /usr/bin/time -v -o "$measure_bootstrap_rss_probe" true >/dev/null 2>&1 \
+    && grep -q "Maximum resident set size" "$measure_bootstrap_rss_probe"; then
+    measure_bootstrap_rss_log="$TMPDIR/measure_bootstrap_rss_tests.log"
+    if bash tests/measure_bootstrap_rss/tests.sh >"$measure_bootstrap_rss_log" 2>&1; then
+        pass "measure-bootstrap-rss/smoke"
+    else
+        fail "measure-bootstrap-rss/smoke" "$(tail -20 "$measure_bootstrap_rss_log")"
+    fi
+else
+    skip "measure-bootstrap-rss/smoke" "requires GNU-compatible /usr/bin/time -v"
 fi
 echo ""
 

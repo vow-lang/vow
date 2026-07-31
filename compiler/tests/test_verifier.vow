@@ -1,6 +1,7 @@
 module TestVerifier
 
 use ir
+use verifier
 use verifier_harness
 use verifier_ids
 
@@ -43,6 +44,14 @@ fn check_caller_precondition_sentinel() -> i64 {
     0
 }
 
+fn check_memory_limit_classifier_ignores_echoed_memlimit_option() -> i64 {
+    let combined: String = String::from(
+        "wrapper: esbmc test.c --memlimit 4096m\nVERIFICATION UNKNOWN\n"
+    );
+    if output_has_memory_limit(combined) { return 17; }
+    0
+}
+
 fn i64_result_to_i32(r: i64) -> i32 {
     if r == 1 { return 1; }
     if r == 2 { return 2; }
@@ -58,6 +67,7 @@ fn i64_result_to_i32(r: i64) -> i32 {
     if r == 12 { return 12; }
     if r == 13 { return 13; }
     if r == 14 { return 14; }
+    if r == 17 { return 17; }
     if r != 0 { return 99; }
     0
 }
@@ -69,5 +79,7 @@ fn main() -> i32 {
     if r2 != 0 { return i64_result_to_i32(r2); }
     let r3: i64 = check_caller_precondition_sentinel();
     if r3 != 0 { return i64_result_to_i32(r3); }
+    let r4: i64 = check_memory_limit_classifier_ignores_echoed_memlimit_option();
+    if r4 != 0 { return i64_result_to_i32(r4); }
     0
 }
