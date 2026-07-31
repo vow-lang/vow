@@ -24,6 +24,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          working-directory: bench
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: bench/uv.lock
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -53,6 +60,8 @@ jobs:
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
+      - name: Bench Python unit tests
+        run: uv run --project bench --locked python -m unittest discover -s bench -p 'test_*.py'
       - name: Verifier-evaluation suite (#334)
         # Asserts the labelled corpus in tests/verify* against ground-truth
         # blame/vow_id, with false-accepts (incl. vacuous proofs) failing the
