@@ -88,6 +88,7 @@ jobs:
           fail_ci_if_error: ${{ secrets.CODECOV_TOKEN != '' }}
 
   bootstrap:
+    needs: build-and-test
     # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression
     # (failing Stage 1/2 verification, or a broken SHA-256 fixed point)
     # blocks PRs. Stage 3 skips ESBMC to roughly halve wall time;
