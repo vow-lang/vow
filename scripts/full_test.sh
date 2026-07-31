@@ -408,6 +408,7 @@ echo "VERIFICATION SUCCESSFUL"
 SH
 chmod +x "$fake_esbmc_dir/esbmc"
 
+# The vowed u64 parameter is modeled with __VERIFIER_nondet_unsigned_long(), exercising its preamble declaration.
 u64_preamble_fixture="$TMPDIR/u64_nondet_preamble.vow"
 cat > "$u64_preamble_fixture" <<'VOW'
 module U64NondetPreamble
