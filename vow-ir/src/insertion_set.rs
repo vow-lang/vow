@@ -1,4 +1,4 @@
-use crate::types::{BasicBlock, Inst, InstData, InstId};
+use crate::types::{BasicBlock, Inst};
 
 struct Insertion {
     index: usize,
@@ -19,12 +19,16 @@ impl InsertionSet {
         }
     }
 
+    /// Schedule `inst` before the instruction at `index` in the original
+    /// block. The caller owns allocation of a function-unique instruction ID.
     pub fn insert_before(&mut self, index: usize, inst: Inst) {
         let order = self.next_order;
         self.next_order += 1;
         self.insertions.push(Insertion { index, order, inst });
     }
 
+    /// Merge scheduled instructions into `block` without changing any
+    /// instruction IDs or references.
     pub fn execute(&mut self, block: &mut BasicBlock) {
         if self.insertions.is_empty() {
             return;
@@ -32,44 +36,22 @@ impl InsertionSet {
 
         self.insertions.sort_by_key(|i| (i.index, i.order));
 
-        let old_len = block.insts.len();
-        let new_len = old_len + self.insertions.len();
+        let old_insts = std::mem::take(&mut block.insts);
+        let mut new_insts = Vec::with_capacity(old_insts.len() + self.insertions.len());
+        let insertions = std::mem::take(&mut self.insertions);
+        let mut ins_iter = insertions.into_iter().peekable();
 
-        let mut remap = vec![0u32; old_len];
-        let mut new_insts: Vec<Inst> = Vec::with_capacity(new_len);
-
-        let mut ins_iter = self.insertions.iter().peekable();
-        let mut new_pos: usize = 0;
-
-        for (old_pos, old_inst) in block.insts.iter().enumerate() {
+        for (old_pos, old_inst) in old_insts.into_iter().enumerate() {
             while ins_iter.peek().is_some_and(|ins| ins.index == old_pos) {
-                new_insts.push(ins_iter.next().unwrap().inst.clone());
-                new_pos += 1;
+                new_insts.push(ins_iter.next().unwrap().inst);
             }
-            remap[old_pos] = new_pos as u32;
-            new_insts.push(old_inst.clone());
-            new_pos += 1;
+            new_insts.push(old_inst);
         }
         for ins in ins_iter {
-            new_insts.push(ins.inst.clone());
-        }
-
-        for (pos, inst) in new_insts.iter_mut().enumerate() {
-            inst.id = InstId(pos as u32);
-            for arg in inst.args.iter_mut() {
-                if (arg.0 as usize) < old_len {
-                    *arg = InstId(remap[arg.0 as usize]);
-                }
-            }
-            if let InstData::PhiTarget(id) = &mut inst.data
-                && (id.0 as usize) < old_len
-            {
-                *id = InstId(remap[id.0 as usize]);
-            }
+            new_insts.push(ins.inst);
         }
 
         block.insts = new_insts;
-        self.insertions.clear();
         self.next_order = 0;
     }
 }
@@ -83,7 +65,7 @@ impl Default for InsertionSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{BlockId, InstData, Opcode, RegionId, Ty};
+    use crate::types::{BlockId, InstData, InstId, Opcode, RegionId, Ty};
     use vow_syntax::span::Span;
 
     fn dummy_span() -> Span {
@@ -132,14 +114,14 @@ mod tests {
         set.execute(&mut block);
 
         assert_eq!(block.insts.len(), 2);
-        assert_eq!(block.insts[0].id, InstId(0));
+        assert_eq!(block.insts[0].id, InstId(99));
         assert_eq!(block.insts[0].data, InstData::ConstI32(1));
-        assert_eq!(block.insts[1].id, InstId(1));
+        assert_eq!(block.insts[1].id, InstId(0));
         assert_eq!(block.insts[1].data, InstData::ConstI32(42));
     }
 
     #[test]
-    fn insert_before_middle_reindexes_args() {
+    fn insert_before_middle_preserves_ids_and_args() {
         let i0 = make_inst(0, Opcode::ConstI32, InstData::ConstI32(10));
         let i1 = make_inst(1, Opcode::ConstI32, InstData::ConstI32(20));
         let i2 = make_inst_with_args(2, Opcode::WrappingAdd, vec![InstId(0), InstId(1)]);
@@ -152,11 +134,11 @@ mod tests {
 
         assert_eq!(block.insts.len(), 4);
         assert_eq!(block.insts[0].id, InstId(0));
-        assert_eq!(block.insts[1].id, InstId(1));
+        assert_eq!(block.insts[1].id, InstId(99));
         assert_eq!(block.insts[1].data, InstData::ConstI32(5));
-        assert_eq!(block.insts[2].id, InstId(2));
-        assert_eq!(block.insts[3].id, InstId(3));
-        assert_eq!(block.insts[3].args, vec![InstId(0), InstId(2)]);
+        assert_eq!(block.insts[2].id, InstId(1));
+        assert_eq!(block.insts[3].id, InstId(2));
+        assert_eq!(block.insts[3].args, vec![InstId(0), InstId(1)]);
     }
 
     #[test]
@@ -185,8 +167,9 @@ mod tests {
             })
             .collect();
         assert_eq!(values, vec![10, 30, 1, 20, 2]);
-        for (expected_id, inst) in block.insts.iter().enumerate() {
-            assert_eq!(inst.id, InstId(expected_id as u32));
-        }
+        assert_eq!(
+            block.insts.iter().map(|inst| inst.id).collect::<Vec<_>>(),
+            vec![InstId(99), InstId(101), InstId(0), InstId(100), InstId(1)]
+        );
     }
 }
