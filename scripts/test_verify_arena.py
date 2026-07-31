@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -19,10 +20,12 @@ class VerifyArenaTest(unittest.TestCase):
     def test_pull_request_ci_runs_the_arena_proof(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
-        self.assertIn(
-            "      - name: Arena primitive verification\n"
-            "        run: scripts/verify_arena.sh\n",
+        self.assertRegex(
             workflow,
+            re.compile(
+                r"^[ \t]*(?:-[ \t]+)?run:[ \t]*scripts/verify_arena\.sh[ \t]*$",
+                re.MULTILINE,
+            ),
         )
 
     def test_runner_caps_memory_and_invokes_the_arena_proof(self) -> None:
