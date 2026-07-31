@@ -300,12 +300,17 @@ supplied arena.
 Runtime-created mutable `Vec` and `String` descriptors retain the
 public 24-byte `{ptr, len, cap}` layout, but the runtime allocation that
 contains the descriptor prefixes it with one private `VowArena*` owner
-word. The pointer returned to generated code still points at the public
-descriptor. Constructors, clone operations, and raw-parts copy
-operations MUST initialize this prefix. Static `VOW_CAP_RODATA`
-descriptors are bare 24-byte descriptors and have no prefix. Generated
-code and FFI consumers MUST NOT inspect or depend on this private word;
-it exists only for the checked projection routing described in §7.2.1.
+word. The high bit of the public `cap` word is reserved as
+`VOW_CAP_RUNTIME_OWNED`; the remaining bits encode the logical capacity.
+The pointer returned to generated code still points at the public
+descriptor. Constructors, clone operations, and raw-parts copy operations
+MUST initialize both the marker and the prefix. Static `VOW_CAP_RODATA`
+descriptors are bare 24-byte descriptors and have no prefix. Valid foreign
+mutable descriptors MUST use a capacity below `VOW_CAP_RUNTIME_OWNED` and
+therefore leave the marker clear. Generated code and FFI consumers MUST NOT
+inspect or depend on the private prefix. Consumers that inspect mutable
+runtime descriptor capacity MUST mask off `VOW_CAP_RUNTIME_OWNED`; mutation
+entry points do this internally.
 
 #### String runtime allocation API
 
@@ -390,10 +395,12 @@ fallback.
 The two `_in_candidate_arena` mutation entries are not unchecked
 explicit-arena operations. They compare the receiver descriptor's
 private owner word with `candidate`; a match uses that arena, while a
-mismatch delegates to the root wrapper. They test `cap ==
-VOW_CAP_RODATA` before reading the owner word, because static literal
-descriptors do not carry the private prefix. The normal mutation path
-then reports `RegionLiteralMutation`.
+mismatch delegates to the root wrapper. Before reading outside the public
+descriptor, they require the in-descriptor `VOW_CAP_RUNTIME_OWNED` marker.
+Foreign descriptors leave it clear and fall back without a prefix read.
+They also test `cap == VOW_CAP_RODATA` first because static literal
+descriptors do not carry the private prefix. The normal mutation path then
+reports `RegionLiteralMutation`.
 
 #### HashMap runtime allocation API
 
@@ -1162,16 +1169,15 @@ compile time MUST be placed in `.rodata`. The surrounding descriptor
 with the read-only-backing sentinel `cap = VOW_CAP_RODATA`.
 
 `VOW_CAP_RODATA` is a reserved `usize` value that is distinguishable
-from every legal runtime capacity. It MUST NOT collide with the
-existing "empty, not yet allocated, growable" sentinel used by the
-current runtime (`cap = 0`; see `__vow_vec_reserve` in
-`vow-runtime`, which lazily allocates `VEC_INITIAL_CAP` when
-`v.cap == 0`). The Phase 1 implementation MUST choose the sentinel
-explicitly — the recommended value is `usize::MAX`, reserving it
-from the legal capacity range; any alternative (e.g., an unused
-high bit, or a distinct flag word added to the descriptor) is
-acceptable provided the read-only and lazy-empty states remain
-strictly disjoint at runtime. Phase 1 runtime changes MUST update
+from every legal runtime capacity. It is `usize::MAX`. The high bit is
+also reserved as `VOW_CAP_RUNTIME_OWNED` for mutable descriptors created
+by the Vow runtime (§3.3); their logical capacity is the remaining low
+bits, with the all-low-bits-set value reserved to keep rodata distinct. A
+valid foreign mutable descriptor leaves the ownership bit clear. The
+logical "empty, not yet allocated, growable" capacity is zero (encoded as
+`VOW_CAP_RUNTIME_OWNED` for runtime-owned descriptors and raw `0` for
+foreign descriptors). These states remain strictly disjoint. Phase 1
+runtime changes MUST update
 `__vow_vec_reserve`, `__vow_vec_push`, `__vow_string_push_str`,
 `__vow_hashmap_insert`, and every other mutation entry point to
 test for `VOW_CAP_RODATA` first and trap before any growth logic
@@ -1294,12 +1300,14 @@ Codegen MAY trace those projection forms to produce an arena
 **candidate**. For `String::push_str` and `String::push_byte`, it MUST
 route such a receiver through the matching
 `_in_candidate_arena` entry. That entry authorizes the candidate only
-when the receiver's runtime owner word matches it; otherwise mutation
-uses the root arena. Direct receivers whose defining instruction has a
-`Block` or `Caller` region continue to use the ordinary `_in_arena`
-entry. A phi may retain a candidate only when all incoming routes name
-the same region, and it remains a candidate when any incoming route is
-projection-derived.
+when the receiver carries `VOW_CAP_RUNTIME_OWNED` and its runtime owner
+word matches the candidate; otherwise mutation uses the root arena. The
+marker test occurs before the prefix read, so a bare foreign descriptor
+cannot cause an out-of-bounds prefix access. Direct receivers whose
+defining instruction has a `Block` or `Caller` region continue to use the
+ordinary `_in_arena` entry. A phi may retain a candidate only when all
+incoming routes name the same region, and it remains a candidate when any
+incoming route is projection-derived.
 
 Candidate routing MUST NOT be used for Vec or HashMap mutation unless
 an equivalent checked runtime entry exists. Nor may a candidate be
@@ -1432,10 +1440,11 @@ The stdlib MUST provide:
   already lives in root and short-circuit. The private owner prefix
   described in §3.3 is runtime metadata for checked mutation routing,
   not a semantic region tag: it is absent from static and foreign
-  descriptors and does not prove that recursively referenced values
-  share the descriptor's arena. Scanning `__vow_root_arena`'s chunk
-  chain for pointer containment would likewise add a per-call cost the
-  intrinsic cannot amortise.
+  descriptors, its accompanying capacity marker only proves the prefix
+  may be read, and neither proves that recursively referenced values share
+  the descriptor's arena. Scanning `__vow_root_arena`'s chunk chain for
+  pointer containment would likewise add a per-call cost the intrinsic
+  cannot amortise.
 
   Double-pinning is therefore the programmer's concern:
   `pin_to_root(pin_to_root(x))` copies twice and produces two
