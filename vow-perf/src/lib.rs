@@ -293,20 +293,21 @@ fn has_rising_maximum_residual_tail(samples: &[Sample]) -> bool {
 
 fn r_squared(class: ComplexityClass, samples: &[Sample]) -> f64 {
     let count = samples.len() as f64;
+    // Linear regression is translation-invariant. Subtracting before the
+    // conversion preserves small deltas when counters have a large baseline.
+    let operation_origin = i128::from(samples[0].operations);
+    let operation_delta =
+        |sample: &Sample| (i128::from(sample.operations) - operation_origin) as f64;
     let mean_x = samples
         .iter()
         .map(|sample| basis_value(class, sample.input_size))
         .sum::<f64>()
         / count;
-    let mean_y = samples
-        .iter()
-        .map(|sample| sample.operations as f64)
-        .sum::<f64>()
-        / count;
+    let mean_y = samples.iter().map(operation_delta).sum::<f64>() / count;
 
     let (covariance, variance_x) = samples.iter().fold((0.0, 0.0), |acc, sample| {
         let centered_x = basis_value(class, sample.input_size) - mean_x;
-        let centered_y = sample.operations as f64 - mean_y;
+        let centered_y = operation_delta(sample) - mean_y;
         (
             acc.0 + centered_x * centered_y,
             acc.1 + centered_x * centered_x,
@@ -316,7 +317,7 @@ fn r_squared(class: ComplexityClass, samples: &[Sample]) -> f64 {
     if variance_x == 0.0 {
         return if samples
             .iter()
-            .all(|sample| sample.operations as f64 == mean_y)
+            .all(|sample| sample.operations == samples[0].operations)
         {
             1.0
         } else {
@@ -330,7 +331,7 @@ fn r_squared(class: ComplexityClass, samples: &[Sample]) -> f64 {
     }
     let intercept = mean_y - slope * mean_x;
     let (residual_sum, total_sum) = samples.iter().fold((0.0, 0.0), |acc, sample| {
-        let actual = sample.operations as f64;
+        let actual = operation_delta(sample);
         let predicted = intercept + slope * basis_value(class, sample.input_size);
         (
             acc.0 + (actual - predicted).powi(2),

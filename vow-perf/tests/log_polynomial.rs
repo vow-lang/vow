@@ -106,6 +106,18 @@ fn decreasing_work_does_not_fit_a_growing_complexity_class() {
 }
 
 #[test]
+fn large_operation_baselines_preserve_small_growth_deltas() {
+    let baseline = 1_u64 << 63;
+    let samples = [16_u64, 32, 64, 128, 256, 512]
+        .map(|input_size| Sample::new(input_size, baseline + input_size));
+
+    let analysis = analyze(ComplexityClass::Constant, &samples).unwrap();
+
+    assert_eq!(analysis.verdict, Verdict::Fail);
+    assert_eq!(analysis.observed, Some(ComplexityClass::Linear));
+}
+
+#[test]
 fn maximum_supported_declaration_does_not_pass_quartic_work() {
     let samples = [16_u64, 32, 64, 128, 256, 512]
         .map(|input_size| Sample::new(input_size, input_size.pow(4)));
