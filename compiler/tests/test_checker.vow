@@ -1,0 +1,70 @@
+module TestChecker
+
+use ast
+use checker
+use diag
+use env
+
+fn empty_module() -> Module {
+    Module {
+        name_sid: 0,
+        uses: Vec::new(),
+        items: Vec::new(),
+        arena: arena_new(),
+    }
+}
+
+fn one_item_module() -> Module {
+    let m: Module = empty_module();
+    m.items.push(item_pack(ITEM_FN(), 0));
+    m
+}
+
+fn check_module_lengths(m: Module, item_files: Vec<String>) [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let e: CheckEnv = env_new(dctx, String::from("test.vow"));
+    check_module(e, m, item_files);
+}
+
+fn run_mismatch_child(mode: String) -> i32 [io] {
+    if mode == String::from("short") {
+        check_module_lengths(one_item_module(), Vec::new());
+        return 0;
+    }
+
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(String::from("extra.vow"));
+    check_module_lengths(empty_module(), item_files);
+    0
+}
+
+fn mismatch_fails_with_invariant(argv0: String, mode: String, failure_base: i64) -> i64 [io] {
+    let child_args: Vec<String> = Vec::new();
+    child_args.push(mode);
+    let rc: i64 = process_run(argv0, child_args);
+    let stderr: String = process_get_stderr();
+
+    if rc != 1 { return failure_base; }
+    if !stderr.contains(String::from("item_files must be parallel to module.items")) {
+        return failure_base + 1;
+    }
+    if stderr.contains(String::from("IndexOutOfBounds")) {
+        return failure_base + 2;
+    }
+    0
+}
+
+fn main() -> i32 [io, read] {
+    let argv: Vec<String> = args();
+    if argv.len() > 1 {
+        return run_mismatch_child(argv[1]);
+    }
+
+    check_module_lengths(empty_module(), Vec::new());
+    let short_result: i64 = mismatch_fails_with_invariant(argv[0], String::from("short"), 1);
+    let long_result: i64 = mismatch_fails_with_invariant(argv[0], String::from("long"), 4);
+    if short_result != 0 && long_result != 0 { return 3; }
+    if short_result != 0 { return 1; }
+    if long_result != 0 { return 2; }
+    0
+}

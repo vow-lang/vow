@@ -133,9 +133,9 @@ reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-na
 
 **128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
 `I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
-exceed reasonable SMT solver timeouts; the `--no-128-verify` flag skips
-verification for functions whose contracts mention 128-bit values while still
-generating native code for them.
+exceed configured SMT solver timeouts. Such proofs use the ordinary verifier
+controls and retain fail-closed `timeout` or `unknown` outcomes; there is no
+type-specific verification opt-out. Never weaken contracts to fit the verifier.
 
 **Struct field layout:** every struct field up to 64 bits wide occupies one
 8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
@@ -330,7 +330,7 @@ Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs
 
 | Operator | Meaning    |
 |----------|------------|
-| `-`      | Negation (not allowed on `u64`) |
+| `-`      | Negation (not allowed on unsigned types) |
 | `!`      | Logical NOT|
 | `&`      | Borrow     |
 | `?`      | Unwrap (propagate error) |
@@ -945,7 +945,16 @@ section.
 
 `num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
 
-`memory_root_arena_bytes()` returns the current bytes retained by root-region arena chunks. `memory_peak_bytes()` returns the peak live bytes retained by all open arena chunks since process start. `memory_alloc_count_since_start()` returns the number of successful Vow arena allocation requests since process start. These queries do not allocate; they are effectful because they observe runtime process state.
+`memory_root_arena_bytes()` returns the current bytes retained by root-region
+arena chunks. It is a gauge, not a monotone counter: adding a root chunk raises
+it, while reclaiming an abandoned single-resident oversized root chunk during
+backing growth lowers it. `memory_peak_bytes()` returns the peak live bytes
+retained by all open arena chunks since process start.
+`memory_alloc_count_since_start()` returns the number of successful Vow arena
+allocation requests since process start. Peak bytes and allocation count are
+monotone non-decreasing and saturate at `u64::MAX` rather than wrapping. These
+queries do not allocate; they are effectful because they observe runtime process
+state.
 
 #### Encoding
 

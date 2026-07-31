@@ -1,0 +1,57 @@
+name: Install ESBMC
+description: Restore or install a checksum-verified ESBMC release
+
+inputs:
+  version:
+    description: ESBMC release version without the leading v
+    required: true
+  sha256:
+    description: SHA-256 checksum of the Ubuntu 24.04 release archive
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        ESBMC_VERSION: ${{ inputs.version }}
+        ESBMC_SHA256: ${{ inputs.sha256 }}
+      run: |
+        if [[ -z "$ESBMC_VERSION" ]]; then
+          echo "version input must not be empty" >&2
+          exit 1
+        fi
+        if [[ -z "$ESBMC_SHA256" ]]; then
+          echo "sha256 input must not be empty" >&2
+          exit 1
+        fi
+
+    - name: Cache ESBMC
+      id: cache-esbmc
+      uses: actions/cache@v6
+      with:
+        path: ~/esbmc
+        key: esbmc-${{ inputs.version }}-${{ inputs.sha256 }}-ubuntu-24.04
+
+    - name: Install ESBMC
+      if: steps.cache-esbmc.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        ESBMC_VERSION: ${{ inputs.version }}
+        ESBMC_SHA256: ${{ inputs.sha256 }}
+        ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
+      run: |
+        ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
+
+        curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+          -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
+
+        echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
+
+        unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
+        rm "/tmp/$ESBMC_ZIP"
+
+    - name: Add ESBMC to PATH
+      shell: bash
+      run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
