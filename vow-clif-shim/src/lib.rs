@@ -277,21 +277,47 @@ fn hidden_region_count(return_kind: i64, store_effects: &[i64], is_main: bool) -
     count + hidden_region_store_targets(store_effects).len()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReceiverRoute {
+    region: i64,
+    projection_candidate: bool,
+}
+
+impl ReceiverRoute {
+    fn direct(region: i64) -> Self {
+        Self {
+            region,
+            projection_candidate: false,
+        }
+    }
+
+    fn projection_candidate(region: i64) -> Self {
+        Self {
+            region,
+            projection_candidate: true,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn inst_region_for_value(
+fn inst_route_for_value(
     inst_id: i64,
     inst_region_by_id: &HashMap<i64, i64>,
     inst_data_by_id: &HashMap<i64, (i64, i64)>,
     inst_op_by_id: &HashMap<i64, i64>,
+    inst_first_arg_by_id: &HashMap<i64, i64>,
+    projection_ids: &std::collections::HashSet<i64>,
     upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
     return_kind: i64,
     store_effects: &[i64],
-) -> i64 {
-    inst_region_for_value_inner(
+) -> ReceiverRoute {
+    inst_route_for_value_inner(
         inst_id,
         inst_region_by_id,
         inst_data_by_id,
         inst_op_by_id,
+        inst_first_arg_by_id,
+        projection_ids,
         upsilon_sources_by_phi,
         return_kind,
         store_effects,
@@ -300,63 +326,135 @@ fn inst_region_for_value(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn inst_region_for_value_inner(
+fn inst_route_for_value_inner(
     inst_id: i64,
     inst_region_by_id: &HashMap<i64, i64>,
     inst_data_by_id: &HashMap<i64, (i64, i64)>,
     inst_op_by_id: &HashMap<i64, i64>,
+    inst_first_arg_by_id: &HashMap<i64, i64>,
+    projection_ids: &std::collections::HashSet<i64>,
     upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
     return_kind: i64,
     store_effects: &[i64],
     seen: &mut std::collections::HashSet<i64>,
-) -> i64 {
+) -> ReceiverRoute {
     if !seen.insert(inst_id) {
-        return inst_region_by_id
-            .get(&inst_id)
-            .copied()
-            .unwrap_or_else(region_root);
+        return ReceiverRoute::direct(
+            inst_region_by_id
+                .get(&inst_id)
+                .copied()
+                .unwrap_or_else(region_root),
+        );
     }
     if let Some(&(dk, dv)) = inst_data_by_id.get(&inst_id)
         && dk == IDATA_ARG_INDEX
         && let Some(rgn) = hidden_region_for_store_target(return_kind, store_effects, dv)
     {
-        return rgn;
+        return ReceiverRoute::direct(rgn);
+    }
+    if projection_ids.contains(&inst_id)
+        && let Some(&container_id) = inst_first_arg_by_id.get(&inst_id)
+    {
+        let candidate = inst_route_for_value_inner(
+            container_id,
+            inst_region_by_id,
+            inst_data_by_id,
+            inst_op_by_id,
+            inst_first_arg_by_id,
+            projection_ids,
+            upsilon_sources_by_phi,
+            return_kind,
+            store_effects,
+            seen,
+        )
+        .region;
+        let kind = candidate & 3;
+        if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+            return ReceiverRoute::projection_candidate(candidate);
+        }
+        return ReceiverRoute::direct(
+            inst_region_by_id
+                .get(&inst_id)
+                .copied()
+                .unwrap_or_else(region_root),
+        );
     }
     if inst_op_by_id.get(&inst_id).copied() == Some(IOP_PHI)
         && let Some(sources) = upsilon_sources_by_phi.get(&inst_id)
     {
-        let mut merged: Option<i64> = None;
+        let mut merged: Option<ReceiverRoute> = None;
         for &source_id in sources {
             let mut source_seen = seen.clone();
-            let rgn = inst_region_for_value_inner(
+            let route = inst_route_for_value_inner(
                 source_id,
                 inst_region_by_id,
                 inst_data_by_id,
                 inst_op_by_id,
+                inst_first_arg_by_id,
+                projection_ids,
                 upsilon_sources_by_phi,
                 return_kind,
                 store_effects,
                 &mut source_seen,
             );
             match merged {
-                Some(existing) if existing != rgn => {
-                    return inst_region_by_id
-                        .get(&inst_id)
-                        .copied()
-                        .unwrap_or_else(region_root);
+                Some(existing) if existing.region != route.region => {
+                    return ReceiverRoute::direct(
+                        inst_region_by_id
+                            .get(&inst_id)
+                            .copied()
+                            .unwrap_or_else(region_root),
+                    );
+                }
+                Some(existing) if !existing.projection_candidate && route.projection_candidate => {
+                    merged = Some(ReceiverRoute::projection_candidate(existing.region));
                 }
                 Some(_) => {}
-                None => merged = Some(rgn),
+                None => merged = Some(route),
             }
         }
-        if let Some(rgn) = merged {
-            return rgn;
+        if let Some(route) = merged {
+            return route;
         }
     }
-    inst_region_by_id
-        .get(&inst_id)
-        .copied()
-        .unwrap_or_else(region_root)
+    ReceiverRoute::direct(
+        inst_region_by_id
+            .get(&inst_id)
+            .copied()
+            .unwrap_or_else(region_root),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inst_region_for_value(
+    inst_id: i64,
+    inst_region_by_id: &HashMap<i64, i64>,
+    inst_data_by_id: &HashMap<i64, (i64, i64)>,
+    inst_op_by_id: &HashMap<i64, i64>,
+    inst_first_arg_by_id: &HashMap<i64, i64>,
+    projection_ids: &std::collections::HashSet<i64>,
+    upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
+    return_kind: i64,
+    store_effects: &[i64],
+) -> i64 {
+    let route = inst_route_for_value(
+        inst_id,
+        inst_region_by_id,
+        inst_data_by_id,
+        inst_op_by_id,
+        inst_first_arg_by_id,
+        projection_ids,
+        upsilon_sources_by_phi,
+        return_kind,
+        store_effects,
+    );
+    if route.projection_candidate {
+        return inst_region_by_id
+            .get(&inst_id)
+            .copied()
+            .unwrap_or_else(region_root);
+    }
+    route.region
 }
 
 fn block_arena_value(
@@ -438,7 +536,12 @@ fn arena_value_for_region(
     }
 }
 
-fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Option<i64>) {
+fn routed_vec_extern(
+    sym: &str,
+    inst_rgn: i64,
+    receiver_route: ReceiverRoute,
+) -> (&str, Option<i64>) {
+    let receiver_rgn = receiver_route.region;
     match sym {
         "__vow_vec_new" => {
             if (inst_rgn & 3) == REGION_KIND_ROOT {
@@ -456,7 +559,9 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         }
         "__vow_vec_push_val" => {
             let kind = receiver_rgn & 3;
-            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+            if !receiver_route.projection_candidate
+                && (kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER)
+            {
                 ("__vow_vec_push_val_in_arena", Some(receiver_rgn))
             } else {
                 (sym, None)
@@ -464,7 +569,9 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         }
         "__vow_vec_push" => {
             let kind = receiver_rgn & 3;
-            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+            if !receiver_route.projection_candidate
+                && (kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER)
+            {
                 ("__vow_vec_push_in_arena", Some(receiver_rgn))
             } else {
                 (sym, None)
@@ -557,7 +664,14 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         "__vow_string_push_str" => {
             let kind = receiver_rgn & 3;
             if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
-                ("__vow_string_push_str_in_arena", Some(receiver_rgn))
+                if receiver_route.projection_candidate {
+                    (
+                        "__vow_string_push_str_in_candidate_arena",
+                        Some(receiver_rgn),
+                    )
+                } else {
+                    ("__vow_string_push_str_in_arena", Some(receiver_rgn))
+                }
             } else {
                 (sym, None)
             }
@@ -565,7 +679,14 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         "__vow_string_push_byte" => {
             let kind = receiver_rgn & 3;
             if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
-                ("__vow_string_push_byte_in_arena", Some(receiver_rgn))
+                if receiver_route.projection_candidate {
+                    (
+                        "__vow_string_push_byte_in_candidate_arena",
+                        Some(receiver_rgn),
+                    )
+                } else {
+                    ("__vow_string_push_byte_in_arena", Some(receiver_rgn))
+                }
             } else {
                 (sym, None)
             }
@@ -579,7 +700,9 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         }
         "__vow_map_insert" => {
             let kind = receiver_rgn & 3;
-            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+            if !receiver_route.projection_candidate
+                && (kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER)
+            {
                 ("__vow_map_insert_in_arena", Some(receiver_rgn))
             } else {
                 (sym, None)
@@ -1188,6 +1311,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let mut inst_region_by_id: HashMap<i64, i64> = HashMap::new();
     let mut inst_data_by_id: HashMap<i64, (i64, i64)> = HashMap::new();
     let mut inst_op_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut inst_first_arg_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut projection_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
     let mut upsilon_sources_by_phi: HashMap<i64, Vec<i64>> = HashMap::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
@@ -1201,6 +1326,19 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             inst_op_by_id.insert(inst_ids[idx], inst_ops[idx]);
             let aoff = arg_offsets[idx] as usize;
             let alen = arg_lengths[idx] as usize;
+            if alen > 0 {
+                inst_first_arg_by_id.insert(inst_ids[idx], all_args[aoff]);
+            }
+            let is_field_or_load = matches!(inst_ops[idx], IOP_FIELD_GET | IOP_LOAD);
+            let is_vec_get = inst_ops[idx] == IOP_CALL
+                && inst_dks[idx] == IDATA_CALL_EXTERN
+                && matches!(
+                    unsafe { read_vow_string(inst_ds_ptrs[idx]) },
+                    "__vow_vec_get_val" | "__vow_vec_get"
+                );
+            if is_field_or_load || is_vec_get {
+                projection_ids.insert(inst_ids[idx]);
+            }
             if inst_ops[idx] == IOP_UPSILON && inst_dks[idx] == IDATA_PHI_TARGET && alen > 0 {
                 upsilon_sources_by_phi
                     .entry(inst_dvs[idx])
@@ -2203,23 +2341,25 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 set_val!(iid, ptr);
                                 continue;
                             }
-                            let receiver_rgn = if alen > 0 {
+                            let receiver_route = if alen > 0 {
                                 let receiver_id = all_args[aoff];
                                 let decl = &ctx.func_decls[fi];
-                                inst_region_for_value(
+                                inst_route_for_value(
                                     receiver_id,
                                     &inst_region_by_id,
                                     &inst_data_by_id,
                                     &inst_op_by_id,
+                                    &inst_first_arg_by_id,
+                                    &projection_ids,
                                     &upsilon_sources_by_phi,
                                     decl.return_kind,
                                     &decl.store_effects,
                                 )
                             } else {
-                                region_root()
+                                ReceiverRoute::direct(region_root())
                             };
                             let (routed_sym, target_region) =
-                                routed_vec_extern(sym, inst_rgns[ii], receiver_rgn);
+                                routed_vec_extern(sym, inst_rgns[ii], receiver_route);
                             extern_target_region = target_region;
                             if let Some(&fr) = extern_func_refs.get(routed_sym) {
                                 fr
@@ -2315,6 +2455,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                         &inst_region_by_id,
                                         &inst_data_by_id,
                                         &inst_op_by_id,
+                                        &inst_first_arg_by_id,
+                                        &projection_ids,
                                         &upsilon_sources_by_phi,
                                         current_decl.return_kind,
                                         &current_decl.store_effects,
@@ -3097,6 +3239,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
+        "__vow_string_push_str_in_candidate_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_string_byte_at" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3107,6 +3254,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_string_push_byte_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_push_byte_in_candidate_arena" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3847,6 +3999,8 @@ mod tests {
         let no_phi: HashMap<i64, Vec<i64>> = HashMap::new();
         let no_op: HashMap<i64, i64> = HashMap::new();
         let no_region: HashMap<i64, i64> = HashMap::new();
+        let no_first_arg: HashMap<i64, i64> = HashMap::new();
+        let no_projections: std::collections::HashSet<i64> = std::collections::HashSet::new();
         // A FreshInCaller return occupies hidden slot 0, so a store into param 0
         // lands at hidden idx 1.
         let store_effects = [0i64, RSUM_KIND_FRESH_IN_CALLER];
@@ -3861,6 +4015,8 @@ mod tests {
                 &no_region,
                 &data_hidden,
                 &no_op,
+                &no_first_arg,
+                &no_projections,
                 &no_phi,
                 RSUM_KIND_FRESH_IN_CALLER,
                 &store_effects,
@@ -3883,6 +4039,8 @@ mod tests {
                 &region_proj,
                 &data_proj,
                 &op_proj,
+                &no_first_arg,
+                &no_projections,
                 &no_phi,
                 RSUM_KIND_FRESH_IN_CALLER,
                 &store_effects,
@@ -3900,11 +4058,55 @@ mod tests {
                 &no_region,
                 &data_nonhidden,
                 &no_op,
+                &no_first_arg,
+                &no_projections,
                 &no_phi,
                 RSUM_KIND_FRESH_IN_CALLER,
                 &store_effects,
             ),
             region_root(),
+        );
+    }
+
+    #[test]
+    fn projection_route_uses_candidate_only_for_checked_string_helpers() {
+        let store_effects = [0i64, RSUM_KIND_FRESH_IN_CALLER];
+        let mut data: HashMap<i64, (i64, i64)> = HashMap::new();
+        data.insert(100, (IDATA_ARG_INDEX, 0));
+        data.insert(200, (IDATA_FIELD, 0));
+        let mut ops: HashMap<i64, i64> = HashMap::new();
+        ops.insert(100, IOP_GET_ARG);
+        ops.insert(200, IOP_FIELD_GET);
+        let mut first_args: HashMap<i64, i64> = HashMap::new();
+        first_args.insert(200, 100);
+        let mut projections = std::collections::HashSet::new();
+        projections.insert(200);
+
+        let route = inst_route_for_value(
+            200,
+            &HashMap::new(),
+            &data,
+            &ops,
+            &first_args,
+            &projections,
+            &HashMap::new(),
+            RSUM_KIND_FRESH_IN_CALLER,
+            &store_effects,
+        );
+        assert_eq!(
+            route,
+            ReceiverRoute::projection_candidate(region_pack(REGION_KIND_CALLER, 1))
+        );
+        assert_eq!(
+            routed_vec_extern("__vow_string_push_byte", region_root(), route),
+            (
+                "__vow_string_push_byte_in_candidate_arena",
+                Some(region_pack(REGION_KIND_CALLER, 1))
+            )
+        );
+        assert_eq!(
+            routed_vec_extern("__vow_vec_push_val", region_root(), route),
+            ("__vow_vec_push_val", None)
         );
     }
 }
