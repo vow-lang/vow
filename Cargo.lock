@@ -994,7 +994,6 @@ dependencies = [
  "cranelift-native",
  "cranelift-object",
  "target-lexicon",
- "tempfile",
  "vow-linker",
 ]
 

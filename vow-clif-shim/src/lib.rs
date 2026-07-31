@@ -2558,7 +2558,7 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
     let obj_path = unsafe { read_vow_string(obj_path_ptr) };
     let output_path = unsafe { read_vow_string(output_path_ptr) };
 
-    let runtime_lib = match find_lib("libvow_runtime.a") {
+    let runtime_lib = match vow_linker::find_runtime_lib() {
         Some(p) => p,
         None => {
             eprintln!(
@@ -2567,35 +2567,22 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
             return -1;
         }
     };
-    let shim_lib = find_lib("libvow_clif_shim.a");
+    let shim_lib = vow_linker::find_shim_lib();
+    let inputs = std::iter::once(std::path::Path::new(obj_path))
+        .chain(std::iter::once(runtime_lib.as_path()))
+        .chain(shim_lib.as_deref());
 
-    let mut cmd = std::process::Command::new("cc");
-    cmd.arg(obj_path);
-    cmd.arg(&runtime_lib);
-    if let Some(ref sl) = shim_lib {
-        cmd.arg(sl);
-    }
-    cmd.arg("-o").arg(output_path);
-    // On macOS the dl* symbols live in libc (no separate libdl), so -ldl
-    // would cause "library not found" — only pass it on platforms that
-    // actually ship libdl as a standalone library.
-    cmd.args(vow_linker::platform_link_args_for(std::env::consts::OS));
-    if cfg!(target_os = "macos") {
-        // Stabilise LC_UUID and CDHash across different -o names; see #500.
-        cmd.args(["-Wl,-reproducible", "-Wl,-final_output,vow"]);
-    }
-
-    match cmd.status() {
-        Ok(s) if s.success() => {
+    match vow_linker::link_reproducible_executable(inputs, std::path::Path::new(output_path)) {
+        Ok(()) => {
             let _ = std::fs::remove_file(obj_path);
             0
         }
-        Ok(s) => {
-            eprintln!("clif_shim: cc exited with {s}");
+        Err(vow_linker::LinkError::Failed(status)) => {
+            eprintln!("clif_shim: cc exited with {status}");
             -1
         }
-        Err(e) => {
-            eprintln!("clif_shim: failed to invoke cc: {e}");
+        Err(vow_linker::LinkError::Invoke(error)) => {
+            eprintln!("clif_shim: failed to invoke cc: {error}");
             -1
         }
     }
@@ -2604,94 +2591,6 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn find_lib(name: &str) -> Option<String> {
-    let env_key = if name.contains("runtime") {
-        "VOW_RUNTIME_PATH"
-    } else {
-        "VOW_CLIF_SHIM_PATH"
-    };
-    let exe = std::env::current_exe().ok();
-    find_lib_from_parts(name, std::env::var_os(env_key), exe.as_deref())
-}
-
-fn find_lib_from_parts(
-    name: &str,
-    env_value: Option<std::ffi::OsString>,
-    exe: Option<&std::path::Path>,
-) -> Option<String> {
-    let target_dir = cargo_target_dir();
-    find_lib_from_parts_with_target_dir(name, env_value, exe, &target_dir)
-}
-
-fn find_lib_from_parts_with_target_dir(
-    name: &str,
-    env_value: Option<std::ffi::OsString>,
-    exe: Option<&std::path::Path>,
-    target_dir: &std::path::Path,
-) -> Option<String> {
-    if let Some(p) = env_value {
-        let path = std::path::PathBuf::from(p);
-        if path.exists() {
-            return Some(path.to_string_lossy().into_owned());
-        }
-    }
-
-    if let Some(exe) = exe
-        && let Some(path) = find_installed_lib_for_exe(name, exe)
-    {
-        return Some(path);
-    }
-
-    find_lib_in_cargo_target(name, target_dir)
-}
-
-fn find_installed_lib_for_exe(name: &str, exe: &std::path::Path) -> Option<String> {
-    if let Some(dir) = exe.parent() {
-        // Preserve the legacy adjacent-to-exe lookup before prefix paths so
-        // manual installs that co-locate the static libraries with vowc keep
-        // working.
-        let p = dir.join(name);
-        if p.exists() {
-            return Some(p.to_string_lossy().into_owned());
-        }
-        if let Some(prefix) = dir.parent() {
-            let p = prefix.join("lib").join("vow").join(name);
-            if p.exists() {
-                return Some(p.to_string_lossy().into_owned());
-            }
-            let p = prefix.join("lib").join(name);
-            if p.exists() {
-                return Some(p.to_string_lossy().into_owned());
-            }
-        }
-    }
-
-    None
-}
-
-fn cargo_target_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target"))
-}
-
-fn find_lib_in_cargo_target(name: &str, target_dir: &std::path::Path) -> Option<String> {
-    // Development fallback only: env overrides and installed-prefix libraries
-    // are checked first. Prefer `release` over `debug`: the bootstrap
-    // (`cargo build --release --all`, scripts/bootstrap.sh) produces the
-    // release archives, so a stale pre-existing `target/debug/*.a` (left over
-    // from an earlier `cargo build`/`cargo test`) must not shadow the fresh
-    // release runtime — otherwise a newly added `__vow_*` builtin links against
-    // the older debug archive and fails with undefined references. A
-    // debug-only checkout (no release archive) still resolves to debug.
-    for profile in &["release", "debug"] {
-        let p = target_dir.join(profile).join(name);
-        if p.exists() {
-            return Some(p.to_string_lossy().into_owned());
-        }
-    }
-
-    None
-}
 
 fn emit_overflow_check(
     builder: &mut FunctionBuilder,
@@ -3688,126 +3587,6 @@ mod tests {
             hidden_region_for_store_target(RSUM_KIND_FRESH_IN_CALLER, &flat, 1),
             Some(region_pack(REGION_KIND_CALLER, 2))
         );
-    }
-
-    #[test]
-    fn finds_lib_in_installed_lib_vow_dir() {
-        let root = tempfile::TempDir::new().unwrap();
-        let bin_dir = root.path().join("bin");
-        let lib_dir = root.path().join("lib").join("vow");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        std::fs::create_dir_all(&lib_dir).unwrap();
-        let exe = bin_dir.join("vowc");
-        let lib = lib_dir.join("libvow_runtime.a");
-        std::fs::write(&exe, b"").unwrap();
-        std::fs::write(&lib, b"").unwrap();
-
-        let found = find_lib_from_parts_with_target_dir(
-            "libvow_runtime.a",
-            None,
-            Some(&exe),
-            &root.path().join("target"),
-        );
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn finds_lib_in_installed_lib_dir() {
-        let root = tempfile::TempDir::new().unwrap();
-        let bin_dir = root.path().join("bin");
-        let lib_dir = root.path().join("lib");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        std::fs::create_dir_all(&lib_dir).unwrap();
-        let exe = bin_dir.join("vowc");
-        let lib = lib_dir.join("libvow_runtime.a");
-        std::fs::write(&exe, b"").unwrap();
-        std::fs::write(&lib, b"").unwrap();
-
-        let found = find_lib_from_parts_with_target_dir(
-            "libvow_runtime.a",
-            None,
-            Some(&exe),
-            &root.path().join("target"),
-        );
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn env_override_does_not_require_current_exe() {
-        let root = tempfile::TempDir::new().unwrap();
-        let lib = root.path().join("libvow_runtime.a");
-        std::fs::write(&lib, b"").unwrap();
-
-        let found =
-            find_lib_from_parts("libvow_runtime.a", Some(lib.clone().into_os_string()), None);
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn cargo_target_fallback_does_not_require_current_exe() {
-        let root = tempfile::TempDir::new().unwrap();
-        let debug_dir = root.path().join("debug");
-        std::fs::create_dir_all(&debug_dir).unwrap();
-        let lib = debug_dir.join("libvow_runtime.a");
-        std::fs::write(&lib, b"").unwrap();
-
-        let found =
-            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn cargo_target_fallback_accepts_release_when_debug_missing() {
-        let root = tempfile::TempDir::new().unwrap();
-        let release_dir = root.path().join("release");
-        std::fs::create_dir_all(&release_dir).unwrap();
-        let lib = release_dir.join("libvow_runtime.a");
-        std::fs::write(&lib, b"").unwrap();
-
-        let found =
-            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn cargo_target_fallback_prefers_release_before_debug() {
-        // A stale pre-existing target/debug archive must not shadow the fresh
-        // release archive produced by the bootstrap; otherwise a newly added
-        // __vow_* runtime symbol links against the older debug build and fails
-        // with undefined references. See find_lib_in_cargo_target.
-        let root = tempfile::TempDir::new().unwrap();
-        let debug_dir = root.path().join("debug");
-        let release_dir = root.path().join("release");
-        std::fs::create_dir_all(&debug_dir).unwrap();
-        std::fs::create_dir_all(&release_dir).unwrap();
-        let debug_lib = debug_dir.join("libvow_runtime.a");
-        let release_lib = release_dir.join("libvow_runtime.a");
-        std::fs::write(&debug_lib, b"debug").unwrap();
-        std::fs::write(&release_lib, b"release").unwrap();
-
-        let found =
-            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
-        let expected = release_lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn cargo_target_fallback_accepts_debug_when_release_missing() {
-        let root = tempfile::TempDir::new().unwrap();
-        let debug_dir = root.path().join("debug");
-        std::fs::create_dir_all(&debug_dir).unwrap();
-        let lib = debug_dir.join("libvow_runtime.a");
-        std::fs::write(&lib, b"debug").unwrap();
-
-        let found =
-            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
-        let expected = lib.to_string_lossy().into_owned();
-        assert_eq!(found.as_deref(), Some(expected.as_str()));
     }
 
     // Directly exercises the shim's copy of region inference (issue #367). It is
