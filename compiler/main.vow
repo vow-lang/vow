@@ -4336,7 +4336,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `parse_u128`   | `fn(s: String) -> Option<u128>`          |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Each `parse_X` returns `Option::None` for malformed input, empty strings, or\n"));
-    r.push_str(String::from("values outside the target type's range.\n"));
+    r.push_str(String::from("values outside the target type's range. Parsing never substitutes a numeric\n"));
+    r.push_str(String::from("sentinel for failure; callers that need a fallback must choose it explicitly\n"));
+    r.push_str(String::from("when handling `Option::None`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("In particular, `parse_u8` accepts decimal values from `0` through `255` and\n"));
     r.push_str(String::from("returns `Option::None` for negative or larger values.\n"));
@@ -8984,7 +8986,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| `parse_u128`   | `fn(s: String) -> Option<u128>`          |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Each `parse_X` returns `Option::None` for malformed input, empty strings, or\n"));
-    r.push_str(String::from("values outside the target type's range.\n"));
+    r.push_str(String::from("values outside the target type's range. Parsing never substitutes a numeric\n"));
+    r.push_str(String::from("sentinel for failure; callers that need a fallback must choose it explicitly\n"));
+    r.push_str(String::from("when handling `Option::None`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("In particular, `parse_u8` accepts decimal values from `0` through `255` and\n"));
     r.push_str(String::from("returns `Option::None` for negative or larger values.\n"));
