@@ -3560,14 +3560,14 @@ mod tests {
         let output = command
             .output()
             .unwrap_or_else(|error| panic!("failed to invoke {command:?}: {error}"));
-        assert!(
-            output.status.success(),
+        let link_failure = format!(
             "failed to link float-Phi test object {}\ncommand: {command:?}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
             object_path.display(),
             output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
+        assert!(output.status.success(), "{link_failure}");
     }
 
     fn declare_test_function(ctx: i64, func_idx: i64, name: &str, ret_ty: i64, is_main: bool) {
