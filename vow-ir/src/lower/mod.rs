@@ -4128,6 +4128,44 @@ mod tests {
     }
 
     #[test]
+    fn free_parse_i64_lowers_an_option_i64_result() {
+        let source = r#"
+module ParseI64Lowering
+
+fn parse_or_default(s: String) -> i64 {
+    match parse_i64(s) {
+        Option::Some(value) => value,
+        Option::None => 0,
+    }
+}
+"#;
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, "parse_i64.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let item_files = vec!["parse_i64.vow".to_string(); ast.items.len()];
+        let module = lower_module(&ast, &item_files, &StringExprSet::new());
+        let instructions: Vec<&Inst> = module.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .collect();
+        let parse_call = instructions
+            .iter()
+            .find(|inst| {
+                inst.data == InstData::CallExtern("__vow_string_parse_i64_opt".to_string())
+            })
+            .expect("free parse_i64 must use the option-returning runtime entry point");
+
+        assert_eq!(parse_call.ty, Ty::Ptr);
+        assert!(instructions.iter().any(|inst| {
+            inst.opcode == Opcode::FieldGet
+                && inst.ty == Ty::I64
+                && inst.args == vec![parse_call.id]
+                && inst.data == InstData::FieldIndex(1)
+        }));
+    }
+
+    #[test]
     fn string_matches_literal_at_lowers_literal_without_allocation() {
         let body = Block {
             stmts: vec![],
