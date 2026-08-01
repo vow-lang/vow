@@ -563,6 +563,11 @@ the obligation to the selected bound payload. References remain borrows and do
 not become linear owners. Collection types do not acquire linear ownership from
 their element type; their separate non-linear-element restrictions still apply.
 
+A non-`linear` struct cannot contain a field whose type is a linear owner. The
+containing struct must also be declared `linear`; otherwise ordinary struct
+aliasing could expose the same obligation more than once. Borrowed references
+and collection fields do not become linear owners under this rule.
+
 ### Struct Literals
 
 Struct literal names must be PascalCase:

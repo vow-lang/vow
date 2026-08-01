@@ -578,6 +578,16 @@ impl<'e> Checker<'e> {
                     for f in &s.fields {
                         if let Ok(ty) = self.env.resolve(&f.ty) {
                             self.check_btreemap_key_in_ty(&ty, f.span);
+                            if !s.is_linear && crate::linear::is_linear_owner_ty(&ty, &self.env) {
+                                self.emit_error(
+                                    ErrorCode::LinearTypeViolation,
+                                    format!(
+                                        "non-linear struct `{}` cannot contain linear owner field `{}`; declare the struct as `linear`",
+                                        s.name, f.name
+                                    ),
+                                    f.span,
+                                );
+                            }
                         }
                     }
                 }
@@ -4281,6 +4291,68 @@ mod tests {
         check_single_file(&mut checker, &module);
         assert!(!checker.has_errors());
         assert!(checker.env.lookup_enum("Color").is_some());
+    }
+
+    #[test]
+    fn check_module_rejects_linear_owner_field_in_non_linear_struct() {
+        use vow_syntax::ast::{
+            EnumDef, EnumVariant, FieldDef, Item, StructDef, VariantKind as AstVariantKind,
+        };
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let named = |name: &str| Type::Named {
+            name: name.to_string(),
+            span: dummy_span(),
+        };
+        let module = Module {
+            name: "test".to_string(),
+            uses: vec![],
+            items: vec![
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: true,
+                    name: "Token".to_string(),
+                    fields: vec![FieldDef {
+                        name: "id".to_string(),
+                        ty: named("i64"),
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                Item::Enum(EnumDef {
+                    vis: Visibility::Public,
+                    name: "Payload".to_string(),
+                    variants: vec![EnumVariant {
+                        name: "Token".to_string(),
+                        kind: AstVariantKind::Tuple(vec![named("Token")]),
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: false,
+                    name: "Holder".to_string(),
+                    fields: vec![FieldDef {
+                        name: "payload".to_string(),
+                        ty: named("Payload"),
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+            ],
+            span: dummy_span(),
+        };
+
+        check_single_file(&mut checker, &module);
+
+        assert!(checker.has_errors());
+        assert!(emitter.0.iter().any(|diagnostic| {
+            diagnostic.code == ErrorCode::LinearTypeViolation
+                && diagnostic.message.contains(
+                    "non-linear struct `Holder` cannot contain linear owner field `payload`",
+                )
+        }));
     }
 
     // --- Match expression ---
