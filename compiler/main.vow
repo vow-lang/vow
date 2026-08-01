@@ -4003,6 +4003,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("the obligation to the selected bound payload. References remain borrows and do\n"));
     r.push_str(String::from("not become linear owners. Collection types do not acquire linear ownership from\n"));
     r.push_str(String::from("their element type; their separate non-linear-element restrictions still apply.\n"));
+    r.push_str(String::from("An unbound `_` match catchall cannot discard a still-reachable linear payload:\n"));
+    r.push_str(String::from("every variant that owns a linear payload must first have an explicit arm that\n"));
+    r.push_str(String::from("binds and consumes or transfers that payload.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A non-`linear` struct cannot contain a field whose type is a linear owner. The\n"));
     r.push_str(String::from("containing struct must also be declared `linear`; otherwise ordinary struct\n"));
@@ -4105,6 +4108,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("Tuple-variant payloads may contain only `_` or immutable identifier bindings.\n"));
     r.push_str(String::from("Nested payload destructuring is not implemented. A catchall `_` or immutable\n"));
     r.push_str(String::from("identifier arm must be the final arm because it matches every enum value.\n"));
+    r.push_str(String::from("For an enum that can own linear payloads, `_` is allowed only after explicit\n"));
+    r.push_str(String::from("arms have handled every variant with a linear payload; otherwise the catchall\n"));
+    r.push_str(String::from("would silently discard an outstanding linear obligation.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Mutable identifier, literal (integer, boolean, or string), tuple, struct,\n"));
     r.push_str(String::from("enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns\n"));
@@ -6075,7 +6081,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("obligation, because copying the containing struct could expose that obligation\n"));
     r.push_str(String::from("more than once. Linear owners include `linear struct` values and owned enum,\n"));
     r.push_str(String::from("`Option`, or `Result` wrappers that transitively contain one; matching such a\n"));
-    r.push_str(String::from("wrapper consumes it and transfers the obligation to the selected payload.\n"));
+    r.push_str(String::from("wrapper consumes it and transfers the obligation to the selected payload. An\n"));
+    r.push_str(String::from("unbound `_` catchall also violates the rule while any unhandled enum variant can\n"));
+    r.push_str(String::from("carry a linear payload.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("linear struct Handle { fd: i64 }\n"));
@@ -6089,8 +6097,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Restructure ownership so each path uses a consumed linear value at most\n"));
     r.push_str(String::from("once. If a struct contains a linear owner field, declare the containing struct\n"));
-    r.push_str(String::from("`linear`. Obligations that are simply left live at scope exit are reported later\n"));
-    r.push_str(String::from("as `RegionLinear`.\n"));
+    r.push_str(String::from("`linear`. In a match, add explicit arms that bind and consume or transfer every\n"));
+    r.push_str(String::from("linear payload before using `_`. Obligations that are simply left live at scope\n"));
+    r.push_str(String::from("exit are reported later as `RegionLinear`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### RegionLinear\n"));
     r.push_str(String::from("\n"));
@@ -8688,6 +8697,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("the obligation to the selected bound payload. References remain borrows and do\n"));
     r.push_str(String::from("not become linear owners. Collection types do not acquire linear ownership from\n"));
     r.push_str(String::from("their element type; their separate non-linear-element restrictions still apply.\n"));
+    r.push_str(String::from("An unbound `_` match catchall cannot discard a still-reachable linear payload:\n"));
+    r.push_str(String::from("every variant that owns a linear payload must first have an explicit arm that\n"));
+    r.push_str(String::from("binds and consumes or transfers that payload.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("A non-`linear` struct cannot contain a field whose type is a linear owner. The\n"));
     r.push_str(String::from("containing struct must also be declared `linear`; otherwise ordinary struct\n"));
@@ -8790,6 +8802,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("Tuple-variant payloads may contain only `_` or immutable identifier bindings.\n"));
     r.push_str(String::from("Nested payload destructuring is not implemented. A catchall `_` or immutable\n"));
     r.push_str(String::from("identifier arm must be the final arm because it matches every enum value.\n"));
+    r.push_str(String::from("For an enum that can own linear payloads, `_` is allowed only after explicit\n"));
+    r.push_str(String::from("arms have handled every variant with a linear payload; otherwise the catchall\n"));
+    r.push_str(String::from("would silently discard an outstanding linear obligation.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Mutable identifier, literal (integer, boolean, or string), tuple, struct,\n"));
     r.push_str(String::from("enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns\n"));
@@ -10768,7 +10783,9 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("obligation, because copying the containing struct could expose that obligation\n"));
     r.push_str(String::from("more than once. Linear owners include `linear struct` values and owned enum,\n"));
     r.push_str(String::from("`Option`, or `Result` wrappers that transitively contain one; matching such a\n"));
-    r.push_str(String::from("wrapper consumes it and transfers the obligation to the selected payload.\n"));
+    r.push_str(String::from("wrapper consumes it and transfers the obligation to the selected payload. An\n"));
+    r.push_str(String::from("unbound `_` catchall also violates the rule while any unhandled enum variant can\n"));
+    r.push_str(String::from("carry a linear payload.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("linear struct Handle { fd: i64 }\n"));
@@ -10782,8 +10799,9 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Restructure ownership so each path uses a consumed linear value at most\n"));
     r.push_str(String::from("once. If a struct contains a linear owner field, declare the containing struct\n"));
-    r.push_str(String::from("`linear`. Obligations that are simply left live at scope exit are reported later\n"));
-    r.push_str(String::from("as `RegionLinear`.\n"));
+    r.push_str(String::from("`linear`. In a match, add explicit arms that bind and consume or transfer every\n"));
+    r.push_str(String::from("linear payload before using `_`. Obligations that are simply left live at scope\n"));
+    r.push_str(String::from("exit are reported later as `RegionLinear`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### RegionLinear\n"));
     r.push_str(String::from("\n"));

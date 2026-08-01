@@ -155,7 +155,9 @@ it. The error also rejects a non-`linear` struct field whose type owns a linear
 obligation, because copying the containing struct could expose that obligation
 more than once. Linear owners include `linear struct` values and owned enum,
 `Option`, or `Result` wrappers that transitively contain one; matching such a
-wrapper consumes it and transfers the obligation to the selected payload.
+wrapper consumes it and transfers the obligation to the selected payload. An
+unbound `_` catchall also violates the rule while any unhandled enum variant can
+carry a linear payload.
 
 ```vow
 linear struct Handle { fd: i64 }
@@ -169,8 +171,9 @@ fn f(h: Handle) -> Handle {
 
 **Fix:** Restructure ownership so each path uses a consumed linear value at most
 once. If a struct contains a linear owner field, declare the containing struct
-`linear`. Obligations that are simply left live at scope exit are reported later
-as `RegionLinear`.
+`linear`. In a match, add explicit arms that bind and consume or transfer every
+linear payload before using `_`. Obligations that are simply left live at scope
+exit are reported later as `RegionLinear`.
 
 ### RegionLinear
 

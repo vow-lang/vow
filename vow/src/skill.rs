@@ -1919,6 +1919,9 @@ linear; matching such a value consumes the wrapper exactly once and transfers
 the obligation to the selected bound payload. References remain borrows and do
 not become linear owners. Collection types do not acquire linear ownership from
 their element type; their separate non-linear-element restrictions still apply.
+An unbound `_` match catchall cannot discard a still-reachable linear payload:
+every variant that owns a linear payload must first have an explicit arm that
+binds and consumes or transfers that payload.
 
 A non-`linear` struct cannot contain a field whose type is a linear owner. The
 containing struct must also be declared `linear`; otherwise ordinary struct
@@ -2021,6 +2024,9 @@ return the same type. Patterns must be exhaustive.
 Tuple-variant payloads may contain only `_` or immutable identifier bindings.
 Nested payload destructuring is not implemented. A catchall `_` or immutable
 identifier arm must be the final arm because it matches every enum value.
+For an enum that can own linear payloads, `_` is allowed only after explicit
+arms have handled every variant with a linear payload; otherwise the catchall
+would silently discard an outstanding linear obligation.
 
 Mutable identifier, literal (integer, boolean, or string), tuple, struct,
 enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns
@@ -3991,7 +3997,9 @@ it. The error also rejects a non-`linear` struct field whose type owns a linear
 obligation, because copying the containing struct could expose that obligation
 more than once. Linear owners include `linear struct` values and owned enum,
 `Option`, or `Result` wrappers that transitively contain one; matching such a
-wrapper consumes it and transfers the obligation to the selected payload.
+wrapper consumes it and transfers the obligation to the selected payload. An
+unbound `_` catchall also violates the rule while any unhandled enum variant can
+carry a linear payload.
 
 ```vow
 linear struct Handle { fd: i64 }
@@ -4005,8 +4013,9 @@ fn f(h: Handle) -> Handle {
 
 **Fix:** Restructure ownership so each path uses a consumed linear value at most
 once. If a struct contains a linear owner field, declare the containing struct
-`linear`. Obligations that are simply left live at scope exit are reported later
-as `RegionLinear`.
+`linear`. In a match, add explicit arms that bind and consume or transfer every
+linear payload before using `_`. Obligations that are simply left live at scope
+exit are reported later as `RegionLinear`.
 
 ### RegionLinear
 
@@ -6582,6 +6591,9 @@ linear; matching such a value consumes the wrapper exactly once and transfers
 the obligation to the selected bound payload. References remain borrows and do
 not become linear owners. Collection types do not acquire linear ownership from
 their element type; their separate non-linear-element restrictions still apply.
+An unbound `_` match catchall cannot discard a still-reachable linear payload:
+every variant that owns a linear payload must first have an explicit arm that
+binds and consumes or transfers that payload.
 
 A non-`linear` struct cannot contain a field whose type is a linear owner. The
 containing struct must also be declared `linear`; otherwise ordinary struct
@@ -6684,6 +6696,9 @@ return the same type. Patterns must be exhaustive.
 Tuple-variant payloads may contain only `_` or immutable identifier bindings.
 Nested payload destructuring is not implemented. A catchall `_` or immutable
 identifier arm must be the final arm because it matches every enum value.
+For an enum that can own linear payloads, `_` is allowed only after explicit
+arms have handled every variant with a linear payload; otherwise the catchall
+would silently discard an outstanding linear obligation.
 
 Mutable identifier, literal (integer, boolean, or string), tuple, struct,
 enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns
@@ -8658,7 +8673,9 @@ it. The error also rejects a non-`linear` struct field whose type owns a linear
 obligation, because copying the containing struct could expose that obligation
 more than once. Linear owners include `linear struct` values and owned enum,
 `Option`, or `Result` wrappers that transitively contain one; matching such a
-wrapper consumes it and transfers the obligation to the selected payload.
+wrapper consumes it and transfers the obligation to the selected payload. An
+unbound `_` catchall also violates the rule while any unhandled enum variant can
+carry a linear payload.
 
 ```vow
 linear struct Handle { fd: i64 }
@@ -8672,8 +8689,9 @@ fn f(h: Handle) -> Handle {
 
 **Fix:** Restructure ownership so each path uses a consumed linear value at most
 once. If a struct contains a linear owner field, declare the containing struct
-`linear`. Obligations that are simply left live at scope exit are reported later
-as `RegionLinear`.
+`linear`. In a match, add explicit arms that bind and consume or transfer every
+linear payload before using `_`. Obligations that are simply left live at scope
+exit are reported later as `RegionLinear`.
 
 ### RegionLinear
 

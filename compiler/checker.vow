@@ -1473,6 +1473,65 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     }
 }
 
+fn handled_variant_contains(handled: Vec<String>, name: String) -> bool {
+    let mut i: i64 = 0;
+    while i < handled.len() {
+        if handled[i] == name {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn unhandled_variant_owns_linear_payload(e: CheckEnv, scrutinee_tid: i64, handled: Vec<String>) -> bool {
+    let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
+    let enum_idx: i64 = env_lookup_enum(e, enum_name);
+    if enum_idx != -1 {
+        let variant_names_lid: i64 = e.edef_vname_lids[enum_idx];
+        let variant_payloads_lid: i64 = e.edef_vpayload_lids[enum_idx];
+        let nvariants: i64 = e.edef_variant_count[enum_idx];
+        let mut vi: i64 = 0;
+        while vi < nvariants {
+            let variant_sid: i64 = ts_arg_get(e.ts, variant_names_lid, vi);
+            let ts: TyStore = e.ts;
+            let variant_name: String = ts.strs[variant_sid];
+            if !handled_variant_contains(handled, variant_name) {
+                let payload_lid: i64 = ts_arg_get(e.ts, variant_payloads_lid, vi);
+                let mut pi: i64 = 0;
+                while pi < ts_arg_len(e.ts, payload_lid) {
+                    if is_linear_owner_ty(e, ts_arg_get(e.ts, payload_lid, pi)) == 1 {
+                        return true;
+                    }
+                    pi = pi + 1;
+                }
+            }
+            vi = vi + 1;
+        }
+        return false;
+    }
+
+    if ty_tag(e.ts, scrutinee_tid) != CTY_APPLIED() {
+        return false;
+    }
+    let args_lid: i64 = ty_b(e.ts, scrutinee_tid);
+    if enum_name == String::from("Option") {
+        return !handled_variant_contains(handled, String::from("Some")) &&
+            ts_arg_len(e.ts, args_lid) >= 1 &&
+            is_linear_owner_ty(e, ts_arg_get(e.ts, args_lid, 0)) == 1;
+    }
+    if enum_name == String::from("Result") {
+        let ok_owns: bool = !handled_variant_contains(handled, String::from("Ok")) &&
+            ts_arg_len(e.ts, args_lid) >= 1 &&
+            is_linear_owner_ty(e, ts_arg_get(e.ts, args_lid, 0)) == 1;
+        let err_owns: bool = !handled_variant_contains(handled, String::from("Err")) &&
+            ts_arg_len(e.ts, args_lid) >= 2 &&
+            is_linear_owner_ty(e, ts_arg_get(e.ts, args_lid, 1)) == 1;
+        return ok_owns || err_owns;
+    }
+    false
+}
+
 // True when a value of type `from_tid` may appear where `to_tid` is expected.
 // Only the dedicated unsuffixed integer literal marker may coerce across
 // integer types; genuine integer values must already match.
@@ -2122,13 +2181,32 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), String::from("match scrutinee must be an enum; use `if`/`else` comparisons for scalar values"), expr_span(a, scrutinee_eid));
         }
         let mut result_tid: i64 = CTY_NEVER();
+        let handled_variants: Vec<String> = Vec::new();
         let mut i: i64 = 0;
         while i < n_arms {
             let pat_pid: i64 = list_get(a, arms_lid, i * 2);
             let body_eid: i64 = list_get(a, arms_lid, i * 2 + 1);
             env_push_scope(e);
             if supported_arms[i] && scrutinee_supported {
+                if pat_tag(a, pat_pid) == PAT_WILD() && unhandled_variant_owns_linear_payload(e, scrutinee_tid, handled_variants) {
+                    env_emit_error_code(
+                        e,
+                        EC_LINEAR_TYPE_VIOLATION(),
+                        String::from("catchall pattern discards an unhandled linear enum payload; add explicit arms that bind and consume every linear payload"),
+                        pat_span(a, pat_pid),
+                    );
+                }
                 bind_arm_pattern(e, m, pat_pid, scrutinee_tid);
+                if pat_tag(a, pat_pid) == PAT_ENUM() {
+                    let path_lid: i64 = pat_a(a, pat_pid);
+                    let path_len: i64 = list_len(a, path_lid);
+                    if path_len > 0 {
+                        let variant_name: String = arena_str(a, list_get(a, path_lid, path_len - 1));
+                        if !handled_variant_contains(handled_variants, variant_name) {
+                            handled_variants.push(variant_name);
+                        }
+                    }
+                }
             }
             let arm_tid: i64 = check_expr(e, m, body_eid);
             env_pop_scope(e);

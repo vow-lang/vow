@@ -562,6 +562,9 @@ linear; matching such a value consumes the wrapper exactly once and transfers
 the obligation to the selected bound payload. References remain borrows and do
 not become linear owners. Collection types do not acquire linear ownership from
 their element type; their separate non-linear-element restrictions still apply.
+An unbound `_` match catchall cannot discard a still-reachable linear payload:
+every variant that owns a linear payload must first have an explicit arm that
+binds and consumes or transfers that payload.
 
 A non-`linear` struct cannot contain a field whose type is a linear owner. The
 containing struct must also be declared `linear`; otherwise ordinary struct
@@ -664,6 +667,9 @@ return the same type. Patterns must be exhaustive.
 Tuple-variant payloads may contain only `_` or immutable identifier bindings.
 Nested payload destructuring is not implemented. A catchall `_` or immutable
 identifier arm must be the final arm because it matches every enum value.
+For an enum that can own linear payloads, `_` is allowed only after explicit
+arms have handled every variant with a linear payload; otherwise the catchall
+would silently discard an outstanding linear obligation.
 
 Mutable identifier, literal (integer, boolean, or string), tuple, struct,
 enum-struct, or-pattern, unqualified enum-variant, and nested payload patterns

@@ -1718,12 +1718,30 @@ impl<'e> Checker<'e> {
                     );
                 }
                 let mut result_ty = Ty::Unit;
+                let mut handled_variants = HashSet::new();
                 for (i, (arm, pattern_supported)) in
                     arms.iter().zip(supported_arms.iter()).enumerate()
                 {
                     self.env.push_scope();
                     if *pattern_supported && scrutinee_supported {
+                        if matches!(&arm.pattern.kind, PatKind::Wildcard)
+                            && self.unhandled_variant_owns_linear_payload(
+                                &scrutinee_ty,
+                                &handled_variants,
+                            )
+                        {
+                            self.emit_error(
+                                ErrorCode::LinearTypeViolation,
+                                "catchall pattern discards an unhandled linear enum payload; add explicit arms that bind and consume every linear payload",
+                                arm.pattern.span,
+                            );
+                        }
                         self.bind_arm_pattern(&arm.pattern, &scrutinee_ty);
+                        if let PatKind::EnumVariant { path, .. } = &arm.pattern.kind
+                            && let Some(variant_name) = path.last()
+                        {
+                            handled_variants.insert(variant_name.clone());
+                        }
                     }
                     let arm_ty = self.check_expr(&arm.body);
                     self.exit_scope();
@@ -2530,6 +2548,56 @@ impl<'e> Checker<'e> {
         }
     }
 
+    fn unhandled_variant_owns_linear_payload(
+        &self,
+        scrutinee_ty: &Ty,
+        handled_variants: &HashSet<String>,
+    ) -> bool {
+        let (enum_name, args) = match scrutinee_ty {
+            Ty::Enum(name) => (name.as_str(), &[][..]),
+            Ty::Applied(base, args) => match base.as_ref() {
+                Ty::Enum(name) => (name.as_str(), args.as_slice()),
+                _ => return false,
+            },
+            _ => return false,
+        };
+
+        if let Some(info) = self.env.lookup_enum(enum_name) {
+            return info.variants.iter().any(|variant| {
+                !handled_variants.contains(&variant.name)
+                    && match &variant.kind {
+                        VariantKind::Tuple(types) => types
+                            .iter()
+                            .any(|ty| crate::linear::is_linear_owner_ty(ty, &self.env)),
+                        VariantKind::Struct(fields) => fields
+                            .iter()
+                            .any(|(_, ty)| crate::linear::is_linear_owner_ty(ty, &self.env)),
+                        VariantKind::Unit => false,
+                    }
+            });
+        }
+
+        match enum_name {
+            "Option" => {
+                !handled_variants.contains("Some")
+                    && args
+                        .first()
+                        .is_some_and(|ty| crate::linear::is_linear_owner_ty(ty, &self.env))
+            }
+            "Result" => {
+                (!handled_variants.contains("Ok")
+                    && args
+                        .first()
+                        .is_some_and(|ty| crate::linear::is_linear_owner_ty(ty, &self.env)))
+                    || (!handled_variants.contains("Err")
+                        && args
+                            .get(1)
+                            .is_some_and(|ty| crate::linear::is_linear_owner_ty(ty, &self.env)))
+            }
+            _ => false,
+        }
+    }
+
     // K violations use BTreeMapKeyTypeMustBeI64; V violations use
     // BTreeMapValueMustBeNonLinear. Called from the major type-resolution sites
     // (Stmt::Let annotations, function param / return / field / alias / const
@@ -2844,6 +2912,50 @@ mod tests {
             emitter.0[0]
                 .message
                 .contains("wildcard pattern discards a linear value")
+        );
+    }
+
+    #[test]
+    fn catchall_rejects_only_unhandled_linear_variants() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![
+                    VariantInfo {
+                        name: "A".to_string(),
+                        kind: VariantKind::Tuple(vec![Ty::Struct("Token".to_string())]),
+                    },
+                    VariantInfo {
+                        name: "B".to_string(),
+                        kind: VariantKind::Tuple(vec![Ty::Struct("Token".to_string())]),
+                    },
+                    VariantInfo {
+                        name: "Empty".to_string(),
+                        kind: VariantKind::Unit,
+                    },
+                ],
+            },
+        );
+        let mut handled = HashSet::from(["A".to_string()]);
+
+        assert!(
+            checker
+                .unhandled_variant_owns_linear_payload(&Ty::Enum("Payload".to_string()), &handled)
+        );
+
+        handled.insert("B".to_string());
+        assert!(
+            !checker
+                .unhandled_variant_owns_linear_payload(&Ty::Enum("Payload".to_string()), &handled)
         );
     }
 
