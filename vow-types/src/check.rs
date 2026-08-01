@@ -578,11 +578,11 @@ impl<'e> Checker<'e> {
                     for f in &s.fields {
                         if let Ok(ty) = self.env.resolve(&f.ty) {
                             self.check_btreemap_key_in_ty(&ty, f.span);
-                            if !s.is_linear && crate::linear::is_linear_owner_ty(&ty, &self.env) {
+                            if crate::linear::is_linear_owner_ty(&ty, &self.env) {
                                 self.emit_error(
                                     ErrorCode::LinearTypeViolation,
                                     format!(
-                                        "non-linear struct `{}` cannot contain linear owner field `{}`; declare the struct as `linear`",
+                                        "struct fields cannot own linear values: `{}.{}` requires move-out semantics that are not supported",
                                         s.name, f.name
                                     ),
                                     f.span,
@@ -2495,7 +2495,10 @@ impl<'e> Checker<'e> {
                             .find(|v| v.name.as_str() == variant_name)
                             .map(|v| match &v.kind {
                                 VariantKind::Tuple(tys) => tys.clone(),
-                                _ => vec![],
+                                VariantKind::Struct(fields) => {
+                                    fields.iter().map(|(_, ty)| ty.clone()).collect()
+                                }
+                                VariantKind::Unit => vec![],
                             })
                     })
                     .or_else(|| match (enum_name.as_str(), variant_name) {
@@ -2896,6 +2899,52 @@ mod tests {
         let pattern = Pat {
             kind: PatKind::EnumVariant {
                 path: vec!["Payload".to_string(), "Token".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Wildcard,
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Enum("Payload".to_string()));
+
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("wildcard pattern discards a linear value")
+        );
+    }
+
+    #[test]
+    fn arm_pattern_wildcard_rejects_linear_struct_variant_payload() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Named".to_string(),
+                    kind: VariantKind::Struct(vec![(
+                        "token".to_string(),
+                        Ty::Struct("Token".to_string()),
+                    )]),
+                }],
+            },
+        );
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Payload".to_string(), "Named".to_string()],
                 inner: vec![Pat {
                     kind: PatKind::Wildcard,
                     span: dummy_span(),
@@ -4406,7 +4455,7 @@ mod tests {
     }
 
     #[test]
-    fn check_module_rejects_linear_owner_field_in_non_linear_struct() {
+    fn check_module_rejects_linear_owner_field_in_linear_struct() {
         use vow_syntax::ast::{
             EnumDef, EnumVariant, FieldDef, Item, StructDef, VariantKind as AstVariantKind,
         };
@@ -4443,7 +4492,7 @@ mod tests {
                 }),
                 Item::Struct(StructDef {
                     vis: Visibility::Public,
-                    is_linear: false,
+                    is_linear: true,
                     name: "Holder".to_string(),
                     fields: vec![FieldDef {
                         name: "payload".to_string(),
@@ -4461,9 +4510,9 @@ mod tests {
         assert!(checker.has_errors());
         assert!(emitter.0.iter().any(|diagnostic| {
             diagnostic.code == ErrorCode::LinearTypeViolation
-                && diagnostic.message.contains(
-                    "non-linear struct `Holder` cannot contain linear owner field `payload`",
-                )
+                && diagnostic
+                    .message
+                    .contains("struct fields cannot own linear values: `Holder.payload`")
         }));
     }
 

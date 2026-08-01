@@ -566,10 +566,11 @@ An unbound `_` match catchall cannot discard a still-reachable linear payload:
 every variant that owns a linear payload must first have an explicit arm that
 binds and consumes or transfers that payload.
 
-A non-`linear` struct cannot contain a field whose type is a linear owner. The
-containing struct must also be declared `linear`; otherwise ordinary struct
-aliasing could expose the same obligation more than once. Borrowed references
-and collection fields do not become linear owners under this rule.
+Struct fields cannot own linear values, even when the containing struct is
+`linear`, because field access does not provide move-out semantics. Allowing an
+owned field would let repeated reads transfer the same obligation more than
+once. Borrowed references and collection fields do not become linear owners
+under this rule.
 
 ### Struct Literals
 

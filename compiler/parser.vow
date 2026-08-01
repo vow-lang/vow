@@ -340,17 +340,19 @@ fn parse_enum_def(p: Parser) -> i64 {
             variant_items.push(payload_lid);
         } else if at(p, tok_lbrace()) {
             let _lb2: Token = advance(p);
+            let payload_types: Vec<i64> = Vec::new();
             while !at(p, tok_rbrace()) && !at_end(p) {
                 let _fsid: i64 = expect_ident(p);
                 let _colon: bool = expect(p, tok_colon());
-                let _ftid: i64 = parse_type(p);
+                let ftid: i64 = parse_type(p);
+                payload_types.push(ftid);
                 if at(p, tok_comma()) {
                     let _c: Token = advance(p);
                 }
             }
             let _rb2: bool = expect(p, tok_rbrace());
-            let empty_lid: i64 = arena_add_list(p.arena, Vec::new());
-            variant_items.push(empty_lid);
+            let payload_lid: i64 = arena_add_list(p.arena, payload_types);
+            variant_items.push(payload_lid);
         } else {
             let empty_lid: i64 = arena_add_list(p.arena, Vec::new());
             variant_items.push(empty_lid);

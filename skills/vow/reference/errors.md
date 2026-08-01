@@ -151,9 +151,9 @@ fn f() -> () {
 **Meaning:** A linear owner value is used in a way that is immediately invalid,
 such as consuming it twice, consuming it inside a loop that may execute more
 than once, or consuming it after only some control-flow paths already consumed
-it. The error also rejects a non-`linear` struct field whose type owns a linear
-obligation, because copying the containing struct could expose that obligation
-more than once. Linear owners include `linear struct` values and owned enum,
+it. The error also rejects a struct field whose type owns a linear obligation,
+because field access has no move-out semantics and repeated reads could expose
+that obligation more than once. Linear owners include `linear struct` values and owned enum,
 `Option`, or `Result` wrappers that transitively contain one; matching such a
 wrapper consumes it and transfers the obligation to the selected payload. An
 unbound `_` catchall also violates the rule while any unhandled enum variant can
@@ -170,8 +170,8 @@ fn f(h: Handle) -> Handle {
 ```
 
 **Fix:** Restructure ownership so each path uses a consumed linear value at most
-once. If a struct contains a linear owner field, declare the containing struct
-`linear`. In a match, add explicit arms that bind and consume or transfer every
+once. Keep linear owners out of struct fields until move-out field access is
+supported. In a match, add explicit arms that bind and consume or transfer every
 linear payload before using `_`. Obligations that are simply left live at scope
 exit are reported later as `RegionLinear`.
 

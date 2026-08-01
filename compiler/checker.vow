@@ -516,19 +516,18 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
                 let ftid_lid: i64 = e.sdef_field_tid_lids[sidx];
                 let fields_lid: i64 = sdef_fields_lid(a, id);
                 let struct_name: String = arena_str(a, sdef_name_sid(a, id));
-                let struct_is_linear: i64 = sdef_is_linear(a, id);
                 let mut fi: i64 = 0;
                 while fi < nf {
                     let ftid: i64 = ts_arg_get(e.ts, ftid_lid, fi);
                     recheck_tid_btreemap_linearity(e, ftid, sdef_span(a, id));
-                    if struct_is_linear == 0 && is_linear_owner_ty(e, ftid) == 1 {
+                    if is_linear_owner_ty(e, ftid) == 1 {
                         let field_name: String = arena_str(a, list_get(a, fields_lid, fi * 2));
                         let ast_ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
-                        let msg: String = String::from("non-linear struct `");
+                        let msg: String = String::from("struct fields cannot own linear values: `");
                         msg.push_str(struct_name);
-                        msg.push_str(String::from("` cannot contain linear owner field `"));
+                        msg.push_str(String::from("."));
                         msg.push_str(field_name);
-                        msg.push_str(String::from("`; declare the struct as `linear`"));
+                        msg.push_str(String::from("` requires move-out semantics that are not supported"));
                         env_emit_error_code(e, EC_LINEAR_TYPE_VIOLATION(), msg, type_span(a, ast_ftid));
                     }
                     fi = fi + 1;
