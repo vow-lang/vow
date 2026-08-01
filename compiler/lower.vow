@@ -9,6 +9,11 @@ struct LowerCtx {
     current_block: i64,
     next_inst_id: i64,
     inst_ty_by_id: Vec<i64>,
+    inst_block_by_id: Vec<i64>,
+    inst_index_by_id: Vec<i64>,
+    phi_first_dependent: Vec<i64>,
+    phi_dependent_targets: Vec<i64>,
+    phi_next_dependent: Vec<i64>,
     scope_vars: Vec<String>,
     scope_vals: Vec<i64>,
     scope_starts: Vec<i64>,
@@ -87,6 +92,11 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         current_block: 0,
         next_inst_id: 0,
         inst_ty_by_id: Vec::new(),
+        inst_block_by_id: Vec::new(),
+        inst_index_by_id: Vec::new(),
+        phi_first_dependent: Vec::new(),
+        phi_dependent_targets: Vec::new(),
+        phi_next_dependent: Vec::new(),
         scope_vars: Vec::new(),
         scope_vals: Vec::new(),
         scope_starts: Vec::new(),
@@ -199,6 +209,43 @@ fn lctx_record_inst_ty(ctx: LowerCtx, inst_id: i64, ty: i64) {
     }
 }
 
+fn lctx_merge_inst_ty(ctx: LowerCtx, inst_id: i64, incoming_ty: i64) {
+    if inst_id < 0 || inst_id >= ctx.inst_ty_by_id.len() {
+        return;
+    }
+    let current_ty: i64 = lctx_inst_ty(ctx, inst_id);
+    let merged_ty: i64 = merge_phi_ty(current_ty, incoming_ty);
+    if merged_ty == current_ty {
+        return;
+    }
+    lctx_record_inst_ty(ctx, inst_id, merged_ty);
+    let block_id: i64 = ctx.inst_block_by_id[inst_id];
+    let inst_index: i64 = ctx.inst_index_by_id[inst_id];
+    let block: IrBlock = ctx.func.blocks[block_id];
+    let inst: IrInst = block.insts[inst_index];
+    inst.ty = merged_ty;
+    block.insts[inst_index] = inst;
+
+    let mut edge: i64 = ctx.phi_first_dependent[inst_id];
+    while edge != -1 {
+        lctx_merge_inst_ty(ctx, ctx.phi_dependent_targets[edge], merged_ty);
+        edge = ctx.phi_next_dependent[edge];
+    }
+}
+
+fn lctx_link_phi_input(ctx: LowerCtx, input_id: i64, target_id: i64) {
+    if target_id < 0 || target_id >= ctx.inst_ty_by_id.len() {
+        return;
+    }
+    if input_id >= 0 && input_id < ctx.phi_first_dependent.len() && input_id != target_id {
+        let edge: i64 = ctx.phi_dependent_targets.len();
+        ctx.phi_dependent_targets.push(target_id);
+        ctx.phi_next_dependent.push(ctx.phi_first_dependent[input_id]);
+        ctx.phi_first_dependent[input_id] = edge;
+    }
+    lctx_merge_inst_ty(ctx, target_id, lctx_inst_ty(ctx, input_id));
+}
+
 fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2: i64, ds: String) -> i64 {
     if lctx_is_terminated(ctx) {
         return ctx.next_inst_id;
@@ -207,8 +254,15 @@ fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, 
     ctx.next_inst_id = id + 1;
     let inst: IrInst = ir_inst_new(id, op, ty, args, dk, dv, dv2, ds);
     let blk: IrBlock = ctx.func.blocks[ctx.current_block];
+    let inst_index: i64 = blk.insts.len();
     blk.insts.push(inst);
     lctx_record_inst_ty(ctx, id, ty);
+    ctx.inst_block_by_id.push(ctx.current_block);
+    ctx.inst_index_by_id.push(inst_index);
+    ctx.phi_first_dependent.push(-1);
+    if op == IOP_UPSILON() && dk == IDATA_PHI_TARGET() && dv != 2147483647 && args.len() > 0 {
+        lctx_link_phi_input(ctx, args[0], dv);
+    }
     id
 }
 
@@ -1385,6 +1439,10 @@ fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64)
         let inst: IrInst = blk.insts[i];
         if inst.id == upsilon_id {
             inst.dv = phi_id;
+            blk.insts[i] = inst;
+            if inst.args.len() > 0 {
+                lctx_link_phi_input(ctx, inst.args[0], phi_id);
+            }
             return;
         }
         i = i + 1;

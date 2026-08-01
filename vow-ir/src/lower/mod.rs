@@ -526,6 +526,8 @@ pub(crate) struct LowerCtx {
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
     inst_ty_cache: HashMap<InstId, Ty>,
+    inst_locations: Vec<(BlockId, usize)>,
+    phi_dependents: HashMap<InstId, Vec<InstId>>,
     // source file path for vow entries
     file: String,
     // struct name → field type names (from AST declarations) for FieldGet auto-tagging
@@ -625,6 +627,8 @@ impl LowerCtx {
             type_aliases,
             inst_struct_type: HashMap::new(),
             inst_ty_cache: HashMap::new(),
+            inst_locations: Vec::new(),
+            phi_dependents: HashMap::new(),
             file,
             struct_field_type_names,
             string_exprs,
@@ -683,6 +687,28 @@ impl LowerCtx {
 
     pub(super) fn inst_ty(&self, id: InstId) -> Ty {
         self.inst_ty_cache.get(&id).copied().unwrap_or(Ty::Unit)
+    }
+
+    fn merge_inst_ty(&mut self, id: InstId, incoming_ty: Ty) {
+        let merged_ty = merge_phi_ty(self.inst_ty(id), incoming_ty);
+        if merged_ty == self.inst_ty(id) {
+            return;
+        }
+        let (block_id, inst_index) = self.inst_locations[id.0 as usize];
+        self.func.blocks[block_id.0 as usize].insts[inst_index].ty = merged_ty;
+        self.inst_ty_cache.insert(id, merged_ty);
+
+        let dependents = self.phi_dependents.get(&id).cloned().unwrap_or_default();
+        for dependent in dependents {
+            self.merge_inst_ty(dependent, merged_ty);
+        }
+    }
+
+    fn link_phi_input(&mut self, input: InstId, target: InstId) {
+        if input != target {
+            self.phi_dependents.entry(input).or_default().push(target);
+        }
+        self.merge_inst_ty(target, self.inst_ty(input));
     }
 
     pub(super) fn emit_linear_consume_if_needed(&mut self, id: InstId, span: Span) {
@@ -765,6 +791,16 @@ impl LowerCtx {
         data: InstData,
         origin: Span,
     ) -> InstId {
+        let phi_link = if opcode == Opcode::Upsilon {
+            match (&data, args.first()) {
+                (InstData::PhiTarget(target), Some(input)) if *target != InstId(u32::MAX) => {
+                    Some((*input, *target))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         let id = InstId(self.next_inst_id);
         self.next_inst_id += 1;
         let inst = Inst {
@@ -778,7 +814,12 @@ impl LowerCtx {
         };
         self.inst_ty_cache.insert(id, ty);
         let block_idx = self.current_block.0 as usize;
+        let inst_idx = self.func.blocks[block_idx].insts.len();
         self.func.blocks[block_idx].insts.push(inst);
+        self.inst_locations.push((self.current_block, inst_idx));
+        if let Some((input, target)) = phi_link {
+            self.link_phi_input(input, target);
+        }
         id
     }
 
@@ -3667,11 +3708,16 @@ fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty, InstData) {
 
 fn backpatch_upsilon(ctx: &mut LowerCtx, block_id: BlockId, upsilon_id: InstId, phi_id: InstId) {
     let block_idx = block_id.0 as usize;
+    let mut input = None;
     for inst in ctx.func.blocks[block_idx].insts.iter_mut() {
         if inst.id == upsilon_id {
             inst.data = InstData::PhiTarget(phi_id);
+            input = inst.args.first().copied();
             break;
         }
+    }
+    if let Some(input) = input {
+        ctx.link_phi_input(input, phi_id);
     }
 }
 
@@ -5501,6 +5547,51 @@ fn parse_or_default(s: String) -> i64 {
         propagate_vec_element_metadata(&mut ctx, nested_vec, nested_option);
         assert_eq!(ctx.inst_struct_type.get(&nested_option).unwrap(), "Option");
         assert_eq!(ctx.inst_option_elem_ty.get(&nested_option), Some(&Ty::U8));
+    }
+
+    #[test]
+    fn phi_ownership_widening_propagates_to_dependent_phis() {
+        let mut ctx = LowerCtx::new(
+            "phi_ownership".to_string(),
+            vec![],
+            vec![],
+            Ty::Unit,
+            vec![],
+            "test.vow".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            Rc::new(HashMap::new()),
+        );
+
+        let loop_phi = ctx.emit(Opcode::Phi, Ty::Ptr, vec![], InstData::None, sp());
+        let exit_phi = ctx.emit(Opcode::Phi, Ty::Ptr, vec![], InstData::None, sp());
+        ctx.emit(
+            Opcode::Upsilon,
+            Ty::Ptr,
+            vec![loop_phi],
+            InstData::PhiTarget(exit_phi),
+            sp(),
+        );
+        let owned = ctx.emit(Opcode::Phi, Ty::LinearPtr, vec![], InstData::None, sp());
+        ctx.emit(
+            Opcode::Upsilon,
+            Ty::LinearPtr,
+            vec![owned],
+            InstData::PhiTarget(loop_phi),
+            sp(),
+        );
+
+        assert_eq!(ctx.inst_ty(loop_phi), Ty::LinearPtr);
+        assert_eq!(ctx.inst_ty(exit_phi), Ty::LinearPtr);
+        let insts = &ctx.func.blocks[0].insts;
+        assert_eq!(insts[loop_phi.0 as usize].ty, Ty::LinearPtr);
+        assert_eq!(insts[exit_phi.0 as usize].ty, Ty::LinearPtr);
     }
 
     #[test]
