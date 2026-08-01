@@ -2433,7 +2433,15 @@ impl<'e> Checker<'e> {
                 }
                 self.env.define(name, scrutinee_ty.clone());
             }
-            PatKind::Wildcard => {}
+            PatKind::Wildcard => {
+                if crate::linear::is_linear_owner_ty(scrutinee_ty, &self.env) {
+                    self.emit_error(
+                        ErrorCode::LinearTypeViolation,
+                        "wildcard pattern discards a linear value; bind it to an identifier and consume it explicitly",
+                        pat.span,
+                    );
+                }
+            }
             PatKind::Tuple(pats) => {
                 if let Ty::Tuple(tys) = scrutinee_ty
                     && pats.len() == tys.len()
@@ -2783,6 +2791,34 @@ mod tests {
         assert_eq!(info.type_name, "Token");
         assert!(info.vec_elem_types.is_empty());
         assert!(info.is_linear);
+    }
+
+    #[test]
+    fn arm_pattern_wildcard_rejects_direct_linear_struct() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::Wildcard,
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Struct("Token".to_string()));
+
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("wildcard pattern discards a linear value")
+        );
     }
 
     #[test]
