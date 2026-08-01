@@ -1378,14 +1378,6 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
     if tag == PAT_WILD() {
-        if is_linear_owner_ty(e, scrutinee_tid) == 1 {
-            env_emit_error_code(
-                e,
-                EC_LINEAR_TYPE_VIOLATION(),
-                String::from("wildcard pattern discards a linear value; bind it to an identifier and consume it explicitly"),
-                pat_span(a, pid),
-            );
-        }
         return;
     }
     if tag == PAT_IDENT() {
@@ -1441,6 +1433,14 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
             } else {
                 CTY_UNIT()
             };
+            if pat_tag(a, ipid) == PAT_WILD() && is_linear_owner_ty(e, field_tid) == 1 {
+                env_emit_error_code(
+                    e,
+                    EC_LINEAR_TYPE_VIOLATION(),
+                    String::from("wildcard pattern discards a linear value; bind it to an identifier and consume it explicitly"),
+                    pat_span(a, ipid),
+                );
+            }
             bind_arm_pattern(e, m, ipid, field_tid);
             i = i + 1;
         }

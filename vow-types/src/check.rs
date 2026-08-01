@@ -2433,15 +2433,7 @@ impl<'e> Checker<'e> {
                 }
                 self.env.define(name, scrutinee_ty.clone());
             }
-            PatKind::Wildcard => {
-                if crate::linear::is_linear_owner_ty(scrutinee_ty, &self.env) {
-                    self.emit_error(
-                        ErrorCode::LinearTypeViolation,
-                        "wildcard pattern discards a linear value; bind it to an identifier and consume it explicitly",
-                        pat.span,
-                    );
-                }
-            }
+            PatKind::Wildcard => {}
             PatKind::Tuple(pats) => {
                 if let Ty::Tuple(tys) = scrutinee_ty
                     && pats.len() == tys.len()
@@ -2491,6 +2483,15 @@ impl<'e> Checker<'e> {
                     })
                     .unwrap_or_default();
                 for (p, t) in inner.iter().zip(variant_tys.iter()) {
+                    if matches!(&p.kind, PatKind::Wildcard)
+                        && crate::linear::is_linear_owner_ty(t, &self.env)
+                    {
+                        self.emit_error(
+                            ErrorCode::LinearTypeViolation,
+                            "wildcard pattern discards a linear value; bind it to an identifier and consume it explicitly",
+                            p.span,
+                        );
+                    }
                     self.bind_arm_pattern(p, t);
                 }
             }
@@ -2794,7 +2795,7 @@ mod tests {
     }
 
     #[test]
-    fn arm_pattern_wildcard_rejects_direct_linear_struct() {
+    fn arm_pattern_wildcard_rejects_linear_enum_payload() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = Checker::new("test.vow", &mut emitter);
         checker.env.define_struct(
@@ -2804,13 +2805,28 @@ mod tests {
                 is_linear: true,
             },
         );
+        checker.env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Token".to_string(),
+                    kind: VariantKind::Tuple(vec![Ty::Struct("Token".to_string())]),
+                }],
+            },
+        );
         checker.env.push_scope();
         let pattern = Pat {
-            kind: PatKind::Wildcard,
+            kind: PatKind::EnumVariant {
+                path: vec!["Payload".to_string(), "Token".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Wildcard,
+                    span: dummy_span(),
+                }],
+            },
             span: dummy_span(),
         };
 
-        checker.bind_arm_pattern(&pattern, &Ty::Struct("Token".to_string()));
+        checker.bind_arm_pattern(&pattern, &Ty::Enum("Payload".to_string()));
 
         assert!(checker.has_errors());
         assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
