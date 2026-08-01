@@ -2529,6 +2529,7 @@ impl<'e> Checker<'e> {
                             Ty::Applied(_, args) => args.iter().skip(1).take(1).cloned().collect(),
                             _ => vec![],
                         }),
+                        ("Option", "None") => Some(vec![]),
                         _ => None,
                     });
                 let Some(variant_tys) = variant_tys else {
@@ -3033,6 +3034,34 @@ mod tests {
         assert_eq!(
             emitter.0[0].message,
             "variant pattern expects 2 payload bindings, found 1"
+        );
+    }
+
+    #[test]
+    fn arm_pattern_rejects_payload_on_builtin_unit_variant() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Option".to_string(), "None".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Wildcard,
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+        let option_ty = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I64]);
+
+        checker.bind_arm_pattern(&pattern, &option_ty);
+
+        assert!(checker.has_errors());
+        drop(checker);
+        assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+        assert_eq!(
+            emitter.0[0].message,
+            "variant pattern expects 0 payload bindings, found 1"
         );
     }
 
