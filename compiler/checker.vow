@@ -1377,6 +1377,60 @@ fn pattern_option_elem_ir_ty(ts: TyStore, tid: i64) -> i64 {
     -1
 }
 
+fn pattern_scalar_ir_ty(ts: TyStore, tid: i64) -> i64 {
+    let elem_tag: i64 = ty_tag(ts, tid);
+    if elem_tag == CTY_I8() { return ITY_I8(); }
+    if elem_tag == CTY_I16() { return ITY_I16(); }
+    if elem_tag == CTY_I32() { return ITY_I32(); }
+    if elem_tag == CTY_I64() { return ITY_I64(); }
+    if elem_tag == CTY_I128() { return ITY_I128(); }
+    if elem_tag == CTY_U8() { return ITY_U8(); }
+    if elem_tag == CTY_U16() { return ITY_U16(); }
+    if elem_tag == CTY_U32() { return ITY_U32(); }
+    if elem_tag == CTY_U64() { return ITY_U64(); }
+    if elem_tag == CTY_U128() { return ITY_U128(); }
+    if elem_tag == CTY_F32() { return ITY_F32(); }
+    if elem_tag == CTY_F64() { return ITY_F64(); }
+    if elem_tag == CTY_BOOL() { return ITY_BOOL(); }
+    -1
+}
+
+fn pattern_variant_payload_ir_tys(ts: TyStore, tid: i64) -> Vec<i64> {
+    if ty_tag(ts, tid) == CTY_REF() {
+        return pattern_variant_payload_ir_tys(ts, ty_a(ts, tid));
+    }
+    let result: Vec<i64> = Vec::new();
+    if ty_tag(ts, tid) != CTY_APPLIED() {
+        return result;
+    }
+    let base: i64 = ty_a(ts, tid);
+    if ty_tag(ts, base) != CTY_ENUM() {
+        return result;
+    }
+    let name: String = ty_struct_name(ts, base);
+    let args_lid: i64 = ty_b(ts, tid);
+    if name == String::from("Option") {
+        result.push(-1);
+        if ts_arg_len(ts, args_lid) > 0 {
+            result.push(pattern_scalar_ir_ty(ts, ts_arg_get(ts, args_lid, 0)));
+        } else {
+            result.push(-1);
+        }
+    } else if name == String::from("Result") {
+        if ts_arg_len(ts, args_lid) > 0 {
+            result.push(pattern_scalar_ir_ty(ts, ts_arg_get(ts, args_lid, 0)));
+        } else {
+            result.push(-1);
+        }
+        if ts_arg_len(ts, args_lid) > 1 {
+            result.push(pattern_scalar_ir_ty(ts, ts_arg_get(ts, args_lid, 1)));
+        } else {
+            result.push(-1);
+        }
+    }
+    result
+}
+
 fn pattern_vec_option_elem_ty_path(ts: TyStore, tid: i64) -> Vec<i64> {
     let result: Vec<i64> = Vec::new();
     let tag: i64 = ty_tag(ts, tid);
@@ -1398,6 +1452,36 @@ fn pattern_vec_option_elem_ty_path(ts: TyStore, tid: i64) -> Vec<i64> {
     result.push(pattern_option_elem_ir_ty(ts, elem_tid));
     if elem_name == String::from("Vec") {
         let nested: Vec<i64> = pattern_vec_option_elem_ty_path(ts, elem_tid);
+        let mut i: i64 = 0;
+        while i < nested.len() {
+            result.push(nested[i]);
+            i = i + 1;
+        }
+    }
+    result
+}
+
+fn pattern_vec_variant_payload_ty_path(ts: TyStore, tid: i64) -> Vec<Vec<i64>> {
+    let result: Vec<Vec<i64>> = Vec::new();
+    let tag: i64 = ty_tag(ts, tid);
+    if tag == CTY_REF() {
+        return pattern_vec_variant_payload_ty_path(ts, ty_a(ts, tid));
+    }
+    if tag != CTY_APPLIED() || pattern_aggregate_name(ts, ty_a(ts, tid)) != String::from("Vec") {
+        return result;
+    }
+    let args_lid: i64 = ty_b(ts, tid);
+    if ts_arg_len(ts, args_lid) == 0 {
+        return result;
+    }
+    let elem_tid: i64 = ts_arg_get(ts, args_lid, 0);
+    let elem_name: String = pattern_aggregate_name(ts, elem_tid);
+    if elem_name.len() == 0 {
+        return result;
+    }
+    result.push(pattern_variant_payload_ir_tys(ts, elem_tid));
+    if elem_name == String::from("Vec") {
+        let nested: Vec<Vec<i64>> = pattern_vec_variant_payload_ty_path(ts, elem_tid);
         let mut i: i64 = 0;
         while i < nested.len() {
             result.push(nested[i]);
@@ -1441,13 +1525,17 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
                 e.pat_aggregate_names.push(String::from(""));
                 e.pat_vec_elem_paths.push(Vec::new());
                 e.pat_vec_option_elem_ty_paths.push(Vec::new());
+                e.pat_vec_variant_payload_ty_paths.push(Vec::new());
                 e.pat_option_elem_tys.push(-1);
+                e.pat_variant_payload_tys.push(Vec::new());
                 e.pat_aggregate_linear.push(0);
             }
             e.pat_aggregate_names[pid] = aggregate_name;
             e.pat_vec_elem_paths[pid] = pattern_vec_elem_path(e.ts, scrutinee_tid);
             e.pat_vec_option_elem_ty_paths[pid] = pattern_vec_option_elem_ty_path(e.ts, scrutinee_tid);
+            e.pat_vec_variant_payload_ty_paths[pid] = pattern_vec_variant_payload_ty_path(e.ts, scrutinee_tid);
             e.pat_option_elem_tys[pid] = pattern_option_elem_ir_ty(e.ts, scrutinee_tid);
+            e.pat_variant_payload_tys[pid] = pattern_variant_payload_ir_tys(e.ts, scrutinee_tid);
             e.pat_aggregate_linear[pid] = pattern_aggregate_is_linear(e, scrutinee_tid);
         }
         env_define_var(e, name, scrutinee_tid);

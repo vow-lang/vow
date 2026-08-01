@@ -58,12 +58,18 @@ struct LowerCtx {
     vec_elem_paths: Vec<Vec<String>>,
     vec_option_elem_inst_ids: Vec<i64>,
     vec_option_elem_ty_paths: Vec<Vec<i64>>,
+    vec_variant_payload_inst_ids: Vec<i64>,
+    vec_variant_payload_ty_paths: Vec<Vec<Vec<i64>>>,
     option_elem_inst_ids: Vec<i64>,
     option_elem_tys: Vec<i64>,
+    variant_payload_inst_ids: Vec<i64>,
+    variant_payload_tys: Vec<Vec<i64>>,
     pat_aggregate_names: Vec<String>,
     pat_vec_elem_paths: Vec<Vec<String>>,
     pat_vec_option_elem_ty_paths: Vec<Vec<i64>>,
+    pat_vec_variant_payload_ty_paths: Vec<Vec<Vec<i64>>>,
     pat_option_elem_tys: Vec<i64>,
+    pat_variant_payload_tys: Vec<Vec<i64>>,
     pat_aggregate_linear: Vec<i64>,
     question_aggregate_names: Vec<String>,
     question_vec_elem_paths: Vec<Vec<String>>,
@@ -141,12 +147,18 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         vec_elem_paths: Vec::new(),
         vec_option_elem_inst_ids: Vec::new(),
         vec_option_elem_ty_paths: Vec::new(),
+        vec_variant_payload_inst_ids: Vec::new(),
+        vec_variant_payload_ty_paths: Vec::new(),
         option_elem_inst_ids: Vec::new(),
         option_elem_tys: Vec::new(),
+        variant_payload_inst_ids: Vec::new(),
+        variant_payload_tys: Vec::new(),
         pat_aggregate_names: Vec::new(),
         pat_vec_elem_paths: Vec::new(),
         pat_vec_option_elem_ty_paths: Vec::new(),
+        pat_vec_variant_payload_ty_paths: Vec::new(),
         pat_option_elem_tys: Vec::new(),
+        pat_variant_payload_tys: Vec::new(),
         pat_aggregate_linear: Vec::new(),
         question_aggregate_names: Vec::new(),
         question_vec_elem_paths: Vec::new(),
@@ -461,6 +473,23 @@ fn lctx_get_vec_option_elem_ty_path(ctx: LowerCtx, inst_id: i64) -> Vec<i64> {
     Vec::new()
 }
 
+fn lctx_tag_vec_variant_payload_ty_path(ctx: LowerCtx, inst_id: i64, path: Vec<Vec<i64>>) {
+    ctx.vec_variant_payload_inst_ids.push(inst_id);
+    ctx.vec_variant_payload_ty_paths.push(path);
+}
+
+fn lctx_get_vec_variant_payload_ty_path(ctx: LowerCtx, inst_id: i64) -> Vec<Vec<i64>> {
+    let n: i64 = ctx.vec_variant_payload_inst_ids.len();
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.vec_variant_payload_inst_ids[i] == inst_id {
+            return ctx.vec_variant_payload_ty_paths[i];
+        }
+    }
+    Vec::new()
+}
+
 fn lctx_get_vec_elem(ctx: LowerCtx, inst_id: i64) -> String {
     let path: Vec<String> = lctx_get_vec_elem_path(ctx, inst_id);
     if path.len() > 0 {
@@ -479,6 +508,10 @@ fn lctx_propagate_vec_elem(ctx: LowerCtx, source_id: i64, result_id: i64) {
     if option_path.len() > 0 && option_path[0] != -1 {
         lctx_tag_option_elem(ctx, result_id, option_path[0]);
     }
+    let variant_path: Vec<Vec<i64>> = lctx_get_vec_variant_payload_ty_path(ctx, source_id);
+    if variant_path.len() > 0 && variant_path[0].len() > 0 {
+        lctx_tag_variant_payloads(ctx, result_id, variant_path[0]);
+    }
     if path.len() > 1 {
         let remaining: Vec<String> = Vec::new();
         let mut i: i64 = 1;
@@ -496,6 +529,15 @@ fn lctx_propagate_vec_elem(ctx: LowerCtx, source_id: i64, result_id: i64) {
             }
             lctx_tag_vec_option_elem_ty_path(ctx, result_id, remaining_options);
         }
+        if variant_path.len() > 1 {
+            let remaining_variants: Vec<Vec<i64>> = Vec::new();
+            let mut vi: i64 = 1;
+            while vi < variant_path.len() {
+                remaining_variants.push(variant_path[vi]);
+                vi = vi + 1;
+            }
+            lctx_tag_vec_variant_payload_ty_path(ctx, result_id, remaining_variants);
+        }
     }
 }
 
@@ -504,7 +546,7 @@ fn lctx_tag_option_elem(ctx: LowerCtx, inst_id: i64, elem_ty: i64) {
     ctx.option_elem_tys.push(elem_ty);
 }
 
-fn lctx_get_option_elem_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
+fn lctx_find_option_elem_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
     let n: i64 = ctx.option_elem_inst_ids.len();
     let mut i: i64 = n;
     while i > 0 {
@@ -513,7 +555,144 @@ fn lctx_get_option_elem_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
             return ctx.option_elem_tys[i];
         }
     }
+    -1
+}
+
+fn lctx_get_option_elem_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
+    let found: i64 = lctx_find_option_elem_ty(ctx, inst_id);
+    if found != -1 {
+        return found;
+    }
     ITY_I64()
+}
+
+fn lctx_tag_variant_payloads(ctx: LowerCtx, inst_id: i64, payload_tys: Vec<i64>) {
+    ctx.variant_payload_inst_ids.push(inst_id);
+    ctx.variant_payload_tys.push(payload_tys);
+}
+
+fn lctx_get_variant_payloads(ctx: LowerCtx, inst_id: i64) -> Vec<i64> {
+    let n: i64 = ctx.variant_payload_inst_ids.len();
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.variant_payload_inst_ids[i] == inst_id {
+            return ctx.variant_payload_tys[i];
+        }
+    }
+    Vec::new()
+}
+
+fn string_vec_equal(a: Vec<String>, b: Vec<String>) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i: i64 = 0;
+    while i < a.len() {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn i64_vec_equal(a: Vec<i64>, b: Vec<i64>) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i: i64 = 0;
+    while i < a.len() {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn i64_vec_vec_equal(a: Vec<Vec<i64>>, b: Vec<Vec<i64>>) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i: i64 = 0;
+    while i < a.len() {
+        if !i64_vec_equal(a[i], b[i]) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn lctx_copy_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, result_id: i64) {
+    if sources.len() == 0 { return; }
+    let aggregate_name: String = lctx_get_tag(ctx, sources[0]);
+    if aggregate_name.len() == 0 { return; }
+
+    let vec_elems: Vec<String> = Vec::new();
+    let vec_options: Vec<i64> = Vec::new();
+    let vec_variants: Vec<Vec<i64>> = Vec::new();
+    let variant_payloads: Vec<i64> = Vec::new();
+    let mut option_elem: i64 = -1;
+    let mut i: i64 = 0;
+    while i < sources.len() {
+        if lctx_get_tag(ctx, sources[i]) != aggregate_name { return; }
+
+        let source_vec_elems: Vec<String> = lctx_get_vec_elem_path(ctx, sources[i]);
+        if source_vec_elems.len() > 0 {
+            if vec_elems.len() == 0 {
+                let mut j: i64 = 0;
+                while j < source_vec_elems.len() {
+                    vec_elems.push(source_vec_elems[j]);
+                    j = j + 1;
+                }
+            } else if !string_vec_equal(vec_elems, source_vec_elems) {
+                return;
+            }
+        }
+
+        let source_vec_options: Vec<i64> = lctx_get_vec_option_elem_ty_path(ctx, sources[i]);
+        if source_vec_options.len() > 0 {
+            if vec_options.len() == 0 {
+                let mut j2: i64 = 0;
+                while j2 < source_vec_options.len() {
+                    vec_options.push(source_vec_options[j2]);
+                    j2 = j2 + 1;
+                }
+            } else if !i64_vec_equal(vec_options, source_vec_options) {
+                return;
+            }
+        }
+
+        let source_vec_variants: Vec<Vec<i64>> = lctx_get_vec_variant_payload_ty_path(ctx, sources[i]);
+        if source_vec_variants.len() > 0 {
+            if vec_variants.len() == 0 {
+                let mut j3: i64 = 0;
+                while j3 < source_vec_variants.len() {
+                    vec_variants.push(source_vec_variants[j3]);
+                    j3 = j3 + 1;
+                }
+            } else if !i64_vec_vec_equal(vec_variants, source_vec_variants) {
+                return;
+            }
+        }
+
+        let source_option: i64 = lctx_find_option_elem_ty(ctx, sources[i]);
+        if source_option != -1 {
+            if option_elem == -1 { option_elem = source_option; }
+            else if option_elem != source_option { return; }
+        }
+
+        let source_variants: Vec<i64> = lctx_get_variant_payloads(ctx, sources[i]);
+        if source_variants.len() > 0 {
+            if variant_payloads.len() == 0 {
+                let mut j4: i64 = 0;
+                while j4 < source_variants.len() {
+                    variant_payloads.push(source_variants[j4]);
+                    j4 = j4 + 1;
+                }
+            } else if !i64_vec_equal(variant_payloads, source_variants) {
+                return;
+            }
+        }
+        i = i + 1;
+    }
+
+    lctx_tag(ctx, result_id, aggregate_name);
+    if vec_elems.len() > 0 { lctx_tag_vec_elem_path(ctx, result_id, vec_elems); }
+    if vec_options.len() > 0 { lctx_tag_vec_option_elem_ty_path(ctx, result_id, vec_options); }
+    if vec_variants.len() > 0 { lctx_tag_vec_variant_payload_ty_path(ctx, result_id, vec_variants); }
+    if option_elem != -1 { lctx_tag_option_elem(ctx, result_id, option_elem); }
+    if variant_payloads.len() > 0 { lctx_tag_variant_payloads(ctx, result_id, variant_payloads); }
 }
 
 fn lctx_get_pattern_aggregate(ctx: LowerCtx, pid: i64) -> String {
@@ -537,11 +716,25 @@ fn lctx_get_pattern_vec_option_elem_ty_path(ctx: LowerCtx, pid: i64) -> Vec<i64>
     Vec::new()
 }
 
+fn lctx_get_pattern_vec_variant_payload_ty_path(ctx: LowerCtx, pid: i64) -> Vec<Vec<i64>> {
+    if pid < ctx.pat_vec_variant_payload_ty_paths.len() {
+        return ctx.pat_vec_variant_payload_ty_paths[pid];
+    }
+    Vec::new()
+}
+
 fn lctx_get_pattern_option_elem_ty(ctx: LowerCtx, pid: i64) -> i64 {
     if pid < ctx.pat_option_elem_tys.len() {
         return ctx.pat_option_elem_tys[pid];
     }
     -1
+}
+
+fn lctx_get_pattern_variant_payload_tys(ctx: LowerCtx, pid: i64) -> Vec<i64> {
+    if pid < ctx.pat_variant_payload_tys.len() {
+        return ctx.pat_variant_payload_tys[pid];
+    }
+    Vec::new()
 }
 
 fn lctx_pattern_is_linear(ctx: LowerCtx, pid: i64) -> i64 {
@@ -3244,6 +3437,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let arm_exit_blocks: Vec<i64> = Vec::new();
         let arm_up_ids: Vec<i64> = Vec::new();
+        let arm_result_values: Vec<i64> = Vec::new();
         let reachable_result_tys: Vec<i64> = Vec::new();
         let reachable_result_markers: Vec<bool> = Vec::new();
         // Parallel to the three above: the arm body's AST expr id, so a marker
@@ -3300,7 +3494,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 lctx_emit_linear_consume_if_needed(ctx, ptr_id);
                 lctx_push_scope(ctx);
 
-                let payload_ty: i64 = lctx_get_option_elem_ty(ctx, ptr_id);
+                let variant_payloads: Vec<i64> = lctx_get_variant_payloads(ctx, ptr_id);
+                let payload_ty: i64 = {
+                    if expected_tag >= 0 && expected_tag < variant_payloads.len() && variant_payloads[expected_tag] != -1 {
+                        variant_payloads[expected_tag]
+                    } else {
+                        lctx_get_option_elem_ty(ctx, ptr_id)
+                    }
+                };
                 let n_inner: i64 = list_len(a, inner_lid);
                 let mut ii: i64 = 0;
                 while ii < n_inner {
@@ -3312,7 +3513,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let aggregate_struct: String = lctx_get_pattern_aggregate(ctx, inner_pid);
                         let aggregate_vec_elems: Vec<String> = lctx_get_pattern_vec_elem_path(ctx, inner_pid);
                         let aggregate_vec_options: Vec<i64> = lctx_get_pattern_vec_option_elem_ty_path(ctx, inner_pid);
+                        let aggregate_vec_variants: Vec<Vec<i64>> = lctx_get_pattern_vec_variant_payload_ty_path(ctx, inner_pid);
                         let aggregate_option_elem: i64 = lctx_get_pattern_option_elem_ty(ctx, inner_pid);
+                        let aggregate_variant_payloads: Vec<i64> = lctx_get_pattern_variant_payload_tys(ctx, inner_pid);
                         let field_ty: i64 = {
                             if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
                                 ITY_LPTR()
@@ -3336,8 +3539,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         if aggregate_vec_options.len() > 0 {
                             lctx_tag_vec_option_elem_ty_path(ctx, field_val, aggregate_vec_options);
                         }
+                        if aggregate_vec_variants.len() > 0 {
+                            lctx_tag_vec_variant_payload_ty_path(ctx, field_val, aggregate_vec_variants);
+                        }
                         if aggregate_option_elem != -1 {
                             lctx_tag_option_elem(ctx, field_val, aggregate_option_elem);
+                        }
+                        if aggregate_variant_payloads.len() > 0 {
+                            lctx_tag_variant_payloads(ctx, field_val, aggregate_variant_payloads);
                         }
                         lctx_define(ctx, pname, field_val);
                     }
@@ -3376,6 +3585,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                     arm_exit_blocks.push(ctx.current_block);
                     arm_up_ids.push(up_id);
+                    arm_result_values.push(arm_result);
                     reachable_result_tys.push(arm_result_ty);
                     reachable_result_markers.push(expr_is_coercible_int_marker(a, body_eid));
                     arm_bodies.push(body_eid);
@@ -3433,6 +3643,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                     arm_exit_blocks.push(ctx.current_block);
                     arm_up_ids.push(up_id);
+                    arm_result_values.push(arm_result);
                     reachable_result_tys.push(arm_result_ty2);
                     reachable_result_markers.push(expr_is_coercible_int_marker(a, body_eid));
                     arm_bodies.push(body_eid);
@@ -3467,6 +3678,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                 arm_exit_blocks.push(ctx.current_block);
                 arm_up_ids.push(up_id);
+                arm_result_values.push(unit_id);
                 reachable_result_tys.push(ITY_UNIT());
                 reachable_result_markers.push(false);
                 arm_bodies.push(-1);
@@ -3569,6 +3781,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+        lctx_copy_compatible_aggregate_metadata(ctx, arm_result_values, phi_id);
 
         let n_results: i64 = arm_up_ids.len();
         let mut ri: i64 = 0;
@@ -4194,8 +4407,12 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.vec_elem_paths = Vec::new();
     ctx.vec_option_elem_inst_ids = Vec::new();
     ctx.vec_option_elem_ty_paths = Vec::new();
+    ctx.vec_variant_payload_inst_ids = Vec::new();
+    ctx.vec_variant_payload_ty_paths = Vec::new();
     ctx.option_elem_inst_ids = Vec::new();
     ctx.option_elem_tys = Vec::new();
+    ctx.variant_payload_inst_ids = Vec::new();
+    ctx.variant_payload_tys = Vec::new();
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;
@@ -4325,7 +4542,9 @@ fn lower_module_vow(
     pat_aggregate_names: Vec<String>,
     pat_vec_elem_paths: Vec<Vec<String>>,
     pat_vec_option_elem_ty_paths: Vec<Vec<i64>>,
+    pat_vec_variant_payload_ty_paths: Vec<Vec<Vec<i64>>>,
     pat_option_elem_tys: Vec<i64>,
+    pat_variant_payload_tys: Vec<Vec<i64>>,
     pat_aggregate_linear: Vec<i64>,
     question_aggregate_names: Vec<String>,
     question_vec_elem_paths: Vec<Vec<String>>,
@@ -4627,7 +4846,9 @@ fn lower_module_vow(
     ctx.pat_aggregate_names = pat_aggregate_names;
     ctx.pat_vec_elem_paths = pat_vec_elem_paths;
     ctx.pat_vec_option_elem_ty_paths = pat_vec_option_elem_ty_paths;
+    ctx.pat_vec_variant_payload_ty_paths = pat_vec_variant_payload_ty_paths;
     ctx.pat_option_elem_tys = pat_option_elem_tys;
+    ctx.pat_variant_payload_tys = pat_variant_payload_tys;
     ctx.pat_aggregate_linear = pat_aggregate_linear;
     ctx.question_aggregate_names = question_aggregate_names;
     ctx.question_vec_elem_paths = question_vec_elem_paths;

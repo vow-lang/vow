@@ -188,12 +188,32 @@ fn propagate_vec_element_metadata(ctx: &mut LowerCtx, source: InstId, result: In
     if let Some(Some(elem_type)) = option_types.first() {
         ctx.inst_option_elem_ty.insert(result, *elem_type);
     }
+    let variant_types = ctx
+        .inst_vec_variant_payload_tys
+        .get(&source)
+        .cloned()
+        .unwrap_or_else(|| vec![Vec::new(); elem_types.len()]);
+    if let Some(elem_variant_types) = variant_types.first()
+        && elem_variant_types.iter().any(Option::is_some)
+    {
+        ctx.inst_variant_payload_tys
+            .insert(result, elem_variant_types.clone());
+    }
     if !remaining.is_empty() {
         ctx.inst_vec_elem_types.insert(result, remaining.to_vec());
         let remaining_option_types = option_types.into_iter().skip(1).collect::<Vec<_>>();
         if remaining_option_types.iter().any(Option::is_some) {
             ctx.inst_vec_option_elem_tys
                 .insert(result, remaining_option_types);
+        }
+        let remaining_variant_types = variant_types.into_iter().skip(1).collect::<Vec<_>>();
+        if remaining_variant_types
+            .iter()
+            .flatten()
+            .any(Option::is_some)
+        {
+            ctx.inst_vec_variant_payload_tys
+                .insert(result, remaining_variant_types);
         }
     }
 }
@@ -228,10 +248,108 @@ fn tag_pattern_aggregate_metadata(ctx: &mut LowerCtx, result: InstId, info: Patt
         if option_types.iter().any(Option::is_some) {
             ctx.inst_vec_option_elem_tys.insert(result, option_types);
         }
+        let variant_types = info
+            .vec_variant_payload_types
+            .into_iter()
+            .map(|variant| {
+                variant
+                    .into_iter()
+                    .map(|ty| ty.map(pattern_scalar_ir_type))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        if variant_types.iter().flatten().any(Option::is_some) {
+            ctx.inst_vec_variant_payload_tys
+                .insert(result, variant_types);
+        }
     }
     if let Some(elem_type) = info.option_elem_type {
         ctx.inst_option_elem_ty
             .insert(result, pattern_scalar_ir_type(elem_type));
+    }
+    let variant_types = info
+        .variant_payload_types
+        .into_iter()
+        .map(|ty| ty.map(pattern_scalar_ir_type))
+        .collect::<Vec<_>>();
+    if variant_types.iter().any(Option::is_some) {
+        ctx.inst_variant_payload_tys.insert(result, variant_types);
+    }
+}
+
+fn compatible_metadata_value<T: Clone + Eq>(
+    sources: &[InstId],
+    get: impl Fn(InstId) -> Option<T>,
+) -> Result<Option<T>, ()> {
+    let mut compatible = None;
+    for source in sources {
+        let Some(value) = get(*source) else {
+            continue;
+        };
+        if compatible.as_ref().is_some_and(|known| known != &value) {
+            return Err(());
+        }
+        compatible = Some(value);
+    }
+    Ok(compatible)
+}
+
+fn copy_compatible_aggregate_metadata(ctx: &mut LowerCtx, sources: &[InstId], result: InstId) {
+    let Some(type_name) = sources
+        .first()
+        .and_then(|source| ctx.inst_struct_type.get(source))
+        .cloned()
+    else {
+        return;
+    };
+    if !sources
+        .iter()
+        .all(|source| ctx.inst_struct_type.get(source) == Some(&type_name))
+    {
+        return;
+    }
+
+    let Ok(vec_elem_types) = compatible_metadata_value(sources, |source| {
+        ctx.inst_vec_elem_types.get(&source).cloned()
+    }) else {
+        return;
+    };
+    let Ok(vec_option_elem_tys) = compatible_metadata_value(sources, |source| {
+        ctx.inst_vec_option_elem_tys.get(&source).cloned()
+    }) else {
+        return;
+    };
+    let Ok(vec_variant_payload_tys) = compatible_metadata_value(sources, |source| {
+        ctx.inst_vec_variant_payload_tys.get(&source).cloned()
+    }) else {
+        return;
+    };
+    let Ok(option_elem_ty) = compatible_metadata_value(sources, |source| {
+        ctx.inst_option_elem_ty.get(&source).copied()
+    }) else {
+        return;
+    };
+    let Ok(variant_payload_tys) = compatible_metadata_value(sources, |source| {
+        ctx.inst_variant_payload_tys.get(&source).cloned()
+    }) else {
+        return;
+    };
+
+    ctx.inst_struct_type.insert(result, type_name);
+    if let Some(types) = vec_elem_types {
+        ctx.inst_vec_elem_types.insert(result, types);
+    }
+    if let Some(types) = vec_option_elem_tys {
+        ctx.inst_vec_option_elem_tys.insert(result, types);
+    }
+    if let Some(types) = vec_variant_payload_tys {
+        ctx.inst_vec_variant_payload_tys.insert(result, types);
+    }
+    if let Some(ty) = option_elem_ty {
+        ctx.inst_option_elem_ty.insert(result, ty);
+    }
+    if let Some(types) = variant_payload_tys {
+        ctx.inst_variant_payload_tys.insert(result, types);
     }
 }
 
@@ -560,8 +678,12 @@ pub(crate) struct LowerCtx {
     inst_vec_elem_types: HashMap<InstId, Vec<String>>,
     // Parallel Option payload widths for aggregate entries in inst_vec_elem_types.
     inst_vec_option_elem_tys: HashMap<InstId, Vec<Option<Ty>>>,
+    // Parallel per-variant scalar payload widths for enum entries in inst_vec_elem_types.
+    inst_vec_variant_payload_tys: HashMap<InstId, Vec<Vec<Option<Ty>>>>,
     // InstId of an Option-tagged value → its payload type (for Option::Some(v) match-arm FieldGet)
     inst_option_elem_ty: HashMap<InstId, Ty>,
+    // InstId of an enum-tagged value → first scalar payload type per variant tag.
+    inst_variant_payload_tys: HashMap<InstId, Vec<Option<Ty>>>,
     // Identifier-pattern address → checker-resolved aggregate metadata.
     pattern_aggregates: Rc<PatternAggregateMap>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
@@ -642,7 +764,9 @@ impl LowerCtx {
             loop_exit_phis: Vec::new(),
             inst_vec_elem_types: HashMap::new(),
             inst_vec_option_elem_tys: HashMap::new(),
+            inst_vec_variant_payload_tys: HashMap::new(),
             inst_option_elem_ty: HashMap::new(),
+            inst_variant_payload_tys: HashMap::new(),
             pattern_aggregates,
             struct_field_vec_elems,
             warnings: Vec::new(),
@@ -2709,6 +2833,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
             let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
             let mut arm_result_markers: Vec<bool> = Vec::new();
+            let mut arm_result_values: Vec<InstId> = Vec::new();
             // Parallel to arm_results/arm_result_markers: the arm body expr, so a marker
             // arm's Upsilon value can be re-narrowed to phi_ty once it's known (see below).
             let mut arm_bodies: Vec<&Expr> = Vec::new();
@@ -2761,9 +2886,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         // Aggregate payload metadata is tracked separately so the binding
                         // retains the struct/Vec tag needed by field and index lowering.
                         let payload_ty = ctx
-                            .inst_option_elem_ty
+                            .inst_variant_payload_tys
                             .get(&ptr_id)
+                            .and_then(|types| types.get(expected_tag as usize))
                             .copied()
+                            .flatten()
+                            .or_else(|| ctx.inst_option_elem_ty.get(&ptr_id).copied())
                             .unwrap_or(Ty::I64);
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
@@ -2822,6 +2950,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
+                            arm_result_values.push(arm_result);
                             arm_bodies.push(&arm.body);
                         }
 
@@ -2867,6 +2996,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
+                            arm_result_values.push(arm_result);
                             arm_bodies.push(&arm.body);
                         }
 
@@ -2897,6 +3027,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         );
                         arm_results.push((arm_block, up_id, Ty::Unit, arm_mut_vals));
                         arm_result_markers.push(false);
+                        arm_result_values.push(unit);
                         arm_bodies.push(&arm.body);
                     }
                 }
@@ -2996,6 +3127,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+            copy_compatible_aggregate_metadata(ctx, &arm_result_values, phi_id);
 
             for (arm_block, up_id, _, _) in &arm_results {
                 backpatch_upsilon(ctx, *arm_block, *up_id, phi_id);
@@ -5313,7 +5445,9 @@ fn parse_or_default(s: String) -> i64 {
                 type_name: "Token".to_string(),
                 vec_elem_types: vec![],
                 vec_option_elem_types: vec![],
+                vec_variant_payload_types: vec![],
                 option_elem_type: None,
+                variant_payload_types: vec![],
                 is_linear: true,
             },
         )]));
@@ -5434,7 +5568,9 @@ fn parse_or_default(s: String) -> i64 {
                 type_name: "Vec".to_string(),
                 vec_elem_types: vec!["Vec".to_string(), "Box".to_string()],
                 vec_option_elem_types: vec![None, None],
+                vec_variant_payload_types: vec![vec![], vec![]],
                 option_elem_type: None,
+                variant_payload_types: vec![],
                 is_linear: false,
             },
         )]));
@@ -5667,7 +5803,9 @@ fn parse_or_default(s: String) -> i64 {
                 type_name: "Option".to_string(),
                 vec_elem_types: vec![],
                 vec_option_elem_types: vec![],
+                vec_variant_payload_types: vec![],
                 option_elem_type: Some(PatternScalarType::U8),
+                variant_payload_types: vec![None, Some(PatternScalarType::U8)],
                 is_linear: false,
             },
         )]));

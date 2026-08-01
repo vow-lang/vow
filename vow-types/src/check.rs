@@ -18,7 +18,9 @@ pub struct PatternAggregateInfo {
     pub type_name: String,
     pub vec_elem_types: Vec<String>,
     pub vec_option_elem_types: Vec<Option<PatternScalarType>>,
+    pub vec_variant_payload_types: Vec<Vec<Option<PatternScalarType>>>,
     pub option_elem_type: Option<PatternScalarType>,
+    pub variant_payload_types: Vec<Option<PatternScalarType>>,
     pub is_linear: bool,
 }
 
@@ -92,15 +94,28 @@ fn vec_element_option_types(ty: &Ty) -> Vec<Option<PatternScalarType>> {
     }
 }
 
-fn option_element_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
-    let elem = match ty {
-        Ty::Reference(inner) => return option_element_scalar_type(inner),
-        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Option") => {
-            args.first()?
+fn vec_element_variant_payload_types(ty: &Ty) -> Vec<Vec<Option<PatternScalarType>>> {
+    match ty {
+        Ty::Reference(inner) => vec_element_variant_payload_types(inner),
+        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Vec") => {
+            let Some(elem_ty) = args.first() else {
+                return Vec::new();
+            };
+            let Some(elem_name) = aggregate_type_name(elem_ty) else {
+                return Vec::new();
+            };
+            let mut types = vec![variant_payload_scalar_types(elem_ty)];
+            if elem_name == "Vec" {
+                types.extend(vec_element_variant_payload_types(elem_ty));
+            }
+            types
         }
-        _ => return None,
-    };
-    match elem {
+        _ => Vec::new(),
+    }
+}
+
+fn pattern_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
+    match ty {
         Ty::I8 => Some(PatternScalarType::I8),
         Ty::I16 => Some(PatternScalarType::I16),
         Ty::I32 => Some(PatternScalarType::I32),
@@ -118,13 +133,41 @@ fn option_element_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
     }
 }
 
+fn variant_payload_scalar_types(ty: &Ty) -> Vec<Option<PatternScalarType>> {
+    match ty {
+        Ty::Reference(inner) => variant_payload_scalar_types(inner),
+        Ty::Applied(base, args) => match aggregate_type_name(base).as_deref() {
+            Some("Option") => vec![None, args.first().and_then(pattern_scalar_type)],
+            Some("Result") => vec![
+                args.first().and_then(pattern_scalar_type),
+                args.get(1).and_then(pattern_scalar_type),
+            ],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn option_element_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
+    let elem = match ty {
+        Ty::Reference(inner) => return option_element_scalar_type(inner),
+        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Option") => {
+            args.first()?
+        }
+        _ => return None,
+    };
+    pattern_scalar_type(elem)
+}
+
 fn pattern_aggregate_info(ty: &Ty, is_linear: bool) -> Option<PatternAggregateInfo> {
     let type_name = aggregate_type_name(ty)?;
     Some(PatternAggregateInfo {
         type_name,
         vec_elem_types: vec_element_type_names(ty),
         vec_option_elem_types: vec_element_option_types(ty),
+        vec_variant_payload_types: vec_element_variant_payload_types(ty),
         option_elem_type: option_element_scalar_type(ty),
+        variant_payload_types: variant_payload_scalar_types(ty),
         is_linear,
     })
 }
@@ -2800,6 +2843,7 @@ mod tests {
         assert_eq!(info.type_name, "Vec");
         assert_eq!(info.vec_elem_types, ["Vec", "Box"]);
         assert_eq!(info.vec_option_elem_types, [None, None]);
+        assert_eq!(info.vec_variant_payload_types, [vec![], vec![]]);
     }
 
     #[test]
@@ -2827,6 +2871,7 @@ mod tests {
 
             assert_eq!(info.type_name, "Option");
             assert_eq!(info.option_elem_type, Some(expected));
+            assert_eq!(info.variant_payload_types, [None, Some(expected)]);
         }
 
         let referenced = Ty::Reference(Box::new(Ty::Applied(
@@ -2861,6 +2906,38 @@ mod tests {
         assert_eq!(
             vec_option_info.vec_option_elem_types,
             [Some(PatternScalarType::U8)]
+        );
+        assert_eq!(
+            vec_option_info.vec_variant_payload_types,
+            [vec![None, Some(PatternScalarType::U8)]]
+        );
+    }
+
+    #[test]
+    fn pattern_result_metadata_preserves_both_scalar_payload_types() {
+        let result = Ty::Applied(
+            Box::new(Ty::Enum("Result".to_string())),
+            vec![Ty::U8, Ty::I32],
+        );
+        let info = pattern_aggregate_info(&result, false).expect("Result is aggregate metadata");
+
+        assert_eq!(info.type_name, "Result");
+        assert_eq!(info.option_elem_type, None);
+        assert_eq!(
+            info.variant_payload_types,
+            [Some(PatternScalarType::U8), Some(PatternScalarType::I32)]
+        );
+
+        let vec_result = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![result]);
+        let vec_info =
+            pattern_aggregate_info(&vec_result, false).expect("Vec<Result> is aggregate metadata");
+        assert_eq!(vec_info.vec_elem_types, ["Result"]);
+        assert_eq!(
+            vec_info.vec_variant_payload_types,
+            [vec![
+                Some(PatternScalarType::U8),
+                Some(PatternScalarType::I32)
+            ]]
         );
     }
 
