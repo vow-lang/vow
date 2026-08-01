@@ -1325,6 +1325,36 @@ fn pattern_option_elem_ir_ty(ts: TyStore, tid: i64) -> i64 {
     -1
 }
 
+fn pattern_vec_option_elem_ty_path(ts: TyStore, tid: i64) -> Vec<i64> {
+    let result: Vec<i64> = Vec::new();
+    let tag: i64 = ty_tag(ts, tid);
+    if tag == CTY_REF() {
+        return pattern_vec_option_elem_ty_path(ts, ty_a(ts, tid));
+    }
+    if tag != CTY_APPLIED() || pattern_aggregate_name(ts, ty_a(ts, tid)) != String::from("Vec") {
+        return result;
+    }
+    let args_lid: i64 = ty_b(ts, tid);
+    if ts_arg_len(ts, args_lid) == 0 {
+        return result;
+    }
+    let elem_tid: i64 = ts_arg_get(ts, args_lid, 0);
+    let elem_name: String = pattern_aggregate_name(ts, elem_tid);
+    if elem_name.len() == 0 {
+        return result;
+    }
+    result.push(pattern_option_elem_ir_ty(ts, elem_tid));
+    if elem_name == String::from("Vec") {
+        let nested: Vec<i64> = pattern_vec_option_elem_ty_path(ts, elem_tid);
+        let mut i: i64 = 0;
+        while i < nested.len() {
+            result.push(nested[i]);
+            i = i + 1;
+        }
+    }
+    result
+}
+
 fn record_question_aggregate(e: CheckEnv, eid: i64, payload_tid: i64) {
     let aggregate_name: String = pattern_aggregate_name(e.ts, payload_tid);
     if aggregate_name.len() == 0 {
@@ -1333,11 +1363,13 @@ fn record_question_aggregate(e: CheckEnv, eid: i64, payload_tid: i64) {
     while e.question_aggregate_names.len() <= eid {
         e.question_aggregate_names.push(String::from(""));
         e.question_vec_elem_paths.push(Vec::new());
+        e.question_vec_option_elem_ty_paths.push(Vec::new());
         e.question_option_elem_tys.push(-1);
         e.question_aggregate_linear.push(0);
     }
     e.question_aggregate_names[eid] = aggregate_name;
     e.question_vec_elem_paths[eid] = pattern_vec_elem_path(e.ts, payload_tid);
+    e.question_vec_option_elem_ty_paths[eid] = pattern_vec_option_elem_ty_path(e.ts, payload_tid);
     e.question_option_elem_tys[eid] = pattern_option_elem_ir_ty(e.ts, payload_tid);
     e.question_aggregate_linear[eid] = pattern_aggregate_is_linear(e, payload_tid);
 }
@@ -1356,11 +1388,13 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
             while e.pat_aggregate_names.len() <= pid {
                 e.pat_aggregate_names.push(String::from(""));
                 e.pat_vec_elem_paths.push(Vec::new());
+                e.pat_vec_option_elem_ty_paths.push(Vec::new());
                 e.pat_option_elem_tys.push(-1);
                 e.pat_aggregate_linear.push(0);
             }
             e.pat_aggregate_names[pid] = aggregate_name;
             e.pat_vec_elem_paths[pid] = pattern_vec_elem_path(e.ts, scrutinee_tid);
+            e.pat_vec_option_elem_ty_paths[pid] = pattern_vec_option_elem_ty_path(e.ts, scrutinee_tid);
             e.pat_option_elem_tys[pid] = pattern_option_elem_ir_ty(e.ts, scrutinee_tid);
             e.pat_aggregate_linear[pid] = pattern_aggregate_is_linear(e, scrutinee_tid);
         }

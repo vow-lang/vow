@@ -9,7 +9,9 @@ use vow_syntax::ast::{
     Type as AstType, UnOp, VariantKind, VowBlock,
 };
 use vow_syntax::span::Span;
-pub use vow_types::check::{PatternAggregateMap, PatternScalarType, StringExprSet};
+pub use vow_types::check::{
+    PatternAggregateInfo, PatternAggregateMap, PatternScalarType, StringExprSet,
+};
 
 use crate::types::{
     BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId,
@@ -178,8 +180,21 @@ fn propagate_vec_element_metadata(ctx: &mut LowerCtx, source: InstId, result: In
         return;
     };
     ctx.inst_struct_type.insert(result, elem_name.clone());
+    let option_types = ctx
+        .inst_vec_option_elem_tys
+        .get(&source)
+        .cloned()
+        .unwrap_or_else(|| vec![None; elem_types.len()]);
+    if let Some(Some(elem_type)) = option_types.first() {
+        ctx.inst_option_elem_ty.insert(result, *elem_type);
+    }
     if !remaining.is_empty() {
         ctx.inst_vec_elem_types.insert(result, remaining.to_vec());
+        let remaining_option_types = option_types.into_iter().skip(1).collect::<Vec<_>>();
+        if remaining_option_types.iter().any(Option::is_some) {
+            ctx.inst_vec_option_elem_tys
+                .insert(result, remaining_option_types);
+        }
     }
 }
 
@@ -198,6 +213,25 @@ fn pattern_scalar_ir_type(ty: PatternScalarType) -> Ty {
         PatternScalarType::F32 => Ty::F32,
         PatternScalarType::F64 => Ty::F64,
         PatternScalarType::Bool => Ty::Bool,
+    }
+}
+
+fn tag_pattern_aggregate_metadata(ctx: &mut LowerCtx, result: InstId, info: PatternAggregateInfo) {
+    ctx.inst_struct_type.insert(result, info.type_name);
+    if !info.vec_elem_types.is_empty() {
+        let option_types = info
+            .vec_option_elem_types
+            .into_iter()
+            .map(|ty| ty.map(pattern_scalar_ir_type))
+            .collect::<Vec<_>>();
+        ctx.inst_vec_elem_types.insert(result, info.vec_elem_types);
+        if option_types.iter().any(Option::is_some) {
+            ctx.inst_vec_option_elem_tys.insert(result, option_types);
+        }
+    }
+    if let Some(elem_type) = info.option_elem_type {
+        ctx.inst_option_elem_ty
+            .insert(result, pattern_scalar_ir_type(elem_type));
     }
 }
 
@@ -445,6 +479,8 @@ pub(crate) struct LowerCtx {
     // A Vec<Vec<Box>> carries ["Vec", "Box"], so each index can consume one
     // name and retain the rest for deeper indexing.
     inst_vec_elem_types: HashMap<InstId, Vec<String>>,
+    // Parallel Option payload widths for aggregate entries in inst_vec_elem_types.
+    inst_vec_option_elem_tys: HashMap<InstId, Vec<Option<Ty>>>,
     // InstId of an Option-tagged value → its payload type (for Option::Some(v) match-arm FieldGet)
     inst_option_elem_ty: HashMap<InstId, Ty>,
     // Identifier-pattern address → checker-resolved aggregate metadata.
@@ -522,6 +558,7 @@ impl LowerCtx {
             loop_break_upsilons: Vec::new(),
             loop_exit_phis: Vec::new(),
             inst_vec_elem_types: HashMap::new(),
+            inst_vec_option_elem_tys: HashMap::new(),
             inst_option_elem_ty: HashMap::new(),
             pattern_aggregates,
             struct_field_vec_elems,
@@ -1232,6 +1269,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     ctx.inst_struct_type.insert(result, "Vec".to_string());
                     if let Some(elem_types) = ctx.inst_vec_elem_types.get(&source_id).cloned() {
                         ctx.inst_vec_elem_types.insert(result, elem_types);
+                    }
+                    if let Some(option_types) =
+                        ctx.inst_vec_option_elem_tys.get(&source_id).cloned()
+                    {
+                        ctx.inst_vec_option_elem_tys.insert(result, option_types);
                     }
                     return result;
                 }
@@ -2627,15 +2669,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     span,
                                 );
                                 if let Some(info) = aggregate {
-                                    ctx.inst_struct_type.insert(field_val, info.type_name);
-                                    if !info.vec_elem_types.is_empty() {
-                                        ctx.inst_vec_elem_types
-                                            .insert(field_val, info.vec_elem_types);
-                                    }
-                                    if let Some(elem_type) = info.option_elem_type {
-                                        ctx.inst_option_elem_ty
-                                            .insert(field_val, pattern_scalar_ir_type(elem_type));
-                                    }
+                                    tag_pattern_aggregate_metadata(ctx, field_val, info);
                                 }
                                 ctx.define(name.clone(), field_val);
                             }
@@ -3328,14 +3362,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             if let Some(info) = aggregate {
-                ctx.inst_struct_type.insert(payload, info.type_name);
-                if !info.vec_elem_types.is_empty() {
-                    ctx.inst_vec_elem_types.insert(payload, info.vec_elem_types);
-                }
-                if let Some(elem_type) = info.option_elem_type {
-                    ctx.inst_option_elem_ty
-                        .insert(payload, pattern_scalar_ir_type(elem_type));
-                }
+                tag_pattern_aggregate_metadata(ctx, payload, info);
             }
             payload
         }
@@ -5112,6 +5139,7 @@ fn parse_or_default(s: String) -> i64 {
             vow_types::check::PatternAggregateInfo {
                 type_name: "Token".to_string(),
                 vec_elem_types: vec![],
+                vec_option_elem_types: vec![],
                 option_elem_type: None,
                 is_linear: true,
             },
@@ -5231,6 +5259,7 @@ fn parse_or_default(s: String) -> i64 {
             vow_types::check::PatternAggregateInfo {
                 type_name: "Vec".to_string(),
                 vec_elem_types: vec!["Vec".to_string(), "Box".to_string()],
+                vec_option_elem_types: vec![None, None],
                 option_elem_type: None,
                 is_linear: false,
             },
@@ -5300,6 +5329,48 @@ fn parse_or_default(s: String) -> i64 {
         for (pattern_type, ir_type) in cases {
             assert_eq!(pattern_scalar_ir_type(pattern_type), ir_type);
         }
+    }
+
+    #[test]
+    fn vec_element_metadata_preserves_nested_option_payload_width() {
+        let mut ctx = LowerCtx::new(
+            "metadata".to_string(),
+            vec![],
+            vec![],
+            Ty::Unit,
+            vec![],
+            "test.vow".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            Rc::new(HashMap::new()),
+        );
+        let source = InstId(1);
+        let nested_vec = InstId(2);
+        let nested_option = InstId(3);
+        ctx.inst_vec_elem_types
+            .insert(source, vec!["Vec".to_string(), "Option".to_string()]);
+        ctx.inst_vec_option_elem_tys
+            .insert(source, vec![None, Some(Ty::U8)]);
+
+        propagate_vec_element_metadata(&mut ctx, source, nested_vec);
+        assert_eq!(ctx.inst_struct_type.get(&nested_vec).unwrap(), "Vec");
+        assert_eq!(
+            ctx.inst_vec_elem_types.get(&nested_vec).unwrap(),
+            &["Option".to_string()]
+        );
+        assert_eq!(
+            ctx.inst_vec_option_elem_tys.get(&nested_vec).unwrap(),
+            &[Some(Ty::U8)]
+        );
+
+        propagate_vec_element_metadata(&mut ctx, nested_vec, nested_option);
+        assert_eq!(ctx.inst_struct_type.get(&nested_option).unwrap(), "Option");
+        assert_eq!(ctx.inst_option_elem_ty.get(&nested_option), Some(&Ty::U8));
     }
 
     #[test]
@@ -5374,6 +5445,7 @@ fn parse_or_default(s: String) -> i64 {
             vow_types::check::PatternAggregateInfo {
                 type_name: "Option".to_string(),
                 vec_elem_types: vec![],
+                vec_option_elem_types: vec![],
                 option_elem_type: Some(PatternScalarType::U8),
                 is_linear: false,
             },

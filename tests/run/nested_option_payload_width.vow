@@ -21,6 +21,26 @@ fn propagate_nested(value: Option<Option<u8>>) -> Option<u8> {
     }
 }
 
+fn unwrap_vec_nested(value: Option<Vec<Option<u8>>>) -> u8 {
+    match value {
+        Option::Some(items) => {
+            match items[0] {
+                Option::Some(byte) => { byte },
+                Option::None => { 0 },
+            }
+        },
+        Option::None => { 0 },
+    }
+}
+
+fn propagate_vec_nested(value: Option<Vec<Option<u8>>>) -> Option<u8> {
+    let items: Vec<Option<u8>> = value?;
+    match items[0] {
+        Option::Some(byte) => { Option::Some(byte) },
+        Option::None => { Option::None },
+    }
+}
+
 fn main() -> i32 {
     let value: u8 = unwrap_nested(Option::Some(Option::Some(7)));
     let propagated: Option<u8> = propagate_nested(Option::Some(Option::Some(9)));
@@ -30,5 +50,16 @@ fn main() -> i32 {
     };
     if value != 7 { return 1; }
     if propagated_value != 9 { return 2; }
+    let items: Vec<Option<u8>> = Vec::new();
+    items.push(Option::Some(11));
+    if unwrap_vec_nested(Option::Some(items)) != 11 { return 3; }
+    let question_items: Vec<Option<u8>> = Vec::new();
+    question_items.push(Option::Some(13));
+    let question_value: Option<u8> = propagate_vec_nested(Option::Some(question_items));
+    let question_byte: u8 = match question_value {
+        Option::Some(byte) => { byte },
+        Option::None => { 0 },
+    };
+    if question_byte != 13 { return 4; }
     0
 }

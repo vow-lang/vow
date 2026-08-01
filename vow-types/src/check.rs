@@ -17,6 +17,7 @@ pub type StringExprSet = HashSet<usize>;
 pub struct PatternAggregateInfo {
     pub type_name: String,
     pub vec_elem_types: Vec<String>,
+    pub vec_option_elem_types: Vec<Option<PatternScalarType>>,
     pub option_elem_type: Option<PatternScalarType>,
     pub is_linear: bool,
 }
@@ -71,6 +72,26 @@ fn vec_element_type_names(ty: &Ty) -> Vec<String> {
     }
 }
 
+fn vec_element_option_types(ty: &Ty) -> Vec<Option<PatternScalarType>> {
+    match ty {
+        Ty::Reference(inner) => vec_element_option_types(inner),
+        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Vec") => {
+            let Some(elem_ty) = args.first() else {
+                return Vec::new();
+            };
+            let Some(elem_name) = aggregate_type_name(elem_ty) else {
+                return Vec::new();
+            };
+            let mut types = vec![option_element_scalar_type(elem_ty)];
+            if elem_name == "Vec" {
+                types.extend(vec_element_option_types(elem_ty));
+            }
+            types
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn option_element_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
     let elem = match ty {
         Ty::Reference(inner) => return option_element_scalar_type(inner),
@@ -102,6 +123,7 @@ fn pattern_aggregate_info(ty: &Ty, is_linear: bool) -> Option<PatternAggregateIn
     Some(PatternAggregateInfo {
         type_name,
         vec_elem_types: vec_element_type_names(ty),
+        vec_option_elem_types: vec_element_option_types(ty),
         option_elem_type: option_element_scalar_type(ty),
         is_linear,
     })
@@ -2637,6 +2659,7 @@ mod tests {
 
         assert_eq!(info.type_name, "Vec");
         assert_eq!(info.vec_elem_types, ["Box"]);
+        assert_eq!(info.vec_option_elem_types, [None]);
         assert!(!info.is_linear);
     }
 
@@ -2653,6 +2676,7 @@ mod tests {
 
         assert_eq!(info.type_name, "Vec");
         assert_eq!(info.vec_elem_types, ["Vec", "Box"]);
+        assert_eq!(info.vec_option_elem_types, [None, None]);
     }
 
     #[test]
@@ -2700,6 +2724,21 @@ mod tests {
         let aggregate_info = pattern_aggregate_info(&aggregate, false)
             .expect("aggregate Option is aggregate metadata");
         assert_eq!(aggregate_info.option_elem_type, None);
+
+        let vec_option = Ty::Applied(
+            Box::new(Ty::Struct("Vec".to_string())),
+            vec![Ty::Applied(
+                Box::new(Ty::Enum("Option".to_string())),
+                vec![Ty::U8],
+            )],
+        );
+        let vec_option_info = pattern_aggregate_info(&vec_option, false)
+            .expect("Vec<Option<u8>> is aggregate metadata");
+        assert_eq!(vec_option_info.vec_elem_types, ["Option"]);
+        assert_eq!(
+            vec_option_info.vec_option_elem_types,
+            [Some(PatternScalarType::U8)]
+        );
     }
 
     #[test]

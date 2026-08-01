@@ -49,14 +49,18 @@ struct LowerCtx {
     loop_exit_phi_ids: Vec<Vec<i64>>,
     vec_elem_inst_ids: Vec<i64>,
     vec_elem_paths: Vec<Vec<String>>,
+    vec_option_elem_inst_ids: Vec<i64>,
+    vec_option_elem_ty_paths: Vec<Vec<i64>>,
     option_elem_inst_ids: Vec<i64>,
     option_elem_tys: Vec<i64>,
     pat_aggregate_names: Vec<String>,
     pat_vec_elem_paths: Vec<Vec<String>>,
+    pat_vec_option_elem_ty_paths: Vec<Vec<i64>>,
     pat_option_elem_tys: Vec<i64>,
     pat_aggregate_linear: Vec<i64>,
     question_aggregate_names: Vec<String>,
     question_vec_elem_paths: Vec<Vec<String>>,
+    question_vec_option_elem_ty_paths: Vec<Vec<i64>>,
     question_option_elem_tys: Vec<i64>,
     question_aggregate_linear: Vec<i64>,
     warnings: Vec<String>,
@@ -121,14 +125,18 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         loop_exit_phi_ids: Vec::new(),
         vec_elem_inst_ids: Vec::new(),
         vec_elem_paths: Vec::new(),
+        vec_option_elem_inst_ids: Vec::new(),
+        vec_option_elem_ty_paths: Vec::new(),
         option_elem_inst_ids: Vec::new(),
         option_elem_tys: Vec::new(),
         pat_aggregate_names: Vec::new(),
         pat_vec_elem_paths: Vec::new(),
+        pat_vec_option_elem_ty_paths: Vec::new(),
         pat_option_elem_tys: Vec::new(),
         pat_aggregate_linear: Vec::new(),
         question_aggregate_names: Vec::new(),
         question_vec_elem_paths: Vec::new(),
+        question_vec_option_elem_ty_paths: Vec::new(),
         question_option_elem_tys: Vec::new(),
         question_aggregate_linear: Vec::new(),
         warnings: Vec::new(),
@@ -378,6 +386,23 @@ fn lctx_get_vec_elem_path(ctx: LowerCtx, inst_id: i64) -> Vec<String> {
     Vec::new()
 }
 
+fn lctx_tag_vec_option_elem_ty_path(ctx: LowerCtx, inst_id: i64, path: Vec<i64>) {
+    ctx.vec_option_elem_inst_ids.push(inst_id);
+    ctx.vec_option_elem_ty_paths.push(path);
+}
+
+fn lctx_get_vec_option_elem_ty_path(ctx: LowerCtx, inst_id: i64) -> Vec<i64> {
+    let n: i64 = ctx.vec_option_elem_inst_ids.len();
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.vec_option_elem_inst_ids[i] == inst_id {
+            return ctx.vec_option_elem_ty_paths[i];
+        }
+    }
+    Vec::new()
+}
+
 fn lctx_get_vec_elem(ctx: LowerCtx, inst_id: i64) -> String {
     let path: Vec<String> = lctx_get_vec_elem_path(ctx, inst_id);
     if path.len() > 0 {
@@ -392,6 +417,10 @@ fn lctx_propagate_vec_elem(ctx: LowerCtx, source_id: i64, result_id: i64) {
         return;
     }
     lctx_tag(ctx, result_id, path[0]);
+    let option_path: Vec<i64> = lctx_get_vec_option_elem_ty_path(ctx, source_id);
+    if option_path.len() > 0 && option_path[0] != -1 {
+        lctx_tag_option_elem(ctx, result_id, option_path[0]);
+    }
     if path.len() > 1 {
         let remaining: Vec<String> = Vec::new();
         let mut i: i64 = 1;
@@ -400,6 +429,15 @@ fn lctx_propagate_vec_elem(ctx: LowerCtx, source_id: i64, result_id: i64) {
             i = i + 1;
         }
         lctx_tag_vec_elem_path(ctx, result_id, remaining);
+        if option_path.len() > 1 {
+            let remaining_options: Vec<i64> = Vec::new();
+            let mut oi: i64 = 1;
+            while oi < option_path.len() {
+                remaining_options.push(option_path[oi]);
+                oi = oi + 1;
+            }
+            lctx_tag_vec_option_elem_ty_path(ctx, result_id, remaining_options);
+        }
     }
 }
 
@@ -434,6 +472,13 @@ fn lctx_get_pattern_vec_elem_path(ctx: LowerCtx, pid: i64) -> Vec<String> {
     Vec::new()
 }
 
+fn lctx_get_pattern_vec_option_elem_ty_path(ctx: LowerCtx, pid: i64) -> Vec<i64> {
+    if pid < ctx.pat_vec_option_elem_ty_paths.len() {
+        return ctx.pat_vec_option_elem_ty_paths[pid];
+    }
+    Vec::new()
+}
+
 fn lctx_get_pattern_option_elem_ty(ctx: LowerCtx, pid: i64) -> i64 {
     if pid < ctx.pat_option_elem_tys.len() {
         return ctx.pat_option_elem_tys[pid];
@@ -458,6 +503,13 @@ fn lctx_get_question_aggregate(ctx: LowerCtx, eid: i64) -> String {
 fn lctx_get_question_vec_elem_path(ctx: LowerCtx, eid: i64) -> Vec<String> {
     if eid < ctx.question_vec_elem_paths.len() {
         return ctx.question_vec_elem_paths[eid];
+    }
+    Vec::new()
+}
+
+fn lctx_get_question_vec_option_elem_ty_path(ctx: LowerCtx, eid: i64) -> Vec<i64> {
+    if eid < ctx.question_vec_option_elem_ty_paths.len() {
+        return ctx.question_vec_option_elem_ty_paths[eid];
     }
     Vec::new()
 }
@@ -1540,6 +1592,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let elem_path: Vec<String> = lctx_get_vec_elem_path(ctx, source_id);
                     if elem_path.len() > 0 {
                         lctx_tag_vec_elem_path(ctx, result, elem_path);
+                    }
+                    let option_path: Vec<i64> = lctx_get_vec_option_elem_ty_path(ctx, source_id);
+                    if option_path.len() > 0 {
+                        lctx_tag_vec_option_elem_ty_path(ctx, result, option_path);
                     }
                     return result;
                 }
@@ -3142,6 +3198,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let pname: String = arena_str(a, name_sid);
                         let aggregate_struct: String = lctx_get_pattern_aggregate(ctx, inner_pid);
                         let aggregate_vec_elems: Vec<String> = lctx_get_pattern_vec_elem_path(ctx, inner_pid);
+                        let aggregate_vec_options: Vec<i64> = lctx_get_pattern_vec_option_elem_ty_path(ctx, inner_pid);
                         let aggregate_option_elem: i64 = lctx_get_pattern_option_elem_ty(ctx, inner_pid);
                         let field_ty: i64 = {
                             if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
@@ -3162,6 +3219,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         }
                         if aggregate_vec_elems.len() > 0 {
                             lctx_tag_vec_elem_path(ctx, field_val, aggregate_vec_elems);
+                        }
+                        if aggregate_vec_options.len() > 0 {
+                            lctx_tag_vec_option_elem_ty_path(ctx, field_val, aggregate_vec_options);
                         }
                         if aggregate_option_elem != -1 {
                             lctx_tag_option_elem(ctx, field_val, aggregate_option_elem);
@@ -3442,6 +3502,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_switch_to_block(ctx, continue_block);
         let aggregate_name: String = lctx_get_question_aggregate(ctx, eid);
         let aggregate_vec_elems: Vec<String> = lctx_get_question_vec_elem_path(ctx, eid);
+        let aggregate_vec_options: Vec<i64> = lctx_get_question_vec_option_elem_ty_path(ctx, eid);
         let aggregate_option_elem: i64 = lctx_get_question_option_elem_ty(ctx, eid);
         let payload_ty: i64 = {
             if aggregate_name.len() > 0 && lctx_question_is_linear(ctx, eid) == 1 {
@@ -3460,6 +3521,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         if aggregate_vec_elems.len() > 0 {
             lctx_tag_vec_elem_path(ctx, payload_id, aggregate_vec_elems);
+        }
+        if aggregate_vec_options.len() > 0 {
+            lctx_tag_vec_option_elem_ty_path(ctx, payload_id, aggregate_vec_options);
         }
         if aggregate_option_elem != -1 {
             lctx_tag_option_elem(ctx, payload_id, aggregate_option_elem);
@@ -4006,6 +4070,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.tag_names = Vec::new();
     ctx.vec_elem_inst_ids = Vec::new();
     ctx.vec_elem_paths = Vec::new();
+    ctx.vec_option_elem_inst_ids = Vec::new();
+    ctx.vec_option_elem_ty_paths = Vec::new();
     ctx.option_elem_inst_ids = Vec::new();
     ctx.option_elem_tys = Vec::new();
 
@@ -4135,10 +4201,12 @@ fn lower_module_vow(
     str_eids: Vec<i64>,
     pat_aggregate_names: Vec<String>,
     pat_vec_elem_paths: Vec<Vec<String>>,
+    pat_vec_option_elem_ty_paths: Vec<Vec<i64>>,
     pat_option_elem_tys: Vec<i64>,
     pat_aggregate_linear: Vec<i64>,
     question_aggregate_names: Vec<String>,
     question_vec_elem_paths: Vec<Vec<String>>,
+    question_vec_option_elem_ty_paths: Vec<Vec<i64>>,
     question_option_elem_tys: Vec<i64>,
     question_aggregate_linear: Vec<i64>,
     item_files: Vec<String>,
@@ -4426,10 +4494,12 @@ fn lower_module_vow(
     let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
     ctx.pat_aggregate_names = pat_aggregate_names;
     ctx.pat_vec_elem_paths = pat_vec_elem_paths;
+    ctx.pat_vec_option_elem_ty_paths = pat_vec_option_elem_ty_paths;
     ctx.pat_option_elem_tys = pat_option_elem_tys;
     ctx.pat_aggregate_linear = pat_aggregate_linear;
     ctx.question_aggregate_names = question_aggregate_names;
     ctx.question_vec_elem_paths = question_vec_elem_paths;
+    ctx.question_vec_option_elem_ty_paths = question_vec_option_elem_ty_paths;
     ctx.question_option_elem_tys = question_option_elem_tys;
     ctx.question_aggregate_linear = question_aggregate_linear;
     // ctx.file is updated per FnDef inside the lowering loop below so each
