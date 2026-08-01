@@ -488,23 +488,12 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
-        if kind == ITEM_TYPE_ALIAS() {
-            register_alias(e, m, id);
-        }
-        i = i + 1;
-    }
-
-    i = 0;
-    while i < n {
-        let cur: String = item_files[i];
-        e.cur_file = cur;
-        let item: i64 = m.items[i];
-        let kind: i64 = item_kind(item);
-        let id: i64 = item_id(item);
         if kind == ITEM_STRUCT() {
             register_struct(e, m, id);
         } else if kind == ITEM_ENUM() {
             register_enum(e, m, id);
+        } else if kind == ITEM_TYPE_ALIAS() {
+            register_alias(e, m, id);
         }
         i = i + 1;
     }
