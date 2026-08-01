@@ -442,7 +442,25 @@ fn check_match_arms(
         .iter()
         .map(|arm| {
             let mut arm_tracker = tracker.clone();
+            let mut bound_names = vec![];
+            collect_pattern_binding_names(&arm.pattern, &mut bound_names);
+            bound_names.sort();
+            bound_names.dedup();
+            let hidden: Vec<(String, Option<ConsumeState>)> = bound_names
+                .into_iter()
+                .map(|name| {
+                    let state = arm_tracker.vars.remove(&name);
+                    (name, state)
+                })
+                .collect();
             check_expr(&arm.body, &mut arm_tracker, env, file, emitter, true);
+            for (name, state) in hidden {
+                if let Some(state) = state {
+                    arm_tracker.vars.insert(name, state);
+                } else {
+                    arm_tracker.vars.remove(&name);
+                }
+            }
             arm_tracker
         })
         .collect();
@@ -463,6 +481,28 @@ fn check_match_arms(
                 .vars
                 .insert(name.clone(), ConsumeState::MaybeConsumed(consumed_span));
         }
+    }
+}
+
+fn collect_pattern_binding_names(pat: &Pat, names: &mut Vec<String>) {
+    match &pat.kind {
+        PatKind::Ident { name, .. } => names.push(name.clone()),
+        PatKind::Tuple(patterns) | PatKind::Or(patterns) => {
+            for pattern in patterns {
+                collect_pattern_binding_names(pattern, names);
+            }
+        }
+        PatKind::Struct { fields, .. } => {
+            for (_, pattern) in fields {
+                collect_pattern_binding_names(pattern, names);
+            }
+        }
+        PatKind::EnumVariant { inner, .. } => {
+            for pattern in inner {
+                collect_pattern_binding_names(pattern, names);
+            }
+        }
+        PatKind::Wildcard | PatKind::Lit(_) => {}
     }
 }
 
@@ -1040,6 +1080,41 @@ mod tests {
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
         assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_match_binding_shadows_consumed_scrutinee() {
+        let env = make_env_with_linear_struct("Token");
+        let mut tracker = LinearTracker::new();
+        tracker
+            .vars
+            .insert("value".to_string(), ConsumeState::Consumed(dummy_span()));
+        let arms = vec![MatchArm {
+            pattern: Pat {
+                kind: PatKind::EnumVariant {
+                    path: vec!["Option".to_string(), "Some".to_string()],
+                    inner: vec![Pat {
+                        kind: PatKind::Ident {
+                            name: "value".to_string(),
+                            is_mut: false,
+                        },
+                        span: dummy_span(),
+                    }],
+                },
+                span: dummy_span(),
+            },
+            body: call_with("consume", "value"),
+            span: dummy_span(),
+        }];
+
+        let mut emitter = TestEmitter(vec![]);
+        check_match_arms(&arms, &mut tracker, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+        assert!(matches!(
+            tracker.vars.get("value"),
+            Some(ConsumeState::Consumed(_))
+        ));
     }
 
     // --- if-else asymmetric consumption ---
