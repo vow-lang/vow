@@ -4106,7 +4106,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| Qualified enum variant (unit)               | `Option::None`       |\n"));
     r.push_str(String::from("| Qualified enum variant (tuple payload)      | `Option::Some(value)` |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Tuple-variant payloads may contain only `_` or immutable identifier bindings.\n"));
+    r.push_str(String::from("Tuple-variant patterns must provide exactly one payload binding for every\n"));
+    r.push_str(String::from("declared payload, and each binding may be only `_` or an immutable identifier.\n"));
     r.push_str(String::from("Nested payload destructuring is not implemented. A catchall `_` or immutable\n"));
     r.push_str(String::from("identifier arm must be the final arm because it matches every enum value.\n"));
     r.push_str(String::from("For an enum that can own linear payloads, `_` is allowed only after explicit\n"));
@@ -6139,7 +6140,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Meaning:** A parsed `match` pattern or scrutinee is not in the subset that\n"));
     r.push_str(String::from("the compiler can lower safely. Match currently accepts enum-valued scrutinees,\n"));
     r.push_str(String::from("qualified unit variants, qualified tuple variants with `_` or immutable\n"));
-    r.push_str(String::from("identifier payloads, and final catchall `_` or immutable identifier arms.\n"));
+    r.push_str(String::from("identifier payloads, and final catchall `_` or immutable identifier arms. A\n"));
+    r.push_str(String::from("tuple-variant pattern must bind exactly the number of payloads declared by the\n"));
+    r.push_str(String::from("variant.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f(n: i64) -> i64 {\n"));
@@ -6153,9 +6156,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Output:** `literal match patterns are not supported`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Use `if`/`else` comparisons for scalar or literal cases. For enum\n"));
-    r.push_str(String::from("payloads, bind each payload to `_` or an immutable identifier and inspect it\n"));
-    r.push_str(String::from("separately. Unsupported patterns fail before lowering and never produce an\n"));
-    r.push_str(String::from("executable.\n"));
+    r.push_str(String::from("payloads, provide exactly one `_` or immutable identifier for each declared\n"));
+    r.push_str(String::from("payload and inspect bound values separately. Unsupported patterns fail before\n"));
+    r.push_str(String::from("lowering and never produce an executable.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ImmutableAssignment\n"));
     r.push_str(String::from("\n"));
@@ -8801,7 +8804,8 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("| Qualified enum variant (unit)               | `Option::None`       |\n"));
     r.push_str(String::from("| Qualified enum variant (tuple payload)      | `Option::Some(value)` |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Tuple-variant payloads may contain only `_` or immutable identifier bindings.\n"));
+    r.push_str(String::from("Tuple-variant patterns must provide exactly one payload binding for every\n"));
+    r.push_str(String::from("declared payload, and each binding may be only `_` or an immutable identifier.\n"));
     r.push_str(String::from("Nested payload destructuring is not implemented. A catchall `_` or immutable\n"));
     r.push_str(String::from("identifier arm must be the final arm because it matches every enum value.\n"));
     r.push_str(String::from("For an enum that can own linear payloads, `_` is allowed only after explicit\n"));
@@ -10842,7 +10846,9 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Meaning:** A parsed `match` pattern or scrutinee is not in the subset that\n"));
     r.push_str(String::from("the compiler can lower safely. Match currently accepts enum-valued scrutinees,\n"));
     r.push_str(String::from("qualified unit variants, qualified tuple variants with `_` or immutable\n"));
-    r.push_str(String::from("identifier payloads, and final catchall `_` or immutable identifier arms.\n"));
+    r.push_str(String::from("identifier payloads, and final catchall `_` or immutable identifier arms. A\n"));
+    r.push_str(String::from("tuple-variant pattern must bind exactly the number of payloads declared by the\n"));
+    r.push_str(String::from("variant.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f(n: i64) -> i64 {\n"));
@@ -10856,9 +10862,9 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Output:** `literal match patterns are not supported`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Use `if`/`else` comparisons for scalar or literal cases. For enum\n"));
-    r.push_str(String::from("payloads, bind each payload to `_` or an immutable identifier and inspect it\n"));
-    r.push_str(String::from("separately. Unsupported patterns fail before lowering and never produce an\n"));
-    r.push_str(String::from("executable.\n"));
+    r.push_str(String::from("payloads, provide exactly one `_` or immutable identifier for each declared\n"));
+    r.push_str(String::from("payload and inspect bound values separately. Unsupported patterns fail before\n"));
+    r.push_str(String::from("lowering and never produce an executable.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ImmutableAssignment\n"));
     r.push_str(String::from("\n"));

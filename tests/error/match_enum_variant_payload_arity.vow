@@ -1,0 +1,21 @@
+// TEST: error-code UnsupportedPattern
+// TEST: stderr "variant pattern expects 2 payload bindings, found 1"
+module MatchEnumVariantPayloadArity
+
+linear struct Token {
+    id: i64,
+}
+
+enum Pair {
+    Both(Token, Token),
+}
+
+fn take_first(pair: Pair) -> Token {
+    match pair {
+        Pair::Both(first) => { first },
+    }
+}
+
+fn main() -> i32 {
+    0
+}

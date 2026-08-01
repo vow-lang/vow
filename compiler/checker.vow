@@ -1154,6 +1154,23 @@ fn lookup_variant_payload(e: CheckEnv, enum_idx: i64, variant_name: String, fiel
     CTY_UNIT()
 }
 
+fn lookup_variant_payload_count(e: CheckEnv, enum_idx: i64, variant_name: String) -> i64 {
+    let vname_lid: i64 = e.edef_vname_lids[enum_idx];
+    let nv: i64 = e.edef_variant_count[enum_idx];
+    let mut i: i64 = 0;
+    while i < nv {
+        let vsid: i64 = ts_arg_get(e.ts, vname_lid, i);
+        let ts: TyStore = e.ts;
+        if ts.strs[vsid] == variant_name {
+            let vpayload_lid: i64 = e.edef_vpayload_lids[enum_idx];
+            let fields_lid: i64 = ts_arg_get(e.ts, vpayload_lid, i);
+            return ts_arg_len(e.ts, fields_lid);
+        }
+        i = i + 1;
+    }
+    -1
+}
+
 // Built-in Option/Result are not registered in `env`; derive their tuple
 // payload types from the scrutinee's applied type arguments instead, so a
 // `match Option::Some(x)` arm binds `x` to the right type (mirrors the Rust
@@ -1174,6 +1191,17 @@ fn builtin_variant_payload(ts: TyStore, scrutinee_tid: i64, enum_name: String, v
         return ts_arg_get(ts, args_lid, 1);
     }
     CTY_UNIT()
+}
+
+fn builtin_variant_payload_count(enum_name: String, variant_name: String) -> i64 {
+    if enum_name == String::from("Option") {
+        if variant_name == String::from("Some") { return 1; }
+        if variant_name == String::from("None") { return 0; }
+    }
+    if enum_name == String::from("Result") {
+        if variant_name == String::from("Ok") || variant_name == String::from("Err") { return 1; }
+    }
+    -1
 }
 
 fn validate_arm_pattern(e: CheckEnv, m: Module, pid: i64, is_last: bool) -> bool [io] {
@@ -1424,6 +1452,20 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
         // else take payload types from the scrutinee's applied args.
         let is_builtin_enum: bool =
             enum_name == String::from("Option") || enum_name == String::from("Result");
+        let expected_payloads: i64 = if enum_idx != -1 && variant_sid != -1 {
+            lookup_variant_payload_count(e, enum_idx, variant_name)
+        } else if is_builtin_enum && variant_sid != -1 {
+            builtin_variant_payload_count(enum_name, variant_name)
+        } else {
+            -1
+        };
+        if expected_payloads >= 0 && n_inner != expected_payloads {
+            let message: String = String::from("variant pattern expects ");
+            message.push_str(i64_to_string(expected_payloads));
+            message.push_str(String::from(" payload bindings, found "));
+            message.push_str(i64_to_string(n_inner));
+            env_emit_error_code(e, EC_UNSUPPORTED_PATTERN(), message, pat_span(a, pid));
+        }
         let mut i: i64 = 0;
         while i < n_inner {
             let ipid: i64 = list_get(a, inner_lid, i);

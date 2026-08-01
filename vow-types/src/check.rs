@@ -2486,7 +2486,7 @@ impl<'e> Checker<'e> {
                 };
                 // Built-in Option/Result aren't in `env`; a registered (user) enum
                 // wins, else take payload types from the scrutinee's type args.
-                let variant_tys: Vec<Ty> = self
+                let variant_tys: Option<Vec<Ty>> = self
                     .env
                     .lookup_enum(&enum_name)
                     .and_then(|info| {
@@ -2511,8 +2511,21 @@ impl<'e> Checker<'e> {
                             _ => vec![],
                         }),
                         _ => None,
-                    })
-                    .unwrap_or_default();
+                    });
+                let Some(variant_tys) = variant_tys else {
+                    return;
+                };
+                if inner.len() != variant_tys.len() {
+                    self.emit_error(
+                        ErrorCode::UnsupportedPattern,
+                        format!(
+                            "variant pattern expects {} payload bindings, found {}",
+                            variant_tys.len(),
+                            inner.len()
+                        ),
+                        pat.span,
+                    );
+                }
                 for (p, t) in inner.iter().zip(variant_tys.iter()) {
                     if matches!(&p.kind, PatKind::Wildcard)
                         && crate::linear::is_linear_owner_ty(t, &self.env)
@@ -2961,6 +2974,46 @@ mod tests {
             emitter.0[0]
                 .message
                 .contains("wildcard pattern discards a linear value")
+        );
+    }
+
+    #[test]
+    fn arm_pattern_rejects_payload_arity_mismatch() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_enum(
+            "Pair",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Both".to_string(),
+                    kind: VariantKind::Tuple(vec![Ty::I64, Ty::I64]),
+                }],
+            },
+        );
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Pair".to_string(), "Both".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Ident {
+                        name: "first".to_string(),
+                        is_mut: false,
+                    },
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Enum("Pair".to_string()));
+
+        assert!(checker.has_errors());
+        assert_eq!(checker.env.lookup("first"), Some(&Ty::I64));
+        drop(checker);
+        assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+        assert_eq!(
+            emitter.0[0].message,
+            "variant pattern expects 2 payload bindings, found 1"
         );
     }
 

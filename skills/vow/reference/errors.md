@@ -212,7 +212,9 @@ fn f(o: Option<i64>) -> i64 {
 **Meaning:** A parsed `match` pattern or scrutinee is not in the subset that
 the compiler can lower safely. Match currently accepts enum-valued scrutinees,
 qualified unit variants, qualified tuple variants with `_` or immutable
-identifier payloads, and final catchall `_` or immutable identifier arms.
+identifier payloads, and final catchall `_` or immutable identifier arms. A
+tuple-variant pattern must bind exactly the number of payloads declared by the
+variant.
 
 ```vow
 fn f(n: i64) -> i64 {
@@ -226,9 +228,9 @@ fn f(n: i64) -> i64 {
 **Output:** `literal match patterns are not supported`
 
 **Fix:** Use `if`/`else` comparisons for scalar or literal cases. For enum
-payloads, bind each payload to `_` or an immutable identifier and inspect it
-separately. Unsupported patterns fail before lowering and never produce an
-executable.
+payloads, provide exactly one `_` or immutable identifier for each declared
+payload and inspect bound values separately. Unsupported patterns fail before
+lowering and never produce an executable.
 
 ### ImmutableAssignment
 

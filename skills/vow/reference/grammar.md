@@ -665,7 +665,8 @@ return the same type. Patterns must be exhaustive.
 | Qualified enum variant (unit)               | `Option::None`       |
 | Qualified enum variant (tuple payload)      | `Option::Some(value)` |
 
-Tuple-variant payloads may contain only `_` or immutable identifier bindings.
+Tuple-variant patterns must provide exactly one payload binding for every
+declared payload, and each binding may be only `_` or an immutable identifier.
 Nested payload destructuring is not implemented. A catchall `_` or immutable
 identifier arm must be the final arm because it matches every enum value.
 For an enum that can own linear payloads, `_` is allowed only after explicit
