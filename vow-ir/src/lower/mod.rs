@@ -640,7 +640,7 @@ pub(crate) struct LowerCtx {
     // enum name → variant names in declaration order (index = tag)
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
     linear_owner_names: HashSet<String>,
-    type_aliases: HashMap<String, AstType>,
+    type_aliases: Rc<HashMap<String, AstType>>,
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
     inst_ty_cache: HashMap<InstId, Ty>,
@@ -704,7 +704,7 @@ impl LowerCtx {
         struct_field_map: HashMap<String, Vec<String>>,
         enum_variant_map: HashMap<String, Vec<String>>,
         linear_owner_names: HashSet<String>,
-        type_aliases: HashMap<String, AstType>,
+        type_aliases: Rc<HashMap<String, AstType>>,
         struct_field_type_names: HashMap<String, Vec<String>>,
         struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
@@ -3975,7 +3975,7 @@ fn lower_function_with_pattern_aggregates(
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
     linear_owner_names: &HashSet<String>,
-    type_aliases: &HashMap<String, AstType>,
+    type_aliases: Rc<HashMap<String, AstType>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
@@ -3985,10 +3985,10 @@ fn lower_function_with_pattern_aggregates(
     let params: Vec<Ty> = fn_def
         .params
         .iter()
-        .map(|p| lower_ty_with_linear(&p.ty, linear_owner_names, type_aliases))
+        .map(|p| lower_ty_with_linear(&p.ty, linear_owner_names, &type_aliases))
         .collect();
     let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
-    let return_ty = lower_ty_with_linear(&fn_def.return_ty, linear_owner_names, type_aliases);
+    let return_ty = lower_ty_with_linear(&fn_def.return_ty, linear_owner_names, &type_aliases);
     let effects = fn_def.effects.clone();
 
     let mut ctx = LowerCtx::new(
@@ -4002,7 +4002,7 @@ fn lower_function_with_pattern_aggregates(
         struct_field_map,
         enum_variant_map,
         linear_owner_names.clone(),
-        type_aliases.clone(),
+        Rc::clone(&type_aliases),
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs.clone(),
@@ -4024,7 +4024,7 @@ fn lower_function_with_pattern_aggregates(
             InstData::ArgIndex(idx as u32),
             fn_def.span,
         );
-        match resolve_type_alias(&param.ty, type_aliases) {
+        match resolve_type_alias(&param.ty, &type_aliases) {
             AstType::Named { name, .. } if name == "str" || name == "String" => {
                 ctx.inst_struct_type.insert(arg_id, "String".to_string());
             }
@@ -4039,7 +4039,7 @@ fn lower_function_with_pattern_aggregates(
                 if let Some(elem_ty) = args.first()
                     && let AstType::Named {
                         name: elem_name, ..
-                    } = resolve_type_alias(elem_ty, type_aliases)
+                    } = resolve_type_alias(elem_ty, &type_aliases)
                     && !matches!(
                         elem_name.as_str(),
                         "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
@@ -4051,7 +4051,7 @@ fn lower_function_with_pattern_aggregates(
             }
             AstType::Generic { name, args, .. } if name == "Option" => {
                 ctx.inst_struct_type.insert(arg_id, "Option".to_string());
-                if let Some(elem_ty) = option_named_elem_type(&param.ty, type_aliases) {
+                if let Some(elem_ty) = option_named_elem_type(&param.ty, &type_aliases) {
                     ctx.inst_option_elem_ty.insert(arg_id, elem_ty);
                 }
             }
@@ -4133,7 +4133,7 @@ fn lower_function(
         struct_field_map,
         enum_variant_map,
         linear_owner_names,
-        &HashMap::new(),
+        Rc::new(HashMap::new()),
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs,
@@ -4175,7 +4175,7 @@ pub fn lower_module_with_pattern_aggregates(
     // aliases to those owners inherit linearity; references and collection
     // types deliberately do not propagate ownership.
     let linear_owner_names = collect_linear_owner_names(module);
-    let type_aliases = collect_type_aliases(module);
+    let type_aliases = Rc::new(collect_type_aliases(module));
 
     let func_index: HashMap<String, FuncSigInfo> = fn_items
         .iter()
@@ -4344,7 +4344,7 @@ pub fn lower_module_with_pattern_aggregates(
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
                 &linear_owner_names,
-                &type_aliases,
+                Rc::clone(&type_aliases),
                 struct_field_type_names.clone(),
                 struct_field_vec_elems.clone(),
                 string_exprs,
@@ -5461,7 +5461,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             enum_variant_map,
             &linear_structs,
-            &HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
@@ -5591,7 +5591,7 @@ fn parse_or_default(s: String) -> i64 {
             struct_field_map,
             enum_variant_map,
             &HashSet::new(),
-            &HashMap::new(),
+            Rc::new(HashMap::new()),
             struct_field_types,
             HashMap::new(),
             &HashSet::new(),
@@ -5655,7 +5655,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             HashMap::new(),
             HashSet::new(),
-            HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             HashMap::new(),
             HashSet::new(),
@@ -5698,7 +5698,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             HashMap::new(),
             HashSet::new(),
-            HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             HashMap::new(),
             HashSet::new(),
@@ -5821,7 +5821,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             enum_variant_map,
             &HashSet::new(),
-            &HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
