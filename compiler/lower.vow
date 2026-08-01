@@ -1917,7 +1917,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut mi3: i64 = 0;
         while mi3 < nmut {
             let mname: String = mutations[mi3];
-            let mphi_ty: i64 = lctx_inst_ty(ctx, saved_mut_vals[mi3]);
+            let mphi_ty: i64 = merge_phi_ty(
+                lctx_inst_ty(ctx, then_mut_vals[mi3]),
+                lctx_inst_ty(ctx, else_mut_vals[mi3]),
+            );
             let phi_args: Vec<i64> = Vec::new();
             let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
             backpatch_upsilon(ctx, then_exit_block, mut_up_then[mi3], phi_id);
@@ -3189,6 +3192,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // arm's Upsilon value can be re-narrowed to result_ty once it's known.
         let arm_bodies: Vec<i64> = Vec::new();
         let arm_mut_ups: Vec<i64> = Vec::new();
+        let arm_mut_inputs: Vec<i64> = Vec::new();
 
         let mut ai: i64 = 0;
         while ai < n_arms {
@@ -3302,6 +3306,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         mu_args.push(arm_mut_vals[mci]);
                         let mu_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
                         arm_mut_ups.push(mu_id);
+                        arm_mut_inputs.push(arm_mut_vals[mci]);
                         mci = mci + 1;
                     }
 
@@ -3358,6 +3363,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         mu2_args.push(arm_mut_vals2[mci2]);
                         let mu2_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu2_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
                         arm_mut_ups.push(mu2_id);
+                        arm_mut_inputs.push(arm_mut_vals2[mci2]);
                         mci2 = mci2 + 1;
                     }
 
@@ -3391,6 +3397,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     mu3_args.push(saved_mut_vals[mci3]);
                     let mu3_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu3_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
                     arm_mut_ups.push(mu3_id);
+                    arm_mut_inputs.push(saved_mut_vals[mci3]);
                     mci3 = mci3 + 1;
                 }
 
@@ -3420,7 +3427,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut mpi: i64 = 0;
         while mpi < nmut {
             let mphi_args: Vec<i64> = Vec::new();
-            let mphi_ty: i64 = lctx_inst_ty(ctx, saved_mut_vals[mpi]);
+            let mut mphi_ty: i64 = lctx_inst_ty(ctx, arm_mut_inputs[mpi]);
+            let mut mti: i64 = 1;
+            while mti < n_merge_arms {
+                mphi_ty = merge_phi_ty(mphi_ty, lctx_inst_ty(ctx, arm_mut_inputs[mti * nmut + mpi]));
+                mti = mti + 1;
+            }
             let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), mphi_ty, mphi_args, IDATA_NONE(), 0, 0, String::from(""));
             let mut bpi: i64 = 0;
             while bpi < n_merge_arms {
