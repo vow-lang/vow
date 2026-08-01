@@ -1,0 +1,26 @@
+// TEST: error-code RegionLinear
+module LinearMatchMutationPhiLeak
+
+linear struct Token {
+    id: i64,
+}
+
+enum Choice {
+    Replace,
+    Keep,
+}
+
+fn leak(choice: Choice) -> () {
+    let mut value: Option<Token> = Option::None;
+    match choice {
+        Choice::Replace => {
+            value = Option::Some(Token { id: 1 });
+        },
+        Choice::Keep => {},
+    }
+}
+
+fn main() -> i32 {
+    leak(Choice::Replace());
+    0
+}

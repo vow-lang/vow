@@ -1,0 +1,15 @@
+// TEST: error-code LinearTypeViolation
+// TEST: stderr "struct fields cannot own linear values"
+module LinearStructLinearOwnerField
+
+linear struct Token {
+    id: i64,
+}
+
+linear struct Holder {
+    token: Token,
+}
+
+fn main() -> i32 {
+    0
+}

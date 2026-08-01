@@ -33,6 +33,7 @@ fn parse_typecheck_and_lower(src: &str) -> bool {
     }
     let mut emitter = CollectingEmitter::new();
     let string_exprs;
+    let pattern_aggregates;
     {
         let mut checker = Checker::new("<proptest>", &mut emitter);
         let item_files = vec!["<proptest>".to_string(); module.items.len()];
@@ -40,10 +41,15 @@ fn parse_typecheck_and_lower(src: &str) -> bool {
         if checker.has_errors() {
             return false;
         }
-        string_exprs = checker.into_string_exprs();
+        (string_exprs, pattern_aggregates) = checker.into_lowering_metadata();
     }
     let item_files: Vec<String> = vec!["<proptest>".to_string(); module.items.len()];
-    let _ir_module = vow_ir::lower::lower_module(&module, &item_files, &string_exprs);
+    let _ir_module = vow_ir::lower::lower_module_with_pattern_aggregates(
+        &module,
+        &item_files,
+        &string_exprs,
+        pattern_aggregates,
+    );
     true
 }
 
@@ -148,23 +154,29 @@ proptest! {
             let mut e1 = CollectingEmitter::new();
             let mut e2 = CollectingEmitter::new();
             let se1;
+            let pa1;
             let se2;
+            let pa2;
             let item_files1: Vec<String> = vec!["<test>".to_string(); module1.items.len()];
             let item_files2: Vec<String> = vec!["<test>".to_string(); module2.items.len()];
             {
                 let mut c1 = Checker::new("<test>", &mut e1);
                 c1.check_module(&module1, &item_files1);
-                se1 = c1.into_string_exprs();
+                (se1, pa1) = c1.into_lowering_metadata();
             }
             {
                 let mut c2 = Checker::new("<test>", &mut e2);
                 c2.check_module(&module2, &item_files2);
-                se2 = c2.into_string_exprs();
+                (se2, pa2) = c2.into_lowering_metadata();
             }
 
             if e1.diagnostics.is_empty() && e2.diagnostics.is_empty() {
-                let ir1 = vow_ir::lower::lower_module(&module1, &item_files1, &se1);
-                let ir2 = vow_ir::lower::lower_module(&module2, &item_files2, &se2);
+                let ir1 = vow_ir::lower::lower_module_with_pattern_aggregates(
+                    &module1, &item_files1, &se1, pa1,
+                );
+                let ir2 = vow_ir::lower::lower_module_with_pattern_aggregates(
+                    &module2, &item_files2, &se2, pa2,
+                );
 
                 prop_assert_eq!(
                     ir1.functions.len(),

@@ -1,8 +1,7 @@
 pub mod vow;
 
 use std::collections::{HashMap, HashSet};
-
-pub type StringExprSet = HashSet<usize>;
+use std::rc::Rc;
 
 use vow_diag::Blame;
 use vow_syntax::ast::{
@@ -10,6 +9,9 @@ use vow_syntax::ast::{
     Type as AstType, UnOp, VariantKind, VowBlock,
 };
 use vow_syntax::span::Span;
+pub use vow_types::check::{
+    PatternAggregateInfo, PatternAggregateMap, PatternScalarType, StringExprSet,
+};
 
 use crate::types::{
     BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId,
@@ -170,8 +172,214 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
     }
 }
 
-fn lower_ty_with_linear(ast_ty: &AstType, linear_struct_names: &HashSet<String>) -> Ty {
+fn propagate_vec_element_metadata(ctx: &mut LowerCtx, source: InstId, result: InstId) {
+    let Some(elem_types) = ctx.inst_vec_elem_types.get(&source).cloned() else {
+        return;
+    };
+    let Some((elem_name, remaining)) = elem_types.split_first() else {
+        return;
+    };
+    ctx.inst_struct_type.insert(result, elem_name.clone());
+    let option_types = ctx
+        .inst_vec_option_elem_tys
+        .get(&source)
+        .cloned()
+        .unwrap_or_else(|| vec![None; elem_types.len()]);
+    if let Some(Some(elem_type)) = option_types.first() {
+        ctx.inst_option_elem_ty.insert(result, *elem_type);
+    }
+    let variant_types = ctx
+        .inst_vec_variant_payload_tys
+        .get(&source)
+        .cloned()
+        .unwrap_or_else(|| vec![Vec::new(); elem_types.len()]);
+    if let Some(elem_variant_types) = variant_types.first()
+        && elem_variant_types.iter().any(Option::is_some)
+    {
+        ctx.inst_variant_payload_tys
+            .insert(result, elem_variant_types.clone());
+    }
+    if !remaining.is_empty() {
+        ctx.inst_vec_elem_types.insert(result, remaining.to_vec());
+        let remaining_option_types = option_types.into_iter().skip(1).collect::<Vec<_>>();
+        if remaining_option_types.iter().any(Option::is_some) {
+            ctx.inst_vec_option_elem_tys
+                .insert(result, remaining_option_types);
+        }
+        let remaining_variant_types = variant_types.into_iter().skip(1).collect::<Vec<_>>();
+        if remaining_variant_types
+            .iter()
+            .flatten()
+            .any(Option::is_some)
+        {
+            ctx.inst_vec_variant_payload_tys
+                .insert(result, remaining_variant_types);
+        }
+    }
+}
+
+fn pattern_scalar_ir_type(ty: PatternScalarType) -> Ty {
+    match ty {
+        PatternScalarType::I8 => Ty::I8,
+        PatternScalarType::I16 => Ty::I16,
+        PatternScalarType::I32 => Ty::I32,
+        PatternScalarType::I64 => Ty::I64,
+        PatternScalarType::I128 => Ty::I128,
+        PatternScalarType::U8 => Ty::U8,
+        PatternScalarType::U16 => Ty::U16,
+        PatternScalarType::U32 => Ty::U32,
+        PatternScalarType::U64 => Ty::U64,
+        PatternScalarType::U128 => Ty::U128,
+        PatternScalarType::F32 => Ty::F32,
+        PatternScalarType::F64 => Ty::F64,
+        PatternScalarType::Bool => Ty::Bool,
+    }
+}
+
+fn tag_pattern_aggregate_metadata(ctx: &mut LowerCtx, result: InstId, info: PatternAggregateInfo) {
+    ctx.inst_struct_type.insert(result, info.type_name);
+    if !info.vec_elem_types.is_empty() {
+        let option_types = info
+            .vec_option_elem_types
+            .into_iter()
+            .map(|ty| ty.map(pattern_scalar_ir_type))
+            .collect::<Vec<_>>();
+        ctx.inst_vec_elem_types.insert(result, info.vec_elem_types);
+        if option_types.iter().any(Option::is_some) {
+            ctx.inst_vec_option_elem_tys.insert(result, option_types);
+        }
+        let variant_types = info
+            .vec_variant_payload_types
+            .into_iter()
+            .map(|variant| {
+                variant
+                    .into_iter()
+                    .map(|ty| ty.map(pattern_scalar_ir_type))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        if variant_types.iter().flatten().any(Option::is_some) {
+            ctx.inst_vec_variant_payload_tys
+                .insert(result, variant_types);
+        }
+    }
+    if let Some(elem_type) = info.option_elem_type {
+        ctx.inst_option_elem_ty
+            .insert(result, pattern_scalar_ir_type(elem_type));
+    }
+    let variant_types = info
+        .variant_payload_types
+        .into_iter()
+        .map(|ty| ty.map(pattern_scalar_ir_type))
+        .collect::<Vec<_>>();
+    if variant_types.iter().any(Option::is_some) {
+        ctx.inst_variant_payload_tys.insert(result, variant_types);
+    }
+}
+
+fn compatible_metadata_value<T: Clone + Eq>(
+    sources: &[InstId],
+    get: impl Fn(InstId) -> Option<T>,
+) -> Result<Option<T>, ()> {
+    let mut compatible = None;
+    for source in sources {
+        let Some(value) = get(*source) else {
+            continue;
+        };
+        if compatible.as_ref().is_some_and(|known| known != &value) {
+            return Err(());
+        }
+        compatible = Some(value);
+    }
+    Ok(compatible)
+}
+
+fn copy_compatible_aggregate_metadata(ctx: &mut LowerCtx, sources: &[InstId], result: InstId) {
+    let Some(type_name) = sources
+        .first()
+        .and_then(|source| ctx.inst_struct_type.get(source))
+        .cloned()
+    else {
+        return;
+    };
+    if !sources
+        .iter()
+        .all(|source| ctx.inst_struct_type.get(source) == Some(&type_name))
+    {
+        return;
+    }
+
+    let Ok(vec_elem_types) = compatible_metadata_value(sources, |source| {
+        ctx.inst_vec_elem_types.get(&source).cloned()
+    }) else {
+        return;
+    };
+    let Ok(vec_option_elem_tys) = compatible_metadata_value(sources, |source| {
+        ctx.inst_vec_option_elem_tys.get(&source).cloned()
+    }) else {
+        return;
+    };
+    let Ok(vec_variant_payload_tys) = compatible_metadata_value(sources, |source| {
+        ctx.inst_vec_variant_payload_tys.get(&source).cloned()
+    }) else {
+        return;
+    };
+    let Ok(option_elem_ty) = compatible_metadata_value(sources, |source| {
+        ctx.inst_option_elem_ty.get(&source).copied()
+    }) else {
+        return;
+    };
+    let Ok(variant_payload_tys) = compatible_metadata_value(sources, |source| {
+        ctx.inst_variant_payload_tys.get(&source).cloned()
+    }) else {
+        return;
+    };
+
+    ctx.inst_struct_type.insert(result, type_name);
+    if let Some(types) = vec_elem_types {
+        ctx.inst_vec_elem_types.insert(result, types);
+    }
+    if let Some(types) = vec_option_elem_tys {
+        ctx.inst_vec_option_elem_tys.insert(result, types);
+    }
+    if let Some(types) = vec_variant_payload_tys {
+        ctx.inst_vec_variant_payload_tys.insert(result, types);
+    }
+    if let Some(ty) = option_elem_ty {
+        ctx.inst_option_elem_ty.insert(result, ty);
+    }
+    if let Some(types) = variant_payload_tys {
+        ctx.inst_variant_payload_tys.insert(result, types);
+    }
+}
+
+fn ast_type_is_linear_owner(ast_ty: &AstType, linear_owner_names: &HashSet<String>) -> bool {
     match ast_ty {
+        AstType::Named { name, .. } => linear_owner_names.contains(name),
+        AstType::Generic { name, args, .. } if name == "Option" || name == "Result" => args
+            .iter()
+            .any(|arg| ast_type_is_linear_owner(arg, linear_owner_names)),
+        _ => false,
+    }
+}
+
+fn resolve_type_alias<'a>(
+    ast_ty: &'a AstType,
+    type_aliases: &'a HashMap<String, AstType>,
+) -> &'a AstType {
+    match ast_ty {
+        AstType::Named { name, .. } => type_aliases.get(name).unwrap_or(ast_ty),
+        _ => ast_ty,
+    }
+}
+
+fn lower_ty_with_linear(
+    ast_ty: &AstType,
+    linear_owner_names: &HashSet<String>,
+    type_aliases: &HashMap<String, AstType>,
+) -> Ty {
+    let resolved_ty = resolve_type_alias(ast_ty, type_aliases);
+    match resolved_ty {
         AstType::Named { name, .. } => match name.as_str() {
             "i8" => Ty::I8,
             "i16" => Ty::I16,
@@ -186,12 +394,101 @@ fn lower_ty_with_linear(ast_ty: &AstType, linear_struct_names: &HashSet<String>)
             "f32" => Ty::F32,
             "f64" => Ty::F64,
             "bool" => Ty::Bool,
-            _ if linear_struct_names.contains(name) => Ty::LinearPtr,
+            _ if linear_owner_names.contains(name) => Ty::LinearPtr,
             _ => Ty::Ptr,
         },
         AstType::Unit { .. } => Ty::Unit,
         AstType::Never { .. } => Ty::Unit,
+        _ if ast_type_is_linear_owner(resolved_ty, linear_owner_names) => Ty::LinearPtr,
         _ => Ty::Ptr,
+    }
+}
+
+fn resolve_type_alias_name(
+    name: &str,
+    direct: &HashMap<String, AstType>,
+    resolved: &mut HashMap<String, AstType>,
+    visiting: &mut HashSet<String>,
+) -> AstType {
+    if let Some(ty) = resolved.get(name) {
+        return ty.clone();
+    }
+    let target = direct
+        .get(name)
+        .expect("type alias name originates from the direct map");
+    if !visiting.insert(name.to_string()) {
+        return target.clone();
+    }
+    let final_ty = match target {
+        AstType::Named {
+            name: target_name, ..
+        } if direct.contains_key(target_name) => {
+            resolve_type_alias_name(target_name, direct, resolved, visiting)
+        }
+        _ => target.clone(),
+    };
+    visiting.remove(name);
+    resolved.insert(name.to_string(), final_ty.clone());
+    final_ty
+}
+
+fn collect_type_aliases(module: &AstModule) -> HashMap<String, AstType> {
+    let direct: HashMap<String, AstType> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::TypeAlias(alias) => Some((alias.name.clone(), alias.ty.clone())),
+            _ => None,
+        })
+        .collect();
+    let mut resolved = HashMap::with_capacity(direct.len());
+    for name in direct.keys() {
+        resolve_type_alias_name(name, &direct, &mut resolved, &mut HashSet::new());
+    }
+    resolved
+}
+
+fn collect_linear_owner_names(module: &AstModule) -> HashSet<String> {
+    let mut names: HashSet<String> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Struct(s) if s.is_linear => Some(s.name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    loop {
+        let newly_linear: Vec<String> = module
+            .items
+            .iter()
+            .filter_map(|item| {
+                let (name, owns_linear) = match item {
+                    Item::Enum(enum_def) => {
+                        let owns_linear =
+                            enum_def.variants.iter().any(|variant| match &variant.kind {
+                                VariantKind::Unit => false,
+                                VariantKind::Tuple(types) => {
+                                    types.iter().any(|ty| ast_type_is_linear_owner(ty, &names))
+                                }
+                                VariantKind::Struct(fields) => fields
+                                    .iter()
+                                    .any(|field| ast_type_is_linear_owner(&field.ty, &names)),
+                            });
+                        (&enum_def.name, owns_linear)
+                    }
+                    Item::TypeAlias(alias) => {
+                        (&alias.name, ast_type_is_linear_owner(&alias.ty, &names))
+                    }
+                    _ => return None,
+                };
+                (!names.contains(name) && owns_linear).then(|| name.clone())
+            })
+            .collect();
+        if newly_linear.is_empty() {
+            return names;
+        }
+        names.extend(newly_linear);
     }
 }
 
@@ -242,8 +539,11 @@ pub(crate) struct FuncSigInfo {
     param_tys: Vec<Ty>,
 }
 
-fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
-    match ast_ty {
+fn non_scalar_type_tag(
+    ast_ty: &AstType,
+    type_aliases: &HashMap<String, AstType>,
+) -> Option<String> {
+    match resolve_type_alias(ast_ty, type_aliases) {
         AstType::Named { name, .. }
             if matches!(
                 name.as_str(),
@@ -270,43 +570,57 @@ fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
     }
 }
 
-fn option_named_elem_type(ast_ty: &AstType) -> Option<Ty> {
-    match ast_ty {
-        AstType::Generic { name, args, .. } if name == "Option" => match args.first() {
-            Some(AstType::Named { name, .. }) if name == "i32" => Some(Ty::I32),
-            Some(AstType::Named { name, .. }) if name == "u8" => Some(Ty::U8),
-            _ => None,
-        },
+fn option_named_elem_type(ast_ty: &AstType, type_aliases: &HashMap<String, AstType>) -> Option<Ty> {
+    match resolve_type_alias(ast_ty, type_aliases) {
+        AstType::Generic { name, args, .. } if name == "Option" => args
+            .first()
+            .map(|ty| lower_ty_with_linear(ty, &HashSet::new(), type_aliases))
+            .filter(|ty| !matches!(ty, Ty::Ptr | Ty::LinearPtr | Ty::Unit)),
         _ => None,
     }
 }
 
-fn vec_named_elem_type(ast_ty: &AstType) -> Option<String> {
-    match ast_ty {
-        AstType::Generic { name, args, .. } if name == "Vec" => match args.first() {
-            Some(AstType::Named { name, .. }) if name == "str" => Some("String".to_string()),
-            Some(AstType::Named { name, .. })
-                if !matches!(
-                    name.as_str(),
-                    "i8" | "i16"
-                        | "i32"
-                        | "i64"
-                        | "i128"
-                        | "u8"
-                        | "u16"
-                        | "u32"
-                        | "u64"
-                        | "u128"
-                        | "f32"
-                        | "f64"
-                        | "bool"
-                ) =>
-            {
-                Some(name.clone())
-            }
-            _ => None,
-        },
+fn vec_named_elem_type(
+    ast_ty: &AstType,
+    type_aliases: &HashMap<String, AstType>,
+) -> Option<String> {
+    match resolve_type_alias(ast_ty, type_aliases) {
+        AstType::Generic { name, args, .. } if name == "Vec" => {
+            args.first()
+                .and_then(|elem_ty| match resolve_type_alias(elem_ty, type_aliases) {
+                    AstType::Named { name, .. } if name == "str" => Some("String".to_string()),
+                    AstType::Named { name, .. }
+                        if !matches!(
+                            name.as_str(),
+                            "i8" | "i16"
+                                | "i32"
+                                | "i64"
+                                | "i128"
+                                | "u8"
+                                | "u16"
+                                | "u32"
+                                | "u64"
+                                | "u128"
+                                | "f32"
+                                | "f64"
+                                | "bool"
+                        ) =>
+                    {
+                        Some(name.clone())
+                    }
+                    AstType::Generic { name, .. } => Some(name.clone()),
+                    _ => None,
+                })
+        }
         _ => None,
+    }
+}
+
+fn type_tag_name(ast_ty: &AstType, type_aliases: &HashMap<String, AstType>) -> String {
+    match resolve_type_alias(ast_ty, type_aliases) {
+        AstType::Named { name, .. } if name == "str" => "String".to_string(),
+        AstType::Named { name, .. } | AstType::Generic { name, .. } => name.clone(),
+        _ => String::new(),
     }
 }
 
@@ -325,10 +639,13 @@ pub(crate) struct LowerCtx {
     pub(super) struct_field_map: HashMap<String, Vec<String>>,
     // enum name → variant names in declaration order (index = tag)
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
-    linear_struct_names: HashSet<String>,
+    linear_owner_names: HashSet<String>,
+    type_aliases: Rc<HashMap<String, AstType>>,
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
     inst_ty_cache: HashMap<InstId, Ty>,
+    inst_locations: Vec<(BlockId, usize)>,
+    phi_dependents: HashMap<InstId, Vec<InstId>>,
     // source file path for vow entries
     file: String,
     // struct name → field type names (from AST declarations) for FieldGet auto-tagging
@@ -355,10 +672,20 @@ pub(crate) struct LowerCtx {
     // Per-loop exit-block Phi IDs for mutation variables.  Break emits Upsilons
     // targeting these so the exit block receives updated values.
     loop_exit_phis: Vec<Vec<(String, InstId)>>,
-    // InstId of a Vec allocation → element type name (for struct-in-Vec field access)
-    inst_vec_elem_type: HashMap<InstId, String>,
+    // InstId of a Vec allocation → aggregate element type names, outermost first.
+    // A Vec<Vec<Box>> carries ["Vec", "Box"], so each index can consume one
+    // name and retain the rest for deeper indexing.
+    inst_vec_elem_types: HashMap<InstId, Vec<String>>,
+    // Parallel Option payload widths for aggregate entries in inst_vec_elem_types.
+    inst_vec_option_elem_tys: HashMap<InstId, Vec<Option<Ty>>>,
+    // Parallel per-variant scalar payload widths for enum entries in inst_vec_elem_types.
+    inst_vec_variant_payload_tys: HashMap<InstId, Vec<Vec<Option<Ty>>>>,
     // InstId of an Option-tagged value → its payload type (for Option::Some(v) match-arm FieldGet)
     inst_option_elem_ty: HashMap<InstId, Ty>,
+    // InstId of an enum-tagged value → first scalar payload type per variant tag.
+    inst_variant_payload_tys: HashMap<InstId, Vec<Option<Ty>>>,
+    // Identifier-pattern address → checker-resolved aggregate metadata.
+    pattern_aggregates: Rc<PatternAggregateMap>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     warnings: Vec<vow_diag::Diagnostic>,
@@ -376,10 +703,12 @@ impl LowerCtx {
         func_index: HashMap<String, FuncSigInfo>,
         struct_field_map: HashMap<String, Vec<String>>,
         enum_variant_map: HashMap<String, Vec<String>>,
-        linear_struct_names: HashSet<String>,
+        linear_owner_names: HashSet<String>,
+        type_aliases: Rc<HashMap<String, AstType>>,
         struct_field_type_names: HashMap<String, Vec<String>>,
         struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
+        pattern_aggregates: Rc<PatternAggregateMap>,
     ) -> Self {
         let entry = BasicBlock {
             id: BlockId(0),
@@ -416,9 +745,12 @@ impl LowerCtx {
             func_index,
             struct_field_map,
             enum_variant_map,
-            linear_struct_names,
+            linear_owner_names,
+            type_aliases,
             inst_struct_type: HashMap::new(),
             inst_ty_cache: HashMap::new(),
+            inst_locations: Vec::new(),
+            phi_dependents: HashMap::new(),
             file,
             struct_field_type_names,
             string_exprs,
@@ -430,8 +762,12 @@ impl LowerCtx {
             loop_continue_scope_depth: Vec::new(),
             loop_break_upsilons: Vec::new(),
             loop_exit_phis: Vec::new(),
-            inst_vec_elem_type: HashMap::new(),
+            inst_vec_elem_types: HashMap::new(),
+            inst_vec_option_elem_tys: HashMap::new(),
+            inst_vec_variant_payload_tys: HashMap::new(),
             inst_option_elem_ty: HashMap::new(),
+            inst_variant_payload_tys: HashMap::new(),
+            pattern_aggregates,
             struct_field_vec_elems,
             warnings: Vec::new(),
         }
@@ -475,6 +811,28 @@ impl LowerCtx {
 
     pub(super) fn inst_ty(&self, id: InstId) -> Ty {
         self.inst_ty_cache.get(&id).copied().unwrap_or(Ty::Unit)
+    }
+
+    fn merge_inst_ty(&mut self, id: InstId, incoming_ty: Ty) {
+        let merged_ty = merge_phi_ty(self.inst_ty(id), incoming_ty);
+        if merged_ty == self.inst_ty(id) {
+            return;
+        }
+        let (block_id, inst_index) = self.inst_locations[id.0 as usize];
+        self.func.blocks[block_id.0 as usize].insts[inst_index].ty = merged_ty;
+        self.inst_ty_cache.insert(id, merged_ty);
+
+        let dependents = self.phi_dependents.get(&id).cloned().unwrap_or_default();
+        for dependent in dependents {
+            self.merge_inst_ty(dependent, merged_ty);
+        }
+    }
+
+    fn link_phi_input(&mut self, input: InstId, target: InstId) {
+        if input != target {
+            self.phi_dependents.entry(input).or_default().push(target);
+        }
+        self.merge_inst_ty(target, self.inst_ty(input));
     }
 
     pub(super) fn emit_linear_consume_if_needed(&mut self, id: InstId, span: Span) {
@@ -557,6 +915,16 @@ impl LowerCtx {
         data: InstData,
         origin: Span,
     ) -> InstId {
+        let phi_link = if opcode == Opcode::Upsilon {
+            match (&data, args.first()) {
+                (InstData::PhiTarget(target), Some(input)) if *target != InstId(u32::MAX) => {
+                    Some((*input, *target))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         let id = InstId(self.next_inst_id);
         self.next_inst_id += 1;
         let inst = Inst {
@@ -570,7 +938,12 @@ impl LowerCtx {
         };
         self.inst_ty_cache.insert(id, ty);
         let block_idx = self.current_block.0 as usize;
+        let inst_idx = self.func.blocks[block_idx].insts.len();
         self.func.blocks[block_idx].insts.push(inst);
+        self.inst_locations.push((self.current_block, inst_idx));
+        if let Some((input, target)) = phi_link {
+            self.link_phi_input(input, target);
+        }
         id
     }
 
@@ -775,6 +1148,12 @@ fn choose_match_result_ty(
     arm_results: &[(BlockId, InstId, Ty, Vec<InstId>)],
     arm_result_markers: &[bool],
 ) -> Ty {
+    if arm_results.iter().any(|(_, _, ty, _)| *ty == Ty::LinearPtr) {
+        // Empty generic variants have no payload value from which lowering can
+        // infer ownership. A linear sibling carries the checker-resolved
+        // wrapper type for the merge, so the Phi must retain that obligation.
+        return Ty::LinearPtr;
+    }
     let Some((_, _, first_ty, _)) = arm_results.first() else {
         return Ty::I64;
     };
@@ -792,6 +1171,14 @@ fn choose_match_result_ty(
     }
 
     result_ty
+}
+
+fn merge_phi_ty(primary: Ty, sibling: Ty) -> Ty {
+    if primary == Ty::LinearPtr || sibling == Ty::LinearPtr {
+        Ty::LinearPtr
+    } else {
+        primary
+    }
 }
 
 /// Return variables that are assigned in `then_branch` or `else_branch` AND
@@ -1124,8 +1511,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                     ctx.inst_struct_type.insert(result, "Vec".to_string());
-                    if let Some(elem_name) = ctx.inst_vec_elem_type.get(&source_id).cloned() {
-                        ctx.inst_vec_elem_type.insert(result, elem_name);
+                    if let Some(elem_types) = ctx.inst_vec_elem_types.get(&source_id).cloned() {
+                        ctx.inst_vec_elem_types.insert(result, elem_types);
+                    }
+                    if let Some(option_types) =
+                        ctx.inst_vec_option_elem_tys.get(&source_id).cloned()
+                    {
+                        ctx.inst_vec_option_elem_tys.insert(result, option_types);
                     }
                     return result;
                 }
@@ -1146,7 +1538,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     ctx.inst_struct_type.insert(result, ret_tag);
                 }
                 if let Some(ret_vec_elem) = call_info.ret_vec_elem {
-                    ctx.inst_vec_elem_type.insert(result, ret_vec_elem);
+                    ctx.inst_vec_elem_types.insert(result, vec![ret_vec_elem]);
                 }
                 if let Some(ret_option_elem) = call_info.ret_option_elem {
                     ctx.inst_option_elem_ty.insert(result, ret_option_elem);
@@ -1289,7 +1681,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     // Variable unchanged by both branches — no phi needed.
                     continue;
                 }
-                let phi_ty = ctx.inst_ty(t_val);
+                let phi_ty = merge_phi_ty(ctx.inst_ty(t_val), ctx.inst_ty(e_val));
                 let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                 if !then_terminated {
                     ctx.switch_to_block(then_upsilon_block);
@@ -1334,7 +1726,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     phi_id
                 }
                 (Some(t_up), Some(e_up)) => {
-                    let phi_ty = ctx.inst_ty(then_val);
+                    let phi_ty = merge_phi_ty(ctx.inst_ty(then_val), ctx.inst_ty(else_val));
                     let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                     backpatch_upsilon(ctx, then_upsilon_block, t_up, phi_id);
                     backpatch_upsilon(ctx, else_upsilon_block, e_up, phi_id);
@@ -1740,9 +2132,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
-            if let Some(elem_name) = ctx.inst_vec_elem_type.get(&iter_id).cloned() {
-                ctx.inst_struct_type.insert(elem_id, elem_name);
-            }
+            propagate_vec_element_metadata(ctx, iter_id, elem_id);
 
             // Save scope depth before pushing the for-each binding scope.
             // Loop-carried phis track outer mutation variables whose bindings
@@ -2135,7 +2525,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     && let Some(elem_name) = vec_elems.get(field_idx as usize)
                     && !elem_name.is_empty()
                 {
-                    ctx.inst_vec_elem_type.insert(result_id, elem_name.clone());
+                    ctx.inst_vec_elem_types
+                        .insert(result_id, vec![elem_name.clone()]);
                 }
                 result_id
             }
@@ -2154,7 +2545,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 vec![]
             };
             let n_fields = field_names.len().max(fields.len());
-            let result_ty = if ctx.linear_struct_names.contains(name) {
+            let result_ty = if ctx.linear_owner_names.contains(name) {
                 Ty::LinearPtr
             } else {
                 Ty::Ptr
@@ -2363,11 +2754,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .get(enum_name)
                 .and_then(|vs| vs.iter().position(|v| v == variant_name))
                 .unwrap_or(0) as i64;
-            let n_payload = fields.len();
+            // Evaluate and transfer payloads before allocating the wrapper so
+            // built-in Option/Result constructors can inherit linear ownership
+            // from their type-erased payload expression.
+            let payload_values: Vec<InstId> = fields
+                .iter()
+                .map(|field| lower_consumed_expr(ctx, field))
+                .collect();
+            let owns_linear = ctx.linear_owner_names.contains(enum_name)
+                || payload_values
+                    .iter()
+                    .any(|value| ctx.inst_ty(*value) == Ty::LinearPtr);
+            let n_payload = payload_values.len();
             let size = (2 + n_payload) as u32 * 8;
             let ptr_id = ctx.emit(
                 Opcode::RegionAlloc,
-                Ty::Ptr,
+                if owns_linear { Ty::LinearPtr } else { Ty::Ptr },
                 vec![],
                 InstData::AllocSize { size, align: 8 },
                 span,
@@ -2387,8 +2789,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::FieldIndex(0),
                 span,
             );
-            for (i, field_expr) in fields.iter().enumerate() {
-                let val_id = lower_consumed_expr(ctx, field_expr);
+            for (i, val_id) in payload_values.into_iter().enumerate() {
                 ctx.emit(
                     Opcode::FieldSet,
                     Ty::Unit,
@@ -2400,6 +2801,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ptr_id
         }
         ExprKind::Match { scrutinee, arms } => {
+            // The selected arm consumes an owned wrapper. Delaying the transfer
+            // until dispatch lets an identifier catchall bind the original
+            // obligation instead of rebinding an already-consumed value.
             let ptr_id = lower_expr(ctx, scrutinee);
             let tag_id = ctx.emit(
                 Opcode::FieldGet,
@@ -2429,6 +2833,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Merge-reaching arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
             let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
             let mut arm_result_markers: Vec<bool> = Vec::new();
+            let mut arm_result_values: Vec<InstId> = Vec::new();
             // Parallel to arm_results/arm_result_markers: the arm body expr, so a marker
             // arm's Upsilon value can be re-narrowed to phi_ty once it's known (see below).
             let mut arm_bodies: Vec<&Expr> = Vec::new();
@@ -2475,18 +2880,35 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         );
 
                         ctx.switch_to_block(arm_block);
+                        ctx.emit_linear_consume_if_needed(ptr_id, span);
                         ctx.push_scope();
-                        // The Option<T> builtins tag their result InstId with the payload's
-                        // real type; every other payload (user enums, Result, etc.) defaults
-                        // to I64 as before.
+                        // Narrow scalar Option<T> payloads carry their real IR type.
+                        // Aggregate payload metadata is tracked separately so the binding
+                        // retains the struct/Vec tag needed by field and index lowering.
                         let payload_ty = ctx
-                            .inst_option_elem_ty
+                            .inst_variant_payload_tys
                             .get(&ptr_id)
+                            .and_then(|types| types.get(expected_tag as usize))
                             .copied()
+                            .flatten()
+                            .or_else(|| ctx.inst_option_elem_ty.get(&ptr_id).copied())
                             .unwrap_or(Ty::I64);
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
-                                let field_ty = if i == 0 { payload_ty } else { Ty::I64 };
+                                let aggregate = ctx
+                                    .pattern_aggregates
+                                    .get(&(inner_pat as *const _ as usize))
+                                    .cloned();
+                                let field_ty =
+                                    if aggregate.as_ref().is_some_and(|info| info.is_linear) {
+                                        Ty::LinearPtr
+                                    } else if aggregate.is_some() {
+                                        Ty::Ptr
+                                    } else if i == 0 {
+                                        payload_ty
+                                    } else {
+                                        Ty::I64
+                                    };
                                 let field_val = ctx.emit(
                                     Opcode::FieldGet,
                                     field_ty,
@@ -2494,6 +2916,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                     InstData::FieldIndex(1 + i as u32),
                                     span,
                                 );
+                                if let Some(info) = aggregate {
+                                    tag_pattern_aggregate_metadata(ctx, field_val, info);
+                                }
                                 ctx.define(name.clone(), field_val);
                             }
                         }
@@ -2525,6 +2950,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
+                            arm_result_values.push(arm_result);
                             arm_bodies.push(&arm.body);
                         }
 
@@ -2539,6 +2965,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             ctx.push_scope();
                             ctx.define(name.clone(), ptr_id);
                         } else {
+                            ctx.emit_linear_consume_if_needed(ptr_id, span);
                             ctx.push_scope();
                         }
                         let arm_result = lower_expr(ctx, &arm.body);
@@ -2569,12 +2996,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             let exit_block = ctx.current_block;
                             arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
                             arm_result_markers.push(expr_is_coercible_int_marker(&arm.body));
+                            arm_result_values.push(arm_result);
                             arm_bodies.push(&arm.body);
                         }
 
                         ctx.restore_scope(scope_snap.clone());
                     }
                     _ => {
+                        ctx.emit_linear_consume_if_needed(ptr_id, span);
                         let arm_block = ctx.current_block;
                         let unit =
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
@@ -2598,6 +3027,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         );
                         arm_results.push((arm_block, up_id, Ty::Unit, arm_mut_vals));
                         arm_result_markers.push(false);
+                        arm_result_values.push(unit);
                         arm_bodies.push(&arm.body);
                     }
                 }
@@ -2616,7 +3046,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 if !changed {
                     continue;
                 }
-                let phi_ty = ctx.inst_ty(arm_results[0].3[i]);
+                let phi_ty = arm_results
+                    .iter()
+                    .skip(1)
+                    .fold(ctx.inst_ty(arm_results[0].3[i]), |ty, (_, _, _, values)| {
+                        merge_phi_ty(ty, ctx.inst_ty(values[i]))
+                    });
                 let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
                 for (exit_block, _, _, arm_mut_vals) in &arm_results {
                     ctx.switch_to_block(*exit_block);
@@ -2692,6 +3127,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+            copy_compatible_aggregate_metadata(ctx, &arm_result_values, phi_id);
 
             for (arm_block, up_id, _, _) in &arm_results {
                 backpatch_upsilon(ctx, *arm_block, *up_id, phi_id);
@@ -3070,14 +3506,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
-            if let Some(elem_name) = ctx.inst_vec_elem_type.get(&vec_ptr).cloned() {
-                ctx.inst_struct_type.insert(result, elem_name);
-            }
+            propagate_vec_element_metadata(ctx, vec_ptr, result);
             result
         }
         // ? operator: unwrap Option::Some or short-circuit with None
         ExprKind::Question { expr: inner } => {
-            let ptr_id = lower_expr(ctx, inner);
+            let ptr_id = lower_consumed_expr(ctx, inner);
             // Load discriminant from field 0
             let tag_id = ctx.emit(
                 Opcode::FieldGet,
@@ -3119,7 +3553,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let none_size: u32 = 16; // discriminant + guard slot
             let none_ptr = ctx.emit(
                 Opcode::RegionAlloc,
-                Ty::Ptr,
+                if ctx.func.return_ty == Ty::LinearPtr {
+                    Ty::LinearPtr
+                } else {
+                    Ty::Ptr
+                },
                 vec![],
                 InstData::AllocSize {
                     size: none_size,
@@ -3154,23 +3592,36 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Continue: extract payload from field 1
             ctx.switch_to_block(continue_block);
-            let payload_ty = ctx
-                .inst_option_elem_ty
-                .get(&ptr_id)
-                .copied()
-                .unwrap_or(Ty::I64);
-            ctx.emit(
+            let aggregate = ctx
+                .pattern_aggregates
+                .get(&(expr as *const _ as usize))
+                .cloned();
+            let payload_ty = if aggregate.as_ref().is_some_and(|info| info.is_linear) {
+                Ty::LinearPtr
+            } else if aggregate.is_some() {
+                Ty::Ptr
+            } else {
+                ctx.inst_option_elem_ty
+                    .get(&ptr_id)
+                    .copied()
+                    .unwrap_or(Ty::I64)
+            };
+            let payload = ctx.emit(
                 Opcode::FieldGet,
                 payload_ty,
                 vec![ptr_id],
                 InstData::FieldIndex(1),
                 span,
-            )
+            );
+            if let Some(info) = aggregate {
+                tag_pattern_aggregate_metadata(ctx, payload, info);
+            }
+            payload
         }
         ExprKind::Cast { expr, target_ty } => {
             let val = lower_expr(ctx, expr);
             let src_ty = ctx.inst_ty(val);
-            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_struct_names);
+            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names, &ctx.type_aliases);
             if let ExprKind::Lit(Lit::Int(v)) = &expr.kind {
                 match tgt {
                     Ty::U8 => ctx.emit(
@@ -3389,11 +3840,16 @@ fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty, InstData) {
 
 fn backpatch_upsilon(ctx: &mut LowerCtx, block_id: BlockId, upsilon_id: InstId, phi_id: InstId) {
     let block_idx = block_id.0 as usize;
+    let mut input = None;
     for inst in ctx.func.blocks[block_idx].insts.iter_mut() {
         if inst.id == upsilon_id {
             inst.data = InstData::PhiTarget(phi_id);
+            input = inst.args.first().copied();
             break;
         }
+    }
+    if let Some(input) = input {
+        ctx.link_phi_input(input, phi_id);
     }
 }
 
@@ -3407,6 +3863,8 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
             if let Some(AstType::Named {
                 name: type_name, ..
             }) = ty
+                .as_ref()
+                .map(|ann| resolve_type_alias(ann, &ctx.type_aliases))
             {
                 if type_name == "u8" {
                     val = lower_narrow_literal(ctx, init, val, Ty::U8);
@@ -3417,6 +3875,8 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
             if let Some(AstType::Named {
                 name: type_name, ..
             }) = ty
+                .as_ref()
+                .map(|ann| resolve_type_alias(ann, &ctx.type_aliases))
                 && type_name == "u64"
                 && ctx.inst_ty(val) != Ty::U64
             {
@@ -3434,6 +3894,7 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
             }
             if let PatKind::Ident { name, .. } = &pattern.kind {
                 if let Some(ann) = ty {
+                    let ann = resolve_type_alias(ann, &ctx.type_aliases);
                     match ann {
                         AstType::Named {
                             name: type_name, ..
@@ -3450,15 +3911,16 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                         } => {
                             ctx.inst_struct_type.insert(val, type_name.clone());
                             if type_name == "Vec"
-                                && let Some(AstType::Named {
+                                && let Some(elem_ty) = args.first()
+                                && let AstType::Named {
                                     name: elem_name, ..
-                                }) = args.first()
+                                } = resolve_type_alias(elem_ty, &ctx.type_aliases)
                                 && !matches!(
                                     elem_name.as_str(),
                                     "i32" | "i64" | "u8" | "u64" | "f32" | "f64" | "bool"
                                 )
                             {
-                                ctx.inst_vec_elem_type.insert(val, elem_name.clone());
+                                ctx.inst_vec_elem_types.insert(val, vec![elem_name.clone()]);
                             }
                         }
                         _ => {}
@@ -3506,25 +3968,27 @@ fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn lower_function(
+fn lower_function_with_pattern_aggregates(
     fn_def: &FnDef,
     file: &str,
     func_index: &HashMap<String, FuncSigInfo>,
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
-    linear_struct_names: &HashSet<String>,
+    linear_owner_names: &HashSet<String>,
+    type_aliases: Rc<HashMap<String, AstType>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
+    pattern_aggregates: &Rc<PatternAggregateMap>,
     const_map: &HashMap<String, (i64, Ty)>,
 ) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
     let params: Vec<Ty> = fn_def
         .params
         .iter()
-        .map(|p| lower_ty_with_linear(&p.ty, linear_struct_names))
+        .map(|p| lower_ty_with_linear(&p.ty, linear_owner_names, &type_aliases))
         .collect();
     let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
-    let return_ty = lower_ty_with_linear(&fn_def.return_ty, linear_struct_names);
+    let return_ty = lower_ty_with_linear(&fn_def.return_ty, linear_owner_names, &type_aliases);
     let effects = fn_def.effects.clone();
 
     let mut ctx = LowerCtx::new(
@@ -3537,10 +4001,12 @@ pub(crate) fn lower_function(
         func_index.clone(),
         struct_field_map,
         enum_variant_map,
-        linear_struct_names.clone(),
+        linear_owner_names.clone(),
+        Rc::clone(&type_aliases),
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs.clone(),
+        Rc::clone(pattern_aggregates),
     );
 
     ctx.const_map = const_map.clone();
@@ -3558,7 +4024,7 @@ pub(crate) fn lower_function(
             InstData::ArgIndex(idx as u32),
             fn_def.span,
         );
-        match &param.ty {
+        match resolve_type_alias(&param.ty, &type_aliases) {
             AstType::Named { name, .. } if name == "str" || name == "String" => {
                 ctx.inst_struct_type.insert(arg_id, "String".to_string());
             }
@@ -3570,24 +4036,22 @@ pub(crate) fn lower_function(
             }
             AstType::Generic { name, args, .. } if name == "Vec" => {
                 ctx.inst_struct_type.insert(arg_id, "Vec".to_string());
-                if let Some(AstType::Named {
-                    name: elem_name, ..
-                }) = args.first()
+                if let Some(elem_ty) = args.first()
+                    && let AstType::Named {
+                        name: elem_name, ..
+                    } = resolve_type_alias(elem_ty, &type_aliases)
                     && !matches!(
                         elem_name.as_str(),
                         "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
                     )
                 {
-                    ctx.inst_vec_elem_type.insert(arg_id, elem_name.clone());
+                    ctx.inst_vec_elem_types
+                        .insert(arg_id, vec![elem_name.clone()]);
                 }
             }
             AstType::Generic { name, args, .. } if name == "Option" => {
                 ctx.inst_struct_type.insert(arg_id, "Option".to_string());
-                if let Some(elem_ty) = args.first().and_then(|t| match t {
-                    AstType::Named { name, .. } if name == "i32" => Some(Ty::I32),
-                    AstType::Named { name, .. } if name == "u8" => Some(Ty::U8),
-                    _ => None,
-                }) {
+                if let Some(elem_ty) = option_named_elem_type(&param.ty, &type_aliases) {
                     ctx.inst_option_elem_ty.insert(arg_id, elem_ty);
                 }
             }
@@ -3648,16 +4112,48 @@ pub(crate) fn lower_function(
     ctx.finish()
 }
 
-pub fn lower_module(
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn lower_function(
+    fn_def: &FnDef,
+    file: &str,
+    func_index: &HashMap<String, FuncSigInfo>,
+    struct_field_map: HashMap<String, Vec<String>>,
+    enum_variant_map: HashMap<String, Vec<String>>,
+    linear_owner_names: &HashSet<String>,
+    struct_field_type_names: HashMap<String, Vec<String>>,
+    struct_field_vec_elems: HashMap<String, Vec<String>>,
+    string_exprs: &StringExprSet,
+    const_map: &HashMap<String, (i64, Ty)>,
+) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
+    lower_function_with_pattern_aggregates(
+        fn_def,
+        file,
+        func_index,
+        struct_field_map,
+        enum_variant_map,
+        linear_owner_names,
+        Rc::new(HashMap::new()),
+        struct_field_type_names,
+        struct_field_vec_elems,
+        string_exprs,
+        &Rc::new(PatternAggregateMap::new()),
+        const_map,
+    )
+}
+
+pub fn lower_module_with_pattern_aggregates(
     module: &AstModule,
     item_files: &[String],
     string_exprs: &StringExprSet,
+    pattern_aggregates: PatternAggregateMap,
 ) -> Module {
     debug_assert_eq!(
         module.items.len(),
         item_files.len(),
         "item_files must be parallel to module.items"
     );
+    let pattern_aggregates = Rc::new(pattern_aggregates);
     // Walk module.items keeping the original index so each retained FnDef
     // can be paired with its source-file path from `item_files`.
     let fn_items: Vec<(&FnDef, &str)> = module
@@ -3675,19 +4171,11 @@ pub fn lower_module(
         })
         .collect();
 
-    let linear_struct_names: HashSet<String> = module
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Struct(s) = item
-                && s.is_linear
-            {
-                Some(s.name.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
+    // A direct linear struct owns its obligation. Enums, Option, Result, and
+    // aliases to those owners inherit linearity; references and collection
+    // types deliberately do not propagate ownership.
+    let linear_owner_names = collect_linear_owner_names(module);
+    let type_aliases = Rc::new(collect_type_aliases(module));
 
     let func_index: HashMap<String, FuncSigInfo> = fn_items
         .iter()
@@ -3697,14 +4185,18 @@ pub fn lower_module(
                 fn_def.name.clone(),
                 FuncSigInfo {
                     id: FuncId(idx as u32),
-                    ret_ty: lower_ty_with_linear(&fn_def.return_ty, &linear_struct_names),
-                    ret_tag: non_scalar_type_tag(&fn_def.return_ty),
-                    ret_vec_elem: vec_named_elem_type(&fn_def.return_ty),
-                    ret_option_elem: option_named_elem_type(&fn_def.return_ty),
+                    ret_ty: lower_ty_with_linear(
+                        &fn_def.return_ty,
+                        &linear_owner_names,
+                        &type_aliases,
+                    ),
+                    ret_tag: non_scalar_type_tag(&fn_def.return_ty, &type_aliases),
+                    ret_vec_elem: vec_named_elem_type(&fn_def.return_ty, &type_aliases),
+                    ret_option_elem: option_named_elem_type(&fn_def.return_ty, &type_aliases),
                     param_tys: fn_def
                         .params
                         .iter()
-                        .map(|p| lower_ty_with_linear(&p.ty, &linear_struct_names))
+                        .map(|p| lower_ty_with_linear(&p.ty, &linear_owner_names, &type_aliases))
                         .collect(),
                 },
             )
@@ -3730,7 +4222,7 @@ pub fn lower_module(
                 }
                 _ => 0,
             };
-            let ty = lower_ty_with_linear(&c.ty, &linear_struct_names);
+            let ty = lower_ty_with_linear(&c.ty, &linear_owner_names, &type_aliases);
             const_map.insert(c.name.clone(), (val, ty));
         }
     }
@@ -3746,7 +4238,7 @@ pub fn lower_module(
                 .iter()
                 .map(|f| FieldLayout {
                     name: f.name.clone(),
-                    ty: lower_ty_with_linear(&f.ty, &linear_struct_names),
+                    ty: lower_ty_with_linear(&f.ty, &linear_owner_names, &type_aliases),
                 })
                 .collect();
             struct_field_map.insert(s.name.clone(), field_names);
@@ -3767,20 +4259,17 @@ pub fn lower_module(
             let type_names: Vec<String> = s
                 .fields
                 .iter()
-                .map(|f| match &f.ty {
-                    AstType::Named { name, .. } => name.clone(),
-                    AstType::Generic { name, .. } => name.clone(),
-                    _ => String::new(),
-                })
+                .map(|f| type_tag_name(&f.ty, &type_aliases))
                 .collect();
             let vec_elems: Vec<String> = s
                 .fields
                 .iter()
-                .map(|f| match &f.ty {
+                .map(|f| match resolve_type_alias(&f.ty, &type_aliases) {
                     AstType::Generic { name, args, .. } if name == "Vec" => {
-                        if let Some(AstType::Named {
-                            name: elem_name, ..
-                        }) = args.first()
+                        if let Some(elem_ty) = args.first()
+                            && let AstType::Named {
+                                name: elem_name, ..
+                            } = resolve_type_alias(elem_ty, &type_aliases)
                             && !matches!(
                                 elem_name.as_str(),
                                 "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
@@ -3816,14 +4305,14 @@ pub fn lower_module(
                             .enumerate()
                             .map(|(i, ty)| FieldLayout {
                                 name: i.to_string(),
-                                ty: lower_ty_with_linear(ty, &linear_struct_names),
+                                ty: lower_ty_with_linear(ty, &linear_owner_names, &type_aliases),
                             })
                             .collect(),
                         VariantKind::Struct(fields) => fields
                             .iter()
                             .map(|f| FieldLayout {
                                 name: f.name.clone(),
-                                ty: lower_ty_with_linear(&f.ty, &linear_struct_names),
+                                ty: lower_ty_with_linear(&f.ty, &linear_owner_names, &type_aliases),
                             })
                             .collect(),
                     };
@@ -3848,16 +4337,18 @@ pub fn lower_module(
         .iter()
         .enumerate()
         .map(|(idx, (fn_def, src_file))| {
-            let (mut func, pool, func_warnings) = lower_function(
+            let (mut func, pool, func_warnings) = lower_function_with_pattern_aggregates(
                 fn_def,
                 src_file,
                 &func_index,
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
-                &linear_struct_names,
+                &linear_owner_names,
+                Rc::clone(&type_aliases),
                 struct_field_type_names.clone(),
                 struct_field_vec_elems.clone(),
                 string_exprs,
+                &pattern_aggregates,
                 &const_map,
             );
             func.id = FuncId(idx as u32);
@@ -3928,6 +4419,14 @@ mod tests {
     fn string_ty() -> Type {
         Type::Named {
             name: "String".to_string(),
+            span: sp(),
+        }
+    }
+
+    fn option_ty(elem: Type) -> Type {
+        Type::Generic {
+            name: "Option".to_string(),
+            args: vec![elem],
             span: sp(),
         }
     }
@@ -4028,6 +4527,66 @@ mod tests {
             assert_eq!(vow_debug_builtin_to_runtime(name), Some((symbol, ty)));
         }
         assert_eq!(vow_debug_builtin_to_runtime("debug_missing"), None);
+    }
+
+    #[test]
+    fn type_alias_chain_to_linear_option_is_a_linear_owner() {
+        let source = r#"
+module LinearAlias
+
+linear struct Token {
+    id: i64,
+}
+
+type MaybeToken = Option<Token>;
+type ForwardedToken = MaybeToken;
+"#;
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, "linear_alias.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let owners = collect_linear_owner_names(&ast);
+        assert!(owners.contains("Token"));
+        assert!(owners.contains("MaybeToken"));
+        assert!(owners.contains("ForwardedToken"));
+    }
+
+    #[test]
+    fn type_aliases_are_resolved_transitively_before_lowering() {
+        let source = r#"
+module NonLinearAlias
+
+type Small = u8;
+type Tiny = Small;
+
+struct Pair {
+    left: u8,
+    right: u8,
+}
+
+type PairAlias = Pair;
+type PairView = PairAlias;
+"#;
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, "non_linear_alias.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let aliases = collect_type_aliases(&ast);
+        let tiny = Type::Named {
+            name: "Tiny".to_string(),
+            span: sp(),
+        };
+        let pair_view = Type::Named {
+            name: "PairView".to_string(),
+            span: sp(),
+        };
+
+        assert_eq!(
+            lower_ty_with_linear(&tiny, &HashSet::new(), &aliases),
+            Ty::U8
+        );
+        assert_eq!(
+            non_scalar_type_tag(&pair_view, &aliases),
+            Some("Pair".to_string())
+        );
     }
 
     #[test]
@@ -4147,7 +4706,12 @@ fn parse_or_default(s: String) -> i64 {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 
         let item_files = vec!["parse_i64.vow".to_string(); ast.items.len()];
-        let module = lower_module(&ast, &item_files, &StringExprSet::new());
+        let module = lower_module_with_pattern_aggregates(
+            &ast,
+            &item_files,
+            &StringExprSet::new(),
+            PatternAggregateMap::new(),
+        );
         let instructions: Vec<&Inst> = module.functions[0]
             .blocks
             .iter()
@@ -4824,6 +5388,462 @@ fn parse_or_default(s: String) -> i64 {
     }
 
     #[test]
+    fn aggregate_match_payload_preserves_linear_pointer_type() {
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("payload")),
+                arms: vec![MatchArm {
+                    pattern: Pat {
+                        kind: PatKind::EnumVariant {
+                            path: vec!["Payload".to_string(), "Token".to_string()],
+                            inner: vec![Pat {
+                                kind: PatKind::Ident {
+                                    name: "token".to_string(),
+                                    is_mut: false,
+                                },
+                                span: sp(),
+                            }],
+                        },
+                        span: sp(),
+                    },
+                    body: ident_expr("token"),
+                    span: sp(),
+                }],
+            },
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "unwrap_token",
+            vec![make_param(
+                "payload",
+                Type::Named {
+                    name: "Payload".to_string(),
+                    span: sp(),
+                },
+            )],
+            Type::Named {
+                name: "Token".to_string(),
+                span: sp(),
+            },
+            Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(match_expr)),
+                span: sp(),
+            },
+            vec![],
+        );
+        let pattern_key = match &fn_def.body.trailing_expr.as_ref().unwrap().kind {
+            ExprKind::Match { arms, .. } => match &arms[0].pattern.kind {
+                PatKind::EnumVariant { inner, .. } => &inner[0] as *const Pat as usize,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let patterns = Rc::new(HashMap::from([(
+            pattern_key,
+            vow_types::check::PatternAggregateInfo {
+                type_name: "Token".to_string(),
+                vec_elem_types: vec![],
+                vec_option_elem_types: vec![],
+                vec_variant_payload_types: vec![],
+                option_elem_type: None,
+                variant_payload_types: vec![],
+                is_linear: true,
+            },
+        )]));
+        let enum_variant_map = HashMap::from([("Payload".to_string(), vec!["Token".to_string()])]);
+        let linear_structs = HashSet::from(["Token".to_string(), "Payload".to_string()]);
+
+        let (func, _, warnings) = lower_function_with_pattern_aggregates(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            enum_variant_map,
+            &linear_structs,
+            Rc::new(HashMap::new()),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &patterns,
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        let wrapper = func.blocks[0]
+            .insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::GetArg)
+            .expect("linear enum argument");
+        assert_eq!(wrapper.ty, Ty::LinearPtr);
+        assert!(
+            func.blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| {
+                    inst.opcode == Opcode::LinearConsume && inst.args == vec![wrapper.id]
+                })
+        );
+        let payload_get = func
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("enum payload FieldGet");
+        assert_eq!(payload_get.ty, Ty::LinearPtr);
+    }
+
+    #[test]
+    fn aggregate_match_payload_preserves_nested_vec_path() {
+        let row_at_zero = Expr {
+            kind: ExprKind::Index {
+                base: Box::new(ident_expr("rows")),
+                index: Box::new(int_expr(0)),
+            },
+            span: sp(),
+        };
+        let box_at_zero = Expr {
+            kind: ExprKind::Index {
+                base: Box::new(row_at_zero),
+                index: Box::new(int_expr(0)),
+            },
+            span: sp(),
+        };
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("payload")),
+                arms: vec![MatchArm {
+                    pattern: Pat {
+                        kind: PatKind::EnumVariant {
+                            path: vec!["Payload".to_string(), "Rows".to_string()],
+                            inner: vec![Pat {
+                                kind: PatKind::Ident {
+                                    name: "rows".to_string(),
+                                    is_mut: false,
+                                },
+                                span: sp(),
+                            }],
+                        },
+                        span: sp(),
+                    },
+                    body: Expr {
+                        kind: ExprKind::FieldAccess {
+                            base: Box::new(box_at_zero),
+                            field: "v".to_string(),
+                        },
+                        span: sp(),
+                    },
+                    span: sp(),
+                }],
+            },
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "get_nested",
+            vec![make_param(
+                "payload",
+                Type::Named {
+                    name: "Payload".to_string(),
+                    span: sp(),
+                },
+            )],
+            i64_ty(),
+            Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(match_expr)),
+                span: sp(),
+            },
+            vec![],
+        );
+        let pattern_key = match &fn_def.body.trailing_expr.as_ref().unwrap().kind {
+            ExprKind::Match { arms, .. } => match &arms[0].pattern.kind {
+                PatKind::EnumVariant { inner, .. } => &inner[0] as *const Pat as usize,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let patterns = Rc::new(HashMap::from([(
+            pattern_key,
+            vow_types::check::PatternAggregateInfo {
+                type_name: "Vec".to_string(),
+                vec_elem_types: vec!["Vec".to_string(), "Box".to_string()],
+                vec_option_elem_types: vec![None, None],
+                vec_variant_payload_types: vec![vec![], vec![]],
+                option_elem_type: None,
+                variant_payload_types: vec![],
+                is_linear: false,
+            },
+        )]));
+        let enum_variant_map = HashMap::from([("Payload".to_string(), vec!["Rows".to_string()])]);
+        let struct_field_map = HashMap::from([(
+            "Box".to_string(),
+            vec!["marker".to_string(), "v".to_string()],
+        )]);
+        let struct_field_types = HashMap::from([(
+            "Box".to_string(),
+            vec!["i64".to_string(), "i64".to_string()],
+        )]);
+
+        let (func, _, warnings) = lower_function_with_pattern_aggregates(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            struct_field_map,
+            enum_variant_map,
+            &HashSet::new(),
+            Rc::new(HashMap::new()),
+            struct_field_types,
+            HashMap::new(),
+            &HashSet::new(),
+            &patterns,
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        let insts: Vec<_> = func.blocks.iter().flat_map(|block| &block.insts).collect();
+        let field_get = insts
+            .iter()
+            .find(|inst| {
+                if inst.opcode != Opcode::FieldGet || inst.data != InstData::FieldIndex(1) {
+                    return false;
+                }
+                let Some(source) = inst.args.first() else {
+                    return false;
+                };
+                insts.iter().any(|candidate| {
+                    candidate.id == *source
+                        && candidate.data == InstData::CallExtern("__vow_vec_get_val".to_string())
+                })
+            })
+            .expect("field access after nested Vec indexes");
+        assert_eq!(field_get.ty, Ty::I64);
+    }
+
+    #[test]
+    fn pattern_scalar_types_map_to_their_exact_ir_types() {
+        let cases = [
+            (PatternScalarType::I8, Ty::I8),
+            (PatternScalarType::I16, Ty::I16),
+            (PatternScalarType::I32, Ty::I32),
+            (PatternScalarType::I64, Ty::I64),
+            (PatternScalarType::I128, Ty::I128),
+            (PatternScalarType::U8, Ty::U8),
+            (PatternScalarType::U16, Ty::U16),
+            (PatternScalarType::U32, Ty::U32),
+            (PatternScalarType::U64, Ty::U64),
+            (PatternScalarType::U128, Ty::U128),
+            (PatternScalarType::F32, Ty::F32),
+            (PatternScalarType::F64, Ty::F64),
+            (PatternScalarType::Bool, Ty::Bool),
+        ];
+
+        for (pattern_type, ir_type) in cases {
+            assert_eq!(pattern_scalar_ir_type(pattern_type), ir_type);
+        }
+    }
+
+    #[test]
+    fn vec_element_metadata_preserves_nested_option_payload_width() {
+        let mut ctx = LowerCtx::new(
+            "metadata".to_string(),
+            vec![],
+            vec![],
+            Ty::Unit,
+            vec![],
+            "test.vow".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            Rc::new(HashMap::new()),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            Rc::new(HashMap::new()),
+        );
+        let source = InstId(1);
+        let nested_vec = InstId(2);
+        let nested_option = InstId(3);
+        ctx.inst_vec_elem_types
+            .insert(source, vec!["Vec".to_string(), "Option".to_string()]);
+        ctx.inst_vec_option_elem_tys
+            .insert(source, vec![None, Some(Ty::U8)]);
+
+        propagate_vec_element_metadata(&mut ctx, source, nested_vec);
+        assert_eq!(ctx.inst_struct_type.get(&nested_vec).unwrap(), "Vec");
+        assert_eq!(
+            ctx.inst_vec_elem_types.get(&nested_vec).unwrap(),
+            &["Option".to_string()]
+        );
+        assert_eq!(
+            ctx.inst_vec_option_elem_tys.get(&nested_vec).unwrap(),
+            &[Some(Ty::U8)]
+        );
+
+        propagate_vec_element_metadata(&mut ctx, nested_vec, nested_option);
+        assert_eq!(ctx.inst_struct_type.get(&nested_option).unwrap(), "Option");
+        assert_eq!(ctx.inst_option_elem_ty.get(&nested_option), Some(&Ty::U8));
+    }
+
+    #[test]
+    fn phi_ownership_widening_propagates_to_dependent_phis() {
+        let mut ctx = LowerCtx::new(
+            "phi_ownership".to_string(),
+            vec![],
+            vec![],
+            Ty::Unit,
+            vec![],
+            "test.vow".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            Rc::new(HashMap::new()),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            Rc::new(HashMap::new()),
+        );
+
+        let loop_phi = ctx.emit(Opcode::Phi, Ty::Ptr, vec![], InstData::None, sp());
+        let exit_phi = ctx.emit(Opcode::Phi, Ty::Ptr, vec![], InstData::None, sp());
+        ctx.emit(
+            Opcode::Upsilon,
+            Ty::Ptr,
+            vec![loop_phi],
+            InstData::PhiTarget(exit_phi),
+            sp(),
+        );
+        let owned = ctx.emit(Opcode::Phi, Ty::LinearPtr, vec![], InstData::None, sp());
+        ctx.emit(
+            Opcode::Upsilon,
+            Ty::LinearPtr,
+            vec![owned],
+            InstData::PhiTarget(loop_phi),
+            sp(),
+        );
+
+        assert_eq!(ctx.inst_ty(loop_phi), Ty::LinearPtr);
+        assert_eq!(ctx.inst_ty(exit_phi), Ty::LinearPtr);
+        let insts = &ctx.func.blocks[0].insts;
+        assert_eq!(insts[loop_phi.0 as usize].ty, Ty::LinearPtr);
+        assert_eq!(insts[exit_phi.0 as usize].ty, Ty::LinearPtr);
+    }
+
+    #[test]
+    fn nested_option_pattern_metadata_preserves_payload_width() {
+        let byte_pattern = Pat {
+            kind: PatKind::Ident {
+                name: "byte".to_string(),
+                is_mut: false,
+            },
+            span: sp(),
+        };
+        let inner_match = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("inner")),
+                arms: vec![MatchArm {
+                    pattern: Pat {
+                        kind: PatKind::EnumVariant {
+                            path: vec!["Option".to_string(), "Some".to_string()],
+                            inner: vec![byte_pattern],
+                        },
+                        span: sp(),
+                    },
+                    body: ident_expr("byte"),
+                    span: sp(),
+                }],
+            },
+            span: sp(),
+        };
+        let outer_match = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(ident_expr("value")),
+                arms: vec![MatchArm {
+                    pattern: Pat {
+                        kind: PatKind::EnumVariant {
+                            path: vec!["Option".to_string(), "Some".to_string()],
+                            inner: vec![Pat {
+                                kind: PatKind::Ident {
+                                    name: "inner".to_string(),
+                                    is_mut: false,
+                                },
+                                span: sp(),
+                            }],
+                        },
+                        span: sp(),
+                    },
+                    body: inner_match,
+                    span: sp(),
+                }],
+            },
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "unwrap_nested",
+            vec![make_param("value", option_ty(option_ty(u8_ty())))],
+            u8_ty(),
+            Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(outer_match)),
+                span: sp(),
+            },
+            vec![],
+        );
+        let pattern_key = match &fn_def.body.trailing_expr.as_ref().unwrap().kind {
+            ExprKind::Match { arms, .. } => match &arms[0].pattern.kind {
+                PatKind::EnumVariant { inner, .. } => &inner[0] as *const Pat as usize,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let patterns = Rc::new(HashMap::from([(
+            pattern_key,
+            vow_types::check::PatternAggregateInfo {
+                type_name: "Option".to_string(),
+                vec_elem_types: vec![],
+                vec_option_elem_types: vec![],
+                vec_variant_payload_types: vec![],
+                option_elem_type: Some(PatternScalarType::U8),
+                variant_payload_types: vec![None, Some(PatternScalarType::U8)],
+                is_linear: false,
+            },
+        )]));
+        let enum_variant_map = HashMap::from([(
+            "Option".to_string(),
+            vec!["None".to_string(), "Some".to_string()],
+        )]);
+
+        let (func, _, warnings) = lower_function_with_pattern_aggregates(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            enum_variant_map,
+            &HashSet::new(),
+            Rc::new(HashMap::new()),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &patterns,
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert!(
+            func.blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| {
+                    inst.opcode == Opcode::FieldGet
+                        && inst.data == InstData::FieldIndex(1)
+                        && inst.ty == Ty::U8
+                }),
+            "the nested Some payload must retain its u8 width"
+        );
+    }
+
+    #[test]
     fn lower_empty_function() {
         let fn_def = make_fn("empty_fn", vec![], unit_ty(), empty_block(), vec![]);
         let (func, _, _) = lower_function(
@@ -4889,6 +5909,56 @@ fn parse_or_default(s: String) -> i64 {
                 .any(|inst| inst.data
                     == InstData::CallExtern("__vow_string_pin_to_root".to_string())),
             "direct pin_to_root(process_get_stdout()) must lower to string pin"
+        );
+    }
+
+    #[test]
+    fn pin_to_root_preserves_vec_element_metadata() {
+        let vec_box_ty = Type::Generic {
+            name: "Vec".to_string(),
+            args: vec![Type::Named {
+                name: "Box".to_string(),
+                span: sp(),
+            }],
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr(
+                "pin_to_root",
+                vec![ident_expr("values")],
+            ))),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "pin_values",
+            vec![make_param("values", vec_box_ty.clone())],
+            vec_box_ty,
+            body,
+            vec![],
+        );
+
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert!(
+            func.blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| {
+                    inst.data == InstData::CallExtern("__vow_vec_pin_to_root_val".to_string())
+                })
         );
     }
 

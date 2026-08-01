@@ -1,0 +1,19 @@
+// TEST: error-code RegionLinear
+module LinearWhileMutationPhiLeak
+
+linear struct Token {
+    id: i64,
+}
+
+fn leak(run: bool) -> () {
+    let mut value: Option<Token> = Option::None;
+    while run {
+        value = Option::Some(Token { id: 1 });
+        break;
+    }
+}
+
+fn main() -> i32 {
+    leak(true);
+    0
+}

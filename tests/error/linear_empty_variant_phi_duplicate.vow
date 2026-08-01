@@ -1,0 +1,32 @@
+// TEST: error-code LinearTypeViolation
+// TEST: stderr "already consumed"
+module LinearEmptyVariantPhiDuplicate
+
+linear struct Token {
+    id: i64,
+}
+
+fn consume(token: Token) -> () {
+    let sink: Vec<Token> = Vec::new();
+    sink.push(token);
+}
+
+fn duplicate(branch: bool) -> () {
+    let wrapped: Option<Token> = if branch {
+        Option::None
+    } else {
+        Option::Some(Token { id: 1 })
+    };
+    match wrapped {
+        Option::Some(token) => {
+            consume(token);
+            consume(token);
+        },
+        Option::None => { let skipped: i64 = 0; },
+    }
+}
+
+fn main() -> i32 {
+    duplicate(false);
+    0
+}

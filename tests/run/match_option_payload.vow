@@ -1,11 +1,32 @@
-// TEST: stdout "10\n-1\n55\n-1\n"
+// TEST: stdout "10\n-1\n55\n77\n88\n99\n111\n222\n55\n-1\n"
 // Regression: `match` on a built-in `Option` must bind the variant payload.
 // Covers Option<i64> (Some/None) and Option<struct> returned from a match
-// (exercising structural match-arm typing for struct-valued arms).
+// (exercising direct field access, Vec element tags, and structural
+// match-arm typing).
 module match_option_payload
 
 struct Box {
+    marker: i64,
     v: i64,
+}
+
+enum Payload {
+    Boxed(Box),
+    Empty,
+}
+
+enum NestedPayload {
+    Rows(Vec<Vec<Box>>),
+    Empty,
+}
+
+linear struct Token {
+    id: i64,
+}
+
+enum LinearPayload {
+    Token(Token),
+    Empty,
 }
 
 fn opt_i64(m: BTreeMap<i64, i64>, k: i64) -> i64 {
@@ -18,7 +39,56 @@ fn opt_i64(m: BTreeMap<i64, i64>, k: i64) -> i64 {
 fn opt_box_or_default(m: BTreeMap<i64, Box>, k: i64) -> Box {
     match m.get(k) {
         Option::Some(b) => { b },
-        Option::None => { Box { v: -1 } },
+        Option::None => { Box { marker: -10, v: -1 } },
+    }
+}
+
+fn opt_box_field(m: BTreeMap<i64, Box>, k: i64) -> i64 {
+    match m.get(k) {
+        Option::Some(b) => { b.v },
+        Option::None => { -1 },
+    }
+}
+
+fn opt_box_vec_field(m: BTreeMap<i64, Vec<Box>>, k: i64) -> i64 {
+    match m.get(k) {
+        Option::Some(boxes) => { boxes[0].v },
+        Option::None => { -1 },
+    }
+}
+
+fn option_box_field(value: Option<Box>) -> i64 {
+    match value {
+        Option::Some(boxed) => { boxed.v },
+        Option::None => { -1 },
+    }
+}
+
+fn result_box_vec_field(value: Result<Vec<Box>, ()>) -> i64 {
+    match value {
+        Result::Ok(boxes) => { boxes[0].v },
+        Result::Err(_) => { -1 },
+    }
+}
+
+fn user_enum_box_field(value: Payload) -> i64 {
+    match value {
+        Payload::Boxed(boxed) => { boxed.v },
+        Payload::Empty => { -1 },
+    }
+}
+
+fn nested_vec_field(value: NestedPayload) -> i64 {
+    match value {
+        NestedPayload::Rows(rows) => { rows[0][0].v },
+        _ => { -1 },
+    }
+}
+
+fn unwrap_linear(value: LinearPayload) -> Token {
+    match value {
+        LinearPayload::Token(token) => { token },
+        LinearPayload::Empty => { Token { id: -1 } },
     }
 }
 
@@ -31,7 +101,40 @@ fn main() -> i32 [io] {
     print_str(String::from("\n"));
 
     let ms: BTreeMap<i64, Box> = BTreeMap::new();
-    ms.insert(5, Box { v: 55 });
+    ms.insert(5, Box { marker: 550, v: 55 });
+    print_i64(opt_box_field(ms, 5));
+    print_str(String::from("\n"));
+
+    let boxes: Vec<Box> = Vec::new();
+    boxes.push(Box { marker: 770, v: 77 });
+    let mv: BTreeMap<i64, Vec<Box>> = BTreeMap::new();
+    mv.insert(7, boxes);
+    print_i64(opt_box_vec_field(mv, 7));
+    print_str(String::from("\n"));
+
+    print_i64(option_box_field(Option::Some(Box { marker: 880, v: 88 })));
+    print_str(String::from("\n"));
+
+    let result_boxes: Vec<Box> = Vec::new();
+    result_boxes.push(Box { marker: 990, v: 99 });
+    let ok_boxes: Result<Vec<Box>, ()> = Result::Ok(result_boxes);
+    print_i64(result_box_vec_field(ok_boxes));
+    print_str(String::from("\n"));
+
+    print_i64(user_enum_box_field(Payload::Boxed(Box { marker: 1110, v: 111 })));
+    print_str(String::from("\n"));
+
+    let nested_boxes: Vec<Box> = Vec::new();
+    nested_boxes.push(Box { marker: 2220, v: 222 });
+    let rows: Vec<Vec<Box>> = Vec::new();
+    rows.push(nested_boxes);
+    print_i64(nested_vec_field(NestedPayload::Rows(rows)));
+    print_str(String::from("\n"));
+
+    let token: Token = unwrap_linear(LinearPayload::Token(Token { id: 7 }));
+    let token_sink: Vec<Token> = Vec::new();
+    token_sink.push(token);
+
     let found: Box = opt_box_or_default(ms, 5);
     print_i64(found.v);
     print_str(String::from("\n"));

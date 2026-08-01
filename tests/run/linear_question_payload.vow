@@ -1,0 +1,43 @@
+// TEST: stdout "7\nnone\n"
+module LinearQuestionPayload
+
+linear struct Token {
+    id: i64,
+}
+
+fn consume_id(token: Token) -> i64 {
+    let id: i64 = token.id;
+    let sink: Vec<Token> = Vec::new();
+    sink.push(token);
+    id
+}
+
+fn forward(value: Option<Token>) -> Option<Token> {
+    let token: Token = value?;
+    Option::Some(token)
+}
+
+fn main() -> i32 [io] {
+    match forward(Option::Some(Token { id: 7 })) {
+        Option::Some(token) => {
+            print_i64(consume_id(token));
+            print_str("\n");
+        },
+        Option::None => {},
+    }
+    let empty: Option<Token> = if false {
+        Option::Some(Token { id: 0 })
+    } else {
+        Option::None
+    };
+    match forward(empty) {
+        Option::Some(token) => {
+            print_i64(consume_id(token));
+            print_str("\n");
+        },
+        Option::None => {
+            print_str("none\n");
+        },
+    }
+    0
+}

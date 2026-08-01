@@ -1,0 +1,28 @@
+// TEST: exit 0
+module AliasNonLinearLowering
+
+type Small = u8;
+type Tiny = Small;
+
+struct Pair {
+    left: u8,
+    right: u8,
+}
+
+type PairAlias = Pair;
+type PairView = PairAlias;
+
+fn add_one(x: Tiny) -> Tiny {
+    x + 1u8
+}
+
+fn pair_sum(pair: PairView) -> u8 {
+    pair.left + pair.right
+}
+
+fn main() -> i32 {
+    let max: Tiny = 255;
+    if add_one(max) != 0u8 { return 1; }
+    if pair_sum(Pair { left: 1, right: 2 }) != 3u8 { return 2; }
+    0
+}

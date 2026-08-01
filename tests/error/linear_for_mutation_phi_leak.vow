@@ -1,0 +1,21 @@
+// TEST: error-code RegionLinear
+module LinearForMutationPhiLeak
+
+linear struct Token {
+    id: i64,
+}
+
+fn leak() -> () {
+    let mut value: Option<Token> = Option::None;
+    let items: Vec<i64> = Vec::new();
+    items.push(1);
+    for item in items {
+        value = Option::Some(Token { id: item });
+        break;
+    }
+}
+
+fn main() -> i32 {
+    leak();
+    0
+}

@@ -217,8 +217,8 @@ pub(crate) fn prepare_frontend_with_root(
     checker.check_module(&ast, &item_files);
     record("typecheck", t_check);
     let has_errors = checker.has_errors();
-    let string_exprs = if matches!(goal, FrontendGoal::LoweredIr) && !has_errors {
-        Some(checker.into_string_exprs())
+    let lowering_metadata = if matches!(goal, FrontendGoal::LoweredIr) && !has_errors {
+        Some(checker.into_lowering_metadata())
     } else {
         drop(checker);
         None
@@ -234,9 +234,15 @@ pub(crate) fn prepare_frontend_with_root(
     let ir = match goal {
         FrontendGoal::MergedAst => None,
         FrontendGoal::LoweredIr => {
-            let string_exprs = string_exprs.expect("LoweredIr goal must preserve string exprs");
+            let (string_exprs, pattern_aggregates) =
+                lowering_metadata.expect("LoweredIr goal must preserve lowering metadata");
             let t_lower = now();
-            let mut module = vow_ir::lower_module(&ast, &item_files, &string_exprs);
+            let mut module = vow_ir::lower_module_with_pattern_aggregates(
+                &ast,
+                &item_files,
+                &string_exprs,
+                pattern_aggregates,
+            );
             record("lower", t_lower);
             // Track lower-warning count so region inference does not see them
             // as its own (and the post-pass error check below only reacts to

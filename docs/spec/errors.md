@@ -58,7 +58,8 @@ fn f() -> i64 {
 ### TypeMismatch
 
 **Phase:** Type Checker
-**Meaning:** An expression has a different type than expected.
+**Meaning:** An expression has a different type than expected, or a qualified
+enum pattern names an enum other than the scrutinee's enum.
 
 ```vow
 fn f() -> i32 {
@@ -68,7 +69,8 @@ fn f() -> i32 {
 
 **Output:** `function body has type 'bool' but declared return type is 'i32'`
 
-**Fix:** Change the expression or the declared type to match.
+**Fix:** Change the expression or declared type to match. For an enum pattern,
+qualify the variant with the scrutinee's enum name.
 
 ### LiteralOutOfRange
 
@@ -148,7 +150,16 @@ fn f() -> () {
 ### LinearTypeViolation
 
 **Phase:** Type Checker
-**Meaning:** A value of a `linear struct` type is used in a way that is immediately invalid before region inference runs, such as consuming it twice, consuming it inside a loop that may execute more than once, or consuming it after only some control-flow paths already consumed it.
+**Meaning:** A linear owner value is used in a way that is immediately invalid,
+such as consuming it twice, consuming it inside a loop that may execute more
+than once, or consuming it after only some control-flow paths already consumed
+it. The error also rejects a struct field whose type owns a linear obligation,
+because field access has no move-out semantics and repeated reads could expose
+that obligation more than once. Linear owners include `linear struct` values and owned enum,
+`Option`, or `Result` wrappers that transitively contain one; matching such a
+wrapper consumes it and transfers the obligation to the selected payload. An
+unbound `_` catchall also violates the rule while any unhandled enum variant can
+carry a linear payload.
 
 ```vow
 linear struct Handle { fd: i64 }
@@ -160,7 +171,11 @@ fn f(h: Handle) -> Handle {
 }
 ```
 
-**Fix:** Restructure ownership so each path uses a consumed linear value at most once. Obligations that are simply left live at scope exit are reported later as `RegionLinear`.
+**Fix:** Restructure ownership so each path uses a consumed linear value at most
+once. Keep linear owners out of struct fields until move-out field access is
+supported. In a match, add explicit arms that bind and consume or transfer every
+linear payload before using `_`. Obligations that are simply left live at scope
+exit are reported later as `RegionLinear`.
 
 ### RegionLinear
 
@@ -199,7 +214,9 @@ fn f(o: Option<i64>) -> i64 {
 **Meaning:** A parsed `match` pattern or scrutinee is not in the subset that
 the compiler can lower safely. Match currently accepts enum-valued scrutinees,
 qualified unit variants, qualified tuple variants with `_` or immutable
-identifier payloads, and final catchall `_` or immutable identifier arms.
+identifier payloads, and final catchall `_` or immutable identifier arms. A
+tuple-variant pattern must bind exactly the number of payloads declared by the
+variant.
 
 ```vow
 fn f(n: i64) -> i64 {
@@ -213,9 +230,9 @@ fn f(n: i64) -> i64 {
 **Output:** `literal match patterns are not supported`
 
 **Fix:** Use `if`/`else` comparisons for scalar or literal cases. For enum
-payloads, bind each payload to `_` or an immutable identifier and inspect it
-separately. Unsupported patterns fail before lowering and never produce an
-executable.
+payloads, provide exactly one `_` or immutable identifier for each declared
+payload and inspect bound values separately. Unsupported patterns fail before
+lowering and never produce an executable.
 
 ### ImmutableAssignment
 

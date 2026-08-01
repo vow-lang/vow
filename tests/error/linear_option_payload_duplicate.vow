@@ -1,0 +1,28 @@
+// TEST: error-code LinearTypeViolation
+module LinearOptionPayloadDuplicate
+
+linear struct Token {
+    id: i64,
+}
+
+fn take(value: Option<Token>) -> Token {
+    match value {
+        Option::Some(token) => { token },
+        Option::None => { Token { id: -1 } },
+    }
+}
+
+fn duplicate(value: Option<Token>) -> Token {
+    let first: Token = take(value);
+    let second: Token = take(value);
+    let sink: Vec<Token> = Vec::new();
+    sink.push(first);
+    second
+}
+
+fn main() -> i32 {
+    let token: Token = duplicate(Option::Some(Token { id: 1 }));
+    let sink: Vec<Token> = Vec::new();
+    sink.push(token);
+    0
+}

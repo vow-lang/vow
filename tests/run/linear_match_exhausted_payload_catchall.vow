@@ -1,0 +1,28 @@
+// TEST: stdout "9\n0\n"
+module LinearMatchExhaustedPayloadCatchall
+
+linear struct Token {
+    id: i64,
+}
+
+fn consume_id(token: Token) -> i64 {
+    let id: i64 = token.id;
+    let sink: Vec<Token> = Vec::new();
+    sink.push(token);
+    id
+}
+
+fn take_or_zero(value: Option<Token>) -> i64 {
+    match value {
+        Option::Some(token) => { consume_id(token) },
+        _ => { 0 },
+    }
+}
+
+fn main() -> i32 [io] {
+    print_i64(take_or_zero(Option::Some(Token { id: 9 })));
+    print_str("\n");
+    print_i64(take_or_zero(Option::None));
+    print_str("\n");
+    0
+}
