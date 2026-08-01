@@ -606,7 +606,9 @@ fn register_alias(e: CheckEnv, m: Module, aid: i64) [io] {
     let a: AstArena = m.arena;
     let name: String = arena_str(a, alias_name_sid(a, aid));
     let tid: i64 = resolve_ast_ty(e, m, alias_type_tid(a, aid));
-    env_define_alias(e, name, tid);
+    if tid != CTY_UNKNOWN() {
+        env_define_alias(e, name, tid);
+    }
 }
 
 fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
@@ -809,9 +811,14 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
 
     let name_sid: i64 = fn_name_sid(a, fid);
     e.cur_fn_name = arena_str(a, name_sid);
+    let fidx: i64 = env_lookup_fn(e, e.cur_fn_name);
 
     let ret_ast_tid: i64 = fn_ret_ast_tid(a, fid);
-    let ret_tid: i64 = resolve_ast_ty(e, m, ret_ast_tid);
+    let ret_tid: i64 = if fidx != -1 {
+        e.fn_ret_tids[fidx]
+    } else {
+        resolve_ast_ty(e, m, ret_ast_tid)
+    };
     e.cur_ret_tid = ret_tid;
     e.cur_effects = fn_eff(a, fid);
 
@@ -826,7 +833,11 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
         let psid: i64 = list_get(a, params_lid, i * 3);
         let pname: String = arena_str(a, psid);
         let ast_ptid: i64 = list_get(a, params_lid, i * 3 + 1);
-        let ptid: i64 = resolve_ast_ty(e, m, ast_ptid);
+        let ptid: i64 = if fidx != -1 && i < e.fn_param_count[fidx] {
+            ts_arg_get(e.ts, e.fn_param_lids[fidx], i)
+        } else {
+            resolve_ast_ty(e, m, ast_ptid)
+        };
         env_define_var(e, pname, ptid);
         i = i + 1;
     }
@@ -1130,6 +1141,18 @@ fn enum_name_from_tid(ts: TyStore, tid: i64) -> String {
         return enum_name_from_tid(ts, base_tid);
     }
     String::from("")
+}
+
+fn enum_pattern_matches_tid(ts: TyStore, a: AstArena, pid: i64, tid: i64) -> bool {
+    if pat_tag(a, pid) != PAT_ENUM() {
+        return false;
+    }
+    let path_lid: i64 = pat_a(a, pid);
+    if list_len(a, path_lid) != 2 {
+        return false;
+    }
+    let qualifier: String = arena_str(a, list_get(a, path_lid, 0));
+    qualifier == enum_name_from_tid(ts, tid)
 }
 
 fn lookup_variant_payload(e: CheckEnv, enum_idx: i64, variant_name: String, field_idx: i64) -> i64 {
@@ -1446,6 +1469,20 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
             -1
         };
         let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
+        if !enum_pattern_matches_tid(e.ts, a, pid, scrutinee_tid) {
+            let qualifier: String = if n_path > 0 {
+                arena_str(a, list_get(a, path_lid, 0))
+            } else {
+                String::from("<missing>")
+            };
+            let message: String = String::from("pattern enum `");
+            message.push_str(qualifier);
+            message.push_str(String::from("` does not match scrutinee enum `"));
+            message.push_str(enum_name);
+            message.push_str(String::from("`"));
+            env_emit_error_code(e, EC_TYPE_MISMATCH(), message, pat_span(a, pid));
+            return;
+        }
         let enum_idx: i64 = env_lookup_enum(e, enum_name);
         let variant_name: String = if variant_sid != -1 { arena_str(a, variant_sid) } else { String::from("") };
         // Built-in Option/Result aren't in `env`; a registered (user) enum wins,
@@ -2241,7 +2278,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if pat_tag(a, pat_pid) == PAT_ENUM() {
                     let path_lid: i64 = pat_a(a, pat_pid);
                     let path_len: i64 = list_len(a, path_lid);
-                    if path_len > 0 {
+                    if path_len > 0 && enum_pattern_matches_tid(e.ts, a, pat_pid, scrutinee_tid) {
                         let variant_name: String = arena_str(a, list_get(a, path_lid, path_len - 1));
                         if !handled_variant_contains(handled_variants, variant_name) {
                             handled_variants.push(variant_name);

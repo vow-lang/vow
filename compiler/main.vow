@@ -4108,6 +4108,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Tuple-variant patterns must provide exactly one payload binding for every\n"));
     r.push_str(String::from("declared payload, and each binding may be only `_` or an immutable identifier.\n"));
+    r.push_str(String::from("The qualified enum name must match the scrutinee's enum; a variant from another\n"));
+    r.push_str(String::from("enum neither binds payloads nor counts toward exhaustiveness.\n"));
     r.push_str(String::from("Nested payload destructuring is not implemented. A catchall `_` or immutable\n"));
     r.push_str(String::from("identifier arm must be the final arm because it matches every enum value.\n"));
     r.push_str(String::from("For an enum that can own linear payloads, `_` is allowed only after explicit\n"));
@@ -5986,7 +5988,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("### TypeMismatch\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
-    r.push_str(String::from("**Meaning:** An expression has a different type than expected.\n"));
+    r.push_str(String::from("**Meaning:** An expression has a different type than expected, or a qualified\n"));
+    r.push_str(String::from("enum pattern names an enum other than the scrutinee's enum.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f() -> i32 {\n"));
@@ -5996,7 +5999,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Output:** `function body has type 'bool' but declared return type is 'i32'`\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Change the expression or the declared type to match.\n"));
+    r.push_str(String::from("**Fix:** Change the expression or declared type to match. For an enum pattern,\n"));
+    r.push_str(String::from("qualify the variant with the scrutinee's enum name.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### LiteralOutOfRange\n"));
     r.push_str(String::from("\n"));
@@ -8806,6 +8810,8 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Tuple-variant patterns must provide exactly one payload binding for every\n"));
     r.push_str(String::from("declared payload, and each binding may be only `_` or an immutable identifier.\n"));
+    r.push_str(String::from("The qualified enum name must match the scrutinee's enum; a variant from another\n"));
+    r.push_str(String::from("enum neither binds payloads nor counts toward exhaustiveness.\n"));
     r.push_str(String::from("Nested payload destructuring is not implemented. A catchall `_` or immutable\n"));
     r.push_str(String::from("identifier arm must be the final arm because it matches every enum value.\n"));
     r.push_str(String::from("For an enum that can own linear payloads, `_` is allowed only after explicit\n"));
@@ -10692,7 +10698,8 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("### TypeMismatch\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
-    r.push_str(String::from("**Meaning:** An expression has a different type than expected.\n"));
+    r.push_str(String::from("**Meaning:** An expression has a different type than expected, or a qualified\n"));
+    r.push_str(String::from("enum pattern names an enum other than the scrutinee's enum.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn f() -> i32 {\n"));
@@ -10702,7 +10709,8 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Output:** `function body has type 'bool' but declared return type is 'i32'`\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Change the expression or the declared type to match.\n"));
+    r.push_str(String::from("**Fix:** Change the expression or declared type to match. For an enum pattern,\n"));
+    r.push_str(String::from("qualify the variant with the scrutinee's enum name.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### LiteralOutOfRange\n"));
     r.push_str(String::from("\n"));

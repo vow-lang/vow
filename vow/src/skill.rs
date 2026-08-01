@@ -2024,6 +2024,8 @@ return the same type. Patterns must be exhaustive.
 
 Tuple-variant patterns must provide exactly one payload binding for every
 declared payload, and each binding may be only `_` or an immutable identifier.
+The qualified enum name must match the scrutinee's enum; a variant from another
+enum neither binds payloads nor counts toward exhaustiveness.
 Nested payload destructuring is not implemented. A catchall `_` or immutable
 identifier arm must be the final arm because it matches every enum value.
 For an enum that can own linear payloads, `_` is allowed only after explicit
@@ -3902,7 +3904,8 @@ fn f() -> i64 {
 ### TypeMismatch
 
 **Phase:** Type Checker
-**Meaning:** An expression has a different type than expected.
+**Meaning:** An expression has a different type than expected, or a qualified
+enum pattern names an enum other than the scrutinee's enum.
 
 ```vow
 fn f() -> i32 {
@@ -3912,7 +3915,8 @@ fn f() -> i32 {
 
 **Output:** `function body has type 'bool' but declared return type is 'i32'`
 
-**Fix:** Change the expression or the declared type to match.
+**Fix:** Change the expression or declared type to match. For an enum pattern,
+qualify the variant with the scrutinee's enum name.
 
 ### LiteralOutOfRange
 
@@ -6700,6 +6704,8 @@ return the same type. Patterns must be exhaustive.
 
 Tuple-variant patterns must provide exactly one payload binding for every
 declared payload, and each binding may be only `_` or an immutable identifier.
+The qualified enum name must match the scrutinee's enum; a variant from another
+enum neither binds payloads nor counts toward exhaustiveness.
 Nested payload destructuring is not implemented. A catchall `_` or immutable
 identifier arm must be the final arm because it matches every enum value.
 For an enum that can own linear payloads, `_` is allowed only after explicit
@@ -8582,7 +8588,8 @@ fn f() -> i64 {
 ### TypeMismatch
 
 **Phase:** Type Checker
-**Meaning:** An expression has a different type than expected.
+**Meaning:** An expression has a different type than expected, or a qualified
+enum pattern names an enum other than the scrutinee's enum.
 
 ```vow
 fn f() -> i32 {
@@ -8592,7 +8599,8 @@ fn f() -> i32 {
 
 **Output:** `function body has type 'bool' but declared return type is 'i32'`
 
-**Fix:** Change the expression or the declared type to match.
+**Fix:** Change the expression or declared type to match. For an enum pattern,
+qualify the variant with the scrutinee's enum name.
 
 ### LiteralOutOfRange
 

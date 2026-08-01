@@ -1,0 +1,28 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "pattern enum `Other` does not match scrutinee enum `Payload`"
+module LinearMatchWrongEnumQualifier
+
+linear struct Token {
+    id: i64,
+}
+
+enum Other {
+    Empty,
+    Token(Token),
+}
+
+enum Payload {
+    Token(Token),
+    Empty,
+}
+
+fn extract(value: Payload) -> Token {
+    match value {
+        Other::Token(token) => { token },
+        _ => { Token { id: 0 } },
+    }
+}
+
+fn main() -> i32 {
+    0
+}

@@ -1738,6 +1738,7 @@ impl<'e> Checker<'e> {
                         }
                         self.bind_arm_pattern(&arm.pattern, &scrutinee_ty);
                         if let PatKind::EnumVariant { path, .. } = &arm.pattern.kind
+                            && Self::enum_pattern_matches_scrutinee(path, &scrutinee_ty)
                             && let Some(variant_name) = path.last()
                         {
                             handled_variants.insert(variant_name.clone());
@@ -2415,11 +2416,22 @@ impl<'e> Checker<'e> {
     }
 
     fn is_enum_match_scrutinee(ty: &Ty) -> bool {
+        Self::enum_match_name(ty).is_some()
+    }
+
+    fn enum_match_name(ty: &Ty) -> Option<&str> {
         match ty {
-            Ty::Enum(_) => true,
-            Ty::Applied(base, _) => matches!(base.as_ref(), Ty::Enum(_)),
-            _ => false,
+            Ty::Enum(name) => Some(name),
+            Ty::Applied(base, _) => match base.as_ref() {
+                Ty::Enum(name) => Some(name),
+                _ => None,
+            },
+            _ => None,
         }
+    }
+
+    fn enum_pattern_matches_scrutinee(path: &[String], scrutinee_ty: &Ty) -> bool {
+        path.first().map(String::as_str) == Self::enum_match_name(scrutinee_ty)
     }
 
     fn check_same_integer(&mut self, lhs: Ty, rhs: Ty, op_span: Span) -> Ty {
@@ -2476,14 +2488,21 @@ impl<'e> Checker<'e> {
                     Some(n) => n.as_str(),
                     None => return,
                 };
-                let enum_name = match scrutinee_ty {
-                    Ty::Enum(n) => n.clone(),
-                    Ty::Applied(base, _) => match base.as_ref() {
-                        Ty::Enum(n) => n.clone(),
-                        _ => return,
-                    },
-                    _ => return,
+                let enum_name = match Self::enum_match_name(scrutinee_ty) {
+                    Some(name) => name.to_string(),
+                    None => return,
                 };
+                if !Self::enum_pattern_matches_scrutinee(path, scrutinee_ty) {
+                    let qualifier = path.first().map(String::as_str).unwrap_or("<missing>");
+                    self.emit_error(
+                        ErrorCode::TypeMismatch,
+                        format!(
+                            "pattern enum `{qualifier}` does not match scrutinee enum `{enum_name}`"
+                        ),
+                        pat.span,
+                    );
+                    return;
+                }
                 // Built-in Option/Result aren't in `env`; a registered (user) enum
                 // wins, else take payload types from the scrutinee's type args.
                 let variant_tys: Option<Vec<Ty>> = self
@@ -3014,6 +3033,51 @@ mod tests {
         assert_eq!(
             emitter.0[0].message,
             "variant pattern expects 2 payload bindings, found 1"
+        );
+    }
+
+    #[test]
+    fn arm_pattern_rejects_wrong_enum_qualifier() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Item".to_string(),
+                    kind: VariantKind::Tuple(vec![Ty::I64]),
+                }],
+            },
+        );
+        checker.env.push_scope();
+        let path = vec!["Other".to_string(), "Item".to_string()];
+        let pattern = Pat {
+            kind: PatKind::EnumVariant {
+                path: path.clone(),
+                inner: vec![Pat {
+                    kind: PatKind::Ident {
+                        name: "item".to_string(),
+                        is_mut: false,
+                    },
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Enum("Payload".to_string()));
+
+        assert!(checker.has_errors());
+        assert!(checker.env.lookup("item").is_none());
+        assert!(!Checker::enum_pattern_matches_scrutinee(
+            &path,
+            &Ty::Enum("Payload".to_string())
+        ));
+        drop(checker);
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert_eq!(
+            emitter.0[0].message,
+            "pattern enum `Other` does not match scrutinee enum `Payload`"
         );
     }
 

@@ -667,6 +667,8 @@ return the same type. Patterns must be exhaustive.
 
 Tuple-variant patterns must provide exactly one payload binding for every
 declared payload, and each binding may be only `_` or an immutable identifier.
+The qualified enum name must match the scrutinee's enum; a variant from another
+enum neither binds payloads nor counts toward exhaustiveness.
 Nested payload destructuring is not implemented. A catchall `_` or immutable
 identifier arm must be the final arm because it matches every enum value.
 For an enum that can own linear payloads, `_` is allowed only after explicit

@@ -1,0 +1,17 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "unknown type"
+module TypeAliasUnknownTargetReused
+
+type Bad = Missing;
+
+fn first(value: Bad) -> Bad {
+    value
+}
+
+fn second(value: Bad) -> Bad {
+    first(value)
+}
+
+fn main() -> i32 {
+    0
+}

@@ -58,7 +58,8 @@ fn f() -> i64 {
 ### TypeMismatch
 
 **Phase:** Type Checker
-**Meaning:** An expression has a different type than expected.
+**Meaning:** An expression has a different type than expected, or a qualified
+enum pattern names an enum other than the scrutinee's enum.
 
 ```vow
 fn f() -> i32 {
@@ -68,7 +69,8 @@ fn f() -> i32 {
 
 **Output:** `function body has type 'bool' but declared return type is 'i32'`
 
-**Fix:** Change the expression or the declared type to match.
+**Fix:** Change the expression or declared type to match. For an enum pattern,
+qualify the variant with the scrutinee's enum name.
 
 ### LiteralOutOfRange
 
