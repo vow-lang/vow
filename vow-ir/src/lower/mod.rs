@@ -245,8 +245,23 @@ fn ast_type_is_linear_owner(ast_ty: &AstType, linear_owner_names: &HashSet<Strin
     }
 }
 
-fn lower_ty_with_linear(ast_ty: &AstType, linear_owner_names: &HashSet<String>) -> Ty {
+fn resolve_type_alias<'a>(
+    ast_ty: &'a AstType,
+    type_aliases: &'a HashMap<String, AstType>,
+) -> &'a AstType {
     match ast_ty {
+        AstType::Named { name, .. } => type_aliases.get(name).unwrap_or(ast_ty),
+        _ => ast_ty,
+    }
+}
+
+fn lower_ty_with_linear(
+    ast_ty: &AstType,
+    linear_owner_names: &HashSet<String>,
+    type_aliases: &HashMap<String, AstType>,
+) -> Ty {
+    let resolved_ty = resolve_type_alias(ast_ty, type_aliases);
+    match resolved_ty {
         AstType::Named { name, .. } => match name.as_str() {
             "i8" => Ty::I8,
             "i16" => Ty::I16,
@@ -266,9 +281,53 @@ fn lower_ty_with_linear(ast_ty: &AstType, linear_owner_names: &HashSet<String>) 
         },
         AstType::Unit { .. } => Ty::Unit,
         AstType::Never { .. } => Ty::Unit,
-        _ if ast_type_is_linear_owner(ast_ty, linear_owner_names) => Ty::LinearPtr,
+        _ if ast_type_is_linear_owner(resolved_ty, linear_owner_names) => Ty::LinearPtr,
         _ => Ty::Ptr,
     }
+}
+
+fn resolve_type_alias_name(
+    name: &str,
+    direct: &HashMap<String, AstType>,
+    resolved: &mut HashMap<String, AstType>,
+    visiting: &mut HashSet<String>,
+) -> AstType {
+    if let Some(ty) = resolved.get(name) {
+        return ty.clone();
+    }
+    let target = direct
+        .get(name)
+        .expect("type alias name originates from the direct map");
+    if !visiting.insert(name.to_string()) {
+        return target.clone();
+    }
+    let final_ty = match target {
+        AstType::Named {
+            name: target_name, ..
+        } if direct.contains_key(target_name) => {
+            resolve_type_alias_name(target_name, direct, resolved, visiting)
+        }
+        _ => target.clone(),
+    };
+    visiting.remove(name);
+    resolved.insert(name.to_string(), final_ty.clone());
+    final_ty
+}
+
+fn collect_type_aliases(module: &AstModule) -> HashMap<String, AstType> {
+    let direct: HashMap<String, AstType> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::TypeAlias(alias) => Some((alias.name.clone(), alias.ty.clone())),
+            _ => None,
+        })
+        .collect();
+    let mut resolved = HashMap::with_capacity(direct.len());
+    for name in direct.keys() {
+        resolve_type_alias_name(name, &direct, &mut resolved, &mut HashSet::new());
+    }
+    resolved
 }
 
 fn collect_linear_owner_names(module: &AstModule) -> HashSet<String> {
@@ -362,8 +421,11 @@ pub(crate) struct FuncSigInfo {
     param_tys: Vec<Ty>,
 }
 
-fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
-    match ast_ty {
+fn non_scalar_type_tag(
+    ast_ty: &AstType,
+    type_aliases: &HashMap<String, AstType>,
+) -> Option<String> {
+    match resolve_type_alias(ast_ty, type_aliases) {
         AstType::Named { name, .. }
             if matches!(
                 name.as_str(),
@@ -390,43 +452,57 @@ fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
     }
 }
 
-fn option_named_elem_type(ast_ty: &AstType) -> Option<Ty> {
-    match ast_ty {
-        AstType::Generic { name, args, .. } if name == "Option" => match args.first() {
-            Some(AstType::Named { name, .. }) if name == "i32" => Some(Ty::I32),
-            Some(AstType::Named { name, .. }) if name == "u8" => Some(Ty::U8),
-            _ => None,
-        },
+fn option_named_elem_type(ast_ty: &AstType, type_aliases: &HashMap<String, AstType>) -> Option<Ty> {
+    match resolve_type_alias(ast_ty, type_aliases) {
+        AstType::Generic { name, args, .. } if name == "Option" => args
+            .first()
+            .map(|ty| lower_ty_with_linear(ty, &HashSet::new(), type_aliases))
+            .filter(|ty| !matches!(ty, Ty::Ptr | Ty::LinearPtr | Ty::Unit)),
         _ => None,
     }
 }
 
-fn vec_named_elem_type(ast_ty: &AstType) -> Option<String> {
-    match ast_ty {
-        AstType::Generic { name, args, .. } if name == "Vec" => match args.first() {
-            Some(AstType::Named { name, .. }) if name == "str" => Some("String".to_string()),
-            Some(AstType::Named { name, .. })
-                if !matches!(
-                    name.as_str(),
-                    "i8" | "i16"
-                        | "i32"
-                        | "i64"
-                        | "i128"
-                        | "u8"
-                        | "u16"
-                        | "u32"
-                        | "u64"
-                        | "u128"
-                        | "f32"
-                        | "f64"
-                        | "bool"
-                ) =>
-            {
-                Some(name.clone())
-            }
-            _ => None,
-        },
+fn vec_named_elem_type(
+    ast_ty: &AstType,
+    type_aliases: &HashMap<String, AstType>,
+) -> Option<String> {
+    match resolve_type_alias(ast_ty, type_aliases) {
+        AstType::Generic { name, args, .. } if name == "Vec" => {
+            args.first()
+                .and_then(|elem_ty| match resolve_type_alias(elem_ty, type_aliases) {
+                    AstType::Named { name, .. } if name == "str" => Some("String".to_string()),
+                    AstType::Named { name, .. }
+                        if !matches!(
+                            name.as_str(),
+                            "i8" | "i16"
+                                | "i32"
+                                | "i64"
+                                | "i128"
+                                | "u8"
+                                | "u16"
+                                | "u32"
+                                | "u64"
+                                | "u128"
+                                | "f32"
+                                | "f64"
+                                | "bool"
+                        ) =>
+                    {
+                        Some(name.clone())
+                    }
+                    AstType::Generic { name, .. } => Some(name.clone()),
+                    _ => None,
+                })
+        }
         _ => None,
+    }
+}
+
+fn type_tag_name(ast_ty: &AstType, type_aliases: &HashMap<String, AstType>) -> String {
+    match resolve_type_alias(ast_ty, type_aliases) {
+        AstType::Named { name, .. } if name == "str" => "String".to_string(),
+        AstType::Named { name, .. } | AstType::Generic { name, .. } => name.clone(),
+        _ => String::new(),
     }
 }
 
@@ -446,6 +522,7 @@ pub(crate) struct LowerCtx {
     // enum name → variant names in declaration order (index = tag)
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
     linear_owner_names: HashSet<String>,
+    type_aliases: HashMap<String, AstType>,
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
     inst_ty_cache: HashMap<InstId, Ty>,
@@ -503,6 +580,7 @@ impl LowerCtx {
         struct_field_map: HashMap<String, Vec<String>>,
         enum_variant_map: HashMap<String, Vec<String>>,
         linear_owner_names: HashSet<String>,
+        type_aliases: HashMap<String, AstType>,
         struct_field_type_names: HashMap<String, Vec<String>>,
         struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
@@ -544,6 +622,7 @@ impl LowerCtx {
             struct_field_map,
             enum_variant_map,
             linear_owner_names,
+            type_aliases,
             inst_struct_type: HashMap::new(),
             inst_ty_cache: HashMap::new(),
             file,
@@ -3369,7 +3448,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::Cast { expr, target_ty } => {
             let val = lower_expr(ctx, expr);
             let src_ty = ctx.inst_ty(val);
-            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names);
+            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names, &ctx.type_aliases);
             if let ExprKind::Lit(Lit::Int(v)) = &expr.kind {
                 match tgt {
                     Ty::U8 => ctx.emit(
@@ -3606,6 +3685,8 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
             if let Some(AstType::Named {
                 name: type_name, ..
             }) = ty
+                .as_ref()
+                .map(|ann| resolve_type_alias(ann, &ctx.type_aliases))
             {
                 if type_name == "u8" {
                     val = lower_narrow_literal(ctx, init, val, Ty::U8);
@@ -3616,6 +3697,8 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
             if let Some(AstType::Named {
                 name: type_name, ..
             }) = ty
+                .as_ref()
+                .map(|ann| resolve_type_alias(ann, &ctx.type_aliases))
                 && type_name == "u64"
                 && ctx.inst_ty(val) != Ty::U64
             {
@@ -3633,6 +3716,7 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
             }
             if let PatKind::Ident { name, .. } = &pattern.kind {
                 if let Some(ann) = ty {
+                    let ann = resolve_type_alias(ann, &ctx.type_aliases);
                     match ann {
                         AstType::Named {
                             name: type_name, ..
@@ -3649,9 +3733,10 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                         } => {
                             ctx.inst_struct_type.insert(val, type_name.clone());
                             if type_name == "Vec"
-                                && let Some(AstType::Named {
+                                && let Some(elem_ty) = args.first()
+                                && let AstType::Named {
                                     name: elem_name, ..
-                                }) = args.first()
+                                } = resolve_type_alias(elem_ty, &ctx.type_aliases)
                                 && !matches!(
                                     elem_name.as_str(),
                                     "i32" | "i64" | "u8" | "u64" | "f32" | "f64" | "bool"
@@ -3712,6 +3797,7 @@ fn lower_function_with_pattern_aggregates(
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
     linear_owner_names: &HashSet<String>,
+    type_aliases: &HashMap<String, AstType>,
     struct_field_type_names: HashMap<String, Vec<String>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
@@ -3721,10 +3807,10 @@ fn lower_function_with_pattern_aggregates(
     let params: Vec<Ty> = fn_def
         .params
         .iter()
-        .map(|p| lower_ty_with_linear(&p.ty, linear_owner_names))
+        .map(|p| lower_ty_with_linear(&p.ty, linear_owner_names, type_aliases))
         .collect();
     let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
-    let return_ty = lower_ty_with_linear(&fn_def.return_ty, linear_owner_names);
+    let return_ty = lower_ty_with_linear(&fn_def.return_ty, linear_owner_names, type_aliases);
     let effects = fn_def.effects.clone();
 
     let mut ctx = LowerCtx::new(
@@ -3738,6 +3824,7 @@ fn lower_function_with_pattern_aggregates(
         struct_field_map,
         enum_variant_map,
         linear_owner_names.clone(),
+        type_aliases.clone(),
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs.clone(),
@@ -3759,7 +3846,7 @@ fn lower_function_with_pattern_aggregates(
             InstData::ArgIndex(idx as u32),
             fn_def.span,
         );
-        match &param.ty {
+        match resolve_type_alias(&param.ty, type_aliases) {
             AstType::Named { name, .. } if name == "str" || name == "String" => {
                 ctx.inst_struct_type.insert(arg_id, "String".to_string());
             }
@@ -3771,9 +3858,10 @@ fn lower_function_with_pattern_aggregates(
             }
             AstType::Generic { name, args, .. } if name == "Vec" => {
                 ctx.inst_struct_type.insert(arg_id, "Vec".to_string());
-                if let Some(AstType::Named {
-                    name: elem_name, ..
-                }) = args.first()
+                if let Some(elem_ty) = args.first()
+                    && let AstType::Named {
+                        name: elem_name, ..
+                    } = resolve_type_alias(elem_ty, type_aliases)
                     && !matches!(
                         elem_name.as_str(),
                         "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
@@ -3785,11 +3873,7 @@ fn lower_function_with_pattern_aggregates(
             }
             AstType::Generic { name, args, .. } if name == "Option" => {
                 ctx.inst_struct_type.insert(arg_id, "Option".to_string());
-                if let Some(elem_ty) = args.first().and_then(|t| match t {
-                    AstType::Named { name, .. } if name == "i32" => Some(Ty::I32),
-                    AstType::Named { name, .. } if name == "u8" => Some(Ty::U8),
-                    _ => None,
-                }) {
+                if let Some(elem_ty) = option_named_elem_type(&param.ty, type_aliases) {
                     ctx.inst_option_elem_ty.insert(arg_id, elem_ty);
                 }
             }
@@ -3871,6 +3955,7 @@ fn lower_function(
         struct_field_map,
         enum_variant_map,
         linear_owner_names,
+        &HashMap::new(),
         struct_field_type_names,
         struct_field_vec_elems,
         string_exprs,
@@ -3912,6 +3997,7 @@ pub fn lower_module_with_pattern_aggregates(
     // aliases to those owners inherit linearity; references and collection
     // types deliberately do not propagate ownership.
     let linear_owner_names = collect_linear_owner_names(module);
+    let type_aliases = collect_type_aliases(module);
 
     let func_index: HashMap<String, FuncSigInfo> = fn_items
         .iter()
@@ -3921,14 +4007,18 @@ pub fn lower_module_with_pattern_aggregates(
                 fn_def.name.clone(),
                 FuncSigInfo {
                     id: FuncId(idx as u32),
-                    ret_ty: lower_ty_with_linear(&fn_def.return_ty, &linear_owner_names),
-                    ret_tag: non_scalar_type_tag(&fn_def.return_ty),
-                    ret_vec_elem: vec_named_elem_type(&fn_def.return_ty),
-                    ret_option_elem: option_named_elem_type(&fn_def.return_ty),
+                    ret_ty: lower_ty_with_linear(
+                        &fn_def.return_ty,
+                        &linear_owner_names,
+                        &type_aliases,
+                    ),
+                    ret_tag: non_scalar_type_tag(&fn_def.return_ty, &type_aliases),
+                    ret_vec_elem: vec_named_elem_type(&fn_def.return_ty, &type_aliases),
+                    ret_option_elem: option_named_elem_type(&fn_def.return_ty, &type_aliases),
                     param_tys: fn_def
                         .params
                         .iter()
-                        .map(|p| lower_ty_with_linear(&p.ty, &linear_owner_names))
+                        .map(|p| lower_ty_with_linear(&p.ty, &linear_owner_names, &type_aliases))
                         .collect(),
                 },
             )
@@ -3954,7 +4044,7 @@ pub fn lower_module_with_pattern_aggregates(
                 }
                 _ => 0,
             };
-            let ty = lower_ty_with_linear(&c.ty, &linear_owner_names);
+            let ty = lower_ty_with_linear(&c.ty, &linear_owner_names, &type_aliases);
             const_map.insert(c.name.clone(), (val, ty));
         }
     }
@@ -3970,7 +4060,7 @@ pub fn lower_module_with_pattern_aggregates(
                 .iter()
                 .map(|f| FieldLayout {
                     name: f.name.clone(),
-                    ty: lower_ty_with_linear(&f.ty, &linear_owner_names),
+                    ty: lower_ty_with_linear(&f.ty, &linear_owner_names, &type_aliases),
                 })
                 .collect();
             struct_field_map.insert(s.name.clone(), field_names);
@@ -3991,20 +4081,17 @@ pub fn lower_module_with_pattern_aggregates(
             let type_names: Vec<String> = s
                 .fields
                 .iter()
-                .map(|f| match &f.ty {
-                    AstType::Named { name, .. } => name.clone(),
-                    AstType::Generic { name, .. } => name.clone(),
-                    _ => String::new(),
-                })
+                .map(|f| type_tag_name(&f.ty, &type_aliases))
                 .collect();
             let vec_elems: Vec<String> = s
                 .fields
                 .iter()
-                .map(|f| match &f.ty {
+                .map(|f| match resolve_type_alias(&f.ty, &type_aliases) {
                     AstType::Generic { name, args, .. } if name == "Vec" => {
-                        if let Some(AstType::Named {
-                            name: elem_name, ..
-                        }) = args.first()
+                        if let Some(elem_ty) = args.first()
+                            && let AstType::Named {
+                                name: elem_name, ..
+                            } = resolve_type_alias(elem_ty, &type_aliases)
                             && !matches!(
                                 elem_name.as_str(),
                                 "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
@@ -4040,14 +4127,14 @@ pub fn lower_module_with_pattern_aggregates(
                             .enumerate()
                             .map(|(i, ty)| FieldLayout {
                                 name: i.to_string(),
-                                ty: lower_ty_with_linear(ty, &linear_owner_names),
+                                ty: lower_ty_with_linear(ty, &linear_owner_names, &type_aliases),
                             })
                             .collect(),
                         VariantKind::Struct(fields) => fields
                             .iter()
                             .map(|f| FieldLayout {
                                 name: f.name.clone(),
-                                ty: lower_ty_with_linear(&f.ty, &linear_owner_names),
+                                ty: lower_ty_with_linear(&f.ty, &linear_owner_names, &type_aliases),
                             })
                             .collect(),
                     };
@@ -4079,6 +4166,7 @@ pub fn lower_module_with_pattern_aggregates(
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
                 &linear_owner_names,
+                &type_aliases,
                 struct_field_type_names.clone(),
                 struct_field_vec_elems.clone(),
                 string_exprs,
@@ -4282,6 +4370,45 @@ type ForwardedToken = MaybeToken;
         assert!(owners.contains("Token"));
         assert!(owners.contains("MaybeToken"));
         assert!(owners.contains("ForwardedToken"));
+    }
+
+    #[test]
+    fn type_aliases_are_resolved_transitively_before_lowering() {
+        let source = r#"
+module NonLinearAlias
+
+type Small = u8;
+type Tiny = Small;
+
+struct Pair {
+    left: u8,
+    right: u8,
+}
+
+type PairAlias = Pair;
+type PairView = PairAlias;
+"#;
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, "non_linear_alias.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let aliases = collect_type_aliases(&ast);
+        let tiny = Type::Named {
+            name: "Tiny".to_string(),
+            span: sp(),
+        };
+        let pair_view = Type::Named {
+            name: "PairView".to_string(),
+            span: sp(),
+        };
+
+        assert_eq!(
+            lower_ty_with_linear(&tiny, &HashSet::new(), &aliases),
+            Ty::U8
+        );
+        assert_eq!(
+            non_scalar_type_tag(&pair_view, &aliases),
+            Some("Pair".to_string())
+        );
     }
 
     #[test]
@@ -5154,6 +5281,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             enum_variant_map,
             &linear_structs,
+            &HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
@@ -5281,6 +5409,7 @@ fn parse_or_default(s: String) -> i64 {
             struct_field_map,
             enum_variant_map,
             &HashSet::new(),
+            &HashMap::new(),
             struct_field_types,
             HashMap::new(),
             &HashSet::new(),
@@ -5344,6 +5473,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             HashMap::new(),
             HashSet::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashSet::new(),
@@ -5462,6 +5592,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             enum_variant_map,
             &HashSet::new(),
+            &HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),

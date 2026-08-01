@@ -21,6 +21,8 @@ struct LowerCtx {
     func_param_tys: Vec<Vec<i64>>,
     struct_names: Vec<String>,
     linear_owner_names: Vec<String>,
+    type_alias_names: Vec<String>,
+    type_alias_target_tids: Vec<i64>,
     struct_field_lists: Vec<Vec<String>>,
     struct_field_type_names: Vec<Vec<String>>,
     struct_field_vec_elems: Vec<Vec<String>>,
@@ -97,6 +99,8 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_param_tys: Vec::new(),
         struct_names: Vec::new(),
         linear_owner_names: Vec::new(),
+        type_alias_names: Vec::new(),
+        type_alias_target_tids: Vec::new(),
         struct_field_lists: Vec::new(),
         struct_field_type_names: Vec::new(),
         struct_field_vec_elems: Vec::new(),
@@ -661,7 +665,54 @@ fn lctx_alloc_vow(ctx: LowerCtx, desc: String, blame: i64, binding_ids: Vec<i64>
 }
 
 fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
-    lower_ast_ty_linear(a, tid, Vec::new())
+    lower_ast_ty_linear(a, tid, Vec::new(), Vec::new(), Vec::new())
+}
+
+fn lower_find_type_alias(alias_names: Vec<String>, name: String) -> i64 {
+    let mut i: i64 = 0;
+    while i < alias_names.len() {
+        if alias_names[i] == name { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn lower_resolve_alias_index(a: AstArena, alias_names: Vec<String>, alias_target_tids: Vec<i64>, states: Vec<i64>, index: i64) -> i64 {
+    if states[index] == 2 { return alias_target_tids[index]; }
+    if states[index] == 1 { return alias_target_tids[index]; }
+    states[index] = 1;
+    let target_tid: i64 = alias_target_tids[index];
+    if target_tid != -1 && type_tag(a, target_tid) == TY_NAMED() {
+        let target_name: String = arena_str(a, type_a(a, target_tid));
+        let target_index: i64 = lower_find_type_alias(alias_names, target_name);
+        if target_index != -1 {
+            alias_target_tids[index] = lower_resolve_alias_index(a, alias_names, alias_target_tids, states, target_index);
+        }
+    }
+    states[index] = 2;
+    alias_target_tids[index]
+}
+
+fn lower_resolve_type_aliases(a: AstArena, alias_names: Vec<String>, alias_target_tids: Vec<i64>) {
+    let states: Vec<i64> = Vec::new();
+    let mut si: i64 = 0;
+    while si < alias_names.len() {
+        states.push(0);
+        si = si + 1;
+    }
+    let mut i: i64 = 0;
+    while i < alias_names.len() {
+        lower_resolve_alias_index(a, alias_names, alias_target_tids, states, i);
+        i = i + 1;
+    }
+}
+
+fn lower_resolve_alias_tid(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> i64 {
+    if tid == -1 || type_tag(a, tid) != TY_NAMED() { return tid; }
+    let name: String = arena_str(a, type_a(a, tid));
+    let index: i64 = lower_find_type_alias(alias_names, name);
+    if index == -1 { return tid; }
+    alias_target_tids[index]
 }
 
 fn is_scalar_field_type_name(name: String) -> bool {
@@ -714,13 +765,14 @@ fn ast_type_is_linear_owner(a: AstArena, tid: i64, linear_names: Vec<String>) ->
     false
 }
 
-fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>) -> i64 {
-    if tid == -1 { return ITY_UNIT(); }
-    let tag: i64 = type_tag(a, tid);
+fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> i64 {
+    let resolved_tid: i64 = lower_resolve_alias_tid(a, tid, alias_names, alias_target_tids);
+    if resolved_tid == -1 { return ITY_UNIT(); }
+    let tag: i64 = type_tag(a, resolved_tid);
     if tag == TY_UNIT() { return ITY_UNIT(); }
     if tag == TY_NEVER() { return ITY_UNIT(); }
     if tag == TY_NAMED() {
-        let name_sid: i64 = type_a(a, tid);
+        let name_sid: i64 = type_a(a, resolved_tid);
         let name: String = arena_str(a, name_sid);
         if name == String::from("i8") { return ITY_I8(); }
         if name == String::from("i16") { return ITY_I16(); }
@@ -741,7 +793,7 @@ fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>) -> i64 
         return ITY_PTR();
     }
     if tag == TY_GENERIC() {
-        if ast_type_is_linear_owner(a, tid, linear_names) { return ITY_LPTR(); }
+        if ast_type_is_linear_owner(a, resolved_tid, linear_names) { return ITY_LPTR(); }
         return ITY_PTR();
     }
     if tag == TY_REF() { return ITY_PTR(); }
@@ -751,17 +803,17 @@ fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>) -> i64 
 }
 
 fn lctx_lower_ast_ty(ctx: LowerCtx, tid: i64) -> i64 {
-    lower_ast_ty_linear(ctx.arena, tid, ctx.linear_owner_names)
+    lower_ast_ty_linear(ctx.arena, tid, ctx.linear_owner_names, ctx.type_alias_names, ctx.type_alias_target_tids)
 }
 
-fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
-    if tid == -1 { return String::from(""); }
-    let tag: i64 = type_tag(a, tid);
+fn lower_ast_type_tag_name(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> String {
+    let resolved_tid: i64 = lower_resolve_alias_tid(a, tid, alias_names, alias_target_tids);
+    if resolved_tid == -1 { return String::from(""); }
+    let tag: i64 = type_tag(a, resolved_tid);
     if tag == TY_NAMED() {
-        let name_sid: i64 = type_a(a, tid);
+        let name_sid: i64 = type_a(a, resolved_tid);
         let name: String = arena_str(a, name_sid);
-        if name == String::from("i32") || name == String::from("i64") || name == String::from("u8") || name == String::from("u64") ||
-           name == String::from("f32") || name == String::from("f64") || name == String::from("bool") {
+        if is_scalar_field_type_name(name) {
             return String::from("");
         }
         if name == String::from("str") {
@@ -770,42 +822,41 @@ fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
         return clone_string(name);
     }
     if tag == TY_GENERIC() {
-        let name_sid: i64 = type_a(a, tid);
+        let name_sid: i64 = type_a(a, resolved_tid);
         return clone_string(arena_str(a, name_sid));
     }
     String::from("")
 }
 
-fn lower_ast_type_option_elem_ty(a: AstArena, tid: i64) -> i64 {
-    if tid == -1 { return -1; }
-    let tag: i64 = type_tag(a, tid);
+fn lower_ast_type_option_elem_ty(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> i64 {
+    let resolved_tid: i64 = lower_resolve_alias_tid(a, tid, alias_names, alias_target_tids);
+    if resolved_tid == -1 { return -1; }
+    let tag: i64 = type_tag(a, resolved_tid);
     if tag != TY_GENERIC() { return -1; }
-    let name_sid: i64 = type_a(a, tid);
+    let name_sid: i64 = type_a(a, resolved_tid);
     let name: String = arena_str(a, name_sid);
     if name != String::from("Option") { return -1; }
-    let args_lid: i64 = type_b(a, tid);
+    let args_lid: i64 = type_b(a, resolved_tid);
     if list_len(a, args_lid) == 0 { return -1; }
     let elem_tid: i64 = list_get(a, args_lid, 0);
-    let elem_tag: i64 = type_tag(a, elem_tid);
-    if elem_tag != TY_NAMED() { return -1; }
-    let elem_sid: i64 = type_a(a, elem_tid);
-    let elem_name: String = arena_str(a, elem_sid);
-    if elem_name == String::from("i32") { return ITY_I32(); }
-    if elem_name == String::from("u8") { return ITY_U8(); }
-    -1
+    let elem_ty: i64 = lower_ast_ty_linear(a, elem_tid, Vec::new(), alias_names, alias_target_tids);
+    if elem_ty == ITY_PTR() || elem_ty == ITY_LPTR() || elem_ty == ITY_UNIT() { return -1; }
+    elem_ty
 }
 
-fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64) -> String {
-    if tid == -1 { return String::from(""); }
-    let tag: i64 = type_tag(a, tid);
+fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> String {
+    let resolved_tid: i64 = lower_resolve_alias_tid(a, tid, alias_names, alias_target_tids);
+    if resolved_tid == -1 { return String::from(""); }
+    let tag: i64 = type_tag(a, resolved_tid);
     if tag != TY_GENERIC() { return String::from(""); }
-    let name_sid: i64 = type_a(a, tid);
+    let name_sid: i64 = type_a(a, resolved_tid);
     let name: String = arena_str(a, name_sid);
     if name != String::from("Vec") { return String::from(""); }
-    let args_lid: i64 = type_b(a, tid);
+    let args_lid: i64 = type_b(a, resolved_tid);
     if list_len(a, args_lid) == 0 { return String::from(""); }
-    let elem_tid: i64 = list_get(a, args_lid, 0);
+    let elem_tid: i64 = lower_resolve_alias_tid(a, list_get(a, args_lid, 0), alias_names, alias_target_tids);
     let elem_tag: i64 = type_tag(a, elem_tid);
+    if elem_tag == TY_GENERIC() { return arena_str(a, type_a(a, elem_tid)); }
     if elem_tag != TY_NAMED() { return String::from(""); }
     let elem_sid: i64 = type_a(a, elem_tid);
     let elem_name: String = arena_str(a, elem_sid);
@@ -3673,9 +3724,10 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
             let name_sid: i64 = pat_a(a, pat_id);
             let name: String = arena_str(a, name_sid);
             if ann_tid != -1 {
-                let atag: i64 = type_tag(a, ann_tid);
+                let resolved_ann_tid: i64 = lower_resolve_alias_tid(a, ann_tid, ctx.type_alias_names, ctx.type_alias_target_tids);
+                let atag: i64 = type_tag(a, resolved_ann_tid);
                 if atag == TY_NAMED() {
-                    let type_name_sid: i64 = type_a(a, ann_tid);
+                    let type_name_sid: i64 = type_a(a, resolved_ann_tid);
                     let type_name: String = arena_str(a, type_name_sid);
                     if type_name == String::from("u8") && expr_is_const_int(a, init_eid) {
                         let const_args: Vec<i64> = Vec::new();
@@ -3690,17 +3742,17 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
                         cast_args.push(val);
                         val = lctx_emit(ctx, IOP_INT_CAST(), ITY_U64(), cast_args, IDATA_INTEGER_CAST(), lctx_inst_ty(ctx, val), ITY_U64(), String::from(""));
                     }
-                    if type_name != String::from("i32") && type_name != String::from("i64") && type_name != String::from("u8") && type_name != String::from("u64") && type_name != String::from("f32") && type_name != String::from("f64") && type_name != String::from("bool") {
+                    if !is_scalar_field_type_name(type_name) {
                         lctx_tag(ctx, val, type_name);
                     }
                 } else if atag == TY_GENERIC() {
-                    let type_name_sid: i64 = type_a(a, ann_tid);
+                    let type_name_sid: i64 = type_a(a, resolved_ann_tid);
                     let type_name: String = arena_str(a, type_name_sid);
                     lctx_tag(ctx, val, type_name);
                     if type_name == String::from("Vec") {
-                        let args_lid: i64 = type_b(a, ann_tid);
+                        let args_lid: i64 = type_b(a, resolved_ann_tid);
                         if list_len(a, args_lid) > 0 {
-                            let elem_tid: i64 = list_get(a, args_lid, 0);
+                            let elem_tid: i64 = lower_resolve_alias_tid(a, list_get(a, args_lid, 0), ctx.type_alias_names, ctx.type_alias_target_tids);
                             let etag: i64 = type_tag(a, elem_tid);
                             if etag == TY_NAMED() {
                                 let elem_name_sid: i64 = type_a(a, elem_tid);
@@ -4094,10 +4146,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         let pname: String = arena_str(a, pname_sid);
         func.param_names.push(pname);
 
-        if ptid != -1 {
-            let ptag: i64 = type_tag(a, ptid);
+        let resolved_ptid: i64 = lower_resolve_alias_tid(a, ptid, ctx.type_alias_names, ctx.type_alias_target_tids);
+        if resolved_ptid != -1 {
+            let ptag: i64 = type_tag(a, resolved_ptid);
             if ptag == TY_NAMED() {
-                let tn_sid: i64 = type_a(a, ptid);
+                let tn_sid: i64 = type_a(a, resolved_ptid);
                 let tn: String = arena_str(a, tn_sid);
                 if tn == String::from("String") || tn == String::from("str") {
                     lctx_tag(ctx, arg_id, String::from("String"));
@@ -4108,7 +4161,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                     }
                 }
             } else if ptag == TY_GENERIC() {
-                let tn_sid: i64 = type_a(a, ptid);
+                let tn_sid: i64 = type_a(a, resolved_ptid);
                 let tn: String = arena_str(a, tn_sid);
                 if tn == String::from("HashMap") {
                     lctx_tag(ctx, arg_id, String::from("HashMap"));
@@ -4116,9 +4169,9 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                     lctx_tag(ctx, arg_id, String::from("BTreeMap"));
                 } else if tn == String::from("Vec") {
                     lctx_tag(ctx, arg_id, String::from("Vec"));
-                    let pargs_lid: i64 = type_b(a, ptid);
+                    let pargs_lid: i64 = type_b(a, resolved_ptid);
                     if list_len(a, pargs_lid) > 0 {
-                        let pelem_tid: i64 = list_get(a, pargs_lid, 0);
+                        let pelem_tid: i64 = lower_resolve_alias_tid(a, list_get(a, pargs_lid, 0), ctx.type_alias_names, ctx.type_alias_target_tids);
                         let petag: i64 = type_tag(a, pelem_tid);
                         if petag == TY_NAMED() {
                             let pelem_sid: i64 = type_a(a, pelem_tid);
@@ -4128,7 +4181,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                     }
                 } else if tn == String::from("Option") {
                     lctx_tag(ctx, arg_id, String::from("Option"));
-                    let opt_elem_ty: i64 = lower_ast_type_option_elem_ty(a, ptid);
+                    let opt_elem_ty: i64 = lower_ast_type_option_elem_ty(a, resolved_ptid, ctx.type_alias_names, ctx.type_alias_target_tids);
                     if opt_elem_ty != -1 {
                         lctx_tag_option_elem(ctx, arg_id, opt_elem_ty);
                     }
@@ -4224,6 +4277,8 @@ fn lower_module_vow(
     let func_param_tys: Vec<Vec<i64>> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
     let linear_owner_names: Vec<String> = Vec::new();
+    let type_alias_names: Vec<String> = Vec::new();
+    let type_alias_target_tids: Vec<i64> = Vec::new();
     let struct_field_lists: Vec<Vec<String>> = Vec::new();
     let struct_field_type_names: Vec<Vec<String>> = Vec::new();
     let struct_field_vec_elems: Vec<Vec<String>> = Vec::new();
@@ -4231,6 +4286,18 @@ fn lower_module_vow(
     let enum_variant_lists: Vec<Vec<String>> = Vec::new();
 
     let n_items: i64 = m.items.len();
+    let mut alias_i: i64 = 0;
+    while alias_i < n_items {
+        let alias_item: i64 = m.items[alias_i];
+        if item_kind(alias_item) == ITEM_TYPE_ALIAS() {
+            let alias_id: i64 = item_id(alias_item);
+            type_alias_names.push(arena_str(a, alias_name_sid(a, alias_id)));
+            type_alias_target_tids.push(alias_type_tid(a, alias_id));
+        }
+        alias_i = alias_i + 1;
+    }
+    lower_resolve_type_aliases(a, type_alias_names, type_alias_target_tids);
+
     let mut lsi: i64 = 0;
     while lsi < n_items {
         let item0: i64 = m.items[lsi];
@@ -4305,12 +4372,12 @@ fn lower_module_vow(
             let name_sid: i64 = fn_name_sid(a, iid);
             let name: String = arena_str(a, name_sid);
             let ret_tid: i64 = fn_ret_ast_tid(a, iid);
-            let ir_ret: i64 = lower_ast_ty_linear(a, ret_tid, linear_owner_names);
+            let ir_ret: i64 = lower_ast_ty_linear(a, ret_tid, linear_owner_names, type_alias_names, type_alias_target_tids);
             func_names.push(name);
             func_ret_tys.push(ir_ret);
-            func_ret_tags.push(lower_ast_type_tag_name(a, ret_tid));
-            func_ret_vec_elems.push(lower_ast_type_vec_elem_name(a, ret_tid));
-            func_ret_option_elems.push(lower_ast_type_option_elem_ty(a, ret_tid));
+            func_ret_tags.push(lower_ast_type_tag_name(a, ret_tid, type_alias_names, type_alias_target_tids));
+            func_ret_vec_elems.push(lower_ast_type_vec_elem_name(a, ret_tid, type_alias_names, type_alias_target_tids));
+            func_ret_option_elems.push(lower_ast_type_option_elem_ty(a, ret_tid, type_alias_names, type_alias_target_tids));
 
             let params_lid: i64 = fn_params_lid(a, iid);
             let nparams: i64 = list_len(a, params_lid) / 3;
@@ -4318,7 +4385,7 @@ fn lower_module_vow(
             let mut pi: i64 = 0;
             while pi < nparams {
                 let ptid: i64 = list_get(a, params_lid, pi * 3 + 1);
-                param_tys.push(lower_ast_ty_linear(a, ptid, linear_owner_names));
+                param_tys.push(lower_ast_ty_linear(a, ptid, linear_owner_names, type_alias_names, type_alias_target_tids));
                 pi = pi + 1;
             }
             func_param_tys.push(param_tys);
@@ -4335,13 +4402,14 @@ fn lower_module_vow(
             while fi < nf {
                 let fname_sid: i64 = list_get(a, fields_lid, fi * 2);
                 let ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
+                let resolved_ftid: i64 = lower_resolve_alias_tid(a, ftid, type_alias_names, type_alias_target_tids);
                 let fname: String = arena_str(a, fname_sid);
                 fnames.push(fname);
                 let ftype_name: String = {
-                    if ftid != -1 {
-                        let ftag: i64 = type_tag(a, ftid);
+                    if resolved_ftid != -1 {
+                        let ftag: i64 = type_tag(a, resolved_ftid);
                         if ftag == TY_NAMED() || ftag == TY_GENERIC() {
-                            let ftn_sid: i64 = type_a(a, ftid);
+                            let ftn_sid: i64 = type_a(a, resolved_ftid);
                             arena_str(a, ftn_sid)
                         } else {
                             String::from("")
@@ -4352,15 +4420,15 @@ fn lower_module_vow(
                 };
                 ftypes.push(ftype_name);
                 let fve: String = {
-                    if ftid != -1 {
-                        let ftag: i64 = type_tag(a, ftid);
+                    if resolved_ftid != -1 {
+                        let ftag: i64 = type_tag(a, resolved_ftid);
                         if ftag == TY_GENERIC() {
-                            let ftn_sid: i64 = type_a(a, ftid);
+                            let ftn_sid: i64 = type_a(a, resolved_ftid);
                             let ftn: String = arena_str(a, ftn_sid);
                             if ftn == String::from("Vec") {
-                                let args_lid: i64 = type_b(a, ftid);
+                                let args_lid: i64 = type_b(a, resolved_ftid);
                                 if list_len(a, args_lid) > 0 {
-                                    let elem_tid: i64 = list_get(a, args_lid, 0);
+                                    let elem_tid: i64 = lower_resolve_alias_tid(a, list_get(a, args_lid, 0), type_alias_names, type_alias_target_tids);
                                     let etag: i64 = type_tag(a, elem_tid);
                                     if etag == TY_NAMED() {
                                         let en_sid: i64 = type_a(a, elem_tid);
@@ -4387,7 +4455,7 @@ fn lower_module_vow(
                     }
                 };
                 fvec_elems.push(fve);
-                let ir_ty: i64 = lower_ast_ty_linear(a, ftid, linear_owner_names);
+                let ir_ty: i64 = lower_ast_ty_linear(a, ftid, linear_owner_names, type_alias_names, type_alias_target_tids);
                 let fl: IrFieldLayout = IrFieldLayout { name: fname, ty: ir_ty };
                 ir_fields.push(fl);
                 fi = fi + 1;
@@ -4418,7 +4486,7 @@ fn lower_module_vow(
                 let mut pi: i64 = 0;
                 while pi < n_payload {
                     let p_ast_tid: i64 = list_get(a, payload_lid, pi);
-                    let p_ir_ty: i64 = lower_ast_ty_linear(a, p_ast_tid, linear_owner_names);
+                    let p_ir_ty: i64 = lower_ast_ty_linear(a, p_ast_tid, linear_owner_names, type_alias_names, type_alias_target_tids);
                     let fl: IrFieldLayout = IrFieldLayout { name: String::from(""), ty: p_ir_ty };
                     payload.push(fl);
                     pi = pi + 1;
@@ -4477,13 +4545,7 @@ fn lower_module_vow(
                     0
                 }
             };
-            let ct: i64 = {
-                if cv_tag == EXPR_LIT_BOOL() {
-                    ITY_BOOL()
-                } else {
-                    ITY_I64()
-                }
-            };
+            let ct: i64 = lower_ast_ty_linear(a, cdef_type_tid(a, iid), linear_owner_names, type_alias_names, type_alias_target_tids);
             cnames.push(cn);
             cvals.push(cv);
             ctids.push(ct);
@@ -4512,6 +4574,8 @@ fn lower_module_vow(
     ctx.func_param_tys = func_param_tys;
     ctx.struct_names = struct_names;
     ctx.linear_owner_names = linear_owner_names;
+    ctx.type_alias_names = type_alias_names;
+    ctx.type_alias_target_tids = type_alias_target_tids;
     ctx.struct_field_lists = struct_field_lists;
     ctx.struct_field_type_names = struct_field_type_names;
     ctx.struct_field_vec_elems = struct_field_vec_elems;
