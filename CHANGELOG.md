@@ -1,3 +1,31 @@
+# [0.6.0](https://github.com/vow-lang/vow/compare/v0.5.1...v0.6.0) (2026-08-09)
+
+
+### Bug Fixes
+
+* **bench:** reject changed skeleton contracts ([#990](https://github.com/vow-lang/vow/issues/990)) ([6d88540](https://github.com/vow-lang/vow/commit/6d88540c27c52d375dd788bcc8f1c46ec4ce2af8))
+* **checker:** guard parallel item file lengths ([#1017](https://github.com/vow-lang/vow/issues/1017)) ([eeaa8d0](https://github.com/vow-lang/vow/commit/eeaa8d0ac00295e90d353bedef9dc000af742bb5))
+* **ci:** cap build-and-test job runtimes ([#988](https://github.com/vow-lang/vow/issues/988)) ([30036b2](https://github.com/vow-lang/vow/commit/30036b26e01cb518c37e2c5b08cab1f5daa7d80c))
+* **euler:** mock LLM SDK imports in resolve_compiler test ([#1035](https://github.com/vow-lang/vow/issues/1035)) ([8c2199d](https://github.com/vow-lang/vow/commit/8c2199d7c387e211623d5b2cbd54bd38826433bd))
+* **euler:** use canonical self-hosted compiler path ([#1012](https://github.com/vow-lang/vow/issues/1012)) ([ee96826](https://github.com/vow-lang/vow/commit/ee9682651aec3e5fc5fc282cbed36a605e4b982c))
+* **full-test:** report bootstrap stage failures ([#1029](https://github.com/vow-lang/vow/issues/1029)) ([efe5d88](https://github.com/vow-lang/vow/commit/efe5d88ee1a246b20822c7fb0a097999df7e5b77))
+* **numeric:** return Option from parse_i64 ([#1023](https://github.com/vow-lang/vow/issues/1023)) ([ab31c9e](https://github.com/vow-lang/vow/commit/ab31c9e0f63cc2254da765a11a9b7870c6acaa97))
+* **release:** align confirmation hint with accepted inputs ([#1013](https://github.com/vow-lang/vow/issues/1013)) ([321e571](https://github.com/vow-lang/vow/commit/321e571d5f184f846648265145f0fd2bf2a09ee0))
+* **scripts:** omit unmeasured bootstrap RSS field ([#1003](https://github.com/vow-lang/vow/issues/1003)) ([289ebd4](https://github.com/vow-lang/vow/commit/289ebd4fe164d65b10ef3ae8489ab55e5d765ef2))
+* **self-hosted:** anchor constructor call spans ([#991](https://github.com/vow-lang/vow/issues/991)) ([1c90bf3](https://github.com/vow-lang/vow/commit/1c90bf38a650798c95b633bd44effd7a6c011505))
+
+
+### Features
+
+* **format:** implement baseline integer formatters ([#1025](https://github.com/vow-lang/vow/issues/1025)) ([8b868bc](https://github.com/vow-lang/vow/commit/8b868bcdeba14e7eb783629810758148668bcf4c))
+* **vow-perf:** classify log-polynomial complexity ([#989](https://github.com/vow-lang/vow/issues/989)) ([07500b9](https://github.com/vow-lang/vow/commit/07500b9a5d87f658526af4c2515f228360054b82))
+* **vow-perf:** isolate instrumented compilation artifacts ([#1011](https://github.com/vow-lang/vow/issues/1011)) ([2464f9b](https://github.com/vow-lang/vow/commit/2464f9b281f1a4ba476b9bd67904df7e5420d8bb))
+
+
+### Performance Improvements
+
+* **bench:** cache first CEGIS caller context formatting ([#993](https://github.com/vow-lang/vow/issues/993)) ([4699e3c](https://github.com/vow-lang/vow/commit/4699e3c98d870446261a7fcd247c743a96a53f54))
+
 ## [0.5.1](https://github.com/vow-lang/vow/compare/v0.5.0...v0.5.1) (2026-07-31)
 
 
