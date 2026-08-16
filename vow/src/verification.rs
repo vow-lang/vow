@@ -20,7 +20,7 @@ use vow_verify::{
     run_with_fallback, verify,
 };
 
-use crate::cache::{CachedFailure, VerifyCache};
+use crate::cache::VerifyCache;
 use crate::verify_outcome::{SkippedFunction, VerifyOutcome};
 use crate::{counterexample, perfetto};
 
@@ -112,20 +112,12 @@ fn verify_one_function(
 
     let result = if let Some(vc) = verify_cache {
         let c_src = emit_verify_c_source(func, ir_module, const_fns, limits);
-        let key = VerifyCache::cache_key(
-            &c_src,
-            limits.max_k_step,
-            func_config.solver_str(),
-            func_config.encoding_str(),
-            func_config.memlimit_mb,
-        );
 
-        // Security: lookup only returns FAILED entries (PROVEN is never trusted
-        // from disk). The Phase D IR-fallback probe only consumed cached
-        // PROVEN, so it is removed: with PROVEN no longer cached, that probe
-        // could only return None.
-        if let Some(cached) = vc.lookup(&key) {
-            VerificationResult::Failed(cached.to_counterexample())
+        // Lookup under the pre-fallback `func_config`; only FAILED entries come
+        // back (a forged PROVEN file is discarded inside the cache, so it can
+        // never bypass ESBMC).
+        if let Some(ce) = vc.lookup_failure(&c_src, limits.max_k_step, &func_config) {
+            VerificationResult::Failed(ce)
         } else {
             let esbmc = match find_esbmc() {
                 Some(p) => p,
@@ -133,27 +125,12 @@ fn verify_one_function(
             };
             let (res, resolved_config) =
                 run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
-            // Security: never cache PROVEN — a forged on-disk entry must not
-            // be able to bypass ESBMC on a later run.
+            // Store under the config that actually produced the result. Only a
+            // Counterexample can be handed to `store_failure`, so a PROVEN
+            // result is structurally uncacheable and can never bypass ESBMC on a
+            // later run.
             if let VerificationResult::Failed(ce) = &res {
-                let store_key = VerifyCache::cache_key(
-                    &c_src,
-                    limits.max_k_step,
-                    resolved_config.solver_str(),
-                    resolved_config.encoding_str(),
-                    resolved_config.memlimit_mb,
-                );
-                vc.store(
-                    &store_key,
-                    &CachedFailure {
-                        vow_id: ce.vow_id,
-                        callee_precondition: ce.callee_precondition,
-                        description: ce.description.clone(),
-                        values: ce.values.clone(),
-                        block_visits: ce.block_visits.clone(),
-                        raw_output: ce.raw_output.clone(),
-                    },
-                );
+                vc.store_failure(&c_src, limits.max_k_step, &resolved_config, ce);
             }
             res
         }
