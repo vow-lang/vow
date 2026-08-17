@@ -325,6 +325,7 @@ void  __vow_string_push_byte(void* string, int64_t byte);
 void* __vow_string_substr(const void* string, int64_t start, int64_t len);
 void* __vow_string_substring(const void* string, int64_t start, int64_t end);
 void* __vow_string_from_i64(int64_t value);
+void* __vow_string_from_u64(uint64_t value);
 void* __vow_string_split(const void* haystack, const void* separator);
 void* __vow_string_trim(const void* string);
 void* __vow_string_to_upper(const void* string);
@@ -366,6 +367,8 @@ void* __vow_string_substring_in_arena(struct VowArena* arena,
                                       int64_t start, int64_t end);
 void* __vow_string_from_i64_in_arena(struct VowArena* arena,
                                      int64_t value);
+void* __vow_string_from_u64_in_arena(struct VowArena* arena,
+                                     uint64_t value);
 void* __vow_string_split_in_arena(struct VowArena* arena,
                                   const void* haystack,
                                   const void* separator);

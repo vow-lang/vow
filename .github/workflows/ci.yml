@@ -25,6 +25,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: bench/uv.lock
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -35,13 +41,17 @@ jobs:
         with:
           version: ${{ env.ESBMC_VERSION }}
           sha256: ${{ env.ESBMC_SHA256 }}
+      - name: Arena verification runner tests
+        run: python3 scripts/test_verify_arena.py
+      - name: Arena primitive verification
+        run: scripts/verify_arena.sh
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
       - name: Benchmark skeleton fidelity unit tests
         run: |
           python3 scripts/test_benchmark_contracts.py
-          PYTHONPATH=bench python3 -m unittest discover -s bench -p 'test_*.py'
+          uv run --project bench --locked python -m unittest discover -s bench -p 'test_*.py'
           PYTHONPATH=euler python3 -m unittest discover -s euler -p 'test_*.py'
       - name: Verifier-evaluation suite (#334)
         # Asserts the labelled corpus in tests/verify* against ground-truth
@@ -88,6 +98,7 @@ jobs:
           fail_ci_if_error: ${{ secrets.CODECOV_TOKEN != '' }}
 
   bootstrap:
+    needs: build-and-test
     # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression
     # (failing Stage 1/2 verification, or a broken SHA-256 fixed point)
     # blocks PRs. Stage 3 skips ESBMC to roughly halve wall time;

@@ -303,6 +303,18 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         }
         return String::from("__vow_string_from_i64_in_arena");
     }
+    if sym == String::from("__vow_string_from_u64") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_from_u64_in_arena");
+    }
+    if sym == String::from("__vow_string_parse_i64_opt") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_parse_i64_opt_in_arena");
+    }
     if sym == String::from("__vow_string_split") {
         if region_kind(inst.rgn) == REGION_KIND_ROOT() {
             return sym;

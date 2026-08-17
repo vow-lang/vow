@@ -1219,11 +1219,12 @@ mod tests {
     }
 
     #[test]
-    fn capacity_flags_are_not_advertised() {
+    fn prover_coupled_flags_are_not_advertised() {
         // Issue #278: the verify-only --vec-max / --string-max / --hashmap-max /
-        // --btreemap-max flags were removed. The collection model bound is an
-        // internal verifier detail, not a CLI knob, so it must never reappear in
-        // any help or skill surface. (--max-k-step is a real, retained flag.)
+        // --btreemap-max flags were removed. Issue #697 likewise retired the
+        // unimplemented --no-128-verify flag. Prover-model details must never
+        // appear as CLI knobs in any help or skill surface. (--max-k-step is a
+        // real, retained verification-effort flag.)
         let surfaces = [
             skill::json(),
             skill::human(),
@@ -1236,10 +1237,11 @@ mod tests {
                 "--string-max",
                 "--hashmap-max",
                 "--btreemap-max",
+                "--no-128-verify",
             ] {
                 assert!(
                     !surface.contains(flag),
-                    "removed capacity flag `{flag}` still advertised in a help/skill surface"
+                    "retired prover-coupled flag `{flag}` still advertised in a help/skill surface"
                 );
             }
         }

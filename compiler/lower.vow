@@ -577,7 +577,8 @@ fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
     if tag == TY_NAMED() {
         let name_sid: i64 = type_a(a, tid);
         let name: String = arena_str(a, name_sid);
-        if name == String::from("i32") || name == String::from("i64") || name == String::from("u8") || name == String::from("u64") ||
+        if name == String::from("i8") || name == String::from("i16") || name == String::from("i32") || name == String::from("i64") ||
+           name == String::from("u8") || name == String::from("u16") || name == String::from("u32") || name == String::from("u64") ||
            name == String::from("f32") || name == String::from("f64") || name == String::from("bool") {
             return String::from("");
         }
@@ -607,8 +608,12 @@ fn lower_ast_type_option_elem_ty(a: AstArena, tid: i64) -> i64 {
     if elem_tag != TY_NAMED() { return -1; }
     let elem_sid: i64 = type_a(a, elem_tid);
     let elem_name: String = arena_str(a, elem_sid);
+    if elem_name == String::from("i8") { return ITY_I8(); }
+    if elem_name == String::from("i16") { return ITY_I16(); }
     if elem_name == String::from("i32") { return ITY_I32(); }
     if elem_name == String::from("u8") { return ITY_U8(); }
+    if elem_name == String::from("u16") { return ITY_U16(); }
+    if elem_name == String::from("u32") { return ITY_U32(); }
     -1
 }
 
@@ -626,7 +631,8 @@ fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64) -> String {
     if elem_tag != TY_NAMED() { return String::from(""); }
     let elem_sid: i64 = type_a(a, elem_tid);
     let elem_name: String = arena_str(a, elem_sid);
-    if elem_name == String::from("i32") || elem_name == String::from("i64") || elem_name == String::from("u8") || elem_name == String::from("u64") ||
+    if elem_name == String::from("i8") || elem_name == String::from("i16") || elem_name == String::from("i32") || elem_name == String::from("i64") ||
+       elem_name == String::from("u8") || elem_name == String::from("u16") || elem_name == String::from("u32") || elem_name == String::from("u64") ||
        elem_name == String::from("f32") || elem_name == String::from("f64") || elem_name == String::from("bool") {
         return String::from("");
     }
@@ -696,6 +702,58 @@ fn debug_builtin_to_extern(name: String) -> String {
     String::from("")
 }
 
+fn lower_str_ends_with(value: String, suffix: String) -> bool {
+    let value_len: i64 = value.len();
+    let suffix_len: i64 = suffix.len();
+    if value_len < suffix_len { return false; }
+    let mut i: i64 = 0;
+    while i < suffix_len {
+        if value.byte_at(value_len - suffix_len + i) != suffix.byte_at(i) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn lower_is_narrow_intrinsic(name: String, stem: String) -> bool {
+    let candidate: String = clone_string(stem);
+    candidate.push_str(String::from("_try"));
+    if name == candidate { return true; }
+    let candidate_wrap: String = clone_string(stem);
+    candidate_wrap.push_str(String::from("_wrap"));
+    if name == candidate_wrap { return true; }
+    let candidate_sat: String = clone_string(stem);
+    candidate_sat.push_str(String::from("_sat"));
+    name == candidate_sat
+}
+
+fn new_narrow_intrinsic_target(name: String) -> i64 {
+    if lower_is_narrow_intrinsic(name, String::from("i16_to_i8")) ||
+       lower_is_narrow_intrinsic(name, String::from("u16_to_i8")) ||
+       lower_is_narrow_intrinsic(name, String::from("i32_to_i8")) ||
+       lower_is_narrow_intrinsic(name, String::from("u32_to_i8")) ||
+       lower_is_narrow_intrinsic(name, String::from("i64_to_i8")) ||
+       lower_is_narrow_intrinsic(name, String::from("u64_to_i8")) {
+        return ITY_I8();
+    }
+    if lower_is_narrow_intrinsic(name, String::from("i32_to_i16")) ||
+       lower_is_narrow_intrinsic(name, String::from("u32_to_i16")) ||
+       lower_is_narrow_intrinsic(name, String::from("i64_to_i16")) ||
+       lower_is_narrow_intrinsic(name, String::from("u64_to_i16")) {
+        return ITY_I16();
+    }
+    if lower_is_narrow_intrinsic(name, String::from("i32_to_u16")) ||
+       lower_is_narrow_intrinsic(name, String::from("u32_to_u16")) ||
+       lower_is_narrow_intrinsic(name, String::from("i64_to_u16")) ||
+       lower_is_narrow_intrinsic(name, String::from("u64_to_u16")) {
+        return ITY_U16();
+    }
+    if lower_is_narrow_intrinsic(name, String::from("i64_to_u32")) ||
+       lower_is_narrow_intrinsic(name, String::from("u64_to_u32")) {
+        return ITY_U32();
+    }
+    -1
+}
+
 fn builtin_to_extern(name: String) -> String {
     if name == String::from("print_str") { return String::from("__vow_string_print"); }
     if name == String::from("print_i64") { return String::from("__vow_print_i64"); }
@@ -724,8 +782,12 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("string_to_lower") { return String::from("__vow_string_to_lower"); }
     if name == String::from("string_replace") { return String::from("__vow_string_replace"); }
     if name == String::from("string_join") { return String::from("__vow_string_join"); }
-    if name == String::from("parse_i64") { return String::from("__vow_parse_i64"); }
+    if name == String::from("parse_i64") { return String::from("__vow_string_parse_i64_opt"); }
     if name == String::from("parse_u8") { return String::from("__vow_string_parse_u8_opt"); }
+    if name == String::from("parse_i8") { return String::from("__vow_string_parse_i8_opt"); }
+    if name == String::from("parse_i16") { return String::from("__vow_string_parse_i16_opt"); }
+    if name == String::from("parse_u16") { return String::from("__vow_string_parse_u16_opt"); }
+    if name == String::from("parse_u32") { return String::from("__vow_string_parse_u32_opt"); }
     if name == String::from("i16_to_u8_try") { return String::from("__vow_i16_to_u8_try"); }
     if name == String::from("i16_to_u8_wrap") { return String::from("__vow_i16_to_u8_wrap"); }
     if name == String::from("i16_to_u8_sat") { return String::from("__vow_i16_to_u8_sat"); }
@@ -763,6 +825,8 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("u64_to_i32_try") { return String::from("__vow_u64_to_i32_try"); }
     if name == String::from("u64_to_i32_wrap") { return String::from("__vow_u64_to_i32_wrap"); }
     if name == String::from("u64_to_i32_sat") { return String::from("__vow_u64_to_i32_sat"); }
+    if name == String::from("int_to_string") { return String::from("__vow_string_from_i64"); }
+    if name == String::from("uint_to_string") { return String::from("__vow_string_from_u64"); }
     if name == String::from("i64_to_string") { return String::from("__vow_string_from_i64"); }
     if name == String::from("vec_sort") { return String::from("__vow_vec_sort"); }
     if name == String::from("time_unix") { return String::from("__vow_time_unix"); }
@@ -791,6 +855,11 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("process_kill") { return String::from("__vow_process_kill"); }
     if name == String::from("process_stdout_for") { return String::from("__vow_process_stdout_for"); }
     if name == String::from("process_stderr_for") { return String::from("__vow_process_stderr_for"); }
+    if new_narrow_intrinsic_target(name) != -1 {
+        let ext: String = String::from("__vow_");
+        ext.push_str(name);
+        return ext;
+    }
     String::from("")
 }
 
@@ -802,6 +871,11 @@ fn debug_builtin_ret_ty(name: String) -> i64 {
 }
 
 fn builtin_ret_ty(name: String) -> i64 {
+    let narrow_target: i64 = new_narrow_intrinsic_target(name);
+    if narrow_target != -1 {
+        if lower_str_ends_with(name, String::from("_try")) { return ITY_PTR(); }
+        return narrow_target;
+    }
     if name == String::from("print_str") { return ITY_UNIT(); }
     if name == String::from("print_i64") { return ITY_UNIT(); }
     if name == String::from("print_u64") { return ITY_UNIT(); }
@@ -829,8 +903,10 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("string_to_lower") { return ITY_PTR(); }
     if name == String::from("string_replace") { return ITY_PTR(); }
     if name == String::from("string_join") { return ITY_PTR(); }
-    if name == String::from("parse_i64") { return ITY_I64(); }
-    if name == String::from("parse_u8") || name == String::from("i16_to_u8_try") || name == String::from("i32_to_u8_try") ||
+    if name == String::from("parse_i64") { return ITY_PTR(); }
+    if name == String::from("parse_i8") || name == String::from("parse_i16") ||
+       name == String::from("parse_u16") || name == String::from("parse_u32") ||
+       name == String::from("parse_u8") || name == String::from("i16_to_u8_try") || name == String::from("i32_to_u8_try") ||
        name == String::from("i64_to_u8_try") || name == String::from("i128_to_u8_try") || name == String::from("u16_to_u8_try") ||
        name == String::from("u32_to_u8_try") || name == String::from("u64_to_u8_try") || name == String::from("u128_to_u8_try") ||
        name == String::from("parse_i32") || name == String::from("i64_to_i32_try") ||
@@ -853,6 +929,8 @@ fn builtin_ret_ty(name: String) -> i64 {
        name == String::from("u64_to_i32_wrap") || name == String::from("u64_to_i32_sat") {
         return ITY_I32();
     }
+    if name == String::from("int_to_string") { return ITY_PTR(); }
+    if name == String::from("uint_to_string") { return ITY_PTR(); }
     if name == String::from("i64_to_string") { return ITY_PTR(); }
     if name == String::from("vec_sort") { return ITY_PTR(); }
     if name == String::from("time_unix") { return ITY_I64(); }
@@ -969,18 +1047,23 @@ fn ir_ty_is_integer(ty: i64) -> bool {
     ty == ITY_I128() || ty == ITY_U128()
 }
 
-fn block_result_is_coercible_int_marker(a: AstArena, bid: i64) -> bool {
+fn block_result_eid(a: AstArena, bid: i64) -> i64 {
     let trail_eid: i64 = blk_trail(a, bid);
     if trail_eid != -1 {
-        return expr_is_coercible_int_marker(a, trail_eid);
+        return trail_eid;
     }
     let stmts_lid: i64 = blk_stmts(a, bid);
     let n: i64 = list_len(a, stmts_lid);
-    if n == 0 { return false; }
+    if n == 0 { return -1; }
     let last_sid: i64 = list_get(a, stmts_lid, n - 1);
-    if stmt_tag(a, last_sid) != STMT_EXPR() { return false; }
-    if stmt_b(a, last_sid) != 0 { return false; }
-    expr_is_coercible_int_marker(a, stmt_a(a, last_sid))
+    if stmt_tag(a, last_sid) != STMT_EXPR() { return -1; }
+    if stmt_b(a, last_sid) != 0 { return -1; }
+    stmt_a(a, last_sid)
+}
+
+fn block_result_is_coercible_int_marker(a: AstArena, bid: i64) -> bool {
+    let result_eid: i64 = block_result_eid(a, bid);
+    result_eid != -1 && expr_is_coercible_int_marker(a, result_eid)
 }
 
 fn expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
@@ -1035,91 +1118,87 @@ fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i6
     result_ty
 }
 
-// Evaluates a const-int-shaped AST expr at compile time, mirroring
-// expr_is_coercible_int_marker's recognized shapes (bare literal, negation,
-// constant arithmetic/bitwise BinOps, and block-wrapped forms of any of
-// those) rather than just expr_is_const_int's narrower bare-literal-only
-// set. Sets ok[0] = false (value undefined) for anything unrecognized, or
-// for a division/remainder by a literal zero -- never panics the compiler
-// itself on an ill-formed user expression.
-fn narrow_literal_eval(a: AstArena, eid: i64, ok: Vec<bool>) -> i64 {
+fn emit_narrow_integer_constant(ctx: LowerCtx, value: i64, ty: i64) -> i64 {
+    let narrow_op: i64 = if ty == ITY_I8() || ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
+    let narrow_data: i64 = if ty == ITY_I8() || ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
+    let const_args: Vec<i64> = Vec::new();
+    lctx_emit(ctx, narrow_op, ty, const_args, narrow_data, value, 0, String::from(""))
+}
+
+fn emit_integer_zero(ctx: LowerCtx, ty: i64) -> i64 {
+    if ty == ITY_I8() || ty == ITY_U8() || ty == ITY_I16() || ty == ITY_U16() ||
+       ty == ITY_I32() || ty == ITY_U32() {
+        return emit_narrow_integer_constant(ctx, 0, ty);
+    }
+    let zero_args: Vec<i64> = Vec::new();
+    if ty == ITY_U64() {
+        return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), zero_args, IDATA_CONST_U64(), 0, 0, String::from(""));
+    }
+    lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args, IDATA_CONST_I64(), 0, 0, String::from(""))
+}
+
+// Re-lower a coercible integer marker at its contextual narrow width. Keep
+// the operator graph intact so checked arithmetic still traps at that width
+// instead of being folded into a wrapping constant.
+fn lower_integer_marker_as(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64 {
+    if eid == -1 || !expr_is_coercible_int_marker(a, eid) {
+        return -1;
+    }
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_INT() {
-        return expr_a(a, eid);
+        return emit_narrow_integer_constant(ctx, expr_a(a, eid), ty);
     }
     if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
-        return 0 - narrow_literal_eval(a, expr_b(a, eid), ok);
+        let zero: i64 = emit_narrow_integer_constant(ctx, 0, ty);
+        let value: i64 = lower_integer_marker_as(ctx, a, expr_b(a, eid), ty);
+        let neg_args: Vec<i64> = Vec::new();
+        neg_args.push(zero);
+        neg_args.push(value);
+        return lctx_emit(ctx, IOP_WSUB(), ty, neg_args, IDATA_INTEGER(), ty, 0, String::from(""));
     }
     if tag == EXPR_BINOP() {
         let op: i64 = expr_a(a, eid);
-        let is_marker_op: bool = op == BINOP_ADD() || op == BINOP_SUB() || op == BINOP_MUL()
-            || op == BINOP_DIV() || op == BINOP_REM()
-            || op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK() || op == BINOP_MUL_CHK()
-            || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK()
-            || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
-            || op == BINOP_SHL() || op == BINOP_SHR();
-        if !is_marker_op {
-            ok[0] = false;
-            return 0;
-        }
-        let l: i64 = narrow_literal_eval(a, expr_b(a, eid), ok);
-        let r: i64 = narrow_literal_eval(a, expr_c(a, eid), ok);
-        if op == BINOP_ADD() || op == BINOP_ADD_CHK() { return l + r; }
-        if op == BINOP_SUB() || op == BINOP_SUB_CHK() { return l - r; }
-        if op == BINOP_MUL() || op == BINOP_MUL_CHK() { return l * r; }
-        if op == BINOP_DIV() || op == BINOP_DIV_CHK() {
-            if r == 0 { ok[0] = false; return 0; }
-            return l / r;
-        }
-        if op == BINOP_REM() || op == BINOP_REM_CHK() {
-            if r == 0 { ok[0] = false; return 0; }
-            return l % r;
-        }
-        if op == BINOP_BITAND() { return l & r; }
-        if op == BINOP_BITOR() { return l | r; }
-        if op == BINOP_XOR() { return l ^ r; }
-        if op == BINOP_SHL() { return l << r; }
-        return l >> r;
+        let lhs: i64 = lower_integer_marker_as(ctx, a, expr_b(a, eid), ty);
+        let rhs_ty: i64 = if op == BINOP_SHL() || op == BINOP_SHR() { ITY_U32() } else { ty };
+        let rhs: i64 = lower_integer_marker_as(ctx, a, expr_c(a, eid), rhs_ty);
+        let bin_args: Vec<i64> = Vec::new();
+        bin_args.push(lhs);
+        bin_args.push(rhs);
+        return lctx_emit(ctx, binop_opcode(op, ty), binop_result_ty(op, ty), bin_args,
+            IDATA_INTEGER(), ty, 0, String::from(""));
     }
     if tag == EXPR_BLOCK() {
         let bid: i64 = expr_a(a, eid);
-        let trail_eid: i64 = blk_trail(a, bid);
-        if trail_eid != -1 {
-            return narrow_literal_eval(a, trail_eid, ok);
+        let result_eid: i64 = block_result_eid(a, bid);
+        if result_eid != -1 {
+            return lower_integer_marker_as(ctx, a, result_eid, ty);
         }
-        let stmts_lid: i64 = blk_stmts(a, bid);
-        let n: i64 = list_len(a, stmts_lid);
-        if n > 0 {
-            let last_sid: i64 = list_get(a, stmts_lid, n - 1);
-            if stmt_tag(a, last_sid) == STMT_EXPR() && stmt_b(a, last_sid) == 0 {
-                return narrow_literal_eval(a, stmt_a(a, last_sid), ok);
-            }
-        }
-        ok[0] = false;
-        return 0;
     }
-    ok[0] = false;
-    0
+    -1
 }
 
-// Re-lower a const-int-shaped AST expr as a `ty`-native constant instead of
-// the default i64, so it shares a Cranelift register width with a genuinely
-// `ty`-typed sibling value (e.g. a match/if arm merge). Returns -1 if `eid`
-// isn't a const-int expr (caller should keep the original value in that case).
-fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64 {
+// Coerce an expression into an admitted contextual narrow integer type.
+// Control-flow expressions are reduced after their Phi so subsequent users
+// observe the annotation's logical width.
+fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, original: i64, ty: i64) -> i64 {
     if eid == -1 {
-        return -1;
+        return original;
     }
-    let ok: Vec<bool> = Vec::new();
-    ok.push(true);
-    let value: i64 = narrow_literal_eval(a, eid, ok);
-    if !ok[0] {
-        return -1;
+    if ty != ITY_I8() && ty != ITY_U8() && ty != ITY_I16() &&
+       ty != ITY_U16() && ty != ITY_I32() && ty != ITY_U32() {
+        return original;
     }
-    let narrow_op: i64 = if ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
-    let narrow_data: i64 = if ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
-    let const_args: Vec<i64> = Vec::new();
-    lctx_emit(ctx, narrow_op, ty, const_args, narrow_data, value, 0, String::from(""))
+    let marker: i64 = lower_integer_marker_as(ctx, a, eid, ty);
+    if marker != -1 {
+        return marker;
+    }
+    let source_ty: i64 = lctx_inst_ty(ctx, original);
+    if ir_ty_is_integer(source_ty) && source_ty != ty {
+        let cast_args: Vec<i64> = Vec::new();
+        cast_args.push(original);
+        return lctx_emit(ctx, IOP_INT_CAST(), ty, cast_args, IDATA_INTEGER_CAST(), source_ty, ty, String::from(""));
+    }
+    original
 }
 
 fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64) {
@@ -1302,10 +1381,22 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let rhs_ty: i64 = lctx_inst_ty(ctx, rhs_id);
         let mut operand_ty: i64 = lhs_ty;
         let is_bitwise: bool = op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR() || op == BINOP_SHL() || op == BINOP_SHR();
-        if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_U8() {
+        if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_I8() {
+            operand_ty = ITY_I8();
+        } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_I8() {
+            operand_ty = ITY_I8();
+        } else if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_U8() {
             operand_ty = ITY_U8();
         } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_U8() {
             operand_ty = ITY_U8();
+        } else if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_I16() {
+            operand_ty = ITY_I16();
+        } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_I16() {
+            operand_ty = ITY_I16();
+        } else if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_U16() {
+            operand_ty = ITY_U16();
+        } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_U16() {
+            operand_ty = ITY_U16();
         } else if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_I32() {
             operand_ty = ITY_I32();
         } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_I32() {
@@ -1322,9 +1413,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // Re-lower a literal operand as an `operand_ty`-native constant instead
         // of the default i64, so it shares a register width with a genuinely
         // `operand_ty`-typed sibling operand in the same binary op.
-        if operand_ty == ITY_U8() || operand_ty == ITY_I32() || operand_ty == ITY_U32() {
-            let narrow_op: i64 = if operand_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
-            let narrow_data: i64 = if operand_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
+        if operand_ty == ITY_I8() || operand_ty == ITY_U8() || operand_ty == ITY_I16() ||
+           operand_ty == ITY_U16() || operand_ty == ITY_I32() || operand_ty == ITY_U32() {
+            let narrow_op: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
+            let narrow_data: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
             if expr_is_const_int(a, lhs_eid) {
                 let const_args: Vec<i64> = Vec::new();
                 lhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, lhs_eid), 0, String::from(""));
@@ -1351,12 +1443,20 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if op == UNOP_NOT() {
             return lctx_emit(ctx, IOP_NOT(), ITY_BOOL(), un_args, IDATA_NONE(), 0, 0, String::from(""));
         }
-        let zero_args: Vec<i64> = Vec::new();
-        let zero_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args, IDATA_CONST_I64(), 0, 0, String::from(""));
+        let operand_ty: i64 = lctx_inst_ty(ctx, operand_id);
+        let result_ty: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() ||
+                               operand_ty == ITY_I16() || operand_ty == ITY_U16() ||
+                               operand_ty == ITY_I32() || operand_ty == ITY_U32() ||
+                               operand_ty == ITY_I64() || operand_ty == ITY_U64() {
+            operand_ty
+        } else {
+            ITY_I64()
+        };
+        let zero_id: i64 = emit_integer_zero(ctx, result_ty);
         let neg_args: Vec<i64> = Vec::new();
         neg_args.push(zero_id);
         neg_args.push(operand_id);
-        return lctx_emit(ctx, IOP_WSUB(), ITY_I64(), neg_args, IDATA_INTEGER(), ITY_I64(), 0, String::from(""));
+        return lctx_emit(ctx, IOP_WSUB(), result_ty, neg_args, IDATA_INTEGER(), result_ty, 0, String::from(""));
     }
 
     if tag == EXPR_CALL() {
@@ -1461,7 +1561,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if fn_name == String::from("fs_listdir") {
                 lctx_tag(ctx, result, String::from("Vec"));
             }
-            if fn_name == String::from("string_substr") || fn_name == String::from("string_trim") || fn_name == String::from("string_to_upper") || fn_name == String::from("string_to_lower") || fn_name == String::from("string_replace") || fn_name == String::from("string_join") || fn_name == String::from("i64_to_string") {
+            if fn_name == String::from("string_substr") || fn_name == String::from("string_trim") || fn_name == String::from("string_to_upper") || fn_name == String::from("string_to_lower") || fn_name == String::from("string_replace") || fn_name == String::from("string_join") || fn_name == String::from("int_to_string") || fn_name == String::from("uint_to_string") || fn_name == String::from("i64_to_string") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("string_split") {
@@ -1476,6 +1576,27 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if fn_name == String::from("vec_sort") || fn_name == String::from("hex_decode") {
                 lctx_tag(ctx, result, String::from("Vec"));
             }
+            let new_narrow_target: i64 = new_narrow_intrinsic_target(fn_name);
+            if new_narrow_target != -1 && lower_str_ends_with(fn_name, String::from("_try")) {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, new_narrow_target);
+            }
+            if fn_name == String::from("parse_i8") {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_I8());
+            }
+            if fn_name == String::from("parse_i16") {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_I16());
+            }
+            if fn_name == String::from("parse_u16") {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_U16());
+            }
+            if fn_name == String::from("parse_u32") {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_U32());
+            }
             if fn_name == String::from("parse_u8") || fn_name == String::from("i16_to_u8_try") ||
                fn_name == String::from("i32_to_u8_try") || fn_name == String::from("i64_to_u8_try") ||
                fn_name == String::from("i128_to_u8_try") || fn_name == String::from("u16_to_u8_try") ||
@@ -1489,6 +1610,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 lctx_tag(ctx, result, String::from("Option"));
                 lctx_tag_option_elem(ctx, result, ITY_I32());
             }
+            if fn_name == String::from("parse_i64") {
+                lctx_tag(ctx, result, String::from("Option"));
+                lctx_tag_option_elem(ctx, result, ITY_I64());
+            }
             return result;
         }
         let fidx: i64 = lctx_find_func(ctx, fn_name);
@@ -1500,12 +1625,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let mut ai: i64 = 0;
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
-                let mut arg_id: i64 = -1;
-                if ai < n_param_tys && param_tys[ai] == ITY_U8() && expr_tag(a, arg_eid) == EXPR_LIT_INT() {
-                    let const_args: Vec<i64> = Vec::new();
-                    arg_id = lctx_emit(ctx, IOP_CONST_U8(), ITY_U8(), const_args, IDATA_CONST_U8(), expr_a(a, arg_eid), 0, String::from(""));
-                } else {
-                    arg_id = lower_consumed_expr(ctx, arg_eid);
+                let mut arg_id: i64 = lower_consumed_expr(ctx, arg_eid);
+                if ai < n_param_tys &&
+                   (param_tys[ai] == ITY_I8() || param_tys[ai] == ITY_U8() ||
+                    param_tys[ai] == ITY_I16() || param_tys[ai] == ITY_U16() ||
+                    param_tys[ai] == ITY_I32() || param_tys[ai] == ITY_U32()) {
+                    arg_id = lower_narrow_literal(ctx, a, arg_eid, arg_id, param_tys[ai]);
                 }
                 call_args.push(arg_id);
                 ai = ai + 1;
@@ -2213,7 +2338,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let val_eid: i64 = expr_a(a, eid);
         let val_id: i64 = {
             if val_eid != -1 {
-                lower_expr(ctx, val_eid)
+                let original: i64 = lower_expr(ctx, val_eid);
+                lower_narrow_literal(ctx, a, val_eid, original, ctx.func.return_ty)
             } else {
                 let u_args: Vec<i64> = Vec::new();
                 lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
@@ -2277,11 +2403,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let name: String = arena_str(a, name_sid);
             let current_id: i64 = lctx_lookup(ctx, name);
             let current_ty: i64 = lctx_inst_ty(ctx, current_id);
-            if (current_ty == ITY_U8() || current_ty == ITY_I32()) && expr_is_const_int(a, rhs_eid) {
-                let narrow_op: i64 = if current_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
-                let narrow_data: i64 = if current_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
-                let narrow_args: Vec<i64> = Vec::new();
-                rhs_id = lctx_emit(ctx, narrow_op, current_ty, narrow_args, narrow_data, expr_const_int_value(a, rhs_eid), 0, String::from(""));
+            if current_ty == ITY_I8() || current_ty == ITY_U8() || current_ty == ITY_I16() ||
+               current_ty == ITY_U16() || current_ty == ITY_I32() || current_ty == ITY_U32() {
+                rhs_id = lower_narrow_literal(ctx, a, rhs_eid, rhs_id, current_ty);
             }
             lctx_assign(ctx, name, rhs_id);
         }
@@ -3141,7 +3265,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // Cranelift register width -- otherwise a plain literal arm (e.g.
         // `None => -1`) merging with a genuinely narrow-typed arm (e.g.
         // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
-        if result_ty == ITY_U8() || result_ty == ITY_I32() || result_ty == ITY_U32() {
+        if result_ty == ITY_I8() || result_ty == ITY_U8() || result_ty == ITY_I16() ||
+           result_ty == ITY_U16() || result_ty == ITY_I32() || result_ty == ITY_U32() {
             let mut fi: i64 = 0;
             while fi < n_merge_arms {
                 if reachable_result_markers[fi] && reachable_result_tys[fi] != result_ty {
@@ -3179,8 +3304,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         }
                         blk.insts.truncate(up_pos);
                         lctx_switch_to_block(ctx, arm_block);
-                        let narrowed: i64 = lower_narrow_literal(ctx, a, arm_bodies[fi], result_ty);
-                        let final_val: i64 = if narrowed != -1 { narrowed } else { old_arg };
+                        let final_val: i64 = lower_narrow_literal(ctx, a, arm_bodies[fi], old_arg, result_ty);
                         let new_up_args: Vec<i64> = Vec::new();
                         new_up_args.push(final_val);
                         let new_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), new_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
@@ -3400,13 +3524,23 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
                 if atag == TY_NAMED() {
                     let type_name_sid: i64 = type_a(a, ann_tid);
                     let type_name: String = arena_str(a, type_name_sid);
-                    if type_name == String::from("u8") && expr_is_const_int(a, init_eid) {
-                        let const_args: Vec<i64> = Vec::new();
-                        val = lctx_emit(ctx, IOP_CONST_U8(), ITY_U8(), const_args, IDATA_CONST_U8(), expr_const_int_value(a, init_eid), 0, String::from(""));
+                    if type_name == String::from("i8") {
+                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_I8());
                     }
-                    if type_name == String::from("i32") && expr_is_const_int(a, init_eid) {
-                        let const_args: Vec<i64> = Vec::new();
-                        val = lctx_emit(ctx, IOP_CONST_I32(), ITY_I32(), const_args, IDATA_CONST_I32(), expr_const_int_value(a, init_eid), 0, String::from(""));
+                    if type_name == String::from("u8") {
+                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_U8());
+                    }
+                    if type_name == String::from("i16") {
+                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_I16());
+                    }
+                    if type_name == String::from("u16") {
+                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_U16());
+                    }
+                    if type_name == String::from("i32") {
+                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_I32());
+                    }
+                    if type_name == String::from("u32") {
+                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_U32());
                     }
                     if type_name == String::from("u64") && lctx_inst_ty(ctx, val) != ITY_U64() {
                         let cast_args: Vec<i64> = Vec::new();
@@ -3895,11 +4029,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     let mut trailing: i64 = lower_block_inner(ctx, body_bid);
     lctx_pop_scope(ctx);
 
-    if ir_ret == ITY_U8() {
-        let trail_eid: i64 = blk_trail(a, body_bid);
-        if trail_eid != -1 && expr_tag(a, trail_eid) == EXPR_LIT_INT() {
-            let const_args: Vec<i64> = Vec::new();
-            trailing = lctx_emit(ctx, IOP_CONST_U8(), ITY_U8(), const_args, IDATA_CONST_U8(), expr_a(a, trail_eid), 0, String::from(""));
+    if ir_ret == ITY_I8() || ir_ret == ITY_U8() || ir_ret == ITY_I16() ||
+       ir_ret == ITY_U16() || ir_ret == ITY_I32() || ir_ret == ITY_U32() {
+        let result_eid: i64 = block_result_eid(a, body_bid);
+        if result_eid != -1 {
+            trailing = lower_narrow_literal(ctx, a, result_eid, trailing, ir_ret);
         }
     }
 

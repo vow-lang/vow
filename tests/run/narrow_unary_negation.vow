@@ -1,0 +1,13 @@
+// TEST: stdout "-7\n"
+module NarrowUnaryNegation
+
+fn negate(value: i8) -> i8 {
+    -value
+}
+
+fn main() -> i32 [io] {
+    let value: i8 = 7;
+    print_i64(negate(value) as i64);
+    print_str(String::from("\n"));
+    0
+}

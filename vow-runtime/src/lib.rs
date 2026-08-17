@@ -56,6 +56,10 @@ const TAG_F64: u8 = 3;
 const TAG_BOOL: u8 = 4;
 const TAG_U64: u8 = 5;
 const TAG_U8: u8 = 6;
+const TAG_I8: u8 = 7;
+const TAG_I16: u8 = 8;
+const TAG_U16: u8 = 9;
+const TAG_U32: u8 = 10;
 
 /// Reserved process exit status for any runtime abort — a contract
 /// violation, checked-arithmetic overflow, unwrap-on-None, index-out-of-bounds,
@@ -86,6 +90,10 @@ fn fmt_payload(tag: u8, payload: u64) -> String {
         TAG_BOOL => if payload != 0 { "true" } else { "false" }.to_string(),
         TAG_U64 => format!("{payload}"),
         TAG_U8 => format!("{}", payload as u8),
+        TAG_I8 => format!("{}", payload as i8),
+        TAG_I16 => format!("{}", payload as i16),
+        TAG_U16 => format!("{}", payload as u16),
+        TAG_U32 => format!("{}", payload as u32),
         _ => format!("0x{payload:x}"),
     }
 }
@@ -294,6 +302,33 @@ pub unsafe extern "C" fn __vow_trace_vow(fn_name_ptr: *const c_char, vow_id: i64
         std::io::stderr(),
         r#"{{"event":"vow","fn":"{name}","vow_id":{vow_id},"passed":{p}}}"#
     );
+}
+
+// ---------------------------------------------------------------------------
+// Performance operation counting
+// ---------------------------------------------------------------------------
+
+static PERF_OPERATION_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Count one executed operation in a `vow-perf` instrumented artifact.
+///
+/// Saturation preserves the strongest reportable lower bound instead of
+/// wrapping a long-running measurement back to a deceptively small value.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_perf_count() {
+    let _ = PERF_OPERATION_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+        count.checked_add(1)
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_perf_counter_reset() {
+    PERF_OPERATION_COUNT.store(0, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_perf_counter_read() -> u64 {
+    PERF_OPERATION_COUNT.load(Ordering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------
@@ -1978,6 +2013,22 @@ pub unsafe extern "C" fn __vow_string_from_i64(v: i64) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_from_u64_in_arena(arena: *mut VowArena, v: u64) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::from_u64");
+    }
+    let s = v.to_string();
+    unsafe { __vow_string_new_in_arena(arena, s.as_ptr() as *const c_char, s.len()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_from_u64(v: u64) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_from_u64_in_arena(&raw mut __vow_root_arena, v) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_print(s: *const u8) {
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
@@ -2365,8 +2416,14 @@ pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
-    let ptr = __vow_vec_new(8, 8) as *mut i64;
+pub unsafe extern "C" fn __vow_string_parse_i64_opt_in_arena(
+    arena: *mut VowArena,
+    s: *const u8,
+) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("parse_i64");
+    }
+    let ptr = unsafe { __vow_vec_new_in_arena(arena, 8, 8) } as *mut i64;
     if s.is_null() {
         unsafe { *ptr = 0 };
         return ptr as *mut u8;
@@ -2389,6 +2446,13 @@ pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
         }
     }
     ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_parse_i64_opt_in_arena(&raw mut __vow_root_arena, s) }
 }
 
 unsafe fn alloc_option_u8(value: Option<u8>) -> *mut u8 {
@@ -2419,6 +2483,44 @@ pub unsafe extern "C" fn __vow_string_parse_u8_opt(s: *const u8) -> *mut u8 {
         .and_then(|text| text.trim().parse::<u8>().ok());
     unsafe { alloc_option_u8(value) }
 }
+
+macro_rules! define_narrow_parser {
+    ($alloc_name:ident, $parse_name:ident, $ty:ty) => {
+        unsafe fn $alloc_name(value: Option<$ty>) -> *mut u8 {
+            let ptr = __vow_vec_new(8, 8) as *mut i64;
+            match value {
+                Some(value) => unsafe {
+                    *ptr = 1;
+                    *ptr.add(1) = i64::from(value);
+                },
+                None => unsafe {
+                    *ptr = 0;
+                    *ptr.add(1) = 0;
+                },
+            }
+            ptr as *mut u8
+        }
+
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $parse_name(s: *const u8) -> *mut u8 {
+            if s.is_null() {
+                return unsafe { $alloc_name(None) };
+            }
+            sanitize_on_read(s as usize, 0);
+            let v = unsafe { &*(s as *const VowVec) };
+            let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+            let value = std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|text| text.trim().parse::<$ty>().ok());
+            unsafe { $alloc_name(value) }
+        }
+    };
+}
+
+define_narrow_parser!(alloc_option_i8, __vow_string_parse_i8_opt, i8);
+define_narrow_parser!(alloc_option_i16, __vow_string_parse_i16_opt, i16);
+define_narrow_parser!(alloc_option_u16, __vow_string_parse_u16_opt, u16);
+define_narrow_parser!(alloc_option_u32, __vow_string_parse_u32_opt, u32);
 
 unsafe fn alloc_option_i32(value: Option<i32>) -> *mut u8 {
     let ptr = __vow_vec_new(8, 8) as *mut i64;
@@ -2593,6 +2695,214 @@ define_unsigned_to_i32!(
     u64
 );
 
+macro_rules! define_narrowing_intrinsic {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident, $sat:expr) => {
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $try_name(value: $source) -> *mut u8 {
+            unsafe { $alloc(<$target>::try_from(value).ok()) }
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $wrap_name(value: $source) -> $target {
+            value as $target
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $sat_name(value: $source) -> $target {
+            ($sat)(value)
+        }
+    };
+}
+
+macro_rules! define_signed_to_signed {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+        define_narrowing_intrinsic!(
+            $try_name,
+            $wrap_name,
+            $sat_name,
+            $source,
+            $target,
+            $alloc,
+            |value: $source| value.clamp(<$target>::MIN as $source, <$target>::MAX as $source)
+                as $target
+        );
+    };
+}
+
+macro_rules! define_unsigned_to_signed {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+        define_narrowing_intrinsic!(
+            $try_name,
+            $wrap_name,
+            $sat_name,
+            $source,
+            $target,
+            $alloc,
+            |value: $source| value.min(<$target>::MAX as $source) as $target
+        );
+    };
+}
+
+macro_rules! define_signed_to_unsigned {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+        define_narrowing_intrinsic!(
+            $try_name,
+            $wrap_name,
+            $sat_name,
+            $source,
+            $target,
+            $alloc,
+            |value: $source| value.clamp(0, <$target>::MAX as $source) as $target
+        );
+    };
+}
+
+macro_rules! define_unsigned_to_unsigned {
+    ($try_name:ident, $wrap_name:ident, $sat_name:ident, $source:ty, $target:ty, $alloc:ident) => {
+        define_narrowing_intrinsic!(
+            $try_name,
+            $wrap_name,
+            $sat_name,
+            $source,
+            $target,
+            $alloc,
+            |value: $source| value.min(<$target>::MAX as $source) as $target
+        );
+    };
+}
+
+define_signed_to_signed!(
+    __vow_i16_to_i8_try,
+    __vow_i16_to_i8_wrap,
+    __vow_i16_to_i8_sat,
+    i16,
+    i8,
+    alloc_option_i8
+);
+define_unsigned_to_signed!(
+    __vow_u16_to_i8_try,
+    __vow_u16_to_i8_wrap,
+    __vow_u16_to_i8_sat,
+    u16,
+    i8,
+    alloc_option_i8
+);
+define_signed_to_signed!(
+    __vow_i32_to_i8_try,
+    __vow_i32_to_i8_wrap,
+    __vow_i32_to_i8_sat,
+    i32,
+    i8,
+    alloc_option_i8
+);
+define_unsigned_to_signed!(
+    __vow_u32_to_i8_try,
+    __vow_u32_to_i8_wrap,
+    __vow_u32_to_i8_sat,
+    u32,
+    i8,
+    alloc_option_i8
+);
+define_signed_to_signed!(
+    __vow_i64_to_i8_try,
+    __vow_i64_to_i8_wrap,
+    __vow_i64_to_i8_sat,
+    i64,
+    i8,
+    alloc_option_i8
+);
+define_unsigned_to_signed!(
+    __vow_u64_to_i8_try,
+    __vow_u64_to_i8_wrap,
+    __vow_u64_to_i8_sat,
+    u64,
+    i8,
+    alloc_option_i8
+);
+
+define_signed_to_signed!(
+    __vow_i32_to_i16_try,
+    __vow_i32_to_i16_wrap,
+    __vow_i32_to_i16_sat,
+    i32,
+    i16,
+    alloc_option_i16
+);
+define_unsigned_to_signed!(
+    __vow_u32_to_i16_try,
+    __vow_u32_to_i16_wrap,
+    __vow_u32_to_i16_sat,
+    u32,
+    i16,
+    alloc_option_i16
+);
+define_signed_to_signed!(
+    __vow_i64_to_i16_try,
+    __vow_i64_to_i16_wrap,
+    __vow_i64_to_i16_sat,
+    i64,
+    i16,
+    alloc_option_i16
+);
+define_unsigned_to_signed!(
+    __vow_u64_to_i16_try,
+    __vow_u64_to_i16_wrap,
+    __vow_u64_to_i16_sat,
+    u64,
+    i16,
+    alloc_option_i16
+);
+
+define_signed_to_unsigned!(
+    __vow_i32_to_u16_try,
+    __vow_i32_to_u16_wrap,
+    __vow_i32_to_u16_sat,
+    i32,
+    u16,
+    alloc_option_u16
+);
+define_unsigned_to_unsigned!(
+    __vow_u32_to_u16_try,
+    __vow_u32_to_u16_wrap,
+    __vow_u32_to_u16_sat,
+    u32,
+    u16,
+    alloc_option_u16
+);
+define_signed_to_unsigned!(
+    __vow_i64_to_u16_try,
+    __vow_i64_to_u16_wrap,
+    __vow_i64_to_u16_sat,
+    i64,
+    u16,
+    alloc_option_u16
+);
+define_unsigned_to_unsigned!(
+    __vow_u64_to_u16_try,
+    __vow_u64_to_u16_wrap,
+    __vow_u64_to_u16_sat,
+    u64,
+    u16,
+    alloc_option_u16
+);
+
+define_signed_to_unsigned!(
+    __vow_i64_to_u32_try,
+    __vow_i64_to_u32_wrap,
+    __vow_i64_to_u32_sat,
+    i64,
+    u32,
+    alloc_option_u32
+);
+define_unsigned_to_unsigned!(
+    __vow_u64_to_u32_try,
+    __vow_u64_to_u32_wrap,
+    __vow_u64_to_u32_sat,
+    u64,
+    u32,
+    alloc_option_u32
+);
+
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_add_sat_u8(a: u8, b: u8) -> u8 {
     a.saturating_add(b)
@@ -2633,20 +2943,6 @@ pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
         }
     }
     ptr as *mut u8
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_parse_i64(s: *const u8) -> i64 {
-    if s.is_null() {
-        return 0;
-    }
-    sanitize_on_read(s as usize, 0);
-    let v = unsafe { &*(s as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.trim().parse::<i64>().unwrap_or(0),
-        Err(_) => 0,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4183,6 +4479,106 @@ pub extern "C" fn __vow_sanitize_check_generation(vec: *const u8, index: usize, 
 mod tests {
     use super::*;
 
+    fn borrowed_vow_string(text: &str) -> VowVec {
+        VowVec {
+            ptr: text.as_ptr() as *mut u8,
+            len: text.len(),
+            cap: text.len(),
+        }
+    }
+
+    unsafe fn option_parts(ptr: *const u8) -> (i64, i64) {
+        let words = ptr as *const i64;
+        unsafe { (*words, *words.add(1)) }
+    }
+
+    #[test]
+    fn narrow_payload_tags_preserve_signedness_and_width() {
+        assert_eq!(fmt_payload(TAG_I8, (-128_i8) as u8 as u64), "-128");
+        assert_eq!(fmt_payload(TAG_I16, (-32768_i16) as u16 as u64), "-32768");
+        assert_eq!(fmt_payload(TAG_U16, u64::from(u16::MAX)), "65535");
+        assert_eq!(fmt_payload(TAG_U32, u64::from(u32::MAX)), "4294967295");
+    }
+
+    #[test]
+    fn narrow_parsers_accept_bounds_and_reject_out_of_range_values() {
+        type ParseFn = unsafe extern "C" fn(*const u8) -> *mut u8;
+        let cases: [(ParseFn, &str, i64, &str); 4] = [
+            (__vow_string_parse_i8_opt, "-128", -128, "128"),
+            (__vow_string_parse_i16_opt, "-32768", -32768, "32768"),
+            (__vow_string_parse_u16_opt, "65535", 65535, "65536"),
+            (
+                __vow_string_parse_u32_opt,
+                "4294967295",
+                4294967295,
+                "4294967296",
+            ),
+        ];
+
+        for (parse, valid, expected, invalid) in cases {
+            let valid = borrowed_vow_string(valid);
+            assert_eq!(
+                unsafe { option_parts(parse(&raw const valid as *const u8)) },
+                (1, expected)
+            );
+
+            let invalid = borrowed_vow_string(invalid);
+            assert_eq!(
+                unsafe { option_parts(parse(&raw const invalid as *const u8)) },
+                (0, 0)
+            );
+        }
+
+        assert_eq!(
+            unsafe { option_parts(__vow_string_parse_i8_opt(std::ptr::null())) },
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn narrow_conversions_distinguish_try_wrap_and_saturate() {
+        assert_eq!(unsafe { option_parts(__vow_i16_to_i8_try(127)) }, (1, 127));
+        assert_eq!(unsafe { option_parts(__vow_i16_to_i8_try(128)) }, (0, 0));
+        assert_eq!(__vow_i16_to_i8_wrap(130), -126);
+        assert_eq!(__vow_i16_to_i8_sat(128), i8::MAX);
+        assert_eq!(__vow_i16_to_i8_sat(-129), i8::MIN);
+
+        assert_eq!(unsafe { option_parts(__vow_u16_to_i8_try(127)) }, (1, 127));
+        assert_eq!(unsafe { option_parts(__vow_u16_to_i8_try(128)) }, (0, 0));
+        assert_eq!(__vow_u16_to_i8_wrap(255), -1);
+        assert_eq!(__vow_u16_to_i8_sat(128), i8::MAX);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_i32_to_u16_try(65535)) },
+            (1, 65535)
+        );
+        assert_eq!(unsafe { option_parts(__vow_i32_to_u16_try(-1)) }, (0, 0));
+        assert_eq!(__vow_i32_to_u16_wrap(-1), u16::MAX);
+        assert_eq!(__vow_i32_to_u16_sat(-1), 0);
+        assert_eq!(__vow_i32_to_u16_sat(70000), u16::MAX);
+
+        assert_eq!(
+            unsafe { option_parts(__vow_u64_to_u32_try(u64::from(u32::MAX))) },
+            (1, i64::from(u32::MAX))
+        );
+        assert_eq!(
+            unsafe { option_parts(__vow_u64_to_u32_try(u64::from(u32::MAX) + 1)) },
+            (0, 0)
+        );
+        assert_eq!(__vow_u64_to_u32_wrap(u64::from(u32::MAX) + 1), 0);
+        assert_eq!(__vow_u64_to_u32_sat(u64::from(u32::MAX) + 1), u32::MAX);
+    }
+
+    #[test]
+    fn performance_operation_counter_can_be_reset_incremented_and_read() {
+        __vow_perf_counter_reset();
+        __vow_perf_count();
+        __vow_perf_count();
+        assert_eq!(__vow_perf_counter_read(), 2);
+        __vow_perf_counter_reset();
+        assert_eq!(__vow_perf_counter_read(), 0);
+    }
+
     #[test]
     fn collect_proc_samples_reports_compiler_self() {
         let procs = vec![ProcInfo {
@@ -4607,6 +5003,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_i64_option_can_be_owned_by_a_local_arena() {
+        let mut arena = empty_arena_header();
+        unsafe { __vow_arena_open(&mut arena) };
+        let input = unsafe { __vow_string_new_in_arena(&mut arena, c"42".as_ptr(), 2) };
+        let parsed =
+            unsafe { __vow_string_parse_i64_opt_in_arena(&mut arena, input) } as *const i64;
+
+        assert_eq!(unsafe { *parsed }, 1);
+        assert_eq!(unsafe { *parsed.add(1) }, 42);
+
+        unsafe { __vow_arena_close(&mut arena) };
+        assert!(arena.first_chunk.is_null());
+    }
+
+    #[test]
+    fn parse_i64_option_root_wrapper_uses_the_root_arena() {
+        let mut input_arena = empty_arena_header();
+        unsafe { __vow_arena_open(&mut input_arena) };
+        let input = unsafe { __vow_string_new_in_arena(&mut input_arena, c"-17".as_ptr(), 3) };
+        let parsed = unsafe { __vow_string_parse_i64_opt(input) } as *const i64;
+
+        assert_eq!(unsafe { *parsed }, 1);
+        assert_eq!(unsafe { *parsed.add(1) }, -17);
+
+        unsafe { __vow_arena_close(&mut input_arena) };
+    }
+
+    #[test]
     fn arena_open_on_open_arena_is_noop() {
         let mut a = empty_arena_header();
         unsafe { __vow_arena_init_closed(&mut a) };
@@ -5013,6 +5437,19 @@ mod tests {
         let digits_bytes =
             unsafe { std::slice::from_raw_parts(digits_header.ptr, digits_header.len) };
         assert_eq!(digits_bytes, b"-42");
+
+        let unsigned_zero = unsafe { __vow_string_from_u64_in_arena(&mut a, 0) };
+        let unsigned_zero_header = unsafe { &*(unsigned_zero as *const VowVec) };
+        let unsigned_zero_bytes = unsafe {
+            std::slice::from_raw_parts(unsigned_zero_header.ptr, unsigned_zero_header.len)
+        };
+        assert_eq!(unsigned_zero_bytes, b"0");
+
+        let unsigned_max = unsafe { __vow_string_from_u64_in_arena(&mut a, u64::MAX) };
+        let unsigned_max_header = unsafe { &*(unsigned_max as *const VowVec) };
+        let unsigned_max_bytes =
+            unsafe { std::slice::from_raw_parts(unsigned_max_header.ptr, unsigned_max_header.len) };
+        assert_eq!(unsigned_max_bytes, b"18446744073709551615");
 
         unsafe { __vow_arena_close(&mut a) };
     }
@@ -5757,6 +6194,11 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena string from_i64 did NOT trap");
             std::process::exit(42);
         }
+        if op == "String::from_u64_in_arena_null" {
+            let _ = unsafe { __vow_string_from_u64_in_arena(std::ptr::null_mut(), 1) };
+            eprintln!("rodata_trap_worker: null arena string from_u64 did NOT trap");
+            std::process::exit(42);
+        }
         if op == "String::split_in_arena_null" {
             let _ = unsafe {
                 __vow_string_split_in_arena(
@@ -6089,6 +6531,11 @@ mod tests {
     #[test]
     fn explicit_arena_string_from_i64_null_arena_traps() {
         assert_runtime_invariant_null_arena("String::from_i64_in_arena_null", "String::from_i64");
+    }
+
+    #[test]
+    fn explicit_arena_string_from_u64_null_arena_traps() {
+        assert_runtime_invariant_null_arena("String::from_u64_in_arena_null", "String::from_u64");
     }
 
     #[test]
