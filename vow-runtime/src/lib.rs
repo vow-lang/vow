@@ -688,6 +688,14 @@ pub unsafe extern "C" fn __vow_free(ptr: *mut u8, size: usize, align: usize) {
 // See docs/design/arena_memory.md §6.1, §7.3.
 pub const VOW_CAP_RODATA: usize = usize::MAX;
 
+// Runtime-owned mutable Vec/String descriptors set the high bit of the public
+// capacity word. The remaining bits store the actual capacity. Valid foreign
+// descriptors leave this bit clear, so checked projection routing can reject
+// them before consulting the private owner prefix. `VOW_CAP_RODATA` remains a
+// distinct all-bits-set sentinel.
+const VOW_CAP_RUNTIME_OWNED: usize = 1usize << (usize::BITS - 1);
+const VOW_CAP_VALUE_MASK: usize = VOW_CAP_RUNTIME_OWNED - 1;
+
 #[repr(C)]
 pub struct VowArena {
     pub first_chunk: *mut u8,
@@ -1210,6 +1218,75 @@ pub struct VowVec {
     pub cap: usize,
 }
 
+/// Runtime allocation wrapper for mutable `VowVec` descriptors. The pointer
+/// exposed across the Vow ABI addresses `desc`, so its public layout remains
+/// the documented 24-byte `{ptr, len, cap}`. The high bit of `cap` marks the
+/// descriptor as runtime-owned; the hidden prefix then records its arena for
+/// O(1), fail-closed projection routing.
+///
+/// Rodata descriptors are emitted as bare `VowVec` values and never use this
+/// wrapper; checked routing observes both `VOW_CAP_RODATA` and the runtime-owned
+/// marker before reading the prefix.
+#[repr(C)]
+struct OwnedVowVec {
+    owner: *mut VowArena,
+    desc: VowVec,
+}
+
+const _: () = assert!(core::mem::size_of::<VowVec>() == 24);
+const _: () = assert!(core::mem::offset_of!(OwnedVowVec, desc) == 8);
+
+fn vow_vec_capacity(desc: &VowVec) -> usize {
+    desc.cap & VOW_CAP_VALUE_MASK
+}
+
+fn set_vow_vec_capacity(desc: &mut VowVec, capacity: usize, op: &'static str) {
+    // `VOW_CAP_VALUE_MASK` would encode as the rodata sentinel when combined
+    // with the ownership bit. Reserve that otherwise-theoretical capacity and
+    // report the same structured OOM used by the reserve path rather than
+    // creating an ambiguous descriptor.
+    if capacity >= VOW_CAP_VALUE_MASK {
+        oom_trap(op);
+    }
+    desc.cap = capacity | (desc.cap & VOW_CAP_RUNTIME_OWNED);
+}
+
+/// Return true iff `vec` is a mutable runtime descriptor allocated by
+/// `__vow_vec_new_in_arena` and its hidden owner is `candidate`.
+///
+/// Safety: the in-descriptor ownership bit is checked before reading outside
+/// the public descriptor. Only runtime-owned descriptors carry that bit and
+/// have an `OwnedVowVec` prefix; valid foreign descriptors leave it clear.
+unsafe fn vow_vec_is_owned_by(vec: *const u8, candidate: *mut VowArena) -> bool {
+    let desc = unsafe { &*(vec as *const VowVec) };
+    if desc.cap == VOW_CAP_RODATA || desc.cap & VOW_CAP_RUNTIME_OWNED == 0 {
+        return false;
+    }
+    let owner_ptr =
+        unsafe { vec.sub(core::mem::size_of::<*mut VowArena>()) } as *const *mut VowArena;
+    let owner = unsafe { *owner_ptr };
+    std::ptr::eq(owner as *const VowArena, candidate as *const VowArena)
+}
+
+unsafe fn alloc_owned_vow_vec_descriptor(arena: *mut VowArena) -> *mut VowVec {
+    let owned_ptr = unsafe {
+        __vow_arena_alloc(
+            arena,
+            core::mem::size_of::<OwnedVowVec>(),
+            core::mem::align_of::<OwnedVowVec>(),
+        )
+    } as *mut OwnedVowVec;
+    unsafe {
+        (*owned_ptr).owner = arena;
+        (*owned_ptr).desc = VowVec {
+            ptr: std::ptr::dangling_mut::<u8>(),
+            len: 0,
+            cap: VOW_CAP_RUNTIME_OWNED,
+        };
+    }
+    unsafe { core::ptr::addr_of_mut!((*owned_ptr).desc) }
+}
+
 struct StdinLineScratch {
     desc: VowVec,
     bytes: Vec<u8>,
@@ -1283,13 +1360,13 @@ pub unsafe extern "C" fn __vow_vec_new_in_arena(
     if arena.is_null() {
         null_arena_trap("Vec::new");
     }
-    let header_ptr = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
+    let header_ptr = unsafe { alloc_owned_vow_vec_descriptor(arena) };
     // Lazy allocation: don't allocate buffer until first push.
     // Use a dangling aligned pointer so from_raw_parts with len=0 is safe.
     unsafe {
         (*header_ptr).ptr = align as *mut u8;
         (*header_ptr).len = 0;
-        (*header_ptr).cap = 0;
+        set_vow_vec_capacity(&mut *header_ptr, 0, "Vec::new");
     }
     sanitize_on_vec_new(header_ptr as usize);
     header_ptr as *mut u8
@@ -1334,7 +1411,7 @@ pub unsafe extern "C" fn __vow_vec_from_raw_parts_copy_val(
     v.ptr = unsafe { __vow_arena_alloc(arena, bytes, 8) };
     unsafe { std::ptr::copy_nonoverlapping(ptr as *const u8, v.ptr, bytes) };
     v.len = len;
-    v.cap = len;
+    set_vow_vec_capacity(v, len, "Vec::from_raw_parts_copy");
     vec
 }
 
@@ -1363,6 +1440,7 @@ unsafe fn vec_reserve_in_arena_no_null_check(
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::reserve");
     }
+    let old_cap = vow_vec_capacity(v);
     // Checked growth arithmetic (issue #435): an oversized `additional` or
     // `elem_size` must trap through the OutOfMemory envelope before the
     // descriptor is touched. Unchecked, `v.len + additional` and the
@@ -1373,17 +1451,21 @@ unsafe fn vec_reserve_in_arena_no_null_check(
         Some(r) => r,
         None => oom_trap("Vec::reserve"),
     };
-    if required <= v.cap {
+    if required <= old_cap {
         return;
     }
-    let mut new_cap = if v.cap == 0 { VEC_INITIAL_CAP } else { v.cap };
+    let mut new_cap = if old_cap == 0 {
+        VEC_INITIAL_CAP
+    } else {
+        old_cap
+    };
     while new_cap < required {
         new_cap = match new_cap.checked_mul(2) {
-            Some(c) => c,
-            None => oom_trap("Vec::reserve"),
+            Some(c) if c < VOW_CAP_VALUE_MASK => c,
+            _ => oom_trap("Vec::reserve"),
         };
     }
-    let old_size = match v.cap.checked_mul(elem_size) {
+    let old_size = match old_cap.checked_mul(elem_size) {
         Some(s) => s,
         None => oom_trap("Vec::reserve"),
     };
@@ -1393,7 +1475,7 @@ unsafe fn vec_reserve_in_arena_no_null_check(
     };
     let new_ptr = unsafe { arena_grow_backing(arena, v.ptr, old_size, new_size, elem_align) };
     v.ptr = new_ptr;
-    v.cap = new_cap;
+    set_vow_vec_capacity(v, new_cap, "Vec::reserve");
 }
 
 #[unsafe(no_mangle)]
@@ -1645,8 +1727,8 @@ pub unsafe extern "C" fn __vow_string_from_cstr(ptr: *const c_char) -> *mut u8 {
 /// is a `.rodata` literal or a parameter alias whose backing is not in
 /// `target_region`.
 ///
-/// The new descriptor has `cap = len`; growth is up to the caller. The
-/// source's `cap` is irrelevant — `VOW_CAP_RODATA` (read-only literal) is
+/// The new descriptor has logical capacity `len`; growth is up to the caller.
+/// The source's `cap` is irrelevant — `VOW_CAP_RODATA` (read-only literal) is
 /// handled transparently because we only read `source.ptr` / `source.len`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_clone_into_arena(
@@ -1664,12 +1746,12 @@ pub unsafe extern "C" fn __vow_string_clone_into_arena(
         "__vow_string_clone_into_arena: null source — indicates a missing \
          ConstStr global (upstream codegen bug)"
     );
-    let header = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
+    let header = unsafe { alloc_owned_vow_vec_descriptor(arena) };
     if source.is_null() {
         unsafe {
             (*header).ptr = std::ptr::dangling_mut::<u8>(); // len=0
             (*header).len = 0;
-            (*header).cap = 0;
+            set_vow_vec_capacity(&mut *header, 0, "String::clone");
         }
         return header as *mut u8;
     }
@@ -1685,7 +1767,7 @@ pub unsafe extern "C" fn __vow_string_clone_into_arena(
     unsafe {
         (*header).ptr = data_ptr;
         (*header).len = len;
-        (*header).cap = len;
+        set_vow_vec_capacity(&mut *header, len, "String::clone");
     }
     header as *mut u8
 }
@@ -1727,12 +1809,12 @@ pub unsafe extern "C" fn __vow_string_from_raw_parts_copy(
     if arena.is_null() {
         null_arena_trap("String::from_raw_parts_copy");
     }
-    let header = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
+    let header = unsafe { alloc_owned_vow_vec_descriptor(arena) };
     if len == 0 || ptr.is_null() {
         unsafe {
             (*header).ptr = std::ptr::dangling_mut::<u8>();
             (*header).len = 0;
-            (*header).cap = 0;
+            set_vow_vec_capacity(&mut *header, 0, "String::from_raw_parts_copy");
         }
         return header as *mut u8;
     }
@@ -1741,7 +1823,7 @@ pub unsafe extern "C" fn __vow_string_from_raw_parts_copy(
     unsafe {
         (*header).ptr = data_ptr;
         (*header).len = len;
-        (*header).cap = len;
+        set_vow_vec_capacity(&mut *header, len, "String::from_raw_parts_copy");
     }
     header as *mut u8
 }
@@ -1839,6 +1921,14 @@ pub unsafe extern "C" fn __vow_string_push_str_in_arena(
     }
     sanitize_on_read(dest as usize, 0);
     sanitize_on_read(src as usize, 0);
+    unsafe { string_push_str_in_arena_no_sanitize(arena, dest, src) };
+}
+
+unsafe fn string_push_str_in_arena_no_sanitize(
+    arena: *mut VowArena,
+    dest: *mut u8,
+    src: *const u8,
+) {
     let vd0 = unsafe { &*(dest as *const VowVec) };
     if vd0.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("String::push_str");
@@ -1873,6 +1963,30 @@ pub unsafe extern "C" fn __vow_string_push_str_in_arena(
     };
     unsafe { std::ptr::copy_nonoverlapping(src_ptr, vd.ptr.add(vd.len), src_len) };
     vd.len += src_len;
+}
+
+/// Projection-safe string append. `candidate` is obtained from the projected
+/// container's inferred Block/Caller region, but is trusted only when the
+/// receiver descriptor's runtime owner matches it. Foreign projections fall
+/// back to the root arena, preserving PR #344's lifetime safety.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_push_str_in_candidate_arena(
+    candidate: *mut VowArena,
+    dest: *mut u8,
+    src: *const u8,
+) {
+    if candidate.is_null() {
+        null_arena_trap("String::push_str");
+    }
+    sanitize_on_read(dest as usize, 0);
+    sanitize_on_read(src as usize, 0);
+    if !arena_is_root(candidate) && unsafe { vow_vec_is_owned_by(dest, candidate) } {
+        unsafe { string_push_str_in_arena_no_sanitize(candidate, dest, src) };
+        return;
+    }
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { string_push_str_in_arena_no_sanitize(&raw mut __vow_root_arena, dest, src) };
 }
 
 #[unsafe(no_mangle)]
@@ -1948,8 +2062,33 @@ pub unsafe extern "C" fn __vow_string_push_byte_in_arena(
     // sanitizer runs before any dereference (UAF detected first), and the
     // shadow table records a single generation for the one appended byte.
     sanitize_on_push(s as usize);
+    unsafe { string_push_byte_in_arena_no_sanitize(arena, s, byte) };
+}
+
+unsafe fn string_push_byte_in_arena_no_sanitize(arena: *mut VowArena, s: *mut u8, byte: i64) {
     let b = byte as u8;
     unsafe { vec_push_no_sanitize_in_arena(arena, s, &b as *const u8, 1, 1, "String::push_byte") };
+}
+
+/// Projection-safe byte append; see
+/// `__vow_string_push_str_in_candidate_arena` for the routing invariant.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_push_byte_in_candidate_arena(
+    candidate: *mut VowArena,
+    s: *mut u8,
+    byte: i64,
+) {
+    if candidate.is_null() {
+        null_arena_trap("String::push_byte");
+    }
+    sanitize_on_push(s as usize);
+    if !arena_is_root(candidate) && unsafe { vow_vec_is_owned_by(s, candidate) } {
+        unsafe { string_push_byte_in_arena_no_sanitize(candidate, s, byte) };
+        return;
+    }
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { string_push_byte_in_arena_no_sanitize(&raw mut __vow_root_arena, s, byte) };
 }
 
 #[unsafe(no_mangle)]
@@ -4643,7 +4782,11 @@ mod tests {
         let v = __vow_vec_new_val();
         let vec = unsafe { &*(v as *const VowVec) };
         assert_eq!(vec.len, 0);
-        assert_eq!(vec.cap, 0, "empty Vec should have cap=0 (lazy)");
+        assert_eq!(
+            vow_vec_capacity(vec),
+            0,
+            "empty Vec should have cap=0 (lazy)"
+        );
     }
 
     #[test]
@@ -4652,7 +4795,10 @@ mod tests {
         unsafe { __vow_vec_push_val(v, 42) };
         let vec = unsafe { &*(v as *const VowVec) };
         assert_eq!(vec.len, 1);
-        assert!(vec.cap >= 1, "cap should be allocated after first push");
+        assert!(
+            vow_vec_capacity(vec) >= 1,
+            "cap should be allocated after first push"
+        );
         assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 42);
     }
 
@@ -4661,7 +4807,11 @@ mod tests {
         let s = __vow_vec_new(1, 1);
         let vec = unsafe { &*(s as *const VowVec) };
         assert_eq!(vec.len, 0);
-        assert_eq!(vec.cap, 0, "empty String should have cap=0 (lazy)");
+        assert_eq!(
+            vow_vec_capacity(vec),
+            0,
+            "empty String should have cap=0 (lazy)"
+        );
     }
 
     #[test]
@@ -4669,7 +4819,11 @@ mod tests {
         let s = unsafe { __vow_string_new(std::ptr::null(), 0) };
         let vec = unsafe { &*(s as *const VowVec) };
         assert_eq!(vec.len, 0);
-        assert_eq!(vec.cap, 0, "String::from(\"\") should have cap=0 (lazy)");
+        assert_eq!(
+            vow_vec_capacity(vec),
+            0,
+            "String::from(\"\") should have cap=0 (lazy)"
+        );
     }
 
     #[test]
@@ -4678,7 +4832,7 @@ mod tests {
         let s = unsafe { __vow_string_new(data.as_ptr() as *const c_char, 5) };
         let vec = unsafe { &*(s as *const VowVec) };
         assert_eq!(vec.len, 5);
-        assert!(vec.cap >= 5);
+        assert!(vow_vec_capacity(vec) >= 5);
     }
 
     #[test]
@@ -4689,7 +4843,7 @@ mod tests {
         }
         let vec = unsafe { &*(v as *const VowVec) };
         assert_eq!(vec.len, 20);
-        assert!(vec.cap >= 20);
+        assert!(vow_vec_capacity(vec) >= 20);
         for i in 0..20 {
             assert_eq!(unsafe { __vow_vec_get_val(v, i as usize) }, i);
         }
@@ -5157,7 +5311,7 @@ mod tests {
         let v = unsafe { __vow_vec_new_in_arena(&mut a, 8, 8) };
         let header = unsafe { &*(v as *const VowVec) };
         assert_eq!(header.len, 0);
-        assert_eq!(header.cap, 0);
+        assert_eq!(vow_vec_capacity(header), 0);
 
         let first = 17_i64;
         let second = 23_i64;
@@ -5180,7 +5334,7 @@ mod tests {
         unsafe { __vow_vec_reserve_in_arena(&mut a, v, 12, 8, 8) };
         let header = unsafe { &*(v as *const VowVec) };
         assert_eq!(header.len, 0, "reserve must not change len");
-        assert!(header.cap >= 12);
+        assert!(vow_vec_capacity(header) >= 12);
 
         unsafe { __vow_vec_push_val_in_arena(&mut a, v, 99) };
         assert_eq!(unsafe { __vow_vec_len(v) }, 1);
@@ -5301,6 +5455,89 @@ mod tests {
     }
 
     #[test]
+    fn candidate_string_push_byte_uses_matching_owner_arena() {
+        let mut owner = empty_arena_header();
+        unsafe { __vow_arena_open(&mut owner) };
+
+        let s = unsafe { __vow_string_new_in_arena(&mut owner, c"".as_ptr(), 0) };
+        unsafe { __vow_string_push_byte_in_candidate_arena(&mut owner, s, b'x' as i64) };
+
+        let desc = unsafe { &*(s as *const VowVec) };
+        assert_eq!(desc.len, 1);
+        assert_eq!(unsafe { *desc.ptr }, b'x');
+        assert_eq!(
+            owner.last_alloc_start, desc.ptr,
+            "matching provenance must allocate the backing in the candidate arena"
+        );
+
+        unsafe { __vow_arena_close(&mut owner) };
+    }
+
+    #[test]
+    fn candidate_string_push_str_falls_back_for_foreign_owner() {
+        let mut owner = empty_arena_header();
+        let mut foreign_candidate = empty_arena_header();
+        unsafe { __vow_arena_open(&mut owner) };
+        unsafe { __vow_arena_open(&mut foreign_candidate) };
+
+        let dest = unsafe { __vow_string_new_in_arena(&mut owner, c"a".as_ptr(), 1) };
+        let src = unsafe { __vow_string_new_in_arena(&mut owner, c"bc".as_ptr(), 2) };
+        let candidate_last_alloc = foreign_candidate.last_alloc_start;
+        unsafe { __vow_string_push_str_in_candidate_arena(&mut foreign_candidate, dest, src) };
+
+        let desc = unsafe { &*(dest as *const VowVec) };
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(desc.ptr, desc.len) },
+            b"abc"
+        );
+        assert_eq!(
+            foreign_candidate.last_alloc_start, candidate_last_alloc,
+            "foreign provenance must not allocate in the candidate arena"
+        );
+
+        unsafe { __vow_arena_close(&mut foreign_candidate) };
+        unsafe { __vow_arena_close(&mut owner) };
+    }
+
+    #[test]
+    fn candidate_string_push_byte_ignores_foreign_prefix_bytes() {
+        #[repr(C)]
+        struct ForeignDescriptor {
+            preceding_word: *mut VowArena,
+            desc: VowVec,
+        }
+
+        let mut candidate = empty_arena_header();
+        unsafe { __vow_arena_open(&mut candidate) };
+        let candidate_last_alloc = candidate.last_alloc_start;
+
+        let mut foreign = ForeignDescriptor {
+            preceding_word: &mut candidate,
+            desc: VowVec {
+                ptr: std::ptr::dangling_mut::<u8>(),
+                len: 0,
+                cap: 0,
+            },
+        };
+        unsafe {
+            __vow_string_push_byte_in_candidate_arena(
+                &mut candidate,
+                core::ptr::addr_of_mut!(foreign.desc) as *mut u8,
+                b'x' as i64,
+            )
+        };
+
+        assert_eq!(foreign.desc.len, 1);
+        assert_eq!(unsafe { *foreign.desc.ptr }, b'x');
+        assert_eq!(
+            candidate.last_alloc_start, candidate_last_alloc,
+            "a foreign descriptor must fall back even when preceding bytes match the candidate"
+        );
+
+        unsafe { __vow_arena_close(&mut candidate) };
+    }
+
+    #[test]
     fn string_push_str_self_append_oversized_no_uaf() {
         // Regression for the self-append UAF scenario flagged on PR #392:
         // `__vow_string_push_str_in_arena` used to capture `vs.ptr` from
@@ -5325,7 +5562,10 @@ mod tests {
         };
         // Sanity: the backing is in a path-oversized chunk.
         let header_before = unsafe { &*(s as *const VowVec) };
-        assert!(header_before.cap > 2048, "test setup: must be oversized");
+        assert!(
+            vow_vec_capacity(header_before) > 2048,
+            "test setup: must be oversized"
+        );
 
         // Self-append: src == dest. With the fix, the post-reserve copy
         // reads from the new backing's prefix (where the old contents
@@ -5401,7 +5641,11 @@ mod tests {
             unsafe { __vow_string_clone_into_arena(&mut a, &source as *const VowVec as *const u8) };
         let cv = unsafe { &*(cloned as *const VowVec) };
         assert_eq!(cv.len, 5);
-        assert_eq!(cv.cap, 5, "clone must not inherit VOW_CAP_RODATA");
+        assert_eq!(
+            vow_vec_capacity(cv),
+            5,
+            "clone must not inherit VOW_CAP_RODATA"
+        );
         let cloned_bytes = unsafe { std::slice::from_raw_parts(cv.ptr, cv.len) };
         assert_eq!(cloned_bytes, b"hello");
         // The clone's backing must live in the arena, not in .rodata.
@@ -5428,7 +5672,11 @@ mod tests {
         let pinned = unsafe { __vow_string_pin_to_root(&source as *const VowVec as *const u8) };
         let pv = unsafe { &*(pinned as *const VowVec) };
         assert_eq!(pv.len, 6);
-        assert_eq!(pv.cap, 6, "pinning must return a mutable root copy");
+        assert_eq!(
+            vow_vec_capacity(pv),
+            6,
+            "pinning must return a mutable root copy"
+        );
         assert_ne!(pv.ptr, bytes.as_ptr() as *mut u8);
         let pinned_bytes = unsafe { std::slice::from_raw_parts(pv.ptr, pv.len) };
         assert_eq!(pinned_bytes, b"rooted");
@@ -5536,7 +5784,7 @@ mod tests {
         };
         let cv = unsafe { &*(copied as *const VowVec) };
         assert_eq!(cv.len, 3);
-        assert!(cv.cap >= 3);
+        assert!(vow_vec_capacity(cv) >= 3);
         assert_ne!(cv.ptr, bytes.as_ptr() as *mut u8);
         let copied_bytes = unsafe { std::slice::from_raw_parts(cv.ptr, cv.len) };
         assert_eq!(copied_bytes, b"raw");
@@ -5551,7 +5799,7 @@ mod tests {
         };
         let cv = unsafe { &*(copied as *const VowVec) };
         assert_eq!(cv.len, 3);
-        assert!(cv.cap >= 3);
+        assert!(vow_vec_capacity(cv) >= 3);
         assert_ne!(cv.ptr, raw.as_ptr() as *mut u8);
         let copied_vals = unsafe { std::slice::from_raw_parts(cv.ptr as *const i64, cv.len) };
         assert_eq!(copied_vals, &[11, 22, 33]);
@@ -5584,7 +5832,7 @@ mod tests {
         let cloned = unsafe { __vow_string_clone(&source as *const VowVec as *const u8) };
         let cv = unsafe { &*(cloned as *const VowVec) };
         assert_eq!(cv.len, 5);
-        assert_eq!(cv.cap, 5, "clone must be mutable, not rodata");
+        assert_eq!(vow_vec_capacity(cv), 5, "clone must be mutable, not rodata");
         assert_ne!(cv.ptr, source.ptr, "clone must copy backing bytes");
         let cloned_bytes = unsafe { std::slice::from_raw_parts(cv.ptr, cv.len) };
         assert_eq!(cloned_bytes, b"hello");
@@ -5603,7 +5851,7 @@ mod tests {
             unsafe { __vow_string_clone_into_arena(&mut a, &source as *const VowVec as *const u8) };
         let cv = unsafe { &*(cloned as *const VowVec) };
         assert_eq!(cv.len, 0);
-        assert_eq!(cv.cap, 0);
+        assert_eq!(vow_vec_capacity(cv), 0);
         unsafe { __vow_arena_close(&mut a) };
     }
 
@@ -6049,6 +6297,11 @@ mod tests {
                 unsafe { __vow_string_push_str(vp, &src as *const _ as *const u8) };
             }
             "String::push_byte" => unsafe { __vow_string_push_byte(vp, 0x61) },
+            "String::push_byte_in_candidate_arena" => {
+                let mut a = empty_arena_header();
+                unsafe { __vow_arena_open(&mut a) };
+                unsafe { __vow_string_push_byte_in_candidate_arena(&mut a, vp, 0x61) };
+            }
             "HashMap::insert" => unsafe { __vow_map_insert(mp, 1, 2) },
             "HashMap::remove" => unsafe { __vow_map_remove(mp, 1) },
             "HashMap::insert_in_arena" => {
@@ -6360,6 +6613,10 @@ mod tests {
         assert_rodata_trap("String::push_byte", "String::push_byte");
     }
     #[test]
+    fn rodata_string_candidate_push_byte_traps_without_reading_owner_prefix() {
+        assert_rodata_trap("String::push_byte_in_candidate_arena", "String::push_byte");
+    }
+    #[test]
     fn rodata_map_insert_traps() {
         assert_rodata_trap("HashMap::insert", "HashMap::insert");
     }
@@ -6383,6 +6640,9 @@ mod tests {
         unsafe { __vow_vec_push_val(v, 42) };
         let vec = unsafe { &*(v as *const VowVec) };
         assert_eq!(vec.len, 1);
-        assert!(vec.cap >= 1, "lazy-allocated, cap should be populated");
+        assert!(
+            vow_vec_capacity(vec) >= 1,
+            "lazy-allocated, cap should be populated"
+        );
     }
 }

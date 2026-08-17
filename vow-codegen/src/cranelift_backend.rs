@@ -462,86 +462,143 @@ fn region_to_arena_value(
     }
 }
 
-// Projection results (`FieldGet`, `Load`, `__vow_vec_get*`) are intentionally
-// NOT traced through to their container here: a pointer-valued field or Vec
-// element does not share its container's arena lifetime, so routing string
-// mutation into the container's arena would create a use-after-free when the
-// container outlives the string (or vice versa). Only direct hidden-caller
-// parameters (`GetArg` → `Caller`) and Phi merges over safe sources are
-// tracked. If safe projection semantics are ever added, extend this function;
-// do not re-introduce the unconditional FieldGet/Load/vec_get tracing.
-fn source_value_region(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReceiverRoute {
+    /// The receiver itself is proven to live in this region.
+    Direct(RegionId),
+    /// A container supplies this candidate region, but the projected receiver
+    /// must pass the runtime descriptor-owner check before it may use it.
+    ProjectionCandidate(RegionId),
+}
+
+impl ReceiverRoute {
+    fn region(self) -> RegionId {
+        match self {
+            Self::Direct(region) | Self::ProjectionCandidate(region) => region,
+        }
+    }
+}
+
+// Projection results (`FieldGet`, `Load`, `__vow_vec_get*`) may carry a
+// pointer-valued field or element from a different arena. Trace them only to
+// obtain a candidate region, never as direct proof. String mutation routes
+// these candidates through the runtime descriptor-owner check; other mutable
+// receiver operations remain on their conservative default variants.
+fn source_value_route(
     source: &Inst,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
     phi_data: &PhiUpsilonData,
     seen: &mut BTreeSet<InstId>,
-) -> RegionId {
+) -> ReceiverRoute {
     if !seen.insert(source.id) {
-        return source.region;
+        return ReceiverRoute::Direct(source.region);
     }
     if let (Opcode::GetArg, InstData::ArgIndex(param_idx)) = (&source.opcode, &source.data)
         && let Some(hidden_idx) = hidden_region_idx_for_store_target(current_summary, *param_idx)
     {
-        return RegionId::Caller(hidden_idx);
+        return ReceiverRoute::Direct(RegionId::Caller(hidden_idx));
+    }
+    let projection_source = match (&source.opcode, &source.data) {
+        (Opcode::FieldGet | Opcode::Load, _) => source.args.first(),
+        (Opcode::Call, InstData::CallExtern(sym))
+            if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
+        {
+            source.args.first()
+        }
+        _ => None,
+    };
+    if let Some(container_id) = projection_source {
+        let candidate =
+            arg_route_inner(*container_id, inst_index, current_summary, phi_data, seen).region();
+        if matches!(candidate, RegionId::Block(_) | RegionId::Caller(_)) {
+            return ReceiverRoute::ProjectionCandidate(candidate);
+        }
+        return ReceiverRoute::Direct(source.region);
     }
     if source.opcode == Opcode::Phi {
-        let mut merged: Option<RegionId> = None;
+        let mut merged: Option<ReceiverRoute> = None;
         for upsilons in phi_data.block_upsilons.values() {
             for &(phi_id, val_id) in upsilons {
                 if phi_id != source.id {
                     continue;
                 }
                 let mut arm_seen = seen.clone();
-                let arm_region =
-                    arg_region_inner(val_id, inst_index, current_summary, phi_data, &mut arm_seen);
+                let arm_route =
+                    arg_route_inner(val_id, inst_index, current_summary, phi_data, &mut arm_seen);
                 match merged {
-                    Some(existing) if existing != arm_region => return source.region,
+                    Some(existing) if existing.region() != arm_route.region() => {
+                        return ReceiverRoute::Direct(source.region);
+                    }
+                    Some(ReceiverRoute::Direct(region))
+                        if matches!(arm_route, ReceiverRoute::ProjectionCandidate(_)) =>
+                    {
+                        merged = Some(ReceiverRoute::ProjectionCandidate(region));
+                    }
                     Some(_) => {}
-                    None => merged = Some(arm_region),
+                    None => merged = Some(arm_route),
                 }
             }
         }
-        if let Some(region) = merged {
-            return region;
+        if let Some(route) = merged {
+            return route;
         }
     }
-    source.region
+    ReceiverRoute::Direct(source.region)
 }
 
-fn arg_region_inner(
+fn arg_route_inner(
     arg_id: InstId,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
     phi_data: &PhiUpsilonData,
     seen: &mut BTreeSet<InstId>,
-) -> RegionId {
+) -> ReceiverRoute {
     inst_index
         .get(&arg_id)
-        .map(|src| source_value_region(src, inst_index, current_summary, phi_data, seen))
-        .unwrap_or(RegionId::Root)
+        .map(|src| source_value_route(src, inst_index, current_summary, phi_data, seen))
+        .unwrap_or(ReceiverRoute::Direct(RegionId::Root))
 }
 
+fn arg_route(
+    arg_id: InstId,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
+) -> ReceiverRoute {
+    let mut seen = BTreeSet::new();
+    arg_route_inner(arg_id, inst_index, current_summary, phi_data, &mut seen)
+}
+
+/// Region proof for operations that cannot perform the runtime projection
+/// owner check (for example hidden-arena threading into an internal callee).
+/// Projection candidates deliberately fall back to the projection's recorded
+/// region, preserving the conservative PR #344 behavior outside string growth.
 fn arg_region(
     arg_id: InstId,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
     phi_data: &PhiUpsilonData,
 ) -> RegionId {
-    let mut seen = BTreeSet::new();
-    arg_region_inner(arg_id, inst_index, current_summary, phi_data, &mut seen)
+    match arg_route(arg_id, inst_index, current_summary, phi_data) {
+        ReceiverRoute::Direct(region) => region,
+        ReceiverRoute::ProjectionCandidate(_) => inst_index
+            .get(&arg_id)
+            .map(|inst| inst.region)
+            .unwrap_or(RegionId::Root),
+    }
 }
 
-fn first_arg_region(
+fn first_arg_route(
     inst: &Inst,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
     phi_data: &PhiUpsilonData,
-) -> RegionId {
+) -> ReceiverRoute {
     inst.args
         .first()
-        .map(|arg_id| arg_region(*arg_id, inst_index, current_summary, phi_data))
-        .unwrap_or(RegionId::Root)
+        .map(|arg_id| arg_route(*arg_id, inst_index, current_summary, phi_data))
+        .unwrap_or(ReceiverRoute::Direct(RegionId::Root))
 }
 
 fn routed_vec_extern<'a>(
@@ -561,18 +618,18 @@ fn routed_vec_extern<'a>(
             region => ("__vow_vec_new_val_in_arena", Some(region)),
         },
         "__vow_vec_push_val" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_vec_push_val_in_arena", Some(region))
                 }
                 _ => (sym, None),
             }
         }
         "__vow_vec_push" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_vec_push_in_arena", Some(region))
                 }
                 _ => (sym, None),
@@ -635,20 +692,26 @@ fn routed_vec_extern<'a>(
             region => ("__vow_string_join_in_arena", Some(region)),
         },
         "__vow_string_push_str" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_string_push_str_in_arena", Some(region))
                 }
+                ReceiverRoute::ProjectionCandidate(
+                    region @ (RegionId::Block(_) | RegionId::Caller(_)),
+                ) => ("__vow_string_push_str_in_candidate_arena", Some(region)),
                 _ => (sym, None),
             }
         }
         "__vow_string_push_byte" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_string_push_byte_in_arena", Some(region))
                 }
+                ReceiverRoute::ProjectionCandidate(
+                    region @ (RegionId::Block(_) | RegionId::Caller(_)),
+                ) => ("__vow_string_push_byte_in_candidate_arena", Some(region)),
                 _ => (sym, None),
             }
         }
@@ -657,9 +720,9 @@ fn routed_vec_extern<'a>(
             region => ("__vow_map_new_in_arena", Some(region)),
         },
         "__vow_map_insert" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_map_insert_in_arena", Some(region))
                 }
                 _ => (sym, None),
@@ -2297,6 +2360,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // dest ptr
             sig.params.push(AbiParam::new(types::I64)); // src ptr
         }
+        "__vow_string_push_str_in_candidate_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // candidate arena
+            sig.params.push(AbiParam::new(types::I64)); // dest ptr
+            sig.params.push(AbiParam::new(types::I64)); // src ptr
+        }
         "__vow_string_byte_at" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // index
@@ -2308,6 +2376,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_string_push_byte_in_arena" => {
             sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // byte value
+        }
+        "__vow_string_push_byte_in_candidate_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // candidate arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // byte value
         }
@@ -4865,7 +4938,7 @@ mod tests {
     }
 
     #[test]
-    fn projected_parameter_region_string_mutations_keep_default_variants() {
+    fn projected_parameter_region_string_mutations_import_candidate_variant() {
         let grow_projection = Function {
             id: FuncId(0),
             name: "grow_projection".to_string(),
@@ -4963,9 +5036,60 @@ mod tests {
 
         let bytes = result.unwrap().bytes;
         let symbols = compiled_object_symbols(bytes.as_slice());
-        assert!(symbols.contains("__vow_string_push_byte"));
+        assert!(symbols.contains("__vow_string_push_byte_in_candidate_arena"));
+        assert!(!symbols.contains("__vow_string_push_byte"));
         assert!(!symbols.contains("__vow_string_push_byte_in_arena"));
-        assert!(symbols.contains("__vow_string_push_str"));
+        assert!(symbols.contains("__vow_string_push_str_in_candidate_arena"));
+        assert!(!symbols.contains("__vow_string_push_str"));
+        assert!(!symbols.contains("__vow_string_push_str_in_arena"));
+    }
+
+    #[test]
+    fn loaded_parameter_region_string_push_str_imports_candidate_variant() {
+        let grow_load = Function {
+            id: FuncId(0),
+            name: "grow_load".to_string(),
+            params: vec![Ty::Ptr, Ty::Ptr],
+            param_names: vec!["address".to_string(), "suffix".to_string()],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::Load, Ty::Ptr, vec![0], InstData::None),
+                    inst(2, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                    inst(
+                        3,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![1, 2],
+                        InstData::CallExtern("__vow_string_push_str".to_string()),
+                    ),
+                    inst(4, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::ConstantGlobal,
+                store_effects: vec![StoreEffect {
+                    target: 0,
+                    source: RegionConstraint::ConstantGlobal,
+                }],
+            },
+            source_file: String::new(),
+        };
+        let module = make_module("test", vec![grow_load]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        let symbols = compiled_object_symbols(bytes.as_slice());
+        assert!(symbols.contains("__vow_string_push_str_in_candidate_arena"));
+        assert!(!symbols.contains("__vow_string_push_str"));
         assert!(!symbols.contains("__vow_string_push_str_in_arena"));
     }
 
