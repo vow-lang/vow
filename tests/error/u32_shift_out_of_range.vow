@@ -1,0 +1,9 @@
+// TEST: error-code ShiftCountOutOfRange
+// TEST: stderr "shift count 32 is out of range for u32"
+module U32ShiftOutOfRange
+
+fn main() -> i32 {
+    let value: u32 = 1;
+    let shifted: u32 = value << 32;
+    0
+}

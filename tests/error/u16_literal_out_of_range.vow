@@ -1,0 +1,8 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 65536 does not fit in u16"
+module U16LiteralOutOfRange
+
+fn main() -> i32 {
+    let x: u16 = 65536;
+    0
+}

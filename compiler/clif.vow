@@ -124,15 +124,28 @@ fn clif_hidden_store_target_region(f: IrFunction, target_param: i64) -> i64 {
     region_root()
 }
 
-// Projection results (IOP_FIELD_GET, IOP_LOAD, __vow_vec_get*) are intentionally
-// NOT traced through to their container here: a pointer-valued field or Vec
-// element does not share its container's arena lifetime, so routing string
-// mutation into the container's arena would create a use-after-free when the
-// container outlives the string (or vice versa). Only direct hidden-caller
-// parameters (IOP_GET_ARG with REGION_KIND_CALLER) and IOP_PHI merges over
-// safe sources are tracked. If safe projection semantics are ever added, extend
-// this function; do not re-introduce the unconditional projection tracing.
-fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -> i64 {
+// Receiver routes are ordinary packed regions for direct proofs and
+// `-(region + 1)` for projection candidates. Packed regions are non-negative,
+// so the sign bit is an unambiguous local tag that never reaches the shim ABI.
+fn clif_candidate_route(rgn: i64) -> i64 {
+    0 - rgn - 1
+}
+
+fn clif_route_is_candidate(route: i64) -> bool {
+    route < 0
+}
+
+fn clif_route_region(route: i64) -> i64 {
+    if route < 0 {
+        return 0 - route - 1;
+    }
+    route
+}
+
+// FieldGet/Load/vec-get tracing obtains only a candidate container region.
+// String mutation uses the runtime descriptor-owner check before trusting it;
+// Vec/Map mutation keeps the conservative default route.
+fn clif_value_receiver_route(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -> i64 {
     if receiver.id < 0 {
         return region_root();
     }
@@ -147,10 +160,34 @@ fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -
             return hidden;
         }
     }
+    if (receiver.op == IOP_FIELD_GET() || receiver.op == IOP_LOAD()) && receiver.args.len() > 0 {
+        let container: IrInst = clif_find_inst(f, receiver.args[0]);
+        let container_route: i64 = clif_value_receiver_route(f, container, next_seen);
+        let candidate: i64 = clif_route_region(container_route);
+        let candidate_kind: i64 = region_kind(candidate);
+        if candidate_kind == REGION_KIND_BLOCK() || candidate_kind == REGION_KIND_CALLER() {
+            return clif_candidate_route(candidate);
+        }
+        return receiver.rgn;
+    }
+    if receiver.op == IOP_CALL()
+        && receiver.dk == IDATA_CALL_EXTERN()
+        && (receiver.ds == String::from("__vow_vec_get_val") || receiver.ds == String::from("__vow_vec_get"))
+        && receiver.args.len() > 0 {
+        let vec_container: IrInst = clif_find_inst(f, receiver.args[0]);
+        let vec_route: i64 = clif_value_receiver_route(f, vec_container, next_seen);
+        let vec_candidate: i64 = clif_route_region(vec_route);
+        let vec_candidate_kind: i64 = region_kind(vec_candidate);
+        if vec_candidate_kind == REGION_KIND_BLOCK() || vec_candidate_kind == REGION_KIND_CALLER() {
+            return clif_candidate_route(vec_candidate);
+        }
+        return receiver.rgn;
+    }
     if receiver.op == IOP_PHI() {
         let blocks: Vec<IrBlock> = f.blocks;
         let mut have: bool = false;
         let mut merged: i64 = region_root();
+        let mut candidate_arm: bool = false;
         let mut bi: i64 = 0;
         while bi < blocks.len() {
             let insts: Vec<IrInst> = blocks[bi].insts;
@@ -162,7 +199,8 @@ fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -
                     && up.dv == receiver.id
                     && up.args.len() > 0 {
                     let src: IrInst = clif_find_inst(f, up.args[0]);
-                    let rgn: i64 = clif_value_receiver_region(f, src, clif_clone_i64_vec(next_seen));
+                    let route: i64 = clif_value_receiver_route(f, src, clif_clone_i64_vec(next_seen));
+                    let rgn: i64 = clif_route_region(route);
                     if !have {
                         have = true;
                         merged = rgn;
@@ -171,24 +209,30 @@ fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -
                         // receiver's own region, which is conservatively Root before routing.
                         return receiver.rgn;
                     }
+                    if clif_route_is_candidate(route) {
+                        candidate_arm = true;
+                    }
                 }
                 ii = ii + 1;
             }
             bi = bi + 1;
         }
         if have {
+            if candidate_arm {
+                return clif_candidate_route(merged);
+            }
             return merged;
         }
     }
     receiver.rgn
 }
 
-fn clif_receiver_region(f: IrFunction, inst: IrInst) -> i64 {
+fn clif_receiver_route(f: IrFunction, inst: IrInst) -> i64 {
     if inst.args.len() == 0 {
         return region_root();
     }
     let receiver: IrInst = clif_find_inst(f, inst.args[0]);
-    clif_value_receiver_region(f, receiver, Vec::new())
+    clif_value_receiver_route(f, receiver, Vec::new())
 }
 
 fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
@@ -206,7 +250,8 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         return String::from("__vow_vec_new_val_in_arena");
     }
     if sym == String::from("__vow_vec_push_val") {
-        let rr: i64 = clif_receiver_region(f, inst);
+        let rr: i64 = clif_receiver_route(f, inst);
+        if clif_route_is_candidate(rr) { return sym; }
         let rk: i64 = region_kind(rr);
         if rk == REGION_KIND_BLOCK() || rk == REGION_KIND_CALLER() {
             return String::from("__vow_vec_push_val_in_arena");
@@ -214,7 +259,8 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         return sym;
     }
     if sym == String::from("__vow_vec_push") {
-        let rr2: i64 = clif_receiver_region(f, inst);
+        let rr2: i64 = clif_receiver_route(f, inst);
+        if clif_route_is_candidate(rr2) { return sym; }
         let rk2: i64 = region_kind(rr2);
         if rk2 == REGION_KIND_BLOCK() || rk2 == REGION_KIND_CALLER() {
             return String::from("__vow_vec_push_in_arena");
@@ -306,17 +352,25 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         return String::from("__vow_string_join_in_arena");
     }
     if sym == String::from("__vow_string_push_str") {
-        let sr: i64 = clif_receiver_region(f, inst);
-        let sk: i64 = region_kind(sr);
+        let sr: i64 = clif_receiver_route(f, inst);
+        let sr_region: i64 = clif_route_region(sr);
+        let sk: i64 = region_kind(sr_region);
         if sk == REGION_KIND_BLOCK() || sk == REGION_KIND_CALLER() {
+            if clif_route_is_candidate(sr) {
+                return String::from("__vow_string_push_str_in_candidate_arena");
+            }
             return String::from("__vow_string_push_str_in_arena");
         }
         return sym;
     }
     if sym == String::from("__vow_string_push_byte") {
-        let br: i64 = clif_receiver_region(f, inst);
-        let bk: i64 = region_kind(br);
+        let br: i64 = clif_receiver_route(f, inst);
+        let br_region: i64 = clif_route_region(br);
+        let bk: i64 = region_kind(br_region);
         if bk == REGION_KIND_BLOCK() || bk == REGION_KIND_CALLER() {
+            if clif_route_is_candidate(br) {
+                return String::from("__vow_string_push_byte_in_candidate_arena");
+            }
             return String::from("__vow_string_push_byte_in_arena");
         }
         return sym;
@@ -328,7 +382,8 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         return String::from("__vow_map_new_in_arena");
     }
     if sym == String::from("__vow_map_insert") {
-        let mr: i64 = clif_receiver_region(f, inst);
+        let mr: i64 = clif_receiver_route(f, inst);
+        if clif_route_is_candidate(mr) { return sym; }
         let mk: i64 = region_kind(mr);
         if mk == REGION_KIND_BLOCK() || mk == REGION_KIND_CALLER() {
             return String::from("__vow_map_insert_in_arena");

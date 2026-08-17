@@ -783,6 +783,21 @@ impl TypeEnv {
                 effects: BTreeSet::new(),
             },
         );
+        for (name, ty) in [
+            ("parse_i8", Ty::I8),
+            ("parse_i16", Ty::I16),
+            ("parse_u16", Ty::U16),
+            ("parse_u32", Ty::U32),
+        ] {
+            env.define_fn(
+                name,
+                FnSig {
+                    params: vec![Ty::Str],
+                    return_ty: Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![ty]),
+                    effects: BTreeSet::new(),
+                },
+            );
+        }
         for (source_name, source_ty) in [
             ("i16", Ty::I16),
             ("i32", Ty::I32),
@@ -842,6 +857,63 @@ impl TypeEnv {
                         effects: BTreeSet::new(),
                     },
                 );
+            }
+        }
+
+        for (target_name, target_ty, sources) in [
+            (
+                "i8",
+                Ty::I8,
+                vec![
+                    ("i16", Ty::I16),
+                    ("u16", Ty::U16),
+                    ("i32", Ty::I32),
+                    ("u32", Ty::U32),
+                    ("i64", Ty::I64),
+                    ("u64", Ty::U64),
+                ],
+            ),
+            (
+                "i16",
+                Ty::I16,
+                vec![
+                    ("i32", Ty::I32),
+                    ("u32", Ty::U32),
+                    ("i64", Ty::I64),
+                    ("u64", Ty::U64),
+                ],
+            ),
+            (
+                "u16",
+                Ty::U16,
+                vec![
+                    ("i32", Ty::I32),
+                    ("u32", Ty::U32),
+                    ("i64", Ty::I64),
+                    ("u64", Ty::U64),
+                ],
+            ),
+            ("u32", Ty::U32, vec![("i64", Ty::I64), ("u64", Ty::U64)]),
+        ] {
+            let option_target = Ty::Applied(
+                Box::new(Ty::Enum("Option".to_string())),
+                vec![target_ty.clone()],
+            );
+            for (source_name, source_ty) in sources {
+                for (mode, return_ty) in [
+                    ("try", option_target.clone()),
+                    ("wrap", target_ty.clone()),
+                    ("sat", target_ty.clone()),
+                ] {
+                    env.define_fn(
+                        format!("{source_name}_to_{target_name}_{mode}"),
+                        FnSig {
+                            params: vec![source_ty.clone()],
+                            return_ty,
+                            effects: BTreeSet::new(),
+                        },
+                    );
+                }
             }
         }
 

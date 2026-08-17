@@ -1,0 +1,101 @@
+// TEST: category callee-blame
+module NarrowingIntrinsicBounds
+
+fn sat_i8(value: i16) -> i8 vow {
+    ensures: (value >= -128 || result == -128) &&
+             (value <= 127 || result == 127) &&
+             (value < -128 || value > 127 || result as i16 == value)
+} {
+    i16_to_i8_sat(value)
+}
+
+fn sat_i16(value: i32) -> i16 vow {
+    ensures: (value >= -32768 || result == -32768) &&
+             (value <= 32767 || result == 32767) &&
+             (value < -32768 || value > 32767 || result as i32 == value)
+} {
+    i32_to_i16_sat(value)
+}
+
+fn sat_u16(value: i32) -> u16 vow {
+    ensures: (value >= 0 || result == 0) &&
+             (value <= 65535 || result == 65535) &&
+             (value < 0 || value > 65535 || result as i32 == value)
+} {
+    i32_to_u16_sat(value)
+}
+
+fn sat_u32(value: i64) -> u32 vow {
+    ensures: (value >= 0 || result == 0) &&
+             (value <= 4294967295 || result == 4294967295) &&
+             (value < 0 || value > 4294967295 || result as i64 == value)
+} {
+    i64_to_u32_sat(value)
+}
+
+fn shift_i8(value: i8, count: u32) -> i8 vow {
+    requires: count < 8
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn shift_i16(value: i16, count: u32) -> i16 vow {
+    requires: count < 16
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn shift_u16(value: u16, count: u32) -> u16 vow {
+    requires: count < 16
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn shift_u32(value: u32, count: u32) -> u32 vow {
+    requires: count < 32
+    ensures: result == value >> count
+} {
+    value >> count
+}
+
+fn full_matrix_is_verifier_reachable(i16_value: i16, u16_value: u16, i32_value: i32,
+                                     u32_value: u32, i64_value: i64, u64_value: u64) -> i64 vow {
+    ensures: result == 1
+} {
+    i16_to_i8_try(i16_value); i16_to_i8_wrap(i16_value); i16_to_i8_sat(i16_value);
+    u16_to_i8_try(u16_value); u16_to_i8_wrap(u16_value); u16_to_i8_sat(u16_value);
+    i32_to_i8_try(i32_value); i32_to_i8_wrap(i32_value); i32_to_i8_sat(i32_value);
+    u32_to_i8_try(u32_value); u32_to_i8_wrap(u32_value); u32_to_i8_sat(u32_value);
+    i64_to_i8_try(i64_value); i64_to_i8_wrap(i64_value); i64_to_i8_sat(i64_value);
+    u64_to_i8_try(u64_value); u64_to_i8_wrap(u64_value); u64_to_i8_sat(u64_value);
+
+    i32_to_i16_try(i32_value); i32_to_i16_wrap(i32_value); i32_to_i16_sat(i32_value);
+    u32_to_i16_try(u32_value); u32_to_i16_wrap(u32_value); u32_to_i16_sat(u32_value);
+    i64_to_i16_try(i64_value); i64_to_i16_wrap(i64_value); i64_to_i16_sat(i64_value);
+    u64_to_i16_try(u64_value); u64_to_i16_wrap(u64_value); u64_to_i16_sat(u64_value);
+
+    i32_to_u16_try(i32_value); i32_to_u16_wrap(i32_value); i32_to_u16_sat(i32_value);
+    u32_to_u16_try(u32_value); u32_to_u16_wrap(u32_value); u32_to_u16_sat(u32_value);
+    i64_to_u16_try(i64_value); i64_to_u16_wrap(i64_value); i64_to_u16_sat(i64_value);
+    u64_to_u16_try(u64_value); u64_to_u16_wrap(u64_value); u64_to_u16_sat(u64_value);
+
+    i64_to_u32_try(i64_value); i64_to_u32_wrap(i64_value); i64_to_u32_sat(i64_value);
+    u64_to_u32_try(u64_value); u64_to_u32_wrap(u64_value); u64_to_u32_sat(u64_value);
+    1
+}
+
+fn main() -> i32 {
+    sat_i8(0);
+    sat_i16(0);
+    sat_u16(0);
+    sat_u32(0);
+    shift_i8(0, 0);
+    shift_i16(0, 0);
+    shift_u16(0, 0);
+    shift_u32(0, 0);
+    full_matrix_is_verifier_reachable(0, 0, 0, 0, 0, 0);
+    0
+}

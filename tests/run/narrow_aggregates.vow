@@ -1,0 +1,35 @@
+// TEST: stdout "-7\n-300\n60000\n4000000000\n"
+module NarrowAggregates
+
+struct Values {
+    a: i8,
+    b: i16,
+    c: u16,
+    d: u32,
+}
+
+fn explicit_i8() -> i8 {
+    return -7;
+}
+
+fn explicit_i16() -> i16 {
+    return -300;
+}
+
+fn main() -> i32 [io] {
+    let values: Values = Values {
+        a: explicit_i8(),
+        b: explicit_i16(),
+        c: 60000,
+        d: 4000000000,
+    };
+    print_i64(values.a as i64);
+    print_str(String::from("\n"));
+    print_i64(values.b as i64);
+    print_str(String::from("\n"));
+    print_i64(values.c as i64);
+    print_str(String::from("\n"));
+    print_i64(values.d as i64);
+    print_str(String::from("\n"));
+    0
+}

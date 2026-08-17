@@ -1,0 +1,18 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr "a=-5, b=-300, c=60000, d=4000000000"
+module NarrowRequiresViolation
+
+fn reject(a: i8, b: i16, c: u16, d: u32) vow {
+    requires: a > 0 && b > 0 && c < 10 && d < 10
+} {
+}
+
+fn main() -> i32 [io] {
+    let a: i8 = -5;
+    let b: i16 = -300;
+    let c: u16 = 60000;
+    let d: u32 = 4000000000;
+    reject(a, b, c, d);
+    0
+}

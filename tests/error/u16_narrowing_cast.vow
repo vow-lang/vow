@@ -1,0 +1,9 @@
+// TEST: error-code NarrowingCastNotAllowed
+// TEST: stderr "cannot cast u32 to u16 via as"
+module U16NarrowingCast
+
+fn main() -> i32 {
+    let wide: u32 = 65536;
+    let narrow: u16 = wide as u16;
+    0
+}

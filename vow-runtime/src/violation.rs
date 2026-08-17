@@ -16,6 +16,10 @@ const TAG_F64: u8 = 3;
 const TAG_BOOL: u8 = 4;
 const TAG_U64: u8 = 5;
 const TAG_U8: u8 = 6;
+const TAG_I8: u8 = 7;
+const TAG_I16: u8 = 8;
+const TAG_U16: u8 = 9;
+const TAG_U32: u8 = 10;
 
 /// A decoded predicate binding: a free variable's name and its captured runtime
 /// value. `lib.rs` builds these from the `VowBinding` C ABI records.
@@ -43,6 +47,10 @@ pub(crate) fn format_value(tag: u8, payload: u64) -> String {
         TAG_BOOL => if payload != 0 { "true" } else { "false" }.to_string(),
         TAG_U64 => format!("{payload}"),
         TAG_U8 => format!("{}", payload as u8),
+        TAG_I8 => format!("{}", payload as i8),
+        TAG_I16 => format!("{}", payload as i16),
+        TAG_U16 => format!("{}", payload as u16),
+        TAG_U32 => format!("{}", payload as u32),
         _ => format!("0x{payload:x}"),
     }
 }
@@ -106,6 +114,10 @@ mod tests {
         assert_eq!(format_value(TAG_BOOL, 1), "true");
         assert_eq!(format_value(TAG_U64, 42), "42");
         assert_eq!(format_value(TAG_U8, 255), "255");
+        assert_eq!(format_value(TAG_I8, (-128_i8) as u8 as u64), "-128");
+        assert_eq!(format_value(TAG_I16, (-32768_i16) as u16 as u64), "-32768");
+        assert_eq!(format_value(TAG_U16, u64::from(u16::MAX)), "65535");
+        assert_eq!(format_value(TAG_U32, u64::from(u32::MAX)), "4294967295");
         // Unknown tag falls back to a hex dump of the raw payload.
         assert_eq!(format_value(99, 0xdead), "0xdead");
     }

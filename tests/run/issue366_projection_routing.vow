@@ -1,0 +1,57 @@
+// TEST: stdout "ok"
+// Issue #366: projected strings may reuse a container's Block/Caller arena only
+// when the runtime descriptor owner actually matches that candidate. The first
+// half grows same-arena Vec-element and struct-field strings past one root page;
+// checked routing keeps that growth out of the never-closed root arena. The
+// second half stores an outer string in a shorter-lived Vec and mutates it
+// through the projection; the owner mismatch must fall back to root so the
+// backing remains valid after the Vec's arena closes (the PR #344 hazard).
+module Issue366ProjectionRouting
+
+struct Holder {
+    name: String,
+}
+
+fn main() -> i32 [io] {
+    let strings: Vec<String> = Vec::new();
+    strings.push(String::from("v"));
+    let projected: String = strings[0];
+
+    let holder: Holder = Holder { name: String::from("h") };
+    let before_same_arena: u64 = memory_root_arena_bytes();
+    let mut i: i64 = 0;
+    while i < 5000 {
+        projected.push_byte(120);
+        holder.name.push_byte(121);
+        i = i + 1;
+    }
+    let after_same_arena: u64 = memory_root_arena_bytes();
+    let same_arena_delta: u64 = after_same_arena - before_same_arena;
+
+    let foreign: String = String::from("f");
+    if true {
+        let shorter: Vec<String> = Vec::new();
+        shorter.push(foreign);
+        let foreign_projection: String = shorter[0];
+        let mut j: i64 = 0;
+        while j < 5000 {
+            foreign_projection.push_byte(122);
+            j = j + 1;
+        }
+    }
+
+    if same_arena_delta < 4096u64
+        && projected.len() == 5001
+        && holder.name.len() == 5001
+        && foreign.len() == 5001
+        && foreign.byte_at(5000) == 122 {
+        print_str("ok");
+    } else {
+        print_str("same_arena_delta=");
+        print_u64(same_arena_delta);
+        print_str(" foreign_len=");
+        print_i64(foreign.len());
+    }
+
+    0
+}
