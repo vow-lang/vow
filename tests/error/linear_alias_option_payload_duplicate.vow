@@ -1,0 +1,29 @@
+// TEST: error-code LinearTypeViolation
+// TEST: stderr "already consumed"
+module LinearAliasOptionPayloadDuplicate
+
+linear struct Token {
+    id: i64,
+}
+
+type MaybeToken = Option<Token>;
+
+fn consume(token: Token) -> () {
+    let sink: Vec<Token> = Vec::new();
+    sink.push(token);
+}
+
+fn duplicate(value: MaybeToken) -> () {
+    match value {
+        Option::Some(token) => {
+            consume(token);
+            consume(token);
+        },
+        Option::None => {},
+    }
+}
+
+fn main() -> i32 {
+    duplicate(Option::Some(Token { id: 1 }));
+    0
+}

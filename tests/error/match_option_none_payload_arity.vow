@@ -1,0 +1,14 @@
+// TEST: error-code UnsupportedPattern
+// TEST: stderr "variant pattern expects 0 payload bindings, found 1"
+module MatchOptionNonePayloadArity
+
+fn unwrap_or_zero(value: Option<i64>) -> i64 {
+    match value {
+        Option::Some(inner) => { inner },
+        Option::None(extra) => { 0 },
+    }
+}
+
+fn main() -> i32 {
+    0
+}

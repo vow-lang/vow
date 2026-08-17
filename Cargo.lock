@@ -1039,6 +1039,7 @@ version = "0.6.0"
 dependencies = [
  "vow-diag",
  "vow-syntax",
+ "vow-types",
 ]
 
 [[package]]

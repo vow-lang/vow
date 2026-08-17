@@ -6,7 +6,7 @@ linear struct Inner {
     fd: i64,
 }
 
-struct Outer {
+linear struct Outer {
     inner: Inner,
 }
 

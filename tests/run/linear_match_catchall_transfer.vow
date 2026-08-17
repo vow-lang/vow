@@ -1,0 +1,34 @@
+// TEST: stdout "9\n"
+module LinearMatchCatchallTransfer
+
+linear struct Token {
+    id: i64,
+}
+
+fn consume_id(token: Token) -> i64 {
+    let id: i64 = token.id;
+    let sink: Vec<Token> = Vec::new();
+    sink.push(token);
+    id
+}
+
+fn identity(value: Option<Token>) -> Option<Token> {
+    value
+}
+
+fn forward(value: Option<Token>) -> Option<Token> {
+    match value {
+        bound => { identity(bound) },
+    }
+}
+
+fn main() -> i32 [io] {
+    match forward(Option::Some(Token { id: 9 })) {
+        Option::Some(token) => {
+            print_i64(consume_id(token));
+            print_str("\n");
+        },
+        Option::None => {},
+    }
+    0
+}

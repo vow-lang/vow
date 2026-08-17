@@ -1,0 +1,22 @@
+// TEST: stdout "29\n31\n"
+module MatchAggregatePhiMetadata
+
+struct Box {
+    v: i64,
+}
+
+fn value_or_default(value: Option<Box>) -> i64 {
+    let boxed = match value {
+        Option::Some(boxed) => { boxed },
+        Option::None => { Box { v: 31 } },
+    };
+    boxed.v
+}
+
+fn main() -> i32 [io] {
+    print_i64(value_or_default(Option::Some(Box { v: 29 })));
+    print_str("\n");
+    print_i64(value_or_default(Option::None));
+    print_str("\n");
+    0
+}

@@ -13,6 +13,165 @@ use crate::types::Ty;
 /// Set of expression addresses (`*const Expr as usize`) whose resolved type is `Ty::Str`.
 pub type StringExprSet = HashSet<usize>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternAggregateInfo {
+    pub type_name: String,
+    pub vec_elem_types: Vec<String>,
+    pub vec_option_elem_types: Vec<Option<PatternScalarType>>,
+    pub vec_variant_payload_types: Vec<Vec<Option<PatternScalarType>>>,
+    pub option_elem_type: Option<PatternScalarType>,
+    pub variant_payload_types: Vec<Option<PatternScalarType>>,
+    pub is_linear: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatternScalarType {
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    F32,
+    F64,
+    Bool,
+}
+
+/// Aggregate type metadata for identifier patterns and `?` payload results,
+/// keyed by the corresponding AST node address.
+pub type PatternAggregateMap = HashMap<usize, PatternAggregateInfo>;
+
+fn aggregate_type_name(ty: &Ty) -> Option<String> {
+    match ty {
+        Ty::Str => Some("String".to_string()),
+        Ty::Struct(name) | Ty::Enum(name) => Some(name.clone()),
+        Ty::Applied(base, _) | Ty::Reference(base) => aggregate_type_name(base),
+        _ => None,
+    }
+}
+
+fn vec_element_type_names(ty: &Ty) -> Vec<String> {
+    match ty {
+        Ty::Reference(inner) => vec_element_type_names(inner),
+        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Vec") => {
+            let Some(elem_ty) = args.first() else {
+                return Vec::new();
+            };
+            let Some(elem_name) = aggregate_type_name(elem_ty) else {
+                return Vec::new();
+            };
+            let mut names = vec![elem_name.clone()];
+            if elem_name == "Vec" {
+                names.extend(vec_element_type_names(elem_ty));
+            }
+            names
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn vec_element_option_types(ty: &Ty) -> Vec<Option<PatternScalarType>> {
+    match ty {
+        Ty::Reference(inner) => vec_element_option_types(inner),
+        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Vec") => {
+            let Some(elem_ty) = args.first() else {
+                return Vec::new();
+            };
+            let Some(elem_name) = aggregate_type_name(elem_ty) else {
+                return Vec::new();
+            };
+            let mut types = vec![option_element_scalar_type(elem_ty)];
+            if elem_name == "Vec" {
+                types.extend(vec_element_option_types(elem_ty));
+            }
+            types
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn vec_element_variant_payload_types(ty: &Ty) -> Vec<Vec<Option<PatternScalarType>>> {
+    match ty {
+        Ty::Reference(inner) => vec_element_variant_payload_types(inner),
+        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Vec") => {
+            let Some(elem_ty) = args.first() else {
+                return Vec::new();
+            };
+            let Some(elem_name) = aggregate_type_name(elem_ty) else {
+                return Vec::new();
+            };
+            let mut types = vec![variant_payload_scalar_types(elem_ty)];
+            if elem_name == "Vec" {
+                types.extend(vec_element_variant_payload_types(elem_ty));
+            }
+            types
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn pattern_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
+    match ty {
+        Ty::I8 => Some(PatternScalarType::I8),
+        Ty::I16 => Some(PatternScalarType::I16),
+        Ty::I32 => Some(PatternScalarType::I32),
+        Ty::I64 => Some(PatternScalarType::I64),
+        Ty::I128 => Some(PatternScalarType::I128),
+        Ty::U8 => Some(PatternScalarType::U8),
+        Ty::U16 => Some(PatternScalarType::U16),
+        Ty::U32 => Some(PatternScalarType::U32),
+        Ty::U64 => Some(PatternScalarType::U64),
+        Ty::U128 => Some(PatternScalarType::U128),
+        Ty::F32 => Some(PatternScalarType::F32),
+        Ty::F64 => Some(PatternScalarType::F64),
+        Ty::Bool => Some(PatternScalarType::Bool),
+        _ => None,
+    }
+}
+
+fn variant_payload_scalar_types(ty: &Ty) -> Vec<Option<PatternScalarType>> {
+    match ty {
+        Ty::Reference(inner) => variant_payload_scalar_types(inner),
+        Ty::Applied(base, args) => match aggregate_type_name(base).as_deref() {
+            Some("Option") => vec![None, args.first().and_then(pattern_scalar_type)],
+            Some("Result") => vec![
+                args.first().and_then(pattern_scalar_type),
+                args.get(1).and_then(pattern_scalar_type),
+            ],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn option_element_scalar_type(ty: &Ty) -> Option<PatternScalarType> {
+    let elem = match ty {
+        Ty::Reference(inner) => return option_element_scalar_type(inner),
+        Ty::Applied(base, args) if aggregate_type_name(base).as_deref() == Some("Option") => {
+            args.first()?
+        }
+        _ => return None,
+    };
+    pattern_scalar_type(elem)
+}
+
+fn pattern_aggregate_info(ty: &Ty, is_linear: bool) -> Option<PatternAggregateInfo> {
+    let type_name = aggregate_type_name(ty)?;
+    Some(PatternAggregateInfo {
+        type_name,
+        vec_elem_types: vec_element_type_names(ty),
+        vec_option_elem_types: vec_element_option_types(ty),
+        vec_variant_payload_types: vec_element_variant_payload_types(ty),
+        option_elem_type: option_element_scalar_type(ty),
+        variant_payload_types: variant_payload_scalar_types(ty),
+        is_linear,
+    })
+}
+
 const MAX_HINT_CANDIDATES: usize = 256;
 const MAX_HINT_IDENTIFIER_BYTES: usize = 128;
 
@@ -217,6 +376,7 @@ pub struct Checker<'e> {
     pub(crate) file: String,
     pub(crate) emitter: &'e mut dyn DiagnosticEmitter,
     string_exprs: StringExprSet,
+    pattern_aggregates: PatternAggregateMap,
     in_loop: u32,
     /// Stack of break-value type collectors. `Some(vec)` for `loop` (collects
     /// break types), `None` for `while` (break-with-value is an error).
@@ -261,6 +421,7 @@ impl<'e> Checker<'e> {
             file: file.into(),
             emitter,
             string_exprs: HashSet::new(),
+            pattern_aggregates: HashMap::new(),
             in_loop: 0,
             break_types_stack: Vec::new(),
             const_values: HashMap::new(),
@@ -268,8 +429,8 @@ impl<'e> Checker<'e> {
         }
     }
 
-    pub fn into_string_exprs(self) -> StringExprSet {
-        self.string_exprs
+    pub fn into_lowering_metadata(self) -> (StringExprSet, PatternAggregateMap) {
+        (self.string_exprs, self.pattern_aggregates)
     }
 
     pub fn has_errors(&self) -> bool {
@@ -460,6 +621,16 @@ impl<'e> Checker<'e> {
                     for f in &s.fields {
                         if let Ok(ty) = self.env.resolve(&f.ty) {
                             self.check_btreemap_key_in_ty(&ty, f.span);
+                            if crate::linear::is_linear_owner_ty(&ty, &self.env) {
+                                self.emit_error(
+                                    ErrorCode::LinearTypeViolation,
+                                    format!(
+                                        "struct fields cannot own linear values: `{}.{}` requires move-out semantics that are not supported",
+                                        s.name, f.name
+                                    ),
+                                    f.span,
+                                );
+                            }
                         }
                     }
                 }
@@ -1596,12 +1767,31 @@ impl<'e> Checker<'e> {
                     );
                 }
                 let mut result_ty = Ty::Unit;
+                let mut handled_variants = HashSet::new();
                 for (i, (arm, pattern_supported)) in
                     arms.iter().zip(supported_arms.iter()).enumerate()
                 {
                     self.env.push_scope();
                     if *pattern_supported && scrutinee_supported {
+                        if matches!(&arm.pattern.kind, PatKind::Wildcard)
+                            && self.unhandled_variant_owns_linear_payload(
+                                &scrutinee_ty,
+                                &handled_variants,
+                            )
+                        {
+                            self.emit_error(
+                                ErrorCode::LinearTypeViolation,
+                                "catchall pattern discards an unhandled linear enum payload; add explicit arms that bind and consume every linear payload",
+                                arm.pattern.span,
+                            );
+                        }
                         self.bind_arm_pattern(&arm.pattern, &scrutinee_ty);
+                        if let PatKind::EnumVariant { path, .. } = &arm.pattern.kind
+                            && Self::enum_pattern_matches_scrutinee(path, &scrutinee_ty)
+                            && let Some(variant_name) = path.last()
+                        {
+                            handled_variants.insert(variant_name.clone());
+                        }
                     }
                     let arm_ty = self.check_expr(&arm.body);
                     self.exit_scope();
@@ -1806,7 +1996,7 @@ impl<'e> Checker<'e> {
             }
             ExprKind::Question { expr: inner } => {
                 let inner_ty = self.check_expr(inner);
-                match &inner_ty {
+                let payload_ty = match &inner_ty {
                     Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option") =>
                     {
                         if !matches!(
@@ -1852,7 +2042,13 @@ impl<'e> Checker<'e> {
                         );
                         Ty::Unit
                     }
+                };
+                let is_linear = crate::linear::is_linear_owner_ty(&payload_ty, &self.env);
+                if let Some(info) = pattern_aggregate_info(&payload_ty, is_linear) {
+                    self.pattern_aggregates
+                        .insert(expr as *const Expr as usize, info);
                 }
+                payload_ty
             }
             ExprKind::Assign { lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);
@@ -2269,11 +2465,22 @@ impl<'e> Checker<'e> {
     }
 
     fn is_enum_match_scrutinee(ty: &Ty) -> bool {
+        Self::enum_match_name(ty).is_some()
+    }
+
+    fn enum_match_name(ty: &Ty) -> Option<&str> {
         match ty {
-            Ty::Enum(_) => true,
-            Ty::Applied(base, _) => matches!(base.as_ref(), Ty::Enum(_)),
-            _ => false,
+            Ty::Enum(name) => Some(name),
+            Ty::Applied(base, _) => match base.as_ref() {
+                Ty::Enum(name) => Some(name),
+                _ => None,
+            },
+            _ => None,
         }
+    }
+
+    fn enum_pattern_matches_scrutinee(path: &[String], scrutinee_ty: &Ty) -> bool {
+        path.first().map(String::as_str) == Self::enum_match_name(scrutinee_ty)
     }
 
     fn check_same_integer(&mut self, lhs: Ty, rhs: Ty, op_span: Span) -> Ty {
@@ -2308,6 +2515,11 @@ impl<'e> Checker<'e> {
     fn bind_arm_pattern(&mut self, pat: &Pat, scrutinee_ty: &Ty) {
         match &pat.kind {
             PatKind::Ident { name, .. } => {
+                let is_linear = crate::linear::is_linear_owner_ty(scrutinee_ty, &self.env);
+                if let Some(info) = pattern_aggregate_info(scrutinee_ty, is_linear) {
+                    self.pattern_aggregates
+                        .insert(pat as *const Pat as usize, info);
+                }
                 self.env.define(name, scrutinee_ty.clone());
             }
             PatKind::Wildcard => {}
@@ -2325,17 +2537,24 @@ impl<'e> Checker<'e> {
                     Some(n) => n.as_str(),
                     None => return,
                 };
-                let enum_name = match scrutinee_ty {
-                    Ty::Enum(n) => n.clone(),
-                    Ty::Applied(base, _) => match base.as_ref() {
-                        Ty::Enum(n) => n.clone(),
-                        _ => return,
-                    },
-                    _ => return,
+                let enum_name = match Self::enum_match_name(scrutinee_ty) {
+                    Some(name) => name.to_string(),
+                    None => return,
                 };
+                if !Self::enum_pattern_matches_scrutinee(path, scrutinee_ty) {
+                    let qualifier = path.first().map(String::as_str).unwrap_or("<missing>");
+                    self.emit_error(
+                        ErrorCode::TypeMismatch,
+                        format!(
+                            "pattern enum `{qualifier}` does not match scrutinee enum `{enum_name}`"
+                        ),
+                        pat.span,
+                    );
+                    return;
+                }
                 // Built-in Option/Result aren't in `env`; a registered (user) enum
                 // wins, else take payload types from the scrutinee's type args.
-                let variant_tys: Vec<Ty> = self
+                let variant_tys: Option<Vec<Ty>> = self
                     .env
                     .lookup_enum(&enum_name)
                     .and_then(|info| {
@@ -2344,7 +2563,10 @@ impl<'e> Checker<'e> {
                             .find(|v| v.name.as_str() == variant_name)
                             .map(|v| match &v.kind {
                                 VariantKind::Tuple(tys) => tys.clone(),
-                                _ => vec![],
+                                VariantKind::Struct(fields) => {
+                                    fields.iter().map(|(_, ty)| ty.clone()).collect()
+                                }
+                                VariantKind::Unit => vec![],
                             })
                     })
                     .or_else(|| match (enum_name.as_str(), variant_name) {
@@ -2356,10 +2578,33 @@ impl<'e> Checker<'e> {
                             Ty::Applied(_, args) => args.iter().skip(1).take(1).cloned().collect(),
                             _ => vec![],
                         }),
+                        ("Option", "None") => Some(vec![]),
                         _ => None,
-                    })
-                    .unwrap_or_default();
+                    });
+                let Some(variant_tys) = variant_tys else {
+                    return;
+                };
+                if inner.len() != variant_tys.len() {
+                    self.emit_error(
+                        ErrorCode::UnsupportedPattern,
+                        format!(
+                            "variant pattern expects {} payload bindings, found {}",
+                            variant_tys.len(),
+                            inner.len()
+                        ),
+                        pat.span,
+                    );
+                }
                 for (p, t) in inner.iter().zip(variant_tys.iter()) {
+                    if matches!(&p.kind, PatKind::Wildcard)
+                        && crate::linear::is_linear_owner_ty(t, &self.env)
+                    {
+                        self.emit_error(
+                            ErrorCode::LinearTypeViolation,
+                            "wildcard pattern discards a linear value; bind it to an identifier and consume it explicitly",
+                            p.span,
+                        );
+                    }
                     self.bind_arm_pattern(p, t);
                 }
             }
@@ -2385,6 +2630,56 @@ impl<'e> Checker<'e> {
                 }
             }
             PatKind::Lit(_) => {}
+        }
+    }
+
+    fn unhandled_variant_owns_linear_payload(
+        &self,
+        scrutinee_ty: &Ty,
+        handled_variants: &HashSet<String>,
+    ) -> bool {
+        let (enum_name, args) = match scrutinee_ty {
+            Ty::Enum(name) => (name.as_str(), &[][..]),
+            Ty::Applied(base, args) => match base.as_ref() {
+                Ty::Enum(name) => (name.as_str(), args.as_slice()),
+                _ => return false,
+            },
+            _ => return false,
+        };
+
+        if let Some(info) = self.env.lookup_enum(enum_name) {
+            return info.variants.iter().any(|variant| {
+                !handled_variants.contains(&variant.name)
+                    && match &variant.kind {
+                        VariantKind::Tuple(types) => types
+                            .iter()
+                            .any(|ty| crate::linear::is_linear_owner_ty(ty, &self.env)),
+                        VariantKind::Struct(fields) => fields
+                            .iter()
+                            .any(|(_, ty)| crate::linear::is_linear_owner_ty(ty, &self.env)),
+                        VariantKind::Unit => false,
+                    }
+            });
+        }
+
+        match enum_name {
+            "Option" => {
+                !handled_variants.contains("Some")
+                    && args
+                        .first()
+                        .is_some_and(|ty| crate::linear::is_linear_owner_ty(ty, &self.env))
+            }
+            "Result" => {
+                (!handled_variants.contains("Ok")
+                    && args
+                        .first()
+                        .is_some_and(|ty| crate::linear::is_linear_owner_ty(ty, &self.env)))
+                    || (!handled_variants.contains("Err")
+                        && args
+                            .get(1)
+                            .is_some_and(|ty| crate::linear::is_linear_owner_ty(ty, &self.env)))
+            }
+            _ => false,
         }
     }
 
@@ -2523,6 +2818,423 @@ mod tests {
             kind,
             span: dummy_span(),
         }
+    }
+
+    #[test]
+    fn pattern_vec_metadata_recurses_through_reference() {
+        let vec_of_box = Ty::Applied(
+            Box::new(Ty::Struct("Vec".to_string())),
+            vec![Ty::Struct("Box".to_string())],
+        );
+        let info = pattern_aggregate_info(&Ty::Reference(Box::new(vec_of_box)), false)
+            .expect("reference-wrapped Vec is aggregate metadata");
+
+        assert_eq!(info.type_name, "Vec");
+        assert_eq!(info.vec_elem_types, ["Box"]);
+        assert_eq!(info.vec_option_elem_types, [None]);
+        assert!(!info.is_linear);
+    }
+
+    #[test]
+    fn pattern_vec_metadata_preserves_nested_aggregate_path() {
+        let nested = Ty::Applied(
+            Box::new(Ty::Struct("Vec".to_string())),
+            vec![Ty::Applied(
+                Box::new(Ty::Struct("Vec".to_string())),
+                vec![Ty::Struct("Box".to_string())],
+            )],
+        );
+        let info = pattern_aggregate_info(&nested, false).expect("nested Vec is aggregate");
+
+        assert_eq!(info.type_name, "Vec");
+        assert_eq!(info.vec_elem_types, ["Vec", "Box"]);
+        assert_eq!(info.vec_option_elem_types, [None, None]);
+        assert_eq!(info.vec_variant_payload_types, [vec![], vec![]]);
+    }
+
+    #[test]
+    fn pattern_option_metadata_preserves_nested_scalar_payload_types() {
+        let cases = [
+            (Ty::I8, PatternScalarType::I8),
+            (Ty::I16, PatternScalarType::I16),
+            (Ty::I32, PatternScalarType::I32),
+            (Ty::I64, PatternScalarType::I64),
+            (Ty::I128, PatternScalarType::I128),
+            (Ty::U8, PatternScalarType::U8),
+            (Ty::U16, PatternScalarType::U16),
+            (Ty::U32, PatternScalarType::U32),
+            (Ty::U64, PatternScalarType::U64),
+            (Ty::U128, PatternScalarType::U128),
+            (Ty::F32, PatternScalarType::F32),
+            (Ty::F64, PatternScalarType::F64),
+            (Ty::Bool, PatternScalarType::Bool),
+        ];
+
+        for (elem_type, expected) in cases {
+            let option = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![elem_type]);
+            let info =
+                pattern_aggregate_info(&option, false).expect("Option is aggregate metadata");
+
+            assert_eq!(info.type_name, "Option");
+            assert_eq!(info.option_elem_type, Some(expected));
+            assert_eq!(info.variant_payload_types, [None, Some(expected)]);
+        }
+
+        let referenced = Ty::Reference(Box::new(Ty::Applied(
+            Box::new(Ty::Enum("Option".to_string())),
+            vec![Ty::U8],
+        )));
+        let referenced_info = pattern_aggregate_info(&referenced, false)
+            .expect("reference-wrapped Option is aggregate metadata");
+        assert_eq!(
+            referenced_info.option_elem_type,
+            Some(PatternScalarType::U8)
+        );
+
+        let aggregate = Ty::Applied(
+            Box::new(Ty::Enum("Option".to_string())),
+            vec![Ty::Struct("Box".to_string())],
+        );
+        let aggregate_info = pattern_aggregate_info(&aggregate, false)
+            .expect("aggregate Option is aggregate metadata");
+        assert_eq!(aggregate_info.option_elem_type, None);
+
+        let vec_option = Ty::Applied(
+            Box::new(Ty::Struct("Vec".to_string())),
+            vec![Ty::Applied(
+                Box::new(Ty::Enum("Option".to_string())),
+                vec![Ty::U8],
+            )],
+        );
+        let vec_option_info = pattern_aggregate_info(&vec_option, false)
+            .expect("Vec<Option<u8>> is aggregate metadata");
+        assert_eq!(vec_option_info.vec_elem_types, ["Option"]);
+        assert_eq!(
+            vec_option_info.vec_option_elem_types,
+            [Some(PatternScalarType::U8)]
+        );
+        assert_eq!(
+            vec_option_info.vec_variant_payload_types,
+            [vec![None, Some(PatternScalarType::U8)]]
+        );
+    }
+
+    #[test]
+    fn pattern_result_metadata_preserves_both_scalar_payload_types() {
+        let result = Ty::Applied(
+            Box::new(Ty::Enum("Result".to_string())),
+            vec![Ty::U8, Ty::I32],
+        );
+        let info = pattern_aggregate_info(&result, false).expect("Result is aggregate metadata");
+
+        assert_eq!(info.type_name, "Result");
+        assert_eq!(info.option_elem_type, None);
+        assert_eq!(
+            info.variant_payload_types,
+            [Some(PatternScalarType::U8), Some(PatternScalarType::I32)]
+        );
+
+        let vec_result = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![result]);
+        let vec_info =
+            pattern_aggregate_info(&vec_result, false).expect("Vec<Result> is aggregate metadata");
+        assert_eq!(vec_info.vec_elem_types, ["Result"]);
+        assert_eq!(
+            vec_info.vec_variant_payload_types,
+            [vec![
+                Some(PatternScalarType::U8),
+                Some(PatternScalarType::I32)
+            ]]
+        );
+    }
+
+    #[test]
+    fn pattern_vec_metadata_ignores_missing_and_scalar_elements() {
+        assert_eq!(aggregate_type_name(&Ty::Str).as_deref(), Some("String"));
+
+        let empty = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![]);
+        let empty_info = pattern_aggregate_info(&empty, false).expect("empty Vec is aggregate");
+        assert!(empty_info.vec_elem_types.is_empty());
+
+        let scalar = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]);
+        let scalar_info = pattern_aggregate_info(&scalar, false).expect("scalar Vec is aggregate");
+        assert!(scalar_info.vec_elem_types.is_empty());
+    }
+
+    #[test]
+    fn arm_pattern_metadata_marks_direct_linear_struct() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::Ident {
+                name: "token".to_string(),
+                is_mut: false,
+            },
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Struct("Token".to_string()));
+
+        let info = checker
+            .pattern_aggregates
+            .get(&(&pattern as *const Pat as usize))
+            .expect("linear pattern metadata");
+        assert_eq!(info.type_name, "Token");
+        assert!(info.vec_elem_types.is_empty());
+        assert!(info.is_linear);
+    }
+
+    #[test]
+    fn arm_pattern_wildcard_rejects_linear_enum_payload() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Token".to_string(),
+                    kind: VariantKind::Tuple(vec![Ty::Struct("Token".to_string())]),
+                }],
+            },
+        );
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Payload".to_string(), "Token".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Wildcard,
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Enum("Payload".to_string()));
+
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("wildcard pattern discards a linear value")
+        );
+    }
+
+    #[test]
+    fn arm_pattern_wildcard_rejects_linear_struct_variant_payload() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Named".to_string(),
+                    kind: VariantKind::Struct(vec![(
+                        "token".to_string(),
+                        Ty::Struct("Token".to_string()),
+                    )]),
+                }],
+            },
+        );
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Payload".to_string(), "Named".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Wildcard,
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Enum("Payload".to_string()));
+
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("wildcard pattern discards a linear value")
+        );
+    }
+
+    #[test]
+    fn arm_pattern_rejects_payload_arity_mismatch() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_enum(
+            "Pair",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Both".to_string(),
+                    kind: VariantKind::Tuple(vec![Ty::I64, Ty::I64]),
+                }],
+            },
+        );
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Pair".to_string(), "Both".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Ident {
+                        name: "first".to_string(),
+                        is_mut: false,
+                    },
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Enum("Pair".to_string()));
+
+        assert!(checker.has_errors());
+        assert_eq!(checker.env.lookup("first"), Some(&Ty::I64));
+        drop(checker);
+        assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+        assert_eq!(
+            emitter.0[0].message,
+            "variant pattern expects 2 payload bindings, found 1"
+        );
+    }
+
+    #[test]
+    fn arm_pattern_rejects_payload_on_builtin_unit_variant() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.push_scope();
+        let pattern = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Option".to_string(), "None".to_string()],
+                inner: vec![Pat {
+                    kind: PatKind::Wildcard,
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+        let option_ty = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I64]);
+
+        checker.bind_arm_pattern(&pattern, &option_ty);
+
+        assert!(checker.has_errors());
+        drop(checker);
+        assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+        assert_eq!(
+            emitter.0[0].message,
+            "variant pattern expects 0 payload bindings, found 1"
+        );
+    }
+
+    #[test]
+    fn arm_pattern_rejects_wrong_enum_qualifier() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Item".to_string(),
+                    kind: VariantKind::Tuple(vec![Ty::I64]),
+                }],
+            },
+        );
+        checker.env.push_scope();
+        let path = vec!["Other".to_string(), "Item".to_string()];
+        let pattern = Pat {
+            kind: PatKind::EnumVariant {
+                path: path.clone(),
+                inner: vec![Pat {
+                    kind: PatKind::Ident {
+                        name: "item".to_string(),
+                        is_mut: false,
+                    },
+                    span: dummy_span(),
+                }],
+            },
+            span: dummy_span(),
+        };
+
+        checker.bind_arm_pattern(&pattern, &Ty::Enum("Payload".to_string()));
+
+        assert!(checker.has_errors());
+        assert!(checker.env.lookup("item").is_none());
+        assert!(!Checker::enum_pattern_matches_scrutinee(
+            &path,
+            &Ty::Enum("Payload".to_string())
+        ));
+        drop(checker);
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert_eq!(
+            emitter.0[0].message,
+            "pattern enum `Other` does not match scrutinee enum `Payload`"
+        );
+    }
+
+    #[test]
+    fn catchall_rejects_only_unhandled_linear_variants() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        checker.env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![
+                    VariantInfo {
+                        name: "A".to_string(),
+                        kind: VariantKind::Tuple(vec![Ty::Struct("Token".to_string())]),
+                    },
+                    VariantInfo {
+                        name: "B".to_string(),
+                        kind: VariantKind::Tuple(vec![Ty::Struct("Token".to_string())]),
+                    },
+                    VariantInfo {
+                        name: "Empty".to_string(),
+                        kind: VariantKind::Unit,
+                    },
+                ],
+            },
+        );
+        let mut handled = HashSet::from(["A".to_string()]);
+
+        assert!(
+            checker
+                .unhandled_variant_owns_linear_payload(&Ty::Enum("Payload".to_string()), &handled)
+        );
+
+        handled.insert("B".to_string());
+        assert!(
+            !checker
+                .unhandled_variant_owns_linear_payload(&Ty::Enum("Payload".to_string()), &handled)
+        );
     }
 
     #[test]
@@ -3969,6 +4681,68 @@ mod tests {
         check_single_file(&mut checker, &module);
         assert!(!checker.has_errors());
         assert!(checker.env.lookup_enum("Color").is_some());
+    }
+
+    #[test]
+    fn check_module_rejects_linear_owner_field_in_linear_struct() {
+        use vow_syntax::ast::{
+            EnumDef, EnumVariant, FieldDef, Item, StructDef, VariantKind as AstVariantKind,
+        };
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let named = |name: &str| Type::Named {
+            name: name.to_string(),
+            span: dummy_span(),
+        };
+        let module = Module {
+            name: "test".to_string(),
+            uses: vec![],
+            items: vec![
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: true,
+                    name: "Token".to_string(),
+                    fields: vec![FieldDef {
+                        name: "id".to_string(),
+                        ty: named("i64"),
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                Item::Enum(EnumDef {
+                    vis: Visibility::Public,
+                    name: "Payload".to_string(),
+                    variants: vec![EnumVariant {
+                        name: "Token".to_string(),
+                        kind: AstVariantKind::Tuple(vec![named("Token")]),
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+                Item::Struct(StructDef {
+                    vis: Visibility::Public,
+                    is_linear: true,
+                    name: "Holder".to_string(),
+                    fields: vec![FieldDef {
+                        name: "payload".to_string(),
+                        ty: named("Payload"),
+                        span: dummy_span(),
+                    }],
+                    span: dummy_span(),
+                }),
+            ],
+            span: dummy_span(),
+        };
+
+        check_single_file(&mut checker, &module);
+
+        assert!(checker.has_errors());
+        assert!(emitter.0.iter().any(|diagnostic| {
+            diagnostic.code == ErrorCode::LinearTypeViolation
+                && diagnostic
+                    .message
+                    .contains("struct fields cannot own linear values: `Holder.payload`")
+        }));
     }
 
     // --- Match expression ---

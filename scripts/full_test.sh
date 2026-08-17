@@ -1060,15 +1060,7 @@ for fixture_path in \
     "$TMPDIR/type_error.vow" \
     "$TMPDIR/missing_module.vow" \
     "$TMPDIR/const_type_mismatch.vow" \
-    "tests/error/match_arm_missing_comma_scalar.vow" \
-    "tests/error/match_arm_missing_comma_block.vow" \
-    "tests/error/u8_shift_out_of_range.vow" \
-    "tests/error/u8_negative_shift_count.vow" \
-    "tests/error/i32_literal_out_of_range.vow" \
-    "tests/error/i32_binary_literal_out_of_range.vow" \
-    "tests/error/i32_narrowing_cast.vow" \
-    "tests/error/i32_negative_shift_count.vow" \
-    "tests/error/i32_shift_out_of_range.vow"; do
+    tests/error/*.vow; do
     fixture=$(basename "$fixture_path" .vow)
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST build --no-verify "$fixture_path" -o "$TMPDIR/rust_${fixture}" 2>/dev/null) || rust_exit=$?

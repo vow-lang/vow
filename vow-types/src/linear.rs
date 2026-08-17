@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::{Block, Expr, ExprKind, FnDef, MatchArm, Pat, PatKind, Stmt};
 use vow_syntax::span::Span;
 
 use crate::env::TypeEnv;
+use crate::env::VariantKind;
+use crate::types::Ty;
 
 #[derive(Debug, Clone, PartialEq)]
 enum ConsumeState {
@@ -77,13 +79,49 @@ pub fn check_linear_usage(
 }
 
 fn is_linear_ast_type(ast_ty: &vow_syntax::ast::Type, env: &TypeEnv) -> bool {
-    match ast_ty {
-        vow_syntax::ast::Type::Named { name, .. } => env
-            .lookup_struct(name)
-            .map(|info| info.is_linear)
-            .unwrap_or(false),
-        _ => false,
+    env.resolve(ast_ty)
+        .is_ok_and(|ty| is_linear_owner_ty(&ty, env))
+}
+
+/// True when a value owns a linear obligation directly or through an enum-like
+/// wrapper. References borrow rather than own, and collections do not become
+/// linear containers merely because their element type is linear.
+pub(crate) fn is_linear_owner_ty(ty: &Ty, env: &TypeEnv) -> bool {
+    fn visit(ty: &Ty, env: &TypeEnv, visiting: &mut HashSet<String>) -> bool {
+        match ty {
+            Ty::Struct(name) => env.lookup_struct(name).is_some_and(|info| info.is_linear),
+            Ty::Enum(name) => {
+                let key = format!("enum:{name}");
+                if !visiting.insert(key.clone()) {
+                    return false;
+                }
+                let result = env.lookup_enum(name).is_some_and(|info| {
+                    info.variants.iter().any(|variant| match &variant.kind {
+                        VariantKind::Tuple(types) => {
+                            types.iter().any(|payload| visit(payload, env, visiting))
+                        }
+                        VariantKind::Struct(fields) => fields
+                            .iter()
+                            .any(|(_, payload)| visit(payload, env, visiting)),
+                        VariantKind::Unit => false,
+                    })
+                });
+                visiting.remove(&key);
+                result
+            }
+            // Option and Result are synthesized by TypeEnv::resolve rather than
+            // registered in enum_defs, while user enums are found through the
+            // environment. Keep both paths explicit here.
+            Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(name) if name == "Option" || name == "Result" || env.lookup_enum(name).is_some()) => {
+                visit(base, env, visiting)
+                    || args.iter().any(|payload| visit(payload, env, visiting))
+            }
+            Ty::Reference(_) => false,
+            _ => false,
+        }
     }
+
+    visit(ty, env, &mut HashSet::new())
 }
 
 fn check_block(
@@ -191,7 +229,9 @@ fn check_expr(
             );
         }
         ExprKind::Match { scrutinee, arms } => {
-            check_expr(scrutinee, tracker, env, file, emitter, false);
+            // Non-linear scrutinees are not registered in the tracker, so this
+            // only consumes enum-like wrappers that own a linear payload.
+            check_expr(scrutinee, tracker, env, file, emitter, true);
             check_match_arms(arms, tracker, env, file, emitter);
         }
         ExprKind::While {
@@ -402,7 +442,25 @@ fn check_match_arms(
         .iter()
         .map(|arm| {
             let mut arm_tracker = tracker.clone();
+            let mut bound_names = vec![];
+            collect_pattern_binding_names(&arm.pattern, &mut bound_names);
+            bound_names.sort();
+            bound_names.dedup();
+            let hidden: Vec<(String, Option<ConsumeState>)> = bound_names
+                .into_iter()
+                .map(|name| {
+                    let state = arm_tracker.vars.remove(&name);
+                    (name, state)
+                })
+                .collect();
             check_expr(&arm.body, &mut arm_tracker, env, file, emitter, true);
+            for (name, state) in hidden {
+                if let Some(state) = state {
+                    arm_tracker.vars.insert(name, state);
+                } else {
+                    arm_tracker.vars.remove(&name);
+                }
+            }
             arm_tracker
         })
         .collect();
@@ -423,6 +481,28 @@ fn check_match_arms(
                 .vars
                 .insert(name.clone(), ConsumeState::MaybeConsumed(consumed_span));
         }
+    }
+}
+
+fn collect_pattern_binding_names(pat: &Pat, names: &mut Vec<String>) {
+    match &pat.kind {
+        PatKind::Ident { name, .. } => names.push(name.clone()),
+        PatKind::Tuple(patterns) | PatKind::Or(patterns) => {
+            for pattern in patterns {
+                collect_pattern_binding_names(pattern, names);
+            }
+        }
+        PatKind::Struct { fields, .. } => {
+            for (_, pattern) in fields {
+                collect_pattern_binding_names(pattern, names);
+            }
+        }
+        PatKind::EnumVariant { inner, .. } => {
+            for pattern in inner {
+                collect_pattern_binding_names(pattern, names);
+            }
+        }
+        PatKind::Wildcard | PatKind::Lit(_) => {}
     }
 }
 
@@ -459,7 +539,7 @@ mod tests {
     };
     use vow_syntax::span::Span;
 
-    use crate::env::{StructInfo, TypeEnv};
+    use crate::env::{EnumInfo, StructInfo, TypeEnv, VariantInfo};
 
     struct TestEmitter(Vec<Diagnostic>);
 
@@ -514,6 +594,35 @@ mod tests {
             },
         );
         env
+    }
+
+    #[test]
+    fn enum_like_wrappers_inherit_owned_linearity_only() {
+        let mut env = make_env_with_linear_struct("Token");
+        env.define_enum(
+            "Payload",
+            EnumInfo {
+                variants: vec![VariantInfo {
+                    name: "Token".to_string(),
+                    kind: VariantKind::Tuple(vec![Ty::Struct("Token".to_string())]),
+                }],
+            },
+        );
+        let payload = Ty::Enum("Payload".to_string());
+        let nested = Ty::Applied(
+            Box::new(Ty::Enum("Option".to_string())),
+            vec![payload.clone()],
+        );
+        let borrowed = Ty::Reference(Box::new(Ty::Struct("Token".to_string())));
+        let vector = Ty::Applied(
+            Box::new(Ty::Struct("Vec".to_string())),
+            vec![Ty::Struct("Token".to_string())],
+        );
+
+        assert!(is_linear_owner_ty(&payload, &env));
+        assert!(is_linear_owner_ty(&nested, &env));
+        assert!(!is_linear_owner_ty(&borrowed, &env));
+        assert!(!is_linear_owner_ty(&vector, &env));
     }
 
     fn named_type(name: &str) -> Type {
@@ -971,6 +1080,41 @@ mod tests {
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
         assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_match_binding_shadows_consumed_scrutinee() {
+        let env = make_env_with_linear_struct("Token");
+        let mut tracker = LinearTracker::new();
+        tracker
+            .vars
+            .insert("value".to_string(), ConsumeState::Consumed(dummy_span()));
+        let arms = vec![MatchArm {
+            pattern: Pat {
+                kind: PatKind::EnumVariant {
+                    path: vec!["Option".to_string(), "Some".to_string()],
+                    inner: vec![Pat {
+                        kind: PatKind::Ident {
+                            name: "value".to_string(),
+                            is_mut: false,
+                        },
+                        span: dummy_span(),
+                    }],
+                },
+                span: dummy_span(),
+            },
+            body: call_with("consume", "value"),
+            span: dummy_span(),
+        }];
+
+        let mut emitter = TestEmitter(vec![]);
+        check_match_arms(&arms, &mut tracker, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+        assert!(matches!(
+            tracker.vars.get("value"),
+            Some(ConsumeState::Consumed(_))
+        ));
     }
 
     // --- if-else asymmetric consumption ---

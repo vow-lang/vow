@@ -1,0 +1,12 @@
+// TEST: error-code TypeMismatch
+module TypeAliasForwardReference
+
+struct Box {
+    value: Later,
+}
+
+type Later = i64;
+
+fn main() -> i32 {
+    0
+}

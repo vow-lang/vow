@@ -1,0 +1,31 @@
+// TEST: error-code LinearTypeViolation
+module LinearMatchCatchallRemainingPayload
+
+linear struct Token {
+    id: i64,
+}
+
+enum Payload {
+    A(Token),
+    B(Token),
+    Empty,
+}
+
+fn consume(token: Token) -> () {
+    let sink: Vec<Token> = Vec::new();
+    sink.push(token);
+}
+
+fn discard_remaining(value: Payload) -> i64 {
+    match value {
+        Payload::A(token) => {
+            consume(token);
+            1
+        },
+        _ => { 0 },
+    }
+}
+
+fn main() -> i32 {
+    0
+}

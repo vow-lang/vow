@@ -1,0 +1,19 @@
+// TEST: error-code LinearTypeViolation
+// TEST: stderr "wildcard pattern discards a linear value"
+module LinearOptionMatchWildcardPayload
+
+linear struct Token {
+    id: i64,
+}
+
+fn discard(value: Option<Token>) -> i64 {
+    match value {
+        Option::Some(_) => { 1 },
+        Option::None => { 0 },
+    }
+}
+
+fn main() -> i32 {
+    discard(Option::Some(Token { id: 1 }));
+    0
+}

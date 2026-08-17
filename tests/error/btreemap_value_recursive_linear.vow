@@ -6,7 +6,7 @@ linear struct Token {
     id: i64,
 }
 
-struct Holder {
+linear struct Holder {
     kids: Vec<Holder>,
     tok: Token,
 }
