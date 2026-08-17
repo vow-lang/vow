@@ -1,7 +1,7 @@
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
-use vow_verify::{CalleePrecondition, Counterexample};
+use vow_verify::{CalleePrecondition, Counterexample, SolverConfig};
 
 use crate::frontend::DependencyManifest;
 
@@ -117,19 +117,22 @@ fn fnv1a_hash_reader<R: Read>(mut r: R) -> std::io::Result<u64> {
 
 // Security: cached PROVEN results from disk are never trusted, so the cached
 // type only carries failure data. A forged on-disk entry must not be able to
-// bypass ESBMC, so successful verifications are never cached.
+// bypass ESBMC, so successful verifications are never cached. The type is
+// module-private: callers speak in `Counterexample` through `lookup_failure` /
+// `store_failure`, which makes "only failures are cached" unrepresentable
+// outside this module rather than a caller-side discipline.
 #[derive(Debug)]
-pub struct CachedFailure {
-    pub vow_id: Option<u32>,
-    pub callee_precondition: Option<CalleePrecondition>,
-    pub description: String,
-    pub values: Vec<(String, String)>,
-    pub block_visits: Vec<u32>,
-    pub raw_output: String,
+struct CachedFailure {
+    vow_id: Option<u32>,
+    callee_precondition: Option<CalleePrecondition>,
+    description: String,
+    values: Vec<(String, String)>,
+    block_visits: Vec<u32>,
+    raw_output: String,
 }
 
 impl CachedFailure {
-    pub fn to_counterexample(&self) -> Counterexample {
+    fn to_counterexample(&self) -> Counterexample {
         Counterexample {
             description: self.description.clone(),
             vow_id: self.vow_id,
@@ -137,6 +140,17 @@ impl CachedFailure {
             values: self.values.clone(),
             block_visits: self.block_visits.clone(),
             raw_output: self.raw_output.clone(),
+        }
+    }
+
+    fn from_counterexample(ce: &Counterexample) -> Self {
+        CachedFailure {
+            vow_id: ce.vow_id,
+            callee_precondition: ce.callee_precondition,
+            description: ce.description.clone(),
+            values: ce.values.clone(),
+            block_visits: ce.block_visits.clone(),
+            raw_output: ce.raw_output.clone(),
         }
     }
 }
@@ -161,7 +175,56 @@ impl VerifyCache {
         Some(Self { dir })
     }
 
-    pub fn cache_key(
+    /// Look up a cached counterexample for `c_source` under `config`.
+    ///
+    /// The key is derived from the resolved solver/encoding/memlimit — the same
+    /// dimensions that can change a verdict — so a run that reproduces those
+    /// reproduces the hit. Only FAILED entries are ever returned: a forged
+    /// PROVEN file on disk is discarded here, never bypassing ESBMC.
+    pub fn lookup_failure(
+        &self,
+        c_source: &str,
+        max_k_step: u32,
+        config: &SolverConfig,
+    ) -> Option<Counterexample> {
+        let key = Self::config_key(c_source, max_k_step, config);
+        self.lookup(&key).map(|cached| cached.to_counterexample())
+    }
+
+    /// Cache a counterexample for `c_source` under `config`.
+    ///
+    /// Taking a `Counterexample` (never a verdict) is what enforces "never cache
+    /// PROVEN" as a type property rather than a caller obligation: there is no
+    /// way to hand a successful result to this method.
+    pub fn store_failure(
+        &self,
+        c_source: &str,
+        max_k_step: u32,
+        config: &SolverConfig,
+        ce: &Counterexample,
+    ) {
+        let key = Self::config_key(c_source, max_k_step, config);
+        self.store(&key, &CachedFailure::from_counterexample(ce));
+    }
+
+    // Project a `SolverConfig` onto the key components. `timeout_secs` is
+    // deliberately omitted: a found counterexample is independent of how long
+    // the solver was allowed to run, and the auto-mode fallback stores under a
+    // config whose timeout differs from the lookup config's (Some(30) vs None) —
+    // including it would turn every fallback store into a permanent miss.
+    // solver/encoding go through `*_str()` (which resolves Auto), so a pre-
+    // fallback `func_config` and the post-fallback `resolved_config` hash alike.
+    fn config_key(c_source: &str, max_k_step: u32, config: &SolverConfig) -> String {
+        Self::cache_key(
+            c_source,
+            max_k_step,
+            config.solver_str(),
+            config.encoding_str(),
+            config.memlimit_mb,
+        )
+    }
+
+    fn cache_key(
         c_source: &str,
         max_k_step: u32,
         solver: &str,
@@ -179,13 +242,13 @@ impl VerifyCache {
         format!("{hash:016x}")
     }
 
-    pub fn lookup(&self, key: &str) -> Option<CachedFailure> {
+    fn lookup(&self, key: &str) -> Option<CachedFailure> {
         let path = self.dir.join(format!("{key}.vr"));
         let content = std::fs::read_to_string(path).ok()?;
         parse_cached_result(&content)
     }
 
-    pub fn store(&self, key: &str, result: &CachedFailure) {
+    fn store(&self, key: &str, result: &CachedFailure) {
         let path = self.dir.join(format!("{key}.vr"));
         let content = serialize_cached_result(result);
         let mut f = match std::fs::File::create(&path) {
@@ -291,6 +354,136 @@ fn parse_cached_result(content: &str) -> Option<CachedFailure> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use vow_verify::{Encoding, Solver, SolverConfig};
+
+    fn cache_in(dir: &TempDir) -> VerifyCache {
+        VerifyCache {
+            dir: dir.path().to_path_buf(),
+        }
+    }
+
+    fn sample_ce() -> Counterexample {
+        Counterexample {
+            description: "x overflows".to_string(),
+            vow_id: Some(5),
+            callee_precondition: Some(CalleePrecondition {
+                func_id: 2,
+                vow_id: 1,
+            }),
+            values: vec![
+                ("x".to_string(), "9223372036854775807".to_string()),
+                ("y".to_string(), "1".to_string()),
+            ],
+            block_visits: vec![0, 2, 5],
+            raw_output: "ESBMC raw trace".to_string(),
+        }
+    }
+
+    fn cfg(
+        solver: Solver,
+        encoding: Encoding,
+        timeout_secs: Option<u32>,
+        memlimit_mb: Option<u32>,
+    ) -> SolverConfig {
+        SolverConfig {
+            solver,
+            encoding,
+            timeout_secs,
+            memlimit_mb,
+        }
+    }
+
+    const C_SRC: &str = "int f(void) { return 0; }";
+
+    #[test]
+    fn verify_cache_failure_roundtrips_all_counterexample_fields() {
+        let dir = TempDir::new().unwrap();
+        let vc = cache_in(&dir);
+        let ce = sample_ce();
+        let config = cfg(Solver::Boolector, Encoding::Bv, None, Some(4096));
+
+        vc.store_failure(C_SRC, 10, &config, &ce);
+        let got = vc
+            .lookup_failure(C_SRC, 10, &config)
+            .expect("a stored failure must be found under the same key");
+
+        assert_eq!(got.description, ce.description);
+        assert_eq!(got.vow_id, ce.vow_id);
+        assert_eq!(got.callee_precondition, ce.callee_precondition);
+        assert_eq!(got.values, ce.values);
+        assert_eq!(got.block_visits, ce.block_visits);
+        assert_eq!(got.raw_output, ce.raw_output);
+    }
+
+    // The verify driver looks up under the pre-fallback `func_config` (encoding
+    // may be Auto) but stores under the post-fallback `resolved_config`
+    // (encoding Bv). Because the key derives from `encoding_str()`, which
+    // resolves Auto -> Bv, the lookup must still hit. Pins that the two-config
+    // call pattern in verify_one_function is a guaranteed hit, not a silent miss.
+    #[test]
+    fn verify_cache_lookup_hits_across_auto_and_bv_encoding() {
+        let dir = TempDir::new().unwrap();
+        let vc = cache_in(&dir);
+        let ce = sample_ce();
+        let stored = cfg(Solver::Boolector, Encoding::Bv, None, Some(4096));
+        let looked_up = cfg(Solver::Boolector, Encoding::Auto, None, Some(4096));
+
+        vc.store_failure(C_SRC, 10, &stored, &ce);
+        assert!(
+            vc.lookup_failure(C_SRC, 10, &looked_up).is_some(),
+            "Auto encoding must resolve to Bv and hit the stored entry"
+        );
+    }
+
+    // Auto-mode fallback stores under a config whose timeout differs from the
+    // lookup config's (Some(30) vs None). timeout_secs must stay out of the key,
+    // or every fallback store would be a permanent miss.
+    #[test]
+    fn verify_cache_key_excludes_timeout_secs() {
+        let dir = TempDir::new().unwrap();
+        let vc = cache_in(&dir);
+        let ce = sample_ce();
+        let stored = cfg(Solver::Boolector, Encoding::Bv, Some(30), Some(4096));
+        let looked_up = cfg(Solver::Boolector, Encoding::Bv, None, Some(4096));
+
+        vc.store_failure(C_SRC, 10, &stored, &ce);
+        assert!(
+            vc.lookup_failure(C_SRC, 10, &looked_up).is_some(),
+            "differing timeout_secs must not change the key"
+        );
+    }
+
+    #[test]
+    fn verify_cache_lookup_misses_on_distinct_key_components() {
+        let dir = TempDir::new().unwrap();
+        let vc = cache_in(&dir);
+        let base = cfg(Solver::Boolector, Encoding::Bv, None, Some(4096));
+        vc.store_failure(C_SRC, 10, &base, &sample_ce());
+
+        // Different unwind bound -> miss.
+        assert!(vc.lookup_failure(C_SRC, 20, &base).is_none());
+        // Different C source -> miss.
+        assert!(
+            vc.lookup_failure("int g(void) { return 1; }", 10, &base)
+                .is_none()
+        );
+        // Different memory limit -> miss.
+        assert!(
+            vc.lookup_failure(
+                C_SRC,
+                10,
+                &cfg(Solver::Boolector, Encoding::Bv, None, Some(1024))
+            )
+            .is_none()
+        );
+        // Never-stored key -> miss.
+        let empty_dir = TempDir::new().unwrap();
+        assert!(
+            cache_in(&empty_dir)
+                .lookup_failure(C_SRC, 10, &base)
+                .is_none()
+        );
+    }
 
     #[test]
     fn verify_cache_proven_disk_entry_is_discarded() {
