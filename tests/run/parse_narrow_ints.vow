@@ -1,0 +1,46 @@
+// TEST: stdout "-128\n0\n32767\n0\n65535\n0\n4294967295\n0\n"
+module ParseNarrowInts
+
+fn show_i8(value: Option<i8>) [io] {
+    match value {
+        Option::Some(v) => print_i64(v as i64),
+        Option::None => print_i64(0),
+    }
+    print_str(String::from("\n"));
+}
+
+fn show_i16(value: Option<i16>) [io] {
+    match value {
+        Option::Some(v) => print_i64(v as i64),
+        Option::None => print_i64(0),
+    }
+    print_str(String::from("\n"));
+}
+
+fn show_u16(value: Option<u16>) [io] {
+    match value {
+        Option::Some(v) => print_i64(v as i64),
+        Option::None => print_i64(0),
+    }
+    print_str(String::from("\n"));
+}
+
+fn show_u32(value: Option<u32>) [io] {
+    match value {
+        Option::Some(v) => print_i64(v as i64),
+        Option::None => print_i64(0),
+    }
+    print_str(String::from("\n"));
+}
+
+fn main() -> i32 [io] {
+    show_i8(parse_i8(String::from("-128")));
+    show_i8(parse_i8(String::from("128")));
+    show_i16(parse_i16(String::from("32767")));
+    show_i16(parse_i16(String::from("32768")));
+    show_u16(parse_u16(String::from("65535")));
+    show_u16(parse_u16(String::from("65536")));
+    show_u32(parse_u32(String::from("4294967295")));
+    show_u32(parse_u32(String::from("4294967296")));
+    0
+}

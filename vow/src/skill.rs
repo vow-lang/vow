@@ -1748,6 +1748,18 @@ For the `i32` target, the available narrowing source types are `i64`, `u32`,
 and `u64`, each providing all three forms: `i64_to_i32_try`/`_wrap`/`_sat`,
 `u32_to_i32_try`/`_wrap`/`_sat`, and `u64_to_i32_try`/`_wrap`/`_sat`.
 
+The remaining executable sub-64-bit targets expose these complete families:
+
+| Target | Narrowing source types |
+|--------|------------------------|
+| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64` |
+| `i16`  | `i32`, `u32`, `i64`, `u64` |
+| `u16`  | `i32`, `u32`, `i64`, `u64` |
+| `u32`  | `i64`, `u64` |
+
+Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
+signedness changes use `as`; they are bit reinterpretations, not narrowing.
+
 No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
 operands must already have the same type. The compiler does not coerce
 across integer types at operator sites — only literals coerce, per the
@@ -2298,8 +2310,8 @@ values outside the target type's range. Parsing never substitutes a numeric
 sentinel for failure; callers that need a fallback must choose it explicitly
 when handling `Option::None`.
 
-In particular, `parse_u8` accepts decimal values from `0` through `255` and
-returns `Option::None` for negative or larger values.
+In particular, `parse_i8`, `parse_i16`, `parse_u8`, `parse_u16`, `parse_i32`,
+and `parse_u32` enforce their exact signed or unsigned fixed-width ranges.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and
@@ -6428,6 +6440,18 @@ For the `i32` target, the available narrowing source types are `i64`, `u32`,
 and `u64`, each providing all three forms: `i64_to_i32_try`/`_wrap`/`_sat`,
 `u32_to_i32_try`/`_wrap`/`_sat`, and `u64_to_i32_try`/`_wrap`/`_sat`.
 
+The remaining executable sub-64-bit targets expose these complete families:
+
+| Target | Narrowing source types |
+|--------|------------------------|
+| `i8`   | `i16`, `u16`, `i32`, `u32`, `i64`, `u64` |
+| `i16`  | `i32`, `u32`, `i64`, `u64` |
+| `u16`  | `i32`, `u32`, `i64`, `u64` |
+| `u32`  | `i64`, `u64` |
+
+Every listed source/target pair provides `_try`, `_wrap`, and `_sat`. Same-width
+signedness changes use `as`; they are bit reinterpretations, not narrowing.
+
 No implicit conversions: `i64 + u64` and `u8 + i32` are type errors. The
 operands must already have the same type. The compiler does not coerce
 across integer types at operator sites — only literals coerce, per the
@@ -6978,8 +7002,8 @@ values outside the target type's range. Parsing never substitutes a numeric
 sentinel for failure; callers that need a fallback must choose it explicitly
 when handling `Option::None`.
 
-In particular, `parse_u8` accepts decimal values from `0` through `255` and
-returns `Option::None` for negative or larger values.
+In particular, `parse_i8`, `parse_i16`, `parse_u8`, `parse_u16`, `parse_i32`,
+and `parse_u32` enforce their exact signed or unsigned fixed-width ranges.
 
 **Narrowing intrinsics** (per [Type Cast](#type-cast)): for every narrowing
 pair the compiler emits `<src>_to_<tgt>_try`, `<src>_to_<tgt>_wrap`, and

@@ -1,0 +1,8 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal -1 does not fit in u16"
+module U16LiteralBelowRange
+
+fn main() -> i32 {
+    let x: u16 = -1;
+    0
+}

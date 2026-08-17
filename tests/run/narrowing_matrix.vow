@@ -1,0 +1,44 @@
+// TEST: stdout "-128\n32767\n0\n4294967295\n"
+module NarrowingMatrix
+
+fn exercise_all_pairs() {
+    let i16_value: i16 = 5;
+    let u16_value: u16 = 5;
+    let i32_value: i32 = 5;
+    let u32_value: u32 = 5;
+    let i64_value: i64 = 5;
+    let u64_value: u64 = 5;
+
+    i16_to_i8_try(i16_value); i16_to_i8_wrap(i16_value); i16_to_i8_sat(i16_value);
+    u16_to_i8_try(u16_value); u16_to_i8_wrap(u16_value); u16_to_i8_sat(u16_value);
+    i32_to_i8_try(i32_value); i32_to_i8_wrap(i32_value); i32_to_i8_sat(i32_value);
+    u32_to_i8_try(u32_value); u32_to_i8_wrap(u32_value); u32_to_i8_sat(u32_value);
+    i64_to_i8_try(i64_value); i64_to_i8_wrap(i64_value); i64_to_i8_sat(i64_value);
+    u64_to_i8_try(u64_value); u64_to_i8_wrap(u64_value); u64_to_i8_sat(u64_value);
+
+    i32_to_i16_try(i32_value); i32_to_i16_wrap(i32_value); i32_to_i16_sat(i32_value);
+    u32_to_i16_try(u32_value); u32_to_i16_wrap(u32_value); u32_to_i16_sat(u32_value);
+    i64_to_i16_try(i64_value); i64_to_i16_wrap(i64_value); i64_to_i16_sat(i64_value);
+    u64_to_i16_try(u64_value); u64_to_i16_wrap(u64_value); u64_to_i16_sat(u64_value);
+
+    i32_to_u16_try(i32_value); i32_to_u16_wrap(i32_value); i32_to_u16_sat(i32_value);
+    u32_to_u16_try(u32_value); u32_to_u16_wrap(u32_value); u32_to_u16_sat(u32_value);
+    i64_to_u16_try(i64_value); i64_to_u16_wrap(i64_value); i64_to_u16_sat(i64_value);
+    u64_to_u16_try(u64_value); u64_to_u16_wrap(u64_value); u64_to_u16_sat(u64_value);
+
+    i64_to_u32_try(i64_value); i64_to_u32_wrap(i64_value); i64_to_u32_sat(i64_value);
+    u64_to_u32_try(u64_value); u64_to_u32_wrap(u64_value); u64_to_u32_sat(u64_value);
+}
+
+fn main() -> i32 [io] {
+    exercise_all_pairs();
+    print_i64(i16_to_i8_sat(-200) as i64);
+    print_str(String::from("\n"));
+    print_i64(u32_to_i16_sat(40000) as i64);
+    print_str(String::from("\n"));
+    print_i64(i64_to_u16_sat(-1) as i64);
+    print_str(String::from("\n"));
+    print_i64(u64_to_u32_sat(5000000000) as i64);
+    print_str(String::from("\n"));
+    0
+}

@@ -1,0 +1,23 @@
+// TEST: stdout "30\n-4\n"
+module I16Basic
+
+fn transform(value: i16, count: u32) -> i16 {
+    let incremented: i16 = value +! 5;
+    let masked: i16 = incremented & 255;
+    masked << count
+}
+
+fn arithmetic_shift(value: i16, count: u32) -> i16 {
+    value >> count
+}
+
+fn main() -> i32 [io] {
+    let value: i16 = 10;
+    let count: u32 = 1;
+    print_i64(transform(value, count) as i64);
+    print_str(String::from("\n"));
+    let negative: i16 = -8;
+    print_i64(arithmetic_shift(negative, count) as i64);
+    print_str(String::from("\n"));
+    0
+}
