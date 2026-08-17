@@ -115,6 +115,283 @@ impl Default for TypeEnv {
     }
 }
 
+/// Construct the builtin `Vec<T>` type used by container-returning builtins.
+fn vec_ty(elem: Ty) -> Ty {
+    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![elem])
+}
+
+/// Construct the builtin `Option<T>` type used by fallible builtins.
+fn option_ty(elem: Ty) -> Ty {
+    Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![elem])
+}
+
+/// Signatures of every builtin free function known to the type checker.
+///
+/// This is the single source of truth consumed by [`TypeEnv::new`]. Holding the
+/// builtin surface as data - rather than ~70 imperative `define_fn` calls -
+/// makes it enumerable and directly testable, and matches the compact
+/// one-line-per-builtin form the self-hosted checker already uses in
+/// `compiler/env.vow`.
+fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
+    fn def(name: &str, params: Vec<Ty>, return_ty: Ty, effects: &[Effect]) -> (String, FnSig) {
+        (
+            name.to_string(),
+            FnSig {
+                params,
+                return_ty,
+                effects: effects.iter().cloned().collect(),
+            },
+        )
+    }
+
+    let mut sigs = vec![
+        def("print_str", vec![Ty::Str], Ty::Unit, &[Effect::IO]),
+        def("print_i64", vec![Ty::I64], Ty::Unit, &[Effect::IO]),
+        def("print_u64", vec![Ty::U64], Ty::Unit, &[Effect::IO]),
+        def("debug_str", vec![Ty::Str], Ty::Unit, &[]),
+        def("debug_i64", vec![Ty::I64], Ty::Unit, &[]),
+        def("debug_u64", vec![Ty::U64], Ty::Unit, &[]),
+        def("fs_read", vec![Ty::Str], Ty::Str, &[Effect::Read]),
+        def("fs_open", vec![Ty::Str], Ty::I64, &[Effect::Read]),
+        def("fs_read_line", vec![Ty::I64], Ty::Str, &[Effect::Read]),
+        def("fs_status", vec![Ty::I64], Ty::I64, &[Effect::Read]),
+        def("fs_close", vec![Ty::I64], Ty::I64, &[Effect::Read]),
+        def(
+            "fs_write",
+            vec![Ty::Str, Ty::Str],
+            Ty::I64,
+            &[Effect::Write],
+        ),
+        def("fs_exists", vec![Ty::Str], Ty::I64, &[Effect::Read]),
+        def("fs_mkdir", vec![Ty::Str], Ty::I64, &[Effect::IO]),
+        def(
+            "fs_listdir",
+            vec![Ty::Str],
+            vec_ty(Ty::Str),
+            &[Effect::Read],
+        ),
+        def("fs_remove", vec![Ty::Str], Ty::I64, &[Effect::IO]),
+        def("fs_remove_dir", vec![Ty::Str], Ty::I64, &[Effect::IO]),
+        def("fs_is_dir", vec![Ty::Str], Ty::I64, &[Effect::Read]),
+        def("fs_is_symlink", vec![Ty::Str], Ty::I64, &[Effect::Read]),
+        def("fs_rename", vec![Ty::Str, Ty::Str], Ty::I64, &[Effect::IO]),
+        def(
+            "string_substr",
+            vec![Ty::Str, Ty::I64, Ty::I64],
+            Ty::Str,
+            &[],
+        ),
+        def("string_split", vec![Ty::Str, Ty::Str], vec_ty(Ty::Str), &[]),
+        def("string_starts_with", vec![Ty::Str, Ty::Str], Ty::I64, &[]),
+        def("string_ends_with", vec![Ty::Str, Ty::Str], Ty::I64, &[]),
+        def(
+            "string_matches_literal_at",
+            vec![Ty::Str, Ty::I64, Ty::Str],
+            Ty::I64,
+            &[],
+        ),
+        def("string_trim", vec![Ty::Str], Ty::Str, &[]),
+        def("string_to_upper", vec![Ty::Str], Ty::Str, &[]),
+        def("string_to_lower", vec![Ty::Str], Ty::Str, &[]),
+        def(
+            "string_replace",
+            vec![Ty::Str, Ty::Str, Ty::Str],
+            Ty::Str,
+            &[],
+        ),
+        def("string_join", vec![vec_ty(Ty::Str), Ty::Str], Ty::Str, &[]),
+        def("parse_i64", vec![Ty::Str], option_ty(Ty::I64), &[]),
+        def("int_to_string", vec![Ty::I64], Ty::Str, &[]),
+        def("uint_to_string", vec![Ty::U64], Ty::Str, &[]),
+        def("i64_to_string", vec![Ty::I64], Ty::Str, &[]),
+        def("vec_sort", vec![vec_ty(Ty::I64)], vec_ty(Ty::I64), &[]),
+        def("time_unix", vec![], Ty::I64, &[Effect::IO]),
+        def("time_unix_ms", vec![], Ty::I64, &[Effect::IO]),
+        def("time_micros", vec![], Ty::I64, &[Effect::IO]),
+        def("proc_sample", vec![], Ty::Str, &[Effect::IO]),
+        def(
+            "gzip_write_file",
+            vec![Ty::Str, Ty::Str],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def("num_cpus", vec![], Ty::I64, &[Effect::IO]),
+        def("memory_root_arena_bytes", vec![], Ty::U64, &[Effect::IO]),
+        def("memory_peak_bytes", vec![], Ty::U64, &[Effect::IO]),
+        def(
+            "memory_alloc_count_since_start",
+            vec![],
+            Ty::U64,
+            &[Effect::IO],
+        ),
+        def("hex_encode", vec![vec_ty(Ty::U8)], Ty::Str, &[]),
+        def("hex_decode", vec![Ty::Str], vec_ty(Ty::U8), &[]),
+        def("eprintln_str", vec![Ty::Str], Ty::Unit, &[Effect::IO]),
+        def("args", vec![], vec_ty(Ty::Str), &[Effect::Read]),
+        def("stdin_read", vec![], Ty::Str, &[Effect::Read]),
+        def("stdin_read_line", vec![], Ty::Str, &[Effect::Read]),
+        def("stdin_ready", vec![], Ty::Bool, &[Effect::Read]),
+        def("process_exit", vec![Ty::I64], Ty::Never, &[Effect::IO]),
+        def(
+            "process_run",
+            vec![Ty::Str, vec_ty(Ty::Str)],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def("process_get_stdout", vec![], Ty::Str, &[Effect::IO]),
+        def("process_get_stderr", vec![], Ty::Str, &[Effect::IO]),
+        def(
+            "process_start",
+            vec![Ty::Str, vec_ty(Ty::Str)],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def("process_wait", vec![Ty::I64], Ty::I64, &[Effect::IO]),
+        def(
+            "process_wait_timeout",
+            vec![Ty::I64, Ty::I64],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def(
+            "process_poll_wait",
+            vec![Ty::I64, Ty::I64],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def("process_kill", vec![Ty::I64], Ty::I64, &[Effect::IO]),
+        def("process_stdout_for", vec![Ty::I64], Ty::Str, &[Effect::IO]),
+        def("process_stderr_for", vec![Ty::I64], Ty::Str, &[Effect::IO]),
+        def(
+            "__vow_clif_create",
+            vec![Ty::I64, Ty::I64],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def(
+            "__vow_clif_add_string",
+            vec![Ty::I64, Ty::Str],
+            Ty::Unit,
+            &[Effect::IO],
+        ),
+        def(
+            "__vow_clif_declare_extern",
+            vec![Ty::I64, Ty::Str],
+            Ty::Unit,
+            &[Effect::IO],
+        ),
+        def(
+            "__vow_clif_declare_function",
+            vec![
+                Ty::I64,
+                Ty::I64,
+                Ty::Str,
+                vec_ty(Ty::I64),
+                Ty::I64,
+                Ty::I64,
+                Ty::I64,
+                Ty::I64,
+                vec_ty(Ty::I64),
+            ],
+            Ty::Unit,
+            &[Effect::IO],
+        ),
+        def(
+            "__vow_clif_fn_begin",
+            vec![Ty::I64, Ty::I64, Ty::I64, vec_ty(Ty::I64)],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def("__vow_clif_fn_block", vec![Ty::I64], Ty::I64, &[Effect::IO]),
+        def(
+            "__vow_clif_fn_inst",
+            vec![
+                Ty::I64,
+                Ty::I64,
+                Ty::I64,
+                Ty::I64,
+                Ty::I64,
+                Ty::I64,
+                Ty::I64,
+                Ty::Str,
+                vec_ty(Ty::I64),
+                Ty::I64,
+            ],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def(
+            "__vow_clif_fn_vow",
+            vec![Ty::I64, Ty::I64, Ty::Str, vec_ty(Ty::I64), vec_ty(Ty::Str)],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def("__vow_clif_fn_end", vec![Ty::I64], Ty::I64, &[Effect::IO]),
+        def(
+            "__vow_clif_finish",
+            vec![Ty::I64, Ty::Str],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def(
+            "__vow_clif_link",
+            vec![Ty::Str, Ty::Str],
+            Ty::I64,
+            &[Effect::IO],
+        ),
+        def("__vow_clif_destroy", vec![Ty::I64], Ty::Unit, &[Effect::IO]),
+    ];
+
+    // Byte-narrowing conversions: `<source>_to_u8_<mode>` for every wider int,
+    // preserved as a generated family rather than one row per combination.
+    sigs.push(def("parse_u8", vec![Ty::Str], option_ty(Ty::U8), &[]));
+    for (source_name, source_ty) in [
+        ("i16", Ty::I16),
+        ("i32", Ty::I32),
+        ("i64", Ty::I64),
+        ("i128", Ty::I128),
+        ("u16", Ty::U16),
+        ("u32", Ty::U32),
+        ("u64", Ty::U64),
+        ("u128", Ty::U128),
+    ] {
+        for (mode, return_ty) in [
+            ("try", option_ty(Ty::U8)),
+            ("wrap", Ty::U8),
+            ("sat", Ty::U8),
+        ] {
+            sigs.push(def(
+                &format!("{source_name}_to_u8_{mode}"),
+                vec![source_ty.clone()],
+                return_ty,
+                &[],
+            ));
+        }
+    }
+    for name in ["add_sat_u8", "sub_sat_u8", "mul_sat_u8"] {
+        sigs.push(def(name, vec![Ty::U8, Ty::U8], Ty::U8, &[]));
+    }
+
+    // 32-bit narrowing conversions: `<source>_to_i32_<mode>`.
+    sigs.push(def("parse_i32", vec![Ty::Str], option_ty(Ty::I32), &[]));
+    for (source_name, source_ty) in [("i64", Ty::I64), ("u32", Ty::U32), ("u64", Ty::U64)] {
+        for (mode, return_ty) in [
+            ("try", option_ty(Ty::I32)),
+            ("wrap", Ty::I32),
+            ("sat", Ty::I32),
+        ] {
+            sigs.push(def(
+                &format!("{source_name}_to_i32_{mode}"),
+                vec![source_ty.clone()],
+                return_ty,
+                &[],
+            ));
+        }
+    }
+
+    sigs
+}
+
 impl TypeEnv {
     pub fn new() -> Self {
         let mut env = Self {
@@ -125,726 +402,9 @@ impl TypeEnv {
             enum_defs: HashMap::new(),
             type_aliases: HashMap::new(),
         };
-        env.define_fn(
-            "print_str",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Unit,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "print_i64",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::Unit,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "print_u64",
-            FnSig {
-                params: vec![Ty::U64],
-                return_ty: Ty::Unit,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "debug_str",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Unit,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "debug_i64",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::Unit,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "debug_u64",
-            FnSig {
-                params: vec![Ty::U64],
-                return_ty: Ty::Unit,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "fs_read",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Str,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_open",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_read_line",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::Str,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_status",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::I64,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_close",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::I64,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_write",
-            FnSig {
-                params: vec![Ty::Str, Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::Write].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_exists",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_mkdir",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_listdir",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_remove",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_remove_dir",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_is_dir",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_is_symlink",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "fs_rename",
-            FnSig {
-                params: vec![Ty::Str, Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "string_substr",
-            FnSig {
-                params: vec![Ty::Str, Ty::I64, Ty::I64],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "string_split",
-            FnSig {
-                params: vec![Ty::Str, Ty::Str],
-                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "string_starts_with",
-            FnSig {
-                params: vec![Ty::Str, Ty::Str],
-                return_ty: Ty::I64,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "string_ends_with",
-            FnSig {
-                params: vec![Ty::Str, Ty::Str],
-                return_ty: Ty::I64,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "string_matches_literal_at",
-            FnSig {
-                params: vec![Ty::Str, Ty::I64, Ty::Str],
-                return_ty: Ty::I64,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "string_trim",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "string_to_upper",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "string_to_lower",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "string_replace",
-            FnSig {
-                params: vec![Ty::Str, Ty::Str, Ty::Str],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "string_join",
-            FnSig {
-                params: vec![
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
-                    Ty::Str,
-                ],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "parse_i64",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I64]),
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "int_to_string",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "uint_to_string",
-            FnSig {
-                params: vec![Ty::U64],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "i64_to_string",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "vec_sort",
-            FnSig {
-                params: vec![Ty::Applied(
-                    Box::new(Ty::Struct("Vec".to_string())),
-                    vec![Ty::I64],
-                )],
-                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "time_unix",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "time_unix_ms",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        // Perfetto tracer primitives (issue #784).
-        env.define_fn(
-            "time_micros",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "proc_sample",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::Str,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "gzip_write_file",
-            FnSig {
-                params: vec![Ty::Str, Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "num_cpus",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "memory_root_arena_bytes",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::U64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "memory_peak_bytes",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::U64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "memory_alloc_count_since_start",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::U64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "hex_encode",
-            FnSig {
-                params: vec![Ty::Applied(
-                    Box::new(Ty::Struct("Vec".to_string())),
-                    vec![Ty::U8],
-                )],
-                return_ty: Ty::Str,
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "hex_decode",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::U8]),
-                effects: BTreeSet::new(),
-            },
-        );
-        env.define_fn(
-            "eprintln_str",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: Ty::Unit,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "args",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "stdin_read",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::Str,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "stdin_read_line",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::Str,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "stdin_ready",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::Bool,
-                effects: [Effect::Read].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "process_exit",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::Never,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-
-        env.define_fn(
-            "process_run",
-            FnSig {
-                params: vec![
-                    Ty::Str,
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
-                ],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "process_get_stdout",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::Str,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "process_get_stderr",
-            FnSig {
-                params: vec![],
-                return_ty: Ty::Str,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-
-        env.define_fn(
-            "process_start",
-            FnSig {
-                params: vec![
-                    Ty::Str,
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
-                ],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "process_wait",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "process_wait_timeout",
-            FnSig {
-                params: vec![Ty::I64, Ty::I64],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "process_poll_wait",
-            FnSig {
-                params: vec![Ty::I64, Ty::I64],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "process_kill",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "process_stdout_for",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::Str,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "process_stderr_for",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::Str,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-
-        // Cranelift shim FFI functions (used by the self-hosted compiler's clif.vow)
-        env.define_fn(
-            "__vow_clif_create",
-            FnSig {
-                params: vec![Ty::I64, Ty::I64],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_add_string",
-            FnSig {
-                params: vec![Ty::I64, Ty::Str],
-                return_ty: Ty::Unit,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_declare_extern",
-            FnSig {
-                params: vec![Ty::I64, Ty::Str],
-                return_ty: Ty::Unit,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_declare_function",
-            FnSig {
-                params: vec![
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::Str,
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                ],
-                return_ty: Ty::Unit,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        // Incremental per-function Cranelift FFI. Replaces the monolithic
-        // __vow_clif_compile_function; the self-hosted clif.vow now streams
-        // blocks/instructions/vow entries into shim-owned scratch buffers
-        // that are reused across functions.
-        env.define_fn(
-            "__vow_clif_fn_begin",
-            FnSig {
-                params: vec![
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                ],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_fn_block",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_fn_inst",
-            FnSig {
-                params: vec![
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::Str,
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::I64,
-                ],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_fn_vow",
-            FnSig {
-                params: vec![
-                    Ty::I64,
-                    Ty::I64,
-                    Ty::Str,
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
-                ],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_fn_end",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_finish",
-            FnSig {
-                params: vec![Ty::I64, Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_link",
-            FnSig {
-                params: vec![Ty::Str, Ty::Str],
-                return_ty: Ty::I64,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-        env.define_fn(
-            "__vow_clif_destroy",
-            FnSig {
-                params: vec![Ty::I64],
-                return_ty: Ty::Unit,
-                effects: [Effect::IO].into_iter().collect(),
-            },
-        );
-
-        let option_u8 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::U8]);
-        env.define_fn(
-            "parse_u8",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: option_u8.clone(),
-                effects: BTreeSet::new(),
-            },
-        );
-        for (source_name, source_ty) in [
-            ("i16", Ty::I16),
-            ("i32", Ty::I32),
-            ("i64", Ty::I64),
-            ("i128", Ty::I128),
-            ("u16", Ty::U16),
-            ("u32", Ty::U32),
-            ("u64", Ty::U64),
-            ("u128", Ty::U128),
-        ] {
-            for (mode, return_ty) in [
-                ("try", option_u8.clone()),
-                ("wrap", Ty::U8),
-                ("sat", Ty::U8),
-            ] {
-                env.define_fn(
-                    format!("{source_name}_to_u8_{mode}"),
-                    FnSig {
-                        params: vec![source_ty.clone()],
-                        return_ty,
-                        effects: BTreeSet::new(),
-                    },
-                );
-            }
+        for (name, sig) in builtin_free_fn_signatures() {
+            env.define_fn(name, sig);
         }
-        for name in ["add_sat_u8", "sub_sat_u8", "mul_sat_u8"] {
-            env.define_fn(
-                name,
-                FnSig {
-                    params: vec![Ty::U8, Ty::U8],
-                    return_ty: Ty::U8,
-                    effects: BTreeSet::new(),
-                },
-            );
-        }
-
-        let option_i32 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
-        env.define_fn(
-            "parse_i32",
-            FnSig {
-                params: vec![Ty::Str],
-                return_ty: option_i32.clone(),
-                effects: BTreeSet::new(),
-            },
-        );
-        for (source_name, source_ty) in [("i64", Ty::I64), ("u32", Ty::U32), ("u64", Ty::U64)] {
-            for (mode, return_ty) in [
-                ("try", option_i32.clone()),
-                ("wrap", Ty::I32),
-                ("sat", Ty::I32),
-            ] {
-                env.define_fn(
-                    format!("{source_name}_to_i32_{mode}"),
-                    FnSig {
-                        params: vec![source_ty.clone()],
-                        return_ty,
-                        effects: BTreeSet::new(),
-                    },
-                );
-            }
-        }
-
         env
     }
 
@@ -1125,6 +685,198 @@ mod tests {
 
     fn dummy_span() -> Span {
         Span::new(0, 0)
+    }
+
+    fn builtin_signature_snapshot() -> String {
+        let env = TypeEnv::new();
+        let mut lines: Vec<String> = env
+            .fn_sigs
+            .iter()
+            .map(|(name, sig)| {
+                let params = sig
+                    .params
+                    .iter()
+                    .map(|t| format!("{t:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let effects = sig
+                    .effects
+                    .iter()
+                    .map(|e| format!("{e:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{name}({params}) -> {:?} [{effects}]", sig.return_ty)
+            })
+            .collect();
+        lines.sort();
+        lines.join("\n")
+    }
+
+    // Golden snapshot of every builtin free-function signature registered by
+    // `TypeEnv::new`. Captured from behavior prior to the table refactor, so it
+    // is an independent source of truth: any dropped, added, or drifted builtin
+    // fails here with the offending line named.
+    const EXPECTED_BUILTIN_SIGNATURES: &str = r#"
+__vow_clif_add_string(I64, Str) -> Unit [IO]
+__vow_clif_create(I64, I64) -> I64 [IO]
+__vow_clif_declare_extern(I64, Str) -> Unit [IO]
+__vow_clif_declare_function(I64, I64, Str, Applied(Struct("Vec"), [I64]), I64, I64, I64, I64, Applied(Struct("Vec"), [I64])) -> Unit [IO]
+__vow_clif_destroy(I64) -> Unit [IO]
+__vow_clif_finish(I64, Str) -> I64 [IO]
+__vow_clif_fn_begin(I64, I64, I64, Applied(Struct("Vec"), [I64])) -> I64 [IO]
+__vow_clif_fn_block(I64) -> I64 [IO]
+__vow_clif_fn_end(I64) -> I64 [IO]
+__vow_clif_fn_inst(I64, I64, I64, I64, I64, I64, I64, Str, Applied(Struct("Vec"), [I64]), I64) -> I64 [IO]
+__vow_clif_fn_vow(I64, I64, Str, Applied(Struct("Vec"), [I64]), Applied(Struct("Vec"), [Str])) -> I64 [IO]
+__vow_clif_link(Str, Str) -> I64 [IO]
+add_sat_u8(U8, U8) -> U8 []
+args() -> Applied(Struct("Vec"), [Str]) [Read]
+debug_i64(I64) -> Unit []
+debug_str(Str) -> Unit []
+debug_u64(U64) -> Unit []
+eprintln_str(Str) -> Unit [IO]
+fs_close(I64) -> I64 [Read]
+fs_exists(Str) -> I64 [Read]
+fs_is_dir(Str) -> I64 [Read]
+fs_is_symlink(Str) -> I64 [Read]
+fs_listdir(Str) -> Applied(Struct("Vec"), [Str]) [Read]
+fs_mkdir(Str) -> I64 [IO]
+fs_open(Str) -> I64 [Read]
+fs_read(Str) -> Str [Read]
+fs_read_line(I64) -> Str [Read]
+fs_remove(Str) -> I64 [IO]
+fs_remove_dir(Str) -> I64 [IO]
+fs_rename(Str, Str) -> I64 [IO]
+fs_status(I64) -> I64 [Read]
+fs_write(Str, Str) -> I64 [Write]
+gzip_write_file(Str, Str) -> I64 [IO]
+hex_decode(Str) -> Applied(Struct("Vec"), [U8]) []
+hex_encode(Applied(Struct("Vec"), [U8])) -> Str []
+i128_to_u8_sat(I128) -> U8 []
+i128_to_u8_try(I128) -> Applied(Enum("Option"), [U8]) []
+i128_to_u8_wrap(I128) -> U8 []
+i16_to_u8_sat(I16) -> U8 []
+i16_to_u8_try(I16) -> Applied(Enum("Option"), [U8]) []
+i16_to_u8_wrap(I16) -> U8 []
+i32_to_u8_sat(I32) -> U8 []
+i32_to_u8_try(I32) -> Applied(Enum("Option"), [U8]) []
+i32_to_u8_wrap(I32) -> U8 []
+i64_to_i32_sat(I64) -> I32 []
+i64_to_i32_try(I64) -> Applied(Enum("Option"), [I32]) []
+i64_to_i32_wrap(I64) -> I32 []
+i64_to_string(I64) -> Str []
+i64_to_u8_sat(I64) -> U8 []
+i64_to_u8_try(I64) -> Applied(Enum("Option"), [U8]) []
+i64_to_u8_wrap(I64) -> U8 []
+int_to_string(I64) -> Str []
+memory_alloc_count_since_start() -> U64 [IO]
+memory_peak_bytes() -> U64 [IO]
+memory_root_arena_bytes() -> U64 [IO]
+mul_sat_u8(U8, U8) -> U8 []
+num_cpus() -> I64 [IO]
+parse_i32(Str) -> Applied(Enum("Option"), [I32]) []
+parse_i64(Str) -> Applied(Enum("Option"), [I64]) []
+parse_u8(Str) -> Applied(Enum("Option"), [U8]) []
+print_i64(I64) -> Unit [IO]
+print_str(Str) -> Unit [IO]
+print_u64(U64) -> Unit [IO]
+proc_sample() -> Str [IO]
+process_exit(I64) -> Never [IO]
+process_get_stderr() -> Str [IO]
+process_get_stdout() -> Str [IO]
+process_kill(I64) -> I64 [IO]
+process_poll_wait(I64, I64) -> I64 [IO]
+process_run(Str, Applied(Struct("Vec"), [Str])) -> I64 [IO]
+process_start(Str, Applied(Struct("Vec"), [Str])) -> I64 [IO]
+process_stderr_for(I64) -> Str [IO]
+process_stdout_for(I64) -> Str [IO]
+process_wait(I64) -> I64 [IO]
+process_wait_timeout(I64, I64) -> I64 [IO]
+stdin_read() -> Str [Read]
+stdin_read_line() -> Str [Read]
+stdin_ready() -> Bool [Read]
+string_ends_with(Str, Str) -> I64 []
+string_join(Applied(Struct("Vec"), [Str]), Str) -> Str []
+string_matches_literal_at(Str, I64, Str) -> I64 []
+string_replace(Str, Str, Str) -> Str []
+string_split(Str, Str) -> Applied(Struct("Vec"), [Str]) []
+string_starts_with(Str, Str) -> I64 []
+string_substr(Str, I64, I64) -> Str []
+string_to_lower(Str) -> Str []
+string_to_upper(Str) -> Str []
+string_trim(Str) -> Str []
+sub_sat_u8(U8, U8) -> U8 []
+time_micros() -> I64 [IO]
+time_unix() -> I64 [IO]
+time_unix_ms() -> I64 [IO]
+u128_to_u8_sat(U128) -> U8 []
+u128_to_u8_try(U128) -> Applied(Enum("Option"), [U8]) []
+u128_to_u8_wrap(U128) -> U8 []
+u16_to_u8_sat(U16) -> U8 []
+u16_to_u8_try(U16) -> Applied(Enum("Option"), [U8]) []
+u16_to_u8_wrap(U16) -> U8 []
+u32_to_i32_sat(U32) -> I32 []
+u32_to_i32_try(U32) -> Applied(Enum("Option"), [I32]) []
+u32_to_i32_wrap(U32) -> I32 []
+u32_to_u8_sat(U32) -> U8 []
+u32_to_u8_try(U32) -> Applied(Enum("Option"), [U8]) []
+u32_to_u8_wrap(U32) -> U8 []
+u64_to_i32_sat(U64) -> I32 []
+u64_to_i32_try(U64) -> Applied(Enum("Option"), [I32]) []
+u64_to_i32_wrap(U64) -> I32 []
+u64_to_u8_sat(U64) -> U8 []
+u64_to_u8_try(U64) -> Applied(Enum("Option"), [U8]) []
+u64_to_u8_wrap(U64) -> U8 []
+uint_to_string(U64) -> Str []
+vec_sort(Applied(Struct("Vec"), [I64])) -> Applied(Struct("Vec"), [I64]) []
+"#;
+
+    #[test]
+    fn builtin_signatures_snapshot() {
+        assert_eq!(
+            builtin_signature_snapshot(),
+            EXPECTED_BUILTIN_SIGNATURES.trim()
+        );
+    }
+
+    #[test]
+    fn builtin_signatures_match_spec_examples() {
+        // Signatures asserted here are sourced independently from the builtin
+        // reference table in docs/spec/grammar.md, not from the code under test.
+        let env = TypeEnv::new();
+        let vec_of = |elem: Ty| Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![elem]);
+        let option_of =
+            |elem: Ty| Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![elem]);
+        let pure: BTreeSet<Effect> = BTreeSet::new();
+        let io: BTreeSet<Effect> = [Effect::IO].into_iter().collect();
+        let write: BTreeSet<Effect> = [Effect::Write].into_iter().collect();
+
+        let cases: &[(&str, Vec<Ty>, Ty, &BTreeSet<Effect>)] = &[
+            ("print_str", vec![Ty::Str], Ty::Unit, &io),
+            ("debug_str", vec![Ty::Str], Ty::Unit, &pure),
+            ("fs_write", vec![Ty::Str, Ty::Str], Ty::I64, &write),
+            (
+                "string_join",
+                vec![vec_of(Ty::Str), Ty::Str],
+                Ty::Str,
+                &pure,
+            ),
+            ("parse_i64", vec![Ty::Str], option_of(Ty::I64), &pure),
+            ("parse_u8", vec![Ty::Str], option_of(Ty::U8), &pure),
+            ("i64_to_u8_try", vec![Ty::I64], option_of(Ty::U8), &pure),
+        ];
+
+        for (name, params, return_ty, effects) in cases {
+            let sig = env
+                .lookup_fn(name)
+                .unwrap_or_else(|| panic!("builtin `{name}` is not registered"));
+            assert_eq!(&sig.params, params, "params mismatch for `{name}`");
+            assert_eq!(
+                &sig.return_ty, return_ty,
+                "return type mismatch for `{name}`"
+            );
+            assert_eq!(&sig.effects, *effects, "effects mismatch for `{name}`");
+        }
     }
 
     #[test]
