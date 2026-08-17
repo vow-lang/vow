@@ -25,39 +25,33 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: bench/uv.lock
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Cache ESBMC
-        id: cache-esbmc
-        uses: actions/cache@v6
-        with:
-          path: ~/esbmc
-          key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
       - name: Install ESBMC
-        if: steps.cache-esbmc.outputs.cache-hit != 'true'
-        env:
-          ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
-        run: |
-          ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
-
-          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-            -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
-
-          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
-
-          unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
-          rm "/tmp/$ESBMC_ZIP"
-      - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/install-esbmc
+        with:
+          version: ${{ env.ESBMC_VERSION }}
+          sha256: ${{ env.ESBMC_SHA256 }}
+      - name: Arena verification runner tests
+        run: python3 scripts/test_verify_arena.py
+      - name: Arena primitive verification
+        run: scripts/verify_arena.sh
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
       - name: Benchmark skeleton fidelity unit tests
         run: |
           python3 scripts/test_benchmark_contracts.py
-          PYTHONPATH=bench python3 -m unittest discover -s bench -p 'test_*.py'
+          uv run --project bench --locked python -m unittest discover -s bench -p 'test_*.py'
           PYTHONPATH=euler python3 -m unittest discover -s euler -p 'test_*.py'
       - name: Verifier-evaluation suite (#334)
         # Asserts the labelled corpus in tests/verify* against ground-truth
@@ -104,6 +98,7 @@ jobs:
           fail_ci_if_error: ${{ secrets.CODECOV_TOKEN != '' }}
 
   bootstrap:
+    needs: build-and-test
     # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression
     # (failing Stage 1/2 verification, or a broken SHA-256 fixed point)
     # blocks PRs. Stage 3 skips ESBMC to roughly halve wall time;
@@ -115,27 +110,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Cache ESBMC
-        id: cache-esbmc
-        uses: actions/cache@v6
-        with:
-          path: ~/esbmc
-          key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
       - name: Install ESBMC
-        if: steps.cache-esbmc.outputs.cache-hit != 'true'
-        env:
-          ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
-        run: |
-          ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
-
-          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-            -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
-
-          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
-
-          unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
-          rm "/tmp/$ESBMC_ZIP"
-      - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/install-esbmc
+        with:
+          version: ${{ env.ESBMC_VERSION }}
+          sha256: ${{ env.ESBMC_SHA256 }}
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify
       - name: Verifier-evaluation suite (self-hosted)

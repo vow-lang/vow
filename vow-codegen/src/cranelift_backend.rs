@@ -4,7 +4,7 @@ use cranelift_codegen::ir::{
     AbiParam, Block, BlockArg, FuncRef, GlobalValue, InstBuilder, MemFlagsData, Signature,
     StackSlot, StackSlotData, StackSlotKind, TrapCode, Value, types,
 };
-use cranelift_codegen::isa::{self, TargetIsa};
+use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{
@@ -13,7 +13,6 @@ use cranelift_module::{
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
-use target_lexicon::{OperatingSystem, Triple};
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, HiddenRegionIdx, Inst, InstData, InstId,
     IntegerSignedness, IntegerType, IntegerWidth, Module as IrModule, Opcode, RegionConstraint,
@@ -155,26 +154,11 @@ fn make_isa(mode: BuildMode) -> Result<Arc<dyn TargetIsa>, CodegenError> {
             .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
     }
     let flags = settings::Flags::new(flag_builder);
-    let mut isa_builder =
-        isa::lookup(host_triple()).map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
-    cranelift_native::infer_native_flags(&mut isa_builder)
-        .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
+    let isa_builder =
+        cranelift_native::builder().map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
     isa_builder
         .finish(flags)
         .map_err(|e| CodegenError::IsaBuild(e.to_string()))
-}
-
-// `Triple::host()` reports macOS as `*-apple-darwin`. cranelift-object 0.132
-// maps a `Darwin` OS to Mach-O `PLATFORM_UNKNOWN` when writing its new
-// `LC_BUILD_VERSION` load command, which the macOS linker rejects with
-// "unknown platform". Rewriting `Darwin` to `MacOSX` yields `PLATFORM_MACOS`.
-// Every non-Darwin host (e.g. Linux/ELF) is returned unchanged.
-fn host_triple() -> Triple {
-    let mut triple = Triple::host();
-    if let OperatingSystem::Darwin(v) = triple.operating_system {
-        triple.operating_system = OperatingSystem::MacOSX(v);
-    }
-    triple
 }
 
 fn ir_ty_to_cranelift(ty: IrTy) -> Option<types::Type> {
@@ -617,6 +601,14 @@ fn routed_vec_extern<'a>(
         "__vow_string_from_i64" => match inst.region {
             RegionId::Root => (sym, None),
             region => ("__vow_string_from_i64_in_arena", Some(region)),
+        },
+        "__vow_string_from_u64" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_from_u64_in_arena", Some(region)),
+        },
+        "__vow_string_parse_i64_opt" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_parse_i64_opt_in_arena", Some(region)),
         },
         "__vow_string_split" => match inst.region {
             RegionId::Root => (sym, None),
@@ -2319,11 +2311,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // byte value
         }
-        "__vow_string_from_i64" => {
+        "__vow_string_from_i64" | "__vow_string_from_u64" => {
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
-        "__vow_string_from_i64_in_arena" => {
+        "__vow_string_from_i64_in_arena" | "__vow_string_from_u64_in_arena" => {
             sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
@@ -2427,6 +2419,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
         }
+        "__vow_string_parse_i64_opt_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
+        }
         "__vow_string_split" => {
             sig.params.push(AbiParam::new(types::I64)); // haystack ptr
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
@@ -2498,10 +2495,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_parse_i64" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-            sig.returns.push(AbiParam::new(types::I64)); // parsed value
         }
         "__vow_vec_sort" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
@@ -2745,7 +2738,14 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_profile_enter" => {
             sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
         }
-        "__vow_profile_init" | "__vow_init_stack_guard" | "__vow_stack_exit" => {}
+        "__vow_perf_counter_read" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_perf_count"
+        | "__vow_perf_counter_reset"
+        | "__vow_profile_init"
+        | "__vow_init_stack_guard"
+        | "__vow_stack_exit" => {}
         "__vow_stack_enter" => {
             sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
         }
@@ -4656,6 +4656,11 @@ mod tests {
             ("__vow_string_to_lower", "__vow_string_to_lower_in_arena", 1),
             ("__vow_string_replace", "__vow_string_replace_in_arena", 3),
             ("__vow_string_join", "__vow_string_join_in_arena", 2),
+            (
+                "__vow_string_parse_i64_opt",
+                "__vow_string_parse_i64_opt_in_arena",
+                1,
+            ),
         ];
 
         let mut insts = vec![
@@ -4688,6 +4693,37 @@ mod tests {
             assert!(symbols.contains(routed), "{routed} should be imported");
             assert!(!symbols.contains(root), "{root} should not be imported");
         }
+    }
+
+    #[test]
+    fn root_region_parse_i64_option_keeps_wrapper_symbol() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::Unit,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_parse_i64_opt".to_string()),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let symbols = compiled_object_symbols(result.unwrap().bytes.as_slice());
+        assert!(symbols.contains("__vow_string_parse_i64_opt"));
+        assert!(!symbols.contains("__vow_string_parse_i64_opt_in_arena"));
     }
 
     #[test]
@@ -4829,7 +4865,7 @@ mod tests {
     }
 
     #[test]
-    fn projected_parameter_region_string_push_byte_keeps_default_variant() {
+    fn projected_parameter_region_string_mutations_keep_default_variants() {
         let grow_projection = Function {
             id: FuncId(0),
             name: "grow_projection".to_string(),
@@ -4886,7 +4922,21 @@ mod tests {
                         vec![4, 7],
                         InstData::CallExtern("__vow_string_push_byte".to_string()),
                     ),
-                    inst(9, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                    inst(
+                        9,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![2, 4],
+                        InstData::CallExtern("__vow_string_push_str".to_string()),
+                    ),
+                    inst(
+                        10,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![4, 2],
+                        InstData::CallExtern("__vow_string_push_str".to_string()),
+                    ),
+                    inst(11, Opcode::Return, Ty::Unit, vec![], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
@@ -4915,6 +4965,8 @@ mod tests {
         let symbols = compiled_object_symbols(bytes.as_slice());
         assert!(symbols.contains("__vow_string_push_byte"));
         assert!(!symbols.contains("__vow_string_push_byte_in_arena"));
+        assert!(symbols.contains("__vow_string_push_str"));
+        assert!(!symbols.contains("__vow_string_push_str_in_arena"));
     }
 
     #[test]

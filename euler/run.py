@@ -605,7 +605,7 @@ def find_root() -> Path:
 
 def resolve_compiler(root: Path) -> tuple[Path, int | None, bool]:
     # Prefer self-hosted vowc (supports --unwind)
-    vowc = root / "vowc"
+    vowc = root / "build" / "vowc"
     if vowc.exists():
         return vowc, SELF_HOSTED_MEM_LIMIT, True
     # Fall back to Rust stage-0 binary (does NOT accept --unwind)

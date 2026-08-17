@@ -255,7 +255,7 @@ pub(crate) fn run_contracts_command(
     let summary = build_contracts_summary(&entries);
     // Fail closed: `vow contracts --verify` exits non-zero when any contract is
     // not proven, matching `vow build --verify` / `vow verify` (#479).
-    if contracts_summary_has_failure(&summary) {
+    if verify && contracts_summary_has_failure(&summary) {
         exit_code = 1;
     }
     let result = ContractsResultJson {
