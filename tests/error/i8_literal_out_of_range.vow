@@ -1,0 +1,8 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 128 does not fit in i8"
+module I8LiteralOutOfRange
+
+fn main() -> i32 {
+    let x: i8 = 128;
+    0
+}

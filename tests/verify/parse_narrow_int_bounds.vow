@@ -1,0 +1,46 @@
+// TEST: category callee-blame
+module ParseNarrowIntBounds
+
+fn parsed_i8_is_in_range(text: String) -> i64 vow {
+    ensures: result >= -128 && result <= 127
+} {
+    match parse_i8(text) {
+        Option::Some(value) => value as i64,
+        Option::None => 0,
+    }
+}
+
+fn parsed_i16_is_in_range(text: String) -> i64 vow {
+    ensures: result >= -32768 && result <= 32767
+} {
+    match parse_i16(text) {
+        Option::Some(value) => value as i64,
+        Option::None => 0,
+    }
+}
+
+fn parsed_u16_is_in_range(text: String) -> i64 vow {
+    ensures: result >= 0 && result <= 65535
+} {
+    match parse_u16(text) {
+        Option::Some(value) => value as i64,
+        Option::None => 0,
+    }
+}
+
+fn parsed_u32_is_in_range(text: String) -> i64 vow {
+    ensures: result >= 0 && result <= 4294967295
+} {
+    match parse_u32(text) {
+        Option::Some(value) => value as i64,
+        Option::None => 0,
+    }
+}
+
+fn main() -> i32 {
+    parsed_i8_is_in_range(String::from(""));
+    parsed_i16_is_in_range(String::from(""));
+    parsed_u16_is_in_range(String::from(""));
+    parsed_u32_is_in_range(String::from(""));
+    0
+}

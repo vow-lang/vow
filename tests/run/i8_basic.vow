@@ -1,0 +1,24 @@
+// TEST: stdout "8\n-4\n"
+module I8Basic
+
+fn transform(value: i8, count: u32) -> i8 {
+    let incremented: i8 = value +! 1;
+    let masked: i8 = incremented & 15;
+    masked << count
+}
+
+fn arithmetic_shift(value: i8, count: u32) -> i8 {
+    value >> count
+}
+
+fn main() -> i32 [io] {
+    let value: i8 = 3;
+    let count: u32 = 1;
+    print_i64(transform(value, count) as i64);
+    print_str(String::from("\n"));
+
+    let negative: i8 = -8;
+    print_i64(arithmetic_shift(negative, count) as i64);
+    print_str(String::from("\n"));
+    0
+}
