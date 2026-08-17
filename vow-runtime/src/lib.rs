@@ -1,11 +1,14 @@
 #![allow(clippy::missing_safety_doc)]
 
+mod violation;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::io::Write as _;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use violation::{ValueBinding, render_violation};
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -49,18 +52,6 @@ fn file_read_map_init(
     map.get_or_insert_with(HashMap::new)
 }
 
-const TAG_I32: u8 = 0;
-const TAG_I64: u8 = 1;
-const TAG_F32: u8 = 2;
-const TAG_F64: u8 = 3;
-const TAG_BOOL: u8 = 4;
-const TAG_U64: u8 = 5;
-const TAG_U8: u8 = 6;
-const TAG_I8: u8 = 7;
-const TAG_I16: u8 = 8;
-const TAG_U16: u8 = 9;
-const TAG_U32: u8 = 10;
-
 /// Reserved process exit status for any runtime abort — a contract
 /// violation, checked-arithmetic overflow, unwrap-on-None, index-out-of-bounds,
 /// region-literal mutation, runtime-invariant violation, sanitizer trap, stack
@@ -81,23 +72,6 @@ pub struct VowBinding {
     pub payload: u64,
 }
 
-fn fmt_payload(tag: u8, payload: u64) -> String {
-    match tag {
-        TAG_I32 => format!("{}", payload as i32),
-        TAG_I64 => format!("{}", payload as i64),
-        TAG_F32 => format!("{}", f32::from_bits(payload as u32)),
-        TAG_F64 => format!("{}", f64::from_bits(payload)),
-        TAG_BOOL => if payload != 0 { "true" } else { "false" }.to_string(),
-        TAG_U64 => format!("{payload}"),
-        TAG_U8 => format!("{}", payload as u8),
-        TAG_I8 => format!("{}", payload as i8),
-        TAG_I16 => format!("{}", payload as i16),
-        TAG_U16 => format!("{}", payload as u16),
-        TAG_U32 => format!("{}", payload as u32),
-        _ => format!("0x{payload:x}"),
-    }
-}
-
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_violation(
     vow_id: u32,
@@ -108,48 +82,37 @@ pub unsafe extern "C" fn __vow_violation(
     file_ptr: *const c_char,
     offset: u32,
 ) {
-    let blame_str = if blame == 0 { "Caller" } else { "Callee" };
-    let desc = if desc_ptr.is_null() {
-        std::borrow::Cow::Borrowed("")
-    } else {
-        unsafe { CStr::from_ptr(desc_ptr) }.to_string_lossy()
-    };
-    let file = if file_ptr.is_null() {
-        std::borrow::Cow::Borrowed("")
-    } else {
-        unsafe { CStr::from_ptr(file_ptr) }.to_string_lossy()
-    };
-
-    let (values_json, values_human) = if binding_count > 0 {
-        let mut json_pairs = String::new();
-        let mut human_pairs = String::new();
-        for i in 0..binding_count as usize {
-            let b = unsafe { &*bindings_ptr.add(i) };
-            let name = unsafe { CStr::from_ptr(b.name) }.to_string_lossy();
-            let val = fmt_payload(b.tag, b.payload);
-            if i > 0 {
-                json_pairs.push(',');
-                human_pairs.push_str(", ");
-            }
-            json_pairs.push_str(&format!(r#""{name}":{val}"#));
-            human_pairs.push_str(&format!("{name}={val}"));
+    let decode = |ptr: *const c_char| -> String {
+        if ptr.is_null() {
+            String::new()
+        } else {
+            unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned()
         }
-        (
-            format!(r#","values":{{{json_pairs}}}"#),
-            format!(", {human_pairs}"),
-        )
-    } else {
-        (String::new(), String::new())
     };
+    let desc = decode(desc_ptr);
+    let file = decode(file_ptr);
+    // Decode the C ABI records into owned data first so the pure renderer can
+    // borrow plain `&str`s, keeping it free of `unsafe` and raw pointers.
+    let decoded: Vec<(String, u8, u64)> = (0..binding_count as usize)
+        .map(|i| {
+            let b = unsafe { &*bindings_ptr.add(i) };
+            (decode(b.name), b.tag, b.payload)
+        })
+        .collect();
+    let bindings: Vec<ValueBinding<'_>> = decoded
+        .iter()
+        .map(|(name, tag, payload)| ValueBinding {
+            name: name.as_str(),
+            tag: *tag,
+            payload: *payload,
+        })
+        .collect();
 
-    let json = format!(
-        r#"{{"error":"VowViolation","vow_id":{vow_id},"blame":"{blame_str}","description":"{desc}","file":"{file}","offset":{offset}{values_json}}}"#
-    );
-    let human = format!(
-        "vow violation: {desc}, blame={blame_str}, file={file}, offset={offset}{values_human}"
-    );
-    let _ = writeln!(std::io::stderr(), "{json}");
-    let _ = writeln!(std::io::stderr(), "{human}");
+    let rendered = render_violation(vow_id, blame, &desc, &file, offset, &bindings);
+    let _ = writeln!(std::io::stderr(), "{}", rendered.json);
+    let _ = writeln!(std::io::stderr(), "{}", rendered.human);
     std::process::exit(VOW_RUNTIME_ABORT_EXIT);
 }
 
@@ -4490,14 +4453,6 @@ mod tests {
     unsafe fn option_parts(ptr: *const u8) -> (i64, i64) {
         let words = ptr as *const i64;
         unsafe { (*words, *words.add(1)) }
-    }
-
-    #[test]
-    fn narrow_payload_tags_preserve_signedness_and_width() {
-        assert_eq!(fmt_payload(TAG_I8, (-128_i8) as u8 as u64), "-128");
-        assert_eq!(fmt_payload(TAG_I16, (-32768_i16) as u16 as u64), "-32768");
-        assert_eq!(fmt_payload(TAG_U16, u64::from(u16::MAX)), "65535");
-        assert_eq!(fmt_payload(TAG_U32, u64::from(u32::MAX)), "4294967295");
     }
 
     #[test]
