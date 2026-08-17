@@ -225,10 +225,43 @@ calling-convention extension that threads restart arguments alongside the
 precondition check. Either way, this is more than a branch-target tweak and
 should be sized accordingly.
 
-**Verification:** Each restart expression is a separate ESBMC verification
-target. The verifier proves that the restart's return value satisfies the
-function's `ensures` clause (or a weaker restart-specific postcondition). The
-restart paths are finite, statically enumerable, and bounded.
+**Verification:** Each restart expression is a heap-read-only synthetic
+verification target that reuses ordinary function-contract checking. A
+function that declares restarts opts its ordinary pre/postconditions, restart
+expressions, restart argument contracts, and restart-specific postconditions
+into the same local read-only validator. The initial feature admits only
+locally validated read-only instructions and known read-only builtins; writes,
+mutable allocation, and user-defined calls are rejected throughout that
+boundary rather than requiring transitive footprint analysis. This includes
+the ordinary precondition because a release-mode `handle` must evaluate it to
+dispatch without changing caller state. Every successful restart must
+establish the function's normal `ensures` clauses. A declared restart-specific
+postcondition is an additional path-local fact, so recovery through restart
+`r` exposes `Q && R_r`, never `R_r` in place of `Q`.
+
+The handler proves the selected restart's argument contract in its live state
+before invocation. The restart proof starts only from that argument contract;
+it does not inherit mutable facts from the original condition failure. If a
+restart can establish a weaker restart-specific clause but cannot establish
+the function's normal postcondition, the verifier rejects the restart
+declaration. Authors who need a genuinely weaker outcome must put that truth
+in the ordinary function contract or return an explicit result variant.
+
+Each synthetic restart target also publishes Vow's existing `RegionSummary`.
+Handled-call lowering instantiates the selected target's `return_region` with
+the actual restart arguments and joins all normal and selectable recovery
+outcomes in the existing region lattice. Thus a heap-backed handler value
+returned by a restart receives the same `must_outlive` propagation as an
+ordinary aliased function result.
+
+This keeps caller verification modular without outcome write-footprint or new
+alias-summary machinery: the restart is heap-read-only, the normal
+postcondition remains available on every successful edge, restart-specific
+facts stay guarded by ordinary CFG path conditions, and lifetime analysis
+reuses the existing region pass. The complete caller-side decision and failure
+diagnostics are recorded in
+[ADR 0002](adr/0002-restart-postcondition-propagation.md). Restart paths are
+finite, statically enumerable, and bounded.
 
 **Agent bug class eliminated:** Unrecoverable contract violations. Agents can
 program compositional recovery strategies without recompilation.

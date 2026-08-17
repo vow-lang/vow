@@ -1,0 +1,23 @@
+// TEST: stdout "30\n2147483647\n"
+module U32Basic
+
+fn transform(value: u32, count: u32) -> u32 {
+    let incremented: u32 = value +! 5;
+    let masked: u32 = incremented & 255;
+    masked << count
+}
+
+fn logical_shift(value: u32, count: u32) -> u32 {
+    value >> count
+}
+
+fn main() -> i32 [io] {
+    let value: u32 = 10;
+    let count: u32 = 1;
+    print_i64(transform(value, count) as i64);
+    print_str(String::from("\n"));
+    let high_bit: u32 = 4294967295;
+    print_i64(logical_shift(high_bit, count) as i64);
+    print_str(String::from("\n"));
+    0
+}

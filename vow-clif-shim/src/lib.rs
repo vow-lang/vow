@@ -124,6 +124,50 @@ fn ity_bits(ty: i64) -> i64 {
     }
 }
 
+fn coerce_call_argument(
+    builder: &mut FunctionBuilder<'_>,
+    value: Value,
+    source_ty: i64,
+    expected_ty: types::Type,
+) -> Value {
+    let actual_ty = builder.func.dfg.value_type(value);
+    if !actual_ty.is_int() || !expected_ty.is_int() {
+        return value;
+    }
+    if actual_ty.bits() > expected_ty.bits() {
+        return builder.ins().ireduce(expected_ty, value);
+    }
+    if actual_ty.bits() < expected_ty.bits() {
+        return if ity_is_signed(source_ty) {
+            builder.ins().sextend(expected_ty, value)
+        } else {
+            builder.ins().uextend(expected_ty, value)
+        };
+    }
+    value
+}
+
+fn extend_field_store_value(
+    builder: &mut FunctionBuilder<'_>,
+    value: Value,
+    source_ty: i64,
+) -> Value {
+    match source_ty {
+        ITY_I8 | ITY_I16 | ITY_I32 => builder.ins().sextend(types::I64, value),
+        ITY_U8 | ITY_U16 | ITY_U32 => builder.ins().uextend(types::I64, value),
+        ITY_F32 => {
+            let bits = builder
+                .ins()
+                .bitcast(types::I32, MemFlagsData::new(), value);
+            builder.ins().uextend(types::I64, bits)
+        }
+        ITY_F64 => builder
+            .ins()
+            .bitcast(types::I64, MemFlagsData::new(), value),
+        _ => value,
+    }
+}
+
 fn signature_return_ty(ret_ty: i64, is_main: bool) -> Option<types::Type> {
     if is_main && ret_ty == ITY_UNIT {
         Some(types::I32)
@@ -276,21 +320,47 @@ fn hidden_region_count(return_kind: i64, store_effects: &[i64], is_main: bool) -
     count + hidden_region_store_targets(store_effects).len()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReceiverRoute {
+    region: i64,
+    projection_candidate: bool,
+}
+
+impl ReceiverRoute {
+    fn direct(region: i64) -> Self {
+        Self {
+            region,
+            projection_candidate: false,
+        }
+    }
+
+    fn projection_candidate(region: i64) -> Self {
+        Self {
+            region,
+            projection_candidate: true,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn inst_region_for_value(
+fn inst_route_for_value(
     inst_id: i64,
     inst_region_by_id: &HashMap<i64, i64>,
     inst_data_by_id: &HashMap<i64, (i64, i64)>,
     inst_op_by_id: &HashMap<i64, i64>,
+    inst_first_arg_by_id: &HashMap<i64, i64>,
+    projection_ids: &std::collections::HashSet<i64>,
     upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
     return_kind: i64,
     store_effects: &[i64],
-) -> i64 {
-    inst_region_for_value_inner(
+) -> ReceiverRoute {
+    inst_route_for_value_inner(
         inst_id,
         inst_region_by_id,
         inst_data_by_id,
         inst_op_by_id,
+        inst_first_arg_by_id,
+        projection_ids,
         upsilon_sources_by_phi,
         return_kind,
         store_effects,
@@ -299,63 +369,135 @@ fn inst_region_for_value(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn inst_region_for_value_inner(
+fn inst_route_for_value_inner(
     inst_id: i64,
     inst_region_by_id: &HashMap<i64, i64>,
     inst_data_by_id: &HashMap<i64, (i64, i64)>,
     inst_op_by_id: &HashMap<i64, i64>,
+    inst_first_arg_by_id: &HashMap<i64, i64>,
+    projection_ids: &std::collections::HashSet<i64>,
     upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
     return_kind: i64,
     store_effects: &[i64],
     seen: &mut std::collections::HashSet<i64>,
-) -> i64 {
+) -> ReceiverRoute {
     if !seen.insert(inst_id) {
-        return inst_region_by_id
-            .get(&inst_id)
-            .copied()
-            .unwrap_or_else(region_root);
+        return ReceiverRoute::direct(
+            inst_region_by_id
+                .get(&inst_id)
+                .copied()
+                .unwrap_or_else(region_root),
+        );
     }
     if let Some(&(dk, dv)) = inst_data_by_id.get(&inst_id)
         && dk == IDATA_ARG_INDEX
         && let Some(rgn) = hidden_region_for_store_target(return_kind, store_effects, dv)
     {
-        return rgn;
+        return ReceiverRoute::direct(rgn);
+    }
+    if projection_ids.contains(&inst_id)
+        && let Some(&container_id) = inst_first_arg_by_id.get(&inst_id)
+    {
+        let candidate = inst_route_for_value_inner(
+            container_id,
+            inst_region_by_id,
+            inst_data_by_id,
+            inst_op_by_id,
+            inst_first_arg_by_id,
+            projection_ids,
+            upsilon_sources_by_phi,
+            return_kind,
+            store_effects,
+            seen,
+        )
+        .region;
+        let kind = candidate & 3;
+        if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+            return ReceiverRoute::projection_candidate(candidate);
+        }
+        return ReceiverRoute::direct(
+            inst_region_by_id
+                .get(&inst_id)
+                .copied()
+                .unwrap_or_else(region_root),
+        );
     }
     if inst_op_by_id.get(&inst_id).copied() == Some(IOP_PHI)
         && let Some(sources) = upsilon_sources_by_phi.get(&inst_id)
     {
-        let mut merged: Option<i64> = None;
+        let mut merged: Option<ReceiverRoute> = None;
         for &source_id in sources {
             let mut source_seen = seen.clone();
-            let rgn = inst_region_for_value_inner(
+            let route = inst_route_for_value_inner(
                 source_id,
                 inst_region_by_id,
                 inst_data_by_id,
                 inst_op_by_id,
+                inst_first_arg_by_id,
+                projection_ids,
                 upsilon_sources_by_phi,
                 return_kind,
                 store_effects,
                 &mut source_seen,
             );
             match merged {
-                Some(existing) if existing != rgn => {
-                    return inst_region_by_id
-                        .get(&inst_id)
-                        .copied()
-                        .unwrap_or_else(region_root);
+                Some(existing) if existing.region != route.region => {
+                    return ReceiverRoute::direct(
+                        inst_region_by_id
+                            .get(&inst_id)
+                            .copied()
+                            .unwrap_or_else(region_root),
+                    );
+                }
+                Some(existing) if !existing.projection_candidate && route.projection_candidate => {
+                    merged = Some(ReceiverRoute::projection_candidate(existing.region));
                 }
                 Some(_) => {}
-                None => merged = Some(rgn),
+                None => merged = Some(route),
             }
         }
-        if let Some(rgn) = merged {
-            return rgn;
+        if let Some(route) = merged {
+            return route;
         }
     }
-    inst_region_by_id
-        .get(&inst_id)
-        .copied()
-        .unwrap_or_else(region_root)
+    ReceiverRoute::direct(
+        inst_region_by_id
+            .get(&inst_id)
+            .copied()
+            .unwrap_or_else(region_root),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inst_region_for_value(
+    inst_id: i64,
+    inst_region_by_id: &HashMap<i64, i64>,
+    inst_data_by_id: &HashMap<i64, (i64, i64)>,
+    inst_op_by_id: &HashMap<i64, i64>,
+    inst_first_arg_by_id: &HashMap<i64, i64>,
+    projection_ids: &std::collections::HashSet<i64>,
+    upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
+    return_kind: i64,
+    store_effects: &[i64],
+) -> i64 {
+    let route = inst_route_for_value(
+        inst_id,
+        inst_region_by_id,
+        inst_data_by_id,
+        inst_op_by_id,
+        inst_first_arg_by_id,
+        projection_ids,
+        upsilon_sources_by_phi,
+        return_kind,
+        store_effects,
+    );
+    if route.projection_candidate {
+        return inst_region_by_id
+            .get(&inst_id)
+            .copied()
+            .unwrap_or_else(region_root);
+    }
+    route.region
 }
 
 fn block_arena_value(
@@ -437,7 +579,12 @@ fn arena_value_for_region(
     }
 }
 
-fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Option<i64>) {
+fn routed_vec_extern(
+    sym: &str,
+    inst_rgn: i64,
+    receiver_route: ReceiverRoute,
+) -> (&str, Option<i64>) {
+    let receiver_rgn = receiver_route.region;
     match sym {
         "__vow_vec_new" => {
             if (inst_rgn & 3) == REGION_KIND_ROOT {
@@ -455,7 +602,9 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         }
         "__vow_vec_push_val" => {
             let kind = receiver_rgn & 3;
-            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+            if !receiver_route.projection_candidate
+                && (kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER)
+            {
                 ("__vow_vec_push_val_in_arena", Some(receiver_rgn))
             } else {
                 (sym, None)
@@ -463,7 +612,9 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         }
         "__vow_vec_push" => {
             let kind = receiver_rgn & 3;
-            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+            if !receiver_route.projection_candidate
+                && (kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER)
+            {
                 ("__vow_vec_push_in_arena", Some(receiver_rgn))
             } else {
                 (sym, None)
@@ -570,7 +721,14 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         "__vow_string_push_str" => {
             let kind = receiver_rgn & 3;
             if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
-                ("__vow_string_push_str_in_arena", Some(receiver_rgn))
+                if receiver_route.projection_candidate {
+                    (
+                        "__vow_string_push_str_in_candidate_arena",
+                        Some(receiver_rgn),
+                    )
+                } else {
+                    ("__vow_string_push_str_in_arena", Some(receiver_rgn))
+                }
             } else {
                 (sym, None)
             }
@@ -578,7 +736,14 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         "__vow_string_push_byte" => {
             let kind = receiver_rgn & 3;
             if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
-                ("__vow_string_push_byte_in_arena", Some(receiver_rgn))
+                if receiver_route.projection_candidate {
+                    (
+                        "__vow_string_push_byte_in_candidate_arena",
+                        Some(receiver_rgn),
+                    )
+                } else {
+                    ("__vow_string_push_byte_in_arena", Some(receiver_rgn))
+                }
             } else {
                 (sym, None)
             }
@@ -592,7 +757,9 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
         }
         "__vow_map_insert" => {
             let kind = receiver_rgn & 3;
-            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+            if !receiver_route.projection_candidate
+                && (kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER)
+            {
                 ("__vow_map_insert_in_arena", Some(receiver_rgn))
             } else {
                 (sym, None)
@@ -1192,6 +1359,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let mut inst_region_by_id: HashMap<i64, i64> = HashMap::new();
     let mut inst_data_by_id: HashMap<i64, (i64, i64)> = HashMap::new();
     let mut inst_op_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut inst_first_arg_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut projection_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
     let mut upsilon_sources_by_phi: HashMap<i64, Vec<i64>> = HashMap::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
@@ -1205,6 +1374,19 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             inst_op_by_id.insert(inst_ids[idx], inst_ops[idx]);
             let aoff = arg_offsets[idx] as usize;
             let alen = arg_lengths[idx] as usize;
+            if alen > 0 {
+                inst_first_arg_by_id.insert(inst_ids[idx], all_args[aoff]);
+            }
+            let is_field_or_load = matches!(inst_ops[idx], IOP_FIELD_GET | IOP_LOAD);
+            let is_vec_get = inst_ops[idx] == IOP_CALL
+                && inst_dks[idx] == IDATA_CALL_EXTERN
+                && matches!(
+                    unsafe { read_vow_string(inst_ds_ptrs[idx]) },
+                    "__vow_vec_get_val" | "__vow_vec_get"
+                );
+            if is_field_or_load || is_vec_get {
+                projection_ids.insert(inst_ids[idx]);
+            }
             if inst_ops[idx] == IOP_UPSILON && inst_dks[idx] == IDATA_PHI_TARGET && alen > 0 {
                 upsilon_sources_by_phi
                     .entry(inst_dvs[idx])
@@ -1772,7 +1954,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             match op {
                 IOP_CONST_I32 => {
                     if dk == IDATA_CONST_I32 {
-                        let val = builder.ins().iconst(types::I32, dv as i32 as i64);
+                        let val = builder.ins().iconst(
+                            ity_to_cranelift(ity)
+                                .expect("ConstI32 instructions must have an integer type"),
+                            dv as i32 as i64,
+                        );
                         set_val!(iid, val);
                     }
                 }
@@ -2037,7 +2223,10 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             builder.ins().uextend(target_ty, value)
                         }
                     } else {
-                        return -1;
+                        let Some(target_ty) = ity_to_cranelift(dv2) else {
+                            return -1;
+                        };
+                        builder.ins().ireduce(target_ty, value)
                     };
                     set_val!(iid, result);
                 }
@@ -2130,22 +2319,29 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             let blame_byte: i64 = if op == IOP_VOW_REQ { 0 } else { 1 };
 
                             // Collect captures
-                            let captures: Vec<(GlobalValue, Value, i64)> =
-                                if let Some(bindings) = vow_bindings.get(&vow_id) {
-                                    bindings
-                                        .iter()
-                                        .filter_map(|b| {
-                                            let ir_ty = *inst_ty_map.get(&b.inst_id)?;
-                                            if matches!(ir_ty, ITY_PTR | ITY_LPTR | ITY_UNIT) {
-                                                return None;
-                                            }
-                                            let cl_val = *value_map.get(&b.inst_id)?;
-                                            Some((b.name_gv, cl_val, ir_ty))
-                                        })
-                                        .collect()
-                                } else {
-                                    vec![]
-                                };
+                            let mut captures: Vec<(GlobalValue, Value, i64)> = Vec::new();
+                            if let Some(bindings) = vow_bindings.get(&vow_id) {
+                                for binding in bindings {
+                                    let Some(&ir_ty) = inst_ty_map.get(&binding.inst_id) else {
+                                        continue;
+                                    };
+                                    if matches!(ir_ty, ITY_PTR | ITY_LPTR | ITY_UNIT) {
+                                        continue;
+                                    }
+                                    let cl_val = if let Some(&slot) = slot_map.get(&binding.inst_id)
+                                    {
+                                        let Some(value_ty) = ity_to_cranelift(ir_ty) else {
+                                            continue;
+                                        };
+                                        load_slotted_value(&mut builder, slot, value_ty)
+                                    } else if let Some(&value) = value_map.get(&binding.inst_id) {
+                                        value
+                                    } else {
+                                        continue;
+                                    };
+                                    captures.push((binding.name_gv, cl_val, ir_ty));
+                                }
+                            }
 
                             emit_vow_check(
                                 &mut builder,
@@ -2207,23 +2403,25 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 set_val!(iid, ptr);
                                 continue;
                             }
-                            let receiver_rgn = if alen > 0 {
+                            let receiver_route = if alen > 0 {
                                 let receiver_id = all_args[aoff];
                                 let decl = &ctx.func_decls[fi];
-                                inst_region_for_value(
+                                inst_route_for_value(
                                     receiver_id,
                                     &inst_region_by_id,
                                     &inst_data_by_id,
                                     &inst_op_by_id,
+                                    &inst_first_arg_by_id,
+                                    &projection_ids,
                                     &upsilon_sources_by_phi,
                                     decl.return_kind,
                                     &decl.store_effects,
                                 )
                             } else {
-                                region_root()
+                                ReceiverRoute::direct(region_root())
                             };
                             let (routed_sym, target_region) =
-                                routed_vec_extern(sym, inst_rgns[ii], receiver_rgn);
+                                routed_vec_extern(sym, inst_rgns[ii], receiver_route);
                             extern_target_region = target_region;
                             if let Some(&fr) = extern_func_refs.get(routed_sym) {
                                 fr
@@ -2264,21 +2462,14 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 "clif shim: IOP_CALL value_map miss: inst_id={iid} arg_id={arg_id} (block={bi}, inst_idx={ii}, func_idx={func_idx})"
                             )
                         });
-                        let v =
-                            if let Some(&expected_ty) = expected_types.get(i + hidden_arg_offset) {
-                                let actual_ty = builder.func.dfg.value_type(v);
-                                if actual_ty == types::I32 && expected_ty == types::I64 {
-                                    builder.ins().sextend(types::I64, v)
-                                } else if actual_ty == types::I8 && expected_ty == types::I64 {
-                                    builder.ins().uextend(types::I64, v)
-                                } else if actual_ty == types::I64 && expected_ty == types::I32 {
-                                    builder.ins().ireduce(types::I32, v)
-                                } else {
-                                    v
-                                }
-                            } else {
-                                v
-                            };
+                        let v = if let Some(&expected_ty) =
+                            expected_types.get(i + hidden_arg_offset)
+                        {
+                            let source_ty = inst_ty_map.get(&arg_id).copied().unwrap_or(ITY_I64);
+                            coerce_call_argument(&mut builder, v, source_ty, expected_ty)
+                        } else {
+                            v
+                        };
                         call_args.push(v);
                     }
                     if dk == IDATA_CALL_TARGET {
@@ -2319,6 +2510,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                         &inst_region_by_id,
                                         &inst_data_by_id,
                                         &inst_op_by_id,
+                                        &inst_first_arg_by_id,
+                                        &projection_ids,
                                         &upsilon_sources_by_phi,
                                         current_decl.return_kind,
                                         &current_decl.store_effects,
@@ -2363,13 +2556,16 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                         )
                                     });
                                     if let Some(&expected_ty) = expected_types.get(i) {
-                                        let actual_ty = builder.func.dfg.value_type(v);
-                                        if actual_ty == types::I32 && expected_ty == types::I64 {
-                                            return builder.ins().sextend(types::I64, v);
-                                        }
-                                        if actual_ty == types::I8 && expected_ty == types::I64 {
-                                            return builder.ins().uextend(types::I64, v);
-                                        }
+                                        let source_ty = inst_ty_map
+                                            .get(&arg_id)
+                                            .copied()
+                                            .unwrap_or(ITY_I64);
+                                        return coerce_call_argument(
+                                            &mut builder,
+                                            v,
+                                            source_ty,
+                                            expected_ty,
+                                        );
                                     }
                                     v
                                 })
@@ -2472,24 +2668,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         let base = arg!(0);
                         let new_val = arg!(1);
                         let offset = (idx as i32) * 8;
-                        let src_ty = builder.func.dfg.value_type(new_val);
-                        let store_val = match src_ty {
-                            types::I32 => builder.ins().sextend(types::I64, new_val),
-                            types::I8 => builder.ins().uextend(types::I64, new_val),
-                            types::F32 => {
-                                let bits =
-                                    builder
-                                        .ins()
-                                        .bitcast(types::I32, MemFlagsData::new(), new_val);
-                                builder.ins().uextend(types::I64, bits)
-                            }
-                            types::F64 => {
-                                builder
-                                    .ins()
-                                    .bitcast(types::I64, MemFlagsData::new(), new_val)
-                            }
-                            _ => new_val,
-                        };
+                        let source_ty = inst_ty_map
+                            .get(&all_args[aoff + 1])
+                            .copied()
+                            .unwrap_or(ITY_I64);
+                        let store_val = extend_field_store_value(&mut builder, new_val, source_ty);
                         builder
                             .ins()
                             .store(MemFlagsData::trusted(), store_val, base, offset);
@@ -2625,9 +2808,9 @@ fn load_slotted_value(
 ) -> Value {
     match value_ty {
         types::F32 | types::F64 => builder.ins().stack_load(types::I64, value_ty, slot, 0),
-        types::I32 => {
+        types::I16 | types::I32 => {
             let raw = builder.ins().stack_load(types::I64, types::I64, slot, 0);
-            builder.ins().ireduce(types::I32, raw)
+            builder.ins().ireduce(value_ty, raw)
         }
         types::I8 => {
             let raw = builder.ins().stack_load(types::I64, types::I64, slot, 0);
@@ -2639,7 +2822,7 @@ fn load_slotted_value(
 
 fn store_slotted_value(builder: &mut FunctionBuilder<'_>, slot: StackSlot, value: Value) {
     let store_val = match builder.func.dfg.value_type(value) {
-        types::I32 => builder.ins().sextend(types::I64, value),
+        types::I16 | types::I32 => builder.ins().sextend(types::I64, value),
         types::I8 => builder.ins().uextend(types::I64, value),
         _ => value,
     };
@@ -2653,7 +2836,12 @@ fn tag_for_ir_ty(ty: i64) -> i64 {
         ITY_F32 => 2,
         ITY_F64 => 3,
         ITY_BOOL => 4,
+        ITY_U64 => 5,
         ITY_U8 => 6,
+        ITY_I8 => 7,
+        ITY_I16 => 8,
+        ITY_U16 => 9,
+        ITY_U32 => 10,
         _ => 0,
     }
 }
@@ -2714,8 +2902,13 @@ fn emit_vow_check(
                     .ins()
                     .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
                 let payload: Value = match *ir_ty {
+                    ITY_I8 => builder.ins().sextend(types::I64, *cl_val),
+                    ITY_U8 => builder.ins().uextend(types::I64, *cl_val),
+                    ITY_I16 => builder.ins().sextend(types::I64, *cl_val),
+                    ITY_U16 => builder.ins().uextend(types::I64, *cl_val),
                     ITY_I32 => builder.ins().sextend(types::I64, *cl_val),
-                    ITY_I64 => *cl_val,
+                    ITY_U32 => builder.ins().uextend(types::I64, *cl_val),
+                    ITY_I64 | ITY_U64 => *cl_val,
                     ITY_F32 => {
                         let bits = builder
                             .ins()
@@ -2726,7 +2919,6 @@ fn emit_vow_check(
                         .ins()
                         .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     ITY_BOOL => *cl_val,
-                    ITY_U8 => builder.ins().uextend(types::I64, *cl_val),
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder
@@ -2777,7 +2969,12 @@ fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, ret_ty: i6
     let target = ity_to_cranelift(ret_ty);
     match (val_ty, target) {
         (types::I64, Some(types::I32)) => builder.ins().ireduce(types::I32, val),
+        (types::I64, Some(types::I16)) => builder.ins().ireduce(types::I16, val),
         (types::I64, Some(types::I8)) => builder.ins().ireduce(types::I8, val),
+        (types::I32, Some(types::I16)) => builder.ins().ireduce(types::I16, val),
+        (types::I16, Some(types::I8)) => builder.ins().ireduce(types::I8, val),
+        (types::I16, Some(types::I32)) => builder.ins().sextend(types::I32, val),
+        (types::I16, Some(types::I64)) => builder.ins().sextend(types::I64, val),
         (types::I32, Some(types::I64)) => builder.ins().sextend(types::I64, val),
         (types::I8, Some(types::I64)) => builder.ins().uextend(types::I64, val),
         (types::I32, Some(types::I8)) => builder.ins().ireduce(types::I8, val),
@@ -2786,45 +2983,39 @@ fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, ret_ty: i6
     }
 }
 
+fn narrow_integer_clif_type(name: &str) -> Option<types::Type> {
+    match name {
+        "i8" | "u8" => Some(types::I8),
+        "i16" | "u16" => Some(types::I16),
+        "i32" | "u32" => Some(types::I32),
+        "i64" | "u64" => Some(types::I64),
+        "i128" | "u128" => Some(types::I128),
+        _ => None,
+    }
+}
+
+fn narrow_intrinsic_signature(sym: &str) -> Option<(types::Type, types::Type)> {
+    let name = sym.strip_prefix("__vow_")?;
+    let (source, rest) = name.split_once("_to_")?;
+    let (target, mode) = rest.rsplit_once('_')?;
+    if !matches!(mode, "try" | "wrap" | "sat") {
+        return None;
+    }
+    let source_ty = narrow_integer_clif_type(source)?;
+    let target_ty = if mode == "try" {
+        types::I64
+    } else {
+        narrow_integer_clif_type(target)?
+    };
+    Some((source_ty, target_ty))
+}
+
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
-    let narrow_source_ty =
-        if sym.starts_with("__vow_i16_to_u8_") || sym.starts_with("__vow_u16_to_u8_") {
-            Some(types::I16)
-        } else if sym.starts_with("__vow_i32_to_u8_") || sym.starts_with("__vow_u32_to_u8_") {
-            Some(types::I32)
-        } else if sym.starts_with("__vow_i64_to_u8_") || sym.starts_with("__vow_u64_to_u8_") {
-            Some(types::I64)
-        } else if sym.starts_with("__vow_i128_to_u8_") || sym.starts_with("__vow_u128_to_u8_") {
-            Some(types::I128)
-        } else {
-            None
-        };
-    if let Some(source_ty) = narrow_source_ty {
+    if let Some((source_ty, return_ty)) = narrow_intrinsic_signature(sym) {
         sig.params.push(AbiParam::new(source_ty));
-        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
-            types::I64
-        } else {
-            types::I8
-        }));
-        return sig;
-    }
-    let i32_narrow_source_ty =
-        if sym.starts_with("__vow_i64_to_i32_") || sym.starts_with("__vow_u64_to_i32_") {
-            Some(types::I64)
-        } else if sym.starts_with("__vow_u32_to_i32_") {
-            Some(types::I32)
-        } else {
-            None
-        };
-    if let Some(source_ty) = i32_narrow_source_ty {
-        sig.params.push(AbiParam::new(source_ty));
-        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
-            types::I64
-        } else {
-            types::I32
-        }));
+        sig.returns.push(AbiParam::new(return_ty));
         return sig;
     }
     if matches!(
@@ -2990,6 +3181,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
+        "__vow_string_push_str_in_candidate_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_string_byte_at" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3000,6 +3196,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_string_push_byte_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_push_byte_in_candidate_arena" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3102,7 +3303,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_string_parse_i64_opt"
         | "__vow_string_parse_u64_opt"
+        | "__vow_string_parse_i8_opt"
         | "__vow_string_parse_u8_opt"
+        | "__vow_string_parse_i16_opt"
+        | "__vow_string_parse_u16_opt"
+        | "__vow_string_parse_u32_opt"
         | "__vow_string_parse_i32_opt" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -3421,16 +3626,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn abi_and_field_widening_preserve_logical_signedness() {
+        let mut function = cranelift_codegen::ir::Function::new();
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut function, &mut builder_ctx);
+        let block = builder.create_block();
+        builder.switch_to_block(block);
+
+        let signed_i8 = builder.ins().iconst(types::I8, -1);
+        coerce_call_argument(&mut builder, signed_i8, ITY_I8, types::I64);
+        let unsigned_i8 = builder.ins().iconst(types::I8, -1);
+        coerce_call_argument(&mut builder, unsigned_i8, ITY_U8, types::I64);
+        let signed_i16 = builder.ins().iconst(types::I16, -1);
+        extend_field_store_value(&mut builder, signed_i16, ITY_I16);
+        let unsigned_i16 = builder.ins().iconst(types::I16, -1);
+        extend_field_store_value(&mut builder, unsigned_i16, ITY_U16);
+
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        let flags = settings::Flags::new(settings::builder());
+        let isa = cranelift_native::builder().unwrap().finish(flags).unwrap();
+        builder.finalize(isa.frontend_config());
+        let clif = function.display().to_string();
+        assert_eq!(clif.matches("sextend.i64").count(), 2, "{clif}");
+        assert_eq!(clif.matches("uextend.i64").count(), 2, "{clif}");
+    }
+
+    #[test]
     fn parse_i64_option_routes_to_its_allocation_region() {
         let root = region_root();
         assert_eq!(
-            routed_vec_extern("__vow_string_parse_i64_opt", root, root),
+            routed_vec_extern(
+                "__vow_string_parse_i64_opt",
+                root,
+                ReceiverRoute::direct(root)
+            ),
             ("__vow_string_parse_i64_opt", None),
         );
 
         let block = region_pack(REGION_KIND_BLOCK, 7);
         assert_eq!(
-            routed_vec_extern("__vow_string_parse_i64_opt", block, root),
+            routed_vec_extern(
+                "__vow_string_parse_i64_opt",
+                block,
+                ReceiverRoute::direct(root)
+            ),
             ("__vow_string_parse_i64_opt_in_arena", Some(block)),
         );
     }
@@ -3527,6 +3767,24 @@ mod tests {
         }
     }
 
+    fn declare_test_function_with_params(ctx: i64, name: &str, param_tys: &[i64], ret_ty: i64) {
+        let name_vec = vow_string(name);
+        let param_tys_vec = vow_i64_vec(param_tys);
+        unsafe {
+            __vow_clif_declare_function(
+                ctx,
+                0,
+                &name_vec as *const VowVec as i64,
+                &param_tys_vec as *const VowVec as i64,
+                param_tys.len() as i64,
+                ret_ty,
+                0,
+                RSUM_KIND_CONSTANT_GLOBAL,
+                0,
+            );
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn add_test_inst(
         ctx: i64,
@@ -3550,6 +3808,36 @@ mod tests {
                     dv,
                     dv2,
                     0,
+                    &args_vec as *const VowVec as i64,
+                    region_root(),
+                ),
+                0
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_test_string_inst(
+        ctx: i64,
+        id: i64,
+        op: i64,
+        ty: i64,
+        dk: i64,
+        data: &VowVec,
+        args: &[i64],
+    ) {
+        let args_vec = vow_i64_vec(args);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_inst(
+                    ctx,
+                    id,
+                    op,
+                    ty,
+                    dk,
+                    0,
+                    0,
+                    data as *const VowVec as i64,
                     &args_vec as *const VowVec as i64,
                     region_root(),
                 ),
@@ -3721,6 +4009,333 @@ mod tests {
     }
 
     #[test]
+    fn phase3_narrow_intrinsic_signatures_use_native_abi_widths() {
+        for (name, expected) in [
+            ("i8", Some(types::I8)),
+            ("u8", Some(types::I8)),
+            ("i16", Some(types::I16)),
+            ("u16", Some(types::I16)),
+            ("i32", Some(types::I32)),
+            ("u32", Some(types::I32)),
+            ("i64", Some(types::I64)),
+            ("u64", Some(types::I64)),
+            ("i128", Some(types::I128)),
+            ("u128", Some(types::I128)),
+            ("unknown", None),
+        ] {
+            assert_eq!(narrow_integer_clif_type(name), expected, "{name}");
+        }
+
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_i16_to_i8_try"),
+            Some((types::I16, types::I64))
+        );
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_u64_to_u32_wrap"),
+            Some((types::I64, types::I32))
+        );
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_i32_to_u16_sat"),
+            Some((types::I32, types::I16))
+        );
+        for name in [
+            "i16_to_i8_try",
+            "__vow_i16_i8_try",
+            "__vow_i16_to_i8_checked",
+            "__vow_unknown_to_i8_wrap",
+            "__vow_i16_to_unknown_wrap",
+        ] {
+            assert_eq!(narrow_intrinsic_signature(name), None, "{name}");
+        }
+
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        for symbol in [
+            "__vow_i16_to_i8_try",
+            "__vow_u64_to_u32_wrap",
+            "__vow_string_parse_i8_opt",
+            "__vow_string_parse_i16_opt",
+            "__vow_string_parse_u16_opt",
+            "__vow_string_parse_u32_opt",
+        ] {
+            let symbol = vow_string(symbol);
+            unsafe {
+                __vow_clif_declare_extern(ctx, &raw const symbol as i64);
+            }
+        }
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
+    #[test]
+    fn phase3_native_width_constants_compile_through_streamed_ffi() {
+        for (name, ty, op, data_kind) in [
+            ("i8_const", ITY_I8, IOP_CONST_U8, IDATA_CONST_U8),
+            ("i16_const", ITY_I16, IOP_CONST_I32, IDATA_CONST_I32),
+            ("u16_const", ITY_U16, IOP_CONST_I32, IDATA_CONST_I32),
+            ("u32_const", ITY_U32, IOP_CONST_I32, IDATA_CONST_I32),
+        ] {
+            let ctx = __vow_clif_create(0, 0);
+            assert_ne!(ctx, 0);
+            declare_test_function(ctx, 0, name, ty, false);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, ty, 0), 0);
+            }
+            add_test_block(ctx);
+            add_test_inst(ctx, 0, op, ty, data_kind, 7, 0, &[]);
+            add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+            unsafe {
+                assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
+                __vow_clif_destroy(ctx);
+            }
+        }
+    }
+
+    #[test]
+    fn phase3_vow_captures_compile_through_streamed_ffi() {
+        let param_tys = [ITY_I8, ITY_U8, ITY_I16, ITY_U16, ITY_U32, ITY_U64];
+        let ctx = __vow_clif_create(1, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function_with_params(ctx, "capture_narrow", &param_tys, ITY_UNIT);
+        let param_tys_vec = vow_i64_vec(&param_tys);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_begin(ctx, 0, ITY_UNIT, &param_tys_vec as *const VowVec as i64,),
+                0
+            );
+        }
+        add_test_block(ctx);
+        for (id, ty) in param_tys.into_iter().enumerate() {
+            add_test_inst(
+                ctx,
+                id as i64,
+                IOP_GET_ARG,
+                ty,
+                IDATA_ARG_INDEX,
+                id as i64,
+                0,
+                &[],
+            );
+        }
+        add_test_inst(
+            ctx,
+            6,
+            IOP_CONST_BOOL,
+            ITY_BOOL,
+            IDATA_CONST_BOOL,
+            1,
+            0,
+            &[],
+        );
+        add_test_inst(ctx, 7, IOP_VOW_REQ, ITY_UNIT, IDATA_VOW_ID, 7, 0, &[6]);
+        add_test_inst(ctx, 8, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+
+        let description = vow_string("narrow captures");
+        let binding_ids = [0, 1, 2, 3, 4, 5];
+        let binding_ids_vec = vow_i64_vec(&binding_ids);
+        let binding_names = [
+            vow_string("i8v"),
+            vow_string("u8v"),
+            vow_string("i16v"),
+            vow_string("u16v"),
+            vow_string("u32v"),
+            vow_string("u64v"),
+        ];
+        let binding_name_ptrs: Vec<i64> = binding_names
+            .iter()
+            .map(|name| name as *const VowVec as i64)
+            .collect();
+        let binding_names_vec = vow_i64_vec(&binding_name_ptrs);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_vow(
+                    ctx,
+                    7,
+                    &description as *const VowVec as i64,
+                    &binding_ids_vec as *const VowVec as i64,
+                    &binding_names_vec as *const VowVec as i64,
+                ),
+                0
+            );
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn phase3_call_debug_and_field_width_coercions_compile_through_streamed_ffi() {
+        let ctx = __vow_clif_create(1, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "phase3_coercions", ITY_U32, false);
+
+        let narrow_sym = vow_string("__vow_i16_to_i8_wrap");
+        let widen_sym = vow_string("__vow_u64_to_u32_wrap");
+        let debug_sym = vow_string("__vow_debug_i64");
+        for symbol in [&narrow_sym, &widen_sym, &debug_sym] {
+            unsafe {
+                __vow_clif_declare_extern(ctx, symbol as *const VowVec as i64);
+            }
+        }
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_U32, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 0, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 7, 0, &[]);
+        add_test_string_inst(
+            ctx,
+            1,
+            IOP_CALL,
+            ITY_I8,
+            IDATA_CALL_EXTERN,
+            &narrow_sym,
+            &[0],
+        );
+        add_test_inst(ctx, 2, IOP_CONST_U8, ITY_U8, IDATA_CONST_U8, 7, 0, &[]);
+        add_test_string_inst(
+            ctx,
+            3,
+            IOP_CALL,
+            ITY_U32,
+            IDATA_CALL_EXTERN,
+            &widen_sym,
+            &[2],
+        );
+        add_test_inst(ctx, 4, IOP_CONST_I32, ITY_I16, IDATA_CONST_I32, -7, 0, &[]);
+        add_test_string_inst(
+            ctx,
+            5,
+            IOP_DEBUG_CALL,
+            ITY_UNIT,
+            IDATA_CALL_EXTERN,
+            &debug_sym,
+            &[4],
+        );
+        add_test_inst(
+            ctx,
+            6,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            8,
+            8,
+            &[],
+        );
+        add_test_inst(ctx, 7, IOP_FIELD_SET, ITY_UNIT, IDATA_FIELD, 0, 0, &[6, 4]);
+        add_test_inst(ctx, 8, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn phase3_i16_phi_uses_typed_cross_block_slots() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "i16_phi", ITY_I16, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I16, 0), 0);
+        }
+
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_CONST_BOOL,
+            ITY_BOOL,
+            IDATA_CONST_BOOL,
+            1,
+            0,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            1,
+            IOP_BRANCH,
+            ITY_UNIT,
+            IDATA_BRANCH_TARGETS,
+            1,
+            2,
+            &[0],
+        );
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 2, IOP_CONST_I32, ITY_I16, IDATA_CONST_I32, -1, 0, &[]);
+        add_test_inst(ctx, 3, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 8, 0, &[2]);
+        add_test_inst(ctx, 4, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 3, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 5, IOP_CONST_I32, ITY_I16, IDATA_CONST_I32, 1, 0, &[]);
+        add_test_inst(ctx, 6, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 8, 0, &[5]);
+        add_test_inst(ctx, 7, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 3, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 8, IOP_PHI, ITY_I16, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 9, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[8]);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn phase3_return_values_coerce_across_native_integer_widths() {
+        for (name, return_ty, value_ty, const_op, data_kind) in [
+            (
+                "i64_to_i16_return",
+                ITY_I16,
+                ITY_I64,
+                IOP_CONST_I64,
+                IDATA_CONST_I64,
+            ),
+            (
+                "i32_to_i16_return",
+                ITY_I16,
+                ITY_I32,
+                IOP_CONST_I32,
+                IDATA_CONST_I32,
+            ),
+            (
+                "i16_to_i8_return",
+                ITY_I8,
+                ITY_I16,
+                IOP_CONST_I32,
+                IDATA_CONST_I32,
+            ),
+            (
+                "i16_to_i32_return",
+                ITY_I32,
+                ITY_I16,
+                IOP_CONST_I32,
+                IDATA_CONST_I32,
+            ),
+            (
+                "i16_to_i64_return",
+                ITY_I64,
+                ITY_I16,
+                IOP_CONST_I32,
+                IDATA_CONST_I32,
+            ),
+        ] {
+            let ctx = __vow_clif_create(0, 0);
+            assert_ne!(ctx, 0);
+            declare_test_function(ctx, 0, name, return_ty, false);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, return_ty, 0), 0);
+            }
+            add_test_block(ctx);
+            add_test_inst(ctx, 0, const_op, value_ty, data_kind, 7, 0, &[]);
+            add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+            unsafe {
+                assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
+                __vow_clif_destroy(ctx);
+            }
+        }
+    }
+
+    #[test]
     fn link_failure_returns_error_status() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3774,6 +4389,8 @@ mod tests {
         let no_phi: HashMap<i64, Vec<i64>> = HashMap::new();
         let no_op: HashMap<i64, i64> = HashMap::new();
         let no_region: HashMap<i64, i64> = HashMap::new();
+        let no_first_arg: HashMap<i64, i64> = HashMap::new();
+        let no_projections: std::collections::HashSet<i64> = std::collections::HashSet::new();
         // A FreshInCaller return occupies hidden slot 0, so a store into param 0
         // lands at hidden idx 1.
         let store_effects = [0i64, RSUM_KIND_FRESH_IN_CALLER];
@@ -3788,6 +4405,8 @@ mod tests {
                 &no_region,
                 &data_hidden,
                 &no_op,
+                &no_first_arg,
+                &no_projections,
                 &no_phi,
                 RSUM_KIND_FRESH_IN_CALLER,
                 &store_effects,
@@ -3810,6 +4429,8 @@ mod tests {
                 &region_proj,
                 &data_proj,
                 &op_proj,
+                &no_first_arg,
+                &no_projections,
                 &no_phi,
                 RSUM_KIND_FRESH_IN_CALLER,
                 &store_effects,
@@ -3827,11 +4448,55 @@ mod tests {
                 &no_region,
                 &data_nonhidden,
                 &no_op,
+                &no_first_arg,
+                &no_projections,
                 &no_phi,
                 RSUM_KIND_FRESH_IN_CALLER,
                 &store_effects,
             ),
             region_root(),
+        );
+    }
+
+    #[test]
+    fn projection_route_uses_candidate_only_for_checked_string_helpers() {
+        let store_effects = [0i64, RSUM_KIND_FRESH_IN_CALLER];
+        let mut data: HashMap<i64, (i64, i64)> = HashMap::new();
+        data.insert(100, (IDATA_ARG_INDEX, 0));
+        data.insert(200, (IDATA_FIELD, 0));
+        let mut ops: HashMap<i64, i64> = HashMap::new();
+        ops.insert(100, IOP_GET_ARG);
+        ops.insert(200, IOP_FIELD_GET);
+        let mut first_args: HashMap<i64, i64> = HashMap::new();
+        first_args.insert(200, 100);
+        let mut projections = std::collections::HashSet::new();
+        projections.insert(200);
+
+        let route = inst_route_for_value(
+            200,
+            &HashMap::new(),
+            &data,
+            &ops,
+            &first_args,
+            &projections,
+            &HashMap::new(),
+            RSUM_KIND_FRESH_IN_CALLER,
+            &store_effects,
+        );
+        assert_eq!(
+            route,
+            ReceiverRoute::projection_candidate(region_pack(REGION_KIND_CALLER, 1))
+        );
+        assert_eq!(
+            routed_vec_extern("__vow_string_push_byte", region_root(), route),
+            (
+                "__vow_string_push_byte_in_candidate_arena",
+                Some(region_pack(REGION_KIND_CALLER, 1))
+            )
+        );
+        assert_eq!(
+            routed_vec_extern("__vow_vec_push_val", region_root(), route),
+            ("__vow_vec_push_val", None)
         );
     }
 }

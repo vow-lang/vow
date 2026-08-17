@@ -1,0 +1,9 @@
+// TEST: error-code ShiftCountOutOfRange
+// TEST: stderr "shift count -1 is out of range for i16"
+module I16NegativeShiftCount
+
+fn main() -> i32 {
+    let value: i16 = 1;
+    let shifted: i16 = value << -1;
+    0
+}

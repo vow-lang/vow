@@ -389,6 +389,65 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         }
     }
 
+    // Remaining narrow-int targets: `<source>_to_<target>_<mode>` for i8, i16,
+    // u16, and u32, each with a `parse_<target>` entry.
+    for (target_name, target_ty, sources) in [
+        (
+            "i8",
+            Ty::I8,
+            vec![
+                ("i16", Ty::I16),
+                ("u16", Ty::U16),
+                ("i32", Ty::I32),
+                ("u32", Ty::U32),
+                ("i64", Ty::I64),
+                ("u64", Ty::U64),
+            ],
+        ),
+        (
+            "i16",
+            Ty::I16,
+            vec![
+                ("i32", Ty::I32),
+                ("u32", Ty::U32),
+                ("i64", Ty::I64),
+                ("u64", Ty::U64),
+            ],
+        ),
+        (
+            "u16",
+            Ty::U16,
+            vec![
+                ("i32", Ty::I32),
+                ("u32", Ty::U32),
+                ("i64", Ty::I64),
+                ("u64", Ty::U64),
+            ],
+        ),
+        ("u32", Ty::U32, vec![("i64", Ty::I64), ("u64", Ty::U64)]),
+    ] {
+        sigs.push(def(
+            &format!("parse_{target_name}"),
+            vec![Ty::Str],
+            option_ty(target_ty.clone()),
+            &[],
+        ));
+        for (source_name, source_ty) in sources {
+            for (mode, return_ty) in [
+                ("try", option_ty(target_ty.clone())),
+                ("wrap", target_ty.clone()),
+                ("sat", target_ty.clone()),
+            ] {
+                sigs.push(def(
+                    &format!("{source_name}_to_{target_name}_{mode}"),
+                    vec![source_ty.clone()],
+                    return_ty,
+                    &[],
+                ));
+            }
+        }
+    }
+
     sigs
 }
 
@@ -755,16 +814,40 @@ hex_encode(Applied(Struct("Vec"), [U8])) -> Str []
 i128_to_u8_sat(I128) -> U8 []
 i128_to_u8_try(I128) -> Applied(Enum("Option"), [U8]) []
 i128_to_u8_wrap(I128) -> U8 []
+i16_to_i8_sat(I16) -> I8 []
+i16_to_i8_try(I16) -> Applied(Enum("Option"), [I8]) []
+i16_to_i8_wrap(I16) -> I8 []
 i16_to_u8_sat(I16) -> U8 []
 i16_to_u8_try(I16) -> Applied(Enum("Option"), [U8]) []
 i16_to_u8_wrap(I16) -> U8 []
+i32_to_i16_sat(I32) -> I16 []
+i32_to_i16_try(I32) -> Applied(Enum("Option"), [I16]) []
+i32_to_i16_wrap(I32) -> I16 []
+i32_to_i8_sat(I32) -> I8 []
+i32_to_i8_try(I32) -> Applied(Enum("Option"), [I8]) []
+i32_to_i8_wrap(I32) -> I8 []
+i32_to_u16_sat(I32) -> U16 []
+i32_to_u16_try(I32) -> Applied(Enum("Option"), [U16]) []
+i32_to_u16_wrap(I32) -> U16 []
 i32_to_u8_sat(I32) -> U8 []
 i32_to_u8_try(I32) -> Applied(Enum("Option"), [U8]) []
 i32_to_u8_wrap(I32) -> U8 []
+i64_to_i16_sat(I64) -> I16 []
+i64_to_i16_try(I64) -> Applied(Enum("Option"), [I16]) []
+i64_to_i16_wrap(I64) -> I16 []
 i64_to_i32_sat(I64) -> I32 []
 i64_to_i32_try(I64) -> Applied(Enum("Option"), [I32]) []
 i64_to_i32_wrap(I64) -> I32 []
+i64_to_i8_sat(I64) -> I8 []
+i64_to_i8_try(I64) -> Applied(Enum("Option"), [I8]) []
+i64_to_i8_wrap(I64) -> I8 []
 i64_to_string(I64) -> Str []
+i64_to_u16_sat(I64) -> U16 []
+i64_to_u16_try(I64) -> Applied(Enum("Option"), [U16]) []
+i64_to_u16_wrap(I64) -> U16 []
+i64_to_u32_sat(I64) -> U32 []
+i64_to_u32_try(I64) -> Applied(Enum("Option"), [U32]) []
+i64_to_u32_wrap(I64) -> U32 []
 i64_to_u8_sat(I64) -> U8 []
 i64_to_u8_try(I64) -> Applied(Enum("Option"), [U8]) []
 i64_to_u8_wrap(I64) -> U8 []
@@ -774,8 +857,12 @@ memory_peak_bytes() -> U64 [IO]
 memory_root_arena_bytes() -> U64 [IO]
 mul_sat_u8(U8, U8) -> U8 []
 num_cpus() -> I64 [IO]
+parse_i16(Str) -> Applied(Enum("Option"), [I16]) []
 parse_i32(Str) -> Applied(Enum("Option"), [I32]) []
 parse_i64(Str) -> Applied(Enum("Option"), [I64]) []
+parse_i8(Str) -> Applied(Enum("Option"), [I8]) []
+parse_u16(Str) -> Applied(Enum("Option"), [U16]) []
+parse_u32(Str) -> Applied(Enum("Option"), [U32]) []
 parse_u8(Str) -> Applied(Enum("Option"), [U8]) []
 print_i64(I64) -> Unit [IO]
 print_str(Str) -> Unit [IO]
@@ -812,18 +899,42 @@ time_unix_ms() -> I64 [IO]
 u128_to_u8_sat(U128) -> U8 []
 u128_to_u8_try(U128) -> Applied(Enum("Option"), [U8]) []
 u128_to_u8_wrap(U128) -> U8 []
+u16_to_i8_sat(U16) -> I8 []
+u16_to_i8_try(U16) -> Applied(Enum("Option"), [I8]) []
+u16_to_i8_wrap(U16) -> I8 []
 u16_to_u8_sat(U16) -> U8 []
 u16_to_u8_try(U16) -> Applied(Enum("Option"), [U8]) []
 u16_to_u8_wrap(U16) -> U8 []
+u32_to_i16_sat(U32) -> I16 []
+u32_to_i16_try(U32) -> Applied(Enum("Option"), [I16]) []
+u32_to_i16_wrap(U32) -> I16 []
 u32_to_i32_sat(U32) -> I32 []
 u32_to_i32_try(U32) -> Applied(Enum("Option"), [I32]) []
 u32_to_i32_wrap(U32) -> I32 []
+u32_to_i8_sat(U32) -> I8 []
+u32_to_i8_try(U32) -> Applied(Enum("Option"), [I8]) []
+u32_to_i8_wrap(U32) -> I8 []
+u32_to_u16_sat(U32) -> U16 []
+u32_to_u16_try(U32) -> Applied(Enum("Option"), [U16]) []
+u32_to_u16_wrap(U32) -> U16 []
 u32_to_u8_sat(U32) -> U8 []
 u32_to_u8_try(U32) -> Applied(Enum("Option"), [U8]) []
 u32_to_u8_wrap(U32) -> U8 []
+u64_to_i16_sat(U64) -> I16 []
+u64_to_i16_try(U64) -> Applied(Enum("Option"), [I16]) []
+u64_to_i16_wrap(U64) -> I16 []
 u64_to_i32_sat(U64) -> I32 []
 u64_to_i32_try(U64) -> Applied(Enum("Option"), [I32]) []
 u64_to_i32_wrap(U64) -> I32 []
+u64_to_i8_sat(U64) -> I8 []
+u64_to_i8_try(U64) -> Applied(Enum("Option"), [I8]) []
+u64_to_i8_wrap(U64) -> I8 []
+u64_to_u16_sat(U64) -> U16 []
+u64_to_u16_try(U64) -> Applied(Enum("Option"), [U16]) []
+u64_to_u16_wrap(U64) -> U16 []
+u64_to_u32_sat(U64) -> U32 []
+u64_to_u32_try(U64) -> Applied(Enum("Option"), [U32]) []
+u64_to_u32_wrap(U64) -> U32 []
 u64_to_u8_sat(U64) -> U8 []
 u64_to_u8_try(U64) -> Applied(Enum("Option"), [U8]) []
 u64_to_u8_wrap(U64) -> U8 []

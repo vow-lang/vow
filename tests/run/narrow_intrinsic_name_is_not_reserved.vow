@@ -1,0 +1,12 @@
+// TEST: stdout "42\n"
+module NarrowIntrinsicNameIsNotReserved
+
+fn custom_to_i8_sat(value: i64) -> i64 {
+    value + 1
+}
+
+fn main() -> i32 [io] {
+    print_i64(custom_to_i8_sat(41));
+    print_str(String::from("\n"));
+    0
+}

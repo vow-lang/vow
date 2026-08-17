@@ -1,0 +1,30 @@
+// TEST: stdout "1\n2\n1\n2\n"
+module NarrowBranchReturns
+
+fn choose_i8(first: bool) -> i8 {
+    if first { 1 } else { 2 }
+}
+
+fn choose_i16(first: bool) -> i16 {
+    if first { 1 } else { 2 }
+}
+
+fn choose_u16(first: bool) -> u16 {
+    if first { 1 } else { 2 }
+}
+
+fn choose_u32(first: bool) -> u32 {
+    if first { 1 } else { 2 }
+}
+
+fn main() -> i32 [io] {
+    print_i64(choose_i8(true) as i64);
+    print_str(String::from("\n"));
+    print_i64(choose_i16(false) as i64);
+    print_str(String::from("\n"));
+    print_i64(choose_u16(true) as i64);
+    print_str(String::from("\n"));
+    print_i64(choose_u32(false) as i64);
+    print_str(String::from("\n"));
+    0
+}

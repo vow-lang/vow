@@ -255,9 +255,65 @@ fn hidden_region_idx_for_store_target(
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty: IrTy) -> Value {
     let val_ty = builder.func.dfg.value_type(val);
     match (val_ty, ir_ty_to_cranelift(return_ty)) {
+        (types::I64, Some(types::I8)) => builder.ins().ireduce(types::I8, val),
+        (types::I64, Some(types::I16)) => builder.ins().ireduce(types::I16, val),
         (types::I64, Some(types::I32)) => builder.ins().ireduce(types::I32, val),
         (types::I32, Some(types::I64)) => builder.ins().sextend(types::I64, val),
         _ => val,
+    }
+}
+
+fn ir_ty_is_signed_integer(ty: IrTy) -> bool {
+    matches!(
+        ty,
+        IrTy::I8 | IrTy::I16 | IrTy::I32 | IrTy::I64 | IrTy::I128
+    )
+}
+
+/// Reconcile an IR argument's register width with an ABI signature while
+/// retaining the logical IR signedness that Cranelift's raw I8/I16/I32 types
+/// do not encode.
+fn coerce_call_argument(
+    builder: &mut FunctionBuilder<'_>,
+    value: Value,
+    source_ty: IrTy,
+    expected_ty: types::Type,
+) -> Value {
+    let actual_ty = builder.func.dfg.value_type(value);
+    if !actual_ty.is_int() || !expected_ty.is_int() {
+        return value;
+    }
+    if actual_ty.bits() > expected_ty.bits() {
+        return builder.ins().ireduce(expected_ty, value);
+    }
+    if actual_ty.bits() < expected_ty.bits() {
+        return if ir_ty_is_signed_integer(source_ty) {
+            builder.ins().sextend(expected_ty, value)
+        } else {
+            builder.ins().uextend(expected_ty, value)
+        };
+    }
+    value
+}
+
+fn extend_field_store_value(
+    builder: &mut FunctionBuilder<'_>,
+    value: Value,
+    source_ty: IrTy,
+) -> Value {
+    match source_ty {
+        IrTy::I8 | IrTy::I16 | IrTy::I32 => builder.ins().sextend(types::I64, value),
+        IrTy::U8 | IrTy::U16 | IrTy::U32 => builder.ins().uextend(types::I64, value),
+        IrTy::F32 => {
+            let bits = builder
+                .ins()
+                .bitcast(types::I32, MemFlagsData::new(), value);
+            builder.ins().uextend(types::I64, bits)
+        }
+        IrTy::F64 => builder
+            .ins()
+            .bitcast(types::I64, MemFlagsData::new(), value),
+        _ => value,
     }
 }
 
@@ -406,86 +462,143 @@ fn region_to_arena_value(
     }
 }
 
-// Projection results (`FieldGet`, `Load`, `__vow_vec_get*`) are intentionally
-// NOT traced through to their container here: a pointer-valued field or Vec
-// element does not share its container's arena lifetime, so routing string
-// mutation into the container's arena would create a use-after-free when the
-// container outlives the string (or vice versa). Only direct hidden-caller
-// parameters (`GetArg` → `Caller`) and Phi merges over safe sources are
-// tracked. If safe projection semantics are ever added, extend this function;
-// do not re-introduce the unconditional FieldGet/Load/vec_get tracing.
-fn source_value_region(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReceiverRoute {
+    /// The receiver itself is proven to live in this region.
+    Direct(RegionId),
+    /// A container supplies this candidate region, but the projected receiver
+    /// must pass the runtime descriptor-owner check before it may use it.
+    ProjectionCandidate(RegionId),
+}
+
+impl ReceiverRoute {
+    fn region(self) -> RegionId {
+        match self {
+            Self::Direct(region) | Self::ProjectionCandidate(region) => region,
+        }
+    }
+}
+
+// Projection results (`FieldGet`, `Load`, `__vow_vec_get*`) may carry a
+// pointer-valued field or element from a different arena. Trace them only to
+// obtain a candidate region, never as direct proof. String mutation routes
+// these candidates through the runtime descriptor-owner check; other mutable
+// receiver operations remain on their conservative default variants.
+fn source_value_route(
     source: &Inst,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
     phi_data: &PhiUpsilonData,
     seen: &mut BTreeSet<InstId>,
-) -> RegionId {
+) -> ReceiverRoute {
     if !seen.insert(source.id) {
-        return source.region;
+        return ReceiverRoute::Direct(source.region);
     }
     if let (Opcode::GetArg, InstData::ArgIndex(param_idx)) = (&source.opcode, &source.data)
         && let Some(hidden_idx) = hidden_region_idx_for_store_target(current_summary, *param_idx)
     {
-        return RegionId::Caller(hidden_idx);
+        return ReceiverRoute::Direct(RegionId::Caller(hidden_idx));
+    }
+    let projection_source = match (&source.opcode, &source.data) {
+        (Opcode::FieldGet | Opcode::Load, _) => source.args.first(),
+        (Opcode::Call, InstData::CallExtern(sym))
+            if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
+        {
+            source.args.first()
+        }
+        _ => None,
+    };
+    if let Some(container_id) = projection_source {
+        let candidate =
+            arg_route_inner(*container_id, inst_index, current_summary, phi_data, seen).region();
+        if matches!(candidate, RegionId::Block(_) | RegionId::Caller(_)) {
+            return ReceiverRoute::ProjectionCandidate(candidate);
+        }
+        return ReceiverRoute::Direct(source.region);
     }
     if source.opcode == Opcode::Phi {
-        let mut merged: Option<RegionId> = None;
+        let mut merged: Option<ReceiverRoute> = None;
         for upsilons in phi_data.block_upsilons.values() {
             for &(phi_id, val_id) in upsilons {
                 if phi_id != source.id {
                     continue;
                 }
                 let mut arm_seen = seen.clone();
-                let arm_region =
-                    arg_region_inner(val_id, inst_index, current_summary, phi_data, &mut arm_seen);
+                let arm_route =
+                    arg_route_inner(val_id, inst_index, current_summary, phi_data, &mut arm_seen);
                 match merged {
-                    Some(existing) if existing != arm_region => return source.region,
+                    Some(existing) if existing.region() != arm_route.region() => {
+                        return ReceiverRoute::Direct(source.region);
+                    }
+                    Some(ReceiverRoute::Direct(region))
+                        if matches!(arm_route, ReceiverRoute::ProjectionCandidate(_)) =>
+                    {
+                        merged = Some(ReceiverRoute::ProjectionCandidate(region));
+                    }
                     Some(_) => {}
-                    None => merged = Some(arm_region),
+                    None => merged = Some(arm_route),
                 }
             }
         }
-        if let Some(region) = merged {
-            return region;
+        if let Some(route) = merged {
+            return route;
         }
     }
-    source.region
+    ReceiverRoute::Direct(source.region)
 }
 
-fn arg_region_inner(
+fn arg_route_inner(
     arg_id: InstId,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
     phi_data: &PhiUpsilonData,
     seen: &mut BTreeSet<InstId>,
-) -> RegionId {
+) -> ReceiverRoute {
     inst_index
         .get(&arg_id)
-        .map(|src| source_value_region(src, inst_index, current_summary, phi_data, seen))
-        .unwrap_or(RegionId::Root)
+        .map(|src| source_value_route(src, inst_index, current_summary, phi_data, seen))
+        .unwrap_or(ReceiverRoute::Direct(RegionId::Root))
 }
 
+fn arg_route(
+    arg_id: InstId,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
+) -> ReceiverRoute {
+    let mut seen = BTreeSet::new();
+    arg_route_inner(arg_id, inst_index, current_summary, phi_data, &mut seen)
+}
+
+/// Region proof for operations that cannot perform the runtime projection
+/// owner check (for example hidden-arena threading into an internal callee).
+/// Projection candidates deliberately fall back to the projection's recorded
+/// region, preserving the conservative PR #344 behavior outside string growth.
 fn arg_region(
     arg_id: InstId,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
     phi_data: &PhiUpsilonData,
 ) -> RegionId {
-    let mut seen = BTreeSet::new();
-    arg_region_inner(arg_id, inst_index, current_summary, phi_data, &mut seen)
+    match arg_route(arg_id, inst_index, current_summary, phi_data) {
+        ReceiverRoute::Direct(region) => region,
+        ReceiverRoute::ProjectionCandidate(_) => inst_index
+            .get(&arg_id)
+            .map(|inst| inst.region)
+            .unwrap_or(RegionId::Root),
+    }
 }
 
-fn first_arg_region(
+fn first_arg_route(
     inst: &Inst,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
     phi_data: &PhiUpsilonData,
-) -> RegionId {
+) -> ReceiverRoute {
     inst.args
         .first()
-        .map(|arg_id| arg_region(*arg_id, inst_index, current_summary, phi_data))
-        .unwrap_or(RegionId::Root)
+        .map(|arg_id| arg_route(*arg_id, inst_index, current_summary, phi_data))
+        .unwrap_or(ReceiverRoute::Direct(RegionId::Root))
 }
 
 fn routed_vec_extern<'a>(
@@ -505,18 +618,18 @@ fn routed_vec_extern<'a>(
             region => ("__vow_vec_new_val_in_arena", Some(region)),
         },
         "__vow_vec_push_val" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_vec_push_val_in_arena", Some(region))
                 }
                 _ => (sym, None),
             }
         }
         "__vow_vec_push" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_vec_push_in_arena", Some(region))
                 }
                 _ => (sym, None),
@@ -579,20 +692,26 @@ fn routed_vec_extern<'a>(
             region => ("__vow_string_join_in_arena", Some(region)),
         },
         "__vow_string_push_str" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_string_push_str_in_arena", Some(region))
                 }
+                ReceiverRoute::ProjectionCandidate(
+                    region @ (RegionId::Block(_) | RegionId::Caller(_)),
+                ) => ("__vow_string_push_str_in_candidate_arena", Some(region)),
                 _ => (sym, None),
             }
         }
         "__vow_string_push_byte" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_string_push_byte_in_arena", Some(region))
                 }
+                ReceiverRoute::ProjectionCandidate(
+                    region @ (RegionId::Block(_) | RegionId::Caller(_)),
+                ) => ("__vow_string_push_byte_in_candidate_arena", Some(region)),
                 _ => (sym, None),
             }
         }
@@ -601,9 +720,9 @@ fn routed_vec_extern<'a>(
             region => ("__vow_map_new_in_arena", Some(region)),
         },
         "__vow_map_insert" => {
-            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
-            match region {
-                RegionId::Block(_) | RegionId::Caller(_) => {
+            let route = first_arg_route(inst, inst_index, current_summary, phi_data);
+            match route {
+                ReceiverRoute::Direct(region @ (RegionId::Block(_) | RegionId::Caller(_))) => {
                     ("__vow_map_insert_in_arena", Some(region))
                 }
                 _ => (sym, None),
@@ -660,7 +779,9 @@ fn lower_inst(
         // ------------------------------------------------------------------
         Opcode::ConstI32 => {
             if let InstData::ConstI32(v) = inst.data {
-                let val = builder.ins().iconst(types::I32, v as i64);
+                let ty = ir_ty_to_cranelift(inst.ty)
+                    .expect("ConstI32 instructions must have an integer result type");
+                let val = builder.ins().iconst(ty, v as i64);
                 ctx.value_map.insert(inst.id, val);
             }
         }
@@ -678,7 +799,9 @@ fn lower_inst(
         }
         Opcode::ConstU8 => {
             if let InstData::ConstU8(v) = inst.data {
-                let val = builder.ins().iconst(types::I8, i64::from(v));
+                let ty = ir_ty_to_cranelift(inst.ty)
+                    .expect("ConstU8 instructions must have an integer result type");
+                let val = builder.ins().iconst(ty, i64::from(v));
                 ctx.value_map.insert(inst.id, val);
             }
         }
@@ -737,9 +860,12 @@ fn lower_inst(
                     IntegerSignedness::Unsigned => builder.ins().uextend(target_ty, value),
                 }
             } else {
-                return Err(CodegenError::UnsupportedOpcode(
-                    "narrowing IntCast reached code generation".to_string(),
-                ));
+                let target_ty = ir_ty_to_cranelift(inst.ty).ok_or_else(|| {
+                    CodegenError::UnsupportedOpcode(
+                        "integer cast has non-integer target".to_string(),
+                    )
+                })?;
+                builder.ins().ireduce(target_ty, value)
             };
             ctx.value_map.insert(inst.id, result);
         }
@@ -1206,13 +1332,8 @@ fn lower_inst(
                             )
                         });
                         if let Some(&expected_ty) = expected_types.get(i) {
-                            let actual_ty = builder.func.dfg.value_type(v);
-                            if actual_ty == types::I32 && expected_ty == types::I64 {
-                                return builder.ins().sextend(types::I64, v);
-                            }
-                            if actual_ty == types::I8 && expected_ty == types::I64 {
-                                return builder.ins().uextend(types::I64, v);
-                            }
+                            let source_ty = ctx.inst_ty_map.get(id).copied().unwrap_or(IrTy::I64);
+                            return coerce_call_argument(builder, v, source_ty, expected_ty);
                         }
                         v
                     })
@@ -1318,16 +1439,8 @@ fn lower_inst(
                     )
                 });
                 let v = if let Some(&expected_ty) = expected_types.get(i + hidden_arg_offset) {
-                    let actual_ty = builder.func.dfg.value_type(v);
-                    if actual_ty == types::I32 && expected_ty == types::I64 {
-                        builder.ins().sextend(types::I64, v)
-                    } else if actual_ty == types::I8 && expected_ty == types::I64 {
-                        builder.ins().uextend(types::I64, v)
-                    } else if actual_ty == types::I64 && expected_ty == types::I32 {
-                        builder.ins().ireduce(types::I32, v)
-                    } else {
-                        v
-                    }
+                    let source_ty = ctx.inst_ty_map.get(id).copied().unwrap_or(IrTy::I64);
+                    coerce_call_argument(builder, v, source_ty, expected_ty)
                 } else {
                     v
                 };
@@ -1507,21 +1620,12 @@ fn lower_inst(
                 let base = ctx.value_map[&inst.args[0]];
                 let new_val = ctx.value_map[&inst.args[1]];
                 let offset = (idx as i32) * 8;
-                let src_ty = builder.func.dfg.value_type(new_val);
-                let store_val = match src_ty {
-                    types::I32 => builder.ins().sextend(types::I64, new_val),
-                    types::I8 => builder.ins().uextend(types::I64, new_val),
-                    types::F32 => {
-                        let bits = builder
-                            .ins()
-                            .bitcast(types::I32, MemFlagsData::new(), new_val);
-                        builder.ins().uextend(types::I64, bits)
-                    }
-                    types::F64 => builder
-                        .ins()
-                        .bitcast(types::I64, MemFlagsData::new(), new_val),
-                    _ => new_val,
-                };
+                let source_ty = ctx
+                    .inst_ty_map
+                    .get(&inst.args[1])
+                    .copied()
+                    .unwrap_or(IrTy::I64);
+                let store_val = extend_field_store_value(builder, new_val, source_ty);
                 builder
                     .ins()
                     .store(MemFlagsData::trusted(), store_val, base, offset);
@@ -1563,7 +1667,12 @@ fn tag_for_ir_ty(ty: IrTy) -> u8 {
         IrTy::F32 => 2,
         IrTy::F64 => 3,
         IrTy::Bool => 4,
+        IrTy::U64 => 5,
         IrTy::U8 => 6,
+        IrTy::I8 => 7,
+        IrTy::I16 => 8,
+        IrTy::U16 => 9,
+        IrTy::U32 => 10,
         _ => 0,
     }
 }
@@ -1661,8 +1770,13 @@ fn emit_vow_violation_body(
                     .ins()
                     .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
                 let payload: Value = match ir_ty {
+                    IrTy::I8 => builder.ins().sextend(types::I64, *cl_val),
+                    IrTy::U8 => builder.ins().uextend(types::I64, *cl_val),
+                    IrTy::I16 => builder.ins().sextend(types::I64, *cl_val),
+                    IrTy::U16 => builder.ins().uextend(types::I64, *cl_val),
                     IrTy::I32 => builder.ins().sextend(types::I64, *cl_val),
-                    IrTy::I64 => *cl_val,
+                    IrTy::U32 => builder.ins().uextend(types::I64, *cl_val),
+                    IrTy::I64 | IrTy::U64 => *cl_val,
                     IrTy::F32 => {
                         let bits = builder
                             .ins()
@@ -1673,7 +1787,6 @@ fn emit_vow_violation_body(
                         .ins()
                         .bitcast(types::I64, MemFlagsData::new(), *cl_val),
                     IrTy::Bool => *cl_val,
-                    IrTy::U8 => builder.ins().uextend(types::I64, *cl_val),
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder
@@ -2048,45 +2161,39 @@ fn compile_ir_function(
     Ok(())
 }
 
+fn narrow_integer_clif_type(name: &str) -> Option<types::Type> {
+    match name {
+        "i8" | "u8" => Some(types::I8),
+        "i16" | "u16" => Some(types::I16),
+        "i32" | "u32" => Some(types::I32),
+        "i64" | "u64" => Some(types::I64),
+        "i128" | "u128" => Some(types::I128),
+        _ => None,
+    }
+}
+
+fn narrow_intrinsic_signature(sym: &str) -> Option<(types::Type, types::Type)> {
+    let name = sym.strip_prefix("__vow_")?;
+    let (source, rest) = name.split_once("_to_")?;
+    let (target, mode) = rest.rsplit_once('_')?;
+    if !matches!(mode, "try" | "wrap" | "sat") {
+        return None;
+    }
+    let source_ty = narrow_integer_clif_type(source)?;
+    let target_ty = if mode == "try" {
+        types::I64
+    } else {
+        narrow_integer_clif_type(target)?
+    };
+    Some((source_ty, target_ty))
+}
+
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
-    let narrow_source_ty =
-        if sym.starts_with("__vow_i16_to_u8_") || sym.starts_with("__vow_u16_to_u8_") {
-            Some(types::I16)
-        } else if sym.starts_with("__vow_i32_to_u8_") || sym.starts_with("__vow_u32_to_u8_") {
-            Some(types::I32)
-        } else if sym.starts_with("__vow_i64_to_u8_") || sym.starts_with("__vow_u64_to_u8_") {
-            Some(types::I64)
-        } else if sym.starts_with("__vow_i128_to_u8_") || sym.starts_with("__vow_u128_to_u8_") {
-            Some(types::I128)
-        } else {
-            None
-        };
-    if let Some(source_ty) = narrow_source_ty {
+    if let Some((source_ty, return_ty)) = narrow_intrinsic_signature(sym) {
         sig.params.push(AbiParam::new(source_ty));
-        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
-            types::I64
-        } else {
-            types::I8
-        }));
-        return sig;
-    }
-    let i32_narrow_source_ty =
-        if sym.starts_with("__vow_i64_to_i32_") || sym.starts_with("__vow_u64_to_i32_") {
-            Some(types::I64)
-        } else if sym.starts_with("__vow_u32_to_i32_") {
-            Some(types::I32)
-        } else {
-            None
-        };
-    if let Some(source_ty) = i32_narrow_source_ty {
-        sig.params.push(AbiParam::new(source_ty));
-        sig.returns.push(AbiParam::new(if sym.ends_with("_try") {
-            types::I64
-        } else {
-            types::I32
-        }));
+        sig.returns.push(AbiParam::new(return_ty));
         return sig;
     }
     if matches!(
@@ -2253,6 +2360,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // dest ptr
             sig.params.push(AbiParam::new(types::I64)); // src ptr
         }
+        "__vow_string_push_str_in_candidate_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // candidate arena
+            sig.params.push(AbiParam::new(types::I64)); // dest ptr
+            sig.params.push(AbiParam::new(types::I64)); // src ptr
+        }
         "__vow_string_byte_at" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // index
@@ -2264,6 +2376,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_string_push_byte_in_arena" => {
             sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // byte value
+        }
+        "__vow_string_push_byte_in_candidate_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // candidate arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // byte value
         }
@@ -2366,7 +2483,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_string_parse_i64_opt"
         | "__vow_string_parse_u64_opt"
+        | "__vow_string_parse_i8_opt"
         | "__vow_string_parse_u8_opt"
+        | "__vow_string_parse_i16_opt"
+        | "__vow_string_parse_u16_opt"
+        | "__vow_string_parse_u32_opt"
         | "__vow_string_parse_i32_opt" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
@@ -3070,6 +3191,31 @@ mod tests {
         Span::new(0, 0)
     }
 
+    #[test]
+    fn abi_and_field_widening_preserve_logical_signedness() {
+        let mut function = cranelift_codegen::ir::Function::new();
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut function, &mut builder_ctx);
+        let block = builder.create_block();
+        builder.switch_to_block(block);
+
+        let signed_i8 = builder.ins().iconst(types::I8, -1);
+        coerce_call_argument(&mut builder, signed_i8, IrTy::I8, types::I64);
+        let unsigned_i8 = builder.ins().iconst(types::I8, -1);
+        coerce_call_argument(&mut builder, unsigned_i8, IrTy::U8, types::I64);
+        let signed_i16 = builder.ins().iconst(types::I16, -1);
+        extend_field_store_value(&mut builder, signed_i16, IrTy::I16);
+        let unsigned_i16 = builder.ins().iconst(types::I16, -1);
+        extend_field_store_value(&mut builder, unsigned_i16, IrTy::U16);
+
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        builder.finalize(make_isa(BuildMode::Release).unwrap().frontend_config());
+        let clif = function.display().to_string();
+        assert_eq!(clif.matches("sextend.i64").count(), 2, "{clif}");
+        assert_eq!(clif.matches("uextend.i64").count(), 2, "{clif}");
+    }
+
     fn make_module(name: &str, funcs: Vec<Function>) -> Module {
         Module {
             name: name.to_string(),
@@ -3124,7 +3270,11 @@ mod tests {
             return data;
         }
         InstData::Integer(match ty {
+            Ty::I8 => IntegerType::I8,
             Ty::I32 => IntegerType::I32,
+            Ty::I16 => IntegerType::I16,
+            Ty::U16 => IntegerType::U16,
+            Ty::U32 => IntegerType::U32,
             Ty::U64 => IntegerType::U64,
             Ty::U8 => IntegerType::U8,
             _ => IntegerType::I64,
@@ -4788,7 +4938,7 @@ mod tests {
     }
 
     #[test]
-    fn projected_parameter_region_string_mutations_keep_default_variants() {
+    fn projected_parameter_region_string_mutations_import_candidate_variant() {
         let grow_projection = Function {
             id: FuncId(0),
             name: "grow_projection".to_string(),
@@ -4886,9 +5036,60 @@ mod tests {
 
         let bytes = result.unwrap().bytes;
         let symbols = compiled_object_symbols(bytes.as_slice());
-        assert!(symbols.contains("__vow_string_push_byte"));
+        assert!(symbols.contains("__vow_string_push_byte_in_candidate_arena"));
+        assert!(!symbols.contains("__vow_string_push_byte"));
         assert!(!symbols.contains("__vow_string_push_byte_in_arena"));
-        assert!(symbols.contains("__vow_string_push_str"));
+        assert!(symbols.contains("__vow_string_push_str_in_candidate_arena"));
+        assert!(!symbols.contains("__vow_string_push_str"));
+        assert!(!symbols.contains("__vow_string_push_str_in_arena"));
+    }
+
+    #[test]
+    fn loaded_parameter_region_string_push_str_imports_candidate_variant() {
+        let grow_load = Function {
+            id: FuncId(0),
+            name: "grow_load".to_string(),
+            params: vec![Ty::Ptr, Ty::Ptr],
+            param_names: vec!["address".to_string(), "suffix".to_string()],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::Load, Ty::Ptr, vec![0], InstData::None),
+                    inst(2, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                    inst(
+                        3,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![1, 2],
+                        InstData::CallExtern("__vow_string_push_str".to_string()),
+                    ),
+                    inst(4, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::ConstantGlobal,
+                store_effects: vec![StoreEffect {
+                    target: 0,
+                    source: RegionConstraint::ConstantGlobal,
+                }],
+            },
+            source_file: String::new(),
+        };
+        let module = make_module("test", vec![grow_load]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        let symbols = compiled_object_symbols(bytes.as_slice());
+        assert!(symbols.contains("__vow_string_push_str_in_candidate_arena"));
+        assert!(!symbols.contains("__vow_string_push_str"));
         assert!(!symbols.contains("__vow_string_push_str_in_arena"));
     }
 
@@ -6122,6 +6323,230 @@ mod tests {
                 ],
             )],
         );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn phase3_narrow_intrinsic_signatures_use_native_abi_widths() {
+        for (name, expected) in [
+            ("i8", Some(types::I8)),
+            ("u8", Some(types::I8)),
+            ("i16", Some(types::I16)),
+            ("u16", Some(types::I16)),
+            ("i32", Some(types::I32)),
+            ("u32", Some(types::I32)),
+            ("i64", Some(types::I64)),
+            ("u64", Some(types::I64)),
+            ("i128", Some(types::I128)),
+            ("u128", Some(types::I128)),
+            ("unknown", None),
+        ] {
+            assert_eq!(narrow_integer_clif_type(name), expected, "{name}");
+        }
+
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_i16_to_i8_try"),
+            Some((types::I16, types::I64))
+        );
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_u64_to_u32_wrap"),
+            Some((types::I64, types::I32))
+        );
+        assert_eq!(
+            narrow_intrinsic_signature("__vow_i32_to_u16_sat"),
+            Some((types::I32, types::I16))
+        );
+        for name in [
+            "i16_to_i8_try",
+            "__vow_i16_i8_try",
+            "__vow_i16_to_i8_checked",
+            "__vow_unknown_to_i8_wrap",
+            "__vow_i16_to_unknown_wrap",
+        ] {
+            assert_eq!(narrow_intrinsic_signature(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn compile_phase3_native_width_constants_and_arithmetic() {
+        let cases = [
+            ("i8_native", Ty::I8, Opcode::ConstU8, InstData::ConstU8(7)),
+            (
+                "i16_native",
+                Ty::I16,
+                Opcode::ConstI32,
+                InstData::ConstI32(7),
+            ),
+            (
+                "u16_native",
+                Ty::U16,
+                Opcode::ConstI32,
+                InstData::ConstI32(7),
+            ),
+            (
+                "u32_native",
+                Ty::U32,
+                Opcode::ConstI32,
+                InstData::ConstI32(7),
+            ),
+        ];
+        let functions = cases
+            .into_iter()
+            .enumerate()
+            .map(|(id, (name, ty, const_op, const_data))| {
+                simple_fn(
+                    id as u32,
+                    name,
+                    vec![ty],
+                    ty,
+                    vec![
+                        inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                        inst(1, const_op, ty, vec![], const_data),
+                        inst(2, Opcode::WrappingAdd, ty, vec![0, 1], InstData::None),
+                        inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                )
+            })
+            .collect();
+        let module = make_module("test", functions);
+
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_phase3_returns_reduce_default_literal_width() {
+        let functions = [("i8_return", Ty::I8), ("i16_return", Ty::I16)]
+            .into_iter()
+            .enumerate()
+            .map(|(id, (name, return_ty))| {
+                simple_fn(
+                    id as u32,
+                    name,
+                    vec![],
+                    return_ty,
+                    vec![
+                        inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                        inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                    ],
+                )
+            })
+            .collect();
+        let module = make_module("test", functions);
+
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_vow_captures_all_phase3_integer_widths() {
+        let bindings = ["i8v", "u8v", "i16v", "u16v", "u32v", "u64v"]
+            .into_iter()
+            .enumerate()
+            .map(|(id, name)| (name.to_string(), InstId(id as u32)))
+            .collect();
+        let module = make_module(
+            "test",
+            vec![Function {
+                id: FuncId(0),
+                name: "capture_narrow".to_string(),
+                params: vec![Ty::I8, Ty::U8, Ty::I16, Ty::U16, Ty::U32, Ty::U64],
+                param_names: vec![],
+                return_ty: Ty::Unit,
+                effects: vec![],
+                vows: vec![VowEntry {
+                    id: VowId(0),
+                    description: "narrow captures".to_string(),
+                    blame: vow_diag::Blame::Caller,
+                    bindings,
+                    file: "test.vow".to_string(),
+                    offset: 1,
+                }],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::I8, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::GetArg, Ty::U8, vec![], InstData::ArgIndex(1)),
+                        inst(2, Opcode::GetArg, Ty::I16, vec![], InstData::ArgIndex(2)),
+                        inst(3, Opcode::GetArg, Ty::U16, vec![], InstData::ArgIndex(3)),
+                        inst(4, Opcode::GetArg, Ty::U32, vec![], InstData::ArgIndex(4)),
+                        inst(5, Opcode::GetArg, Ty::U64, vec![], InstData::ArgIndex(5)),
+                        inst(
+                            6,
+                            Opcode::ConstBool,
+                            Ty::Bool,
+                            vec![],
+                            InstData::ConstBool(true),
+                        ),
+                        inst(
+                            7,
+                            Opcode::VowRequires,
+                            Ty::Unit,
+                            vec![6],
+                            InstData::VowId(VowId(0)),
+                        ),
+                        inst(8, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                    ],
+                }],
+                local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
+                source_file: "test.vow".to_string(),
+            }],
+        );
+
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_phase3_extern_calls_debug_widening_and_i16_field_storage() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "phase3_abi",
+                vec![Ty::I16],
+                Ty::I8,
+                vec![
+                    inst(0, Opcode::GetArg, Ty::I16, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::DebugCall,
+                        Ty::Unit,
+                        vec![0],
+                        InstData::CallExtern("__vow_debug_i64".to_string()),
+                    ),
+                    inst(
+                        2,
+                        Opcode::RegionAlloc,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::AllocSize { size: 8, align: 8 },
+                    ),
+                    inst(
+                        3,
+                        Opcode::FieldSet,
+                        Ty::Unit,
+                        vec![2, 0],
+                        InstData::FieldIndex(0),
+                    ),
+                    inst(
+                        4,
+                        Opcode::Call,
+                        Ty::I8,
+                        vec![0],
+                        InstData::CallExtern("__vow_i16_to_i8_wrap".to_string()),
+                    ),
+                    inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            )],
+        );
+
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
