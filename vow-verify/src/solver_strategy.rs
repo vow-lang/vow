@@ -231,8 +231,8 @@ fn bv_config_for(config: &SolverConfig) -> SolverConfig {
 /// Decide whether a BV result warrants a Z3 + IR retry, and with what config.
 ///
 /// Returns `Some((ir_config, ir_max_k_step))` when the retry is warranted, or
-/// `None` when it is not — either because the BV result was conclusive, or
-/// because the resolved BV solver is Bitwuzla (which cannot run the IR
+/// `None` when it is not — either because the BV result is not resource-limited,
+/// or because the resolved BV solver is Bitwuzla (which cannot run the IR
 /// encoding). A retry is warranted only for a *resource-limited* BV result: a
 /// `Timeout`, or a memory-limit `Unknown`. Every other `Unknown` is an explicit
 /// ESBMC inconclusive verdict and must not be laundered into a proof
@@ -1152,9 +1152,11 @@ exit 0
         assert!(retry_plan(&cfg, &bv, &VerificationResult::Timeout, 5).is_none());
     }
 
-    // A conclusive BV result is not resource-limited, so no retry is planned.
+    // Only a resource-limited BV result retries. Conclusive verdicts
+    // (Proven/ProvenIr/Failed) and fail-closed infrastructure outcomes
+    // (ToolNotFound/ToolError/Skipped, per the status taxonomy) never do.
     #[test]
-    fn retry_plan_conclusive_results_do_not_retry() {
+    fn retry_plan_non_resource_limited_results_do_not_retry() {
         let cfg = auto_bv_config();
         let bv = bv_config_for(&cfg);
         for result in [
@@ -1168,10 +1170,15 @@ exit 0
                 block_visits: vec![],
                 raw_output: String::new(),
             }),
+            VerificationResult::ToolNotFound,
+            VerificationResult::ToolError("boom".to_string()),
+            VerificationResult::Skipped {
+                reason: "non-modelable".to_string(),
+            },
         ] {
             assert!(
                 retry_plan(&cfg, &bv, &result, 5).is_none(),
-                "conclusive {result:?} must not retry",
+                "non-resource-limited {result:?} must not retry",
             );
         }
     }
