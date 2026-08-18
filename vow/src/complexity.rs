@@ -9,6 +9,8 @@ use vow_syntax::ast::{
     VowClause,
 };
 
+mod writer;
+
 // Effect -> bit, matching the self-hosted EFF_* constants (io=1,panic=2,
 // read=4,unsafe=8,write=16), so effect_breadth (popcount) and the canonical
 // effects list are byte-identical with the self-hosted compiler.
@@ -29,29 +31,6 @@ fn cx_popcount_bits(mut mask: i64) -> i64 {
         mask /= 2;
     }
     c
-}
-
-fn cx_emit_effects(out: &mut String, eff: i64) {
-    out.push('[');
-    let mut ne = 0;
-    for (bit, name) in [
-        (1, "io"),
-        (2, "panic"),
-        (4, "read"),
-        (8, "unsafe"),
-        (16, "write"),
-    ] {
-        if (eff / bit) % 2 != 0 {
-            if ne > 0 {
-                out.push(',');
-            }
-            out.push('"');
-            out.push_str(name);
-            out.push('"');
-            ne += 1;
-        }
-    }
-    out.push(']');
 }
 
 // Count linear-struct literals (StructLiteral whose name is a linear struct) in
@@ -546,98 +525,6 @@ struct CxEmit {
     verif: Verif,
 }
 
-fn cx_emit_fn(out: &mut String, r: &CxEmit, thr: i64) {
-    out.push_str("{\"name\":\"");
-    out.push_str(&cx_json_escape(&r.name));
-    out.push_str("\",\"line\":");
-    out.push_str(&r.line.to_string());
-    out.push_str(",\"complexity_score\":");
-    out.push_str(&r.score.to_string());
-    out.push_str(",\"score_factors\":{\"cognitive_sub\":");
-    out.push_str(&cx_fmt_fixed(r.cog_sub_s));
-    out.push_str(",\"size_sub\":");
-    out.push_str(&cx_fmt_fixed(r.size_sub_s));
-    out.push_str(",\"vow_bump\":");
-    out.push_str(&cx_fmt_fixed(r.vow_bump_s));
-    out.push_str(",\"base\":");
-    out.push_str(&cx_fmt_fixed(r.base_s));
-    out.push_str(",\"over_threshold\":");
-    out.push_str(if r.score > thr { "true" } else { "false" });
-    out.push_str("},\"size\":{\"nloc\":");
-    out.push_str(&r.nloc.to_string());
-    out.push_str(",\"tokens\":");
-    out.push_str(&r.tokens.to_string());
-    out.push_str(",\"stmts\":");
-    out.push_str(&r.stmts.to_string());
-    out.push_str(",\"params\":");
-    out.push_str(&r.params.to_string());
-    out.push_str("},\"structural\":{\"cyclomatic\":");
-    out.push_str(&r.cyclomatic.to_string());
-    out.push_str(",\"cyclomatic_ir\":");
-    out.push_str(&r.cyclomatic_ir.to_string());
-    out.push_str(",\"cognitive\":");
-    out.push_str(&r.cognitive.to_string());
-    out.push_str(",\"max_nesting\":");
-    out.push_str(&r.max_nesting.to_string());
-    out.push_str(",\"halstead\":{\"n1\":");
-    out.push_str(&r.h_n1.to_string());
-    out.push_str(",\"n2\":");
-    out.push_str(&r.h_n2.to_string());
-    out.push_str(",\"N1\":");
-    out.push_str(&r.h_bign1.to_string());
-    out.push_str(",\"N2\":");
-    out.push_str(&r.h_bign2.to_string());
-    out.push_str(",\"vocabulary\":");
-    out.push_str(&r.h_vocab.to_string());
-    out.push_str(",\"length\":");
-    out.push_str(&r.h_length.to_string());
-    out.push_str(",\"volume\":");
-    out.push_str(&cx_fmt_fixed(r.h_volume_s));
-    out.push_str(",\"difficulty\":");
-    out.push_str(&cx_fmt_fixed(r.h_difficulty_s));
-    out.push_str(",\"effort\":");
-    out.push_str(&cx_fmt_fixed(r.h_effort_s));
-    out.push_str("}},\"vow\":{\"tier\":\"experimental\",\"effects\":");
-    cx_emit_effects(out, r.eff);
-    out.push_str(",\"effect_breadth\":");
-    out.push_str(&cx_popcount_bits(r.eff).to_string());
-    out.push_str(",\"effect_fanout\":");
-    out.push_str(&r.effect_fanout.to_string());
-    out.push_str(",\"linear_values\":");
-    out.push_str(&r.linear_values.to_string());
-    out.push_str(",\"linear_consumes\":");
-    out.push_str(&r.linear_consumes.to_string());
-    out.push_str(",\"linear_borrows\":");
-    out.push_str(&r.linear_borrows.to_string());
-    out.push_str(",\"contract\":{\"requires\":");
-    out.push_str(&r.contract.requires.to_string());
-    out.push_str(",\"ensures\":");
-    out.push_str(&r.contract.ensures.to_string());
-    out.push_str(",\"invariants\":");
-    out.push_str(&r.contract.invariants.to_string());
-    out.push_str(",\"predicate_nodes\":");
-    out.push_str(&r.contract.predicate_nodes.to_string());
-    out.push_str(",\"predicate_depth\":");
-    out.push_str(&r.contract.predicate_depth.to_string());
-    out.push_str(",\"free_vars\":");
-    out.push_str(&r.contract.free_vars.to_string());
-    out.push_str(",\"has_vec_quantification\":");
-    out.push_str(if r.contract.has_vec_quant {
-        "true"
-    } else {
-        "false"
-    });
-    out.push_str("}},\"verification\":{\"tier\":\"experimental\",\"loops_total\":");
-    out.push_str(&r.verif.loops_total.to_string());
-    out.push_str(",\"loops_without_invariant\":");
-    out.push_str(&r.verif.loops_without_invariant.to_string());
-    out.push_str(",\"max_loop_nesting\":");
-    out.push_str(&r.verif.max_loop_nesting.to_string());
-    out.push_str(",\"contract_predicate_cost\":");
-    out.push_str(&r.verif.contract_predicate_cost.to_string());
-    out.push_str("}}");
-}
-
 // Compute the full per-function complexity record from a function's AST, the
 // source text (for line numbers), and its optional IR-derived info. Pure: no
 // I/O, no shared state — every metric is a function of these inputs, so the
@@ -897,7 +784,7 @@ pub(crate) fn run_complexity_command(
     let mut out = String::from(
         "{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"",
     );
-    out.push_str(&cx_json_escape(&source.to_string_lossy()));
+    out.push_str(&writer::escape(&source.to_string_lossy()));
     out.push_str("\",\"complexity_score\":");
     out.push_str(&file_max.to_string());
     out.push_str(",\"functions_over_threshold\":");
@@ -909,7 +796,7 @@ pub(crate) fn run_complexity_command(
         if k > 0 {
             out.push(',');
         }
-        cx_emit_fn(&mut out, r, thr);
+        out.push_str(&writer::render_fn(r, thr));
     }
     out.push_str("],\"module\":{\"tier\":\"experimental\",\"functions\":");
     out.push_str(&(recs.len() as i64).to_string());
@@ -935,7 +822,7 @@ pub(crate) fn run_complexity_command(
                 out.push(',');
             }
             out.push('"');
-            out.push_str(&cx_json_escape(&r.name));
+            out.push_str(&writer::escape(&r.name));
             out.push('"');
             emitted += 1;
         }
@@ -1027,27 +914,6 @@ fn cx_log2_milli(n: i64) -> i64 {
         iter += 1;
     }
     intpart * scale + frac
-}
-
-fn cx_fmt_fixed(scaled: i64) -> String {
-    let mut s = String::new();
-    let mut x = scaled;
-    if x < 0 {
-        s.push('-');
-        x = -x;
-    }
-    let whole = x / 1000;
-    let frac = x - whole * 1000;
-    s.push_str(&whole.to_string());
-    s.push('.');
-    if frac < 100 {
-        s.push('0');
-    }
-    if frac < 10 {
-        s.push('0');
-    }
-    s.push_str(&frac.to_string());
-    s
 }
 
 fn cx_popcount(mask: i64) -> i64 {
@@ -2294,26 +2160,4 @@ fn line_at(src: &str, offset: usize) -> i64 {
         i += 1;
     }
     line
-}
-
-fn cx_json_escape(s: &str) -> String {
-    // Iterate chars, not bytes: `byte as char` would map a UTF-8 lead byte like
-    // 0xC3 to U+00C3 and re-encode it as two bytes (mojibake), diverging from the
-    // self-hosted escaper, which appends the original UTF-8 bytes. Pushing the
-    // char preserves those bytes and stays byte-identical for non-ASCII paths.
-    let mut r = String::new();
-    for c in s.chars() {
-        match c {
-            '"' => r.push_str("\\\""),
-            '\\' => r.push_str("\\\\"),
-            '\n' => r.push_str("\\n"),
-            '\r' => r.push_str("\\r"),
-            '\t' => r.push_str("\\t"),
-            '\x08' => r.push_str("\\b"),
-            '\x0c' => r.push_str("\\f"),
-            c if (c as u32) < 32 => r.push('?'),
-            c => r.push(c),
-        }
-    }
-    r
 }
