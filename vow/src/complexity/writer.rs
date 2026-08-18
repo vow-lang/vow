@@ -4,7 +4,7 @@
 //! `escape`r and the per-function record writer — so the command shell keeps
 //! only orchestration and aggregation.
 
-use super::{cx_popcount_bits, CxEmit};
+use super::{CxEmit, cx_popcount_bits};
 
 // Render one function's complexity record as a JSON object. Returns the text
 // rather than appending to a caller-owned buffer, so the whole field ordering,
@@ -180,7 +180,9 @@ mod tests {
 
     // A fully-populated record with recognizable field values. Fixed-point
     // fields carry `scale=1000` integers whose 3-decimal rendering is easy to
-    // predict independently (e.g. 4743 -> "4.743").
+    // predict independently (e.g. 4743 -> "4.743"). Values are chosen for
+    // legible rendering, not to be a self-consistent run of the score pipeline
+    // (the writer emits the struct verbatim; scoring is tested elsewhere).
     fn sample_emit() -> CxEmit {
         CxEmit {
             name: "sample".to_string(),
