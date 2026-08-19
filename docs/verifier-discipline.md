@@ -118,10 +118,17 @@ silently regress it:
   proof found under the weaker IR encoding must be `ProvenIr`. A violation
   panics; the CLI surfaces the panic as `verify_status: "panicked"` and the run
   fails closed — it never reports `Verified`.
-- **The unwind assertion** in the same branch asserts the IR retry's
-  `max_k_step` is never below the BV attempt's, so a future "halve unwind on
-  timeout" edit trips immediately.
-- **Regression tests** (`solver_strategy.rs`, `#[cfg(unix)]` fake-esbmc):
+- **The unwind assertion** in `retry_plan` (`solver_strategy.rs`) asserts the IR
+  retry's `max_k_step` is never below the BV attempt's, so a future "halve
+  unwind on timeout" edit trips immediately.
+- **Pure-seam unit tests** (`solver_strategy.rs`, no subprocess) pin the policy
+  of the three functions the fallback is built from — `bv_config_for` (step 1),
+  `retry_plan` (steps 2, 5), and `combine_retry` (steps 3, 4) — with expected
+  values anchored on this document. They include a direct `#[should_panic]` test
+  of the launder guard (`launder_guard_rejects_bare_proven`) that reaches the
+  invariant without a compiled esbmc run.
+- **Regression tests** (`solver_strategy.rs`, `#[cfg(unix)]` fake-esbmc) exercise
+  the same discipline end to end through the driver:
   - `fallback_forced_timeout_never_verified` — a forced timeout on both BV and
     IR yields `Timeout`, never a proof.
   - `fallback_forced_timeout_ir_proof_is_labeled_proven_ir` — a BV timeout with

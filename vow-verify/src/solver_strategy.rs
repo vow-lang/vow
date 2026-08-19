@@ -200,6 +200,104 @@ fn enforce_retry_never_launders_proof(retry: &VerificationResult) {
     );
 }
 
+/// The resolved BV configuration for the first (auto-mode) attempt.
+///
+/// Applies the `DEFAULT_AUTO_TIMEOUT_SECS` cap that makes the IR fallback
+/// reachable, with two carve-outs (docs/verifier-discipline.md, step 1):
+/// an explicit user `--timeout` is honored verbatim, and a Bitwuzla BV run is
+/// left uncapped because Bitwuzla cannot run the IR encoding — capping it at
+/// 30s would cut off bitwise-heavy contracts with no retry to fall back to.
+fn bv_config_for(config: &SolverConfig) -> SolverConfig {
+    let bv_solver = match config.solver {
+        Solver::Auto => Solver::Boolector,
+        s => s,
+    };
+    let timeout_secs = if config.timeout_secs.is_some() {
+        config.timeout_secs
+    } else if matches!(bv_solver, Solver::Bitwuzla) {
+        None
+    } else {
+        Some(DEFAULT_AUTO_TIMEOUT_SECS)
+    };
+    SolverConfig {
+        solver: config.solver,
+        encoding: Encoding::Bv,
+        timeout_secs,
+        memlimit_mb: config.memlimit_mb,
+    }
+    .resolve()
+}
+
+/// Decide whether a BV result warrants a Z3 + IR retry, and with what config.
+///
+/// Returns `Some((ir_config, ir_max_k_step))` when the retry is warranted, or
+/// `None` when it is not — either because the BV result is not resource-limited,
+/// or because the resolved BV solver is Bitwuzla (which cannot run the IR
+/// encoding). A retry is warranted only for a *resource-limited* BV result: a
+/// `Timeout`, or a memory-limit `Unknown`. Every other `Unknown` is an explicit
+/// ESBMC inconclusive verdict and must not be laundered into a proof
+/// (docs/verifier-discipline.md, steps 2 and 5).
+///
+/// The IR retry reuses the same unwind bound as the BV attempt. `ir_max_k_step`
+/// is deliberately just `max_k_step`; the assertion is a trip wire, not a check
+/// of current behaviour, so a future edit that derives a smaller bound (e.g.
+/// `max_k_step / 2`, which would prove a strictly weaker obligation) fails
+/// loudly here instead of silently — see docs/verifier-discipline.md.
+fn retry_plan(
+    config: &SolverConfig,
+    bv_config: &SolverConfig,
+    bv_result: &VerificationResult,
+    max_k_step: u32,
+) -> Option<(SolverConfig, u32)> {
+    let resource_limited = matches!(bv_result, VerificationResult::Timeout)
+        || matches!(bv_result, VerificationResult::Unknown { reason } if reason == &memory_limit_reason());
+    if !resource_limited || matches!(bv_config.solver, Solver::Bitwuzla) {
+        return None;
+    }
+
+    // Reuse the same timeout/memlimit policy for the IR retry: user timeout
+    // override if set, else the 30s default.
+    let ir_config = SolverConfig {
+        solver: Solver::Z3,
+        encoding: Encoding::Ir,
+        timeout_secs: config.timeout_secs.or(Some(DEFAULT_AUTO_TIMEOUT_SECS)),
+        memlimit_mb: config.memlimit_mb,
+    };
+    let ir_max_k_step = max_k_step;
+    assert!(
+        ir_max_k_step >= max_k_step,
+        "verifier-discipline violation: IR retry unwind {ir_max_k_step} is below \
+         the BV unwind {max_k_step}; a retry must never reduce the unwind bound \
+         (see docs/verifier-discipline.md)"
+    );
+    Some((ir_config, ir_max_k_step))
+}
+
+/// Combine a BV result with its IR-retry result under the retry taxonomy.
+///
+/// - An IR *proof* is relabeled `Proven -> ProvenIr`: the IR encoding does not
+///   model overflow, so it is a strictly weaker proof and must carry the
+///   distinct status (docs/verifier-discipline.md, step 3).
+/// - An IR *counterexample* is discarded — a CE found only under IR can be
+///   infeasible under BV — and the original resource-limited BV result stands
+///   (step 4). The returned config is still the IR config, recording what ran.
+/// - Any other IR outcome passes through.
+///
+/// The launder guard runs on the way out, so a bare `Proven` can never escape.
+fn combine_retry(
+    bv_result: VerificationResult,
+    ir_result: VerificationResult,
+    ir_config: SolverConfig,
+) -> (VerificationResult, SolverConfig) {
+    let combined = match ir_result {
+        VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
+        VerificationResult::Failed(_) => (bv_result, ir_config),
+        other => (other, ir_config),
+    };
+    enforce_retry_never_launders_proof(&combined.0);
+    combined
+}
+
 /// Run ESBMC with fallback: if BV times out in auto mode, retry with --ir --z3.
 /// Returns the result and the config that produced it.
 pub fn run_with_fallback(
@@ -216,86 +314,20 @@ pub fn run_with_fallback(
         return (result, resolved);
     }
 
-    // Auto mode: run with BV first, fallback to IR on timeout.
-    //
-    // The default 30s cap is only meaningful when the IR fallback is
-    // actually reachable. Bitwuzla can't run the IR encoding, so applying
-    // `DEFAULT_AUTO_TIMEOUT_SECS` when the resolved BV solver is Bitwuzla
-    // would amount to a silent regression — users who pick Bitwuzla for
-    // bitwise-heavy contracts would get cut off at 30s with no retry.
-    // Leave those runs uncapped unless the user set --timeout explicitly.
-    let bv_solver = match config.solver {
-        Solver::Auto => Solver::Boolector,
-        s => s,
-    };
-    let timeout_secs = if config.timeout_secs.is_some() {
-        config.timeout_secs
-    } else if matches!(bv_solver, Solver::Bitwuzla) {
-        None
-    } else {
-        Some(DEFAULT_AUTO_TIMEOUT_SECS)
-    };
-    let bv_config = SolverConfig {
-        solver: config.solver,
-        encoding: Encoding::Bv,
-        timeout_secs,
-        memlimit_mb: config.memlimit_mb,
-    }
-    .resolve();
-
+    // Auto mode: run with BV first, then fall back to Z3 + IR when the BV
+    // attempt is resource-limited. The policy behind each step lives in the
+    // three pure seams below, exercised directly by unit tests; this driver
+    // only sequences the two subprocess invocations around them.
+    let bv_config = bv_config_for(config);
     let result = run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &bv_config);
 
-    let resource_limited = matches!(&result, VerificationResult::Timeout)
-        || matches!(&result, VerificationResult::Unknown { reason } if reason == &memory_limit_reason());
-    if resource_limited {
-        // Timeout/memlimit means BV could neither prove nor disprove within
-        // the resource budget, so auto mode may retry with Z3+IR. Other
-        // UNKNOWN outcomes are explicit ESBMC inconclusive results and must
-        // not be hidden by proving the weaker IR abstraction.
-        let can_ir = !matches!(bv_config.solver, Solver::Bitwuzla);
-        if !can_ir {
-            return (result, bv_config);
+    match retry_plan(config, &bv_config, &result, max_k_step) {
+        None => (result, bv_config),
+        Some((ir_config, ir_max_k_step)) => {
+            let ir_result =
+                run_esbmc_with_max_k_step(esbmc, c_src, ir_max_k_step, func_name, &ir_config);
+            combine_retry(result, ir_result, ir_config)
         }
-
-        // Reuse the same timeout/memlimit policy for the IR retry: user
-        // timeout override if set, else the 30s default.
-        let ir_timeout = config.timeout_secs.or(Some(DEFAULT_AUTO_TIMEOUT_SECS));
-        let ir_config = SolverConfig {
-            solver: Solver::Z3,
-            encoding: Encoding::Ir,
-            timeout_secs: ir_timeout,
-            memlimit_mb: config.memlimit_mb,
-        };
-        // The IR retry must run the SAME unwind bound as the BV attempt.
-        // Reducing the unwind on retry ("halve unwind on timeout") would prove a
-        // strictly weaker obligation and is forbidden — see docs/verifier-discipline.md.
-        //
-        // `ir_max_k_step` is deliberately just `max_k_step`, so the assertion below is
-        // a tautology *today* — that is intentional. It is a trip wire, not a check of
-        // current behaviour: it exists so a future edit that derives a smaller bound
-        // (e.g. `max_k_step / 2`) fails loudly here instead of silently proving the
-        // weaker obligation.
-        let ir_max_k_step = max_k_step;
-        assert!(
-            ir_max_k_step >= max_k_step,
-            "verifier-discipline violation: IR retry unwind {ir_max_k_step} is below \
-             the BV unwind {max_k_step}; a retry must never reduce the unwind bound \
-             (see docs/verifier-discipline.md)"
-        );
-        let ir_result =
-            run_esbmc_with_max_k_step(esbmc, c_src, ir_max_k_step, func_name, &ir_config);
-        let retry = match ir_result {
-            VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
-            // IR returned a counterexample, but IR does not model overflow —
-            // a CE found only under IR can be infeasible under BV. Report the
-            // original resource-limited result rather than an unsound Failed.
-            VerificationResult::Failed(_) => (result, ir_config),
-            other => (other, ir_config),
-        };
-        enforce_retry_never_launders_proof(&retry.0);
-        retry
-    } else {
-        (result, bv_config)
     }
 }
 
@@ -306,6 +338,7 @@ pub fn run_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::esbmc::Counterexample;
     use vow_ir::{
         BasicBlock, BlockId, FuncId, Inst, InstId, IntegerType, RegionId, RegionSummary, Ty,
     };
@@ -1010,5 +1043,234 @@ exit 0
         );
         assert_eq!(resolved.solver, Solver::Z3);
         assert_eq!(resolved.encoding, Encoding::Ir);
+    }
+
+    // -- Pure fallback-policy seams (no subprocess) --
+    //
+    // These pin the adaptive-retry policy documented in docs/verifier-discipline.md
+    // ("How the existing fallback embodies the discipline", steps 1-5) directly,
+    // without spawning esbmc. Expected values are anchored on that document, not
+    // re-derived from the code under test.
+
+    fn auto_bv_config() -> SolverConfig {
+        SolverConfig {
+            solver: Solver::Auto,
+            encoding: Encoding::Auto,
+            timeout_secs: None,
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
+        }
+    }
+
+    // Step 1 + Bitwuzla note: auto mode runs BV first under the 30s default cap.
+    #[test]
+    fn bv_config_auto_defaults_to_boolector_bv_with_30s_cap() {
+        let bv = bv_config_for(&auto_bv_config());
+        assert_eq!(bv.solver, Solver::Boolector);
+        assert_eq!(bv.encoding, Encoding::Bv);
+        assert_eq!(bv.timeout_secs, Some(DEFAULT_AUTO_TIMEOUT_SECS));
+    }
+
+    // Bitwuzla can't fall back to IR, so its BV attempt is left uncapped
+    // (docs/verifier-discipline.md: the 30s default is only meaningful when the
+    // IR fallback is reachable).
+    #[test]
+    fn bv_config_bitwuzla_is_left_uncapped() {
+        let cfg = SolverConfig {
+            solver: Solver::Bitwuzla,
+            ..auto_bv_config()
+        };
+        let bv = bv_config_for(&cfg);
+        assert_eq!(bv.solver, Solver::Bitwuzla);
+        assert_eq!(bv.encoding, Encoding::Bv);
+        assert_eq!(bv.timeout_secs, None);
+    }
+
+    // An explicit user --timeout is honored verbatim and overrides the default.
+    #[test]
+    fn bv_config_honors_explicit_user_timeout() {
+        let cfg = SolverConfig {
+            timeout_secs: Some(7),
+            ..auto_bv_config()
+        };
+        assert_eq!(bv_config_for(&cfg).timeout_secs, Some(7));
+
+        let bitwuzla = SolverConfig {
+            solver: Solver::Bitwuzla,
+            timeout_secs: Some(7),
+            ..auto_bv_config()
+        };
+        assert_eq!(bv_config_for(&bitwuzla).timeout_secs, Some(7));
+    }
+
+    // Step 2: a resource-limited BV result (Timeout, or a memory-limit Unknown)
+    // retries with Z3 + IR at the SAME unwind bound. The returned unwind pins
+    // the "IR retry uses the same max_k_step" rule and the never-reduce-unwind
+    // trip wire.
+    #[test]
+    fn retry_plan_timeout_plans_z3_ir_at_same_unwind() {
+        let cfg = auto_bv_config();
+        let bv = bv_config_for(&cfg);
+        let plan = retry_plan(&cfg, &bv, &VerificationResult::Timeout, 5);
+        let (ir_config, ir_max_k_step) = plan.expect("timeout should plan an IR retry");
+        assert_eq!(ir_config.solver, Solver::Z3);
+        assert_eq!(ir_config.encoding, Encoding::Ir);
+        assert_eq!(ir_config.timeout_secs, Some(DEFAULT_AUTO_TIMEOUT_SECS));
+        assert_eq!(ir_max_k_step, 5, "IR retry must reuse the BV unwind bound");
+    }
+
+    #[test]
+    fn retry_plan_memory_limit_unknown_retries() {
+        let cfg = auto_bv_config();
+        let bv = bv_config_for(&cfg);
+        let memlimit = VerificationResult::Unknown {
+            reason: memory_limit_reason(),
+        };
+        assert!(retry_plan(&cfg, &bv, &memlimit, 5).is_some());
+    }
+
+    // Step 5: a non-memory Unknown is an explicit ESBMC inconclusive verdict and
+    // must never be retried into a proof.
+    #[test]
+    fn retry_plan_non_memory_unknown_does_not_retry() {
+        let cfg = auto_bv_config();
+        let bv = bv_config_for(&cfg);
+        let unknown = VerificationResult::Unknown {
+            reason: "k-induction forward condition failed".to_string(),
+        };
+        assert!(retry_plan(&cfg, &bv, &unknown, 5).is_none());
+    }
+
+    // Bitwuzla cannot run the IR encoding, so a resource-limited Bitwuzla BV run
+    // never plans a retry.
+    #[test]
+    fn retry_plan_bitwuzla_never_retries() {
+        let cfg = SolverConfig {
+            solver: Solver::Bitwuzla,
+            ..auto_bv_config()
+        };
+        let bv = bv_config_for(&cfg);
+        assert!(retry_plan(&cfg, &bv, &VerificationResult::Timeout, 5).is_none());
+    }
+
+    // Only a resource-limited BV result retries. Conclusive verdicts
+    // (Proven/ProvenIr/Failed) and fail-closed infrastructure outcomes
+    // (ToolNotFound/ToolError/Skipped, per the status taxonomy) never do.
+    #[test]
+    fn retry_plan_non_resource_limited_results_do_not_retry() {
+        let cfg = auto_bv_config();
+        let bv = bv_config_for(&cfg);
+        for result in [
+            VerificationResult::Proven,
+            VerificationResult::ProvenIr,
+            VerificationResult::Failed(Counterexample {
+                description: String::new(),
+                vow_id: None,
+                callee_precondition: None,
+                values: vec![],
+                block_visits: vec![],
+                raw_output: String::new(),
+            }),
+            VerificationResult::ToolNotFound,
+            VerificationResult::ToolError("boom".to_string()),
+            VerificationResult::Skipped {
+                reason: "non-modelable".to_string(),
+            },
+        ] {
+            assert!(
+                retry_plan(&cfg, &bv, &result, 5).is_none(),
+                "non-resource-limited {result:?} must not retry",
+            );
+        }
+    }
+
+    // The IR retry reuses the user's explicit --timeout when set.
+    #[test]
+    fn retry_plan_honors_user_timeout_for_ir() {
+        let cfg = SolverConfig {
+            timeout_secs: Some(9),
+            ..auto_bv_config()
+        };
+        let bv = bv_config_for(&cfg);
+        let (ir_config, _) = retry_plan(&cfg, &bv, &VerificationResult::Timeout, 5)
+            .expect("timeout should plan an IR retry");
+        assert_eq!(ir_config.timeout_secs, Some(9));
+    }
+
+    fn ir_config() -> SolverConfig {
+        SolverConfig {
+            solver: Solver::Z3,
+            encoding: Encoding::Ir,
+            timeout_secs: Some(DEFAULT_AUTO_TIMEOUT_SECS),
+            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
+        }
+    }
+
+    // Step 3: an IR proof is the weaker encoding, so it is relabeled ProvenIr,
+    // never surfaced as bare Proven.
+    #[test]
+    fn combine_retry_ir_proof_is_labeled_proven_ir() {
+        let (result, cfg) = combine_retry(
+            VerificationResult::Timeout,
+            VerificationResult::Proven,
+            ir_config(),
+        );
+        assert!(matches!(result, VerificationResult::ProvenIr));
+        assert_eq!(cfg.solver, Solver::Z3);
+        assert_eq!(cfg.encoding, Encoding::Ir);
+    }
+
+    // Step 4: an IR counterexample can be infeasible under BV, so it is
+    // discarded and the original resource-limited BV result stands. The config
+    // still records that the IR retry ran.
+    #[test]
+    fn combine_retry_ir_counterexample_keeps_original_result() {
+        let cex = Counterexample {
+            description: String::new(),
+            vow_id: None,
+            callee_precondition: None,
+            values: vec![],
+            block_visits: vec![],
+            raw_output: String::new(),
+        };
+        let (result, cfg) = combine_retry(
+            VerificationResult::Timeout,
+            VerificationResult::Failed(cex),
+            ir_config(),
+        );
+        assert!(
+            matches!(result, VerificationResult::Timeout),
+            "IR counterexample must not override the original result, got {result:?}",
+        );
+        assert_eq!(cfg.encoding, Encoding::Ir);
+    }
+
+    // A non-proof, non-CE IR outcome (e.g. the retry also timed out) passes
+    // through unchanged — never upgraded to a proof.
+    #[test]
+    fn combine_retry_inconclusive_ir_passes_through() {
+        let (result, _) = combine_retry(
+            VerificationResult::Timeout,
+            VerificationResult::Timeout,
+            ir_config(),
+        );
+        assert!(matches!(result, VerificationResult::Timeout));
+
+        let (unknown, _) = combine_retry(
+            VerificationResult::Timeout,
+            VerificationResult::Unknown {
+                reason: "still inconclusive".to_string(),
+            },
+            ir_config(),
+        );
+        assert!(matches!(unknown, VerificationResult::Unknown { .. }));
+    }
+
+    // Enforcement (docs/verifier-discipline.md): the always-on launder guard —
+    // reachable without a subprocess only now that it is a plain function — must
+    // reject a bare Proven from a resource-limited retry.
+    #[test]
+    #[should_panic(expected = "verifier-discipline violation")]
+    fn launder_guard_rejects_bare_proven() {
+        enforce_retry_never_launders_proof(&VerificationResult::Proven);
     }
 }
