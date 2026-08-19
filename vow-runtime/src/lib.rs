@@ -1,7 +1,9 @@
 #![allow(clippy::missing_safety_doc)]
 
+mod profile;
 mod violation;
 
+use profile::render_profile_report;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
@@ -329,48 +331,13 @@ pub extern "C" fn __vow_profile_init() {
         extern "C" fn report() {
             let guard = PROFILE_COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(counters) = guard.as_ref() {
-                if counters.is_empty() {
-                    return;
-                }
-                let mut entries: Vec<_> = counters
+                let entries: Vec<(&str, u64)> = counters
                     .iter()
                     .map(|(name, count)| (*name, *count))
                     .collect();
-                entries.sort_by_key(|k| std::cmp::Reverse(k.1));
-                let total: u64 = entries.iter().map(|item| item.1).sum();
-                let _ = writeln!(std::io::stderr(), "\n--- vow profile report ---");
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "{:<40} {:>12} {:>7}",
-                    "function",
-                    "calls",
-                    "%"
-                );
-                let _ = writeln!(std::io::stderr(), "{}", "-".repeat(61));
-                let limit = entries.len().min(20);
-                for (name, count) in &entries[..limit] {
-                    let pct = (*count as f64 / total as f64) * 100.0;
-                    let _ = writeln!(
-                        std::io::stderr(),
-                        "{:<40} {:>12} {:>6.1}%",
-                        name,
-                        count,
-                        pct
-                    );
+                if let Some(report) = render_profile_report(&entries) {
+                    let _ = write!(std::io::stderr(), "{report}");
                 }
-                if entries.len() > limit {
-                    let _ = writeln!(
-                        std::io::stderr(),
-                        "  ... and {} more functions",
-                        entries.len() - limit
-                    );
-                }
-                let _ = writeln!(std::io::stderr(), "{}", "-".repeat(61));
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "total calls: {total}, unique functions: {}",
-                    entries.len()
-                );
             }
         }
         unsafe {
