@@ -45,6 +45,28 @@ fn assign_wide(target: WideStruct) {
 fn suffixed_negative_zero() -> u128 {
     -0u128
 }
+
+fn match_wide(value: Option<i64>) -> u128 {
+    match value {
+        Option::Some(_) => { 340282366920938463463374607431768211455 },
+        Option::None => { 0 },
+    }
+}
+
+fn make_option() -> Option<u128> {
+    let value: Option<u128> = Option::Some(340282366920938463463374607431768211454);
+    value
+}
+
+fn make_ok() -> Result<u128, ()> {
+    let value: Result<u128, ()> = Result::Ok(340282366920938463463374607431768211453);
+    value
+}
+
+fn make_err() -> Result<(), u128> {
+    let value: Result<(), u128> = Result::Err(340282366920938463463374607431768211452);
+    value
+}
 "#,
     )
     .unwrap();
@@ -84,6 +106,22 @@ fn suffixed_negative_zero() -> u128 {
     assert!(
         stdout.contains("ConstU128[18446744073709551619u128]"),
         "field assignment lost its high limb:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211455u128]"),
+        "match arm lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211454u128]"),
+        "Option payload lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211453u128]"),
+        "Result::Ok payload lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211452u128]"),
+        "Result::Err payload lost its contextual wide type:\n{stdout}"
     );
 }
 

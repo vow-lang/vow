@@ -999,10 +999,8 @@ impl<'e> Checker<'e> {
         let body_ty = self.check_block(&fn_def.body);
 
         let expected = self.current_return_ty.clone();
-        if expected.is_integer()
-            && let Some(trailing_expr) = integer_marker_from_block(&fn_def.body)
-        {
-            self.check_integer_literal_range(trailing_expr, &expected);
+        if let Some(trailing_expr) = integer_marker_from_block(&fn_def.body) {
+            self.check_contextual_integer_literal_ranges(trailing_expr, &expected);
         }
         if !can_context_coerce(&body_ty, &expected) {
             self.emit_error_with_hints(
@@ -1090,7 +1088,7 @@ impl<'e> Checker<'e> {
                     match self.env.resolve(ann) {
                         Ok(ann_ty) => {
                             self.check_btreemap_key_in_ty(&ann_ty, ann.span());
-                            self.check_integer_literal_range(init, &ann_ty);
+                            self.check_contextual_integer_literal_ranges(init, &ann_ty);
                             if !can_context_coerce(&init_ty, &ann_ty) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
@@ -1153,6 +1151,14 @@ impl<'e> Checker<'e> {
             self.check_integer_value_range(value, target, expr.span);
             return;
         }
+        if matches!(target, Ty::I128 | Ty::U128)
+            && let ExprKind::Match { arms, .. } = &expr.kind
+        {
+            for arm in arms {
+                self.check_integer_literal_range(&arm.body, target);
+            }
+            return;
+        }
         if !target.is_integer() || !is_coercible_integer_marker(expr) {
             return;
         }
@@ -1186,6 +1192,36 @@ impl<'e> Checker<'e> {
                 self.check_integer_literal_range(else_expr, target);
             }
             _ => {}
+        }
+    }
+
+    fn check_contextual_integer_literal_ranges(&mut self, expr: &Expr, target: &Ty) {
+        if target.is_integer() {
+            self.check_integer_literal_range(expr, target);
+            return;
+        }
+        let Ty::Applied(base, args) = target else {
+            return;
+        };
+        let Ty::Enum(enum_name) = base.as_ref() else {
+            return;
+        };
+        let ExprKind::EnumConstruct { path, fields } = &expr.kind else {
+            return;
+        };
+        if path.first() != Some(enum_name) {
+            return;
+        }
+        let payload_index = match (enum_name.as_str(), path.get(1).map(String::as_str)) {
+            ("Option", Some("Some")) | ("Result", Some("Ok")) => Some(0),
+            ("Result", Some("Err")) => Some(1),
+            _ => None,
+        };
+        if let Some(payload_ty @ (Ty::I128 | Ty::U128 | Ty::Applied(_, _))) =
+            payload_index.and_then(|index| args.get(index))
+            && let Some(field) = fields.first()
+        {
+            self.check_contextual_integer_literal_ranges(field, payload_ty);
         }
     }
 
@@ -1639,7 +1675,7 @@ impl<'e> Checker<'e> {
                 }
                 for (arg, expected_ty) in args.iter().zip(param_tys.iter()) {
                     let arg_ty = self.check_expr(arg);
-                    self.check_integer_literal_range(arg, expected_ty);
+                    self.check_contextual_integer_literal_ranges(arg, expected_ty);
                     if !can_context_coerce(&arg_ty, expected_ty) {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
@@ -2138,9 +2174,7 @@ impl<'e> Checker<'e> {
                 let val_ty = match value {
                     Some(v) => {
                         let ty = self.check_expr(v);
-                        if expected.is_integer() {
-                            self.check_integer_literal_range(v, &expected);
-                        }
+                        self.check_contextual_integer_literal_ranges(v, &expected);
                         ty
                     }
                     None => Ty::Unit,
@@ -2221,9 +2255,7 @@ impl<'e> Checker<'e> {
             ExprKind::Assign { lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);
                 let rhs_ty = self.check_expr(rhs);
-                if lhs_ty.is_integer() {
-                    self.check_integer_literal_range(rhs, &lhs_ty);
-                }
+                self.check_contextual_integer_literal_ranges(rhs, &lhs_ty);
                 if !can_assignment_coerce(&rhs_ty, &lhs_ty) {
                     self.emit_error(
                         ErrorCode::TypeMismatch,
@@ -2282,7 +2314,10 @@ impl<'e> Checker<'e> {
                             if let Some((_, expected_ty)) =
                                 info.fields.iter().find(|(n, _)| n == field_name)
                             {
-                                self.check_integer_literal_range(field_expr, expected_ty);
+                                self.check_contextual_integer_literal_ranges(
+                                    field_expr,
+                                    expected_ty,
+                                );
                                 if !can_context_coerce(&actual_ty, expected_ty) {
                                     self.emit_error(
                                         ErrorCode::TypeMismatch,
@@ -2527,7 +2562,10 @@ impl<'e> Checker<'e> {
                                 for (i, field_expr) in fields.iter().enumerate() {
                                     let actual_ty = self.check_expr(field_expr);
                                     if let Some(expected_ty) = expected_tys.get(i) {
-                                        self.check_integer_literal_range(field_expr, expected_ty);
+                                        self.check_contextual_integer_literal_ranges(
+                                            field_expr,
+                                            expected_ty,
+                                        );
                                         if !can_context_coerce(&actual_ty, expected_ty) {
                                             self.emit_error(
                                                 ErrorCode::TypeMismatch,

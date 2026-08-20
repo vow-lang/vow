@@ -2949,6 +2949,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     }
                 })
                 .collect();
+            let contextual_wide_payload_ty = payload_values
+                .first()
+                .map(|value| ctx.inst_ty(*value))
+                .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
             let owns_linear = ctx.linear_owner_names.contains(enum_name)
                 || payload_values
                     .iter()
@@ -2963,6 +2967,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             ctx.inst_struct_type.insert(ptr_id, enum_name.to_string());
+            if enum_name == "Option" && variant_name == "Some" {
+                if let Some(payload_ty) = contextual_wide_payload_ty {
+                    ctx.inst_option_elem_ty.insert(ptr_id, payload_ty);
+                }
+            } else if enum_name == "Result"
+                && matches!(variant_name, "Ok" | "Err")
+                && let Some(payload_ty) = contextual_wide_payload_ty
+            {
+                let variant_count = ctx.enum_variant_map.get(enum_name).map_or(2, Vec::len);
+                let mut variant_tys = vec![None; variant_count];
+                if let Some(slot) = variant_tys.get_mut(tag as usize) {
+                    *slot = Some(payload_ty);
+                }
+                ctx.inst_variant_payload_tys.insert(ptr_id, variant_tys);
+            }
             let tag_val = ctx.emit(
                 Opcode::ConstI64,
                 Ty::I64,
@@ -3984,18 +4003,18 @@ fn known_field_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
         .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
 }
 
-fn wide_context_contains_if(expr: &Expr) -> bool {
+fn wide_context_contains_control_flow(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::If { .. } => true,
+        ExprKind::If { .. } | ExprKind::Match { .. } => true,
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
-        } => wide_context_contains_if(operand),
+        } => wide_context_contains_control_flow(operand),
         ExprKind::BinaryOp { lhs, rhs, .. } => {
-            wide_context_contains_if(lhs) || wide_context_contains_if(rhs)
+            wide_context_contains_control_flow(lhs) || wide_context_contains_control_flow(rhs)
         }
         ExprKind::Block(block) => {
-            integer_marker_from_block(block).is_some_and(wide_context_contains_if)
+            integer_marker_from_block(block).is_some_and(wide_context_contains_control_flow)
         }
         _ => false,
     }
@@ -4033,13 +4052,53 @@ fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
             }
             record_wide_marker_context(ctx, else_expr, ty);
         }
+        ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                record_wide_marker_context(ctx, &arm.body, ty);
+            }
+        }
         _ => {}
     }
 }
 
 fn record_wide_control_flow_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
-    if matches!(ty, Ty::I128 | Ty::U128) && wide_context_contains_if(expr) {
+    if matches!(ty, Ty::I128 | Ty::U128) && wide_context_contains_control_flow(expr) {
         record_wide_marker_context(ctx, expr, ty);
+    }
+}
+
+fn record_wide_expected_ast_context(ctx: &mut LowerCtx, expr: &Expr, expected: &AstType) {
+    let expected = resolve_type_alias(expected, &ctx.type_aliases).clone();
+    match expected {
+        AstType::Named { name, .. } => {
+            let ty = match name.as_str() {
+                "i128" => Some(Ty::I128),
+                "u128" => Some(Ty::U128),
+                _ => None,
+            };
+            if let Some(ty) = ty {
+                record_wide_marker_context(ctx, expr, ty);
+            }
+        }
+        AstType::Generic { name, args, .. } => {
+            let ExprKind::EnumConstruct { path, fields } = &expr.kind else {
+                return;
+            };
+            if path.first() != Some(&name) {
+                return;
+            }
+            let payload_index = match (name.as_str(), path.get(1).map(String::as_str)) {
+                ("Option", Some("Some")) | ("Result", Some("Ok")) => Some(0),
+                ("Result", Some("Err")) => Some(1),
+                _ => None,
+            };
+            if let Some(payload_ty) = payload_index.and_then(|index| args.get(index))
+                && let Some(field) = fields.first()
+            {
+                record_wide_expected_ast_context(ctx, field, payload_ty);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -4241,6 +4300,9 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
         Stmt::Let {
             pattern, init, ty, ..
         } => {
+            if let Some(expected) = ty {
+                record_wide_expected_ast_context(ctx, init, expected);
+            }
             if let Some(AstType::Named {
                 name: type_name, ..
             }) = ty
@@ -4483,6 +4545,7 @@ fn lower_function_with_pattern_aggregates(
     }
 
     if let Some(expr) = integer_marker_from_block(&fn_def.body) {
+        record_wide_expected_ast_context(&mut ctx, expr, &fn_def.return_ty);
         record_wide_control_flow_context(&mut ctx, expr, return_ty);
     }
     ctx.push_scope();

@@ -909,10 +909,8 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let body_bid: i64 = fn_body_bid(a, fid);
     let body_tid: i64 = check_block(e, m, body_bid);
     let body_result_eid: i64 = checker_block_result_eid(a, body_bid);
-    let ret_tag: i64 = ty_tag(e.ts, ret_tid);
-
-    if body_result_eid != -1 && ty_is_integer(e.ts, ret_tid) {
-        check_integer_literal_range(e, a, body_result_eid, ret_tag);
+    if body_result_eid != -1 {
+        check_contextual_integer_literal_ranges(e, a, body_result_eid, ret_tid);
     }
 
     if !is_coercible(e.ts, body_tid, ret_tid) {
@@ -1234,6 +1232,19 @@ fn wide_literal_range_message(a: AstArena, lit_eid: i64, target_tag: i64) -> Str
 
 fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_tag: i64) {
     if !expr_is_const_int(a, lit_eid) {
+        if (target_tag == CTY_I128() || target_tag == CTY_U128()) &&
+           expr_tag(a, lit_eid) == EXPR_MATCH() {
+            let arms_lid: i64 = expr_b(a, lit_eid);
+            let n: i64 = list_len(a, arms_lid) / 2;
+            let mut i: i64 = 0;
+            while i < n {
+                check_integer_literal_range(
+                    e, a, list_get(a, arms_lid, i * 2 + 1), target_tag
+                );
+                i = i + 1;
+            }
+            return;
+        }
         if !checker_expr_is_coercible_int_marker(a, lit_eid) {
             return;
         }
@@ -1269,6 +1280,7 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
             if else_eid != -1 {
                 check_integer_literal_range(e, a, else_eid, target_tag);
             }
+            return;
         }
         return;
     }
@@ -1314,6 +1326,51 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
     }
 }
 
+fn check_contextual_integer_literal_ranges(e: CheckEnv, a: AstArena, eid: i64, target_tid: i64) {
+    if ty_is_integer(e.ts, target_tid) {
+        check_integer_literal_range(e, a, eid, ty_tag(e.ts, target_tid));
+        return;
+    }
+    if ty_tag(e.ts, target_tid) != CTY_APPLIED() || expr_tag(a, eid) != EXPR_ECTOR() {
+        return;
+    }
+    let base_tid: i64 = ty_a(e.ts, target_tid);
+    if ty_tag(e.ts, base_tid) != CTY_ENUM() {
+        return;
+    }
+    let enum_name: String = ty_struct_name(e.ts, base_tid);
+    let path_lid: i64 = expr_a(a, eid);
+    if list_len(a, path_lid) < 2 || arena_str(a, list_get(a, path_lid, 0)) != enum_name {
+        return;
+    }
+    let variant_name: String = arena_str(a, list_get(a, path_lid, 1));
+    let payload_index: i64 = {
+        if (enum_name == String::from("Option") && variant_name == String::from("Some")) ||
+           (enum_name == String::from("Result") && variant_name == String::from("Ok")) {
+            0
+        } else if enum_name == String::from("Result") && variant_name == String::from("Err") {
+            1
+        } else {
+            -1
+        }
+    };
+    let target_args_lid: i64 = ty_b(e.ts, target_tid);
+    let fields_lid: i64 = expr_b(a, eid);
+    let payload_tid: i64 = if payload_index >= 0 &&
+                              payload_index < ts_arg_len(e.ts, target_args_lid) {
+        ts_arg_get(e.ts, target_args_lid, payload_index)
+    } else {
+        -1
+    };
+    let payload_tag: i64 = if payload_tid == -1 { -1 } else { ty_tag(e.ts, payload_tid) };
+    if (payload_tag == CTY_I128() || payload_tag == CTY_U128() ||
+        payload_tag == CTY_APPLIED()) && list_len(a, fields_lid) > 0 {
+        check_contextual_integer_literal_ranges(
+            e, a, list_get(a, fields_lid, 0), payload_tid
+        );
+    }
+}
+
 fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
     let a: AstArena = m.arena;
     env_push_scope(e);
@@ -1336,9 +1393,7 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
                 init_tid
             } else {
                 let at_tid: i64 = resolve_ast_ty(e, m, annot_ast_tid);
-                if ty_is_integer(e.ts, at_tid) {
-                    check_integer_literal_range(e, a, init_eid, ty_tag(e.ts, at_tid));
-                }
+                check_contextual_integer_literal_ranges(e, a, init_eid, at_tid);
                 if !is_coercible(e.ts, init_tid, at_tid) {
                     env_emit_error(e, String::from("let binding type mismatch"), stmt_span(a, sid));
                 }
@@ -2238,9 +2293,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let ptid: i64 = ts_arg_get(e.ts, plid, ai);
                     let atid: i64 = arg_tids[ai];
                     let aeid: i64 = list_get(a, args_lid, ai);
-                    if ty_is_integer(e.ts, ptid) {
-                        check_integer_literal_range(e, a, aeid, ty_tag(e.ts, ptid));
-                    }
+                    check_contextual_integer_literal_ranges(e, a, aeid, ptid);
                     if !is_coercible(e.ts, atid, ptid) {
                         env_emit_error(e, String::from("argument has wrong type"), expr_span(a, aeid));
                     }
@@ -2678,10 +2731,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
         } else {
             let val_tid: i64 = check_expr(e, m, val_eid);
-            let ret_tag: i64 = ty_tag(e.ts, e.cur_ret_tid);
-            if ty_is_integer(e.ts, e.cur_ret_tid) {
-                check_integer_literal_range(e, a, val_eid, ret_tag);
-            }
+            check_contextual_integer_literal_ranges(e, a, val_eid, e.cur_ret_tid);
             if !is_coercible(e.ts, val_tid, e.cur_ret_tid) {
                 env_emit_error(e, String::from("return type mismatch"), expr_span(a, eid));
             }
@@ -2732,10 +2782,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let rhs_eid: i64 = expr_b(a, eid);
         let lhs_tid: i64 = check_expr(e, m, lhs_eid);
         let _rhs_tid: i64 = check_expr(e, m, rhs_eid);
-        let lhs_tag: i64 = ty_tag(e.ts, lhs_tid);
-        if ty_is_integer(e.ts, lhs_tid) {
-            check_integer_literal_range(e, a, rhs_eid, lhs_tag);
-        }
+        check_contextual_integer_literal_ranges(e, a, rhs_eid, lhs_tid);
         if expr_tag(a, lhs_eid) == EXPR_IDENT() {
             let lhs_name: String = arena_str(a, expr_a(a, lhs_eid));
             let mut_status: i64 = env_mark_mutated(e, lhs_name);
@@ -2776,9 +2823,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let ts_local: TyStore = e.ts;
                     if ts_local.strs[declared_sid] == fname {
                         let expected_tid: i64 = ts_arg_get(e.ts, ftid_lid, field_index);
-                        if ty_is_integer(e.ts, expected_tid) {
-                            check_integer_literal_range(e, a, feid, ty_tag(e.ts, expected_tid));
-                        }
+                        check_contextual_integer_literal_ranges(e, a, feid, expected_tid);
                         field_index = nf;
                     } else {
                         field_index = field_index + 1;
@@ -2892,12 +2937,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let expected_tid: i64 = lookup_variant_payload(
                         e, eidx, variant_name, payload_index
                     );
-                    if ty_is_integer(e.ts, expected_tid) {
-                        let arg_eid: i64 = list_get(a, args_lid, payload_index);
-                        check_integer_literal_range(
-                            e, a, arg_eid, ty_tag(e.ts, expected_tid)
-                        );
-                    }
+                    let arg_eid: i64 = list_get(a, args_lid, payload_index);
+                    check_contextual_integer_literal_ranges(e, a, arg_eid, expected_tid);
                     payload_index = payload_index + 1;
                 }
                 return ts_make_enum(e.ts, first_name);

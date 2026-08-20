@@ -1597,19 +1597,19 @@ fn expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
     false
 }
 
-fn wide_context_contains_if(a: AstArena, eid: i64) -> bool {
+fn wide_context_contains_control_flow(a: AstArena, eid: i64) -> bool {
     if eid == -1 { return false; }
     let tag: i64 = expr_tag(a, eid);
-    if tag == EXPR_IF() { return true; }
+    if tag == EXPR_IF() || tag == EXPR_MATCH() { return true; }
     if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
-        return wide_context_contains_if(a, expr_b(a, eid));
+        return wide_context_contains_control_flow(a, expr_b(a, eid));
     }
     if tag == EXPR_BINOP() {
-        return wide_context_contains_if(a, expr_b(a, eid)) ||
-            wide_context_contains_if(a, expr_c(a, eid));
+        return wide_context_contains_control_flow(a, expr_b(a, eid)) ||
+            wide_context_contains_control_flow(a, expr_c(a, eid));
     }
     if tag == EXPR_BLOCK() {
-        return wide_context_contains_if(a, block_result_eid(a, expr_a(a, eid)));
+        return wide_context_contains_control_flow(a, block_result_eid(a, expr_a(a, eid)));
     }
     false
 }
@@ -1640,12 +1640,68 @@ fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64
     if tag == EXPR_IF() {
         lctx_record_wide_marker_context(ctx, a, block_result_eid(a, expr_b(a, eid)), ty);
         lctx_record_wide_marker_context(ctx, a, expr_c(a, eid), ty);
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        let arms_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n {
+            lctx_record_wide_marker_context(
+                ctx, a, list_get(a, arms_lid, i * 2 + 1), ty
+            );
+            i = i + 1;
+        }
     }
 }
 
 fn lctx_record_wide_control_flow_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
-    if (ty == ITY_I128() || ty == ITY_U128()) && wide_context_contains_if(a, eid) {
+    if (ty == ITY_I128() || ty == ITY_U128()) && wide_context_contains_control_flow(a, eid) {
         lctx_record_wide_marker_context(ctx, a, eid, ty);
+    }
+}
+
+fn lctx_record_wide_expected_ast_context(ctx: LowerCtx, a: AstArena, eid: i64, expected_tid: i64) {
+    let resolved_tid: i64 = lower_resolve_alias_tid(
+        a, expected_tid, ctx.type_alias_names, ctx.type_alias_target_tids
+    );
+    if resolved_tid == -1 { return; }
+    let expected_tag: i64 = type_tag(a, resolved_tid);
+    if expected_tag == TY_NAMED() {
+        let name: String = arena_str(a, type_a(a, resolved_tid));
+        let expected_ty: i64 = ity_for_scalar_type_name(name);
+        if expected_ty == ITY_I128() || expected_ty == ITY_U128() {
+            lctx_record_wide_marker_context(ctx, a, eid, expected_ty);
+        }
+        return;
+    }
+    if expected_tag != TY_GENERIC() || expr_tag(a, eid) != EXPR_ECTOR() {
+        return;
+    }
+    let enum_name: String = arena_str(a, type_a(a, resolved_tid));
+    let path_lid: i64 = expr_a(a, eid);
+    if list_len(a, path_lid) < 2 || arena_str(a, list_get(a, path_lid, 0)) != enum_name {
+        return;
+    }
+    let variant_name: String = arena_str(a, list_get(a, path_lid, 1));
+    let payload_index: i64 = {
+        if (enum_name == String::from("Option") && variant_name == String::from("Some")) ||
+           (enum_name == String::from("Result") && variant_name == String::from("Ok")) {
+            0
+        } else if enum_name == String::from("Result") && variant_name == String::from("Err") {
+            1
+        } else {
+            -1
+        }
+    };
+    let expected_args_lid: i64 = type_b(a, resolved_tid);
+    let fields_lid: i64 = expr_b(a, eid);
+    if payload_index >= 0 && payload_index < list_len(a, expected_args_lid) &&
+       list_len(a, fields_lid) > 0 {
+        lctx_record_wide_expected_ast_context(
+            ctx, a, list_get(a, fields_lid, 0),
+            list_get(a, expected_args_lid, payload_index)
+        );
     }
 }
 
@@ -3331,6 +3387,23 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_ty: i64 = if owns_linear { ITY_LPTR() } else { ITY_PTR() };
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), alloc_ty, alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, enum_name);
+        if n_payload > 0 {
+            let contextual_payload_ty: i64 = lctx_inst_ty(ctx, payload_values[0]);
+            if contextual_payload_ty == ITY_I128() || contextual_payload_ty == ITY_U128() {
+                if enum_name == String::from("Option") && variant_name == String::from("Some") {
+                    lctx_tag_option_elem(ctx, ptr_id, contextual_payload_ty);
+                } else if enum_name == String::from("Result") &&
+                          (variant_name == String::from("Ok") || variant_name == String::from("Err")) {
+                    let contextual_variants: Vec<i64> = Vec::new();
+                    contextual_variants.push(-1);
+                    contextual_variants.push(-1);
+                    if tag_val >= 0 && tag_val < contextual_variants.len() {
+                        contextual_variants[tag_val] = contextual_payload_ty;
+                    }
+                    lctx_tag_variant_payloads(ctx, ptr_id, contextual_variants);
+                }
+            }
+        }
 
         let tag_args: Vec<i64> = Vec::new();
         let tag_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), tag_args, IDATA_CONST_I64(), tag_val, 0, String::from(""));
@@ -4308,6 +4381,7 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
         let ann_tid: i64 = stmt_b(a, sid);
         let init_eid: i64 = stmt_c(a, sid);
         if ann_tid != -1 {
+            lctx_record_wide_expected_ast_context(ctx, a, init_eid, ann_tid);
             let context_ann_tid: i64 = lower_resolve_alias_tid(
                 a, ann_tid, ctx.type_alias_names, ctx.type_alias_target_tids
             );
@@ -4846,6 +4920,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
 
     let contextual_result_eid: i64 = block_result_eid(a, body_bid);
     if contextual_result_eid != -1 {
+        lctx_record_wide_expected_ast_context(ctx, a, contextual_result_eid, ret_tid);
         lctx_record_wide_control_flow_context(ctx, a, contextual_result_eid, ir_ret);
     }
     lctx_push_scope(ctx);
