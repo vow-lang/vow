@@ -192,6 +192,12 @@ let y: i8 = 200;   // error: LiteralOutOfRange — i8 range is -128..=127
 Suffixed forms are supported for all 10 integer widths. They override context
 coercion and are still subject to the same compile-time range check.
 
+Integer tokens store their decimal digits as an unsigned magnitude. A leading
+`-` is a separate unary-negation expression and is not part of the literal.
+For `i128` and `u128`, compiler IR and serialized modules carry that value as
+two unsigned 64-bit limbs `(lo, hi)`, least-significant limb first. This wire
+layout is shared by the Rust bootstrap and self-hosted compilers.
+
 ### Float Literals
 
 ```vow

@@ -3633,6 +3633,12 @@ fn skill_bundle() -> String {
     r.push_str(String::from("Suffixed forms are supported for all 10 integer widths. They override context\n"));
     r.push_str(String::from("coercion and are still subject to the same compile-time range check.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("Integer tokens store their decimal digits as an unsigned magnitude. A leading\n"));
+    r.push_str(String::from("`-` is a separate unary-negation expression and is not part of the literal.\n"));
+    r.push_str(String::from("For `i128` and `u128`, compiler IR and serialized modules carry that value as\n"));
+    r.push_str(String::from("two unsigned 64-bit limbs `(lo, hi)`, least-significant limb first. This wire\n"));
+    r.push_str(String::from("layout is shared by the Rust bootstrap and self-hosted compilers.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Float Literals\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
@@ -8346,6 +8352,12 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Suffixed forms are supported for all 10 integer widths. They override context\n"));
     r.push_str(String::from("coercion and are still subject to the same compile-time range check.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Integer tokens store their decimal digits as an unsigned magnitude. A leading\n"));
+    r.push_str(String::from("`-` is a separate unary-negation expression and is not part of the literal.\n"));
+    r.push_str(String::from("For `i128` and `u128`, compiler IR and serialized modules carry that value as\n"));
+    r.push_str(String::from("two unsigned 64-bit limbs `(lo, hi)`, least-significant limb first. This wire\n"));
+    r.push_str(String::from("layout is shared by the Rust bootstrap and self-hosted compilers.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Float Literals\n"));
     r.push_str(String::from("\n"));
