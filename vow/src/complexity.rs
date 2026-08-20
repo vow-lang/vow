@@ -823,67 +823,11 @@ pub(crate) fn run_complexity_command(
         }
     }
 
-    // File-level aggregates + exit-gating (see complexity_totals).
-    let Totals {
-        thr,
-        file_max,
-        over_count,
-        exit_code,
-        hk_max,
-        fan_in_max,
-        fan_out_max,
-    } = complexity_totals(&recs, &ir_info, max_score, max_cognitive, max_cyclomatic);
-
-    // Pass 2: emit.
-    let mut out = String::from(
-        "{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"",
-    );
-    out.push_str(&writer::escape(&source.to_string_lossy()));
-    out.push_str("\",\"complexity_score\":");
-    out.push_str(&file_max.to_string());
-    out.push_str(",\"functions_over_threshold\":");
-    out.push_str(&over_count.to_string());
-    out.push_str(",\"nloc\":");
-    out.push_str(&file_nloc.to_string());
-    out.push_str(",\"functions\":[");
-    for (k, r) in recs.iter().enumerate() {
-        if k > 0 {
-            out.push(',');
-        }
-        out.push_str(&writer::render_fn(r, thr));
-    }
-    out.push_str("],\"module\":{\"tier\":\"experimental\",\"functions\":");
-    out.push_str(&(recs.len() as i64).to_string());
-    out.push_str(",\"fan_in_max\":");
-    out.push_str(&fan_in_max.to_string());
-    out.push_str(",\"fan_out_max\":");
-    out.push_str(&fan_out_max.to_string());
-    out.push_str(",\"henry_kafura_max\":");
-    out.push_str(&hk_max.to_string());
-    out.push_str("}}],\"summary\":{\"functions\":");
-    out.push_str(&(recs.len() as i64).to_string());
-    out.push_str(",\"nloc_total\":");
-    out.push_str(&file_nloc.to_string());
-    out.push_str(",\"threshold\":");
-    out.push_str(&thr.to_string());
-    out.push_str(",\"functions_over_threshold\":");
-    out.push_str(&over_count.to_string());
-    out.push_str(",\"thresholds_exceeded\":[");
-    let mut emitted = 0;
-    for r in &recs {
-        if r.score > thr {
-            if emitted > 0 {
-                out.push(',');
-            }
-            out.push('"');
-            out.push_str(&writer::escape(&r.name));
-            out.push('"');
-            emitted += 1;
-        }
-    }
-    out.push_str("]}}");
+    // Aggregate + gate (complexity_totals), then shape into JSON (render_report).
+    let totals = complexity_totals(&recs, &ir_info, max_score, max_cognitive, max_cyclomatic);
+    let out = writer::render_report(&recs, &totals, file_nloc, source);
     println!("{out}");
-    std::process::exit(exit_code);
+    std::process::exit(totals.exit_code);
 }
 
 // ---- 0-100 gate score (mirrors compiler/complexity.vow cx_score) ----
