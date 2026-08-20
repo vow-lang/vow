@@ -940,6 +940,11 @@ impl<'e> Checker<'e> {
         let body_ty = self.check_block(&fn_def.body);
 
         let expected = self.current_return_ty.clone();
+        if matches!(expected, Ty::I128 | Ty::U128)
+            && let Some(trailing_expr) = &fn_def.body.trailing_expr
+        {
+            self.check_integer_literal_range(trailing_expr, &expected);
+        }
         if !can_context_coerce(&body_ty, &expected) {
             self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
@@ -2028,11 +2033,17 @@ impl<'e> Checker<'e> {
                 Ty::Never
             }
             ExprKind::Return { value } => {
+                let expected = self.current_return_ty.clone();
                 let val_ty = match value {
-                    Some(v) => self.check_expr(v),
+                    Some(v) => {
+                        let ty = self.check_expr(v);
+                        if matches!(expected, Ty::I128 | Ty::U128) {
+                            self.check_integer_literal_range(v, &expected);
+                        }
+                        ty
+                    }
                     None => Ty::Unit,
                 };
-                let expected = self.current_return_ty.clone();
                 if !can_context_coerce(&val_ty, &expected) {
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,

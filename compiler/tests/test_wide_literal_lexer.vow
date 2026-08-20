@@ -51,6 +51,22 @@ fn check_pre128_targets_use_the_full_magnitude() -> i32 [io] {
     0
 }
 
+fn check_implicit_wide_return_range() -> i32 [io] {
+    let i128_overflow: String = String::from(
+        "module WideRange\nfn value() -> i128 { 170141183460469231731687303715884105728 }"
+    );
+    if checked_error_count(i128_overflow) == 0 { return 25; }
+    0
+}
+
+fn check_explicit_wide_return_range() -> i32 [io] {
+    let i128_overflow: String = String::from(
+        "module WideRange\nfn value() -> i128 { return 170141183460469231731687303715884105728; }"
+    );
+    if checked_error_count(i128_overflow) == 0 { return 26; }
+    0
+}
+
 fn check_wide_suffix_parser_path() -> i32 {
     let tokens: Vec<Token> = lex(String::from("340282366920938463463374607431768211455u128"));
     let arena: AstArena = arena_new();
@@ -113,5 +129,9 @@ fn main() -> i32 [io] {
     if t3.str_val != String::from("integer literal out of range") { return 8; }
     let parser_result: i32 = check_wide_suffix_parser_path();
     if parser_result != 0 { return parser_result; }
-    check_pre128_targets_use_the_full_magnitude()
+    let pre128_result: i32 = check_pre128_targets_use_the_full_magnitude();
+    if pre128_result != 0 { return pre128_result; }
+    let implicit_result: i32 = check_implicit_wide_return_range();
+    if implicit_result != 0 { return implicit_result; }
+    check_explicit_wide_return_range()
 }

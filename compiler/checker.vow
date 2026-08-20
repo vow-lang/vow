@@ -804,6 +804,23 @@ fn check_vow_clause(e: CheckEnv, m: Module, vow_lid: i64, kind: i64, context: St
     }
 }
 
+fn checker_block_result_eid(a: AstArena, bid: i64) -> i64 {
+    let trail_eid: i64 = blk_trail(a, bid);
+    if trail_eid != -1 {
+        return trail_eid;
+    }
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    if n == 0 {
+        return -1;
+    }
+    let last_sid: i64 = list_get(a, stmts_lid, n - 1);
+    if stmt_tag(a, last_sid) == STMT_EXPR() && stmt_b(a, last_sid) == 0 {
+        return stmt_a(a, last_sid);
+    }
+    -1
+}
+
 fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let a: AstArena = m.arena;
     let save_ret: i64 = e.cur_ret_tid;
@@ -849,6 +866,12 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
 
     let body_bid: i64 = fn_body_bid(a, fid);
     let body_tid: i64 = check_block(e, m, body_bid);
+    let body_result_eid: i64 = checker_block_result_eid(a, body_bid);
+    let ret_tag: i64 = ty_tag(e.ts, ret_tid);
+
+    if body_result_eid != -1 && (ret_tag == CTY_I128() || ret_tag == CTY_U128()) && expr_is_const_int(a, body_result_eid) {
+        check_integer_literal_range(e, a, body_result_eid, ret_tag);
+    }
 
     if !is_coercible(e.ts, body_tid, ret_tid) {
         env_emit_error(e, String::from("function body type mismatch"), fn_span(a, fid));
@@ -2484,6 +2507,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
         } else {
             let val_tid: i64 = check_expr(e, m, val_eid);
+            let ret_tag: i64 = ty_tag(e.ts, e.cur_ret_tid);
+            if (ret_tag == CTY_I128() || ret_tag == CTY_U128()) && expr_is_const_int(a, val_eid) {
+                check_integer_literal_range(e, a, val_eid, ret_tag);
+            }
             if !is_coercible(e.ts, val_tid, e.cur_ret_tid) {
                 env_emit_error(e, String::from("return type mismatch"), expr_span(a, eid));
             }
