@@ -29,6 +29,24 @@ fn checked_error_count(source: String) -> i64 [io] {
     dctx.error_count
 }
 
+fn checked_first_error_message(source: String) -> String [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("wide_range.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < parsed.items.len() {
+        item_files.push(String::from("wide_range.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("wide_range.vow"));
+    check_module(check_env, parsed, item_files);
+    if dctx.diags.len() == 0 { return String::from(""); }
+    dctx.diags[0].message
+}
+
 fn check_pre128_targets_use_the_full_magnitude() -> i32 [io] {
     let i64_overflow: String = String::from(
         "module WideRange\nfn value() -> i64 { let x: i64 = 18446744073709551616; x }"
@@ -78,7 +96,7 @@ fn check_wide_assignment_range() -> i32 [io] {
 
 fn check_unsigned_negative_zero_range() -> i32 [io] {
     let u128_negative_zero: String = String::from(
-        "module WideRange\nfn value() -> u128 { let x: u128 = -0; x }"
+        "module WideRange\nfn value() -> u128 { let x: u128 = -0; x }\nfn suffixed() -> u128 { -0u128 }"
     );
     if checked_error_count(u128_negative_zero) != 0 { return 28; }
     0
@@ -89,6 +107,17 @@ fn check_default_i64_wide_magnitude_range() -> i32 [io] {
         "module WideRange\nfn value() -> i64 { 340282366920938463463374607431768211455 }"
     );
     if checked_error_count(i64_overflow) == 0 { return 29; }
+    0
+}
+
+fn check_wide_range_diagnostic_value() -> i32 [io] {
+    let source: String = String::from(
+        "module WideRange\nfn value() -> i128 { 170141183460469231731687303715884105728 }"
+    );
+    let message: String = checked_first_error_message(source);
+    if !message.contains(String::from(
+        "literal 170141183460469231731687303715884105728 does not fit in i128"
+    )) { return 42; }
     0
 }
 
@@ -146,7 +175,7 @@ fn check_unsigned_wide_ir_printing() -> i32 {
 
 fn check_aggregate_wide_literal_lowering() -> i32 {
     let source: String = String::from(
-        "module WideAggregate\nstruct WideStruct { value: u128 }\nenum WideEnum { Value(u128) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }"
+        "module WideAggregate\nstruct WideStruct { value: u128 }\nenum WideEnum { Value(u128) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }\nfn compare_wide(x: u128, flag: bool) -> bool { x == if flag { 18446744073709551618 } else { 0 } }\nfn assign_wide(target: WideStruct) { target.value = 18446744073709551619; }"
     );
     let arena: AstArena = arena_new();
     let parsed: Module = parse_module_into(
@@ -166,6 +195,8 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     let mut saw_struct_limb: bool = false;
     let mut saw_enum_limb: bool = false;
     let mut saw_if_limb: bool = false;
+    let mut saw_binary_if_limb: bool = false;
+    let mut saw_field_assignment_limb: bool = false;
     let mut function_index: i64 = 0;
     while function_index < lowered.functions.len() {
         let f: IrFunction = lowered.functions[function_index];
@@ -183,6 +214,10 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
                    inst.dv2 as u64 == (1u64 << 63) {
                     saw_if_limb = true;
                 }
+                if inst.dk == IDATA_CONST_U128() && inst.dv2 == 1 {
+                    if inst.dv == 2 { saw_binary_if_limb = true; }
+                    if inst.dv == 3 { saw_field_assignment_limb = true; }
+                }
                 inst_index = inst_index + 1;
             }
             block_index = block_index + 1;
@@ -192,6 +227,8 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     if !saw_struct_limb { return 36; }
     if !saw_enum_limb { return 37; }
     if !saw_if_limb { return 39; }
+    if !saw_binary_if_limb { return 40; }
+    if !saw_field_assignment_limb { return 41; }
     0
 }
 
@@ -269,6 +306,8 @@ fn main() -> i32 [io] {
     if negative_zero_result != 0 { return negative_zero_result; }
     let default_i64_result: i32 = check_default_i64_wide_magnitude_range();
     if default_i64_result != 0 { return default_i64_result; }
+    let diagnostic_result: i32 = check_wide_range_diagnostic_value();
+    if diagnostic_result != 0 { return diagnostic_result; }
     let binary_result: i32 = check_wide_binary_marker_ranges();
     if binary_result != 0 { return binary_result; }
     let negative_suffix_result: i32 = check_explicit_negative_i128_suffix_range();

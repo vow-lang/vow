@@ -1460,17 +1460,21 @@ impl<'e> Checker<'e> {
                     && let ExprKind::Cast { expr, target_ty } = &operand.kind
                     && let ExprKind::Lit(Lit::Int(magnitude)) = expr.kind
                     && let Type::Named { name, .. } = target_ty.as_ref()
-                    && name == "i128"
                 {
-                    self.check_integer_value_range(
-                        ConstIntValue {
-                            magnitude,
-                            negative: true,
-                        },
-                        &Ty::I128,
-                        operand.span,
-                    );
-                    return Ty::I128;
+                    if name == "i128" {
+                        self.check_integer_value_range(
+                            ConstIntValue {
+                                magnitude,
+                                negative: true,
+                            },
+                            &Ty::I128,
+                            operand.span,
+                        );
+                        return Ty::I128;
+                    }
+                    if name == "u128" && magnitude == 0 {
+                        return Ty::U128;
+                    }
                 }
                 let operand_ty = self.check_expr(operand);
                 match op {

@@ -1197,6 +1197,14 @@ fn expr_is_coercible_int_marker(expr: &Expr) -> bool {
             rhs,
         } => expr_is_coercible_int_marker(lhs) && expr_is_coercible_int_marker(rhs),
         ExprKind::Block(block) => block_result_is_coercible_int_marker(block),
+        ExprKind::If {
+            then_branch,
+            else_branch: Some(else_expr),
+            ..
+        } => {
+            block_result_is_coercible_int_marker(then_branch)
+                && expr_is_coercible_int_marker(else_expr)
+        }
         _ => false,
     }
 }
@@ -1424,6 +1432,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 return phi;
             }
 
+            if expr_is_integer_literal(lhs)
+                && let Some(context_ty) = known_wide_expr_ty(ctx, rhs)
+            {
+                record_wide_control_flow_context(ctx, lhs, context_ty);
+            }
+            if expr_is_integer_literal(rhs)
+                && let Some(context_ty) = known_wide_expr_ty(ctx, lhs)
+            {
+                record_wide_control_flow_context(ctx, rhs, context_ty);
+            }
             let mut lhs_id = lower_expr(ctx, lhs);
             let mut rhs_id = lower_expr(ctx, rhs);
             let lhs_is_str = ctx
@@ -1868,6 +1886,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Assign { lhs, rhs } => {
+            if let Some(field_ty) = known_field_assignment_ty(ctx, lhs) {
+                record_wide_control_flow_context(ctx, rhs, field_ty);
+            }
             if let ExprKind::Ident(name) = &lhs.kind
                 && let Some(current) = ctx.lookup(name)
             {
@@ -1930,6 +1951,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         FIELD_IDX_SENTINEL
                     } as u32;
                     if field_idx != FIELD_IDX_SENTINEL as u32 {
+                        let field_ty = ctx
+                            .struct_field_type_names
+                            .get(&struct_name)
+                            .and_then(|types| types.get(field_idx as usize))
+                            .map(|type_name| scalar_ty_for_field_type_name(type_name));
+                        if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
+                            new_val = lower_narrow_literal(ctx, rhs, new_val, field_ty);
+                        }
                         // Field store transfers a linear RHS into the heap container.
                         ctx.emit_linear_consume_if_needed(new_val, span);
                         ctx.emit(
@@ -3899,6 +3928,60 @@ fn integer_marker_from_block(block: &Block) -> Option<&Expr> {
         return Some(expr);
     }
     None
+}
+
+fn known_wide_expr_ty(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
+    let ty = match &expr.kind {
+        ExprKind::Ident(name) => ctx.lookup(name).map(|id| ctx.inst_ty(id)),
+        ExprKind::Cast { target_ty, .. } => Some(lower_ty_with_linear(
+            target_ty,
+            &ctx.linear_owner_names,
+            &ctx.type_aliases,
+        )),
+        ExprKind::Block(block) => {
+            integer_marker_from_block(block).and_then(|result| known_wide_expr_ty(ctx, result))
+        }
+        _ => None,
+    };
+    ty.filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
+}
+
+fn known_struct_expr_name(ctx: &LowerCtx, expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Ident(name) => ctx
+            .lookup(name)
+            .and_then(|id| ctx.inst_struct_type.get(&id).cloned()),
+        ExprKind::FieldAccess { base, field } => {
+            let base_name = known_struct_expr_name(ctx, base)?;
+            let field_idx = ctx
+                .struct_field_map
+                .get(&base_name)?
+                .iter()
+                .position(|name| name == field)?;
+            ctx.struct_field_type_names
+                .get(&base_name)
+                .and_then(|types| types.get(field_idx))
+                .cloned()
+        }
+        _ => None,
+    }
+}
+
+fn known_field_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
+    let ExprKind::FieldAccess { base, field } = &lhs.kind else {
+        return None;
+    };
+    let struct_name = known_struct_expr_name(ctx, base)?;
+    let field_idx = ctx
+        .struct_field_map
+        .get(&struct_name)?
+        .iter()
+        .position(|name| name == field)?;
+    ctx.struct_field_type_names
+        .get(&struct_name)
+        .and_then(|types| types.get(field_idx))
+        .map(|name| scalar_ty_for_field_type_name(name))
+        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
 }
 
 fn wide_context_contains_if(expr: &Expr) -> bool {

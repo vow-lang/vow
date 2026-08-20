@@ -1654,6 +1654,26 @@ fn lctx_wide_context_ty(ctx: LowerCtx, eid: i64) -> i64 {
     ctx.wide_context_tys[eid]
 }
 
+fn lctx_known_wide_expr_ty(ctx: LowerCtx, a: AstArena, eid: i64) -> i64 {
+    if eid == -1 { return -1; }
+    let tag: i64 = expr_tag(a, eid);
+    let ty: i64 = {
+        if tag == EXPR_IDENT() {
+            let name: String = arena_str(a, expr_a(a, eid));
+            let id: i64 = lctx_lookup(ctx, name);
+            if id == -1 { -1 } else { lctx_inst_ty(ctx, id) }
+        } else if tag == EXPR_CAST() {
+            lctx_lower_ast_ty(ctx, expr_b(a, eid))
+        } else if tag == EXPR_BLOCK() {
+            lctx_known_wide_expr_ty(ctx, a, block_result_eid(a, expr_a(a, eid)))
+        } else {
+            -1
+        }
+    };
+    if ty == ITY_I128() || ty == ITY_U128() { return ty; }
+    -1
+}
+
 fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i64 {
     if result_tys.len() == 0 {
         return ITY_I64();
@@ -1964,6 +1984,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             return phi_id;
         }
 
+        if expr_is_coercible_int_marker(a, lhs_eid) {
+            lctx_record_wide_control_flow_context(
+                ctx, a, lhs_eid, lctx_known_wide_expr_ty(ctx, a, rhs_eid)
+            );
+        }
+        if expr_is_coercible_int_marker(a, rhs_eid) {
+            lctx_record_wide_control_flow_context(
+                ctx, a, rhs_eid, lctx_known_wide_expr_ty(ctx, a, lhs_eid)
+            );
+        }
         let mut lhs_id: i64 = lower_expr(ctx, lhs_eid);
         let mut rhs_id: i64 = lower_expr(ctx, rhs_eid);
         let lhs_is_str: bool = lctx_is_str_eid(ctx, lhs_eid);
@@ -2992,7 +3022,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let field_sid: i64 = expr_b(a, lhs_eid);
             let field_name: String = arena_str(a, field_sid);
             let recv_id: i64 = lower_expr(ctx, recv_eid);
-            let val_id: i64 = lower_expr(ctx, rhs_eid);
             let recv_tag_str: String = lctx_get_tag(ctx, recv_id);
             if recv_tag_str.len() == 0 {
                 let w: String = String::from("warning: FieldSet on untagged instruction %");
@@ -3004,6 +3033,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
             if fidx != -1 {
+                let field_type_name: String = lctx_struct_field_type(ctx, recv_tag_str, fidx);
+                let field_ty: i64 = ity_for_scalar_type_name(field_type_name);
+                lctx_record_wide_control_flow_context(ctx, a, rhs_eid, field_ty);
+                let original: i64 = lower_expr(ctx, rhs_eid);
+                let val_id: i64 = lower_narrow_literal(ctx, a, rhs_eid, original, field_ty);
                 // Field store transfers a linear RHS into the heap container.
                 lctx_emit_linear_consume_if_needed(ctx, val_id);
                 let fs_args: Vec<i64> = Vec::new();

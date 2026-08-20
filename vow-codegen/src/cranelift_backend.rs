@@ -792,7 +792,9 @@ fn lower_inst(
             }
         }
         Opcode::ConstI128 | Opcode::ConstU128 => {
-            todo!("epic #526: wide constant codegen belongs to a later seam")
+            return Err(CodegenError::UnsupportedOpcode(
+                "wide constant codegen belongs to a later seam (epic #526)".to_string(),
+            ));
         }
         Opcode::ConstU64 => {
             if let InstData::ConstU64(v) = inst.data {

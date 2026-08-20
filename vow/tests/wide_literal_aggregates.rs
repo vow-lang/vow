@@ -33,6 +33,18 @@ fn make_enum() -> WideEnum {
 fn choose_wide(flag: bool) -> u128 {
     if flag { 170141183460469231731687303715884105728 } else { 0 }
 }
+
+fn compare_wide(x: u128, flag: bool) -> bool {
+    x == if flag { 18446744073709551618 } else { 0 }
+}
+
+fn assign_wide(target: WideStruct) {
+    target.value = 18446744073709551619;
+}
+
+fn suffixed_negative_zero() -> u128 {
+    -0u128
+}
 "#,
     )
     .unwrap();
@@ -64,5 +76,57 @@ fn choose_wide(flag: bool) -> u128 {
     assert!(
         stdout.contains("ConstU128[170141183460469231731687303715884105728u128]"),
         "conditional branch lost its high limb before the Phi:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[18446744073709551618u128]"),
+        "binary conditional operand lost its high limb:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[18446744073709551619u128]"),
+        "field assignment lost its high limb:\n{stdout}"
+    );
+}
+
+#[test]
+fn deferred_wide_codegen_fails_closed_without_panicking() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source_path = dir.path().join("wide_codegen.vow");
+    let output_path = dir.path().join("wide_codegen");
+    fs::write(
+        &source_path,
+        "module WideCodegen\nfn value() -> u128 { 42u128 }\n",
+    )
+    .unwrap();
+
+    let output = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            source_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("invalid JSON from build: {error}\nstdout: {stdout}"));
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "deferred wide codegen must fail closed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(json["status"], "CompileFailed");
+    assert!(
+        json["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("wide constant codegen")),
+        "build must explain the deferred backend seam: {json}"
+    );
+    assert!(
+        !output_path.exists(),
+        "failed wide codegen must not leave an executable"
     );
 }
