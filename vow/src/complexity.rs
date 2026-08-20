@@ -608,6 +608,86 @@ fn analyze_function(
     }
 }
 
+// File-level aggregates and the exit-gating decision for `vow complexity`.
+struct Totals {
+    // Display threshold: `max_score` when the score gate is on, else the 80
+    // default. Reported in the JSON and used to mark functions over threshold;
+    // distinct from the gating comparison, which uses the raw gate flags.
+    thr: i64,
+    file_max: i64,
+    over_count: i64,
+    exit_code: i32,
+    hk_max: i64,
+    fan_in_max: i64,
+    fan_out_max: i64,
+}
+
+// Pure policy behind `run_complexity_command`: given every analyzed record and
+// the three opt-in gate flags (each disabled by a negative sentinel), produce
+// the reported file maxima, the over-threshold count, the process exit code, and
+// the module-coupling maxima. Kept side-effect-free so the gate semantics are
+// exercised by unit tests instead of only end-to-end through the process exit.
+//
+// The score gate, cognitive gate, and cyclomatic gate are independent: any one
+// tripping fails the run. `thr` (the reporting threshold) deliberately diverges
+// from the score gate when the gate is disabled — it falls back to 80 so the
+// report still flags large functions, while a disabled gate never fails the run.
+//
+// Coupling maxima are computed over `recs` (the entry file's reported functions)
+// rather than all lowered IR functions, so a multi-module run can't attribute
+// fan-in/out or Henry-Kafura to an imported helper.
+fn complexity_totals(
+    recs: &[CxEmit],
+    ir_info: &HashMap<String, IrInfo>,
+    max_score: i64,
+    max_cognitive: i64,
+    max_cyclomatic: i64,
+) -> Totals {
+    let thr = if max_score >= 0 { max_score } else { 80 };
+
+    let mut file_max = 0i64;
+    let mut over_count = 0i64;
+    let mut exit_code = 0i32;
+    for r in recs {
+        if r.score > file_max {
+            file_max = r.score;
+        }
+        if r.score > thr {
+            over_count += 1;
+        }
+        if max_score >= 0 && r.score > max_score {
+            exit_code = 1;
+        }
+        if max_cognitive >= 0 && r.cognitive > max_cognitive {
+            exit_code = 1;
+        }
+        if max_cyclomatic >= 0 && r.cyclomatic > max_cyclomatic {
+            exit_code = 1;
+        }
+    }
+
+    let mut hk_max: i64 = 0;
+    let mut fan_in_max: i64 = 0;
+    let mut fan_out_max: i64 = 0;
+    for r in recs {
+        if let Some(info) = ir_info.get(&r.name) {
+            hk_max = hk_max.max(cx_henry_kafura(r.nloc, info.fan_in, info.fan_out));
+            fan_in_max = fan_in_max.max(info.fan_in);
+            fan_out_max = fan_out_max.max(info.fan_out);
+        }
+    }
+
+    Totals {
+        thr,
+        file_max,
+        over_count,
+        exit_code,
+        hk_max,
+        fan_in_max,
+        fan_out_max,
+    }
+}
+
 pub(crate) fn run_complexity_command(
     source: &Path,
     cog_anchor: i64,
@@ -663,12 +743,9 @@ pub(crate) fn run_complexity_command(
     // mirrors the self-hosted `itf == path` and stays correct when the entry has no items.
     let item_files = frontend.item_files();
     let entry_file = source.to_string_lossy().into_owned();
-    let thr = if max_score >= 0 { max_score } else { 80 };
 
     // IR-derived per-function info, matched to AST functions by name.
     let mut ir_info: HashMap<String, IrInfo> = HashMap::new();
-    let mut fan_in_max: i64 = 0;
-    let mut fan_out_max: i64 = 0;
     if let Some(m) = frontend.ir() {
         let funcs = &m.functions;
         let callees: Vec<HashSet<u32>> = funcs.iter().map(ir_callees).collect();
@@ -746,90 +823,11 @@ pub(crate) fn run_complexity_command(
         }
     }
 
-    // File-level aggregates + exit-gating.
-    let mut file_max = 0i64;
-    let mut over_count = 0i64;
-    let mut exit_code = 0i32;
-    for r in &recs {
-        if r.score > file_max {
-            file_max = r.score;
-        }
-        if r.score > thr {
-            over_count += 1;
-        }
-        if max_score >= 0 && r.score > max_score {
-            exit_code = 1;
-        }
-        if max_cognitive >= 0 && r.cognitive > max_cognitive {
-            exit_code = 1;
-        }
-        if max_cyclomatic >= 0 && r.cyclomatic > max_cyclomatic {
-            exit_code = 1;
-        }
-    }
-
-    // Module-level coupling maxima, restricted to the entry file's reported
-    // functions (recs) — not all lowered IR functions — so a multi-module run
-    // can't attribute fan-in/out or Henry-Kafura to an imported helper.
-    let mut hk_max: i64 = 0;
-    for r in &recs {
-        if let Some(info) = ir_info.get(&r.name) {
-            hk_max = hk_max.max(cx_henry_kafura(r.nloc, info.fan_in, info.fan_out));
-            fan_in_max = fan_in_max.max(info.fan_in);
-            fan_out_max = fan_out_max.max(info.fan_out);
-        }
-    }
-
-    // Pass 2: emit.
-    let mut out = String::from(
-        "{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"",
-    );
-    out.push_str(&writer::escape(&source.to_string_lossy()));
-    out.push_str("\",\"complexity_score\":");
-    out.push_str(&file_max.to_string());
-    out.push_str(",\"functions_over_threshold\":");
-    out.push_str(&over_count.to_string());
-    out.push_str(",\"nloc\":");
-    out.push_str(&file_nloc.to_string());
-    out.push_str(",\"functions\":[");
-    for (k, r) in recs.iter().enumerate() {
-        if k > 0 {
-            out.push(',');
-        }
-        out.push_str(&writer::render_fn(r, thr));
-    }
-    out.push_str("],\"module\":{\"tier\":\"experimental\",\"functions\":");
-    out.push_str(&(recs.len() as i64).to_string());
-    out.push_str(",\"fan_in_max\":");
-    out.push_str(&fan_in_max.to_string());
-    out.push_str(",\"fan_out_max\":");
-    out.push_str(&fan_out_max.to_string());
-    out.push_str(",\"henry_kafura_max\":");
-    out.push_str(&hk_max.to_string());
-    out.push_str("}}],\"summary\":{\"functions\":");
-    out.push_str(&(recs.len() as i64).to_string());
-    out.push_str(",\"nloc_total\":");
-    out.push_str(&file_nloc.to_string());
-    out.push_str(",\"threshold\":");
-    out.push_str(&thr.to_string());
-    out.push_str(",\"functions_over_threshold\":");
-    out.push_str(&over_count.to_string());
-    out.push_str(",\"thresholds_exceeded\":[");
-    let mut emitted = 0;
-    for r in &recs {
-        if r.score > thr {
-            if emitted > 0 {
-                out.push(',');
-            }
-            out.push('"');
-            out.push_str(&writer::escape(&r.name));
-            out.push('"');
-            emitted += 1;
-        }
-    }
-    out.push_str("]}}");
+    // Aggregate + gate (complexity_totals), then shape into JSON (render_report).
+    let totals = complexity_totals(&recs, &ir_info, max_score, max_cognitive, max_cyclomatic);
+    let out = writer::render_report(&recs, &totals, file_nloc, source);
     println!("{out}");
-    std::process::exit(exit_code);
+    std::process::exit(totals.exit_code);
 }
 
 // ---- 0-100 gate score (mirrors compiler/complexity.vow cx_score) ----
@@ -1966,6 +1964,160 @@ mod tests {
         assert_eq!(counts.get(&1).copied().unwrap_or(0), 2);
         assert_eq!(counts.get(&2).copied().unwrap_or(0), 1);
         assert_eq!(counts.get(&3).copied().unwrap_or(0), 0);
+    }
+
+    // ---- complexity_totals: exit-gating policy + file aggregates ----
+
+    // A minimal record; only the fields the gating/aggregation seam reads
+    // (name, score, cognitive, cyclomatic, nloc) carry meaning here.
+    fn cx(name: &str, score: i64, cognitive: i64, cyclomatic: i64, nloc: i64) -> CxEmit {
+        CxEmit {
+            name: name.to_string(),
+            line: 1,
+            nloc,
+            tokens: 0,
+            stmts: 0,
+            params: 0,
+            cyclomatic,
+            cyclomatic_ir: cyclomatic,
+            cognitive,
+            max_nesting: 0,
+            h_n1: 0,
+            h_n2: 0,
+            h_bign1: 0,
+            h_bign2: 0,
+            h_vocab: 0,
+            h_length: 0,
+            h_volume_s: 0,
+            h_difficulty_s: 0,
+            h_effort_s: 0,
+            eff: 0,
+            effect_fanout: 0,
+            linear_values: 0,
+            linear_consumes: 0,
+            linear_borrows: 0,
+            score,
+            cog_sub_s: 0,
+            size_sub_s: 0,
+            base_s: 0,
+            vow_bump_s: 0,
+            contract: Contract {
+                requires: 0,
+                ensures: 0,
+                invariants: 0,
+                predicate_nodes: 0,
+                predicate_depth: 0,
+                free_vars: 0,
+                has_vec_quant: false,
+            },
+            verif: Verif {
+                loops_total: 0,
+                loops_without_invariant: 0,
+                max_loop_nesting: 0,
+                contract_predicate_cost: 0,
+            },
+        }
+    }
+
+    fn info(fan_in: i64, fan_out: i64) -> IrInfo {
+        IrInfo {
+            cyclomatic: 0,
+            consumes: 0,
+            borrows: 0,
+            fan_in,
+            fan_out,
+            effect_fanout: 0,
+        }
+    }
+
+    // The discriminating case: with the score gate DISABLED (-1), the display
+    // threshold falls back to 80, so a 90-scoring function is "over threshold"
+    // (over_count == 1) yet must NOT set the exit code (gate off). This pins the
+    // split between the reporting threshold and the gating threshold — collapsing
+    // them (passing only `thr` into the seam) would silently break it.
+    #[test]
+    fn complexity_totals_disabled_score_gate_reports_but_does_not_fail() {
+        let recs = [cx("f", 90, 0, 0, 1)];
+        let totals = complexity_totals(&recs, &HashMap::new(), -1, -1, -1);
+        assert_eq!(totals.thr, 80);
+        assert_eq!(totals.file_max, 90);
+        assert_eq!(totals.over_count, 1);
+        assert_eq!(totals.exit_code, 0);
+    }
+
+    #[test]
+    fn complexity_totals_enabled_score_gate_sets_threshold_and_exit() {
+        let recs = [cx("f", 90, 0, 0, 1)];
+        let totals = complexity_totals(&recs, &HashMap::new(), 50, -1, -1);
+        assert_eq!(totals.thr, 50);
+        assert_eq!(totals.over_count, 1);
+        assert_eq!(totals.exit_code, 1);
+    }
+
+    #[test]
+    fn complexity_totals_score_under_enabled_gate_passes() {
+        let recs = [cx("f", 90, 0, 0, 1)];
+        let totals = complexity_totals(&recs, &HashMap::new(), 95, -1, -1);
+        assert_eq!(totals.thr, 95);
+        assert_eq!(totals.over_count, 0);
+        assert_eq!(totals.exit_code, 0);
+    }
+
+    // Cognitive and cyclomatic are independent opt-in gates: either can fail the
+    // run while the score gate is off and the score is well under the display
+    // default, and neither influences over_count (a score-only statistic).
+    #[test]
+    fn complexity_totals_cognitive_gate_is_independent() {
+        let recs = [cx("f", 10, 6, 0, 1)];
+        let totals = complexity_totals(&recs, &HashMap::new(), -1, 5, -1);
+        assert_eq!(totals.exit_code, 1);
+        assert_eq!(totals.over_count, 0);
+    }
+
+    #[test]
+    fn complexity_totals_cyclomatic_gate_is_independent() {
+        let recs = [cx("f", 10, 0, 4, 1)];
+        let totals = complexity_totals(&recs, &HashMap::new(), -1, -1, 3);
+        assert_eq!(totals.exit_code, 1);
+        assert_eq!(totals.over_count, 0);
+    }
+
+    #[test]
+    fn complexity_totals_file_max_is_the_largest_score() {
+        let recs = [
+            cx("a", 12, 0, 0, 1),
+            cx("b", 77, 0, 0, 1),
+            cx("c", 30, 0, 0, 1),
+        ];
+        let totals = complexity_totals(&recs, &HashMap::new(), -1, -1, -1);
+        assert_eq!(totals.file_max, 77);
+    }
+
+    // Coupling maxima are restricted to the reported (entry-file) records: an
+    // ir_info entry for a name NOT in recs — e.g. an imported helper — must not
+    // leak into fan_in_max/fan_out_max/henry_kafura_max.
+    #[test]
+    fn complexity_totals_coupling_maxima_ignore_non_reported_functions() {
+        let recs = [cx("entry_a", 10, 0, 0, 5), cx("entry_b", 10, 0, 0, 5)];
+        let mut ir_info = HashMap::new();
+        ir_info.insert("entry_a".to_string(), info(2, 3));
+        ir_info.insert("entry_b".to_string(), info(1, 1));
+        ir_info.insert("imported_helper".to_string(), info(99, 99));
+        let totals = complexity_totals(&recs, &ir_info, -1, -1, -1);
+        assert_eq!(totals.fan_in_max, 2);
+        assert_eq!(totals.fan_out_max, 3);
+        assert_eq!(totals.hk_max, cx_henry_kafura(5, 2, 3));
+    }
+
+    #[test]
+    fn complexity_totals_empty_input_yields_zeroes_and_success() {
+        let totals = complexity_totals(&[], &HashMap::new(), -1, -1, -1);
+        assert_eq!(totals.file_max, 0);
+        assert_eq!(totals.over_count, 0);
+        assert_eq!(totals.exit_code, 0);
+        assert_eq!(totals.fan_in_max, 0);
+        assert_eq!(totals.fan_out_max, 0);
+        assert_eq!(totals.hk_max, 0);
     }
 }
 

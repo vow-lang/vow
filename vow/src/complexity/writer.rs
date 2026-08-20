@@ -4,7 +4,70 @@
 //! `escape`r and the per-function record writer — so the command shell keeps
 //! only orchestration and aggregation.
 
-use super::{CxEmit, cx_popcount_bits};
+use super::{CxEmit, Totals, cx_popcount_bits};
+use std::path::Path;
+
+// Render the top-level `complexity_report` envelope: the file block (its
+// aggregates and every function record), the module-coupling block, and the
+// summary. Hand-built and byte-identical with the self-hosted emitter, so the
+// field order, spacing, and fixed-point formatting here are load-bearing (see
+// the module header). All aggregation and the exit-gating decision are computed
+// upstream in `Totals`; this seam only shapes them into JSON.
+pub(super) fn render_report(
+    recs: &[CxEmit],
+    totals: &Totals,
+    file_nloc: i64,
+    source: &Path,
+) -> String {
+    let mut out = String::from(
+        "{\"schema_version\":\"1\",\"kind\":\"complexity_report\",\"tool\":\"vow\",\"files\":[{\"file\":\"",
+    );
+    out.push_str(&escape(&source.to_string_lossy()));
+    out.push_str("\",\"complexity_score\":");
+    out.push_str(&totals.file_max.to_string());
+    out.push_str(",\"functions_over_threshold\":");
+    out.push_str(&totals.over_count.to_string());
+    out.push_str(",\"nloc\":");
+    out.push_str(&file_nloc.to_string());
+    out.push_str(",\"functions\":[");
+    for (k, r) in recs.iter().enumerate() {
+        if k > 0 {
+            out.push(',');
+        }
+        out.push_str(&render_fn(r, totals.thr));
+    }
+    out.push_str("],\"module\":{\"tier\":\"experimental\",\"functions\":");
+    out.push_str(&(recs.len() as i64).to_string());
+    out.push_str(",\"fan_in_max\":");
+    out.push_str(&totals.fan_in_max.to_string());
+    out.push_str(",\"fan_out_max\":");
+    out.push_str(&totals.fan_out_max.to_string());
+    out.push_str(",\"henry_kafura_max\":");
+    out.push_str(&totals.hk_max.to_string());
+    out.push_str("}}],\"summary\":{\"functions\":");
+    out.push_str(&(recs.len() as i64).to_string());
+    out.push_str(",\"nloc_total\":");
+    out.push_str(&file_nloc.to_string());
+    out.push_str(",\"threshold\":");
+    out.push_str(&totals.thr.to_string());
+    out.push_str(",\"functions_over_threshold\":");
+    out.push_str(&totals.over_count.to_string());
+    out.push_str(",\"thresholds_exceeded\":[");
+    let mut emitted = 0;
+    for r in recs {
+        if r.score > totals.thr {
+            if emitted > 0 {
+                out.push(',');
+            }
+            out.push('"');
+            out.push_str(&escape(&r.name));
+            out.push('"');
+            emitted += 1;
+        }
+    }
+    out.push_str("]}}");
+    out
+}
 
 // Render one function's complexity record as a JSON object. Returns the text
 // rather than appending to a caller-owned buffer, so the whole field ordering,
@@ -173,8 +236,9 @@ pub(super) fn escape(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Contract, CxEmit, Verif};
+    use super::super::{Contract, CxEmit, Totals, Verif};
     use super::*;
+    use std::path::Path;
 
     // ---- render_fn fixtures ----
 
@@ -362,5 +426,97 @@ mod tests {
                 .unwrap_or_else(|e| panic!("escape({input:?}) produced invalid JSON string: {e}"));
             assert_eq!(&parsed, input);
         }
+    }
+
+    // ---- render_report (the top-level complexity_report envelope) ----
+
+    fn totals(thr: i64, file_max: i64, over_count: i64) -> Totals {
+        Totals {
+            thr,
+            file_max,
+            over_count,
+            exit_code: 0,
+            hk_max: 7,
+            fan_in_max: 3,
+            fan_out_max: 5,
+        }
+    }
+
+    fn named(name: &str, score: i64) -> CxEmit {
+        let mut e = sample_emit();
+        e.name = name.to_string();
+        e.score = score;
+        e
+    }
+
+    fn report_value(
+        recs: &[CxEmit],
+        t: &Totals,
+        file_nloc: i64,
+        source: &str,
+    ) -> serde_json::Value {
+        let raw = render_report(recs, t, file_nloc, Path::new(source));
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("render_report produced invalid JSON: {e}\n{raw}"))
+    }
+
+    #[test]
+    fn render_report_emits_the_documented_envelope_shape() {
+        let recs = [named("f", 42)];
+        let v = report_value(&recs, &totals(80, 42, 0), 14, "src/x.vow");
+        assert_eq!(v["schema_version"], "1");
+        assert_eq!(v["kind"], "complexity_report");
+        assert_eq!(v["tool"], "vow");
+        let file = &v["files"][0];
+        assert_eq!(file["file"], "src/x.vow");
+        assert_eq!(file["complexity_score"], 42);
+        assert_eq!(file["functions_over_threshold"], 0);
+        assert_eq!(file["nloc"], 14);
+        assert_eq!(file["functions"].as_array().unwrap().len(), 1);
+        let module = &file["module"];
+        assert_eq!(module["functions"], 1);
+        assert_eq!(module["fan_in_max"], 3);
+        assert_eq!(module["fan_out_max"], 5);
+        assert_eq!(module["henry_kafura_max"], 7);
+        let summary = &v["summary"];
+        assert_eq!(summary["functions"], 1);
+        assert_eq!(summary["nloc_total"], 14);
+        assert_eq!(summary["threshold"], 80);
+        assert_eq!(summary["functions_over_threshold"], 0);
+    }
+
+    #[test]
+    fn render_report_lists_only_over_threshold_functions_in_summary() {
+        // With thr=40: "hi" (90) is over, "lo" (10) is not.
+        let recs = [named("lo", 10), named("hi", 90)];
+        let v = report_value(&recs, &totals(40, 90, 1), 20, "m.vow");
+        assert_eq!(
+            v["summary"]["thresholds_exceeded"],
+            serde_json::json!(["hi"])
+        );
+        // Each function record carries its own over_threshold flag against thr.
+        let fns = v["files"][0]["functions"].as_array().unwrap();
+        assert_eq!(fns[0]["score_factors"]["over_threshold"], false);
+        assert_eq!(fns[1]["score_factors"]["over_threshold"], true);
+    }
+
+    #[test]
+    fn render_report_escapes_the_source_path() {
+        let recs = [named("f", 1)];
+        let v = report_value(&recs, &totals(80, 1, 0), 1, "we\"ird.vow");
+        assert_eq!(v["files"][0]["file"], "we\"ird.vow");
+    }
+
+    #[test]
+    fn render_report_handles_zero_functions() {
+        let v = report_value(&[], &totals(80, 0, 0), 0, "empty.vow");
+        assert_eq!(v["files"][0]["functions"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            v["summary"]["thresholds_exceeded"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 }
