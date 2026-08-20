@@ -1294,9 +1294,9 @@ impl<'e> Checker<'e> {
                                     "comparison operands have different types: `{lhs_ty}` and `{rhs_ty}`"
                                 ),
                                 expr.span,
-                                vec![format!(
-                                    "convert one operand so both sides have the same type"
-                                )],
+                                vec![
+                                    "convert one operand so both sides have the same type".to_string()
+                                ],
                             );
                         }
                         Ty::Bool
