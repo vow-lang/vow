@@ -166,10 +166,16 @@ fn arena_add_expr(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -
     eid
 }
 
+fn arena_add_int_expr(a: AstArena, lo: u64, hi: u64, span: i64) -> i64 {
+    arena_add_expr(a, EXPR_LIT_INT(), lo as i64, hi as i64, 0, span)
+}
+
 fn expr_tag(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5] }
 fn expr_a(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 1] }
 fn expr_b(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 2] }
 fn expr_c(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 3] }
+fn expr_int_lo(a: AstArena, eid: i64) -> u64 { expr_a(a, eid) as u64 }
+fn expr_int_hi(a: AstArena, eid: i64) -> u64 { expr_b(a, eid) as u64 }
 
 fn expr_is_const_int(a: AstArena, eid: i64) -> bool {
     if expr_tag(a, eid) == EXPR_LIT_INT() { return true; }

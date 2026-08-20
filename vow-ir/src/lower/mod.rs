@@ -1454,6 +1454,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Ty::I32
                 } else if contextual_narrow_literal_ty(Ty::U32) {
                     Ty::U32
+                } else if contextual_narrow_literal_ty(Ty::I128) {
+                    Ty::I128
+                } else if contextual_narrow_literal_ty(Ty::U128) {
+                    Ty::U128
                 } else if is_bitwise && lhs_ty == Ty::I64 {
                     if rhs_ty != Ty::I64 { rhs_ty } else { lhs_ty }
                 } else {
@@ -1461,7 +1465,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 };
                 if matches!(
                     operand_ty,
-                    Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                    Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
                 ) {
                     lhs_id = lower_narrow_literal(ctx, lhs, lhs_id, operand_ty);
                     if !matches!(op, BinOp::Shl | BinOp::Shr) {
@@ -1480,7 +1484,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let operand_ty = ctx.inst_ty(val);
                     let result_ty = if matches!(
                         operand_ty,
-                        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I64 | Ty::U64
+                        Ty::I8
+                            | Ty::U8
+                            | Ty::I16
+                            | Ty::U16
+                            | Ty::I32
+                            | Ty::U32
+                            | Ty::I64
+                            | Ty::U64
+                            | Ty::I128
+                            | Ty::U128
                     ) {
                         operand_ty
                     } else {
@@ -1544,7 +1557,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         && let Some(&param_ty) = info.param_tys.get(i)
                         && matches!(
                             param_ty,
-                            Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                            Ty::I8
+                                | Ty::U8
+                                | Ty::I16
+                                | Ty::U16
+                                | Ty::I32
+                                | Ty::U32
+                                | Ty::I128
+                                | Ty::U128
                         )
                     {
                         let original = lower_consumed_expr(ctx, a);
@@ -1839,7 +1859,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         let current_ty = ctx.inst_ty(current);
                         if matches!(
                             current_ty,
-                            Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                            Ty::I8
+                                | Ty::U8
+                                | Ty::I16
+                                | Ty::U16
+                                | Ty::I32
+                                | Ty::U32
+                                | Ty::I128
+                                | Ty::U128
                         ) {
                             new_val = lower_narrow_literal(ctx, rhs, new_val, current_ty);
                         }
@@ -3156,7 +3183,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
             if matches!(
                 phi_ty,
-                Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
             ) {
                 for i in 0..arm_results.len() {
                     let arm_block = arm_results[i].0;
@@ -3707,6 +3734,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         InstData::ConstU64(*v as u64),
                         span,
                     ),
+                    Ty::I128 => ctx.emit(
+                        Opcode::ConstI128,
+                        Ty::I128,
+                        vec![],
+                        InstData::ConstI128(*v as i128),
+                        span,
+                    ),
+                    Ty::U128 => ctx.emit(
+                        Opcode::ConstU128,
+                        Ty::U128,
+                        vec![],
+                        InstData::ConstU128(*v),
+                        span,
+                    ),
                     _ if ir_ty_is_integer(tgt) => ctx.emit(
                         Opcode::IntCast,
                         tgt,
@@ -3807,7 +3848,7 @@ fn integer_marker_from_block(block: &Block) -> Option<&Expr> {
     None
 }
 
-fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: i64, ty: Ty, span: Span) -> InstId {
+fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: u128, ty: Ty, span: Span) -> InstId {
     match ty {
         Ty::I8 => ctx.emit(
             Opcode::ConstU8,
@@ -3837,13 +3878,27 @@ fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: i64, ty: Ty, span: Sp
             InstData::ConstI32(value as u32 as i32),
             span,
         ),
+        Ty::I128 => ctx.emit(
+            Opcode::ConstI128,
+            Ty::I128,
+            vec![],
+            InstData::ConstI128(value as i128),
+            span,
+        ),
+        Ty::U128 => ctx.emit(
+            Opcode::ConstU128,
+            Ty::U128,
+            vec![],
+            InstData::ConstU128(value),
+            span,
+        ),
         _ => unreachable!("non-narrow integer context: {ty:?}"),
     }
 }
 
 fn emit_integer_zero(ctx: &mut LowerCtx, ty: Ty, span: Span) -> InstId {
     match ty {
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 => {
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128 => {
             emit_narrow_integer_constant(ctx, 0, ty, span)
         }
         Ty::U64 => ctx.emit(
@@ -3868,12 +3923,9 @@ fn emit_integer_zero(ctx: &mut LowerCtx, ty: Ty, span: Span) -> InstId {
 /// instead of folding the whole expression into a wrapping constant.
 fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<InstId> {
     match &expr.kind {
-        ExprKind::Lit(Lit::Int(value)) => Some(emit_narrow_integer_constant(
-            ctx,
-            *value as i64,
-            ty,
-            expr.span,
-        )),
+        ExprKind::Lit(Lit::Int(value)) => {
+            Some(emit_narrow_integer_constant(ctx, *value, ty, expr.span))
+        }
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
@@ -3911,7 +3963,10 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
 /// their overflow behavior; control-flow results are explicitly reduced after
 /// their Phi so later users observe the annotated type.
 fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
-    if !matches!(ty, Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32) {
+    if !matches!(
+        ty,
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
+    ) {
         return original;
     }
     if let Some(narrowed) = lower_integer_marker_as(ctx, expr, ty) {
@@ -4003,6 +4058,10 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                     val = lower_narrow_literal(ctx, init, val, Ty::I32);
                 } else if type_name == "u32" {
                     val = lower_narrow_literal(ctx, init, val, Ty::U32);
+                } else if type_name == "i128" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::I128);
+                } else if type_name == "u128" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::U128);
                 }
             }
             if let Some(AstType::Named {
@@ -4209,7 +4268,7 @@ fn lower_function_with_pattern_aggregates(
 
     if matches!(
         return_ty,
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
     ) && let Some(expr) = &fn_def.body.trailing_expr
     {
         trailing = lower_narrow_literal(&mut ctx, expr, trailing, return_ty);
@@ -4566,7 +4625,7 @@ mod tests {
         }
     }
 
-    fn int_expr(v: i128) -> Expr {
+    fn int_expr(v: u128) -> Expr {
         Expr {
             kind: ExprKind::Lit(Lit::Int(v)),
             span: sp(),
@@ -4909,15 +4968,29 @@ type PairView = PairAlias;
     }
 
     #[test]
-    fn phase3_literals_lower_at_their_native_ir_width() {
+    fn integer_literals_lower_at_their_native_ir_width() {
         let cases = [
-            ("i8", Ty::I8, Opcode::ConstU8, InstData::ConstU8(7)),
-            ("i16", Ty::I16, Opcode::ConstI32, InstData::ConstI32(7)),
-            ("u16", Ty::U16, Opcode::ConstI32, InstData::ConstI32(7)),
-            ("u32", Ty::U32, Opcode::ConstI32, InstData::ConstI32(7)),
+            ("i8", 7, Ty::I8, Opcode::ConstU8, InstData::ConstU8(7)),
+            ("i16", 7, Ty::I16, Opcode::ConstI32, InstData::ConstI32(7)),
+            ("u16", 7, Ty::U16, Opcode::ConstI32, InstData::ConstI32(7)),
+            ("u32", 7, Ty::U32, Opcode::ConstI32, InstData::ConstI32(7)),
+            (
+                "i128",
+                i128::MAX as u128,
+                Ty::I128,
+                Opcode::ConstI128,
+                InstData::ConstI128(i128::MAX),
+            ),
+            (
+                "u128",
+                u128::MAX,
+                Ty::U128,
+                Opcode::ConstU128,
+                InstData::ConstU128(u128::MAX),
+            ),
         ];
 
-        for (name, expected_ty, expected_op, expected_data) in cases {
+        for (name, value, expected_ty, expected_op, expected_data) in cases {
             let fn_def = make_fn(
                 &format!("return_{name}"),
                 vec![],
@@ -4932,10 +5005,10 @@ type PairView = PairAlias;
                             span: sp(),
                         },
                         ty: Some(named_ty(name)),
-                        init: Box::new(int_expr(7)),
+                        init: Box::new(int_expr(value)),
                         span: sp(),
                     }],
-                    trailing_expr: Some(Box::new(int_expr(7))),
+                    trailing_expr: Some(Box::new(int_expr(value))),
                     span: sp(),
                 },
                 vec![],

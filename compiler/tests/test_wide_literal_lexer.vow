@@ -1,0 +1,73 @@
+module TestWideLiteralLexer
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use ir
+use lower
+use module_io
+
+fn check_wide_suffix_parser_path() -> i32 {
+    let tokens: Vec<Token> = lex(String::from("340282366920938463463374607431768211455u128"));
+    let arena: AstArena = arena_new();
+    let parser: Parser = parser_new(tokens, arena, diag_ctx_new(), String::from("wide.vow"));
+    let cast_eid: i64 = parse_primary(parser);
+    if expr_tag(arena, cast_eid) != EXPR_CAST() { return 9; }
+
+    let literal_eid: i64 = expr_a(arena, cast_eid);
+    let u64_max: u64 = 0u64 - 1u64;
+    if expr_tag(arena, literal_eid) != EXPR_LIT_INT() { return 10; }
+    if expr_int_lo(arena, literal_eid) != u64_max { return 11; }
+    if expr_int_hi(arena, literal_eid) != u64_max { return 12; }
+
+    let target_tid: i64 = expr_b(arena, cast_eid);
+    if type_tag(arena, target_tid) != TY_NAMED() { return 13; }
+    let target_name: String = arena.strs[type_a(arena, target_tid)];
+    if target_name != String::from("u128") { return 14; }
+
+    let ctx: LowerCtx = lctx_new(String::from("wide"), ITY_U128(), 0, arena, Vec::new());
+    let wide_id: i64 = lower_expr(ctx, cast_eid);
+    let block: IrBlock = ctx.func.blocks[0];
+    let wide_inst: IrInst = block.insts[wide_id];
+    if wide_inst.op != IOP_CONST_U128() { return 15; }
+    if wide_inst.ty != ITY_U128() { return 16; }
+    if wide_inst.dk != IDATA_CONST_U128() { return 17; }
+    if wide_inst.dv as u64 != u64_max || wide_inst.dv2 as u64 != u64_max { return 18; }
+
+    let encoded: Vec<i64> = Vec::new();
+    write_inst_data(encoded, wide_inst);
+    if encoded.len() != 17 || encoded[0] != 21 { return 19; }
+    let mut i: i64 = 1;
+    while i < encoded.len() {
+        if encoded[i] != 255 { return 20; }
+        i = i + 1;
+    }
+    0
+}
+
+fn main() -> i32 {
+    let tokens: Vec<Token> = lex(String::from(
+        "42i128 9223372036854775808u128 340282366920938463463374607431768211455u128 340282366920938463463374607431768211456u128"
+    ));
+    let u64_top_bit: u64 = 1u64 << 63;
+    let u64_max: u64 = 0u64 - 1u64;
+    let t0: Token = tokens[0];
+    let t1: Token = tokens[1];
+    let t2: Token = tokens[2];
+    let t3: Token = tokens[3];
+
+    if t0.int_lo != 42u64 || t0.int_hi != 0u64 { return 1; }
+    if t0.int_val2 != tok_suffix_i128() { return 2; }
+
+    if t1.int_lo != u64_top_bit || t1.int_hi != 0u64 { return 3; }
+    if t1.int_val2 != tok_suffix_u128() { return 4; }
+
+    if t2.int_lo != u64_max || t2.int_hi != u64_max { return 5; }
+    if t2.int_val2 != tok_suffix_u128() { return 6; }
+
+    if t3.tag != tok_invalid_int() { return 7; }
+    if t3.str_val != String::from("integer literal out of range") { return 8; }
+    check_wide_suffix_parser_path()
+}

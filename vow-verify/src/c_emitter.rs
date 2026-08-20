@@ -707,6 +707,8 @@ pub fn is_modelable(
 
                 Opcode::RemF32
                 | Opcode::RemF64
+                | Opcode::ConstI128
+                | Opcode::ConstU128
                 | Opcode::Load
                 | Opcode::Store
                 | Opcode::LinearConsume
@@ -901,6 +903,8 @@ fn emit_inst(
                 out.push_str(&format!("  v{} = {}LL;\n", id, v));
             }
         }
+        // Epic #526: wide constant verification is implemented by a later seam.
+        Opcode::ConstI128 | Opcode::ConstU128 => emit_unmodelled(inst, out),
         Opcode::ConstF32 => {
             if let InstData::ConstF32(v) = inst.data {
                 out.push_str(&format!("  v{} = {}f;\n", id, v));

@@ -4,6 +4,8 @@ struct Token {
     tag: i64,
     int_val: i64,
     int_val2: i64,
+    int_lo: u64,
+    int_hi: u64,
     str_val: String,
     span_start: i64,
     span_len: i64,
@@ -90,6 +92,7 @@ fn tok_kw_const() -> i64 { 77 }
 fn tok_caret() -> i64 { 78 }
 fn tok_kw_continue() -> i64 { 79 }
 fn tok_pipe() -> i64 { 80 }
+fn tok_invalid_int() -> i64 { 81 }
 
 fn tok_suffix_i8() -> i64 { 0 }
 fn tok_suffix_i16() -> i64 { 1 }
@@ -109,7 +112,22 @@ fn make_token(tag: i64, int_val: i64, int_val2: i64, str_val: String, span_start
         tag: tag,
         int_val: int_val,
         int_val2: int_val2,
+        int_lo: int_val as u64,
+        int_hi: 0u64,
         str_val: str_val,
+        span_start: span_start,
+        span_len: span_len,
+    }
+}
+
+fn make_wide_int_token(tag: i64, lo: u64, hi: u64, suffix: i64, span_start: i64, span_len: i64) -> Token {
+    Token {
+        tag: tag,
+        int_val: lo as i64,
+        int_val2: suffix,
+        int_lo: lo,
+        int_hi: hi,
+        str_val: String::from(""),
         span_start: span_start,
         span_len: span_len,
     }

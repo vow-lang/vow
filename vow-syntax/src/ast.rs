@@ -334,7 +334,7 @@ pub enum ExprKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Lit {
-    Int(i128),
+    Int(u128),
     Float(f64),
     Bool(bool),
     String(String),

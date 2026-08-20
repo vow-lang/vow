@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::{
-    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module, Pat, PatKind, Stmt, UnOp,
+    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module, Pat, PatKind, Stmt, Type, UnOp,
     VowBlock, VowClause,
 };
 use vow_syntax::span::Span;
@@ -317,16 +317,39 @@ fn is_numeric_or_lit_int(ty: &Ty) -> bool {
     ty.is_numeric() || ty.is_lit_int()
 }
 
-/// Evaluates a constant integer expression: a bare literal, or a literal
-/// wrapped in unary negation (e.g. `-1`). Returns `None` for anything else.
-fn const_int_value(expr: &Expr) -> Option<i128> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConstIntValue {
+    magnitude: u128,
+    negative: bool,
+}
+
+impl ConstIntValue {
+    fn display(self) -> String {
+        if self.negative {
+            format!("-{}", self.magnitude)
+        } else {
+            self.magnitude.to_string()
+        }
+    }
+}
+
+/// Evaluates a constant integer expression: a bare unsigned magnitude, or a
+/// magnitude wrapped in unary negation (e.g. `-1`). Returns `None` for anything
+/// else.
+fn const_int_value(expr: &Expr) -> Option<ConstIntValue> {
     match &expr.kind {
-        ExprKind::Lit(Lit::Int(value)) => Some(*value),
+        ExprKind::Lit(Lit::Int(value)) => Some(ConstIntValue {
+            magnitude: *value,
+            negative: false,
+        }),
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
         } => match &operand.kind {
-            ExprKind::Lit(Lit::Int(value)) => Some(-*value),
+            ExprKind::Lit(Lit::Int(value)) => Some(ConstIntValue {
+                magnitude: *value,
+                negative: true,
+            }),
             _ => None,
         },
         _ => None,
@@ -337,24 +360,20 @@ fn is_integer_or_lit_int(ty: &Ty) -> bool {
     ty.is_integer() || ty.is_lit_int()
 }
 
-/// Inclusive `(min, max)` representable by an integer type of the given
-/// `width`/signedness. Literal values are stored as `i128`, so the true
-/// `u128` maximum (`2^128 - 1`) is unrepresentable; `i128::MAX` is used as
-/// the effective upper bound since no literal can exceed it anyway.
-fn integer_type_range(width: u16, is_unsigned: bool) -> (i128, i128) {
+/// Returns the largest positive magnitude and, for signed types, the largest
+/// negative magnitude representable at `width`.
+fn integer_type_magnitude_bounds(width: u16, is_unsigned: bool) -> (u128, Option<u128>) {
     let bits = u32::from(width);
     if is_unsigned {
         let max = if bits >= 128 {
-            i128::MAX
+            u128::MAX
         } else {
-            (1i128 << bits) - 1
+            (1u128 << bits) - 1
         };
-        (0, max)
-    } else if bits >= 128 {
-        (i128::MIN, i128::MAX)
+        (max, None)
     } else {
-        let max = (1i128 << (bits - 1)) - 1;
-        (-(max + 1), max)
+        let negative_magnitude = 1u128 << (bits - 1);
+        (negative_magnitude - 1, Some(negative_magnitude))
     }
 }
 
@@ -1063,22 +1082,40 @@ impl<'e> Checker<'e> {
     }
 
     fn check_integer_literal_range(&mut self, expr: &Expr, target: &Ty) {
+        if let Some(value) = const_int_value(expr) {
+            self.check_integer_value_range(value, target, expr.span);
+        }
+    }
+
+    fn check_integer_value_range(&mut self, value: ConstIntValue, target: &Ty, span: Span) {
         let Some(width) = target.integer_width() else {
             return;
         };
-        let (min, max) = integer_type_range(width, target.is_unsigned());
-        if let Some(value) = const_int_value(expr)
-            && !(min..=max).contains(&value)
-        {
-            self.emit_error_with_hints(
-                ErrorCode::LiteralOutOfRange,
-                format!("literal {value} does not fit in {target} (range {min}..={max})"),
-                expr.span,
-                vec![format!(
-                    "use a value in {min}..={max} or choose an explicit narrowing intrinsic"
-                )],
-            );
+        let (positive_max, negative_max) =
+            integer_type_magnitude_bounds(width, target.is_unsigned());
+        let out_of_range = if value.negative {
+            negative_max.is_none_or(|max| value.magnitude > max)
+        } else {
+            value.magnitude > positive_max
+        };
+        if !out_of_range {
+            return;
         }
+        let range = match negative_max {
+            Some(max) => format!("-{max}..={positive_max}"),
+            None => format!("0..={positive_max}"),
+        };
+        self.emit_error_with_hints(
+            ErrorCode::LiteralOutOfRange,
+            format!(
+                "literal {} does not fit in {target} (range {range})",
+                value.display()
+            ),
+            span,
+            vec![format!(
+                "use a value in {range} or choose an explicit narrowing intrinsic"
+            )],
+        );
     }
 
     fn stmt_diverges(&self, stmt: &Stmt) -> bool {
@@ -1280,11 +1317,14 @@ impl<'e> Checker<'e> {
                             );
                         }
                         if let Some(count) = const_int_value(rhs)
-                            && !(0..i128::from(width)).contains(&count)
+                            && (count.negative || count.magnitude >= u128::from(width))
                         {
                             self.emit_error_with_hints(
                                 ErrorCode::ShiftCountOutOfRange,
-                                format!("shift count {count} is out of range for {lhs_ty}"),
+                                format!(
+                                    "shift count {} is out of range for {lhs_ty}",
+                                    count.display()
+                                ),
                                 rhs.span,
                                 vec![format!("{lhs_ty} shift counts must be in 0..{width}")],
                             );
@@ -1314,6 +1354,22 @@ impl<'e> Checker<'e> {
                 }
             }
             ExprKind::UnaryOp { op, operand } => {
+                if *op == UnOp::Neg
+                    && let ExprKind::Cast { expr, target_ty } = &operand.kind
+                    && let ExprKind::Lit(Lit::Int(magnitude)) = expr.kind
+                    && let Type::Named { name, .. } = target_ty.as_ref()
+                    && name == "i128"
+                {
+                    self.check_integer_value_range(
+                        ConstIntValue {
+                            magnitude,
+                            negative: true,
+                        },
+                        &Ty::I128,
+                        operand.span,
+                    );
+                    return Ty::I128;
+                }
                 let operand_ty = self.check_expr(operand);
                 match op {
                     UnOp::Neg => {
@@ -3639,7 +3695,7 @@ mod tests {
 
     // --- u8 shift count range ---
 
-    fn u8_cast(value: i128) -> Expr {
+    fn u8_cast(value: u128) -> Expr {
         make_expr(ExprKind::Cast {
             expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(value)))),
             target_ty: Box::new(Type::Named {
@@ -3649,7 +3705,7 @@ mod tests {
         })
     }
 
-    fn u8_shl_with_count(count: i128) -> Expr {
+    fn u8_shl_with_count(count: u128) -> Expr {
         make_expr(ExprKind::BinaryOp {
             op: BinOp::Shl,
             lhs: Box::new(u8_cast(1)),
@@ -3657,7 +3713,7 @@ mod tests {
         })
     }
 
-    fn u8_shl_with_neg_count(count: i128) -> Expr {
+    fn u8_shl_with_neg_count(count: u128) -> Expr {
         make_expr(ExprKind::BinaryOp {
             op: BinOp::Shl,
             lhs: Box::new(u8_cast(1)),
@@ -3704,7 +3760,7 @@ mod tests {
 
     // --- i32 shift count range ---
 
-    fn i32_cast(value: i128) -> Expr {
+    fn i32_cast(value: u128) -> Expr {
         make_expr(ExprKind::Cast {
             expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(value)))),
             target_ty: Box::new(Type::Named {
@@ -3714,7 +3770,7 @@ mod tests {
         })
     }
 
-    fn i32_shl_with_count(count: i128) -> Expr {
+    fn i32_shl_with_count(count: u128) -> Expr {
         make_expr(ExprKind::BinaryOp {
             op: BinOp::Shl,
             lhs: Box::new(i32_cast(1)),
@@ -3722,7 +3778,7 @@ mod tests {
         })
     }
 
-    fn i32_shl_with_neg_count(count: i128) -> Expr {
+    fn i32_shl_with_neg_count(count: u128) -> Expr {
         make_expr(ExprKind::BinaryOp {
             op: BinOp::Shl,
             lhs: Box::new(i32_cast(1)),
@@ -4548,7 +4604,7 @@ mod tests {
         assert!(emitter.0[0].message.contains("let binding"));
     }
 
-    fn let_stmt_with_i32_init(value: i128) -> Stmt {
+    fn let_stmt_with_i32_init(value: u128) -> Stmt {
         use vow_syntax::ast::{Pat, PatKind};
         Stmt::Let {
             pattern: Pat {
@@ -4582,6 +4638,77 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         checker.check_stmt(&let_stmt_with_i32_init(2147483647));
+        assert!(!checker.has_errors());
+    }
+
+    fn let_stmt_with_wide_init(target: &str, magnitude: u128, negative: bool) -> Stmt {
+        use vow_syntax::ast::{Pat, PatKind};
+        let literal = make_expr(ExprKind::Lit(Lit::Int(magnitude)));
+        let init = if negative {
+            make_expr(ExprKind::UnaryOp {
+                op: UnOp::Neg,
+                operand: Box::new(literal),
+            })
+        } else {
+            literal
+        };
+        Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "wide".to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(Type::Named {
+                name: target.to_string(),
+                span: dummy_span(),
+            }),
+            init: Box::new(init),
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn wide_integer_literal_ranges_use_the_full_unsigned_magnitude() {
+        for stmt in [
+            let_stmt_with_wide_init("u128", u128::MAX, false),
+            let_stmt_with_wide_init("i128", i128::MAX as u128, false),
+            let_stmt_with_wide_init("i128", 1u128 << 127, true),
+        ] {
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.check_stmt(&stmt);
+            assert!(!checker.has_errors());
+        }
+
+        for stmt in [
+            let_stmt_with_wide_init("i128", 1u128 << 127, false),
+            let_stmt_with_wide_init("u128", 1, true),
+        ] {
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.check_stmt(&stmt);
+            assert!(checker.has_errors());
+            assert_eq!(emitter.0[0].code, ErrorCode::LiteralOutOfRange);
+        }
+    }
+
+    #[test]
+    fn explicit_i128_suffix_accepts_the_minimum_negative_value() {
+        let expr = make_expr(ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand: Box::new(make_expr(ExprKind::Cast {
+                expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(1u128 << 127)))),
+                target_ty: Box::new(Type::Named {
+                    name: "i128".to_string(),
+                    span: dummy_span(),
+                }),
+            })),
+        });
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        assert_eq!(checker.check_expr(&expr), Ty::I128);
         assert!(!checker.has_errors());
     }
 

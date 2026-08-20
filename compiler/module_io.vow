@@ -611,6 +611,13 @@ fn write_inst_data(out: Vec<i64>, inst: IrInst) {
         write_integer_ty(out, inst.dv2);
         return;
     }
+    if dk == IDATA_CONST_I128() || dk == IDATA_CONST_U128() {
+        if dk == IDATA_CONST_I128() { write_u8(out, 20); }
+        else { write_u8(out, 21); }
+        write_i64_bits(out, inst.dv);
+        write_i64_bits(out, inst.dv2);
+        return;
+    }
     write_u8(out, reject_encode_u8());
 }
 
@@ -690,6 +697,11 @@ fn read_inst_data(r: ModuleReader) -> WireInstData [panic] {
         data.dk = IDATA_INTEGER_CAST();
         data.dv = read_integer_ty(r);
         data.dv2 = read_integer_ty(r);
+    } else if tag == 20 || tag == 21 {
+        if tag == 20 { data.dk = IDATA_CONST_I128(); }
+        else { data.dk = IDATA_CONST_U128(); }
+        data.dv = read_i64_bits(r);
+        data.dv2 = read_i64_bits(r);
     } else {
         return WireInstData { dk: reject_decode_i64(), dv: 0, dv2: 0, ds: String::from("") };
     }

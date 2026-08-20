@@ -791,6 +791,9 @@ fn lower_inst(
                 ctx.value_map.insert(inst.id, val);
             }
         }
+        Opcode::ConstI128 | Opcode::ConstU128 => {
+            todo!("epic #526: wide constant codegen belongs to a later seam")
+        }
         Opcode::ConstU64 => {
             if let InstData::ConstU64(v) = inst.data {
                 let val = builder.ins().iconst(types::I64, v as i64);

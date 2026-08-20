@@ -1759,7 +1759,7 @@ mod tests {
         }
     }
 
-    fn int(value: i128) -> Expr {
+    fn int(value: u128) -> Expr {
         Expr {
             kind: ExprKind::Lit(Lit::Int(value)),
             span: sp(),

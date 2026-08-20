@@ -298,7 +298,7 @@ impl<'src> Lexer<'src> {
         }
 
         let digits = &self.src[start..self.pos];
-        let int_value: i128 = digits.parse().map_err(|_| LexError {
+        let int_value: u128 = digits.parse().map_err(|_| LexError {
             message: format!("integer literal '{}' out of range", digits),
             span: Span::new(start as u32, (self.pos - start) as u32),
         })?;
@@ -467,6 +467,28 @@ mod tests {
                 suffix: IntSuffix::I128
             }
         );
+    }
+
+    #[test]
+    fn lex_integer_accepts_full_u128_magnitude() {
+        let tokens = Lexer::new("340282366920938463463374607431768211455u128")
+            .tokenize()
+            .expect("u128::MAX must be a valid literal magnitude");
+        assert_eq!(
+            tokens[0].kind,
+            TokenKind::LitIntSuffixed {
+                value: u128::MAX,
+                suffix: IntSuffix::U128,
+            }
+        );
+    }
+
+    #[test]
+    fn lex_integer_rejects_magnitude_above_u128() {
+        let error = Lexer::new("340282366920938463463374607431768211456u128")
+            .tokenize()
+            .expect_err("u128::MAX + 1 must be rejected");
+        assert!(error.message.contains("out of range"));
     }
 
     #[test]
