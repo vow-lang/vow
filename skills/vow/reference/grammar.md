@@ -131,11 +131,11 @@ There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`
 indices are `i64`. This is deliberate — it preserves binary fixed point
 reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
 
-**128-bit verification:** `i128`/`u128` arithmetic codegens via Cranelift's
-`I128` and verifies via ESBMC's `__int128`. Predicates over 128-bit values may
-exceed configured SMT solver timeouts. Such proofs use the ordinary verifier
-controls and retain fail-closed `timeout` or `unknown` outcomes; there is no
-type-specific verification opt-out. Never weaken contracts to fit the verifier.
+**128-bit implementation status:** `i128`/`u128` types and full-range literal
+representation are available to the frontend and IR. Native code generation,
+arithmetic, and ESBMC modelling remain unsupported; builds and verification
+fail closed when those deferred operations reach a backend. Later numeric-tower
+work will complete those paths. Never weaken contracts to fit the verifier.
 
 **Struct field layout:** every struct field up to 64 bits wide occupies one
 8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
