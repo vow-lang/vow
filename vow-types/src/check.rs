@@ -348,7 +348,7 @@ fn const_int_value(expr: &Expr) -> Option<ConstIntValue> {
         } => match &operand.kind {
             ExprKind::Lit(Lit::Int(value)) => Some(ConstIntValue {
                 magnitude: *value,
-                negative: true,
+                negative: *value != 0,
             }),
             _ => None,
         },
@@ -2120,6 +2120,9 @@ impl<'e> Checker<'e> {
             ExprKind::Assign { lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);
                 let rhs_ty = self.check_expr(rhs);
+                if matches!(lhs_ty, Ty::I128 | Ty::U128) {
+                    self.check_integer_literal_range(rhs, &lhs_ty);
+                }
                 if !can_assignment_coerce(&rhs_ty, &lhs_ty) {
                     self.emit_error(
                         ErrorCode::TypeMismatch,
@@ -4684,6 +4687,7 @@ mod tests {
     fn wide_integer_literal_ranges_use_the_full_unsigned_magnitude() {
         for stmt in [
             let_stmt_with_wide_init("u128", u128::MAX, false),
+            let_stmt_with_wide_init("u128", 0, true),
             let_stmt_with_wide_init("i128", i128::MAX as u128, false),
             let_stmt_with_wide_init("i128", 1u128 << 127, true),
             let_stmt_with_wide_init("u64", u64::MAX as u128, false),

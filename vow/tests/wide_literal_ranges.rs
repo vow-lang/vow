@@ -60,3 +60,8 @@ fn implicit_i128_return_rejects_out_of_range_literal() {
 fn explicit_i128_return_rejects_out_of_range_literal() {
     assert_literal_out_of_range("i128_return_literal_out_of_range.vow");
 }
+
+#[test]
+fn u128_assignment_rejects_negative_literal() {
+    assert_literal_out_of_range("u128_assignment_literal_below_range.vow");
+}

@@ -67,6 +67,22 @@ fn check_explicit_wide_return_range() -> i32 [io] {
     0
 }
 
+fn check_wide_assignment_range() -> i32 [io] {
+    let u128_below_range: String = String::from(
+        "module WideRange\nfn value() -> u128 { let mut x: u128 = 0; x = -1; x }"
+    );
+    if checked_error_count(u128_below_range) == 0 { return 27; }
+    0
+}
+
+fn check_unsigned_negative_zero_range() -> i32 [io] {
+    let u128_negative_zero: String = String::from(
+        "module WideRange\nfn value() -> u128 { let x: u128 = -0; x }"
+    );
+    if checked_error_count(u128_negative_zero) != 0 { return 28; }
+    0
+}
+
 fn check_wide_suffix_parser_path() -> i32 {
     let tokens: Vec<Token> = lex(String::from("340282366920938463463374607431768211455u128"));
     let arena: AstArena = arena_new();
@@ -133,5 +149,9 @@ fn main() -> i32 [io] {
     if pre128_result != 0 { return pre128_result; }
     let implicit_result: i32 = check_implicit_wide_return_range();
     if implicit_result != 0 { return implicit_result; }
-    check_explicit_wide_return_range()
+    let explicit_result: i32 = check_explicit_wide_return_range();
+    if explicit_result != 0 { return explicit_result; }
+    let assignment_result: i32 = check_wide_assignment_range();
+    if assignment_result != 0 { return assignment_result; }
+    check_unsigned_negative_zero_range()
 }

@@ -1073,7 +1073,7 @@ fn wide_literal_out_of_range(a: AstArena, lit_eid: i64, target_tag: i64) -> bool
     let lo: u64 = expr_int_lo(a, magnitude_eid);
     let hi: u64 = expr_int_hi(a, magnitude_eid);
     if target_tag == CTY_U128() {
-        return negative;
+        return negative && (lo != 0u64 || hi != 0u64);
     }
     if target_tag == CTY_I128() {
         let sign_bit: u64 = 1u64 << 63;
@@ -2559,8 +2559,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     if tag == EXPR_ASSIGN() {
         let lhs_eid: i64 = expr_a(a, eid);
         let rhs_eid: i64 = expr_b(a, eid);
-        let _lhs_tid: i64 = check_expr(e, m, lhs_eid);
+        let lhs_tid: i64 = check_expr(e, m, lhs_eid);
         let _rhs_tid: i64 = check_expr(e, m, rhs_eid);
+        let lhs_tag: i64 = ty_tag(e.ts, lhs_tid);
+        if (lhs_tag == CTY_I128() || lhs_tag == CTY_U128()) && expr_is_const_int(a, rhs_eid) {
+            check_integer_literal_range(e, a, rhs_eid, lhs_tag);
+        }
         if expr_tag(a, lhs_eid) == EXPR_IDENT() {
             let lhs_name: String = arena_str(a, expr_a(a, lhs_eid));
             let mut_status: i64 = env_mark_mutated(e, lhs_name);
