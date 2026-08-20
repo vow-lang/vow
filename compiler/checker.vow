@@ -619,6 +619,9 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     let resolved_tid: i64 = resolve_ast_ty(e, m, type_tid);
     let val_eid: i64 = cdef_value_eid(a, cid);
     let val_tag: i64 = expr_tag(a, val_eid);
+    if ty_is_integer(e.ts, resolved_tid) {
+        check_integer_literal_range(e, a, val_eid, ty_tag(e.ts, resolved_tid));
+    }
     let val: i64 = {
         if val_tag == EXPR_LIT_INT() {
             if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
@@ -849,6 +852,13 @@ fn checker_expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
     if tag == EXPR_BLOCK() {
         let result_eid: i64 = checker_block_result_eid(a, expr_a(a, eid));
         return result_eid != -1 && checker_expr_is_coercible_int_marker(a, result_eid);
+    }
+    if tag == EXPR_IF() {
+        let then_result: i64 = checker_block_result_eid(a, expr_b(a, eid));
+        let else_eid: i64 = expr_c(a, eid);
+        return then_result != -1 && else_eid != -1 &&
+            checker_expr_is_coercible_int_marker(a, then_result) &&
+            checker_expr_is_coercible_int_marker(a, else_eid);
     }
     false
 }
@@ -1172,6 +1182,17 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
             let result_eid: i64 = checker_block_result_eid(a, expr_a(a, lit_eid));
             if result_eid != -1 {
                 check_integer_literal_range(e, a, result_eid, target_tag);
+            }
+            return;
+        }
+        if tag == EXPR_IF() {
+            let then_result: i64 = checker_block_result_eid(a, expr_b(a, lit_eid));
+            if then_result != -1 {
+                check_integer_literal_range(e, a, then_result, target_tag);
+            }
+            let else_eid: i64 = expr_c(a, lit_eid);
+            if else_eid != -1 {
+                check_integer_literal_range(e, a, else_eid, target_tag);
             }
         }
         return;

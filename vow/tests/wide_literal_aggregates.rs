@@ -29,6 +29,10 @@ fn make_struct() -> WideStruct {
 fn make_enum() -> WideEnum {
     WideEnum::Value(18446744073709551617)
 }
+
+fn choose_wide(flag: bool) -> u128 {
+    if flag { 170141183460469231731687303715884105728 } else { 0 }
+}
 "#,
     )
     .unwrap();
@@ -56,5 +60,9 @@ fn make_enum() -> WideEnum {
     assert!(
         stdout.contains("ConstU128[18446744073709551617u128]"),
         "enum payload lost its high limb:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[170141183460469231731687303715884105728u128]"),
+        "conditional branch lost its high limb before the Phi:\n{stdout}"
     );
 }

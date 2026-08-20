@@ -706,6 +706,9 @@ pub(crate) struct LowerCtx {
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
     // enum name → variant tag → declared payload types
     enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>>,
+    // Expressions inside a wide contextual control-flow expression, keyed by
+    // their stable AST address for the duration of function lowering.
+    wide_literal_contexts: HashMap<usize, Ty>,
     linear_owner_names: HashSet<String>,
     type_aliases: Rc<HashMap<String, AstType>>,
     // InstId of a struct/enum allocation → type name
@@ -813,6 +816,7 @@ impl LowerCtx {
             struct_field_map,
             enum_variant_map,
             enum_variant_payload_tys: HashMap::new(),
+            wide_literal_contexts: HashMap::new(),
             linear_owner_names,
             type_aliases,
             inst_struct_type: HashMap::new(),
@@ -1281,13 +1285,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
     let span = expr.span;
     match &expr.kind {
         ExprKind::Lit(lit) => match lit {
-            Lit::Int(v) => ctx.emit(
-                Opcode::ConstI64,
-                Ty::I64,
-                vec![],
-                InstData::ConstI64(*v as i64),
-                span,
-            ),
+            Lit::Int(v) => match ctx
+                .wide_literal_contexts
+                .get(&(expr as *const _ as usize))
+                .copied()
+            {
+                Some(ty @ (Ty::I128 | Ty::U128)) => emit_narrow_integer_constant(ctx, *v, ty, span),
+                _ => ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(*v as i64),
+                    span,
+                ),
+            },
             Lit::Float(v) => ctx.emit(
                 Opcode::ConstF64,
                 Ty::F64,
@@ -1570,6 +1581,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 | Ty::U128
                         )
                     {
+                        record_wide_control_flow_context(ctx, a, param_ty);
                         let original = lower_consumed_expr(ctx, a);
                         lower_narrow_literal(ctx, a, original, param_ty)
                     } else {
@@ -1840,6 +1852,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Return { value } => {
             if let Some(val_expr) = value {
+                record_wide_control_flow_context(ctx, val_expr, ctx.func.return_ty);
                 let original = lower_expr(ctx, val_expr);
                 let val = lower_narrow_literal(ctx, val_expr, original, ctx.func.return_ty);
                 if let Some(vow_block) = ctx.vow_block.clone() {
@@ -1855,6 +1868,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Assign { lhs, rhs } => {
+            if let ExprKind::Ident(name) = &lhs.kind
+                && let Some(current) = ctx.lookup(name)
+            {
+                record_wide_control_flow_context(ctx, rhs, ctx.inst_ty(current));
+            }
             let mut new_val = lower_expr(ctx, rhs);
             match &lhs.kind {
                 ExprKind::Ident(name) => {
@@ -2683,13 +2701,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         FIELD_IDX_SENTINEL
                     }
                 } as u32;
-                let mut val_id = lower_consumed_expr(ctx, field_expr);
-                if idx != FIELD_IDX_SENTINEL as u32 {
-                    let field_ty = ctx
-                        .struct_field_type_names
+                let field_ty = if idx != FIELD_IDX_SENTINEL as u32 {
+                    ctx.struct_field_type_names
                         .get(name)
                         .and_then(|types| types.get(idx as usize))
-                        .map(|type_name| scalar_ty_for_field_type_name(type_name));
+                        .map(|type_name| scalar_ty_for_field_type_name(type_name))
+                } else {
+                    None
+                };
+                if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
+                    record_wide_control_flow_context(ctx, field_expr, field_ty);
+                }
+                let mut val_id = lower_consumed_expr(ctx, field_expr);
+                if idx != FIELD_IDX_SENTINEL as u32 {
                     if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
                         val_id = lower_narrow_literal(ctx, field_expr, val_id, field_ty);
                     }
@@ -2884,6 +2908,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .enumerate()
                 .map(|(index, field)| {
+                    if let Some(ty @ (Ty::I128 | Ty::U128)) = payload_tys.get(index).copied() {
+                        record_wide_control_flow_context(ctx, field, ty);
+                    }
                     let original = lower_consumed_expr(ctx, field);
                     match payload_tys.get(index).copied() {
                         Some(ty @ (Ty::I128 | Ty::U128)) => {
@@ -3874,6 +3901,65 @@ fn integer_marker_from_block(block: &Block) -> Option<&Expr> {
     None
 }
 
+fn wide_context_contains_if(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::If { .. } => true,
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => wide_context_contains_if(operand),
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            wide_context_contains_if(lhs) || wide_context_contains_if(rhs)
+        }
+        ExprKind::Block(block) => {
+            integer_marker_from_block(block).is_some_and(wide_context_contains_if)
+        }
+        _ => false,
+    }
+}
+
+fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
+    if !matches!(ty, Ty::I128 | Ty::U128) {
+        return;
+    }
+    ctx.wide_literal_contexts
+        .insert(expr as *const _ as usize, ty);
+    match &expr.kind {
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => record_wide_marker_context(ctx, operand, ty),
+        ExprKind::BinaryOp { op, lhs, rhs } => {
+            record_wide_marker_context(ctx, lhs, ty);
+            if !matches!(op, BinOp::Shl | BinOp::Shr) {
+                record_wide_marker_context(ctx, rhs, ty);
+            }
+        }
+        ExprKind::Block(block) => {
+            if let Some(result) = integer_marker_from_block(block) {
+                record_wide_marker_context(ctx, result, ty);
+            }
+        }
+        ExprKind::If {
+            then_branch,
+            else_branch: Some(else_expr),
+            ..
+        } => {
+            if let Some(result) = integer_marker_from_block(then_branch) {
+                record_wide_marker_context(ctx, result, ty);
+            }
+            record_wide_marker_context(ctx, else_expr, ty);
+        }
+        _ => {}
+    }
+}
+
+fn record_wide_control_flow_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
+    if matches!(ty, Ty::I128 | Ty::U128) && wide_context_contains_if(expr) {
+        record_wide_marker_context(ctx, expr, ty);
+    }
+}
+
 fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: u128, ty: Ty, span: Span) -> InstId {
     match ty {
         Ty::I8 => ctx.emit(
@@ -3995,6 +4081,14 @@ fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: T
     ) {
         return original;
     }
+    if matches!(ty, Ty::I128 | Ty::U128)
+        && ctx
+            .wide_literal_contexts
+            .get(&(expr as *const _ as usize))
+            .is_some_and(|context_ty| *context_ty == ty)
+    {
+        return original;
+    }
     if let Some(narrowed) = lower_integer_marker_as(ctx, expr, ty) {
         return narrowed;
     }
@@ -4064,6 +4158,21 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
         Stmt::Let {
             pattern, init, ty, ..
         } => {
+            if let Some(AstType::Named {
+                name: type_name, ..
+            }) = ty
+                .as_ref()
+                .map(|ann| resolve_type_alias(ann, &ctx.type_aliases))
+            {
+                let context_ty = match type_name.as_str() {
+                    "i128" => Some(Ty::I128),
+                    "u128" => Some(Ty::U128),
+                    _ => None,
+                };
+                if let Some(context_ty) = context_ty {
+                    record_wide_control_flow_context(ctx, init, context_ty);
+                }
+            }
             let mut val = lower_expr(ctx, init);
             let span = init.span;
             if let Some(AstType::Named {
@@ -4290,6 +4399,9 @@ fn lower_function_with_pattern_aggregates(
         vow::lower_requires(&mut ctx, vow_block);
     }
 
+    if let Some(expr) = integer_marker_from_block(&fn_def.body) {
+        record_wide_control_flow_context(&mut ctx, expr, return_ty);
+    }
     ctx.push_scope();
     let mut trailing = lower_block_inner(&mut ctx, &fn_def.body);
     ctx.pop_scope();

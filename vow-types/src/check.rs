@@ -401,6 +401,14 @@ fn is_coercible_integer_marker(expr: &Expr) -> bool {
         ExprKind::Block(block) => {
             integer_marker_from_block(block).is_some_and(is_coercible_integer_marker)
         }
+        ExprKind::If {
+            then_branch,
+            else_branch: Some(else_expr),
+            ..
+        } => {
+            integer_marker_from_block(then_branch).is_some_and(is_coercible_integer_marker)
+                && is_coercible_integer_marker(else_expr)
+        }
         _ => false,
     }
 }
@@ -758,6 +766,7 @@ impl<'e> Checker<'e> {
                                 c.span,
                             );
                         }
+                        self.check_integer_literal_range(&c.value, &ty);
                         self.const_values.insert(c.name.clone(), *v as i64);
                         self.const_types.insert(c.name.clone(), ty.clone());
                     }
@@ -786,6 +795,7 @@ impl<'e> Checker<'e> {
                                 c.span,
                             );
                         }
+                        self.check_integer_literal_range(&c.value, &ty);
                         if let ExprKind::Lit(Lit::Int(v)) = &operand.kind {
                             self.const_values.insert(c.name.clone(), -(*v as i64));
                             self.const_types.insert(c.name.clone(), ty.clone());
@@ -1164,6 +1174,16 @@ impl<'e> Checker<'e> {
                 if let Some(result) = integer_marker_from_block(block) {
                     self.check_integer_literal_range(result, target);
                 }
+            }
+            ExprKind::If {
+                then_branch,
+                else_branch: Some(else_expr),
+                ..
+            } => {
+                if let Some(result) = integer_marker_from_block(then_branch) {
+                    self.check_integer_literal_range(result, target);
+                }
+                self.check_integer_literal_range(else_expr, target);
             }
             _ => {}
         }

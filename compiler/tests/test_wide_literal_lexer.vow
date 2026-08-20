@@ -123,6 +123,11 @@ fn check_aggregate_literal_ranges() -> i32 [io] {
         "module WideRange\nenum Wide { Value(i128) }\nfn value() -> Wide { Wide::Value(170141183460469231731687303715884105728) }"
     );
     if checked_error_count(i128_enum_overflow) == 0 { return 34; }
+
+    let i64_const_overflow: String = String::from(
+        "module WideRange\nconst VALUE: i64 = 340282366920938463463374607431768211455;\nfn value() -> i64 { VALUE }"
+    );
+    if checked_error_count(i64_const_overflow) == 0 { return 38; }
     0
 }
 
@@ -141,7 +146,7 @@ fn check_unsigned_wide_ir_printing() -> i32 {
 
 fn check_aggregate_wide_literal_lowering() -> i32 {
     let source: String = String::from(
-        "module WideAggregate\nstruct WideStruct { value: u128 }\nenum WideEnum { Value(u128) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }"
+        "module WideAggregate\nstruct WideStruct { value: u128 }\nenum WideEnum { Value(u128) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }"
     );
     let arena: AstArena = arena_new();
     let parsed: Module = parse_module_into(
@@ -160,6 +165,7 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     );
     let mut saw_struct_limb: bool = false;
     let mut saw_enum_limb: bool = false;
+    let mut saw_if_limb: bool = false;
     let mut function_index: i64 = 0;
     while function_index < lowered.functions.len() {
         let f: IrFunction = lowered.functions[function_index];
@@ -173,6 +179,10 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
                     if inst.dv == 0 { saw_struct_limb = true; }
                     if inst.dv == 1 { saw_enum_limb = true; }
                 }
+                if inst.dk == IDATA_CONST_U128() && inst.dv == 0 &&
+                   inst.dv2 as u64 == (1u64 << 63) {
+                    saw_if_limb = true;
+                }
                 inst_index = inst_index + 1;
             }
             block_index = block_index + 1;
@@ -181,6 +191,7 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     }
     if !saw_struct_limb { return 36; }
     if !saw_enum_limb { return 37; }
+    if !saw_if_limb { return 39; }
     0
 }
 
