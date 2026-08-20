@@ -80,3 +80,13 @@ fn u128_context_rejects_negative_literal_inside_binary_marker() {
 fn i128_context_rejects_overflowing_literal_inside_binary_marker() {
     assert_literal_out_of_range("i128_binary_wide_literal_out_of_range.vow");
 }
+
+#[test]
+fn u128_struct_field_rejects_negative_literal() {
+    assert_literal_out_of_range("u128_struct_field_literal_below_range.vow");
+}
+
+#[test]
+fn i128_enum_payload_rejects_overflowing_literal() {
+    assert_literal_out_of_range("i128_enum_payload_literal_out_of_range.vow");
+}

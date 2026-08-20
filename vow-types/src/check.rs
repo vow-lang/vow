@@ -2258,6 +2258,7 @@ impl<'e> Checker<'e> {
                             if let Some((_, expected_ty)) =
                                 info.fields.iter().find(|(n, _)| n == field_name)
                             {
+                                self.check_integer_literal_range(field_expr, expected_ty);
                                 if !can_context_coerce(&actual_ty, expected_ty) {
                                     self.emit_error(
                                         ErrorCode::TypeMismatch,
@@ -2501,16 +2502,17 @@ impl<'e> Checker<'e> {
                                 };
                                 for (i, field_expr) in fields.iter().enumerate() {
                                     let actual_ty = self.check_expr(field_expr);
-                                    if let Some(expected_ty) = expected_tys.get(i)
-                                        && !can_context_coerce(&actual_ty, expected_ty)
-                                    {
-                                        self.emit_error(
-                                            ErrorCode::TypeMismatch,
-                                            format!(
-                                                "variant `{variant_name}` field {i} expects `{expected_ty}`, found `{actual_ty}`"
-                                            ),
-                                            field_expr.span,
-                                        );
+                                    if let Some(expected_ty) = expected_tys.get(i) {
+                                        self.check_integer_literal_range(field_expr, expected_ty);
+                                        if !can_context_coerce(&actual_ty, expected_ty) {
+                                            self.emit_error(
+                                                ErrorCode::TypeMismatch,
+                                                format!(
+                                                    "variant `{variant_name}` field {i} expects `{expected_ty}`, found `{actual_ty}`"
+                                                ),
+                                                field_expr.span,
+                                            );
+                                        }
                                     }
                                 }
                             }

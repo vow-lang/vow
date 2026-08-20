@@ -1,0 +1,15 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal -1 does not fit in u128"
+module U128StructFieldLiteralBelowRange
+
+struct Wide {
+    value: u128,
+}
+
+fn value() -> Wide {
+    Wide { value: -1 }
+}
+
+fn main() -> i32 {
+    0
+}

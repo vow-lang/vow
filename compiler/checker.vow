@@ -2041,7 +2041,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let target_tid: i64 = resolve_ast_ty(e, m, target_ast_tid);
             let target_tag: i64 = ty_tag(e.ts, target_tid);
             if target_tag == CTY_I128() && expr_tag(a, inner_eid) == EXPR_LIT_INT() {
-                check_integer_literal_range(e, a, eid, target_tag);
+                if wide_literal_out_of_range(a, eid, target_tag) {
+                    env_emit_error_code(
+                        e, EC_LITERAL_OUT_OF_RANGE(),
+                        String::from("wide integer literal does not fit in i128"),
+                        expr_span(a, eid)
+                    );
+                }
                 return target_tid;
             }
         }
@@ -2649,15 +2655,36 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let n_path: i64 = list_len(a, path_lid);
         let last_sid: i64 = list_get(a, path_lid, n_path - 1);
         let sname: String = arena_str(a, last_sid);
+        let sidx: i64 = env_lookup_struct(e, sname);
         let n_pairs: i64 = list_len(a, fields_lid);
         let n_fields: i64 = n_pairs / 2;
         let mut i: i64 = 0;
         while i < n_fields {
+            let fname_sid: i64 = list_get(a, fields_lid, i * 2);
+            let fname: String = arena_str(a, fname_sid);
             let feid: i64 = list_get(a, fields_lid, i * 2 + 1);
             let _ftid: i64 = check_expr(e, m, feid);
+            if sidx != -1 {
+                let fname_lid: i64 = e.sdef_field_name_lids[sidx];
+                let ftid_lid: i64 = e.sdef_field_tid_lids[sidx];
+                let nf: i64 = e.sdef_field_count[sidx];
+                let mut field_index: i64 = 0;
+                while field_index < nf {
+                    let declared_sid: i64 = ts_arg_get(e.ts, fname_lid, field_index);
+                    let ts_local: TyStore = e.ts;
+                    if ts_local.strs[declared_sid] == fname {
+                        let expected_tid: i64 = ts_arg_get(e.ts, ftid_lid, field_index);
+                        if ty_is_integer(e.ts, expected_tid) {
+                            check_integer_literal_range(e, a, feid, ty_tag(e.ts, expected_tid));
+                        }
+                        field_index = nf;
+                    } else {
+                        field_index = field_index + 1;
+                    }
+                }
+            }
             i = i + 1;
         }
-        let sidx: i64 = env_lookup_struct(e, sname);
         if sidx == -1 {
             return CTY_UNKNOWN();
         }
@@ -2753,6 +2780,26 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             return CTY_STR();
         }
         if n_path > 1 {
+            let eidx: i64 = env_lookup_enum(e, first_name);
+            if eidx != -1 {
+                let variant_sid: i64 = list_get(a, path_lid, 1);
+                let variant_name: String = arena_str(a, variant_sid);
+                let expected_count: i64 = lookup_variant_payload_count(e, eidx, variant_name);
+                let mut payload_index: i64 = 0;
+                while payload_index < n_args && payload_index < expected_count {
+                    let expected_tid: i64 = lookup_variant_payload(
+                        e, eidx, variant_name, payload_index
+                    );
+                    if ty_is_integer(e.ts, expected_tid) {
+                        let arg_eid: i64 = list_get(a, args_lid, payload_index);
+                        check_integer_literal_range(
+                            e, a, arg_eid, ty_tag(e.ts, expected_tid)
+                        );
+                    }
+                    payload_index = payload_index + 1;
+                }
+                return ts_make_enum(e.ts, first_name);
+            }
             return CTY_UNKNOWN();
         }
         let eidx: i64 = env_lookup_enum(e, first_name);

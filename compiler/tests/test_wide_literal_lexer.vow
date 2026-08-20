@@ -8,6 +8,7 @@ use parser
 use checker
 use env
 use ir
+use ir_printer
 use lower
 use module_io
 
@@ -104,6 +105,85 @@ fn check_wide_binary_marker_ranges() -> i32 [io] {
     0
 }
 
+fn check_explicit_negative_i128_suffix_range() -> i32 [io] {
+    let i128_below_range: String = String::from(
+        "module WideRange\nfn value() -> i128 { -200000000000000000000000000000000000000i128 }"
+    );
+    if checked_error_count(i128_below_range) == 0 { return 32; }
+    0
+}
+
+fn check_aggregate_literal_ranges() -> i32 [io] {
+    let u128_struct_below_range: String = String::from(
+        "module WideRange\nstruct Wide { value: u128 }\nfn value() -> Wide { Wide { value: -1 } }"
+    );
+    if checked_error_count(u128_struct_below_range) == 0 { return 33; }
+
+    let i128_enum_overflow: String = String::from(
+        "module WideRange\nenum Wide { Value(i128) }\nfn value() -> Wide { Wide::Value(170141183460469231731687303715884105728) }"
+    );
+    if checked_error_count(i128_enum_overflow) == 0 { return 34; }
+    0
+}
+
+fn check_unsigned_wide_ir_printing() -> i32 {
+    let max_limb: i64 = -1;
+    let inst: IrInst = ir_inst_new(
+        0, IOP_CONST_U128(), ITY_U128(), Vec::new(),
+        IDATA_CONST_U128(), max_limb, max_limb, String::from("")
+    );
+    let rendered: String = format_data(inst);
+    if rendered != String::from(
+        "lo=18446744073709551615,hi=18446744073709551615u128"
+    ) { return 35; }
+    0
+}
+
+fn check_aggregate_wide_literal_lowering() -> i32 {
+    let source: String = String::from(
+        "module WideAggregate\nstruct WideStruct { value: u128 }\nenum WideEnum { Value(u128) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }"
+    );
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("wide_aggregate.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut item_index: i64 = 0;
+    while item_index < parsed.items.len() {
+        item_files.push(String::from("wide_aggregate.vow"));
+        item_index = item_index + 1;
+    }
+    let lowered: IrModule = lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    );
+    let mut saw_struct_limb: bool = false;
+    let mut saw_enum_limb: bool = false;
+    let mut function_index: i64 = 0;
+    while function_index < lowered.functions.len() {
+        let f: IrFunction = lowered.functions[function_index];
+        let mut block_index: i64 = 0;
+        while block_index < f.blocks.len() {
+            let block: IrBlock = f.blocks[block_index];
+            let mut inst_index: i64 = 0;
+            while inst_index < block.insts.len() {
+                let inst: IrInst = block.insts[inst_index];
+                if inst.dk == IDATA_CONST_U128() && inst.dv2 == 1 {
+                    if inst.dv == 0 { saw_struct_limb = true; }
+                    if inst.dv == 1 { saw_enum_limb = true; }
+                }
+                inst_index = inst_index + 1;
+            }
+            block_index = block_index + 1;
+        }
+        function_index = function_index + 1;
+    }
+    if !saw_struct_limb { return 36; }
+    if !saw_enum_limb { return 37; }
+    0
+}
+
 fn check_wide_suffix_parser_path() -> i32 {
     let tokens: Vec<Token> = lex(String::from("340282366920938463463374607431768211455u128"));
     let arena: AstArena = arena_new();
@@ -178,5 +258,13 @@ fn main() -> i32 [io] {
     if negative_zero_result != 0 { return negative_zero_result; }
     let default_i64_result: i32 = check_default_i64_wide_magnitude_range();
     if default_i64_result != 0 { return default_i64_result; }
-    check_wide_binary_marker_ranges()
+    let binary_result: i32 = check_wide_binary_marker_ranges();
+    if binary_result != 0 { return binary_result; }
+    let negative_suffix_result: i32 = check_explicit_negative_i128_suffix_range();
+    if negative_suffix_result != 0 { return negative_suffix_result; }
+    let aggregate_result: i32 = check_aggregate_literal_ranges();
+    if aggregate_result != 0 { return aggregate_result; }
+    let lowering_result: i32 = check_aggregate_wide_literal_lowering();
+    if lowering_result != 0 { return lowering_result; }
+    check_unsigned_wide_ir_printing()
 }

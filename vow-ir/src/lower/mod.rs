@@ -704,6 +704,8 @@ pub(crate) struct LowerCtx {
     pub(super) struct_field_map: HashMap<String, Vec<String>>,
     // enum name → variant names in declaration order (index = tag)
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
+    // enum name → variant tag → declared payload types
+    enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>>,
     linear_owner_names: HashSet<String>,
     type_aliases: Rc<HashMap<String, AstType>>,
     // InstId of a struct/enum allocation → type name
@@ -810,6 +812,7 @@ impl LowerCtx {
             func_index,
             struct_field_map,
             enum_variant_map,
+            enum_variant_payload_tys: HashMap::new(),
             linear_owner_names,
             type_aliases,
             inst_struct_type: HashMap::new(),
@@ -2680,8 +2683,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         FIELD_IDX_SENTINEL
                     }
                 } as u32;
-                let val_id = lower_consumed_expr(ctx, field_expr);
+                let mut val_id = lower_consumed_expr(ctx, field_expr);
                 if idx != FIELD_IDX_SENTINEL as u32 {
+                    let field_ty = ctx
+                        .struct_field_type_names
+                        .get(name)
+                        .and_then(|types| types.get(idx as usize))
+                        .map(|type_name| scalar_ty_for_field_type_name(type_name));
+                    if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
+                        val_id = lower_narrow_literal(ctx, field_expr, val_id, field_ty);
+                    }
                     ctx.emit(
                         Opcode::FieldSet,
                         Ty::Unit,
@@ -2860,12 +2871,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .get(enum_name)
                 .and_then(|vs| vs.iter().position(|v| v == variant_name))
                 .unwrap_or(0) as i64;
+            let payload_tys = ctx
+                .enum_variant_payload_tys
+                .get(enum_name)
+                .and_then(|variants| variants.get(tag as usize))
+                .cloned()
+                .unwrap_or_default();
             // Evaluate and transfer payloads before allocating the wrapper so
             // built-in Option/Result constructors can inherit linear ownership
             // from their type-erased payload expression.
             let payload_values: Vec<InstId> = fields
                 .iter()
-                .map(|field| lower_consumed_expr(ctx, field))
+                .enumerate()
+                .map(|(index, field)| {
+                    let original = lower_consumed_expr(ctx, field);
+                    match payload_tys.get(index).copied() {
+                        Some(ty @ (Ty::I128 | Ty::U128)) => {
+                            lower_narrow_literal(ctx, field, original, ty)
+                        }
+                        _ => original,
+                    }
+                })
                 .collect();
             let owns_linear = ctx.linear_owner_names.contains(enum_name)
                 || payload_values
@@ -4166,6 +4192,7 @@ fn lower_function_with_pattern_aggregates(
     func_index: &HashMap<String, FuncSigInfo>,
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
+    enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>>,
     linear_owner_names: &HashSet<String>,
     type_aliases: Rc<HashMap<String, AstType>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
@@ -4201,6 +4228,7 @@ fn lower_function_with_pattern_aggregates(
         Rc::clone(pattern_aggregates),
     );
 
+    ctx.enum_variant_payload_tys = enum_variant_payload_tys;
     ctx.const_map = const_map.clone();
 
     if let Some(vow) = &fn_def.vow {
@@ -4319,6 +4347,7 @@ fn lower_function(
         func_index,
         struct_field_map,
         enum_variant_map,
+        HashMap::new(),
         linear_owner_names,
         Rc::new(HashMap::new()),
         struct_field_type_names,
@@ -4476,6 +4505,7 @@ pub fn lower_module_with_pattern_aggregates(
 
     // Build enum layout info
     let mut enum_variant_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>> = HashMap::new();
     let mut enum_layouts: Vec<EnumLayout> = Vec::new();
     for item in &module.items {
         if let Item::Enum(e) = item {
@@ -4510,7 +4540,12 @@ pub fn lower_module_with_pattern_aggregates(
                     }
                 })
                 .collect();
+            let payload_tys = variant_layouts
+                .iter()
+                .map(|variant| variant.payload.iter().map(|field| field.ty).collect())
+                .collect();
             enum_variant_map.insert(e.name.clone(), variant_names);
+            enum_variant_payload_tys.insert(e.name.clone(), payload_tys);
             enum_layouts.push(EnumLayout {
                 name: e.name.clone(),
                 variants: variant_layouts,
@@ -4530,6 +4565,7 @@ pub fn lower_module_with_pattern_aggregates(
                 &func_index,
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
+                enum_variant_payload_tys.clone(),
                 &linear_owner_names,
                 Rc::clone(&type_aliases),
                 struct_field_type_names.clone(),
@@ -6056,6 +6092,7 @@ fn parse_or_default(s: String) -> i64 {
             &HashMap::new(),
             HashMap::new(),
             enum_variant_map,
+            HashMap::new(),
             &linear_structs,
             Rc::new(HashMap::new()),
             HashMap::new(),
@@ -6186,6 +6223,7 @@ fn parse_or_default(s: String) -> i64 {
             &HashMap::new(),
             struct_field_map,
             enum_variant_map,
+            HashMap::new(),
             &HashSet::new(),
             Rc::new(HashMap::new()),
             struct_field_types,
@@ -6416,6 +6454,7 @@ fn parse_or_default(s: String) -> i64 {
             &HashMap::new(),
             HashMap::new(),
             enum_variant_map,
+            HashMap::new(),
             &HashSet::new(),
             Rc::new(HashMap::new()),
             HashMap::new(),
