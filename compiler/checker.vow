@@ -821,6 +821,38 @@ fn checker_block_result_eid(a: AstArena, bid: i64) -> i64 {
     -1
 }
 
+fn checker_expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() {
+        return true;
+    }
+    if tag == EXPR_UNOP() {
+        if expr_a(a, eid) == UNOP_NEG() {
+            return checker_expr_is_coercible_int_marker(a, expr_b(a, eid));
+        }
+        return false;
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        let marker_op: bool = op == BINOP_ADD() || op == BINOP_SUB()
+            || op == BINOP_MUL() || op == BINOP_DIV() || op == BINOP_REM()
+            || op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK()
+            || op == BINOP_MUL_CHK() || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK()
+            || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
+            || op == BINOP_SHL() || op == BINOP_SHR();
+        if marker_op {
+            return checker_expr_is_coercible_int_marker(a, expr_b(a, eid))
+                && checker_expr_is_coercible_int_marker(a, expr_c(a, eid));
+        }
+        return false;
+    }
+    if tag == EXPR_BLOCK() {
+        let result_eid: i64 = checker_block_result_eid(a, expr_a(a, eid));
+        return result_eid != -1 && checker_expr_is_coercible_int_marker(a, result_eid);
+    }
+    false
+}
+
 fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let a: AstArena = m.arena;
     let save_ret: i64 = e.cur_ret_tid;
@@ -869,7 +901,7 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let body_result_eid: i64 = checker_block_result_eid(a, body_bid);
     let ret_tag: i64 = ty_tag(e.ts, ret_tid);
 
-    if body_result_eid != -1 && (ret_tag == CTY_I128() || ret_tag == CTY_U128()) && expr_is_const_int(a, body_result_eid) {
+    if body_result_eid != -1 && ty_is_integer(e.ts, ret_tid) {
         check_integer_literal_range(e, a, body_result_eid, ret_tag);
     }
 
@@ -1116,6 +1148,34 @@ fn pre128_wide_literal_out_of_range(a: AstArena, lit_eid: i64, target_tag: i64) 
 }
 
 fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_tag: i64) {
+    if !expr_is_const_int(a, lit_eid) {
+        if !checker_expr_is_coercible_int_marker(a, lit_eid) {
+            return;
+        }
+        let tag: i64 = expr_tag(a, lit_eid);
+        if tag == EXPR_UNOP() {
+            check_integer_literal_range(e, a, expr_b(a, lit_eid), target_tag);
+            return;
+        }
+        if tag == EXPR_BINOP() {
+            check_integer_literal_range(e, a, expr_b(a, lit_eid), target_tag);
+            let op: i64 = expr_a(a, lit_eid);
+            let rhs_target: i64 = if op == BINOP_SHL() || op == BINOP_SHR() {
+                CTY_U32()
+            } else {
+                target_tag
+            };
+            check_integer_literal_range(e, a, expr_c(a, lit_eid), rhs_target);
+            return;
+        }
+        if tag == EXPR_BLOCK() {
+            let result_eid: i64 = checker_block_result_eid(a, expr_a(a, lit_eid));
+            if result_eid != -1 {
+                check_integer_literal_range(e, a, result_eid, target_tag);
+            }
+        }
+        return;
+    }
     if target_tag == CTY_I128() || target_tag == CTY_U128() {
         if wide_literal_out_of_range(a, lit_eid, target_tag) {
             let msg: String = String::from("wide integer literal does not fit in ");
@@ -1172,10 +1232,13 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
             let init_eid: i64 = stmt_c(a, sid);
             let init_tid: i64 = check_expr(e, m, init_eid);
             let bound_tid: i64 = if annot_ast_tid == -1 {
+                if ty_is_lit_int(e.ts, init_tid) {
+                    check_integer_literal_range(e, a, init_eid, CTY_I64());
+                }
                 init_tid
             } else {
                 let at_tid: i64 = resolve_ast_ty(e, m, annot_ast_tid);
-                if ty_is_integer(e.ts, at_tid) && expr_is_const_int(a, init_eid) {
+                if ty_is_integer(e.ts, at_tid) {
                     check_integer_literal_range(e, a, init_eid, ty_tag(e.ts, at_tid));
                 }
                 if !is_coercible(e.ts, init_tid, at_tid) {
@@ -1887,8 +1950,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let lhs_tid: i64 = check_expr(e, m, lhs_eid);
         let rhs_tid: i64 = check_expr(e, m, rhs_eid);
         if op != BINOP_SHL() && op != BINOP_SHR() {
-            let rhs_is_real_literal: bool = ty_is_integer(e.ts, lhs_tid) && ty_is_lit_int(e.ts, rhs_tid) && expr_is_const_int(a, rhs_eid);
-            let lhs_is_real_literal: bool = ty_is_integer(e.ts, rhs_tid) && ty_is_lit_int(e.ts, lhs_tid) && expr_is_const_int(a, lhs_eid);
+            let rhs_is_real_literal: bool = ty_is_integer(e.ts, lhs_tid) && ty_is_lit_int(e.ts, rhs_tid);
+            let lhs_is_real_literal: bool = ty_is_integer(e.ts, rhs_tid) && ty_is_lit_int(e.ts, lhs_tid);
             if rhs_is_real_literal {
                 check_integer_literal_range(e, a, rhs_eid, ty_tag(e.ts, lhs_tid));
             }
@@ -2067,7 +2130,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     let ptid: i64 = ts_arg_get(e.ts, plid, ai);
                     let atid: i64 = arg_tids[ai];
                     let aeid: i64 = list_get(a, args_lid, ai);
-                    if ty_is_integer(e.ts, ptid) && expr_is_const_int(a, aeid) {
+                    if ty_is_integer(e.ts, ptid) {
                         check_integer_literal_range(e, a, aeid, ty_tag(e.ts, ptid));
                     }
                     if !is_coercible(e.ts, atid, ptid) {
@@ -2508,7 +2571,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         } else {
             let val_tid: i64 = check_expr(e, m, val_eid);
             let ret_tag: i64 = ty_tag(e.ts, e.cur_ret_tid);
-            if (ret_tag == CTY_I128() || ret_tag == CTY_U128()) && expr_is_const_int(a, val_eid) {
+            if ty_is_integer(e.ts, e.cur_ret_tid) {
                 check_integer_literal_range(e, a, val_eid, ret_tag);
             }
             if !is_coercible(e.ts, val_tid, e.cur_ret_tid) {
@@ -2562,7 +2625,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let lhs_tid: i64 = check_expr(e, m, lhs_eid);
         let _rhs_tid: i64 = check_expr(e, m, rhs_eid);
         let lhs_tag: i64 = ty_tag(e.ts, lhs_tid);
-        if (lhs_tag == CTY_I128() || lhs_tag == CTY_U128()) && expr_is_const_int(a, rhs_eid) {
+        if ty_is_integer(e.ts, lhs_tid) {
             check_integer_literal_range(e, a, rhs_eid, lhs_tag);
         }
         if expr_tag(a, lhs_eid) == EXPR_IDENT() {
@@ -2748,9 +2811,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let src_tag: i64 = ty_tag(e.ts, src_tid);
         let tgt_tag: i64 = ty_tag(e.ts, tgt_tid);
         if src_tag == CTY_LIT_INT() && ty_is_integer(e.ts, tgt_tid) {
-            if expr_is_const_int(a, inner_eid) {
-                check_integer_literal_range(e, a, inner_eid, tgt_tag);
-            }
+            check_integer_literal_range(e, a, inner_eid, tgt_tag);
             return tgt_tid;
         }
         if ty_is_integer(e.ts, src_tid) && ty_is_integer(e.ts, tgt_tid) {

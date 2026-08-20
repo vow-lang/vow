@@ -65,3 +65,18 @@ fn explicit_i128_return_rejects_out_of_range_literal() {
 fn u128_assignment_rejects_negative_literal() {
     assert_literal_out_of_range("u128_assignment_literal_below_range.vow");
 }
+
+#[test]
+fn default_i64_return_rejects_wide_magnitude() {
+    assert_literal_out_of_range("i64_body_wide_literal_out_of_range.vow");
+}
+
+#[test]
+fn u128_context_rejects_negative_literal_inside_binary_marker() {
+    assert_literal_out_of_range("u128_binary_literal_below_range.vow");
+}
+
+#[test]
+fn i128_context_rejects_overflowing_literal_inside_binary_marker() {
+    assert_literal_out_of_range("i128_binary_wide_literal_out_of_range.vow");
+}

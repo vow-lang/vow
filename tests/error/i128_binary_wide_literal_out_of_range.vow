@@ -1,0 +1,12 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 170141183460469231731687303715884105728 does not fit in i128"
+module I128BinaryWideLiteralOutOfRange
+
+fn value() -> i128 {
+    let x: i128 = 170141183460469231731687303715884105728 + 0;
+    x
+}
+
+fn main() -> i32 {
+    0
+}

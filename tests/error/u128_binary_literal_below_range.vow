@@ -1,0 +1,12 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal -1 does not fit in u128"
+module U128BinaryLiteralBelowRange
+
+fn value() -> u128 {
+    let x: u128 = -1 + 0;
+    x
+}
+
+fn main() -> i32 {
+    0
+}

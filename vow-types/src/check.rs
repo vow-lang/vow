@@ -356,6 +356,55 @@ fn const_int_value(expr: &Expr) -> Option<ConstIntValue> {
     }
 }
 
+fn integer_marker_from_block(block: &Block) -> Option<&Expr> {
+    if let Some(expr) = &block.trailing_expr {
+        return Some(expr);
+    }
+    if let Some(Stmt::Expr {
+        expr,
+        has_semicolon: false,
+        ..
+    }) = block.stmts.last()
+    {
+        return Some(expr);
+    }
+    None
+}
+
+fn is_coercible_integer_marker(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Int(_)) => true,
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => is_coercible_integer_marker(operand),
+        ExprKind::BinaryOp {
+            op:
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Rem
+                | BinOp::AddChecked
+                | BinOp::SubChecked
+                | BinOp::MulChecked
+                | BinOp::DivChecked
+                | BinOp::RemChecked
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Shl
+                | BinOp::Shr,
+            lhs,
+            rhs,
+        } => is_coercible_integer_marker(lhs) && is_coercible_integer_marker(rhs),
+        ExprKind::Block(block) => {
+            integer_marker_from_block(block).is_some_and(is_coercible_integer_marker)
+        }
+        _ => false,
+    }
+}
+
 fn is_integer_or_lit_int(ty: &Ty) -> bool {
     ty.is_integer() || ty.is_lit_int()
 }
@@ -940,8 +989,8 @@ impl<'e> Checker<'e> {
         let body_ty = self.check_block(&fn_def.body);
 
         let expected = self.current_return_ty.clone();
-        if matches!(expected, Ty::I128 | Ty::U128)
-            && let Some(trailing_expr) = &fn_def.body.trailing_expr
+        if expected.is_integer()
+            && let Some(trailing_expr) = integer_marker_from_block(&fn_def.body)
         {
             self.check_integer_literal_range(trailing_expr, &expected);
         }
@@ -1064,6 +1113,9 @@ impl<'e> Checker<'e> {
                         }
                     }
                 } else {
+                    if init_ty.is_lit_int() {
+                        self.check_integer_literal_range(init, &Ty::I64);
+                    }
                     init_ty
                 };
                 self.bind_pattern(pattern, &binding_ty);
@@ -1089,6 +1141,31 @@ impl<'e> Checker<'e> {
     fn check_integer_literal_range(&mut self, expr: &Expr, target: &Ty) {
         if let Some(value) = const_int_value(expr) {
             self.check_integer_value_range(value, target, expr.span);
+            return;
+        }
+        if !target.is_integer() || !is_coercible_integer_marker(expr) {
+            return;
+        }
+        match &expr.kind {
+            ExprKind::UnaryOp {
+                op: UnOp::Neg,
+                operand,
+            } => self.check_integer_literal_range(operand, target),
+            ExprKind::BinaryOp { op, lhs, rhs } => {
+                self.check_integer_literal_range(lhs, target);
+                let rhs_target = if matches!(op, BinOp::Shl | BinOp::Shr) {
+                    Ty::U32
+                } else {
+                    target.clone()
+                };
+                self.check_integer_literal_range(rhs, &rhs_target);
+            }
+            ExprKind::Block(block) => {
+                if let Some(result) = integer_marker_from_block(block) {
+                    self.check_integer_literal_range(result, target);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -2037,7 +2114,7 @@ impl<'e> Checker<'e> {
                 let val_ty = match value {
                     Some(v) => {
                         let ty = self.check_expr(v);
-                        if matches!(expected, Ty::I128 | Ty::U128) {
+                        if expected.is_integer() {
                             self.check_integer_literal_range(v, &expected);
                         }
                         ty
@@ -2120,7 +2197,7 @@ impl<'e> Checker<'e> {
             ExprKind::Assign { lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);
                 let rhs_ty = self.check_expr(rhs);
-                if matches!(lhs_ty, Ty::I128 | Ty::U128) {
+                if lhs_ty.is_integer() {
                     self.check_integer_literal_range(rhs, &lhs_ty);
                 }
                 if !can_assignment_coerce(&rhs_ty, &lhs_ty) {

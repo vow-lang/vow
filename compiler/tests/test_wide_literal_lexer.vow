@@ -83,6 +83,27 @@ fn check_unsigned_negative_zero_range() -> i32 [io] {
     0
 }
 
+fn check_default_i64_wide_magnitude_range() -> i32 [io] {
+    let i64_overflow: String = String::from(
+        "module WideRange\nfn value() -> i64 { 340282366920938463463374607431768211455 }"
+    );
+    if checked_error_count(i64_overflow) == 0 { return 29; }
+    0
+}
+
+fn check_wide_binary_marker_ranges() -> i32 [io] {
+    let u128_below_range: String = String::from(
+        "module WideRange\nfn value() -> u128 { let x: u128 = -1 + 0; x }"
+    );
+    if checked_error_count(u128_below_range) == 0 { return 30; }
+
+    let i128_overflow: String = String::from(
+        "module WideRange\nfn value() -> i128 { let x: i128 = 170141183460469231731687303715884105728 + 0; x }"
+    );
+    if checked_error_count(i128_overflow) == 0 { return 31; }
+    0
+}
+
 fn check_wide_suffix_parser_path() -> i32 {
     let tokens: Vec<Token> = lex(String::from("340282366920938463463374607431768211455u128"));
     let arena: AstArena = arena_new();
@@ -153,5 +174,9 @@ fn main() -> i32 [io] {
     if explicit_result != 0 { return explicit_result; }
     let assignment_result: i32 = check_wide_assignment_range();
     if assignment_result != 0 { return assignment_result; }
-    check_unsigned_negative_zero_range()
+    let negative_zero_result: i32 = check_unsigned_negative_zero_range();
+    if negative_zero_result != 0 { return negative_zero_result; }
+    let default_i64_result: i32 = check_default_i64_wide_magnitude_range();
+    if default_i64_result != 0 { return default_i64_result; }
+    check_wide_binary_marker_ranges()
 }
