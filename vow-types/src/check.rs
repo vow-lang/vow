@@ -4675,6 +4675,8 @@ mod tests {
             let_stmt_with_wide_init("u128", u128::MAX, false),
             let_stmt_with_wide_init("i128", i128::MAX as u128, false),
             let_stmt_with_wide_init("i128", 1u128 << 127, true),
+            let_stmt_with_wide_init("u64", u64::MAX as u128, false),
+            let_stmt_with_wide_init("i64", 1u128 << 63, true),
         ] {
             let mut emitter = TestEmitter(vec![]);
             let mut checker = new_checker(&mut emitter);
@@ -4685,6 +4687,8 @@ mod tests {
         for stmt in [
             let_stmt_with_wide_init("i128", 1u128 << 127, false),
             let_stmt_with_wide_init("u128", 1, true),
+            let_stmt_with_wide_init("i64", 1u128 << 64, false),
+            let_stmt_with_wide_init("u64", 1u128 << 64, false),
         ] {
             let mut emitter = TestEmitter(vec![]);
             let mut checker = new_checker(&mut emitter);

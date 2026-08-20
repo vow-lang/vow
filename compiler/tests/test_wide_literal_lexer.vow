@@ -5,9 +5,51 @@ use token
 use ast
 use diag
 use parser
+use checker
+use env
 use ir
 use lower
 use module_io
+
+fn checked_error_count(source: String) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("wide_range.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < parsed.items.len() {
+        item_files.push(String::from("wide_range.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("wide_range.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx.error_count
+}
+
+fn check_pre128_targets_use_the_full_magnitude() -> i32 [io] {
+    let i64_overflow: String = String::from(
+        "module WideRange\nfn value() -> i64 { let x: i64 = 18446744073709551616; x }"
+    );
+    if checked_error_count(i64_overflow) == 0 { return 21; }
+
+    let u64_overflow: String = String::from(
+        "module WideRange\nfn value() -> u64 { let x: u64 = 18446744073709551616; x }"
+    );
+    if checked_error_count(u64_overflow) == 0 { return 22; }
+
+    let i64_min: String = String::from(
+        "module WideRange\nfn value() -> i64 { let x: i64 = -9223372036854775808; x }"
+    );
+    if checked_error_count(i64_min) != 0 { return 23; }
+
+    let u64_max: String = String::from(
+        "module WideRange\nfn value() -> u64 { let x: u64 = 18446744073709551615; x }"
+    );
+    if checked_error_count(u64_max) != 0 { return 24; }
+    0
+}
 
 fn check_wide_suffix_parser_path() -> i32 {
     let tokens: Vec<Token> = lex(String::from("340282366920938463463374607431768211455u128"));
@@ -47,7 +89,7 @@ fn check_wide_suffix_parser_path() -> i32 {
     0
 }
 
-fn main() -> i32 {
+fn main() -> i32 [io] {
     let tokens: Vec<Token> = lex(String::from(
         "42i128 9223372036854775808u128 340282366920938463463374607431768211455u128 340282366920938463463374607431768211456u128"
     ));
@@ -69,5 +111,7 @@ fn main() -> i32 {
 
     if t3.tag != tok_invalid_int() { return 7; }
     if t3.str_val != String::from("integer literal out of range") { return 8; }
-    check_wide_suffix_parser_path()
+    let parser_result: i32 = check_wide_suffix_parser_path();
+    if parser_result != 0 { return parser_result; }
+    check_pre128_targets_use_the_full_magnitude()
 }

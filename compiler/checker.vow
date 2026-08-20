@@ -1062,6 +1062,36 @@ fn wide_literal_out_of_range(a: AstArena, lit_eid: i64, target_tag: i64) -> bool
     false
 }
 
+fn pre128_wide_literal_out_of_range(a: AstArena, lit_eid: i64, target_tag: i64) -> bool {
+    let mut magnitude_eid: i64 = lit_eid;
+    let mut negative: bool = false;
+    if expr_tag(a, lit_eid) == EXPR_UNOP() && expr_a(a, lit_eid) == UNOP_NEG() {
+        negative = true;
+        magnitude_eid = expr_b(a, lit_eid);
+    }
+    if expr_tag(a, magnitude_eid) != EXPR_LIT_INT() {
+        return false;
+    }
+
+    let lo: u64 = expr_int_lo(a, magnitude_eid);
+    let hi: u64 = expr_int_hi(a, magnitude_eid);
+    if hi != 0u64 {
+        return true;
+    }
+
+    let sign_bit: u64 = 1u64 << 63;
+    if lo < sign_bit {
+        return false;
+    }
+    if !negative && target_tag == CTY_U64() {
+        return false;
+    }
+    if negative && target_tag == CTY_I64() && lo == sign_bit {
+        return false;
+    }
+    true
+}
+
 fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_tag: i64) {
     if target_tag == CTY_I128() || target_tag == CTY_U128() {
         if wide_literal_out_of_range(a, lit_eid, target_tag) {
@@ -1069,6 +1099,12 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
             msg.push_str(ty_tag_name(target_tag));
             env_emit_error_code(e, EC_LITERAL_OUT_OF_RANGE(), msg, expr_span(a, lit_eid));
         }
+        return;
+    }
+    if pre128_wide_literal_out_of_range(a, lit_eid, target_tag) {
+        let msg: String = String::from("wide integer literal does not fit in ");
+        msg.push_str(ty_tag_name(target_tag));
+        env_emit_error_code(e, EC_LITERAL_OUT_OF_RANGE(), msg, expr_span(a, lit_eid));
         return;
     }
     let is_unsigned: bool = target_tag >= CTY_U8() && target_tag <= CTY_U128();
