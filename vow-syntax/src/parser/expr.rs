@@ -1201,8 +1201,8 @@ mod tests {
     }
 
     #[test]
-    fn i128_and_u128_suffixes_produce_typed_ast_nodes() {
-        for (source, expected_type) in [("1i128", "i128"), ("1u128", "u128")] {
+    fn explicit_wide_integer_suffixes_produce_typed_ast_nodes() {
+        for (source, expected_type) in [("1u64", "u64"), ("1i128", "i128"), ("1u128", "u128")] {
             let expr = parse_no_errors(source);
             match &expr.kind {
                 ExprKind::Cast { expr, target_ty } => {
@@ -1215,6 +1215,12 @@ mod tests {
                 other => panic!("expected typed integer literal AST for {source}, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn preexisting_narrow_integer_suffixes_remain_untyped() {
+        let expr = parse_no_errors("1u8");
+        assert!(matches!(expr.kind, ExprKind::Lit(Lit::Int(1))));
     }
 
     #[test]

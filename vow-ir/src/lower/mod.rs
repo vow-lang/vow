@@ -5043,6 +5043,74 @@ type PairView = PairAlias;
     }
 
     #[test]
+    fn explicit_wide_suffixes_lower_through_the_parser_to_native_constants() {
+        let source = r#"
+module WideSuffixLowering
+
+fn signed_max() -> i128 {
+    170141183460469231731687303715884105727i128
+}
+
+fn signed_min() -> i128 {
+    -170141183460469231731687303715884105728i128
+}
+
+fn unsigned_max() -> u128 {
+    340282366920938463463374607431768211455u128
+}
+"#;
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, "wide_suffixes.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let item_files = vec!["wide_suffixes.vow".to_string(); ast.items.len()];
+        let module = lower_module_with_pattern_aggregates(
+            &ast,
+            &item_files,
+            &StringExprSet::new(),
+            PatternAggregateMap::new(),
+        );
+
+        let signed_max = &module.functions[0];
+        assert!(
+            signed_max
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| inst.opcode == Opcode::ConstI128
+                    && inst.ty == Ty::I128
+                    && inst.data == InstData::ConstI128(i128::MAX))
+        );
+
+        let signed_min = &module.functions[1];
+        let signed_min_insts: Vec<_> = signed_min
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .collect();
+        assert!(signed_min_insts.iter().any(|inst| {
+            inst.opcode == Opcode::ConstI128
+                && inst.ty == Ty::I128
+                && inst.data == InstData::ConstI128(i128::MIN)
+        }));
+        assert!(signed_min_insts.iter().any(|inst| {
+            inst.opcode == Opcode::WrappingSub
+                && inst.ty == Ty::I128
+                && inst.data == InstData::Integer(IntegerType::I128)
+        }));
+
+        let unsigned_max = &module.functions[2];
+        assert!(
+            unsigned_max
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| inst.opcode == Opcode::ConstU128
+                    && inst.ty == Ty::U128
+                    && inst.data == InstData::ConstU128(u128::MAX))
+        );
+    }
+
+    #[test]
     fn checked_marker_return_keeps_narrow_overflow_operation() {
         let checked_add = Expr {
             kind: ExprKind::BinaryOp {
@@ -5161,12 +5229,14 @@ type PairView = PairAlias;
     }
 
     #[test]
-    fn phase3_binary_literals_follow_the_typed_operand() {
+    fn integer_binary_literals_follow_the_typed_operand() {
         for (name, expected_ty) in [
             ("i8", Ty::I8),
             ("i16", Ty::I16),
             ("u16", Ty::U16),
             ("u32", Ty::U32),
+            ("i128", Ty::I128),
+            ("u128", Ty::U128),
         ] {
             let sum = Expr {
                 kind: ExprKind::BinaryOp {
