@@ -6,7 +6,7 @@ use std::rc::Rc;
 use vow_diag::Blame;
 use vow_syntax::ast::{
     BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
-    Type as AstType, UnOp, VariantKind, VowBlock,
+    Type as AstType, UnOp, VariantKind, VowBlock, loop_break_values,
 };
 use vow_syntax::span::Span;
 pub use vow_types::check::{
@@ -4012,7 +4012,7 @@ fn known_field_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
 
 fn wide_context_contains_control_flow(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::If { .. } | ExprKind::Match { .. } => true,
+        ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Loop { .. } => true,
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
@@ -4062,6 +4062,11 @@ fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
         ExprKind::Match { arms, .. } => {
             for arm in arms {
                 record_wide_marker_context(ctx, &arm.body, ty);
+            }
+        }
+        ExprKind::Loop { body, .. } => {
+            for value in loop_break_values(body) {
+                record_wide_marker_context(ctx, value, ty);
             }
         }
         _ => {}

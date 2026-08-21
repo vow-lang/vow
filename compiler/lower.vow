@@ -1602,7 +1602,7 @@ fn expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
 fn wide_context_contains_control_flow(a: AstArena, eid: i64) -> bool {
     if eid == -1 { return false; }
     let tag: i64 = expr_tag(a, eid);
-    if tag == EXPR_IF() || tag == EXPR_MATCH() { return true; }
+    if tag == EXPR_IF() || tag == EXPR_MATCH() || tag == EXPR_LOOP() { return true; }
     if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
         return wide_context_contains_control_flow(a, expr_b(a, eid));
     }
@@ -1652,6 +1652,15 @@ fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64
             lctx_record_wide_marker_context(
                 ctx, a, list_get(a, arms_lid, i * 2 + 1), ty
             );
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, eid));
+        let mut i: i64 = 0;
+        while i < values.len() {
+            lctx_record_wide_marker_context(ctx, a, values[i], ty);
             i = i + 1;
         }
     }

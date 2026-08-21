@@ -78,6 +78,12 @@ fn consume_option(value: Option<u128>) {
 fn pass_option() {
     consume_option(Option::Some(340282366920938463463374607431768211451));
 }
+
+fn loop_wide() -> u128 {
+    loop {
+        break 340282366920938463463374607431768211449;
+    }
+}
 "#,
     )
     .unwrap();
@@ -141,6 +147,10 @@ fn pass_option() {
     assert!(
         stdout.contains("ConstU128[340282366920938463463374607431768211451u128]"),
         "generic function argument lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211449u128]"),
+        "loop break value lost its contextual wide type:\n{stdout}"
     );
 }
 

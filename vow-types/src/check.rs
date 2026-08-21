@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::{
     BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module, Pat, PatKind, Stmt, Type, UnOp,
-    VowBlock, VowClause,
+    VowBlock, VowClause, loop_break_values,
 };
 use vow_syntax::span::Span;
 
@@ -1151,13 +1151,19 @@ impl<'e> Checker<'e> {
             self.check_integer_value_range(value, target, expr.span);
             return;
         }
-        if target.is_integer()
-            && let ExprKind::Match { arms, .. } = &expr.kind
-        {
-            for arm in arms {
-                self.check_integer_literal_range(&arm.body, target);
+        if target.is_integer() {
+            if let ExprKind::Match { arms, .. } = &expr.kind {
+                for arm in arms {
+                    self.check_integer_literal_range(&arm.body, target);
+                }
+                return;
             }
-            return;
+            if let ExprKind::Loop { body, .. } = &expr.kind {
+                for value in loop_break_values(body) {
+                    self.check_integer_literal_range(value, target);
+                }
+                return;
+            }
         }
         if !target.is_integer() || !is_coercible_integer_marker(expr) {
             return;

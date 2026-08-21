@@ -1244,6 +1244,15 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
             }
             return;
         }
+        if expr_tag(a, lit_eid) == EXPR_LOOP() {
+            let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, lit_eid));
+            let mut i: i64 = 0;
+            while i < values.len() {
+                check_integer_literal_range(e, a, values[i], target_tag);
+                i = i + 1;
+            }
+            return;
+        }
         if !checker_expr_is_coercible_int_marker(a, lit_eid) {
             return;
         }
