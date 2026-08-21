@@ -127,6 +127,10 @@ fn loop_option() -> Option<u128> {
 fn assign_wide_vec_field(target: WideVec) {
     target.values[0] = 340282366920938463463374607431768211443;
 }
+
+fn cast_wide_marker() -> u128 {
+    (340282366920938463463374607431768211442 + 0) as u128
+}
 "#,
     )
     .unwrap();
@@ -218,6 +222,10 @@ fn assign_wide_vec_field(target: WideVec) {
     assert!(
         stdout.contains("ConstU128[340282366920938463463374607431768211443u128]"),
         "Vec-valued struct field assignment lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211442u128]"),
+        "explicit wide cast lost its compound marker limbs:\n{stdout}"
     );
 }
 

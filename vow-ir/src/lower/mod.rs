@@ -3842,9 +3842,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             payload
         }
         ExprKind::Cast { expr, target_ty } => {
+            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names, &ctx.type_aliases);
+            if matches!(tgt, Ty::I128 | Ty::U128) {
+                record_wide_marker_context(ctx, expr, tgt);
+            }
             let val = lower_expr(ctx, expr);
             let src_ty = ctx.inst_ty(val);
-            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names, &ctx.type_aliases);
             if let ExprKind::Lit(Lit::Int(v)) = &expr.kind {
                 match tgt {
                     Ty::U8 => ctx.emit(

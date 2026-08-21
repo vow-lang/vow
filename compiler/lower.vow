@@ -4416,9 +4416,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     if tag == EXPR_CAST() {
         let inner_eid: i64 = expr_a(a, eid);
         let target_ast_tid: i64 = expr_b(a, eid);
+        let tgt_ty: i64 = lctx_lower_ast_ty(ctx, target_ast_tid);
+        if tgt_ty == ITY_I128() || tgt_ty == ITY_U128() {
+            lctx_record_wide_marker_context(ctx, a, inner_eid, tgt_ty);
+        }
         let val_id: i64 = lower_expr(ctx, inner_eid);
         let src_ty: i64 = lctx_inst_ty(ctx, val_id);
-        let tgt_ty: i64 = lctx_lower_ast_ty(ctx, target_ast_tid);
         if expr_tag(a, inner_eid) == EXPR_LIT_INT() {
             let lit_val: i64 = expr_a(a, inner_eid);
             if tgt_ty == ITY_U8() {
