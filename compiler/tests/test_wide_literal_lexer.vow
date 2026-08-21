@@ -190,6 +190,11 @@ fn check_contextual_match_and_option_ranges() -> i32 [io] {
         "module WideRange\nfn value(flag: bool) -> i64 { if flag { 0 } else { loop { break 340282366920938463463374607431768211455; } } }"
     );
     if checked_error_count(i64_nested_loop_overflow) == 0 { return 56; }
+
+    let i64_option_overflow: String = String::from(
+        "module WideRange\nfn value() -> Option<i64> { Option::Some(340282366920938463463374607431768211455) }"
+    );
+    if checked_error_count(i64_option_overflow) == 0 { return 57; }
     0
 }
 
@@ -208,7 +213,7 @@ fn check_unsigned_wide_ir_printing() -> i32 {
 
 fn check_aggregate_wide_literal_lowering() -> i32 {
     let source: String = String::from(
-        "module WideAggregate\nstruct WideStruct { value: u128 }\nstruct WrappedWide { value: Option<u128> }\nenum WideEnum { Value(u128) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }\nfn compare_wide(x: u128, flag: bool) -> bool { x == if flag { 18446744073709551618 } else { 0 } }\nfn compare_wide_literal_first(x: u128) -> bool { 340282366920938463463374607431768211450 == x }\nfn assign_wide(target: WideStruct) { target.value = 18446744073709551619; }\nfn match_wide(value: Option<i64>) -> u128 { match value { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } }\nfn make_option() -> Option<u128> { let value: Option<u128> = Option::Some(340282366920938463463374607431768211454); value }\nfn make_ok() -> Result<u128, ()> { let value: Result<u128, ()> = Result::Ok(340282366920938463463374607431768211453); value }\nfn make_err() -> Result<(), u128> { let value: Result<(), u128> = Result::Err(340282366920938463463374607431768211452); value }\nfn consume_option(value: Option<u128>) { }\nfn pass_option() { consume_option(Option::Some(340282366920938463463374607431768211451)); }\nfn loop_wide() -> u128 { loop { break 340282366920938463463374607431768211449; } }\nfn make_wrapped() -> WrappedWide { WrappedWide { value: Option::Some(340282366920938463463374607431768211448) } }"
+        "module WideAggregate\nstruct WideStruct { value: u128 }\nstruct WrappedWide { value: Option<u128> }\nenum WideEnum { Value(u128) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }\nfn compare_wide(x: u128, flag: bool) -> bool { x == if flag { 18446744073709551618 } else { 0 } }\nfn compare_wide_literal_first(x: u128) -> bool { 340282366920938463463374607431768211450 == x }\nfn assign_wide(target: WideStruct) { target.value = 18446744073709551619; }\nfn match_wide(value: Option<i64>) -> u128 { match value { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } }\nfn make_option() -> Option<u128> { let value: Option<u128> = Option::Some(340282366920938463463374607431768211454); value }\nfn make_ok() -> Result<u128, ()> { let value: Result<u128, ()> = Result::Ok(340282366920938463463374607431768211453); value }\nfn make_err() -> Result<(), u128> { let value: Result<(), u128> = Result::Err(340282366920938463463374607431768211452); value }\nfn consume_option(value: Option<u128>) { }\nfn pass_option() { consume_option(Option::Some(340282366920938463463374607431768211451)); }\nfn loop_wide() -> u128 { loop { break 340282366920938463463374607431768211449; } }\nfn make_wrapped() -> WrappedWide { WrappedWide { value: Option::Some(340282366920938463463374607431768211448) } }\nfn choose_option(flag: bool) -> Option<u128> { if flag { Option::Some(340282366920938463463374607431768211447) } else { Option::None } }\nfn assign_wide_vec(values: Vec<u128>) { values[0] = 340282366920938463463374607431768211446; }"
     );
     let arena: AstArena = arena_new();
     let parsed: Module = parse_module_into(
@@ -238,6 +243,8 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     let mut saw_argument_limb: bool = false;
     let mut saw_loop_break_limb: bool = false;
     let mut saw_nested_field_limb: bool = false;
+    let mut saw_conditional_payload_limb: bool = false;
+    let mut saw_index_assignment_limb: bool = false;
     let mut function_index: i64 = 0;
     while function_index < lowered.functions.len() {
         let f: IrFunction = lowered.functions[function_index];
@@ -268,6 +275,8 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
                     if inst.dv == -6 { saw_left_binary_limb = true; }
                     if inst.dv == -7 { saw_loop_break_limb = true; }
                     if inst.dv == -8 { saw_nested_field_limb = true; }
+                    if inst.dv == -9 { saw_conditional_payload_limb = true; }
+                    if inst.dv == -10 { saw_index_assignment_limb = true; }
                 }
                 inst_index = inst_index + 1;
             }
@@ -288,6 +297,8 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     if !saw_argument_limb { return 50; }
     if !saw_loop_break_limb { return 53; }
     if !saw_nested_field_limb { return 54; }
+    if !saw_conditional_payload_limb { return 58; }
+    if !saw_index_assignment_limb { return 59; }
     0
 }
 

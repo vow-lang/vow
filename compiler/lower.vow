@@ -1689,6 +1689,48 @@ fn lctx_record_wide_expected_ast_context(ctx: LowerCtx, a: AstArena, eid: i64, e
     );
     if resolved_tid == -1 { return; }
     let expected_tag: i64 = type_tag(a, resolved_tid);
+    if expected_tag == TY_GENERIC() {
+        let expr_kind: i64 = expr_tag(a, eid);
+        if expr_kind == EXPR_BLOCK() {
+            let result_eid: i64 = block_result_eid(a, expr_a(a, eid));
+            if result_eid != -1 {
+                lctx_record_wide_expected_ast_context(ctx, a, result_eid, resolved_tid);
+            }
+            return;
+        }
+        if expr_kind == EXPR_IF() {
+            let then_result: i64 = block_result_eid(a, expr_b(a, eid));
+            if then_result != -1 {
+                lctx_record_wide_expected_ast_context(ctx, a, then_result, resolved_tid);
+            }
+            let else_eid: i64 = expr_c(a, eid);
+            if else_eid != -1 {
+                lctx_record_wide_expected_ast_context(ctx, a, else_eid, resolved_tid);
+            }
+            return;
+        }
+        if expr_kind == EXPR_MATCH() {
+            let arms_lid: i64 = expr_b(a, eid);
+            let n: i64 = list_len(a, arms_lid) / 2;
+            let mut i: i64 = 0;
+            while i < n {
+                lctx_record_wide_expected_ast_context(
+                    ctx, a, list_get(a, arms_lid, i * 2 + 1), resolved_tid
+                );
+                i = i + 1;
+            }
+            return;
+        }
+        if expr_kind == EXPR_LOOP() {
+            let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, eid));
+            let mut i: i64 = 0;
+            while i < values.len() {
+                lctx_record_wide_expected_ast_context(ctx, a, values[i], resolved_tid);
+                i = i + 1;
+            }
+            return;
+        }
+    }
     if expected_tag == TY_NAMED() {
         let name: String = arena_str(a, type_a(a, resolved_tid));
         let expected_ty: i64 = ity_for_scalar_type_name(name);
@@ -3134,7 +3176,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let idx_eid: i64 = expr_b(a, lhs_eid);
             let recv_id: i64 = lower_expr(ctx, recv_eid);
             let idx_id: i64 = lower_expr(ctx, idx_eid);
-            let val_id: i64 = lower_expr(ctx, rhs_eid);
+            let elem_ty: i64 = ity_for_scalar_type_name(lctx_get_vec_elem(ctx, recv_id));
+            lctx_record_wide_control_flow_context(ctx, a, rhs_eid, elem_ty);
+            let original: i64 = lower_expr(ctx, rhs_eid);
+            let val_id: i64 = if elem_ty == ITY_I128() || elem_ty == ITY_U128() {
+                lower_narrow_literal(ctx, a, rhs_eid, original, elem_ty)
+            } else {
+                original
+            };
             // Index store transfers a linear RHS into the heap container.
             lctx_emit_linear_consume_if_needed(ctx, val_id);
             let set_args: Vec<i64> = Vec::new();

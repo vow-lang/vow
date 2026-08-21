@@ -94,6 +94,18 @@ fn make_wrapped() -> WrappedWide {
         value: Option::Some(340282366920938463463374607431768211448),
     }
 }
+
+fn choose_option(flag: bool) -> Option<u128> {
+    if flag {
+        Option::Some(340282366920938463463374607431768211447)
+    } else {
+        Option::None
+    }
+}
+
+fn assign_wide_vec(values: Vec<u128>) {
+    values[0] = 340282366920938463463374607431768211446;
+}
 "#,
     )
     .unwrap();
@@ -165,6 +177,14 @@ fn make_wrapped() -> WrappedWide {
     assert!(
         stdout.contains("ConstU128[340282366920938463463374607431768211448u128]"),
         "nested generic struct field lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211447u128]"),
+        "generic conditional payload lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211446u128]"),
+        "indexed Vec assignment lost its contextual wide type:\n{stdout}"
     );
 }
 

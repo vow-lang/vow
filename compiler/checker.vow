@@ -1340,7 +1340,47 @@ fn check_contextual_integer_literal_ranges(e: CheckEnv, a: AstArena, eid: i64, t
         check_integer_literal_range(e, a, eid, ty_tag(e.ts, target_tid));
         return;
     }
-    if ty_tag(e.ts, target_tid) != CTY_APPLIED() || expr_tag(a, eid) != EXPR_ECTOR() {
+    let expr_kind: i64 = expr_tag(a, eid);
+    if expr_kind == EXPR_BLOCK() {
+        let result_eid: i64 = checker_block_result_eid(a, expr_a(a, eid));
+        if result_eid != -1 {
+            check_contextual_integer_literal_ranges(e, a, result_eid, target_tid);
+        }
+        return;
+    }
+    if expr_kind == EXPR_IF() {
+        let then_result: i64 = checker_block_result_eid(a, expr_b(a, eid));
+        if then_result != -1 {
+            check_contextual_integer_literal_ranges(e, a, then_result, target_tid);
+        }
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 {
+            check_contextual_integer_literal_ranges(e, a, else_eid, target_tid);
+        }
+        return;
+    }
+    if expr_kind == EXPR_MATCH() {
+        let arms_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n {
+            check_contextual_integer_literal_ranges(
+                e, a, list_get(a, arms_lid, i * 2 + 1), target_tid
+            );
+            i = i + 1;
+        }
+        return;
+    }
+    if expr_kind == EXPR_LOOP() {
+        let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, eid));
+        let mut i: i64 = 0;
+        while i < values.len() {
+            check_contextual_integer_literal_ranges(e, a, values[i], target_tid);
+            i = i + 1;
+        }
+        return;
+    }
+    if ty_tag(e.ts, target_tid) != CTY_APPLIED() || expr_kind != EXPR_ECTOR() {
         return;
     }
     let base_tid: i64 = ty_a(e.ts, target_tid);
@@ -1372,8 +1412,8 @@ fn check_contextual_integer_literal_ranges(e: CheckEnv, a: AstArena, eid: i64, t
         -1
     };
     let payload_tag: i64 = if payload_tid == -1 { -1 } else { ty_tag(e.ts, payload_tid) };
-    if (payload_tag == CTY_I128() || payload_tag == CTY_U128() ||
-        payload_tag == CTY_APPLIED()) && list_len(a, fields_lid) > 0 {
+    if (ty_is_integer(e.ts, payload_tid) || payload_tag == CTY_APPLIED()) &&
+       list_len(a, fields_lid) > 0 {
         check_contextual_integer_literal_ranges(
             e, a, list_get(a, fields_lid, 0), payload_tid
         );

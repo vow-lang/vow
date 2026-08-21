@@ -122,6 +122,11 @@ fn i128_option_payload_rejects_overflowing_literal() {
 }
 
 #[test]
+fn i64_option_payload_rejects_wide_literal_before_compatibility_storage() {
+    assert_literal_out_of_range("i64_option_payload_wide_literal_out_of_range.vow");
+}
+
+#[test]
 fn i64_const_rejects_wide_literal_before_compatibility_storage() {
     assert_literal_out_of_range("i64_const_wide_literal_out_of_range.vow");
 }

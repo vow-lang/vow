@@ -1207,6 +1207,40 @@ impl<'e> Checker<'e> {
             self.check_integer_literal_range(expr, target);
             return;
         }
+        match &expr.kind {
+            ExprKind::Block(block) => {
+                if let Some(result) = block.trailing_expr.as_deref() {
+                    self.check_contextual_integer_literal_ranges(result, target);
+                }
+                return;
+            }
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if let Some(result) = then_branch.trailing_expr.as_deref() {
+                    self.check_contextual_integer_literal_ranges(result, target);
+                }
+                if let Some(else_expr) = else_branch.as_deref() {
+                    self.check_contextual_integer_literal_ranges(else_expr, target);
+                }
+                return;
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.check_contextual_integer_literal_ranges(&arm.body, target);
+                }
+                return;
+            }
+            ExprKind::Loop { body, .. } => {
+                for value in loop_break_values(body) {
+                    self.check_contextual_integer_literal_ranges(value, target);
+                }
+                return;
+            }
+            _ => {}
+        }
         let Ty::Applied(base, args) = target else {
             return;
         };
@@ -1224,8 +1258,8 @@ impl<'e> Checker<'e> {
             ("Result", Some("Err")) => Some(1),
             _ => None,
         };
-        if let Some(payload_ty @ (Ty::I128 | Ty::U128 | Ty::Applied(_, _))) =
-            payload_index.and_then(|index| args.get(index))
+        if let Some(payload_ty) = payload_index.and_then(|index| args.get(index))
+            && (payload_ty.is_integer() || matches!(payload_ty, Ty::Applied(_, _)))
             && let Some(field) = fields.first()
         {
             self.check_contextual_integer_literal_ranges(field, payload_ty);

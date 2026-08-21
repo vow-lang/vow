@@ -1897,8 +1897,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Assign { lhs, rhs } => {
+            let index_ty = known_index_assignment_ty(ctx, lhs);
             if let Some(field_ty) = known_field_assignment_ty(ctx, lhs) {
                 record_wide_control_flow_context(ctx, rhs, field_ty);
+            }
+            if let Some(index_ty) = index_ty {
+                record_wide_control_flow_context(ctx, rhs, index_ty);
             }
             if let ExprKind::Ident(name) = &lhs.kind
                 && let Some(current) = ctx.lookup(name)
@@ -1984,6 +1988,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Index { base, index } => {
                     let vec_ptr = lower_expr(ctx, base);
                     let idx_id = lower_expr(ctx, index);
+                    if let Some(index_ty) = index_ty {
+                        new_val = lower_narrow_literal(ctx, rhs, new_val, index_ty);
+                    }
                     // Index store transfers a linear RHS into the heap container.
                     ctx.emit_linear_consume_if_needed(new_val, span);
                     ctx.emit(
@@ -4022,6 +4029,48 @@ fn known_field_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
         .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
 }
 
+fn known_vec_element_path(ctx: &LowerCtx, expr: &Expr) -> Option<Vec<String>> {
+    match &expr.kind {
+        ExprKind::Ident(name) => ctx
+            .lookup(name)
+            .and_then(|id| ctx.inst_vec_elem_types.get(&id))
+            .cloned(),
+        ExprKind::FieldAccess { base, field } => {
+            let struct_name = known_struct_expr_name(ctx, base)?;
+            let field_idx = ctx
+                .struct_field_map
+                .get(&struct_name)?
+                .iter()
+                .position(|name| name == field)?;
+            ctx.struct_field_vec_elems
+                .get(&struct_name)
+                .and_then(|types| types.get(field_idx))
+                .filter(|name| !name.is_empty())
+                .map(|name| vec![name.clone()])
+        }
+        ExprKind::Index { base, .. } => {
+            let mut path = known_vec_element_path(ctx, base)?;
+            if path.is_empty() {
+                return None;
+            }
+            path.remove(0);
+            Some(path)
+        }
+        _ => None,
+    }
+}
+
+fn known_index_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
+    let ExprKind::Index { base, .. } = &lhs.kind else {
+        return None;
+    };
+    known_vec_element_path(ctx, base)
+        .and_then(|path| path.first().cloned())
+        .filter(|name| is_scalar_field_type_name(name))
+        .map(|name| scalar_ty_for_field_type_name(&name))
+        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
+}
+
 fn wide_context_contains_control_flow(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Loop { .. } => true,
@@ -4093,6 +4142,42 @@ fn record_wide_control_flow_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
 
 fn record_wide_expected_ast_context(ctx: &mut LowerCtx, expr: &Expr, expected: &AstType) {
     let expected = resolve_type_alias(expected, &ctx.type_aliases).clone();
+    if matches!(expected, AstType::Generic { .. }) {
+        match &expr.kind {
+            ExprKind::Block(block) => {
+                if let Some(result) = block.trailing_expr.as_deref() {
+                    record_wide_expected_ast_context(ctx, result, &expected);
+                }
+                return;
+            }
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if let Some(result) = then_branch.trailing_expr.as_deref() {
+                    record_wide_expected_ast_context(ctx, result, &expected);
+                }
+                if let Some(else_expr) = else_branch.as_deref() {
+                    record_wide_expected_ast_context(ctx, else_expr, &expected);
+                }
+                return;
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    record_wide_expected_ast_context(ctx, &arm.body, &expected);
+                }
+                return;
+            }
+            ExprKind::Loop { body, .. } => {
+                for value in loop_break_values(body) {
+                    record_wide_expected_ast_context(ctx, value, &expected);
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
     match expected {
         AstType::Named { name, .. } => {
             let ty = match name.as_str() {
