@@ -2,6 +2,24 @@ module IrPrinter
 
 use ir
 
+fn u64_to_str(v: u64) -> String {
+    if v == 0u64 { return String::from("0"); }
+    let out: String = String::from("");
+    let mut n: u64 = v;
+    let digits: Vec<u64> = Vec::new();
+    while n > 0u64 {
+        digits.push(n % 10u64);
+        n = n / 10u64;
+    }
+    let mut i: i64 = digits.len() - 1;
+    while i >= 0 {
+        let digit: i64 = digits[i] as i64;
+        out.push_byte(48 + digit);
+        i = i - 1;
+    }
+    out
+}
+
 fn pad_right(s: String, width: i64) -> String {
     let out: String = String::from("");
     out.push_str(s);
@@ -70,6 +88,8 @@ fn ir_ty_str(ty: i64) -> String {
 fn opcode_name(op: i64) -> String {
     if op == IOP_CONST_I32() { return String::from("ConstI32"); }
     if op == IOP_CONST_I64() { return String::from("ConstI64"); }
+    if op == IOP_CONST_I128() { return String::from("ConstI128"); }
+    if op == IOP_CONST_U128() { return String::from("ConstU128"); }
     if op == IOP_CONST_F32() { return String::from("ConstF32"); }
     if op == IOP_CONST_F64() { return String::from("ConstF64"); }
     if op == IOP_CONST_BOOL() { return String::from("ConstBool"); }
@@ -248,6 +268,15 @@ fn format_data(inst: IrInst) -> String {
     if dk == IDATA_CONST_U8() {
         let out: String = i64_to_string(inst.dv);
         out.push_str(String::from("u8"));
+        return out;
+    }
+    if dk == IDATA_CONST_I128() || dk == IDATA_CONST_U128() {
+        let out: String = String::from("lo=");
+        out.push_str(u64_to_str(inst.dv as u64));
+        out.push_str(String::from(",hi="));
+        out.push_str(u64_to_str(inst.dv2 as u64));
+        if dk == IDATA_CONST_I128() { out.push_str(String::from("i128")); }
+        else { out.push_str(String::from("u128")); }
         return out;
     }
     if dk == IDATA_INTEGER() { return ir_ty_str(inst.dv); }

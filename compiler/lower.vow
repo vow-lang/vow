@@ -23,18 +23,26 @@ struct LowerCtx {
     func_ret_tags: Vec<String>,
     func_ret_vec_elems: Vec<String>,
     func_ret_option_elems: Vec<i64>,
+    func_return_ast_tid: i64,
     func_param_tys: Vec<Vec<i64>>,
+    func_param_ast_tids: Vec<Vec<i64>>,
     struct_names: Vec<String>,
     linear_owner_names: Vec<String>,
     type_alias_names: Vec<String>,
     type_alias_target_tids: Vec<i64>,
     struct_field_lists: Vec<Vec<String>>,
     struct_field_type_names: Vec<Vec<String>>,
+    struct_field_ast_tids: Vec<Vec<i64>>,
     struct_field_vec_elems: Vec<Vec<String>>,
     enum_names: Vec<String>,
     enum_variant_lists: Vec<Vec<String>>,
+    enum_variant_payload_tys: Vec<Vec<Vec<i64>>>,
+    enum_variant_payload_ast_tids: Vec<Vec<Vec<i64>>>,
+    wide_context_tys: Vec<i64>,
     tag_inst_ids: Vec<i64>,
     tag_names: Vec<String>,
+    declared_ast_inst_ids: Vec<i64>,
+    declared_ast_tids: Vec<i64>,
     arena: AstArena,
     cur_vow_lid: i64,
     str_eids: Vec<i64>,
@@ -112,18 +120,26 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_ret_tags: Vec::new(),
         func_ret_vec_elems: Vec::new(),
         func_ret_option_elems: Vec::new(),
+        func_return_ast_tid: -1,
         func_param_tys: Vec::new(),
+        func_param_ast_tids: Vec::new(),
         struct_names: Vec::new(),
         linear_owner_names: Vec::new(),
         type_alias_names: Vec::new(),
         type_alias_target_tids: Vec::new(),
         struct_field_lists: Vec::new(),
         struct_field_type_names: Vec::new(),
+        struct_field_ast_tids: Vec::new(),
         struct_field_vec_elems: Vec::new(),
         enum_names: Vec::new(),
         enum_variant_lists: Vec::new(),
+        enum_variant_payload_tys: Vec::new(),
+        enum_variant_payload_ast_tids: Vec::new(),
+        wide_context_tys: Vec::new(),
         tag_inst_ids: Vec::new(),
         tag_names: Vec::new(),
+        declared_ast_inst_ids: Vec::new(),
+        declared_ast_tids: Vec::new(),
         arena: arena,
         cur_vow_lid: -1,
         str_eids: str_eids,
@@ -421,6 +437,38 @@ fn lctx_get_tag(ctx: LowerCtx, inst_id: i64) -> String {
     String::from("")
 }
 
+fn lctx_tag_declared_ast_tid(ctx: LowerCtx, inst_id: i64, tid: i64) {
+    if tid == -1 { return; }
+    ctx.declared_ast_inst_ids.push(inst_id);
+    ctx.declared_ast_tids.push(tid);
+}
+
+fn lctx_get_declared_ast_tid(ctx: LowerCtx, inst_id: i64) -> i64 {
+    let mut i: i64 = ctx.declared_ast_inst_ids.len();
+    while i > 0 {
+        i = i - 1;
+        if ctx.declared_ast_inst_ids[i] == inst_id {
+            return ctx.declared_ast_tids[i];
+        }
+    }
+    -1
+}
+
+fn lctx_generic_ast_arg_tid(ctx: LowerCtx, tid: i64, expected_name: String, index: i64) -> i64 {
+    let resolved_tid: i64 = lower_resolve_alias_tid(
+        ctx.arena, tid, ctx.type_alias_names, ctx.type_alias_target_tids
+    );
+    if resolved_tid == -1 || type_tag(ctx.arena, resolved_tid) != TY_GENERIC() {
+        return -1;
+    }
+    if arena_str(ctx.arena, type_a(ctx.arena, resolved_tid)) != expected_name {
+        return -1;
+    }
+    let args_lid: i64 = type_b(ctx.arena, resolved_tid);
+    if index < 0 || index >= list_len(ctx.arena, args_lid) { return -1; }
+    list_get(ctx.arena, args_lid, index)
+}
+
 fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
     let n: i64 = ctx.str_eids.len();
     let mut i: i64 = 0;
@@ -623,6 +671,7 @@ fn lctx_copy_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, res
     let vec_variants: Vec<Vec<i64>> = Vec::new();
     let variant_payloads: Vec<i64> = Vec::new();
     let mut option_elem: i64 = -1;
+    let mut declared_ast_tid: i64 = -1;
     let mut i: i64 = 0;
     while i < sources.len() {
         if lctx_get_tag(ctx, sources[i]) != aggregate_name { return; }
@@ -684,6 +733,11 @@ fn lctx_copy_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, res
                 return;
             }
         }
+        let source_declared_ast_tid: i64 = lctx_get_declared_ast_tid(ctx, sources[i]);
+        if source_declared_ast_tid != -1 {
+            if declared_ast_tid == -1 { declared_ast_tid = source_declared_ast_tid; }
+            else if declared_ast_tid != source_declared_ast_tid { return; }
+        }
         i = i + 1;
     }
 
@@ -693,6 +747,7 @@ fn lctx_copy_compatible_aggregate_metadata(ctx: LowerCtx, sources: Vec<i64>, res
     if vec_variants.len() > 0 { lctx_tag_vec_variant_payload_ty_path(ctx, result_id, vec_variants); }
     if option_elem != -1 { lctx_tag_option_elem(ctx, result_id, option_elem); }
     if variant_payloads.len() > 0 { lctx_tag_variant_payloads(ctx, result_id, variant_payloads); }
+    if declared_ast_tid != -1 { lctx_tag_declared_ast_tid(ctx, result_id, declared_ast_tid); }
 }
 
 fn lctx_get_pattern_aggregate(ctx: LowerCtx, pid: i64) -> String {
@@ -843,6 +898,32 @@ fn lctx_find_variant_tag(ctx: LowerCtx, enum_name: String, variant_name: String)
     -1
 }
 
+fn lctx_variant_payload_ty(
+    ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
+) -> i64 {
+    let eidx: i64 = lctx_find_enum(ctx, enum_name);
+    if eidx == -1 || eidx >= ctx.enum_variant_payload_tys.len() { return -1; }
+    let variant_index: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
+    let variants: Vec<Vec<i64>> = ctx.enum_variant_payload_tys[eidx];
+    if variant_index < 0 || variant_index >= variants.len() { return -1; }
+    let payload: Vec<i64> = variants[variant_index];
+    if payload_index < 0 || payload_index >= payload.len() { return -1; }
+    payload[payload_index]
+}
+
+fn lctx_variant_payload_ast_tid(
+    ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
+) -> i64 {
+    let eidx: i64 = lctx_find_enum(ctx, enum_name);
+    if eidx == -1 || eidx >= ctx.enum_variant_payload_ast_tids.len() { return -1; }
+    let variant_index: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
+    let variants: Vec<Vec<i64>> = ctx.enum_variant_payload_ast_tids[eidx];
+    if variant_index < 0 || variant_index >= variants.len() { return -1; }
+    let payload: Vec<i64> = variants[variant_index];
+    if payload_index < 0 || payload_index >= payload.len() { return -1; }
+    payload[payload_index]
+}
+
 fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: String) -> i64 {
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 {
@@ -883,6 +964,15 @@ fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) ->
         return type_names[field_idx];
     }
     String::from("")
+}
+
+fn lctx_struct_field_ast_tid(ctx: LowerCtx, struct_name: String, field_idx: i64) -> i64 {
+    if field_idx == -1 { return -1; }
+    let sidx: i64 = lctx_find_struct(ctx, struct_name);
+    if sidx == -1 { return -1; }
+    let type_tids: Vec<i64> = ctx.struct_field_ast_tids[sidx];
+    if field_idx < type_tids.len() { return type_tids[field_idx]; }
+    -1
 }
 
 fn lctx_struct_field_vec_elem(ctx: LowerCtx, struct_name: String, field_idx: i64) -> String {
@@ -1570,7 +1660,198 @@ fn expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
     if tag == EXPR_BLOCK() {
         return block_result_is_coercible_int_marker(a, expr_a(a, eid));
     }
+    if tag == EXPR_IF() {
+        let then_result: i64 = block_result_eid(a, expr_b(a, eid));
+        let else_eid: i64 = expr_c(a, eid);
+        return then_result != -1 && else_eid != -1 &&
+            expr_is_coercible_int_marker(a, then_result) &&
+            expr_is_coercible_int_marker(a, else_eid);
+    }
     false
+}
+
+fn wide_context_contains_control_flow(a: AstArena, eid: i64) -> bool {
+    if eid == -1 { return false; }
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_IF() || tag == EXPR_MATCH() || tag == EXPR_LOOP() { return true; }
+    if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return wide_context_contains_control_flow(a, expr_b(a, eid));
+    }
+    if tag == EXPR_BINOP() {
+        return wide_context_contains_control_flow(a, expr_b(a, eid)) ||
+            wide_context_contains_control_flow(a, expr_c(a, eid));
+    }
+    if tag == EXPR_BLOCK() {
+        return wide_context_contains_control_flow(a, block_result_eid(a, expr_a(a, eid)));
+    }
+    false
+}
+
+fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
+    if eid == -1 || (ty != ITY_I128() && ty != ITY_U128()) { return; }
+    while ctx.wide_context_tys.len() <= eid {
+        ctx.wide_context_tys.push(-1);
+    }
+    ctx.wide_context_tys[eid] = ty;
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        lctx_record_wide_marker_context(ctx, a, expr_b(a, eid), ty);
+        return;
+    }
+    if tag == EXPR_BINOP() {
+        lctx_record_wide_marker_context(ctx, a, expr_b(a, eid), ty);
+        let op: i64 = expr_a(a, eid);
+        if op != BINOP_SHL() && op != BINOP_SHR() {
+            lctx_record_wide_marker_context(ctx, a, expr_c(a, eid), ty);
+        }
+        return;
+    }
+    if tag == EXPR_BLOCK() {
+        lctx_record_wide_marker_context(ctx, a, block_result_eid(a, expr_a(a, eid)), ty);
+        return;
+    }
+    if tag == EXPR_IF() {
+        lctx_record_wide_marker_context(ctx, a, block_result_eid(a, expr_b(a, eid)), ty);
+        lctx_record_wide_marker_context(ctx, a, expr_c(a, eid), ty);
+        return;
+    }
+    if tag == EXPR_MATCH() {
+        let arms_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, arms_lid) / 2;
+        let mut i: i64 = 0;
+        while i < n {
+            lctx_record_wide_marker_context(
+                ctx, a, list_get(a, arms_lid, i * 2 + 1), ty
+            );
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == EXPR_LOOP() {
+        let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, eid));
+        let mut i: i64 = 0;
+        while i < values.len() {
+            lctx_record_wide_marker_context(ctx, a, values[i], ty);
+            i = i + 1;
+        }
+    }
+}
+
+fn lctx_record_wide_control_flow_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
+    if (ty == ITY_I128() || ty == ITY_U128()) && wide_context_contains_control_flow(a, eid) {
+        lctx_record_wide_marker_context(ctx, a, eid, ty);
+    }
+}
+
+fn lctx_record_wide_expected_ast_context(ctx: LowerCtx, a: AstArena, eid: i64, expected_tid: i64) {
+    let resolved_tid: i64 = lower_resolve_alias_tid(
+        a, expected_tid, ctx.type_alias_names, ctx.type_alias_target_tids
+    );
+    if resolved_tid == -1 { return; }
+    let expected_tag: i64 = type_tag(a, resolved_tid);
+    if expected_tag == TY_GENERIC() {
+        let expr_kind: i64 = expr_tag(a, eid);
+        if expr_kind == EXPR_BLOCK() {
+            let result_eid: i64 = block_result_eid(a, expr_a(a, eid));
+            if result_eid != -1 {
+                lctx_record_wide_expected_ast_context(ctx, a, result_eid, resolved_tid);
+            }
+            return;
+        }
+        if expr_kind == EXPR_IF() {
+            let then_result: i64 = block_result_eid(a, expr_b(a, eid));
+            if then_result != -1 {
+                lctx_record_wide_expected_ast_context(ctx, a, then_result, resolved_tid);
+            }
+            let else_eid: i64 = expr_c(a, eid);
+            if else_eid != -1 {
+                lctx_record_wide_expected_ast_context(ctx, a, else_eid, resolved_tid);
+            }
+            return;
+        }
+        if expr_kind == EXPR_MATCH() {
+            let arms_lid: i64 = expr_b(a, eid);
+            let n: i64 = list_len(a, arms_lid) / 2;
+            let mut i: i64 = 0;
+            while i < n {
+                lctx_record_wide_expected_ast_context(
+                    ctx, a, list_get(a, arms_lid, i * 2 + 1), resolved_tid
+                );
+                i = i + 1;
+            }
+            return;
+        }
+        if expr_kind == EXPR_LOOP() {
+            let values: Vec<i64> = loop_break_value_eids(a, expr_a(a, eid));
+            let mut i: i64 = 0;
+            while i < values.len() {
+                lctx_record_wide_expected_ast_context(ctx, a, values[i], resolved_tid);
+                i = i + 1;
+            }
+            return;
+        }
+    }
+    if expected_tag == TY_NAMED() {
+        let name: String = arena_str(a, type_a(a, resolved_tid));
+        let expected_ty: i64 = ity_for_scalar_type_name(name);
+        if expected_ty == ITY_I128() || expected_ty == ITY_U128() {
+            lctx_record_wide_marker_context(ctx, a, eid, expected_ty);
+        }
+        return;
+    }
+    if expected_tag != TY_GENERIC() || expr_tag(a, eid) != EXPR_ECTOR() {
+        return;
+    }
+    let enum_name: String = arena_str(a, type_a(a, resolved_tid));
+    let path_lid: i64 = expr_a(a, eid);
+    if list_len(a, path_lid) < 2 || arena_str(a, list_get(a, path_lid, 0)) != enum_name {
+        return;
+    }
+    let variant_name: String = arena_str(a, list_get(a, path_lid, 1));
+    let payload_index: i64 = {
+        if (enum_name == String::from("Option") && variant_name == String::from("Some")) ||
+           (enum_name == String::from("Result") && variant_name == String::from("Ok")) {
+            0
+        } else if enum_name == String::from("Result") && variant_name == String::from("Err") {
+            1
+        } else {
+            -1
+        }
+    };
+    let expected_args_lid: i64 = type_b(a, resolved_tid);
+    let fields_lid: i64 = expr_b(a, eid);
+    if payload_index >= 0 && payload_index < list_len(a, expected_args_lid) &&
+       list_len(a, fields_lid) > 0 {
+        lctx_record_wide_expected_ast_context(
+            ctx, a, list_get(a, fields_lid, 0),
+            list_get(a, expected_args_lid, payload_index)
+        );
+    }
+}
+
+fn lctx_wide_context_ty(ctx: LowerCtx, eid: i64) -> i64 {
+    if eid < 0 || eid >= ctx.wide_context_tys.len() { return -1; }
+    ctx.wide_context_tys[eid]
+}
+
+fn lctx_known_wide_expr_ty(ctx: LowerCtx, a: AstArena, eid: i64) -> i64 {
+    if eid == -1 { return -1; }
+    let tag: i64 = expr_tag(a, eid);
+    let ty: i64 = {
+        if tag == EXPR_IDENT() {
+            let name: String = arena_str(a, expr_a(a, eid));
+            let id: i64 = lctx_lookup(ctx, name);
+            if id == -1 { -1 } else { lctx_inst_ty(ctx, id) }
+        } else if tag == EXPR_CAST() {
+            lctx_lower_ast_ty(ctx, expr_b(a, eid))
+        } else if tag == EXPR_BLOCK() {
+            lctx_known_wide_expr_ty(ctx, a, block_result_eid(a, expr_a(a, eid)))
+        } else {
+            -1
+        }
+    };
+    if ty == ITY_I128() || ty == ITY_U128() { return ty; }
+    -1
 }
 
 fn choose_match_result_ty(result_tys: Vec<i64>, result_markers: Vec<bool>) -> i64 {
@@ -1618,6 +1899,14 @@ fn emit_narrow_integer_constant(ctx: LowerCtx, value: i64, ty: i64) -> i64 {
     lctx_emit(ctx, narrow_op, ty, const_args, narrow_data, value, 0, String::from(""))
 }
 
+fn emit_wide_integer_constant(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64 {
+    let wide_op: i64 = if ty == ITY_I128() { IOP_CONST_I128() } else { IOP_CONST_U128() };
+    let wide_data: i64 = if ty == ITY_I128() { IDATA_CONST_I128() } else { IDATA_CONST_U128() };
+    let const_args: Vec<i64> = Vec::new();
+    lctx_emit(ctx, wide_op, ty, const_args, wide_data,
+        expr_int_lo(a, eid) as i64, expr_int_hi(a, eid) as i64, String::from(""))
+}
+
 fn emit_integer_zero(ctx: LowerCtx, ty: i64) -> i64 {
     if ty == ITY_I8() || ty == ITY_U8() || ty == ITY_I16() || ty == ITY_U16() ||
        ty == ITY_I32() || ty == ITY_U32() {
@@ -1626,6 +1915,12 @@ fn emit_integer_zero(ctx: LowerCtx, ty: i64) -> i64 {
     let zero_args: Vec<i64> = Vec::new();
     if ty == ITY_U64() {
         return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), zero_args, IDATA_CONST_U64(), 0, 0, String::from(""));
+    }
+    if ty == ITY_I128() {
+        return lctx_emit(ctx, IOP_CONST_I128(), ITY_I128(), zero_args, IDATA_CONST_I128(), 0, 0, String::from(""));
+    }
+    if ty == ITY_U128() {
+        return lctx_emit(ctx, IOP_CONST_U128(), ITY_U128(), zero_args, IDATA_CONST_U128(), 0, 0, String::from(""));
     }
     lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args, IDATA_CONST_I64(), 0, 0, String::from(""))
 }
@@ -1639,10 +1934,13 @@ fn lower_integer_marker_as(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64
     }
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_INT() {
+        if ty == ITY_I128() || ty == ITY_U128() {
+            return emit_wide_integer_constant(ctx, a, eid, ty);
+        }
         return emit_narrow_integer_constant(ctx, expr_a(a, eid), ty);
     }
     if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
-        let zero: i64 = emit_narrow_integer_constant(ctx, 0, ty);
+        let zero: i64 = emit_integer_zero(ctx, ty);
         let value: i64 = lower_integer_marker_as(ctx, a, expr_b(a, eid), ty);
         let neg_args: Vec<i64> = Vec::new();
         neg_args.push(zero);
@@ -1678,7 +1976,11 @@ fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, original: i64, ty:
         return original;
     }
     if ty != ITY_I8() && ty != ITY_U8() && ty != ITY_I16() &&
-       ty != ITY_U16() && ty != ITY_I32() && ty != ITY_U32() {
+       ty != ITY_U16() && ty != ITY_I32() && ty != ITY_U32() &&
+       ty != ITY_I128() && ty != ITY_U128() {
+        return original;
+    }
+    if (ty == ITY_I128() || ty == ITY_U128()) && lctx_wide_context_ty(ctx, eid) == ty {
         return original;
     }
     let marker: i64 = lower_integer_marker_as(ctx, a, eid, ty);
@@ -1737,6 +2039,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     let tag: i64 = expr_tag(a, eid);
 
     if tag == EXPR_LIT_INT() {
+        let context_ty: i64 = lctx_wide_context_ty(ctx, eid);
+        if context_ty == ITY_I128() || context_ty == ITY_U128() {
+            return emit_wide_integer_constant(ctx, a, eid, context_ty);
+        }
         let val: i64 = expr_a(a, eid);
         let args: Vec<i64> = Vec::new();
         return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), args, IDATA_CONST_I64(), val, 0, String::from(""));
@@ -1858,6 +2164,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             return phi_id;
         }
 
+        if expr_is_coercible_int_marker(a, lhs_eid) {
+            lctx_record_wide_control_flow_context(
+                ctx, a, lhs_eid, lctx_known_wide_expr_ty(ctx, a, rhs_eid)
+            );
+        }
+        if expr_is_coercible_int_marker(a, rhs_eid) {
+            lctx_record_wide_control_flow_context(
+                ctx, a, rhs_eid, lctx_known_wide_expr_ty(ctx, a, lhs_eid)
+            );
+        }
         let mut lhs_id: i64 = lower_expr(ctx, lhs_eid);
         let mut rhs_id: i64 = lower_expr(ctx, rhs_eid);
         let lhs_is_str: bool = lctx_is_str_eid(ctx, lhs_eid);
@@ -1902,6 +2218,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             operand_ty = ITY_U32();
         } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_U32() {
             operand_ty = ITY_U32();
+        } else if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_I128() {
+            operand_ty = ITY_I128();
+        } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_I128() {
+            operand_ty = ITY_I128();
+        } else if expr_is_const_int(a, lhs_eid) && rhs_ty == ITY_U128() {
+            operand_ty = ITY_U128();
+        } else if expr_is_const_int(a, rhs_eid) && lhs_ty == ITY_U128() {
+            operand_ty = ITY_U128();
         } else if is_bitwise && lhs_ty == ITY_I64() {
             if rhs_ty != ITY_I64() {
                 operand_ty = rhs_ty;
@@ -1911,16 +2235,25 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // of the default i64, so it shares a register width with a genuinely
         // `operand_ty`-typed sibling operand in the same binary op.
         if operand_ty == ITY_I8() || operand_ty == ITY_U8() || operand_ty == ITY_I16() ||
-           operand_ty == ITY_U16() || operand_ty == ITY_I32() || operand_ty == ITY_U32() {
+           operand_ty == ITY_U16() || operand_ty == ITY_I32() || operand_ty == ITY_U32() ||
+           operand_ty == ITY_I128() || operand_ty == ITY_U128() {
             let narrow_op: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
             let narrow_data: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
             if expr_is_const_int(a, lhs_eid) {
-                let const_args: Vec<i64> = Vec::new();
-                lhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, lhs_eid), 0, String::from(""));
+                if operand_ty == ITY_I128() || operand_ty == ITY_U128() {
+                    lhs_id = lower_integer_marker_as(ctx, a, lhs_eid, operand_ty);
+                } else {
+                    let const_args: Vec<i64> = Vec::new();
+                    lhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, lhs_eid), 0, String::from(""));
+                }
             }
             if op != BINOP_SHL() && op != BINOP_SHR() && expr_is_const_int(a, rhs_eid) {
-                let const_args: Vec<i64> = Vec::new();
-                rhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, rhs_eid), 0, String::from(""));
+                if operand_ty == ITY_I128() || operand_ty == ITY_U128() {
+                    rhs_id = lower_integer_marker_as(ctx, a, rhs_eid, operand_ty);
+                } else {
+                    let const_args: Vec<i64> = Vec::new();
+                    rhs_id = lctx_emit(ctx, narrow_op, operand_ty, const_args, narrow_data, expr_const_int_value(a, rhs_eid), 0, String::from(""));
+                }
             }
         }
         let iop: i64 = binop_opcode(op, operand_ty);
@@ -1944,7 +2277,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let result_ty: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() ||
                                operand_ty == ITY_I16() || operand_ty == ITY_U16() ||
                                operand_ty == ITY_I32() || operand_ty == ITY_U32() ||
-                               operand_ty == ITY_I64() || operand_ty == ITY_U64() {
+                               operand_ty == ITY_I64() || operand_ty == ITY_U64() ||
+                               operand_ty == ITY_I128() || operand_ty == ITY_U128() {
             operand_ty
         } else {
             ITY_I64()
@@ -2122,15 +2456,23 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let call_args: Vec<i64> = Vec::new();
             let nargs: i64 = list_len(a, args_lid);
             let param_tys: Vec<i64> = ctx.func_param_tys[fidx];
+            let param_ast_tids: Vec<i64> = ctx.func_param_ast_tids[fidx];
             let n_param_tys: i64 = param_tys.len();
             let mut ai: i64 = 0;
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
+                if ai < n_param_tys {
+                    lctx_record_wide_expected_ast_context(
+                        ctx, a, arg_eid, param_ast_tids[ai]
+                    );
+                    lctx_record_wide_control_flow_context(ctx, a, arg_eid, param_tys[ai]);
+                }
                 let mut arg_id: i64 = lower_consumed_expr(ctx, arg_eid);
                 if ai < n_param_tys &&
                    (param_tys[ai] == ITY_I8() || param_tys[ai] == ITY_U8() ||
                     param_tys[ai] == ITY_I16() || param_tys[ai] == ITY_U16() ||
-                    param_tys[ai] == ITY_I32() || param_tys[ai] == ITY_U32()) {
+                    param_tys[ai] == ITY_I32() || param_tys[ai] == ITY_U32() ||
+                    param_tys[ai] == ITY_I128() || param_tys[ai] == ITY_U128()) {
                     arg_id = lower_narrow_literal(ctx, a, arg_eid, arg_id, param_tys[ai]);
                 }
                 call_args.push(arg_id);
@@ -2839,6 +3181,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let val_eid: i64 = expr_a(a, eid);
         let val_id: i64 = {
             if val_eid != -1 {
+                lctx_record_wide_expected_ast_context(
+                    ctx, a, val_eid, ctx.func_return_ast_tid
+                );
+                lctx_record_wide_control_flow_context(ctx, a, val_eid, ctx.func.return_ty);
                 let original: i64 = lower_expr(ctx, val_eid);
                 lower_narrow_literal(ctx, a, val_eid, original, ctx.func.return_ty)
             } else {
@@ -2863,7 +3209,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let field_sid: i64 = expr_b(a, lhs_eid);
             let field_name: String = arena_str(a, field_sid);
             let recv_id: i64 = lower_expr(ctx, recv_eid);
-            let val_id: i64 = lower_expr(ctx, rhs_eid);
             let recv_tag_str: String = lctx_get_tag(ctx, recv_id);
             if recv_tag_str.len() == 0 {
                 let w: String = String::from("warning: FieldSet on untagged instruction %");
@@ -2875,6 +3220,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
             if fidx != -1 {
+                lctx_record_wide_expected_ast_context(
+                    ctx, a, rhs_eid,
+                    lctx_struct_field_ast_tid(ctx, recv_tag_str, fidx)
+                );
+                let field_type_name: String = lctx_struct_field_type(ctx, recv_tag_str, fidx);
+                let field_ty: i64 = ity_for_scalar_type_name(field_type_name);
+                lctx_record_wide_control_flow_context(ctx, a, rhs_eid, field_ty);
+                let original: i64 = lower_expr(ctx, rhs_eid);
+                let val_id: i64 = lower_narrow_literal(ctx, a, rhs_eid, original, field_ty);
                 // Field store transfers a linear RHS into the heap container.
                 lctx_emit_linear_consume_if_needed(ctx, val_id);
                 let fs_args: Vec<i64> = Vec::new();
@@ -2889,7 +3243,20 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let idx_eid: i64 = expr_b(a, lhs_eid);
             let recv_id: i64 = lower_expr(ctx, recv_eid);
             let idx_id: i64 = lower_expr(ctx, idx_eid);
-            let val_id: i64 = lower_expr(ctx, rhs_eid);
+            lctx_record_wide_expected_ast_context(
+                ctx, a, rhs_eid,
+                lctx_generic_ast_arg_tid(
+                    ctx, lctx_get_declared_ast_tid(ctx, recv_id), String::from("Vec"), 0
+                )
+            );
+            let elem_ty: i64 = ity_for_scalar_type_name(lctx_get_vec_elem(ctx, recv_id));
+            lctx_record_wide_control_flow_context(ctx, a, rhs_eid, elem_ty);
+            let original: i64 = lower_expr(ctx, rhs_eid);
+            let val_id: i64 = if elem_ty == ITY_I128() || elem_ty == ITY_U128() {
+                lower_narrow_literal(ctx, a, rhs_eid, original, elem_ty)
+            } else {
+                original
+            };
             // Index store transfers a linear RHS into the heap container.
             lctx_emit_linear_consume_if_needed(ctx, val_id);
             let set_args: Vec<i64> = Vec::new();
@@ -2898,16 +3265,30 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             set_args.push(val_id);
             return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), set_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_set_val"));
         }
+        if lhs_tag == EXPR_IDENT() {
+            let context_name_sid: i64 = expr_a(a, lhs_eid);
+            let context_name: String = arena_str(a, context_name_sid);
+            let context_id: i64 = lctx_lookup(ctx, context_name);
+            lctx_record_wide_expected_ast_context(
+                ctx, a, rhs_eid, lctx_get_declared_ast_tid(ctx, context_id)
+            );
+            lctx_record_wide_control_flow_context(
+                ctx, a, rhs_eid, lctx_inst_ty(ctx, context_id)
+            );
+        }
         let mut rhs_id: i64 = lower_expr(ctx, rhs_eid);
         if lhs_tag == EXPR_IDENT() {
             let name_sid: i64 = expr_a(a, lhs_eid);
             let name: String = arena_str(a, name_sid);
             let current_id: i64 = lctx_lookup(ctx, name);
+            let current_ast_tid: i64 = lctx_get_declared_ast_tid(ctx, current_id);
             let current_ty: i64 = lctx_inst_ty(ctx, current_id);
             if current_ty == ITY_I8() || current_ty == ITY_U8() || current_ty == ITY_I16() ||
-               current_ty == ITY_U16() || current_ty == ITY_I32() || current_ty == ITY_U32() {
+               current_ty == ITY_U16() || current_ty == ITY_I32() || current_ty == ITY_U32() ||
+               current_ty == ITY_I128() || current_ty == ITY_U128() {
                 rhs_id = lower_narrow_literal(ctx, a, rhs_eid, rhs_id, current_ty);
             }
+            lctx_tag_declared_ast_tid(ctx, rhs_id, current_ast_tid);
             lctx_assign(ctx, name, rhs_id);
         }
         return rhs_id;
@@ -2936,6 +3317,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let field_type: String = lctx_struct_field_type(ctx, recv_tag_str, fidx);
         let field_ity: i64 = ity_for_scalar_type_name(field_type);
         let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), field_ity, fg_args, IDATA_FIELD(), fidx, 0, String::from(""));
+        lctx_tag_declared_ast_tid(
+            ctx, result, lctx_struct_field_ast_tid(ctx, recv_tag_str, fidx)
+        );
         if field_type != String::from("") {
             if !is_scalar_field_type_name(field_type) {
                 lctx_tag(ctx, result, field_type);
@@ -2984,8 +3368,23 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let fval_eid: i64 = list_get(a, fields_lid, fi * 2 + 1);
             let fname: String = arena_str(a, fname_sid);
             let fidx: i64 = lctx_struct_field_index(ctx, struct_name, fname);
-            let val_id: i64 = lower_consumed_expr(ctx, fval_eid);
             if fidx != -1 {
+                lctx_record_wide_expected_ast_context(
+                    ctx, a, fval_eid,
+                    lctx_struct_field_ast_tid(ctx, struct_name, fidx)
+                );
+                let context_field_name: String = lctx_struct_field_type(ctx, struct_name, fidx);
+                lctx_record_wide_control_flow_context(
+                    ctx, a, fval_eid, ity_for_scalar_type_name(context_field_name)
+                );
+            }
+            let mut val_id: i64 = lower_consumed_expr(ctx, fval_eid);
+            if fidx != -1 {
+                let field_name: String = lctx_struct_field_type(ctx, struct_name, fidx);
+                let field_ty: i64 = ity_for_scalar_type_name(field_name);
+                if field_ty == ITY_I128() || field_ty == ITY_U128() {
+                    val_id = lower_narrow_literal(ctx, a, fval_eid, val_id, field_ty);
+                }
                 let fs_args: Vec<i64> = Vec::new();
                 fs_args.push(ptr_id);
                 fs_args.push(val_id);
@@ -3127,7 +3526,20 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut pvi: i64 = 0;
         while pvi < n_payload {
             let payload_eid0: i64 = list_get(a, fields_lid, pvi);
-            let payload_value: i64 = lower_consumed_expr(ctx, payload_eid0);
+            let payload_ty: i64 = lctx_variant_payload_ty(
+                ctx, enum_name, variant_name, pvi
+            );
+            let payload_ast_tid: i64 = lctx_variant_payload_ast_tid(
+                ctx, enum_name, variant_name, pvi
+            );
+            lctx_record_wide_expected_ast_context(ctx, a, payload_eid0, payload_ast_tid);
+            lctx_record_wide_control_flow_context(ctx, a, payload_eid0, payload_ty);
+            let mut payload_value: i64 = lower_consumed_expr(ctx, payload_eid0);
+            if payload_ty == ITY_I128() || payload_ty == ITY_U128() {
+                payload_value = lower_narrow_literal(
+                    ctx, a, payload_eid0, payload_value, payload_ty
+                );
+            }
             payload_values.push(payload_value);
             if lctx_inst_ty(ctx, payload_value) == ITY_LPTR() {
                 owns_linear = true;
@@ -3139,6 +3551,23 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_ty: i64 = if owns_linear { ITY_LPTR() } else { ITY_PTR() };
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), alloc_ty, alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, enum_name);
+        if n_payload > 0 {
+            let contextual_payload_ty: i64 = lctx_inst_ty(ctx, payload_values[0]);
+            if contextual_payload_ty == ITY_I128() || contextual_payload_ty == ITY_U128() {
+                if enum_name == String::from("Option") && variant_name == String::from("Some") {
+                    lctx_tag_option_elem(ctx, ptr_id, contextual_payload_ty);
+                } else if enum_name == String::from("Result") &&
+                          (variant_name == String::from("Ok") || variant_name == String::from("Err")) {
+                    let contextual_variants: Vec<i64> = Vec::new();
+                    contextual_variants.push(-1);
+                    contextual_variants.push(-1);
+                    if tag_val >= 0 && tag_val < contextual_variants.len() {
+                        contextual_variants[tag_val] = contextual_payload_ty;
+                    }
+                    lctx_tag_variant_payloads(ctx, ptr_id, contextual_variants);
+                }
+            }
+        }
 
         let tag_args: Vec<i64> = Vec::new();
         let tag_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), tag_args, IDATA_CONST_I64(), tag_val, 0, String::from(""));
@@ -3319,13 +3748,20 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_len"));
             }
             if method_name == String::from("insert") {
+                let map_ast_tid: i64 = lctx_get_declared_ast_tid(ctx, recv_id);
+                let key_ast_tid: i64 = lctx_generic_ast_arg_tid(
+                    ctx, map_ast_tid, String::from("HashMap"), 0
+                );
+                let value_ast_tid: i64 = lctx_generic_ast_arg_tid(
+                    ctx, map_ast_tid, String::from("HashMap"), 1
+                );
                 let k_id: i64 = {
                     let ae: i64 = list_get(a, args_lid, 0);
-                    lower_consumed_expr(ctx, ae)
+                    lower_consumed_expr_with_expected_ast_tid(ctx, ae, key_ast_tid)
                 };
                 let v_id: i64 = {
                     let ae: i64 = list_get(a, args_lid, 1);
-                    lower_consumed_expr(ctx, ae)
+                    lower_consumed_expr_with_expected_ast_tid(ctx, ae, value_ast_tid)
                 };
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
@@ -3379,10 +3815,17 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             // crash. Mirrors the Vec.push pattern in the same file.
             let nargs: i64 = list_len(a, args_lid);
             if method_name == String::from("insert") {
+                let map_ast_tid: i64 = lctx_get_declared_ast_tid(ctx, recv_id);
+                let key_ast_tid: i64 = lctx_generic_ast_arg_tid(
+                    ctx, map_ast_tid, String::from("BTreeMap"), 0
+                );
+                let value_ast_tid: i64 = lctx_generic_ast_arg_tid(
+                    ctx, map_ast_tid, String::from("BTreeMap"), 1
+                );
                 let k_id: i64 = {
                     if nargs > 0 {
                         let ae: i64 = list_get(a, args_lid, 0);
-                        lower_consumed_expr(ctx, ae)
+                        lower_consumed_expr_with_expected_ast_tid(ctx, ae, key_ast_tid)
                     } else {
                         let u_args: Vec<i64> = Vec::new();
                         lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
@@ -3391,7 +3834,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let v_id: i64 = {
                     if nargs > 1 {
                         let ae: i64 = list_get(a, args_lid, 1);
-                        lower_consumed_expr(ctx, ae)
+                        lower_consumed_expr_with_expected_ast_tid(ctx, ae, value_ast_tid)
                     } else {
                         let u_args: Vec<i64> = Vec::new();
                         lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
@@ -3446,10 +3889,17 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         if method_name == String::from("push") {
             let nargs: i64 = list_len(a, args_lid);
+            let elem_ty: i64 = ity_for_scalar_type_name(lctx_get_vec_elem(ctx, recv_id));
             let elem_id: i64 = {
                 if nargs > 0 {
                     let ae: i64 = list_get(a, args_lid, 0);
-                    lower_consumed_expr(ctx, ae)
+                    lctx_record_wide_control_flow_context(ctx, a, ae, elem_ty);
+                    let original: i64 = lower_consumed_expr(ctx, ae);
+                    if elem_ty == ITY_I128() || elem_ty == ITY_U128() {
+                        lower_narrow_literal(ctx, a, ae, original, elem_ty)
+                    } else {
+                        original
+                    }
                 } else {
                     let u_args: Vec<i64> = Vec::new();
                     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
@@ -3500,12 +3950,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let base_eid: i64 = expr_a(a, eid);
         let index_eid: i64 = expr_b(a, eid);
         let vec_ptr: i64 = lower_expr(ctx, base_eid);
+        let elem_ast_tid: i64 = lctx_generic_ast_arg_tid(
+            ctx, lctx_get_declared_ast_tid(ctx, vec_ptr), String::from("Vec"), 0
+        );
         let idx_id: i64 = lower_expr(ctx, index_eid);
         let call_args: Vec<i64> = Vec::new();
         call_args.push(vec_ptr);
         call_args.push(idx_id);
         let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
         lctx_propagate_vec_elem(ctx, vec_ptr, result);
+        lctx_tag_declared_ast_tid(ctx, result, elem_ast_tid);
         return result;
     }
 
@@ -3835,7 +4289,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // `None => -1`) merging with a genuinely narrow-typed arm (e.g.
         // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
         if result_ty == ITY_I8() || result_ty == ITY_U8() || result_ty == ITY_I16() ||
-           result_ty == ITY_U16() || result_ty == ITY_I32() || result_ty == ITY_U32() {
+           result_ty == ITY_U16() || result_ty == ITY_I32() || result_ty == ITY_U32() ||
+           result_ty == ITY_I128() || result_ty == ITY_U128() {
             let mut fi: i64 = 0;
             while fi < n_merge_arms {
                 if reachable_result_markers[fi] && reachable_result_tys[fi] != result_ty {
@@ -4071,9 +4526,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     if tag == EXPR_CAST() {
         let inner_eid: i64 = expr_a(a, eid);
         let target_ast_tid: i64 = expr_b(a, eid);
+        let tgt_ty: i64 = lctx_lower_ast_ty(ctx, target_ast_tid);
+        if tgt_ty == ITY_I128() || tgt_ty == ITY_U128() {
+            lctx_record_wide_marker_context(ctx, a, inner_eid, tgt_ty);
+        }
         let val_id: i64 = lower_expr(ctx, inner_eid);
         let src_ty: i64 = lctx_inst_ty(ctx, val_id);
-        let tgt_ty: i64 = lctx_lower_ast_ty(ctx, target_ast_tid);
         if expr_tag(a, inner_eid) == EXPR_LIT_INT() {
             let lit_val: i64 = expr_a(a, inner_eid);
             if tgt_ty == ITY_U8() {
@@ -4084,6 +4542,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let lit_val: i64 = expr_a(a, inner_eid);
                 let const_args: Vec<i64> = Vec::new();
                 return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), const_args, IDATA_CONST_U64(), lit_val, 0, String::from(""));
+            }
+            if tgt_ty == ITY_I128() || tgt_ty == ITY_U128() {
+                return emit_wide_integer_constant(ctx, a, inner_eid, tgt_ty);
             }
         }
         if ir_ty_is_integer(src_ty) && ir_ty_is_integer(tgt_ty) {
@@ -4104,6 +4565,20 @@ fn lower_consumed_expr(ctx: LowerCtx, eid: i64) -> i64 {
     id
 }
 
+fn lower_consumed_expr_with_expected_ast_tid(
+    ctx: LowerCtx, eid: i64, expected_tid: i64
+) -> i64 {
+    lctx_record_wide_expected_ast_context(ctx, ctx.arena, eid, expected_tid);
+    let expected_ty: i64 = {
+        if expected_tid == -1 { -1 } else { lctx_lower_ast_ty(ctx, expected_tid) }
+    };
+    let original: i64 = lower_consumed_expr(ctx, eid);
+    if expected_ty == ITY_I128() || expected_ty == ITY_U128() {
+        return lower_narrow_literal(ctx, ctx.arena, eid, original, expected_ty);
+    }
+    original
+}
+
 fn lower_stmt(ctx: LowerCtx, sid: i64) {
     let a: AstArena = ctx.arena;
     let tag: i64 = stmt_tag(a, sid);
@@ -4111,6 +4586,18 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
         let pat_id: i64 = stmt_a(a, sid);
         let ann_tid: i64 = stmt_b(a, sid);
         let init_eid: i64 = stmt_c(a, sid);
+        if ann_tid != -1 {
+            lctx_record_wide_expected_ast_context(ctx, a, init_eid, ann_tid);
+            let context_ann_tid: i64 = lower_resolve_alias_tid(
+                a, ann_tid, ctx.type_alias_names, ctx.type_alias_target_tids
+            );
+            if type_tag(a, context_ann_tid) == TY_NAMED() {
+                let context_name: String = arena_str(a, type_a(a, context_ann_tid));
+                lctx_record_wide_control_flow_context(
+                    ctx, a, init_eid, ity_for_scalar_type_name(context_name)
+                );
+            }
+        }
         let mut val: i64 = lower_expr(ctx, init_eid);
         lctx_set_inst_span(ctx, val, stmt_span(a, sid));
         let ptag: i64 = pat_tag(a, pat_id);
@@ -4141,6 +4628,12 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
                     if type_name == String::from("u32") {
                         val = lower_narrow_literal(ctx, a, init_eid, val, ITY_U32());
                     }
+                    if type_name == String::from("i128") {
+                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_I128());
+                    }
+                    if type_name == String::from("u128") {
+                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_U128());
+                    }
                     if type_name == String::from("u64") && lctx_inst_ty(ctx, val) != ITY_U64() {
                         let cast_args: Vec<i64> = Vec::new();
                         cast_args.push(val);
@@ -4166,6 +4659,9 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
                         }
                     }
                 }
+            }
+            if ann_tid != -1 {
+                lctx_tag_declared_ast_tid(ctx, val, ann_tid);
             }
             ctx.func.local_names_ids.push(val);
             ctx.func.local_names_strs.push(name);
@@ -4495,6 +4991,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     func.blocks.push(entry);
 
     ctx.func = func;
+    ctx.func_return_ast_tid = ret_tid;
     ctx.current_block = 0;
     ctx.next_inst_id = 0;
     ctx.inst_ty_by_id = Vec::new();
@@ -4503,6 +5000,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.scope_starts = Vec::new();
     ctx.tag_inst_ids = Vec::new();
     ctx.tag_names = Vec::new();
+    ctx.declared_ast_inst_ids = Vec::new();
+    ctx.declared_ast_tids = Vec::new();
     ctx.vec_elem_inst_ids = Vec::new();
     ctx.vec_elem_paths = Vec::new();
     ctx.vec_option_elem_inst_ids = Vec::new();
@@ -4529,6 +5028,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         func.params.push(pty);
         let arg_args: Vec<i64> = Vec::new();
         let arg_id: i64 = lctx_emit(ctx, IOP_GET_ARG(), pty, arg_args, IDATA_ARG_INDEX(), pi, 0, String::from(""));
+        lctx_tag_declared_ast_tid(ctx, arg_id, ptid);
         lctx_set_inst_span(ctx, arg_id, fn_span(a, fid));
         let pname: String = arena_str(a, pname_sid);
         func.param_names.push(pname);
@@ -4610,12 +5110,18 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         lower_requires_clauses(ctx, vow_lid);
     }
 
+    let contextual_result_eid: i64 = block_result_eid(a, body_bid);
+    if contextual_result_eid != -1 {
+        lctx_record_wide_expected_ast_context(ctx, a, contextual_result_eid, ret_tid);
+        lctx_record_wide_control_flow_context(ctx, a, contextual_result_eid, ir_ret);
+    }
     lctx_push_scope(ctx);
     let mut trailing: i64 = lower_block_inner(ctx, body_bid);
     lctx_pop_scope(ctx);
 
     if ir_ret == ITY_I8() || ir_ret == ITY_U8() || ir_ret == ITY_I16() ||
-       ir_ret == ITY_U16() || ir_ret == ITY_I32() || ir_ret == ITY_U32() {
+       ir_ret == ITY_U16() || ir_ret == ITY_I32() || ir_ret == ITY_U32() ||
+       ir_ret == ITY_I128() || ir_ret == ITY_U128() {
         let result_eid: i64 = block_result_eid(a, body_bid);
         if result_eid != -1 {
             trailing = lower_narrow_literal(ctx, a, result_eid, trailing, ir_ret);
@@ -4664,15 +5170,19 @@ fn lower_module_vow(
     let func_ret_vec_elems: Vec<String> = Vec::new();
     let func_ret_option_elems: Vec<i64> = Vec::new();
     let func_param_tys: Vec<Vec<i64>> = Vec::new();
+    let func_param_ast_tids: Vec<Vec<i64>> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
     let linear_owner_names: Vec<String> = Vec::new();
     let type_alias_names: Vec<String> = Vec::new();
     let type_alias_target_tids: Vec<i64> = Vec::new();
     let struct_field_lists: Vec<Vec<String>> = Vec::new();
     let struct_field_type_names: Vec<Vec<String>> = Vec::new();
+    let struct_field_ast_tids: Vec<Vec<i64>> = Vec::new();
     let struct_field_vec_elems: Vec<Vec<String>> = Vec::new();
     let enum_names: Vec<String> = Vec::new();
     let enum_variant_lists: Vec<Vec<String>> = Vec::new();
+    let enum_variant_payload_tys: Vec<Vec<Vec<i64>>> = Vec::new();
+    let enum_variant_payload_ast_tids: Vec<Vec<Vec<i64>>> = Vec::new();
 
     let n_items: i64 = m.items.len();
     let mut alias_i: i64 = 0;
@@ -4771,13 +5281,16 @@ fn lower_module_vow(
             let params_lid: i64 = fn_params_lid(a, iid);
             let nparams: i64 = list_len(a, params_lid) / 3;
             let param_tys: Vec<i64> = Vec::new();
+            let param_ast_tids: Vec<i64> = Vec::new();
             let mut pi: i64 = 0;
             while pi < nparams {
                 let ptid: i64 = list_get(a, params_lid, pi * 3 + 1);
                 param_tys.push(lower_ast_ty_linear(a, ptid, linear_owner_names, type_alias_names, type_alias_target_tids));
+                param_ast_tids.push(ptid);
                 pi = pi + 1;
             }
             func_param_tys.push(param_tys);
+            func_param_ast_tids.push(param_ast_tids);
         } else if ik == ITEM_STRUCT() {
             let sname_sid: i64 = sdef_name_sid(a, iid);
             let sname: String = arena_str(a, sname_sid);
@@ -4785,12 +5298,14 @@ fn lower_module_vow(
             let nf: i64 = list_len(a, fields_lid) / 2;
             let fnames: Vec<String> = Vec::new();
             let ftypes: Vec<String> = Vec::new();
+            let ftids: Vec<i64> = Vec::new();
             let fvec_elems: Vec<String> = Vec::new();
             let ir_fields: Vec<IrFieldLayout> = Vec::new();
             let mut fi: i64 = 0;
             while fi < nf {
                 let fname_sid: i64 = list_get(a, fields_lid, fi * 2);
                 let ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
+                ftids.push(ftid);
                 let resolved_ftid: i64 = lower_resolve_alias_tid(a, ftid, type_alias_names, type_alias_target_tids);
                 let fname: String = arena_str(a, fname_sid);
                 fnames.push(fname);
@@ -4852,6 +5367,7 @@ fn lower_module_vow(
             struct_names.push(sname);
             struct_field_lists.push(fnames);
             struct_field_type_names.push(ftypes);
+            struct_field_ast_tids.push(ftids);
             struct_field_vec_elems.push(fvec_elems);
             let is_linear: i64 = a.sdef_data[iid * 4 + 2];
             let sl: IrStructLayout = IrStructLayout { name: sname, fields: ir_fields, is_linear: is_linear };
@@ -4863,6 +5379,8 @@ fn lower_module_vow(
             let n_pairs: i64 = list_len(a, variants_lid);
             let nv: i64 = n_pairs / 2;
             let vnames: Vec<String> = Vec::new();
+            let variant_payload_tys: Vec<Vec<i64>> = Vec::new();
+            let variant_payload_ast_tids: Vec<Vec<i64>> = Vec::new();
             let ir_variants: Vec<IrVariantLayout> = Vec::new();
             let mut vi: i64 = 0;
             while vi < nv {
@@ -4872,20 +5390,28 @@ fn lower_module_vow(
                 let payload_lid: i64 = list_get(a, variants_lid, vi * 2 + 1);
                 let n_payload: i64 = list_len(a, payload_lid);
                 let payload: Vec<IrFieldLayout> = Vec::new();
+                let payload_tys: Vec<i64> = Vec::new();
+                let payload_ast_tids: Vec<i64> = Vec::new();
                 let mut pi: i64 = 0;
                 while pi < n_payload {
                     let p_ast_tid: i64 = list_get(a, payload_lid, pi);
                     let p_ir_ty: i64 = lower_ast_ty_linear(a, p_ast_tid, linear_owner_names, type_alias_names, type_alias_target_tids);
+                    payload_tys.push(p_ir_ty);
+                    payload_ast_tids.push(p_ast_tid);
                     let fl: IrFieldLayout = IrFieldLayout { name: String::from(""), ty: p_ir_ty };
                     payload.push(fl);
                     pi = pi + 1;
                 }
                 let vl: IrVariantLayout = IrVariantLayout { name: vname, tag: vi, payload: payload };
                 ir_variants.push(vl);
+                variant_payload_tys.push(payload_tys);
+                variant_payload_ast_tids.push(payload_ast_tids);
                 vi = vi + 1;
             }
             enum_names.push(ename);
             enum_variant_lists.push(vnames);
+            enum_variant_payload_tys.push(variant_payload_tys);
+            enum_variant_payload_ast_tids.push(variant_payload_ast_tids);
             let el: IrEnumLayout = IrEnumLayout { name: ename, variants: ir_variants };
             ir_mod.enum_layouts.push(el);
         }
@@ -4897,12 +5423,16 @@ fn lower_module_vow(
     opt_variants.push(String::from("None"));
     opt_variants.push(String::from("Some"));
     enum_variant_lists.push(opt_variants);
+    enum_variant_payload_tys.push(Vec::new());
+    enum_variant_payload_ast_tids.push(Vec::new());
 
     enum_names.push(String::from("Result"));
     let res_variants: Vec<String> = Vec::new();
     res_variants.push(String::from("Ok"));
     res_variants.push(String::from("Err"));
     enum_variant_lists.push(res_variants);
+    enum_variant_payload_tys.push(Vec::new());
+    enum_variant_payload_ast_tids.push(Vec::new());
 
     let cnames: Vec<String> = Vec::new();
     let cvals: Vec<i64> = Vec::new();
@@ -4963,15 +5493,19 @@ fn lower_module_vow(
     ctx.func_ret_vec_elems = func_ret_vec_elems;
     ctx.func_ret_option_elems = func_ret_option_elems;
     ctx.func_param_tys = func_param_tys;
+    ctx.func_param_ast_tids = func_param_ast_tids;
     ctx.struct_names = struct_names;
     ctx.linear_owner_names = linear_owner_names;
     ctx.type_alias_names = type_alias_names;
     ctx.type_alias_target_tids = type_alias_target_tids;
     ctx.struct_field_lists = struct_field_lists;
     ctx.struct_field_type_names = struct_field_type_names;
+    ctx.struct_field_ast_tids = struct_field_ast_tids;
     ctx.struct_field_vec_elems = struct_field_vec_elems;
     ctx.enum_names = enum_names;
     ctx.enum_variant_lists = enum_variant_lists;
+    ctx.enum_variant_payload_tys = enum_variant_payload_tys;
+    ctx.enum_variant_payload_ast_tids = enum_variant_payload_ast_tids;
     ctx.const_names = cnames;
     ctx.const_values = cvals;
     ctx.const_tids = ctids;

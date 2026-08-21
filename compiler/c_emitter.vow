@@ -408,6 +408,8 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
 // function (used as a Warning diagnostic + skip-the-function gate).
 // Empty string means the function IS modelable.
 fn iop_unsupported_name(op: i64) -> String {
+    if op == IOP_CONST_I128() { return String::from("ConstI128"); }
+    if op == IOP_CONST_U128() { return String::from("ConstU128"); }
     if op == IOP_REM_F32() { return String::from("RemF32"); }
     if op == IOP_REM_F64() { return String::from("RemF64"); }
     if op == IOP_LOAD() { return String::from("Load"); }

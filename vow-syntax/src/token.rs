@@ -55,12 +55,12 @@ pub enum TokenKind {
     KwUnsafe,
 
     // Literals
-    LitInt(i128),
+    LitInt(u128),
     LitFloat(f64),
     LitBool(bool),
     LitString(String),
 
-    LitIntSuffixed { value: i128, suffix: IntSuffix },
+    LitIntSuffixed { value: u128, suffix: IntSuffix },
 
     // Identifiers
     Ident(String),

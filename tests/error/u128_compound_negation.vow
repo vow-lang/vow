@@ -1,0 +1,12 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "unary negation is not allowed on unsigned type"
+module U128CompoundNegation
+
+fn returned() -> u128 {
+    -(1 + 0)
+}
+
+fn assigned() {
+    let mut value: u128 = 0;
+    value = -(1 + 0);
+}

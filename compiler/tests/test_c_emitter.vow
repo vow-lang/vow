@@ -379,6 +379,45 @@ fn check_expanding_string_helper_falls_back(name: String, argc: i64, base_code: 
     0
 }
 
+fn check_wide_constants_are_non_modelable() -> i64 {
+    let i128_insts: Vec<IrInst> = Vec::new();
+    i128_insts.push(ir_inst_new(
+        0, IOP_CONST_I128(), ITY_I128(), Vec::new(),
+        IDATA_CONST_I128(), 0, 0, String::from("")
+    ));
+    i128_insts.push(mk_inst_return(1, 0));
+    let i128_blocks: Vec<IrBlock> = Vec::new();
+    i128_blocks.push(mk_block(0, i128_insts));
+    let i128_fn: IrFunction = mk_function(
+        14, String::from("wide_i128"), Vec::new(), ITY_I128(), i128_blocks
+    );
+    let i128_functions: Vec<IrFunction> = Vec::new();
+    i128_functions.push(i128_fn);
+    let i128_module: IrModule = mk_module(i128_functions);
+    if !non_modelable_reason(i128_fn, i128_module, Vec::new()).contains(
+        String::from("ConstI128")
+    ) { return 64; }
+
+    let u128_insts: Vec<IrInst> = Vec::new();
+    u128_insts.push(ir_inst_new(
+        0, IOP_CONST_U128(), ITY_U128(), Vec::new(),
+        IDATA_CONST_U128(), 0, 0, String::from("")
+    ));
+    u128_insts.push(mk_inst_return(1, 0));
+    let u128_blocks: Vec<IrBlock> = Vec::new();
+    u128_blocks.push(mk_block(0, u128_insts));
+    let u128_fn: IrFunction = mk_function(
+        15, String::from("wide_u128"), Vec::new(), ITY_U128(), u128_blocks
+    );
+    let u128_functions: Vec<IrFunction> = Vec::new();
+    u128_functions.push(u128_fn);
+    let u128_module: IrModule = mk_module(u128_functions);
+    if !non_modelable_reason(u128_fn, u128_module, Vec::new()).contains(
+        String::from("ConstU128")
+    ) { return 65; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_name_modelable_and_mangled(String::from("abs"), 7, 1);
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -410,5 +449,7 @@ fn main() -> i32 {
     if r14 != 0 { return i64_to_i32_wrap(r14); }
     let r15: i64 = check_expanding_string_helper_falls_back(String::from("__vow_string_split_in_arena"), 3, 62);
     if r15 != 0 { return i64_to_i32_wrap(r15); }
+    let r16: i64 = check_wide_constants_are_non_modelable();
+    if r16 != 0 { return i64_to_i32_wrap(r16); }
     0
 }

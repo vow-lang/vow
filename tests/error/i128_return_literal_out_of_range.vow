@@ -1,0 +1,11 @@
+// TEST: stderr "literal 170141183460469231731687303715884105728 does not fit in i128"
+// TEST: error-code LiteralOutOfRange
+module I128ReturnLiteralOutOfRange
+
+fn too_large() -> i128 {
+    return 170141183460469231731687303715884105728;
+}
+
+fn main() -> i32 {
+    0
+}

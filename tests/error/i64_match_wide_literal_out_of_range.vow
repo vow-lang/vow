@@ -1,0 +1,10 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 340282366920938463463374607431768211455 does not fit in i64"
+module I64MatchWideLiteralOutOfRange
+
+fn value(input: Option<i64>) -> i64 {
+    match input {
+        Option::Some(_) => { 340282366920938463463374607431768211455 },
+        Option::None => { 0 },
+    }
+}

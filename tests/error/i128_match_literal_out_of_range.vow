@@ -1,0 +1,9 @@
+// TEST: error E1010
+module I128MatchLiteralOutOfRange
+
+fn value(input: Option<i64>) -> i128 {
+    match input {
+        Option::Some(_) => { 170141183460469231731687303715884105728 },
+        Option::None => { 0 },
+    }
+}

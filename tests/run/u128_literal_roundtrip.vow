@@ -1,0 +1,18 @@
+// TEST: skip "parse/print fixture covered by vow-syntax integration tests"
+module U128LiteralRoundtrip
+
+fn small() -> u128 {
+    42u128
+}
+
+fn above_i64_max() -> u128 {
+    9223372036854775808u128
+}
+
+fn near_i128_max() -> u128 {
+    170141183460469231731687303715884105726u128
+}
+
+fn maximum() -> u128 {
+    340282366920938463463374607431768211455u128
+}

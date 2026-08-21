@@ -418,6 +418,12 @@ fn roundtrip(src: &str) {
 }
 
 #[test]
+fn wide_integer_literal_fixtures_roundtrip() {
+    roundtrip(include_str!("../../tests/run/i128_literal_roundtrip.vow"));
+    roundtrip(include_str!("../../tests/run/u128_literal_roundtrip.vow"));
+}
+
+#[test]
 fn binary_search_roundtrip() {
     roundtrip(BINARY_SEARCH_SOURCE);
 }
