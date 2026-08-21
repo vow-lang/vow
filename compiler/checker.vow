@@ -1412,7 +1412,8 @@ fn check_contextual_integer_literal_ranges(e: CheckEnv, a: AstArena, eid: i64, t
         -1
     };
     let payload_tag: i64 = if payload_tid == -1 { -1 } else { ty_tag(e.ts, payload_tid) };
-    if (ty_is_integer(e.ts, payload_tid) || payload_tag == CTY_APPLIED()) &&
+    if payload_tid != -1 &&
+       (ty_is_integer(e.ts, payload_tid) || payload_tag == CTY_APPLIED()) &&
        list_len(a, fields_lid) > 0 {
         check_contextual_integer_literal_ranges(
             e, a, list_get(a, fields_lid, 0), payload_tid
