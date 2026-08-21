@@ -68,7 +68,7 @@ fn arb_type_leaf() -> impl Strategy<Value = Type> {
 
 pub fn arb_lit() -> impl Strategy<Value = Lit> {
     prop_oneof![
-        (0i128..1000).prop_map(Lit::Int),
+        (0u128..1000).prop_map(Lit::Int),
         prop::bool::ANY.prop_map(Lit::Bool),
         prop::sample::select(&["hello", "world", "test", ""])
             .prop_map(|s| Lit::String(s.to_string())),

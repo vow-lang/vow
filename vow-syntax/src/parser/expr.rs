@@ -155,7 +155,13 @@ impl Parser {
             TokenKind::LitIntSuffixed { value, suffix } => {
                 self.advance();
                 use crate::token::IntSuffix;
-                if suffix == IntSuffix::U64 {
+                if matches!(suffix, IntSuffix::U64 | IntSuffix::I128 | IntSuffix::U128) {
+                    let target_name = match suffix {
+                        IntSuffix::U64 => "u64",
+                        IntSuffix::I128 => "i128",
+                        IntSuffix::U128 => "u128",
+                        _ => unreachable!(),
+                    };
                     Expr {
                         kind: ExprKind::Cast {
                             expr: Box::new(Expr {
@@ -163,7 +169,7 @@ impl Parser {
                                 span: start,
                             }),
                             target_ty: Box::new(Type::Named {
-                                name: "u64".to_string(),
+                                name: target_name.to_string(),
                                 span: start,
                             }),
                         },
@@ -1192,6 +1198,41 @@ mod tests {
     fn paren_unwrap() {
         let expr = parse_no_errors("(42)");
         assert!(matches!(&expr.kind, ExprKind::Lit(Lit::Int(42))));
+    }
+
+    #[test]
+    fn explicit_wide_integer_suffixes_produce_typed_ast_nodes() {
+        for (source, expected_type) in [("1u64", "u64"), ("1i128", "i128"), ("1u128", "u128")] {
+            let expr = parse_no_errors(source);
+            match &expr.kind {
+                ExprKind::Cast { expr, target_ty } => {
+                    assert!(matches!(&expr.kind, ExprKind::Lit(Lit::Int(1))));
+                    assert!(matches!(
+                        &**target_ty,
+                        Type::Named { name, .. } if name == expected_type
+                    ));
+                }
+                other => panic!("expected typed integer literal AST for {source}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn preexisting_narrow_integer_suffixes_remain_untyped() {
+        let expr = parse_no_errors("1u8");
+        assert!(matches!(expr.kind, ExprKind::Lit(Lit::Int(1))));
+    }
+
+    #[test]
+    fn integer_literal_negation_remains_a_prefix_expression() {
+        let expr = parse_no_errors("-1i128");
+        assert!(matches!(
+            &expr.kind,
+            ExprKind::UnaryOp {
+                op: UnOp::Neg,
+                operand,
+            } if matches!(operand.kind, ExprKind::Cast { .. })
+        ));
     }
 
     #[test]

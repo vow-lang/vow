@@ -1,0 +1,485 @@
+module TestWideLiteralLexer
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+use ir
+use ir_printer
+use lower
+use module_io
+
+fn checked_error_count(source: String) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("wide_range.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < parsed.items.len() {
+        item_files.push(String::from("wide_range.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("wide_range.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx.error_count
+}
+
+fn checked_first_error_message(source: String) -> String [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("wide_range.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < parsed.items.len() {
+        item_files.push(String::from("wide_range.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("wide_range.vow"));
+    check_module(check_env, parsed, item_files);
+    if dctx.diags.len() == 0 { return String::from(""); }
+    dctx.diags[0].message
+}
+
+fn check_inferred_and_method_argument_ranges() -> i32 [io] {
+    let inferred_option: String = String::from(
+        "module WideRange\nfn value() { let value = Option::Some(340282366920938463463374607431768211455); }"
+    );
+    if checked_error_count(inferred_option) == 0 { return 71; }
+
+    let truncate_argument: String = String::from(
+        "module WideRange\nfn truncate(values: Vec<i64>) { values.truncate(340282366920938463444927863358058659841); }"
+    );
+    if checked_error_count(truncate_argument) == 0 { return 72; }
+    0
+}
+
+fn check_special_i64_operand_ranges() -> i32 [io] {
+    let literal_comparison: String = String::from(
+        "module WideRange\nfn value() -> bool { 340282366920938463463374607431768211455 > 0 }"
+    );
+    if checked_error_count(literal_comparison) == 0 { return 73; }
+
+    let index_operand: String = String::from(
+        "module WideRange\nfn value(values: Vec<i64>) -> i64 { values[340282366920938463463374607431768211455] }"
+    );
+    if checked_error_count(index_operand) == 0 { return 74; }
+
+    let string_match_position: String = String::from(
+        "module WideRange\nfn value(text: String) -> i64 { string_matches_literal_at(text, 340282366920938463463374607431768211455, \"x\") }"
+    );
+    if checked_error_count(string_match_position) == 0 { return 75; }
+
+    let string_raw_parts: String = String::from(
+        "module WideRange\nfn value() -> String { String::from_raw_parts_copy(340282366920938463463374607431768211455, 0) }"
+    );
+    if checked_error_count(string_raw_parts) == 0 { return 76; }
+
+    let vec_raw_parts: String = String::from(
+        "module WideRange\nfn value() -> Vec<i64> { Vec::from_raw_parts_copy(340282366920938463463374607431768211455, 0) }"
+    );
+    if checked_error_count(vec_raw_parts) == 0 { return 77; }
+    0
+}
+
+fn check_unsigned_compound_negation() -> i32 [io] {
+    let compound_return: String = String::from(
+        "module WideRange\nfn value() -> u128 { -(1 + 0) }"
+    );
+    if checked_error_count(compound_return) == 0 { return 78; }
+
+    let compound_assignment: String = String::from(
+        "module WideRange\nfn value() { let mut result: u128 = 0; result = -(1 + 0); }"
+    );
+    if checked_error_count(compound_assignment) == 0 { return 79; }
+    0
+}
+
+fn check_pre128_targets_use_the_full_magnitude() -> i32 [io] {
+    let i64_overflow: String = String::from(
+        "module WideRange\nfn value() -> i64 { let x: i64 = 18446744073709551616; x }"
+    );
+    if checked_error_count(i64_overflow) == 0 { return 21; }
+
+    let u64_overflow: String = String::from(
+        "module WideRange\nfn value() -> u64 { let x: u64 = 18446744073709551616; x }"
+    );
+    if checked_error_count(u64_overflow) == 0 { return 22; }
+
+    let i64_min: String = String::from(
+        "module WideRange\nfn value() -> i64 { let x: i64 = -9223372036854775808; x }"
+    );
+    if checked_error_count(i64_min) != 0 { return 23; }
+
+    let u64_max: String = String::from(
+        "module WideRange\nfn value() -> u64 { let x: u64 = 18446744073709551615; x }"
+    );
+    if checked_error_count(u64_max) != 0 { return 24; }
+    0
+}
+
+fn check_implicit_wide_return_range() -> i32 [io] {
+    let i128_overflow: String = String::from(
+        "module WideRange\nfn value() -> i128 { 170141183460469231731687303715884105728 }"
+    );
+    if checked_error_count(i128_overflow) == 0 { return 25; }
+    0
+}
+
+fn check_explicit_wide_return_range() -> i32 [io] {
+    let i128_overflow: String = String::from(
+        "module WideRange\nfn value() -> i128 { return 170141183460469231731687303715884105728; }"
+    );
+    if checked_error_count(i128_overflow) == 0 { return 26; }
+    0
+}
+
+fn check_wide_assignment_range() -> i32 [io] {
+    let u128_below_range: String = String::from(
+        "module WideRange\nfn value() -> u128 { let mut x: u128 = 0; x = -1; x }"
+    );
+    if checked_error_count(u128_below_range) == 0 { return 27; }
+    0
+}
+
+fn check_unsigned_negative_zero_range() -> i32 [io] {
+    let u128_negative_zero: String = String::from(
+        "module WideRange\nfn value() -> u128 { let x: u128 = -0; x }\nfn suffixed() -> u128 { -0u128 }"
+    );
+    if checked_error_count(u128_negative_zero) != 0 { return 28; }
+    0
+}
+
+fn check_default_i64_wide_magnitude_range() -> i32 [io] {
+    let i64_overflow: String = String::from(
+        "module WideRange\nfn value() -> i64 { 340282366920938463463374607431768211455 }"
+    );
+    if checked_error_count(i64_overflow) == 0 { return 29; }
+    0
+}
+
+fn check_wide_range_diagnostic_value() -> i32 [io] {
+    let source: String = String::from(
+        "module WideRange\nfn value() -> i128 { 170141183460469231731687303715884105728 }"
+    );
+    let message: String = checked_first_error_message(source);
+    if !message.contains(String::from(
+        "literal 170141183460469231731687303715884105728 does not fit in i128"
+    )) { return 42; }
+    0
+}
+
+fn check_wide_binary_marker_ranges() -> i32 [io] {
+    let u128_below_range: String = String::from(
+        "module WideRange\nfn value() -> u128 { let x: u128 = -1 + 0; x }"
+    );
+    if checked_error_count(u128_below_range) == 0 { return 30; }
+
+    let i128_overflow: String = String::from(
+        "module WideRange\nfn value() -> i128 { let x: i128 = 170141183460469231731687303715884105728 + 0; x }"
+    );
+    if checked_error_count(i128_overflow) == 0 { return 31; }
+    0
+}
+
+fn check_explicit_negative_i128_suffix_range() -> i32 [io] {
+    let i128_below_range: String = String::from(
+        "module WideRange\nfn value() -> i128 { -200000000000000000000000000000000000000i128 }"
+    );
+    if checked_error_count(i128_below_range) == 0 { return 32; }
+    0
+}
+
+fn check_aggregate_literal_ranges() -> i32 [io] {
+    let u128_struct_below_range: String = String::from(
+        "module WideRange\nstruct Wide { value: u128 }\nfn value() -> Wide { Wide { value: -1 } }"
+    );
+    if checked_error_count(u128_struct_below_range) == 0 { return 33; }
+
+    let i128_enum_overflow: String = String::from(
+        "module WideRange\nenum Wide { Value(i128) }\nfn value() -> Wide { Wide::Value(170141183460469231731687303715884105728) }"
+    );
+    if checked_error_count(i128_enum_overflow) == 0 { return 34; }
+
+    let i64_const_overflow: String = String::from(
+        "module WideRange\nconst VALUE: i64 = 340282366920938463463374607431768211455;\nfn value() -> i64 { VALUE }"
+    );
+    if checked_error_count(i64_const_overflow) == 0 { return 38; }
+    0
+}
+
+fn check_contextual_match_and_option_ranges() -> i32 [io] {
+    let i128_match_overflow: String = String::from(
+        "module WideRange\nfn value(input: Option<i64>) -> i128 { match input { Option::Some(_) => { 170141183460469231731687303715884105728 }, Option::None => { 0 }, } }"
+    );
+    if checked_error_count(i128_match_overflow) == 0 { return 43; }
+
+    let i128_option_overflow: String = String::from(
+        "module WideRange\nfn value() -> Option<i128> { let result: Option<i128> = Option::Some(170141183460469231731687303715884105728); result }"
+    );
+    if checked_error_count(i128_option_overflow) == 0 { return 44; }
+
+    let i64_match_overflow: String = String::from(
+        "module WideRange\nfn value(input: Option<i64>) -> i64 { match input { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } }"
+    );
+    if checked_error_count(i64_match_overflow) == 0 { return 49; }
+
+    let i64_loop_break_overflow: String = String::from(
+        "module WideRange\nfn value() -> i64 { loop { break 340282366920938463463374607431768211455; } }"
+    );
+    if checked_error_count(i64_loop_break_overflow) == 0 { return 52; }
+
+    let i64_nested_match_overflow: String = String::from(
+        "module WideRange\nfn value(flag: bool, input: Option<i64>) -> i64 { if flag { 0 } else { match input { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } } }"
+    );
+    if checked_error_count(i64_nested_match_overflow) == 0 { return 55; }
+
+    let i64_nested_loop_overflow: String = String::from(
+        "module WideRange\nfn value(flag: bool) -> i64 { if flag { 0 } else { loop { break 340282366920938463463374607431768211455; } } }"
+    );
+    if checked_error_count(i64_nested_loop_overflow) == 0 { return 56; }
+
+    let i64_option_overflow: String = String::from(
+        "module WideRange\nfn value() -> Option<i64> { Option::Some(340282366920938463463374607431768211455) }"
+    );
+    if checked_error_count(i64_option_overflow) == 0 { return 57; }
+    0
+}
+
+fn check_unsigned_wide_ir_printing() -> i32 {
+    let max_limb: i64 = -1;
+    let inst: IrInst = ir_inst_new(
+        0, IOP_CONST_U128(), ITY_U128(), Vec::new(),
+        IDATA_CONST_U128(), max_limb, max_limb, String::from("")
+    );
+    let rendered: String = format_data(inst);
+    if rendered != String::from(
+        "lo=18446744073709551615,hi=18446744073709551615u128"
+    ) { return 35; }
+    0
+}
+
+fn check_aggregate_wide_literal_lowering() -> i32 {
+    let source: String = String::from(
+        "module WideAggregate\nstruct WideStruct { value: u128 }\nstruct WrappedWide { value: Option<u128> }\nstruct WideVec { values: Vec<u128> }\nenum WideEnum { Value(u128) }\nenum NestedWideEnum { Value(Option<u128>) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }\nfn compare_wide(x: u128, flag: bool) -> bool { x == if flag { 18446744073709551618 } else { 0 } }\nfn compare_wide_literal_first(x: u128) -> bool { 340282366920938463463374607431768211450 == x }\nfn assign_wide(target: WideStruct) { target.value = 18446744073709551619; }\nfn match_wide(value: Option<i64>) -> u128 { match value { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } }\nfn make_option() -> Option<u128> { let value: Option<u128> = Option::Some(340282366920938463463374607431768211454); value }\nfn make_ok() -> Result<u128, ()> { let value: Result<u128, ()> = Result::Ok(340282366920938463463374607431768211453); value }\nfn make_err() -> Result<(), u128> { let value: Result<(), u128> = Result::Err(340282366920938463463374607431768211452); value }\nfn consume_option(value: Option<u128>) { }\nfn pass_option() { consume_option(Option::Some(340282366920938463463374607431768211451)); }\nfn loop_wide() -> u128 { loop { break 340282366920938463463374607431768211449; } }\nfn make_wrapped() -> WrappedWide { WrappedWide { value: Option::Some(340282366920938463463374607431768211448) } }\nfn choose_option(flag: bool) -> Option<u128> { if flag { Option::Some(340282366920938463463374607431768211447) } else { Option::None } }\nfn assign_wide_vec(values: Vec<u128>) { values[0] = 340282366920938463463374607431768211446; }\nfn match_option(value: Option<i64>) -> Option<u128> { match value { Option::Some(_) => { Option::Some(340282366920938463463374607431768211445) }, Option::None => { Option::None }, } }\nfn loop_option() -> Option<u128> { loop { break Option::Some(340282366920938463463374607431768211444); } }\nfn assign_wide_vec_field(target: WideVec) { target.values[0] = 340282366920938463463374607431768211443; }\nfn cast_wide_marker() -> u128 { (340282366920938463463374607431768211442 + 0) as u128 }\nfn make_nested_enum() -> NestedWideEnum { NestedWideEnum::Value(Option::Some(340282366920938463463374607431768211441)) }\nfn push_wide_vec(values: Vec<u128>) { values.push(340282366920938463463374607431768211440); }\nfn return_option() -> Option<u128> { return Option::Some(340282366920938463463374607431768211439); }\nfn assign_wrapped(target: WrappedWide) { target.value = Option::Some(340282366920938463463374607431768211438); }\nfn insert_hashmap(values: HashMap<i64, u128>) { values.insert(0, 340282366920938463463374607431768211437); }\nfn insert_btreemap(values: BTreeMap<i64, u128>) { values.insert(0, 340282366920938463463374607431768211436); }\nfn assign_option_vec(values: Vec<Option<u128>>) { values[0] = Option::Some(340282366920938463463374607431768211435); }"
+    );
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("wide_aggregate.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut item_index: i64 = 0;
+    while item_index < parsed.items.len() {
+        item_files.push(String::from("wide_aggregate.vow"));
+        item_index = item_index + 1;
+    }
+    let lowered: IrModule = lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    );
+    let mut saw_struct_limb: bool = false;
+    let mut saw_enum_limb: bool = false;
+    let mut saw_if_limb: bool = false;
+    let mut saw_binary_if_limb: bool = false;
+    let mut saw_left_binary_limb: bool = false;
+    let mut saw_field_assignment_limb: bool = false;
+    let mut saw_match_limb: bool = false;
+    let mut saw_option_limb: bool = false;
+    let mut saw_ok_limb: bool = false;
+    let mut saw_err_limb: bool = false;
+    let mut saw_argument_limb: bool = false;
+    let mut saw_loop_break_limb: bool = false;
+    let mut saw_nested_field_limb: bool = false;
+    let mut saw_conditional_payload_limb: bool = false;
+    let mut saw_index_assignment_limb: bool = false;
+    let mut saw_match_payload_limb: bool = false;
+    let mut saw_loop_payload_limb: bool = false;
+    let mut saw_field_index_assignment_limb: bool = false;
+    let mut saw_cast_marker_limb: bool = false;
+    let mut saw_nested_enum_limb: bool = false;
+    let mut saw_push_limb: bool = false;
+    let mut saw_return_limb: bool = false;
+    let mut saw_nested_assignment_limb: bool = false;
+    let mut saw_hashmap_insert_limb: bool = false;
+    let mut saw_btreemap_insert_limb: bool = false;
+    let mut saw_nested_index_assignment_limb: bool = false;
+    let mut function_index: i64 = 0;
+    while function_index < lowered.functions.len() {
+        let f: IrFunction = lowered.functions[function_index];
+        let mut block_index: i64 = 0;
+        while block_index < f.blocks.len() {
+            let block: IrBlock = f.blocks[block_index];
+            let mut inst_index: i64 = 0;
+            while inst_index < block.insts.len() {
+                let inst: IrInst = block.insts[inst_index];
+                if inst.dk == IDATA_CONST_U128() && inst.dv2 == 1 {
+                    if inst.dv == 0 { saw_struct_limb = true; }
+                    if inst.dv == 1 { saw_enum_limb = true; }
+                }
+                if inst.dk == IDATA_CONST_U128() && inst.dv == 0 &&
+                   inst.dv2 as u64 == (1u64 << 63) {
+                    saw_if_limb = true;
+                }
+                if inst.dk == IDATA_CONST_U128() && inst.dv2 == 1 {
+                    if inst.dv == 2 { saw_binary_if_limb = true; }
+                    if inst.dv == 3 { saw_field_assignment_limb = true; }
+                }
+                if inst.dk == IDATA_CONST_U128() && inst.dv2 == -1 {
+                    if inst.dv == -1 { saw_match_limb = true; }
+                    if inst.dv == -2 { saw_option_limb = true; }
+                    if inst.dv == -3 { saw_ok_limb = true; }
+                    if inst.dv == -4 { saw_err_limb = true; }
+                    if inst.dv == -5 { saw_argument_limb = true; }
+                    if inst.dv == -6 { saw_left_binary_limb = true; }
+                    if inst.dv == -7 { saw_loop_break_limb = true; }
+                    if inst.dv == -8 { saw_nested_field_limb = true; }
+                    if inst.dv == -9 { saw_conditional_payload_limb = true; }
+                    if inst.dv == -10 { saw_index_assignment_limb = true; }
+                    if inst.dv == -11 { saw_match_payload_limb = true; }
+                    if inst.dv == -12 { saw_loop_payload_limb = true; }
+                    if inst.dv == -13 { saw_field_index_assignment_limb = true; }
+                    if inst.dv == -14 { saw_cast_marker_limb = true; }
+                    if inst.dv == -15 { saw_nested_enum_limb = true; }
+                    if inst.dv == -16 { saw_push_limb = true; }
+                    if inst.dv == -17 { saw_return_limb = true; }
+                    if inst.dv == -18 { saw_nested_assignment_limb = true; }
+                    if inst.dv == -19 { saw_hashmap_insert_limb = true; }
+                    if inst.dv == -20 { saw_btreemap_insert_limb = true; }
+                    if inst.dv == -21 { saw_nested_index_assignment_limb = true; }
+                }
+                inst_index = inst_index + 1;
+            }
+            block_index = block_index + 1;
+        }
+        function_index = function_index + 1;
+    }
+    if !saw_struct_limb { return 36; }
+    if !saw_enum_limb { return 37; }
+    if !saw_if_limb { return 39; }
+    if !saw_binary_if_limb { return 40; }
+    if !saw_field_assignment_limb { return 41; }
+    if !saw_left_binary_limb { return 51; }
+    if !saw_match_limb { return 45; }
+    if !saw_option_limb { return 46; }
+    if !saw_ok_limb { return 47; }
+    if !saw_err_limb { return 48; }
+    if !saw_argument_limb { return 50; }
+    if !saw_loop_break_limb { return 53; }
+    if !saw_nested_field_limb { return 54; }
+    if !saw_conditional_payload_limb { return 58; }
+    if !saw_index_assignment_limb { return 59; }
+    if !saw_match_payload_limb { return 60; }
+    if !saw_loop_payload_limb { return 61; }
+    if !saw_field_index_assignment_limb { return 62; }
+    if !saw_cast_marker_limb { return 63; }
+    if !saw_nested_enum_limb { return 64; }
+    if !saw_push_limb { return 65; }
+    if !saw_return_limb { return 66; }
+    if !saw_nested_assignment_limb { return 67; }
+    if !saw_hashmap_insert_limb { return 68; }
+    if !saw_btreemap_insert_limb { return 69; }
+    if !saw_nested_index_assignment_limb { return 70; }
+    0
+}
+
+fn check_wide_suffix_parser_path() -> i32 {
+    let tokens: Vec<Token> = lex(String::from("340282366920938463463374607431768211455u128"));
+    let arena: AstArena = arena_new();
+    let parser: Parser = parser_new(tokens, arena, diag_ctx_new(), String::from("wide.vow"));
+    let cast_eid: i64 = parse_primary(parser);
+    if expr_tag(arena, cast_eid) != EXPR_CAST() { return 9; }
+
+    let literal_eid: i64 = expr_a(arena, cast_eid);
+    let u64_max: u64 = 0u64 - 1u64;
+    if expr_tag(arena, literal_eid) != EXPR_LIT_INT() { return 10; }
+    if expr_int_lo(arena, literal_eid) != u64_max { return 11; }
+    if expr_int_hi(arena, literal_eid) != u64_max { return 12; }
+
+    let target_tid: i64 = expr_b(arena, cast_eid);
+    if type_tag(arena, target_tid) != TY_NAMED() { return 13; }
+    let target_name: String = arena.strs[type_a(arena, target_tid)];
+    if target_name != String::from("u128") { return 14; }
+
+    let ctx: LowerCtx = lctx_new(String::from("wide"), ITY_U128(), 0, arena, Vec::new());
+    let wide_id: i64 = lower_expr(ctx, cast_eid);
+    let block: IrBlock = ctx.func.blocks[0];
+    let wide_inst: IrInst = block.insts[wide_id];
+    if wide_inst.op != IOP_CONST_U128() { return 15; }
+    if wide_inst.ty != ITY_U128() { return 16; }
+    if wide_inst.dk != IDATA_CONST_U128() { return 17; }
+    if wide_inst.dv as u64 != u64_max || wide_inst.dv2 as u64 != u64_max { return 18; }
+
+    let encoded: Vec<i64> = Vec::new();
+    write_inst_data(encoded, wide_inst);
+    if encoded.len() != 17 || encoded[0] != 21 { return 19; }
+    let mut i: i64 = 1;
+    while i < encoded.len() {
+        if encoded[i] != 255 { return 20; }
+        i = i + 1;
+    }
+    0
+}
+
+fn main() -> i32 [io] {
+    let tokens: Vec<Token> = lex(String::from(
+        "42i128 9223372036854775808u128 340282366920938463463374607431768211455u128 340282366920938463463374607431768211456u128"
+    ));
+    let u64_top_bit: u64 = 1u64 << 63;
+    let u64_max: u64 = 0u64 - 1u64;
+    let t0: Token = tokens[0];
+    let t1: Token = tokens[1];
+    let t2: Token = tokens[2];
+    let t3: Token = tokens[3];
+
+    if t0.int_lo != 42u64 || t0.int_hi != 0u64 { return 1; }
+    if t0.int_val2 != tok_suffix_i128() { return 2; }
+
+    if t1.int_lo != u64_top_bit || t1.int_hi != 0u64 { return 3; }
+    if t1.int_val2 != tok_suffix_u128() { return 4; }
+
+    if t2.int_lo != u64_max || t2.int_hi != u64_max { return 5; }
+    if t2.int_val2 != tok_suffix_u128() { return 6; }
+
+    if t3.tag != tok_invalid_int() { return 7; }
+    if t3.str_val != String::from("integer literal out of range") { return 8; }
+    let parser_result: i32 = check_wide_suffix_parser_path();
+    if parser_result != 0 { return parser_result; }
+    let pre128_result: i32 = check_pre128_targets_use_the_full_magnitude();
+    if pre128_result != 0 { return pre128_result; }
+    let implicit_result: i32 = check_implicit_wide_return_range();
+    if implicit_result != 0 { return implicit_result; }
+    let explicit_result: i32 = check_explicit_wide_return_range();
+    if explicit_result != 0 { return explicit_result; }
+    let assignment_result: i32 = check_wide_assignment_range();
+    if assignment_result != 0 { return assignment_result; }
+    let negative_zero_result: i32 = check_unsigned_negative_zero_range();
+    if negative_zero_result != 0 { return negative_zero_result; }
+    let default_i64_result: i32 = check_default_i64_wide_magnitude_range();
+    if default_i64_result != 0 { return default_i64_result; }
+    let diagnostic_result: i32 = check_wide_range_diagnostic_value();
+    if diagnostic_result != 0 { return diagnostic_result; }
+    let binary_result: i32 = check_wide_binary_marker_ranges();
+    if binary_result != 0 { return binary_result; }
+    let negative_suffix_result: i32 = check_explicit_negative_i128_suffix_range();
+    if negative_suffix_result != 0 { return negative_suffix_result; }
+    let aggregate_result: i32 = check_aggregate_literal_ranges();
+    if aggregate_result != 0 { return aggregate_result; }
+    let contextual_result: i32 = check_contextual_match_and_option_ranges();
+    if contextual_result != 0 { return contextual_result; }
+    let inferred_method_result: i32 = check_inferred_and_method_argument_ranges();
+    if inferred_method_result != 0 { return inferred_method_result; }
+    let special_operand_result: i32 = check_special_i64_operand_ranges();
+    if special_operand_result != 0 { return special_operand_result; }
+    let unsigned_negation_result: i32 = check_unsigned_compound_negation();
+    if unsigned_negation_result != 0 { return unsigned_negation_result; }
+    let lowering_result: i32 = check_aggregate_wide_literal_lowering();
+    if lowering_result != 0 { return lowering_result; }
+    check_unsigned_wide_ir_printing()
+}

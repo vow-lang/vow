@@ -1,0 +1,5 @@
+module I64InferredOptionWideLiteralOutOfRange
+
+fn value() {
+    let value = Option::Some(340282366920938463463374607431768211455);
+}

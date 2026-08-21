@@ -29,7 +29,7 @@ pub const MODULE_MAGIC: [u8; 4] = *b"VMOD";
 /// Skips 2 because `tests/multi/vmod_decode_bad_version/main.vow` pins
 /// the literal byte `2` as its "bad version" probe — leaving it untouched
 /// keeps that fixture meaningful without a parallel source edit.
-pub const MODULE_VERSION: u32 = 4;
+pub const MODULE_VERSION: u32 = 5;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DecodeError {
@@ -336,6 +336,8 @@ opcode_map! {
     133 => BitAnd, 134 => BitOr, 135 => BitXor, 136 => Shl, 137 => Shr,
     138 => ConstU8,
     139 => IntCast,
+    140 => ConstI128,
+    141 => ConstU128,
 }
 
 fn write_integer_type(out: &mut Vec<u8>, ty: IntegerType) {
@@ -478,6 +480,17 @@ fn write_inst_data(out: &mut Vec<u8>, d: &InstData) {
             out.push(2);
             out.extend_from_slice(&v.to_le_bytes());
         }
+        InstData::ConstI128(v) => {
+            out.push(20);
+            let magnitude = *v as u128;
+            out.extend_from_slice(&(magnitude as u64).to_le_bytes());
+            out.extend_from_slice(&((magnitude >> 64) as u64).to_le_bytes());
+        }
+        InstData::ConstU128(v) => {
+            out.push(21);
+            out.extend_from_slice(&(*v as u64).to_le_bytes());
+            out.extend_from_slice(&((*v >> 64) as u64).to_le_bytes());
+        }
         InstData::ConstF32(v) => {
             out.push(3);
             out.extend_from_slice(&v.to_bits().to_le_bytes());
@@ -584,6 +597,16 @@ fn read_inst_data(r: &mut Reader) -> Result<InstData, DecodeError> {
             from: read_integer_type(r)?,
             to: read_integer_type(r)?,
         }),
+        20 => {
+            let lo = u128::from(r.u64()?);
+            let hi = u128::from(r.u64()?);
+            Ok(InstData::ConstI128(((hi << 64) | lo) as i128))
+        }
+        21 => {
+            let lo = u128::from(r.u64()?);
+            let hi = u128::from(r.u64()?);
+            Ok(InstData::ConstU128((hi << 64) | lo))
+        }
         _ => Err(DecodeError::InvalidKind("InstData", tag as u32)),
     }
 }
@@ -983,10 +1006,10 @@ mod tests {
     #[test]
     fn magic_and_version_are_stable() {
         assert_eq!(&MODULE_MAGIC, b"VMOD");
-        assert_eq!(MODULE_VERSION, 4);
+        assert_eq!(MODULE_VERSION, 5);
         let bytes = encode_module(&empty_module());
         assert_eq!(&bytes[..4], b"VMOD");
-        assert_eq!(&bytes[4..8], &4u32.to_le_bytes());
+        assert_eq!(&bytes[4..8], &5u32.to_le_bytes());
     }
 
     #[test]
@@ -995,6 +1018,32 @@ mod tests {
         let b = encode_module(&m);
         let m2 = decode_module(&b).unwrap();
         assert_eq!(m, m2);
+    }
+
+    #[test]
+    fn wide_integer_inst_data_round_trips_as_low_then_high_limbs() {
+        let cases = [
+            (
+                InstData::ConstI128(i128::MAX),
+                20u8,
+                u64::MAX,
+                i64::MAX as u64,
+            ),
+            (InstData::ConstI128(i128::MIN), 20u8, 0, 1u64 << 63),
+            (InstData::ConstU128(u128::MAX), 21u8, u64::MAX, u64::MAX),
+        ];
+
+        for (data, tag, lo, hi) in cases {
+            let mut bytes = Vec::new();
+            write_inst_data(&mut bytes, &data);
+            assert_eq!(bytes[0], tag);
+            assert_eq!(&bytes[1..9], &lo.to_le_bytes());
+            assert_eq!(&bytes[9..17], &hi.to_le_bytes());
+
+            let mut reader = Reader::new(&bytes);
+            assert_eq!(read_inst_data(&mut reader).unwrap(), data);
+            assert_eq!(reader.pos, bytes.len());
+        }
     }
 
     #[test]

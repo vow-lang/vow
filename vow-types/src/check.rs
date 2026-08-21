@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::{
-    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module, Pat, PatKind, Stmt, UnOp,
-    VowBlock, VowClause,
+    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module, Pat, PatKind, Stmt, Type, UnOp,
+    VowBlock, VowClause, loop_break_values,
 };
 use vow_syntax::span::Span;
 
@@ -285,6 +285,46 @@ fn can_context_coerce(from: &Ty, to: &Ty) -> bool {
     }
 }
 
+fn default_literal_integer_types(ty: &Ty) -> Ty {
+    match ty {
+        Ty::LitInt => Ty::I64,
+        Ty::Applied(base, args) => Ty::Applied(
+            Box::new(default_literal_integer_types(base)),
+            args.iter().map(default_literal_integer_types).collect(),
+        ),
+        Ty::Reference(inner) => Ty::Reference(Box::new(default_literal_integer_types(inner))),
+        Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(default_literal_integer_types).collect()),
+        _ => ty.clone(),
+    }
+}
+
+fn method_argument_types(receiver: &Ty, method: &str) -> Vec<Ty> {
+    match receiver {
+        Ty::Str => match method {
+            "push_str" | "eq" | "contains" => vec![Ty::Str],
+            "byte_at" | "push_byte" => vec![Ty::I64],
+            "substring" => vec![Ty::I64, Ty::I64],
+            _ => vec![],
+        },
+        Ty::Applied(base, args) => match base.as_ref() {
+            Ty::Struct(name) if name == "Vec" => match method {
+                "push" => args.first().cloned().into_iter().collect(),
+                "get" | "truncate" => vec![Ty::I64],
+                _ => vec![],
+            },
+            Ty::Struct(name) if name == "HashMap" || name == "BTreeMap" => match method {
+                "insert" => args.iter().take(2).cloned().collect(),
+                "get" | "contains" | "contains_key" | "remove" => {
+                    args.first().cloned().into_iter().collect()
+                }
+                _ => vec![],
+            },
+            _ => vec![],
+        },
+        _ => vec![],
+    }
+}
+
 fn can_assignment_coerce(from: &Ty, to: &Ty) -> bool {
     can_context_coerce(from, to) || *to == Ty::Never
 }
@@ -317,19 +357,100 @@ fn is_numeric_or_lit_int(ty: &Ty) -> bool {
     ty.is_numeric() || ty.is_lit_int()
 }
 
-/// Evaluates a constant integer expression: a bare literal, or a literal
-/// wrapped in unary negation (e.g. `-1`). Returns `None` for anything else.
-fn const_int_value(expr: &Expr) -> Option<i128> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConstIntValue {
+    magnitude: u128,
+    negative: bool,
+}
+
+impl ConstIntValue {
+    fn display(self) -> String {
+        if self.negative {
+            format!("-{}", self.magnitude)
+        } else {
+            self.magnitude.to_string()
+        }
+    }
+}
+
+/// Evaluates a constant integer expression: a bare unsigned magnitude, or a
+/// magnitude wrapped in unary negation (e.g. `-1`). Returns `None` for anything
+/// else.
+fn const_int_value(expr: &Expr) -> Option<ConstIntValue> {
     match &expr.kind {
-        ExprKind::Lit(Lit::Int(value)) => Some(*value),
+        ExprKind::Lit(Lit::Int(value)) => Some(ConstIntValue {
+            magnitude: *value,
+            negative: false,
+        }),
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
         } => match &operand.kind {
-            ExprKind::Lit(Lit::Int(value)) => Some(-*value),
+            ExprKind::Lit(Lit::Int(value)) => Some(ConstIntValue {
+                magnitude: *value,
+                negative: *value != 0,
+            }),
             _ => None,
         },
         _ => None,
+    }
+}
+
+fn integer_marker_from_block(block: &Block) -> Option<&Expr> {
+    if let Some(expr) = &block.trailing_expr {
+        return Some(expr);
+    }
+    if let Some(Stmt::Expr {
+        expr,
+        has_semicolon: false,
+        ..
+    }) = block.stmts.last()
+    {
+        return Some(expr);
+    }
+    None
+}
+
+fn is_coercible_integer_marker(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Int(_)) => true,
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => is_coercible_integer_marker(operand),
+        ExprKind::BinaryOp {
+            op:
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Rem
+                | BinOp::AddChecked
+                | BinOp::SubChecked
+                | BinOp::MulChecked
+                | BinOp::DivChecked
+                | BinOp::RemChecked
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Shl
+                | BinOp::Shr,
+            lhs,
+            rhs,
+        } => is_coercible_integer_marker(lhs) && is_coercible_integer_marker(rhs),
+        ExprKind::Block(block) => {
+            integer_marker_from_block(block).is_some_and(is_coercible_integer_marker)
+        }
+        ExprKind::If {
+            then_branch,
+            else_branch: Some(else_expr),
+            ..
+        } => {
+            integer_marker_from_block(then_branch).is_some_and(is_coercible_integer_marker)
+                && is_coercible_integer_marker(else_expr)
+        }
+        ExprKind::Match { .. } | ExprKind::Loop { .. } => true,
+        _ => false,
     }
 }
 
@@ -337,24 +458,20 @@ fn is_integer_or_lit_int(ty: &Ty) -> bool {
     ty.is_integer() || ty.is_lit_int()
 }
 
-/// Inclusive `(min, max)` representable by an integer type of the given
-/// `width`/signedness. Literal values are stored as `i128`, so the true
-/// `u128` maximum (`2^128 - 1`) is unrepresentable; `i128::MAX` is used as
-/// the effective upper bound since no literal can exceed it anyway.
-fn integer_type_range(width: u16, is_unsigned: bool) -> (i128, i128) {
+/// Returns the largest positive magnitude and, for signed types, the largest
+/// negative magnitude representable at `width`.
+fn integer_type_magnitude_bounds(width: u16, is_unsigned: bool) -> (u128, Option<u128>) {
     let bits = u32::from(width);
     if is_unsigned {
         let max = if bits >= 128 {
-            i128::MAX
+            u128::MAX
         } else {
-            (1i128 << bits) - 1
+            (1u128 << bits) - 1
         };
-        (0, max)
-    } else if bits >= 128 {
-        (i128::MIN, i128::MAX)
+        (max, None)
     } else {
-        let max = (1i128 << (bits - 1)) - 1;
-        (-(max + 1), max)
+        let negative_magnitude = 1u128 << (bits - 1);
+        (negative_magnitude - 1, Some(negative_magnitude))
     }
 }
 
@@ -690,6 +807,7 @@ impl<'e> Checker<'e> {
                                 c.span,
                             );
                         }
+                        self.check_integer_literal_range(&c.value, &ty);
                         self.const_values.insert(c.name.clone(), *v as i64);
                         self.const_types.insert(c.name.clone(), ty.clone());
                     }
@@ -718,6 +836,7 @@ impl<'e> Checker<'e> {
                                 c.span,
                             );
                         }
+                        self.check_integer_literal_range(&c.value, &ty);
                         if let ExprKind::Lit(Lit::Int(v)) = &operand.kind {
                             self.const_values.insert(c.name.clone(), -(*v as i64));
                             self.const_types.insert(c.name.clone(), ty.clone());
@@ -921,6 +1040,9 @@ impl<'e> Checker<'e> {
         let body_ty = self.check_block(&fn_def.body);
 
         let expected = self.current_return_ty.clone();
+        if let Some(trailing_expr) = integer_marker_from_block(&fn_def.body) {
+            self.check_contextual_integer_literal_ranges(trailing_expr, &expected);
+        }
         if !can_context_coerce(&body_ty, &expected) {
             self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
@@ -1007,7 +1129,7 @@ impl<'e> Checker<'e> {
                     match self.env.resolve(ann) {
                         Ok(ann_ty) => {
                             self.check_btreemap_key_in_ty(&ann_ty, ann.span());
-                            self.check_integer_literal_range(init, &ann_ty);
+                            self.check_contextual_integer_literal_ranges(init, &ann_ty);
                             if !can_context_coerce(&init_ty, &ann_ty) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
@@ -1040,7 +1162,9 @@ impl<'e> Checker<'e> {
                         }
                     }
                 } else {
-                    init_ty
+                    let defaulted_ty = default_literal_integer_types(&init_ty);
+                    self.check_contextual_integer_literal_ranges(init, &defaulted_ty);
+                    defaulted_ty
                 };
                 self.bind_pattern(pattern, &binding_ty);
                 Ty::Unit
@@ -1063,22 +1187,163 @@ impl<'e> Checker<'e> {
     }
 
     fn check_integer_literal_range(&mut self, expr: &Expr, target: &Ty) {
+        if let Some(value) = const_int_value(expr) {
+            self.check_integer_value_range(value, target, expr.span);
+            return;
+        }
+        if target.is_integer() {
+            if let ExprKind::Match { arms, .. } = &expr.kind {
+                for arm in arms {
+                    self.check_integer_literal_range(&arm.body, target);
+                }
+                return;
+            }
+            if let ExprKind::Loop { body, .. } = &expr.kind {
+                for value in loop_break_values(body) {
+                    self.check_integer_literal_range(value, target);
+                }
+                return;
+            }
+        }
+        if !target.is_integer() || !is_coercible_integer_marker(expr) {
+            return;
+        }
+        match &expr.kind {
+            ExprKind::UnaryOp {
+                op: UnOp::Neg,
+                operand,
+            } => {
+                if target.is_unsigned() {
+                    self.emit_error(
+                        ErrorCode::TypeMismatch,
+                        format!("unary negation is not allowed on unsigned type `{target}`"),
+                        expr.span,
+                    );
+                } else {
+                    self.check_integer_literal_range(operand, target);
+                }
+            }
+            ExprKind::BinaryOp { op, lhs, rhs } => {
+                self.check_integer_literal_range(lhs, target);
+                let rhs_target = if matches!(op, BinOp::Shl | BinOp::Shr) {
+                    Ty::U32
+                } else {
+                    target.clone()
+                };
+                self.check_integer_literal_range(rhs, &rhs_target);
+            }
+            ExprKind::Block(block) => {
+                if let Some(result) = integer_marker_from_block(block) {
+                    self.check_integer_literal_range(result, target);
+                }
+            }
+            ExprKind::If {
+                then_branch,
+                else_branch: Some(else_expr),
+                ..
+            } => {
+                if let Some(result) = integer_marker_from_block(then_branch) {
+                    self.check_integer_literal_range(result, target);
+                }
+                self.check_integer_literal_range(else_expr, target);
+            }
+            _ => {}
+        }
+    }
+
+    fn check_contextual_integer_literal_ranges(&mut self, expr: &Expr, target: &Ty) {
+        if target.is_integer() {
+            self.check_integer_literal_range(expr, target);
+            return;
+        }
+        match &expr.kind {
+            ExprKind::Block(block) => {
+                if let Some(result) = block.trailing_expr.as_deref() {
+                    self.check_contextual_integer_literal_ranges(result, target);
+                }
+                return;
+            }
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if let Some(result) = then_branch.trailing_expr.as_deref() {
+                    self.check_contextual_integer_literal_ranges(result, target);
+                }
+                if let Some(else_expr) = else_branch.as_deref() {
+                    self.check_contextual_integer_literal_ranges(else_expr, target);
+                }
+                return;
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.check_contextual_integer_literal_ranges(&arm.body, target);
+                }
+                return;
+            }
+            ExprKind::Loop { body, .. } => {
+                for value in loop_break_values(body) {
+                    self.check_contextual_integer_literal_ranges(value, target);
+                }
+                return;
+            }
+            _ => {}
+        }
+        let Ty::Applied(base, args) = target else {
+            return;
+        };
+        let Ty::Enum(enum_name) = base.as_ref() else {
+            return;
+        };
+        let ExprKind::EnumConstruct { path, fields } = &expr.kind else {
+            return;
+        };
+        if path.first() != Some(enum_name) {
+            return;
+        }
+        let payload_index = match (enum_name.as_str(), path.get(1).map(String::as_str)) {
+            ("Option", Some("Some")) | ("Result", Some("Ok")) => Some(0),
+            ("Result", Some("Err")) => Some(1),
+            _ => None,
+        };
+        if let Some(payload_ty) = payload_index.and_then(|index| args.get(index))
+            && (payload_ty.is_integer() || matches!(payload_ty, Ty::Applied(_, _)))
+            && let Some(field) = fields.first()
+        {
+            self.check_contextual_integer_literal_ranges(field, payload_ty);
+        }
+    }
+
+    fn check_integer_value_range(&mut self, value: ConstIntValue, target: &Ty, span: Span) {
         let Some(width) = target.integer_width() else {
             return;
         };
-        let (min, max) = integer_type_range(width, target.is_unsigned());
-        if let Some(value) = const_int_value(expr)
-            && !(min..=max).contains(&value)
-        {
-            self.emit_error_with_hints(
-                ErrorCode::LiteralOutOfRange,
-                format!("literal {value} does not fit in {target} (range {min}..={max})"),
-                expr.span,
-                vec![format!(
-                    "use a value in {min}..={max} or choose an explicit narrowing intrinsic"
-                )],
-            );
+        let (positive_max, negative_max) =
+            integer_type_magnitude_bounds(width, target.is_unsigned());
+        let out_of_range = if value.negative {
+            negative_max.is_none_or(|max| value.magnitude > max)
+        } else {
+            value.magnitude > positive_max
+        };
+        if !out_of_range {
+            return;
         }
+        let range = match negative_max {
+            Some(max) => format!("-{max}..={positive_max}"),
+            None => format!("0..={positive_max}"),
+        };
+        self.emit_error_with_hints(
+            ErrorCode::LiteralOutOfRange,
+            format!(
+                "literal {} does not fit in {target} (range {range})",
+                value.display()
+            ),
+            span,
+            vec![format!(
+                "use a value in {range} or choose an explicit narrowing intrinsic"
+            )],
+        );
     }
 
     fn stmt_diverges(&self, stmt: &Stmt) -> bool {
@@ -1241,6 +1506,10 @@ impl<'e> Checker<'e> {
                     | BinOp::DivChecked
                     | BinOp::RemChecked => self.check_same_numeric(lhs_ty, rhs_ty, expr.span),
                     BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                        if lhs_ty.is_lit_int() && rhs_ty.is_lit_int() {
+                            self.check_integer_literal_range(lhs, &Ty::I64);
+                            self.check_integer_literal_range(rhs, &Ty::I64);
+                        }
                         if lhs_ty != rhs_ty
                             && lhs_ty != Ty::Never
                             && rhs_ty != Ty::Never
@@ -1252,9 +1521,9 @@ impl<'e> Checker<'e> {
                                     "comparison operands have different types: `{lhs_ty}` and `{rhs_ty}`"
                                 ),
                                 expr.span,
-                                vec![format!(
-                                    "convert one operand so both sides have the same type"
-                                )],
+                                vec![
+                                    "convert one operand so both sides have the same type".to_string()
+                                ],
                             );
                         }
                         Ty::Bool
@@ -1280,11 +1549,14 @@ impl<'e> Checker<'e> {
                             );
                         }
                         if let Some(count) = const_int_value(rhs)
-                            && !(0..i128::from(width)).contains(&count)
+                            && (count.negative || count.magnitude >= u128::from(width))
                         {
                             self.emit_error_with_hints(
                                 ErrorCode::ShiftCountOutOfRange,
-                                format!("shift count {count} is out of range for {lhs_ty}"),
+                                format!(
+                                    "shift count {} is out of range for {lhs_ty}",
+                                    count.display()
+                                ),
                                 rhs.span,
                                 vec![format!("{lhs_ty} shift counts must be in 0..{width}")],
                             );
@@ -1314,6 +1586,26 @@ impl<'e> Checker<'e> {
                 }
             }
             ExprKind::UnaryOp { op, operand } => {
+                if *op == UnOp::Neg
+                    && let ExprKind::Cast { expr, target_ty } = &operand.kind
+                    && let ExprKind::Lit(Lit::Int(magnitude)) = expr.kind
+                    && let Type::Named { name, .. } = target_ty.as_ref()
+                {
+                    if name == "i128" {
+                        self.check_integer_value_range(
+                            ConstIntValue {
+                                magnitude,
+                                negative: true,
+                            },
+                            &Ty::I128,
+                            operand.span,
+                        );
+                        return Ty::I128;
+                    }
+                    if name == "u128" && magnitude == 0 {
+                        return Ty::U128;
+                    }
+                }
                 let operand_ty = self.check_expr(operand);
                 match op {
                     UnOp::Neg => {
@@ -1411,6 +1703,7 @@ impl<'e> Checker<'e> {
                     }
                     for (arg, expected_ty) in args.iter().zip(expected.iter()) {
                         let arg_ty = self.check_expr(arg);
+                        self.check_contextual_integer_literal_ranges(arg, expected_ty);
                         if !can_context_coerce(&arg_ty, expected_ty) {
                             self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
@@ -1477,7 +1770,7 @@ impl<'e> Checker<'e> {
                 }
                 for (arg, expected_ty) in args.iter().zip(param_tys.iter()) {
                     let arg_ty = self.check_expr(arg);
-                    self.check_integer_literal_range(arg, expected_ty);
+                    self.check_contextual_integer_literal_ranges(arg, expected_ty);
                     if !can_context_coerce(&arg_ty, expected_ty) {
                         self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
@@ -1499,6 +1792,12 @@ impl<'e> Checker<'e> {
                 let recv_ty = self.check_expr(receiver);
                 for arg in args {
                     self.check_expr(arg);
+                }
+                for (arg, expected_ty) in args
+                    .iter()
+                    .zip(method_argument_types(&recv_ty, method).iter())
+                {
+                    self.check_contextual_integer_literal_ranges(arg, expected_ty);
                 }
                 let is_str = matches!(recv_ty, Ty::Str);
                 let is_vec = matches!(&recv_ty,
@@ -1723,6 +2022,7 @@ impl<'e> Checker<'e> {
             ExprKind::Index { base, index } => {
                 let base_ty = self.check_expr(base);
                 self.check_expr(index);
+                self.check_contextual_integer_literal_ranges(index, &Ty::I64);
                 match &base_ty {
                     Ty::Applied(_, args) => args.first().cloned().unwrap_or(Ty::Unit),
                     _ => {
@@ -1972,11 +2272,15 @@ impl<'e> Checker<'e> {
                 Ty::Never
             }
             ExprKind::Return { value } => {
+                let expected = self.current_return_ty.clone();
                 let val_ty = match value {
-                    Some(v) => self.check_expr(v),
+                    Some(v) => {
+                        let ty = self.check_expr(v);
+                        self.check_contextual_integer_literal_ranges(v, &expected);
+                        ty
+                    }
                     None => Ty::Unit,
                 };
-                let expected = self.current_return_ty.clone();
                 if !can_context_coerce(&val_ty, &expected) {
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
@@ -2053,6 +2357,7 @@ impl<'e> Checker<'e> {
             ExprKind::Assign { lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);
                 let rhs_ty = self.check_expr(rhs);
+                self.check_contextual_integer_literal_ranges(rhs, &lhs_ty);
                 if !can_assignment_coerce(&rhs_ty, &lhs_ty) {
                     self.emit_error(
                         ErrorCode::TypeMismatch,
@@ -2111,6 +2416,10 @@ impl<'e> Checker<'e> {
                             if let Some((_, expected_ty)) =
                                 info.fields.iter().find(|(n, _)| n == field_name)
                             {
+                                self.check_contextual_integer_literal_ranges(
+                                    field_expr,
+                                    expected_ty,
+                                );
                                 if !can_context_coerce(&actual_ty, expected_ty) {
                                     self.emit_error(
                                         ErrorCode::TypeMismatch,
@@ -2214,6 +2523,7 @@ impl<'e> Checker<'e> {
                         }
                         for field in fields {
                             let arg_ty = self.check_expr(field);
+                            self.check_contextual_integer_literal_ranges(field, &Ty::I64);
                             if !can_context_coerce(&arg_ty, &Ty::I64) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
@@ -2295,6 +2605,7 @@ impl<'e> Checker<'e> {
                         }
                         for field in fields {
                             let arg_ty = self.check_expr(field);
+                            self.check_contextual_integer_literal_ranges(field, &Ty::I64);
                             if !can_context_coerce(&arg_ty, &Ty::I64) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
@@ -2354,16 +2665,20 @@ impl<'e> Checker<'e> {
                                 };
                                 for (i, field_expr) in fields.iter().enumerate() {
                                     let actual_ty = self.check_expr(field_expr);
-                                    if let Some(expected_ty) = expected_tys.get(i)
-                                        && !can_context_coerce(&actual_ty, expected_ty)
-                                    {
-                                        self.emit_error(
-                                            ErrorCode::TypeMismatch,
-                                            format!(
-                                                "variant `{variant_name}` field {i} expects `{expected_ty}`, found `{actual_ty}`"
-                                            ),
-                                            field_expr.span,
+                                    if let Some(expected_ty) = expected_tys.get(i) {
+                                        self.check_contextual_integer_literal_ranges(
+                                            field_expr,
+                                            expected_ty,
                                         );
+                                        if !can_context_coerce(&actual_ty, expected_ty) {
+                                            self.emit_error(
+                                                ErrorCode::TypeMismatch,
+                                                format!(
+                                                    "variant `{variant_name}` field {i} expects `{expected_ty}`, found `{actual_ty}`"
+                                                ),
+                                                field_expr.span,
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -3639,7 +3954,7 @@ mod tests {
 
     // --- u8 shift count range ---
 
-    fn u8_cast(value: i128) -> Expr {
+    fn u8_cast(value: u128) -> Expr {
         make_expr(ExprKind::Cast {
             expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(value)))),
             target_ty: Box::new(Type::Named {
@@ -3649,7 +3964,7 @@ mod tests {
         })
     }
 
-    fn u8_shl_with_count(count: i128) -> Expr {
+    fn u8_shl_with_count(count: u128) -> Expr {
         make_expr(ExprKind::BinaryOp {
             op: BinOp::Shl,
             lhs: Box::new(u8_cast(1)),
@@ -3657,7 +3972,7 @@ mod tests {
         })
     }
 
-    fn u8_shl_with_neg_count(count: i128) -> Expr {
+    fn u8_shl_with_neg_count(count: u128) -> Expr {
         make_expr(ExprKind::BinaryOp {
             op: BinOp::Shl,
             lhs: Box::new(u8_cast(1)),
@@ -3704,7 +4019,7 @@ mod tests {
 
     // --- i32 shift count range ---
 
-    fn i32_cast(value: i128) -> Expr {
+    fn i32_cast(value: u128) -> Expr {
         make_expr(ExprKind::Cast {
             expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(value)))),
             target_ty: Box::new(Type::Named {
@@ -3714,7 +4029,7 @@ mod tests {
         })
     }
 
-    fn i32_shl_with_count(count: i128) -> Expr {
+    fn i32_shl_with_count(count: u128) -> Expr {
         make_expr(ExprKind::BinaryOp {
             op: BinOp::Shl,
             lhs: Box::new(i32_cast(1)),
@@ -3722,7 +4037,7 @@ mod tests {
         })
     }
 
-    fn i32_shl_with_neg_count(count: i128) -> Expr {
+    fn i32_shl_with_neg_count(count: u128) -> Expr {
         make_expr(ExprKind::BinaryOp {
             op: BinOp::Shl,
             lhs: Box::new(i32_cast(1)),
@@ -4519,7 +4834,7 @@ mod tests {
             span: dummy_span(),
         };
         checker.check_stmt(&stmt);
-        assert_eq!(checker.env.lookup("x"), Some(&Ty::LitInt));
+        assert_eq!(checker.env.lookup("x"), Some(&Ty::I64));
         assert!(!checker.has_errors());
     }
 
@@ -4548,7 +4863,7 @@ mod tests {
         assert!(emitter.0[0].message.contains("let binding"));
     }
 
-    fn let_stmt_with_i32_init(value: i128) -> Stmt {
+    fn let_stmt_with_i32_init(value: u128) -> Stmt {
         use vow_syntax::ast::{Pat, PatKind};
         Stmt::Let {
             pattern: Pat {
@@ -4582,6 +4897,82 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         checker.check_stmt(&let_stmt_with_i32_init(2147483647));
+        assert!(!checker.has_errors());
+    }
+
+    fn let_stmt_with_wide_init(target: &str, magnitude: u128, negative: bool) -> Stmt {
+        use vow_syntax::ast::{Pat, PatKind};
+        let literal = make_expr(ExprKind::Lit(Lit::Int(magnitude)));
+        let init = if negative {
+            make_expr(ExprKind::UnaryOp {
+                op: UnOp::Neg,
+                operand: Box::new(literal),
+            })
+        } else {
+            literal
+        };
+        Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "wide".to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(Type::Named {
+                name: target.to_string(),
+                span: dummy_span(),
+            }),
+            init: Box::new(init),
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn wide_integer_literal_ranges_use_the_full_unsigned_magnitude() {
+        for stmt in [
+            let_stmt_with_wide_init("u128", u128::MAX, false),
+            let_stmt_with_wide_init("u128", 0, true),
+            let_stmt_with_wide_init("i128", i128::MAX as u128, false),
+            let_stmt_with_wide_init("i128", 1u128 << 127, true),
+            let_stmt_with_wide_init("u64", u64::MAX as u128, false),
+            let_stmt_with_wide_init("i64", 1u128 << 63, true),
+        ] {
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.check_stmt(&stmt);
+            assert!(!checker.has_errors());
+        }
+
+        for stmt in [
+            let_stmt_with_wide_init("i128", 1u128 << 127, false),
+            let_stmt_with_wide_init("u128", 1, true),
+            let_stmt_with_wide_init("i64", 1u128 << 64, false),
+            let_stmt_with_wide_init("u64", 1u128 << 64, false),
+        ] {
+            let mut emitter = TestEmitter(vec![]);
+            let mut checker = new_checker(&mut emitter);
+            checker.check_stmt(&stmt);
+            assert!(checker.has_errors());
+            assert_eq!(emitter.0[0].code, ErrorCode::LiteralOutOfRange);
+        }
+    }
+
+    #[test]
+    fn explicit_i128_suffix_accepts_the_minimum_negative_value() {
+        let expr = make_expr(ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand: Box::new(make_expr(ExprKind::Cast {
+                expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(1u128 << 127)))),
+                target_ty: Box::new(Type::Named {
+                    name: "i128".to_string(),
+                    span: dummy_span(),
+                }),
+            })),
+        });
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        assert_eq!(checker.check_expr(&expr), Ty::I128);
         assert!(!checker.has_errors());
     }
 

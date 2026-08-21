@@ -707,6 +707,8 @@ pub fn is_modelable(
 
                 Opcode::RemF32
                 | Opcode::RemF64
+                | Opcode::ConstI128
+                | Opcode::ConstU128
                 | Opcode::Load
                 | Opcode::Store
                 | Opcode::LinearConsume
@@ -772,6 +774,8 @@ fn first_unsupported_opcode(
             match inst.opcode {
                 Opcode::RemF32
                 | Opcode::RemF64
+                | Opcode::ConstI128
+                | Opcode::ConstU128
                 | Opcode::Load
                 | Opcode::Store
                 | Opcode::LinearConsume
@@ -901,6 +905,8 @@ fn emit_inst(
                 out.push_str(&format!("  v{} = {}LL;\n", id, v));
             }
         }
+        // Epic #526: wide constant verification is implemented by a later seam.
+        Opcode::ConstI128 | Opcode::ConstU128 => emit_unmodelled(inst, out),
         Opcode::ConstF32 => {
             if let InstData::ConstF32(v) = inst.data {
                 out.push_str(&format!("  v{} = {}f;\n", id, v));
@@ -3573,7 +3579,21 @@ mod tests {
                 ),
                 inst(5, Opcode::ConstUnit, Ty::Unit, vec![], InstData::None),
                 inst(6, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
-                inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                inst(
+                    7,
+                    Opcode::ConstI128,
+                    Ty::I128,
+                    vec![],
+                    InstData::ConstI128(i128::MAX),
+                ),
+                inst(
+                    8,
+                    Opcode::ConstU128,
+                    Ty::U128,
+                    vec![],
+                    InstData::ConstU128(u128::MAX),
+                ),
+                inst(9, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
@@ -3591,6 +3611,46 @@ mod tests {
         assert!(c.contains("v5 = 0;"), "ConstUnit assign: {c}");
         assert!(c.contains("int64_t v6;"), "ConstStr decl: {c}");
         assert!(c.contains("v6 = 0;"), "ConstStr assign: {c}");
+        assert!(
+            c.contains("/* opcode ConstI128 not modelled */"),
+            "ConstI128 must use the deferred verifier fallback: {c}"
+        );
+        assert!(
+            c.contains("/* opcode ConstU128 not modelled */"),
+            "ConstU128 must use the deferred verifier fallback: {c}"
+        );
+    }
+
+    #[test]
+    fn wide_constants_report_the_unsupported_opcode() {
+        for (opcode, ty, data, name) in [
+            (
+                Opcode::ConstI128,
+                Ty::I128,
+                InstData::ConstI128(i128::MAX),
+                "ConstI128",
+            ),
+            (
+                Opcode::ConstU128,
+                Ty::U128,
+                InstData::ConstU128(u128::MAX),
+                "ConstU128",
+            ),
+        ] {
+            let (func, module) = one_block_func_module(
+                "wide",
+                ty,
+                vec![
+                    inst(0, opcode, ty, vec![], data),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            let reason = non_modelable_reason(&func, &module, &HashMap::new());
+            assert!(
+                matches!(reason.as_deref(), Some(reason) if reason.contains(name)),
+                "wide constant reason should name {name}: {reason:?}"
+            );
+        }
     }
 
     #[test]

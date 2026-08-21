@@ -1,0 +1,5 @@
+module I64IndexWideLiteralOutOfRange
+
+fn value(values: Vec<i64>) -> i64 {
+    values[340282366920938463463374607431768211455]
+}
