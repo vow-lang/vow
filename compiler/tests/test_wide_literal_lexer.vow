@@ -170,6 +170,11 @@ fn check_contextual_match_and_option_ranges() -> i32 [io] {
         "module WideRange\nfn value() -> Option<i128> { let result: Option<i128> = Option::Some(170141183460469231731687303715884105728); result }"
     );
     if checked_error_count(i128_option_overflow) == 0 { return 44; }
+
+    let i64_match_overflow: String = String::from(
+        "module WideRange\nfn value(input: Option<i64>) -> i64 { match input { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } }"
+    );
+    if checked_error_count(i64_match_overflow) == 0 { return 49; }
     0
 }
 
@@ -188,7 +193,7 @@ fn check_unsigned_wide_ir_printing() -> i32 {
 
 fn check_aggregate_wide_literal_lowering() -> i32 {
     let source: String = String::from(
-        "module WideAggregate\nstruct WideStruct { value: u128 }\nenum WideEnum { Value(u128) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }\nfn compare_wide(x: u128, flag: bool) -> bool { x == if flag { 18446744073709551618 } else { 0 } }\nfn assign_wide(target: WideStruct) { target.value = 18446744073709551619; }\nfn match_wide(value: Option<i64>) -> u128 { match value { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } }\nfn make_option() -> Option<u128> { let value: Option<u128> = Option::Some(340282366920938463463374607431768211454); value }\nfn make_ok() -> Result<u128, ()> { let value: Result<u128, ()> = Result::Ok(340282366920938463463374607431768211453); value }\nfn make_err() -> Result<(), u128> { let value: Result<(), u128> = Result::Err(340282366920938463463374607431768211452); value }"
+        "module WideAggregate\nstruct WideStruct { value: u128 }\nenum WideEnum { Value(u128) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }\nfn compare_wide(x: u128, flag: bool) -> bool { x == if flag { 18446744073709551618 } else { 0 } }\nfn compare_wide_literal_first(x: u128) -> bool { 340282366920938463463374607431768211450 == x }\nfn assign_wide(target: WideStruct) { target.value = 18446744073709551619; }\nfn match_wide(value: Option<i64>) -> u128 { match value { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } }\nfn make_option() -> Option<u128> { let value: Option<u128> = Option::Some(340282366920938463463374607431768211454); value }\nfn make_ok() -> Result<u128, ()> { let value: Result<u128, ()> = Result::Ok(340282366920938463463374607431768211453); value }\nfn make_err() -> Result<(), u128> { let value: Result<(), u128> = Result::Err(340282366920938463463374607431768211452); value }\nfn consume_option(value: Option<u128>) { }\nfn pass_option() { consume_option(Option::Some(340282366920938463463374607431768211451)); }"
     );
     let arena: AstArena = arena_new();
     let parsed: Module = parse_module_into(
@@ -209,11 +214,13 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     let mut saw_enum_limb: bool = false;
     let mut saw_if_limb: bool = false;
     let mut saw_binary_if_limb: bool = false;
+    let mut saw_left_binary_limb: bool = false;
     let mut saw_field_assignment_limb: bool = false;
     let mut saw_match_limb: bool = false;
     let mut saw_option_limb: bool = false;
     let mut saw_ok_limb: bool = false;
     let mut saw_err_limb: bool = false;
+    let mut saw_argument_limb: bool = false;
     let mut function_index: i64 = 0;
     while function_index < lowered.functions.len() {
         let f: IrFunction = lowered.functions[function_index];
@@ -240,6 +247,8 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
                     if inst.dv == -2 { saw_option_limb = true; }
                     if inst.dv == -3 { saw_ok_limb = true; }
                     if inst.dv == -4 { saw_err_limb = true; }
+                    if inst.dv == -5 { saw_argument_limb = true; }
+                    if inst.dv == -6 { saw_left_binary_limb = true; }
                 }
                 inst_index = inst_index + 1;
             }
@@ -252,10 +261,12 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     if !saw_if_limb { return 39; }
     if !saw_binary_if_limb { return 40; }
     if !saw_field_assignment_limb { return 41; }
+    if !saw_left_binary_limb { return 51; }
     if !saw_match_limb { return 45; }
     if !saw_option_limb { return 46; }
     if !saw_ok_limb { return 47; }
     if !saw_err_limb { return 48; }
+    if !saw_argument_limb { return 50; }
     0
 }
 

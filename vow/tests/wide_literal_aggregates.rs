@@ -38,6 +38,10 @@ fn compare_wide(x: u128, flag: bool) -> bool {
     x == if flag { 18446744073709551618 } else { 0 }
 }
 
+fn compare_wide_literal_first(x: u128) -> bool {
+    340282366920938463463374607431768211450 == x
+}
+
 fn assign_wide(target: WideStruct) {
     target.value = 18446744073709551619;
 }
@@ -66,6 +70,13 @@ fn make_ok() -> Result<u128, ()> {
 fn make_err() -> Result<(), u128> {
     let value: Result<(), u128> = Result::Err(340282366920938463463374607431768211452);
     value
+}
+
+fn consume_option(value: Option<u128>) {
+}
+
+fn pass_option() {
+    consume_option(Option::Some(340282366920938463463374607431768211451));
 }
 "#,
     )
@@ -104,6 +115,10 @@ fn make_err() -> Result<(), u128> {
         "binary conditional operand lost its high limb:\n{stdout}"
     );
     assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211450u128]"),
+        "left-hand binary literal lost its high limb:\n{stdout}"
+    );
+    assert!(
         stdout.contains("ConstU128[18446744073709551619u128]"),
         "field assignment lost its high limb:\n{stdout}"
     );
@@ -122,6 +137,10 @@ fn make_err() -> Result<(), u128> {
     assert!(
         stdout.contains("ConstU128[340282366920938463463374607431768211452u128]"),
         "Result::Err payload lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211451u128]"),
+        "generic function argument lost its contextual wide type:\n{stdout}"
     );
 }
 

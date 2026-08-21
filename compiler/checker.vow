@@ -1232,8 +1232,7 @@ fn wide_literal_range_message(a: AstArena, lit_eid: i64, target_tag: i64) -> Str
 
 fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_tag: i64) {
     if !expr_is_const_int(a, lit_eid) {
-        if (target_tag == CTY_I128() || target_tag == CTY_U128()) &&
-           expr_tag(a, lit_eid) == EXPR_MATCH() {
+        if expr_tag(a, lit_eid) == EXPR_MATCH() {
             let arms_lid: i64 = expr_b(a, lit_eid);
             let n: i64 = list_len(a, arms_lid) / 2;
             let mut i: i64 = 0;

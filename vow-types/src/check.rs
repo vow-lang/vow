@@ -1151,7 +1151,7 @@ impl<'e> Checker<'e> {
             self.check_integer_value_range(value, target, expr.span);
             return;
         }
-        if matches!(target, Ty::I128 | Ty::U128)
+        if target.is_integer()
             && let ExprKind::Match { arms, .. } = &expr.kind
         {
             for arm in arms {

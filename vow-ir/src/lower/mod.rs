@@ -594,7 +594,7 @@ fn scalar_ty_for_field_type_name(name: &str) -> Ty {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FuncSigInfo {
     id: FuncId,
     ret_ty: Ty,
@@ -602,6 +602,7 @@ pub(crate) struct FuncSigInfo {
     ret_vec_elem: Option<String>,
     ret_option_elem: Option<Ty>,
     param_tys: Vec<Ty>,
+    param_ast_tys: Vec<AstType>,
 }
 
 fn non_scalar_type_tag(
@@ -1585,6 +1586,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .enumerate()
                 .map(|(i, a)| {
+                    if let Some(expected) = call_info
+                        .as_ref()
+                        .and_then(|info| info.param_ast_tys.get(i))
+                    {
+                        record_wide_expected_ast_context(ctx, a, expected);
+                    }
                     if let Some(info) = &call_info
                         && let Some(&param_ty) = info.param_tys.get(i)
                         && matches!(
@@ -4672,6 +4679,7 @@ pub fn lower_module_with_pattern_aggregates(
                         .iter()
                         .map(|p| lower_ty_with_linear(&p.ty, &linear_owner_names, &type_aliases))
                         .collect(),
+                    param_ast_tys: fn_def.params.iter().map(|p| p.ty.clone()).collect(),
                 },
             )
         })
@@ -7307,6 +7315,7 @@ fn parse_or_default(s: String) -> i64 {
                 ret_vec_elem: None,
                 ret_option_elem: None,
                 param_tys: vec![],
+                param_ast_tys: vec![],
             },
         );
 
@@ -7366,6 +7375,7 @@ fn parse_or_default(s: String) -> i64 {
                 ret_vec_elem: None,
                 ret_option_elem: None,
                 param_tys: vec![Ty::U8],
+                param_ast_tys: vec![u8_ty()],
             },
         );
 
@@ -7442,6 +7452,7 @@ fn parse_or_default(s: String) -> i64 {
                 ret_vec_elem: None,
                 ret_option_elem: None,
                 param_tys: vec![],
+                param_ast_tys: vec![],
             },
         );
 

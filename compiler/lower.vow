@@ -24,6 +24,7 @@ struct LowerCtx {
     func_ret_vec_elems: Vec<String>,
     func_ret_option_elems: Vec<i64>,
     func_param_tys: Vec<Vec<i64>>,
+    func_param_ast_tids: Vec<Vec<i64>>,
     struct_names: Vec<String>,
     linear_owner_names: Vec<String>,
     type_alias_names: Vec<String>,
@@ -115,6 +116,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_ret_vec_elems: Vec::new(),
         func_ret_option_elems: Vec::new(),
         func_param_tys: Vec::new(),
+        func_param_ast_tids: Vec::new(),
         struct_names: Vec::new(),
         linear_owner_names: Vec::new(),
         type_alias_names: Vec::new(),
@@ -2332,11 +2334,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let call_args: Vec<i64> = Vec::new();
             let nargs: i64 = list_len(a, args_lid);
             let param_tys: Vec<i64> = ctx.func_param_tys[fidx];
+            let param_ast_tids: Vec<i64> = ctx.func_param_ast_tids[fidx];
             let n_param_tys: i64 = param_tys.len();
             let mut ai: i64 = 0;
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
                 if ai < n_param_tys {
+                    lctx_record_wide_expected_ast_context(
+                        ctx, a, arg_eid, param_ast_tids[ai]
+                    );
                     lctx_record_wide_control_flow_context(ctx, a, arg_eid, param_tys[ai]);
                 }
                 let mut arg_id: i64 = lower_consumed_expr(ctx, arg_eid);
@@ -4978,6 +4984,7 @@ fn lower_module_vow(
     let func_ret_vec_elems: Vec<String> = Vec::new();
     let func_ret_option_elems: Vec<i64> = Vec::new();
     let func_param_tys: Vec<Vec<i64>> = Vec::new();
+    let func_param_ast_tids: Vec<Vec<i64>> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
     let linear_owner_names: Vec<String> = Vec::new();
     let type_alias_names: Vec<String> = Vec::new();
@@ -5086,13 +5093,16 @@ fn lower_module_vow(
             let params_lid: i64 = fn_params_lid(a, iid);
             let nparams: i64 = list_len(a, params_lid) / 3;
             let param_tys: Vec<i64> = Vec::new();
+            let param_ast_tids: Vec<i64> = Vec::new();
             let mut pi: i64 = 0;
             while pi < nparams {
                 let ptid: i64 = list_get(a, params_lid, pi * 3 + 1);
                 param_tys.push(lower_ast_ty_linear(a, ptid, linear_owner_names, type_alias_names, type_alias_target_tids));
+                param_ast_tids.push(ptid);
                 pi = pi + 1;
             }
             func_param_tys.push(param_tys);
+            func_param_ast_tids.push(param_ast_tids);
         } else if ik == ITEM_STRUCT() {
             let sname_sid: i64 = sdef_name_sid(a, iid);
             let sname: String = arena_str(a, sname_sid);
@@ -5285,6 +5295,7 @@ fn lower_module_vow(
     ctx.func_ret_vec_elems = func_ret_vec_elems;
     ctx.func_ret_option_elems = func_ret_option_elems;
     ctx.func_param_tys = func_param_tys;
+    ctx.func_param_ast_tids = func_param_ast_tids;
     ctx.struct_names = struct_names;
     ctx.linear_owner_names = linear_owner_names;
     ctx.type_alias_names = type_alias_names;

@@ -3577,7 +3577,21 @@ mod tests {
                 ),
                 inst(5, Opcode::ConstUnit, Ty::Unit, vec![], InstData::None),
                 inst(6, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
-                inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                inst(
+                    7,
+                    Opcode::ConstI128,
+                    Ty::I128,
+                    vec![],
+                    InstData::ConstI128(i128::MAX),
+                ),
+                inst(
+                    8,
+                    Opcode::ConstU128,
+                    Ty::U128,
+                    vec![],
+                    InstData::ConstU128(u128::MAX),
+                ),
+                inst(9, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
@@ -3595,6 +3609,14 @@ mod tests {
         assert!(c.contains("v5 = 0;"), "ConstUnit assign: {c}");
         assert!(c.contains("int64_t v6;"), "ConstStr decl: {c}");
         assert!(c.contains("v6 = 0;"), "ConstStr assign: {c}");
+        assert!(
+            c.contains("/* opcode ConstI128 not modelled */"),
+            "ConstI128 must use the deferred verifier fallback: {c}"
+        );
+        assert!(
+            c.contains("/* opcode ConstU128 not modelled */"),
+            "ConstU128 must use the deferred verifier fallback: {c}"
+        );
     }
 
     #[test]
