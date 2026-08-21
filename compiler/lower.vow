@@ -4399,27 +4399,6 @@ fn binop_str(op: i64) -> String {
     String::from("?")
 }
 
-fn i64_to_string(v: i64) -> String {
-    if v == 0 { return String::from("0"); }
-    let neg: bool = v < 0;
-    let mut n: i64 = v;
-    if neg { n = 0 - n; }
-    let digits: Vec<i64> = Vec::new();
-    while n > 0 {
-        digits.push(n - (n / 10) * 10);
-        n = n / 10;
-    }
-    let result: String = String::from("");
-    if neg { result.push_byte(45); }
-    let nd: i64 = digits.len();
-    let mut i: i64 = nd;
-    while i > 0 {
-        i = i - 1;
-        result.push_byte(48 + digits[i]);
-    }
-    result
-}
-
 fn lower_requires_clauses(ctx: LowerCtx, vow_lid: i64) {
     let a: AstArena = ctx.arena;
     let n: i64 = list_len(a, vow_lid);

@@ -2,27 +2,6 @@ module IrPrinter
 
 use ir
 
-fn i64_to_str(v: i64) -> String {
-    if v == 0 { return String::from("0"); }
-    let out: String = String::from("");
-    let mut n: i64 = v;
-    if n < 0 {
-        out.push_byte(45);
-        n = 0 - n;
-    }
-    let digits: Vec<i64> = Vec::new();
-    while n > 0 {
-        digits.push(n % 10);
-        n = n / 10;
-    }
-    let mut i: i64 = digits.len() - 1;
-    while i >= 0 {
-        out.push_byte(48 + digits[i]);
-        i = i - 1;
-    }
-    out
-}
-
 fn pad_right(s: String, width: i64) -> String {
     let out: String = String::from("");
     out.push_str(s);
@@ -203,28 +182,28 @@ fn effects_str(eff: i64) -> String {
 fn format_data(inst: IrInst) -> String {
     let dk: i64 = inst.dk;
     if dk == IDATA_NONE() { return String::from(""); }
-    if dk == IDATA_CONST_I32() { return i64_to_str(inst.dv); }
-    if dk == IDATA_CONST_I64() { return i64_to_str(inst.dv); }
-    if dk == IDATA_CONST_F32() { return i64_to_str(inst.dv); }
-    if dk == IDATA_CONST_F64() { return i64_to_str(inst.dv); }
+    if dk == IDATA_CONST_I32() { return i64_to_string(inst.dv); }
+    if dk == IDATA_CONST_I64() { return i64_to_string(inst.dv); }
+    if dk == IDATA_CONST_F32() { return i64_to_string(inst.dv); }
+    if dk == IDATA_CONST_F64() { return i64_to_string(inst.dv); }
     if dk == IDATA_CONST_BOOL() {
         if inst.dv == 0 { return String::from("false"); }
         return String::from("true");
     }
-    if dk == IDATA_ARG_INDEX() { return i64_to_str(inst.dv); }
+    if dk == IDATA_ARG_INDEX() { return i64_to_string(inst.dv); }
     if dk == IDATA_PHI_TARGET() {
         let out: String = String::from("%");
-        out.push_str(i64_to_str(inst.dv));
+        out.push_str(i64_to_string(inst.dv));
         return out;
     }
     if dk == IDATA_CONST_STR() {
         let out: String = String::from("@");
-        out.push_str(i64_to_str(inst.dv));
+        out.push_str(i64_to_string(inst.dv));
         return out;
     }
     if dk == IDATA_CALL_TARGET() {
         let out: String = String::from("func");
-        out.push_str(i64_to_str(inst.dv));
+        out.push_str(i64_to_string(inst.dv));
         return out;
     }
     if dk == IDATA_CALL_EXTERN() {
@@ -234,40 +213,40 @@ fn format_data(inst: IrInst) -> String {
     }
     if dk == IDATA_BRANCH_TARGETS() {
         let out: String = String::from("block_");
-        out.push_str(i64_to_str(inst.dv));
+        out.push_str(i64_to_string(inst.dv));
         out.push_str(String::from(", block_"));
-        out.push_str(i64_to_str(inst.dv2));
+        out.push_str(i64_to_string(inst.dv2));
         return out;
     }
     if dk == IDATA_JUMP_TARGET() {
         let out: String = String::from("block_");
-        out.push_str(i64_to_str(inst.dv));
+        out.push_str(i64_to_string(inst.dv));
         return out;
     }
     if dk == IDATA_VOW_ID() {
         let out: String = String::from("vow_");
-        out.push_str(i64_to_str(inst.dv));
+        out.push_str(i64_to_string(inst.dv));
         return out;
     }
     if dk == IDATA_ALLOC_SIZE() {
         let out: String = String::from("size=");
-        out.push_str(i64_to_str(inst.dv));
+        out.push_str(i64_to_string(inst.dv));
         out.push_str(String::from(",align="));
-        out.push_str(i64_to_str(inst.dv2));
+        out.push_str(i64_to_string(inst.dv2));
         return out;
     }
     if dk == IDATA_FIELD() {
         let out: String = String::from("field_");
-        out.push_str(i64_to_str(inst.dv));
+        out.push_str(i64_to_string(inst.dv));
         return out;
     }
     if dk == IDATA_CONST_U64() {
-        let out: String = i64_to_str(inst.dv);
+        let out: String = i64_to_string(inst.dv);
         out.push_str(String::from("u64"));
         return out;
     }
     if dk == IDATA_CONST_U8() {
-        let out: String = i64_to_str(inst.dv);
+        let out: String = i64_to_string(inst.dv);
         out.push_str(String::from("u8"));
         return out;
     }
@@ -288,7 +267,7 @@ fn format_args(args: Vec<i64>) -> String {
     while i < n {
         if i > 0 { out.push_str(String::from(", ")); }
         out.push_byte(37);
-        out.push_str(i64_to_str(args[i]));
+        out.push_str(i64_to_string(args[i]));
         i = i + 1;
     }
     out
@@ -298,7 +277,7 @@ fn print_inst(inst: IrInst) -> String {
     let out: String = String::from("    ");
     out.push_str(pad_right(ir_ty_str(inst.ty), 10));
     out.push_str(String::from("  %"));
-    out.push_str(i64_to_str(inst.id));
+    out.push_str(i64_to_string(inst.id));
     out.push_str(String::from(" = "));
     let dstr: String = format_data(inst);
     out.push_str(opcode_name(inst.op));
@@ -322,17 +301,17 @@ fn print_inst(inst: IrInst) -> String {
                 out.push_str(String::from("rodata"));
             } else if kind == REGION_KIND_BLOCK() {
                 out.push_str(String::from("block_"));
-                out.push_str(i64_to_str(region_val(rgn)));
+                out.push_str(i64_to_string(region_val(rgn)));
             } else if kind == REGION_KIND_CALLER() {
                 out.push_str(String::from("caller_"));
-                out.push_str(i64_to_str(region_val(rgn)));
+                out.push_str(i64_to_string(region_val(rgn)));
             } else {
                 // Defensive: a packed i64 outside 0..=3 indicates a bug in
                 // whoever assigned `inst.rgn`. Emit the raw kind so the slip
                 // is visible in golden output instead of silently producing
                 // an empty `<region=>`.
                 out.push_str(String::from("unknown_"));
-                out.push_str(i64_to_str(kind));
+                out.push_str(i64_to_string(kind));
             }
             out.push_byte(62);
         }
@@ -344,11 +323,11 @@ fn print_block(blk: IrBlock, is_entry: i64) -> String {
     let out: String = String::from("");
     if is_entry == 1 {
         out.push_str(String::from("  entry (block "));
-        out.push_str(i64_to_str(blk.id));
+        out.push_str(i64_to_string(blk.id));
         out.push_str(String::from("):"));
     } else {
         out.push_str(String::from("  block_"));
-        out.push_str(i64_to_str(blk.id));
+        out.push_str(i64_to_string(blk.id));
         out.push_byte(58);
     }
     let n: i64 = blk.insts.len();
@@ -398,7 +377,7 @@ fn print_module(m: IrModule) -> String {
         let mut i: i64 = 0;
         while i < ns {
             out.push_str(String::from("\n  @"));
-            out.push_str(i64_to_str(i));
+            out.push_str(i64_to_string(i));
             out.push_str(String::from(" = "));
             out.push_str(debug_escape_str(m.strings[i]));
             i = i + 1;
@@ -442,7 +421,7 @@ fn print_module(m: IrModule) -> String {
             let vr: IrVariantLayout = el.variants[vi];
             out.push_str(vr.name);
             out.push_str(String::from("(tag="));
-            out.push_str(i64_to_str(vr.tag));
+            out.push_str(i64_to_string(vr.tag));
             let npay: i64 = vr.payload.len();
             if npay > 0 {
                 out.push_str(String::from(", "));

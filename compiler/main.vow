@@ -225,8 +225,8 @@ fn find_param_index(names: Vec<String>, name: String) -> i64 {
 }
 
 fn ce_value_for_param(names: Vec<String>, vals: Vec<String>, param: String, param_idx: i64) -> String {
-    let fallback_esbmc: String = str2(String::from("_esbmc_p"), i64_to_str(param_idx));
-    let fallback_raw: String = str2(String::from("p"), i64_to_str(param_idx));
+    let fallback_esbmc: String = str2(String::from("_esbmc_p"), i64_to_string(param_idx));
+    let fallback_raw: String = str2(String::from("p"), i64_to_string(param_idx));
     let mut i: i64 = 0;
     while i < names.len() {
         if names[i] == param || names[i] == fallback_esbmc || names[i] == fallback_raw {
@@ -247,7 +247,7 @@ fn inst_const_i64_string_by_id(f: IrFunction, inst_id: i64) -> String {
             let inst: IrInst = insts[ii];
             if inst.id == inst_id {
                 if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
-                    return i64_to_str(inst.dv);
+                    return i64_to_string(inst.dv);
                 }
                 if inst.args.len() >= 2 {
                     let lhs_s: String = inst_const_i64_string_by_id(f, inst.args[0]);
@@ -255,15 +255,15 @@ fn inst_const_i64_string_by_id(f: IrFunction, inst_id: i64) -> String {
                     if lhs_s.len() > 0 && rhs_s.len() > 0 {
                         let lhs: i64 = str_to_i64(lhs_s);
                         let rhs: i64 = str_to_i64(rhs_s);
-                        if lhs_s == i64_to_str(lhs) && rhs_s == i64_to_str(rhs) {
+                        if lhs_s == i64_to_string(lhs) && rhs_s == i64_to_string(rhs) {
                             if inst.op == IOP_WADD() || inst.op == IOP_CADD() {
-                                return i64_to_str(lhs + rhs);
+                                return i64_to_string(lhs + rhs);
                             }
                             if inst.op == IOP_WSUB() || inst.op == IOP_CSUB() {
-                                return i64_to_str(lhs - rhs);
+                                return i64_to_string(lhs - rhs);
                             }
                             if inst.op == IOP_WMUL() || inst.op == IOP_CMUL() {
-                                return i64_to_str(lhs * rhs);
+                                return i64_to_string(lhs * rhs);
                             }
                         }
                     }
@@ -282,7 +282,7 @@ fn string_is_i64_literal(s: String) -> bool {
         return false;
     }
     let v: i64 = str_to_i64(s);
-    i64_to_str(v) == s
+    i64_to_string(v) == s
 }
 
 fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, call_inst: IrInst) -> String {
@@ -295,10 +295,10 @@ fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, c
             let inst: IrInst = insts[ii];
             if inst.id == inst_id {
                 if inst.op == IOP_CONST_I32() || inst.op == IOP_CONST_I64() {
-                    return i64_to_str(inst.dv);
+                    return i64_to_string(inst.dv);
                 }
                 if inst.op == IOP_CONST_U64() && inst.dv >= 0 {
-                    return i64_to_str(inst.dv);
+                    return i64_to_string(inst.dv);
                 }
                 if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
                     let pidx: i64 = inst.dv;
@@ -314,13 +314,13 @@ fn callee_i64_string_for_call(f: IrFunction, callee: IrFunction, inst_id: i64, c
                         let lhs: i64 = str_to_i64(lhs_s);
                         let rhs: i64 = str_to_i64(rhs_s);
                         if inst.op == IOP_WADD() || inst.op == IOP_CADD() {
-                            return i64_to_str(lhs + rhs);
+                            return i64_to_string(lhs + rhs);
                         }
                         if inst.op == IOP_WSUB() || inst.op == IOP_CSUB() {
-                            return i64_to_str(lhs - rhs);
+                            return i64_to_string(lhs - rhs);
                         }
                         if inst.op == IOP_WMUL() || inst.op == IOP_CMUL() {
-                            return i64_to_str(lhs * rhs);
+                            return i64_to_string(lhs * rhs);
                         }
                     }
                 }
@@ -809,7 +809,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
             return replay_skip(String::from("function has a Unit parameter"));
         }
         if ty != ITY_I64() && ty != ITY_U64() && ty != ITY_BOOL() {
-            return replay_skip(str3(String::from("parameter "), i64_to_str(pi), String::from(": unsupported type (self-hosted v1: scalars only)")));
+            return replay_skip(str3(String::from("parameter "), i64_to_string(pi), String::from(": unsupported type (self-hosted v1: scalars only)")));
         }
         let pname: String = pnames[pi];
         let raw: String = replay_value_for(pname, ce.var_names, ce.var_values);
@@ -820,7 +820,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
         if lit.len() == 0 {
             return replay_skip(str3(String::from("parameter "), pname, String::from(": value not renderable as a literal")));
         }
-        let aname: String = str2(String::from("__replay_a"), i64_to_str(pi));
+        let aname: String = str2(String::from("__replay_a"), i64_to_string(pi));
         body.push_str(String::from("    let "));
         body.push_str(aname);
         body.push_str(String::from(": "));
@@ -848,7 +848,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     let dir: String = replay_dir_of(path);
     // Tag by function + vow_id so two functions sharing a (per-function-local)
     // vow_id do not collide within one run.
-    let tag: String = str4(String::from("__vow_replay_"), ce.function, String::from("_"), i64_to_str(ce.vow_id));
+    let tag: String = str4(String::from("__vow_replay_"), ce.function, String::from("_"), i64_to_string(ce.vow_id));
     let harness_path: String = str3(dir, tag, String::from(".vow"));
     let bin_path: String = str2(dir, tag);
     let oext: String = str2(bin_path, String::from(".o"));
@@ -914,7 +914,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     // vow_id and blame — a substring scan over all of stderr could otherwise
     // splice a vow_id and blame from two different lines into a false confirm.
     let viol: String = replay_find_violation_line(err);
-    let vowid_needle: String = str3(String::from("\"vow_id\":"), i64_to_str(ce.vow_id), String::from(","));
+    let vowid_needle: String = str3(String::from("\"vow_id\":"), i64_to_string(ce.vow_id), String::from(","));
     let blame_needle: String = str3(String::from("\"blame\":\""), replay_blame_runtime_name(ce.blame), String::from("\""));
     if viol.len() > 0 && viol.contains(vowid_needle) && viol.contains(blame_needle) {
         return ReplayVerdict { status: String::from("confirmed"), reason: String::from("") };
@@ -1325,7 +1325,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     let n_items: i64 = checked.n_items;
     let n_errors: i64 = checked.n_errors;
     diag_ctx_print_all(dctx);
-    eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
+    eprintln_str(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
     if n_errors > 0 {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
@@ -1518,7 +1518,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let n_items: i64 = checked.n_items;
     let n_errors: i64 = checked.n_errors;
     diag_ctx_print_all(dctx);
-    eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
+    eprintln_str(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
     if n_errors > 0 {
         diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
         return 1;
@@ -1776,7 +1776,7 @@ fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i
     r.push_str(String::from("\","));
     if exit_code >= 0 {
         r.push_str(String::from("\"exit_code\":"));
-        r.push_str(i64_to_str(exit_code));
+        r.push_str(i64_to_string(exit_code));
     } else {
         r.push_str(String::from("\"exit_code\":null"));
     }
@@ -1785,7 +1785,7 @@ fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i
     r.push_str(String::from("\",\"stderr\":\""));
     r.push_str(test_json_escape(stderr));
     r.push_str(String::from("\",\"duration_ms\":"));
-    r.push_str(i64_to_str(duration_ms));
+    r.push_str(i64_to_string(duration_ms));
     r.push_str(String::from(",\"diagnostics\":"));
     r.push_str(diagnostics_json);
     r.push_str(String::from(",\"counterexamples\":[]}"));
@@ -2098,11 +2098,11 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     let r: String = String::from("{\"status\":\"");
     r.push_str(result_status);
     r.push_str(String::from("\",\"total\":"));
-    r.push_str(i64_to_str(total));
+    r.push_str(i64_to_string(total));
     r.push_str(String::from(",\"passed\":"));
-    r.push_str(i64_to_str(passed));
+    r.push_str(i64_to_string(passed));
     r.push_str(String::from(",\"failed\":"));
-    r.push_str(i64_to_str(failed));
+    r.push_str(i64_to_string(failed));
     r.push_str(String::from(",\"skipped\":0,\"tests\":["));
     let mut ji: i64 = 0;
     while ji < entries_json.len() {
@@ -2113,16 +2113,16 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         ji = ji + 1;
     }
     r.push_str(String::from("],\"contract_density\":{\"functions_total\":"));
-    r.push_str(i64_to_str(total_fns));
+    r.push_str(i64_to_string(total_fns));
     r.push_str(String::from(",\"functions_with_vows\":"));
-    r.push_str(i64_to_str(fns_with_vows));
+    r.push_str(i64_to_string(fns_with_vows));
     r.push_str(String::from(",\"density_pct\":"));
     // Emit density as X.Y
     let whole: i64 = density_pct / 10;
     let frac: i64 = density_pct - (whole * 10);
-    r.push_str(i64_to_str(whole));
+    r.push_str(i64_to_string(whole));
     r.push_str(String::from("."));
-    r.push_str(i64_to_str(frac));
+    r.push_str(i64_to_string(frac));
     r.push_str(String::from("}}"));
     print_str(r);
     if failed > 0 {
@@ -2148,7 +2148,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
     let emit_c: bool = has_flag(argv, "--emit-c");
     let do_verify: bool = has_flag(argv, "--verify");
     if do_verify {
-        eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
+        eprintln_str(str4(i64_to_string(n_items), String::from(" items, "), i64_to_string(n_errors), String::from(" errors")));
     } else {
         print_i64(n_items);
         print_str(" items, ");
@@ -13384,7 +13384,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             json.push_str(String::from(","));
         }
         json.push_str(String::from("{\"vow_id\":"));
-        json.push_str(i64_to_str(e_vow_ids[ci]));
+        json.push_str(i64_to_string(e_vow_ids[ci]));
         json.push_str(String::from(",\"function\":\""));
         json.push_str(diag_json_escape_str(e_func_names[ci]));
         json.push_str(String::from("\",\"kind\":\""));
@@ -13396,7 +13396,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         json.push_str(String::from("\",\"source\":{\"file\":\""));
         json.push_str(diag_json_escape_str(e_files[ci]));
         json.push_str(String::from("\",\"offset\":"));
-        json.push_str(i64_to_str(e_offsets[ci]));
+        json.push_str(i64_to_string(e_offsets[ci]));
         json.push_str(String::from("},\"status\":\""));
         json.push_str(e_statuses[ci]);
         json.push_str(String::from("\",\"quality\":\""));
@@ -13472,31 +13472,31 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     json.push_str(String::from("],\"summary\":{\"total\":"));
-    json.push_str(i64_to_str(total));
+    json.push_str(i64_to_string(total));
     json.push_str(String::from(",\"proven\":"));
-    json.push_str(i64_to_str(n_proven));
+    json.push_str(i64_to_string(n_proven));
     json.push_str(String::from(",\"failed\":"));
-    json.push_str(i64_to_str(n_failed));
+    json.push_str(i64_to_string(n_failed));
     json.push_str(String::from(",\"unknown\":"));
-    json.push_str(i64_to_str(n_unknown));
+    json.push_str(i64_to_string(n_unknown));
     json.push_str(String::from(",\"timeout\":"));
-    json.push_str(i64_to_str(n_timeout));
+    json.push_str(i64_to_string(n_timeout));
     json.push_str(String::from(",\"error\":"));
-    json.push_str(i64_to_str(n_error));
+    json.push_str(i64_to_string(n_error));
     json.push_str(String::from(",\"not_verified\":"));
-    json.push_str(i64_to_str(n_not_verified));
+    json.push_str(i64_to_string(n_not_verified));
     json.push_str(String::from(",\"skipped\":"));
-    json.push_str(i64_to_str(n_skipped));
+    json.push_str(i64_to_string(n_skipped));
     json.push_str(String::from(",\"vacuous\":"));
-    json.push_str(i64_to_str(n_vacuous));
+    json.push_str(i64_to_string(n_vacuous));
     json.push_str(String::from(",\"trivially_satisfiable\":"));
-    json.push_str(i64_to_str(n_trivial));
+    json.push_str(i64_to_string(n_trivial));
     json.push_str(String::from(",\"quality\":{\"weak\":"));
-    json.push_str(i64_to_str(n_weak));
+    json.push_str(i64_to_string(n_weak));
     json.push_str(String::from(",\"tautological\":"));
-    json.push_str(i64_to_str(n_taut));
+    json.push_str(i64_to_string(n_taut));
     json.push_str(String::from(",\"substantive\":"));
-    json.push_str(i64_to_str(n_subst));
+    json.push_str(i64_to_string(n_subst));
     json.push_str(String::from("}}}"));
     print_str(json);
     exit_code
