@@ -409,6 +409,7 @@ fn is_coercible_integer_marker(expr: &Expr) -> bool {
             integer_marker_from_block(then_branch).is_some_and(is_coercible_integer_marker)
                 && is_coercible_integer_marker(else_expr)
         }
+        ExprKind::Match { .. } | ExprKind::Loop { .. } => true,
         _ => false,
     }
 }

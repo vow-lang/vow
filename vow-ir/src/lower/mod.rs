@@ -721,6 +721,8 @@ pub(crate) struct LowerCtx {
     file: String,
     // struct name → field type names (from AST declarations) for FieldGet auto-tagging
     pub(super) struct_field_type_names: HashMap<String, Vec<String>>,
+    // struct name → complete declared field types for contextual aggregate lowering
+    struct_field_ast_types: Rc<HashMap<String, Vec<AstType>>>,
     // expr addresses whose resolved type is String (from checker)
     string_exprs: StringExprSet,
     // const name → (compile-time value, declared type)
@@ -777,6 +779,7 @@ impl LowerCtx {
         linear_owner_names: HashSet<String>,
         type_aliases: Rc<HashMap<String, AstType>>,
         struct_field_type_names: HashMap<String, Vec<String>>,
+        struct_field_ast_types: Rc<HashMap<String, Vec<AstType>>>,
         struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
         pattern_aggregates: Rc<PatternAggregateMap>,
@@ -826,6 +829,7 @@ impl LowerCtx {
             phi_dependents: HashMap::new(),
             file,
             struct_field_type_names,
+            struct_field_ast_types,
             string_exprs,
             const_map: HashMap::new(),
             loop_exit_blocks: Vec::new(),
@@ -2745,6 +2749,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 } else {
                     None
                 };
+                if let Some(expected) = ctx
+                    .struct_field_ast_types
+                    .get(name)
+                    .and_then(|types| types.get(idx as usize))
+                    .cloned()
+                {
+                    record_wide_expected_ast_context(ctx, field_expr, &expected);
+                }
                 if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
                     record_wide_control_flow_context(ctx, field_expr, field_ty);
                 }
@@ -4462,6 +4474,7 @@ fn lower_function_with_pattern_aggregates(
     linear_owner_names: &HashSet<String>,
     type_aliases: Rc<HashMap<String, AstType>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
+    struct_field_ast_types: Rc<HashMap<String, Vec<AstType>>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
     pattern_aggregates: &Rc<PatternAggregateMap>,
@@ -4489,6 +4502,7 @@ fn lower_function_with_pattern_aggregates(
         linear_owner_names.clone(),
         Rc::clone(&type_aliases),
         struct_field_type_names,
+        struct_field_ast_types,
         struct_field_vec_elems,
         string_exprs.clone(),
         Rc::clone(pattern_aggregates),
@@ -4621,6 +4635,7 @@ fn lower_function(
         linear_owner_names,
         Rc::new(HashMap::new()),
         struct_field_type_names,
+        Rc::new(HashMap::new()),
         struct_field_vec_elems,
         string_exprs,
         &Rc::new(PatternAggregateMap::new()),
@@ -4739,6 +4754,7 @@ pub fn lower_module_with_pattern_aggregates(
 
     // Build struct field type names for FieldGet auto-tagging
     let mut struct_field_type_names: HashMap<String, Vec<String>> = HashMap::new();
+    let mut struct_field_ast_types: HashMap<String, Vec<AstType>> = HashMap::new();
     // struct name → per-field Vec element type name (empty if not Vec<Named>)
     let mut struct_field_vec_elems: HashMap<String, Vec<String>> = HashMap::new();
     for item in &module.items {
@@ -4770,9 +4786,14 @@ pub fn lower_module_with_pattern_aggregates(
                 })
                 .collect();
             struct_field_type_names.insert(s.name.clone(), type_names);
+            struct_field_ast_types.insert(
+                s.name.clone(),
+                s.fields.iter().map(|field| field.ty.clone()).collect(),
+            );
             struct_field_vec_elems.insert(s.name.clone(), vec_elems);
         }
     }
+    let struct_field_ast_types = Rc::new(struct_field_ast_types);
 
     // Build enum layout info
     let mut enum_variant_map: HashMap<String, Vec<String>> = HashMap::new();
@@ -4840,6 +4861,7 @@ pub fn lower_module_with_pattern_aggregates(
                 &linear_owner_names,
                 Rc::clone(&type_aliases),
                 struct_field_type_names.clone(),
+                Rc::clone(&struct_field_ast_types),
                 struct_field_vec_elems.clone(),
                 string_exprs,
                 &pattern_aggregates,
@@ -6367,6 +6389,7 @@ fn parse_or_default(s: String) -> i64 {
             &linear_structs,
             Rc::new(HashMap::new()),
             HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             &HashSet::new(),
             &patterns,
@@ -6498,6 +6521,7 @@ fn parse_or_default(s: String) -> i64 {
             &HashSet::new(),
             Rc::new(HashMap::new()),
             struct_field_types,
+            Rc::new(HashMap::new()),
             HashMap::new(),
             &HashSet::new(),
             &patterns,
@@ -6562,6 +6586,7 @@ fn parse_or_default(s: String) -> i64 {
             HashSet::new(),
             Rc::new(HashMap::new()),
             HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             HashSet::new(),
             Rc::new(HashMap::new()),
@@ -6605,6 +6630,7 @@ fn parse_or_default(s: String) -> i64 {
             HashSet::new(),
             Rc::new(HashMap::new()),
             HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             HashSet::new(),
             Rc::new(HashMap::new()),
@@ -6729,6 +6755,7 @@ fn parse_or_default(s: String) -> i64 {
             &HashSet::new(),
             Rc::new(HashMap::new()),
             HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             &HashSet::new(),
             &patterns,

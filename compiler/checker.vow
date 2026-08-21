@@ -860,6 +860,7 @@ fn checker_expr_is_coercible_int_marker(a: AstArena, eid: i64) -> bool {
             checker_expr_is_coercible_int_marker(a, then_result) &&
             checker_expr_is_coercible_int_marker(a, else_eid);
     }
+    if tag == EXPR_MATCH() || tag == EXPR_LOOP() { return true; }
     false
 }
 

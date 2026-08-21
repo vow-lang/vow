@@ -107,6 +107,16 @@ fn i64_loop_break_rejects_wide_literal_before_compatibility_storage() {
 }
 
 #[test]
+fn i64_nested_match_rejects_wide_literal_before_compatibility_storage() {
+    assert_literal_out_of_range("i64_nested_match_wide_literal_out_of_range.vow");
+}
+
+#[test]
+fn i64_nested_loop_rejects_wide_literal_before_compatibility_storage() {
+    assert_literal_out_of_range("i64_nested_loop_break_wide_literal_out_of_range.vow");
+}
+
+#[test]
 fn i128_option_payload_rejects_overflowing_literal() {
     assert_literal_out_of_range("i128_option_payload_literal_out_of_range.vow");
 }

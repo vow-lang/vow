@@ -18,6 +18,10 @@ struct WideStruct {
     value: u128,
 }
 
+struct WrappedWide {
+    value: Option<u128>,
+}
+
 enum WideEnum {
     Value(u128),
 }
@@ -82,6 +86,12 @@ fn pass_option() {
 fn loop_wide() -> u128 {
     loop {
         break 340282366920938463463374607431768211449;
+    }
+}
+
+fn make_wrapped() -> WrappedWide {
+    WrappedWide {
+        value: Option::Some(340282366920938463463374607431768211448),
     }
 }
 "#,
@@ -151,6 +161,10 @@ fn loop_wide() -> u128 {
     assert!(
         stdout.contains("ConstU128[340282366920938463463374607431768211449u128]"),
         "loop break value lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211448u128]"),
+        "nested generic struct field lost its contextual wide type:\n{stdout}"
     );
 }
 
