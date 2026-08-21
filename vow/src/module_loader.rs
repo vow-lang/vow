@@ -47,13 +47,7 @@ fn load_deps(
     errors: &mut Vec<Diagnostic>,
 ) {
     for use_decl in &module.uses {
-        let vow_path = resolve_use(root_dir, &use_decl.path);
-        let decl_path = vow_path.with_extension("vow.d");
-        let file_path = if decl_path.exists() {
-            decl_path
-        } else {
-            vow_path
-        };
+        let file_path = module_file_for_use(root_dir, &use_decl.path, |p| p.exists());
         if !visited.insert(file_path.clone()) {
             continue;
         }
@@ -85,6 +79,27 @@ fn load_deps(
                 });
             }
         }
+    }
+}
+
+/// Resolve a dotted `use` path to the file to load, relative to `root_dir`,
+/// preferring a sibling `.vow.d` declaration stub over the full `.vow` source
+/// when one exists.
+///
+/// `decl_exists` is the on-disk existence check for the derived `.vow.d` path,
+/// injected so the resolution decision is testable without touching the
+/// filesystem. The production caller passes `|p| p.exists()`.
+fn module_file_for_use(
+    root_dir: &Path,
+    path: &[String],
+    decl_exists: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    let vow_path = resolve_use(root_dir, path);
+    let decl_path = vow_path.with_extension("vow.d");
+    if decl_exists(&decl_path) {
+        decl_path
+    } else {
+        vow_path
     }
 }
 
@@ -128,4 +143,113 @@ pub(crate) fn merge_modules(graph: ModuleGraph) -> (Module, Vec<String>) {
         span: root_module.span,
     };
     (merged, item_files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    fn comps(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn single_component_without_decl_resolves_to_vow_source() {
+        let file = module_file_for_use(Path::new("/proj"), &comps(&["region"]), |_| false);
+        assert_eq!(file, PathBuf::from("/proj/region.vow"));
+    }
+
+    #[test]
+    fn single_component_with_decl_prefers_decl_stub() {
+        let file = module_file_for_use(Path::new("/proj"), &comps(&["region"]), |_| true);
+        assert_eq!(file, PathBuf::from("/proj/region.vow.d"));
+    }
+
+    #[test]
+    fn multi_component_path_nests_directories() {
+        let file = module_file_for_use(Path::new("/proj"), &comps(&["a", "b"]), |_| false);
+        assert_eq!(file, PathBuf::from("/proj/a/b.vow"));
+    }
+
+    #[test]
+    fn multi_component_path_with_decl_prefers_nested_decl_stub() {
+        let file = module_file_for_use(Path::new("/proj"), &comps(&["a", "b"]), |_| true);
+        assert_eq!(file, PathBuf::from("/proj/a/b.vow.d"));
+    }
+
+    #[test]
+    fn existence_is_queried_with_the_decl_path() {
+        let seen: RefCell<Option<PathBuf>> = RefCell::new(None);
+        let _ = module_file_for_use(Path::new("/proj"), &comps(&["region"]), |p| {
+            *seen.borrow_mut() = Some(p.to_path_buf());
+            false
+        });
+        assert_eq!(seen.into_inner(), Some(PathBuf::from("/proj/region.vow.d")));
+    }
+
+    fn parse(src: &str, file: &str) -> Module {
+        let (module, diags) = vow_syntax::parser::parse_module(src, file);
+        assert!(
+            diags.is_empty(),
+            "unexpected diagnostics for {file}: {diags:?}"
+        );
+        module
+    }
+
+    #[test]
+    fn merge_concatenates_items_dependency_first_with_aligned_provenance() {
+        let dep = parse("module Dep fn helper() -> i64 { 0 }", "dep.vow");
+        let root = parse(
+            "module Root use dep fn a() -> i64 { 0 } fn b() -> i64 { 1 }",
+            "main.vow",
+        );
+        let graph = ModuleGraph {
+            modules: vec![
+                (PathBuf::from("dep.vow"), dep),
+                (PathBuf::from("main.vow"), root),
+            ],
+        };
+
+        let (merged, item_files) = merge_modules(graph);
+
+        assert_eq!(merged.items.len(), 3);
+        assert_eq!(item_files.len(), merged.items.len());
+        assert_eq!(item_files, vec!["dep.vow", "main.vow", "main.vow"]);
+    }
+
+    #[test]
+    fn merge_takes_root_name_and_span_and_clears_uses() {
+        let dep = parse("module Dep fn helper() -> i64 { 0 }", "dep.vow");
+        let root = parse("module Root use dep fn a() -> i64 { 0 }", "main.vow");
+        let root_span = root.span;
+        let graph = ModuleGraph {
+            modules: vec![
+                (PathBuf::from("dep.vow"), dep),
+                (PathBuf::from("main.vow"), root),
+            ],
+        };
+
+        let (merged, _) = merge_modules(graph);
+
+        assert_eq!(merged.name, "Root");
+        assert_eq!(merged.span, root_span);
+        assert!(merged.uses.is_empty());
+    }
+
+    #[test]
+    fn merge_of_single_module_attributes_every_item_to_that_file() {
+        let root = parse(
+            "module Solo fn a() -> i64 { 0 } fn b() -> i64 { 1 }",
+            "solo.vow",
+        );
+        let graph = ModuleGraph {
+            modules: vec![(PathBuf::from("solo.vow"), root)],
+        };
+
+        let (merged, item_files) = merge_modules(graph);
+
+        assert_eq!(merged.items.len(), 2);
+        assert_eq!(item_files, vec!["solo.vow", "solo.vow"]);
+    }
 }
