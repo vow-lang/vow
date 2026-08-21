@@ -1421,6 +1421,46 @@ fn check_contextual_integer_literal_ranges(e: CheckEnv, a: AstArena, eid: i64, t
     }
 }
 
+fn default_literal_integer_tid(e: CheckEnv, tid: i64) -> i64 {
+    let tag: i64 = ty_tag(e.ts, tid);
+    if tag == CTY_LIT_INT() { return CTY_I64(); }
+    if tag == CTY_APPLIED() {
+        let args_lid: i64 = ty_b(e.ts, tid);
+        let args: Vec<i64> = Vec::new();
+        let mut i: i64 = 0;
+        while i < ts_arg_len(e.ts, args_lid) {
+            args.push(default_literal_integer_tid(e, ts_arg_get(e.ts, args_lid, i)));
+            i = i + 1;
+        }
+        return ts_make_applied(e.ts, default_literal_integer_tid(e, ty_a(e.ts, tid)), args);
+    }
+    if tag == CTY_REF() {
+        return ty_add(
+            e.ts, CTY_REF(), default_literal_integer_tid(e, ty_a(e.ts, tid)), 0
+        );
+    }
+    if tag == CTY_TUPLE() {
+        let elems_lid: i64 = ty_a(e.ts, tid);
+        let elems: Vec<i64> = Vec::new();
+        let mut i: i64 = 0;
+        while i < ts_arg_len(e.ts, elems_lid) {
+            elems.push(default_literal_integer_tid(e, ts_arg_get(e.ts, elems_lid, i)));
+            i = i + 1;
+        }
+        return ty_add(e.ts, CTY_TUPLE(), ts_add_args(e.ts, elems), 0);
+    }
+    tid
+}
+
+fn check_method_argument_range(
+    e: CheckEnv, a: AstArena, args_lid: i64, index: i64, target_tid: i64
+) {
+    if index < 0 || index >= list_len(a, args_lid) { return; }
+    check_contextual_integer_literal_ranges(
+        e, a, list_get(a, args_lid, index), target_tid
+    );
+}
+
 fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
     let a: AstArena = m.arena;
     env_push_scope(e);
@@ -1437,10 +1477,9 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
             let init_eid: i64 = stmt_c(a, sid);
             let init_tid: i64 = check_expr(e, m, init_eid);
             let bound_tid: i64 = if annot_ast_tid == -1 {
-                if ty_is_lit_int(e.ts, init_tid) {
-                    check_integer_literal_range(e, a, init_eid, CTY_I64());
-                }
-                init_tid
+                let defaulted_tid: i64 = default_literal_integer_tid(e, init_tid);
+                check_contextual_integer_literal_ranges(e, a, init_eid, defaulted_tid);
+                defaulted_tid
             } else {
                 let at_tid: i64 = resolve_ast_ty(e, m, annot_ast_tid);
                 check_contextual_integer_literal_ranges(e, a, init_eid, at_tid);
@@ -2375,6 +2414,17 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         }
         let recv_tag: i64 = ty_tag(e.ts, recv_tid);
         if recv_tag == CTY_STR() {
+            if mname == String::from("push_str") || mname == String::from("eq") ||
+               mname == String::from("contains") {
+                check_method_argument_range(e, a, args_lid, 0, CTY_STR());
+            }
+            if mname == String::from("byte_at") || mname == String::from("push_byte") {
+                check_method_argument_range(e, a, args_lid, 0, CTY_I64());
+            }
+            if mname == String::from("substring") {
+                check_method_argument_range(e, a, args_lid, 0, CTY_I64());
+                check_method_argument_range(e, a, args_lid, 1, CTY_I64());
+            }
             if mname == String::from("len") { return CTY_I64(); }
             if mname == String::from("byte_at") { return CTY_I64(); }
             if mname == String::from("push_str") { return CTY_UNIT(); }
@@ -2413,6 +2463,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     } else {
                         CTY_UNIT()
                     };
+                    if mname == String::from("push") {
+                        check_method_argument_range(e, a, args_lid, 0, inner_tid);
+                    }
+                    if mname == String::from("get") || mname == String::from("truncate") {
+                        check_method_argument_range(e, a, args_lid, 0, CTY_I64());
+                    }
                     if mname == String::from("len") { return CTY_I64(); }
                     if mname == String::from("push") { return CTY_UNIT(); }
                     if mname == String::from("pop") { return CTY_UNIT(); }
@@ -2443,11 +2499,25 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 }
                 if base_name == String::from("HashMap") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
+                    let key_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 0 {
+                        ts_arg_get(e.ts, hargs_lid, 0)
+                    } else {
+                        CTY_I64()
+                    };
                     let val_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 1 {
                         ts_arg_get(e.ts, hargs_lid, 1)
                     } else {
                         CTY_UNIT()
                     };
+                    if mname == String::from("insert") {
+                        check_method_argument_range(e, a, args_lid, 0, key_tid);
+                        check_method_argument_range(e, a, args_lid, 1, val_tid);
+                    }
+                    if mname == String::from("get") ||
+                       mname == String::from("contains_key") ||
+                       mname == String::from("remove") {
+                        check_method_argument_range(e, a, args_lid, 0, key_tid);
+                    }
                     if mname == String::from("insert") { return CTY_UNIT(); }
                     if mname == String::from("get") { return val_tid; }
                     if mname == String::from("contains_key") { return CTY_BOOL(); }
@@ -2477,6 +2547,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         kerr_msg.push_str(ty_tag_name(bkey_tag));
                         kerr_msg.push_str(String::from("'"));
                         env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, expr_span(a, eid));
+                    }
+                    if mname == String::from("insert") {
+                        check_method_argument_range(e, a, args_lid, 0, bkey_tid);
+                        check_method_argument_range(e, a, args_lid, 1, bval_tid);
+                    }
+                    if mname == String::from("get") || mname == String::from("contains") {
+                        check_method_argument_range(e, a, args_lid, 0, bkey_tid);
                     }
                     if mname == String::from("len") { return CTY_I64(); }
                     if mname == String::from("contains") { return CTY_BOOL(); }

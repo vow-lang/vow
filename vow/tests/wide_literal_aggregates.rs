@@ -147,6 +147,22 @@ fn push_wide_vec(values: Vec<u128>) {
 fn return_option() -> Option<u128> {
     return Option::Some(340282366920938463463374607431768211439);
 }
+
+fn assign_wrapped(target: WrappedWide) {
+    target.value = Option::Some(340282366920938463463374607431768211438);
+}
+
+fn insert_hashmap(values: HashMap<i64, u128>) {
+    values.insert(0, 340282366920938463463374607431768211437);
+}
+
+fn insert_btreemap(values: BTreeMap<i64, u128>) {
+    values.insert(0, 340282366920938463463374607431768211436);
+}
+
+fn assign_option_vec(values: Vec<Option<u128>>) {
+    values[0] = Option::Some(340282366920938463463374607431768211435);
+}
 "#,
     )
     .unwrap();
@@ -254,6 +270,22 @@ fn return_option() -> Option<u128> {
     assert!(
         stdout.contains("ConstU128[340282366920938463463374607431768211439u128]"),
         "explicit generic return lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211438u128]"),
+        "field assignment lost its complete declared type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211437u128]"),
+        "HashMap insertion lost its declared value type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211436u128]"),
+        "BTreeMap insertion lost its declared value type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211435u128]"),
+        "index assignment lost its complete declared element type:\n{stdout}"
     );
 }
 

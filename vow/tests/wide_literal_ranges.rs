@@ -130,3 +130,13 @@ fn i64_option_payload_rejects_wide_literal_before_compatibility_storage() {
 fn i64_const_rejects_wide_literal_before_compatibility_storage() {
     assert_literal_out_of_range("i64_const_wide_literal_out_of_range.vow");
 }
+
+#[test]
+fn inferred_option_payload_defaults_to_i64_before_storage() {
+    assert_literal_out_of_range("i64_inferred_option_wide_literal_out_of_range.vow");
+}
+
+#[test]
+fn vec_truncate_rejects_wide_i64_argument_before_lowering() {
+    assert_literal_out_of_range("i64_vec_truncate_wide_literal_out_of_range.vow");
+}

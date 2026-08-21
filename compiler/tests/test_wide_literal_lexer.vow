@@ -47,6 +47,19 @@ fn checked_first_error_message(source: String) -> String [io] {
     dctx.diags[0].message
 }
 
+fn check_inferred_and_method_argument_ranges() -> i32 [io] {
+    let inferred_option: String = String::from(
+        "module WideRange\nfn value() { let value = Option::Some(340282366920938463463374607431768211455); }"
+    );
+    if checked_error_count(inferred_option) == 0 { return 71; }
+
+    let truncate_argument: String = String::from(
+        "module WideRange\nfn truncate(values: Vec<i64>) { values.truncate(340282366920938463444927863358058659841); }"
+    );
+    if checked_error_count(truncate_argument) == 0 { return 72; }
+    0
+}
+
 fn check_pre128_targets_use_the_full_magnitude() -> i32 [io] {
     let i64_overflow: String = String::from(
         "module WideRange\nfn value() -> i64 { let x: i64 = 18446744073709551616; x }"
@@ -213,7 +226,7 @@ fn check_unsigned_wide_ir_printing() -> i32 {
 
 fn check_aggregate_wide_literal_lowering() -> i32 {
     let source: String = String::from(
-        "module WideAggregate\nstruct WideStruct { value: u128 }\nstruct WrappedWide { value: Option<u128> }\nstruct WideVec { values: Vec<u128> }\nenum WideEnum { Value(u128) }\nenum NestedWideEnum { Value(Option<u128>) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }\nfn compare_wide(x: u128, flag: bool) -> bool { x == if flag { 18446744073709551618 } else { 0 } }\nfn compare_wide_literal_first(x: u128) -> bool { 340282366920938463463374607431768211450 == x }\nfn assign_wide(target: WideStruct) { target.value = 18446744073709551619; }\nfn match_wide(value: Option<i64>) -> u128 { match value { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } }\nfn make_option() -> Option<u128> { let value: Option<u128> = Option::Some(340282366920938463463374607431768211454); value }\nfn make_ok() -> Result<u128, ()> { let value: Result<u128, ()> = Result::Ok(340282366920938463463374607431768211453); value }\nfn make_err() -> Result<(), u128> { let value: Result<(), u128> = Result::Err(340282366920938463463374607431768211452); value }\nfn consume_option(value: Option<u128>) { }\nfn pass_option() { consume_option(Option::Some(340282366920938463463374607431768211451)); }\nfn loop_wide() -> u128 { loop { break 340282366920938463463374607431768211449; } }\nfn make_wrapped() -> WrappedWide { WrappedWide { value: Option::Some(340282366920938463463374607431768211448) } }\nfn choose_option(flag: bool) -> Option<u128> { if flag { Option::Some(340282366920938463463374607431768211447) } else { Option::None } }\nfn assign_wide_vec(values: Vec<u128>) { values[0] = 340282366920938463463374607431768211446; }\nfn match_option(value: Option<i64>) -> Option<u128> { match value { Option::Some(_) => { Option::Some(340282366920938463463374607431768211445) }, Option::None => { Option::None }, } }\nfn loop_option() -> Option<u128> { loop { break Option::Some(340282366920938463463374607431768211444); } }\nfn assign_wide_vec_field(target: WideVec) { target.values[0] = 340282366920938463463374607431768211443; }\nfn cast_wide_marker() -> u128 { (340282366920938463463374607431768211442 + 0) as u128 }\nfn make_nested_enum() -> NestedWideEnum { NestedWideEnum::Value(Option::Some(340282366920938463463374607431768211441)) }\nfn push_wide_vec(values: Vec<u128>) { values.push(340282366920938463463374607431768211440); }\nfn return_option() -> Option<u128> { return Option::Some(340282366920938463463374607431768211439); }"
+        "module WideAggregate\nstruct WideStruct { value: u128 }\nstruct WrappedWide { value: Option<u128> }\nstruct WideVec { values: Vec<u128> }\nenum WideEnum { Value(u128) }\nenum NestedWideEnum { Value(Option<u128>) }\nfn make_struct() -> WideStruct { WideStruct { value: 18446744073709551616 } }\nfn make_enum() -> WideEnum { WideEnum::Value(18446744073709551617) }\nfn choose_wide(flag: bool) -> u128 { if flag { 170141183460469231731687303715884105728 } else { 0 } }\nfn compare_wide(x: u128, flag: bool) -> bool { x == if flag { 18446744073709551618 } else { 0 } }\nfn compare_wide_literal_first(x: u128) -> bool { 340282366920938463463374607431768211450 == x }\nfn assign_wide(target: WideStruct) { target.value = 18446744073709551619; }\nfn match_wide(value: Option<i64>) -> u128 { match value { Option::Some(_) => { 340282366920938463463374607431768211455 }, Option::None => { 0 }, } }\nfn make_option() -> Option<u128> { let value: Option<u128> = Option::Some(340282366920938463463374607431768211454); value }\nfn make_ok() -> Result<u128, ()> { let value: Result<u128, ()> = Result::Ok(340282366920938463463374607431768211453); value }\nfn make_err() -> Result<(), u128> { let value: Result<(), u128> = Result::Err(340282366920938463463374607431768211452); value }\nfn consume_option(value: Option<u128>) { }\nfn pass_option() { consume_option(Option::Some(340282366920938463463374607431768211451)); }\nfn loop_wide() -> u128 { loop { break 340282366920938463463374607431768211449; } }\nfn make_wrapped() -> WrappedWide { WrappedWide { value: Option::Some(340282366920938463463374607431768211448) } }\nfn choose_option(flag: bool) -> Option<u128> { if flag { Option::Some(340282366920938463463374607431768211447) } else { Option::None } }\nfn assign_wide_vec(values: Vec<u128>) { values[0] = 340282366920938463463374607431768211446; }\nfn match_option(value: Option<i64>) -> Option<u128> { match value { Option::Some(_) => { Option::Some(340282366920938463463374607431768211445) }, Option::None => { Option::None }, } }\nfn loop_option() -> Option<u128> { loop { break Option::Some(340282366920938463463374607431768211444); } }\nfn assign_wide_vec_field(target: WideVec) { target.values[0] = 340282366920938463463374607431768211443; }\nfn cast_wide_marker() -> u128 { (340282366920938463463374607431768211442 + 0) as u128 }\nfn make_nested_enum() -> NestedWideEnum { NestedWideEnum::Value(Option::Some(340282366920938463463374607431768211441)) }\nfn push_wide_vec(values: Vec<u128>) { values.push(340282366920938463463374607431768211440); }\nfn return_option() -> Option<u128> { return Option::Some(340282366920938463463374607431768211439); }\nfn assign_wrapped(target: WrappedWide) { target.value = Option::Some(340282366920938463463374607431768211438); }\nfn insert_hashmap(values: HashMap<i64, u128>) { values.insert(0, 340282366920938463463374607431768211437); }\nfn insert_btreemap(values: BTreeMap<i64, u128>) { values.insert(0, 340282366920938463463374607431768211436); }\nfn assign_option_vec(values: Vec<Option<u128>>) { values[0] = Option::Some(340282366920938463463374607431768211435); }"
     );
     let arena: AstArena = arena_new();
     let parsed: Module = parse_module_into(
@@ -252,6 +265,10 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     let mut saw_nested_enum_limb: bool = false;
     let mut saw_push_limb: bool = false;
     let mut saw_return_limb: bool = false;
+    let mut saw_nested_assignment_limb: bool = false;
+    let mut saw_hashmap_insert_limb: bool = false;
+    let mut saw_btreemap_insert_limb: bool = false;
+    let mut saw_nested_index_assignment_limb: bool = false;
     let mut function_index: i64 = 0;
     while function_index < lowered.functions.len() {
         let f: IrFunction = lowered.functions[function_index];
@@ -291,6 +308,10 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
                     if inst.dv == -15 { saw_nested_enum_limb = true; }
                     if inst.dv == -16 { saw_push_limb = true; }
                     if inst.dv == -17 { saw_return_limb = true; }
+                    if inst.dv == -18 { saw_nested_assignment_limb = true; }
+                    if inst.dv == -19 { saw_hashmap_insert_limb = true; }
+                    if inst.dv == -20 { saw_btreemap_insert_limb = true; }
+                    if inst.dv == -21 { saw_nested_index_assignment_limb = true; }
                 }
                 inst_index = inst_index + 1;
             }
@@ -320,6 +341,10 @@ fn check_aggregate_wide_literal_lowering() -> i32 {
     if !saw_nested_enum_limb { return 64; }
     if !saw_push_limb { return 65; }
     if !saw_return_limb { return 66; }
+    if !saw_nested_assignment_limb { return 67; }
+    if !saw_hashmap_insert_limb { return 68; }
+    if !saw_btreemap_insert_limb { return 69; }
+    if !saw_nested_index_assignment_limb { return 70; }
     0
 }
 
@@ -407,6 +432,8 @@ fn main() -> i32 [io] {
     if aggregate_result != 0 { return aggregate_result; }
     let contextual_result: i32 = check_contextual_match_and_option_ranges();
     if contextual_result != 0 { return contextual_result; }
+    let inferred_method_result: i32 = check_inferred_and_method_argument_ranges();
+    if inferred_method_result != 0 { return inferred_method_result; }
     let lowering_result: i32 = check_aggregate_wide_literal_lowering();
     if lowering_result != 0 { return lowering_result; }
     check_unsigned_wide_ir_printing()

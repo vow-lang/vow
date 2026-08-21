@@ -342,7 +342,7 @@ fn tag_pattern_aggregate_metadata(ctx: &mut LowerCtx, result: InstId, info: Patt
     }
 }
 
-fn compatible_metadata_value<T: Clone + Eq>(
+fn compatible_metadata_value<T: Clone + PartialEq>(
     sources: &[InstId],
     get: impl Fn(InstId) -> Option<T>,
 ) -> Result<Option<T>, ()> {
@@ -399,6 +399,11 @@ fn copy_compatible_aggregate_metadata(ctx: &mut LowerCtx, sources: &[InstId], re
     }) else {
         return;
     };
+    let Ok(declared_ast_type) = compatible_metadata_value(sources, |source| {
+        ctx.inst_declared_ast_types.get(&source).cloned()
+    }) else {
+        return;
+    };
 
     ctx.inst_struct_type.insert(result, type_name);
     if let Some(types) = vec_elem_types {
@@ -415,6 +420,9 @@ fn copy_compatible_aggregate_metadata(ctx: &mut LowerCtx, sources: &[InstId], re
     }
     if let Some(types) = variant_payload_tys {
         ctx.inst_variant_payload_tys.insert(result, types);
+    }
+    if let Some(ast_type) = declared_ast_type {
+        ctx.inst_declared_ast_types.insert(result, ast_type);
     }
 }
 
@@ -716,6 +724,9 @@ pub(crate) struct LowerCtx {
     type_aliases: Rc<HashMap<String, AstType>>,
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
+    // InstId → complete declared source type when one is available.
+    // Container mutations use this to preserve nested wide literal contexts.
+    inst_declared_ast_types: HashMap<InstId, AstType>,
     inst_ty_cache: HashMap<InstId, Ty>,
     inst_locations: Vec<(BlockId, usize)>,
     phi_dependents: HashMap<InstId, Vec<InstId>>,
@@ -829,6 +840,7 @@ impl LowerCtx {
             linear_owner_names,
             type_aliases,
             inst_struct_type: HashMap::new(),
+            inst_declared_ast_types: HashMap::new(),
             inst_ty_cache: HashMap::new(),
             inst_locations: Vec::new(),
             phi_dependents: HashMap::new(),
@@ -1907,6 +1919,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Assign { lhs, rhs } => {
             let index_ty = known_index_assignment_ty(ctx, lhs);
+            if let Some(expected) = known_assignment_ast_type(ctx, lhs) {
+                record_wide_expected_ast_context(ctx, rhs, &expected);
+            }
             if let Some(field_ty) = known_field_assignment_ty(ctx, lhs) {
                 record_wide_control_flow_context(ctx, rhs, field_ty);
             }
@@ -1917,12 +1932,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 && let Some(current) = ctx.lookup(name)
             {
                 record_wide_control_flow_context(ctx, rhs, ctx.inst_ty(current));
+                if let Some(expected) = ctx.inst_declared_ast_types.get(&current).cloned() {
+                    record_wide_expected_ast_context(ctx, rhs, &expected);
+                }
             }
             let mut new_val = lower_expr(ctx, rhs);
             match &lhs.kind {
                 ExprKind::Ident(name) => {
                     if let Some(current) = ctx.lookup(name) {
                         let current_ty = ctx.inst_ty(current);
+                        let declared_ast_type = ctx.inst_declared_ast_types.get(&current).cloned();
                         if matches!(
                             current_ty,
                             Ty::I8
@@ -1935,6 +1954,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                                 | Ty::U128
                         ) {
                             new_val = lower_narrow_literal(ctx, rhs, new_val, current_ty);
+                        }
+                        if let Some(ast_type) = declared_ast_type {
+                            ctx.inst_declared_ast_types.insert(new_val, ast_type);
                         }
                     }
                     ctx.assign(name, new_val);
@@ -2701,6 +2723,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::FieldIndex(field_idx),
                     span,
                 );
+                if let Some(ast_type) = ctx
+                    .struct_field_ast_types
+                    .get(&struct_name)
+                    .and_then(|types| types.get(field_idx as usize))
+                    .cloned()
+                {
+                    ctx.inst_declared_ast_types.insert(result_id, ast_type);
+                }
                 if !field_type_name.is_empty() && !is_scalar_field_type_name(&field_type_name) {
                     ctx.inst_struct_type.insert(result_id, field_type_name);
                 }
@@ -3552,15 +3582,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 ),
                 (Some("BTreeMap"), "insert") => {
+                    let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
                     let k_id = args
                         .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(ctx, e, key_ast_ty.as_ref())
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
                     let v_id = args
                         .get(1)
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(
+                                ctx,
+                                e,
+                                value_ast_ty.as_ref(),
+                            )
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
@@ -3607,15 +3646,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (Some("HashMap"), "insert") => {
+                    let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
                     let k_id = args
                         .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(ctx, e, key_ast_ty.as_ref())
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
                     let v_id = args
                         .get(1)
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(
+                                ctx,
+                                e,
+                                value_ast_ty.as_ref(),
+                            )
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
@@ -3753,6 +3801,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Index { base, index } => {
+            let elem_ast_type = known_expr_ast_type(ctx, expr);
             let vec_ptr = lower_expr(ctx, base);
             let idx_id = lower_expr(ctx, index);
             let result = ctx.emit(
@@ -3763,6 +3812,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             propagate_vec_element_metadata(ctx, vec_ptr, result);
+            if let Some(ast_type) = elem_ast_type {
+                ctx.inst_declared_ast_types.insert(result, ast_type);
+            }
             result
         }
         // ? operator: unwrap Option::Some or short-circuit with None
@@ -4048,6 +4100,59 @@ fn known_struct_expr_name(ctx: &LowerCtx, expr: &Expr) -> Option<String> {
     }
 }
 
+fn known_expr_ast_type(ctx: &LowerCtx, expr: &Expr) -> Option<AstType> {
+    match &expr.kind {
+        ExprKind::Ident(name) => ctx
+            .lookup(name)
+            .and_then(|id| ctx.inst_declared_ast_types.get(&id))
+            .cloned(),
+        ExprKind::FieldAccess { base, field } => {
+            let struct_name = known_struct_expr_name(ctx, base)?;
+            let field_idx = ctx
+                .struct_field_map
+                .get(&struct_name)?
+                .iter()
+                .position(|name| name == field)?;
+            ctx.struct_field_ast_types
+                .get(&struct_name)
+                .and_then(|types| types.get(field_idx))
+                .cloned()
+        }
+        ExprKind::Index { base, .. } => {
+            let base_ty = known_expr_ast_type(ctx, base)?;
+            match resolve_type_alias(&base_ty, &ctx.type_aliases) {
+                AstType::Generic { name, args, .. } if name == "Vec" => args.first().cloned(),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn known_assignment_ast_type(ctx: &LowerCtx, lhs: &Expr) -> Option<AstType> {
+    matches!(
+        lhs.kind,
+        ExprKind::FieldAccess { .. } | ExprKind::Index { .. }
+    )
+    .then(|| known_expr_ast_type(ctx, lhs))
+    .flatten()
+}
+
+fn known_map_argument_ast_types(
+    ctx: &LowerCtx,
+    recv_id: InstId,
+) -> (Option<AstType>, Option<AstType>) {
+    let Some(ast_ty) = ctx.inst_declared_ast_types.get(&recv_id) else {
+        return (None, None);
+    };
+    match resolve_type_alias(ast_ty, &ctx.type_aliases) {
+        AstType::Generic { name, args, .. } if name == "HashMap" || name == "BTreeMap" => {
+            (args.first().cloned(), args.get(1).cloned())
+        }
+        _ => (None, None),
+    }
+}
+
 fn known_field_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
     let ExprKind::FieldAccess { base, field } = &lhs.kind else {
         return None;
@@ -4245,6 +4350,23 @@ fn record_wide_expected_ast_context(ctx: &mut LowerCtx, expr: &Expr, expected: &
         }
         _ => {}
     }
+}
+
+fn lower_consumed_expr_with_expected_ast_type(
+    ctx: &mut LowerCtx,
+    expr: &Expr,
+    expected: Option<&AstType>,
+) -> InstId {
+    let wide_ty = expected
+        .map(|ast_ty| {
+            record_wide_expected_ast_context(ctx, expr, ast_ty);
+            lower_ty_with_linear(ast_ty, &ctx.linear_owner_names, &ctx.type_aliases)
+        })
+        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
+    let original = lower_consumed_expr(ctx, expr);
+    wide_ty
+        .map(|ty| lower_narrow_literal(ctx, expr, original, ty))
+        .unwrap_or(original)
 }
 
 fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: u128, ty: Ty, span: Span) -> InstId {
@@ -4511,6 +4633,7 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
             }
             if let PatKind::Ident { name, .. } = &pattern.kind {
                 if let Some(ann) = ty {
+                    ctx.inst_declared_ast_types.insert(val, ann.clone());
                     let ann = resolve_type_alias(ann, &ctx.type_aliases);
                     match ann {
                         AstType::Named {
@@ -4648,6 +4771,7 @@ fn lower_function_with_pattern_aggregates(
             InstData::ArgIndex(idx as u32),
             fn_def.span,
         );
+        ctx.inst_declared_ast_types.insert(arg_id, param.ty.clone());
         match resolve_type_alias(&param.ty, &type_aliases) {
             AstType::Named { name, .. } if name == "str" || name == "String" => {
                 ctx.inst_struct_type.insert(arg_id, "String".to_string());

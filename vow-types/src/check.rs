@@ -285,6 +285,46 @@ fn can_context_coerce(from: &Ty, to: &Ty) -> bool {
     }
 }
 
+fn default_literal_integer_types(ty: &Ty) -> Ty {
+    match ty {
+        Ty::LitInt => Ty::I64,
+        Ty::Applied(base, args) => Ty::Applied(
+            Box::new(default_literal_integer_types(base)),
+            args.iter().map(default_literal_integer_types).collect(),
+        ),
+        Ty::Reference(inner) => Ty::Reference(Box::new(default_literal_integer_types(inner))),
+        Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(default_literal_integer_types).collect()),
+        _ => ty.clone(),
+    }
+}
+
+fn method_argument_types(receiver: &Ty, method: &str) -> Vec<Ty> {
+    match receiver {
+        Ty::Str => match method {
+            "push_str" | "eq" | "contains" => vec![Ty::Str],
+            "byte_at" | "push_byte" => vec![Ty::I64],
+            "substring" => vec![Ty::I64, Ty::I64],
+            _ => vec![],
+        },
+        Ty::Applied(base, args) => match base.as_ref() {
+            Ty::Struct(name) if name == "Vec" => match method {
+                "push" => args.first().cloned().into_iter().collect(),
+                "get" | "truncate" => vec![Ty::I64],
+                _ => vec![],
+            },
+            Ty::Struct(name) if name == "HashMap" || name == "BTreeMap" => match method {
+                "insert" => args.iter().take(2).cloned().collect(),
+                "get" | "contains" | "contains_key" | "remove" => {
+                    args.first().cloned().into_iter().collect()
+                }
+                _ => vec![],
+            },
+            _ => vec![],
+        },
+        _ => vec![],
+    }
+}
+
 fn can_assignment_coerce(from: &Ty, to: &Ty) -> bool {
     can_context_coerce(from, to) || *to == Ty::Never
 }
@@ -1122,10 +1162,9 @@ impl<'e> Checker<'e> {
                         }
                     }
                 } else {
-                    if init_ty.is_lit_int() {
-                        self.check_integer_literal_range(init, &Ty::I64);
-                    }
-                    init_ty
+                    let defaulted_ty = default_literal_integer_types(&init_ty);
+                    self.check_contextual_integer_literal_ranges(init, &defaulted_ty);
+                    defaulted_ty
                 };
                 self.bind_pattern(pattern, &binding_ty);
                 Ty::Unit
@@ -1738,6 +1777,12 @@ impl<'e> Checker<'e> {
                 let recv_ty = self.check_expr(receiver);
                 for arg in args {
                     self.check_expr(arg);
+                }
+                for (arg, expected_ty) in args
+                    .iter()
+                    .zip(method_argument_types(&recv_ty, method).iter())
+                {
+                    self.check_contextual_integer_literal_ranges(arg, expected_ty);
                 }
                 let is_str = matches!(recv_ty, Ty::Str);
                 let is_vec = matches!(&recv_ty,
@@ -4771,7 +4816,7 @@ mod tests {
             span: dummy_span(),
         };
         checker.check_stmt(&stmt);
-        assert_eq!(checker.env.lookup("x"), Some(&Ty::LitInt));
+        assert_eq!(checker.env.lookup("x"), Some(&Ty::I64));
         assert!(!checker.has_errors());
     }
 
