@@ -93,6 +93,8 @@ fn IOP_SHL() -> i64 { 136 }
 fn IOP_SHR() -> i64 { 137 }
 fn IOP_CONST_U8() -> i64 { 138 }
 fn IOP_INT_CAST() -> i64 { 139 }
+fn IOP_CONST_I128() -> i64 { 140 }
+fn IOP_CONST_U128() -> i64 { 141 }
 
 fn REGION_KIND_BLOCK()  -> i64 { 0 }
 fn REGION_KIND_CALLER() -> i64 { 1 }
@@ -122,7 +124,7 @@ fn region_rodata() -> i64 { region_pack(REGION_KIND_RODATA(), 0) }
 // Skips 2 because `tests/multi/vmod_decode_bad_version/main.vow` pins the
 // literal byte 2 as its bad-version probe — kept synchronized with the
 // Rust `MODULE_VERSION` constant in `vow-ir/src/serialize.rs`.
-fn MODULE_VERSION() -> i64 { 4 }
+fn MODULE_VERSION() -> i64 { 5 }
 
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
@@ -188,6 +190,8 @@ fn IDATA_CONST_U64() -> i64 { 17 }
 fn IDATA_INTEGER() -> i64 { 18 }
 fn IDATA_CONST_U8() -> i64 { 19 }
 fn IDATA_INTEGER_CAST() -> i64 { 20 }
+fn IDATA_CONST_I128() -> i64 { 21 }
+fn IDATA_CONST_U128() -> i64 { 22 }
 
 fn BLAME_CALLER() -> i64 { 0 }
 fn BLAME_CALLEE() -> i64 { 1 }

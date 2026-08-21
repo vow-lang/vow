@@ -791,6 +791,11 @@ fn lower_inst(
                 ctx.value_map.insert(inst.id, val);
             }
         }
+        Opcode::ConstI128 | Opcode::ConstU128 => {
+            return Err(CodegenError::UnsupportedOpcode(
+                "wide constant codegen belongs to a later seam (epic #526)".to_string(),
+            ));
+        }
         Opcode::ConstU64 => {
             if let InstData::ConstU64(v) = inst.data {
                 let val = builder.ins().iconst(types::I64, v as i64);

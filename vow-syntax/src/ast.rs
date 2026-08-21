@@ -334,7 +334,7 @@ pub enum ExprKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Lit {
-    Int(i128),
+    Int(u128),
     Float(f64),
     Bool(bool),
     String(String),
@@ -395,6 +395,88 @@ pub enum Stmt {
     },
 }
 
+/// Return values carried by breaks that target the loop owning `block`.
+/// Nested loop bodies are excluded because an unlabeled break targets the
+/// innermost loop. Conditions and iterables are included because they execute
+/// before their nested loop becomes the active break target.
+pub fn loop_break_values(block: &Block) -> Vec<&Expr> {
+    fn push_block_exprs<'a>(block: &'a Block, pending: &mut Vec<&'a Expr>) {
+        for stmt in &block.stmts {
+            pending.push(match stmt {
+                Stmt::Let { init, .. } => init,
+                Stmt::Expr { expr, .. } => expr,
+            });
+        }
+        if let Some(expr) = &block.trailing_expr {
+            pending.push(expr);
+        }
+    }
+
+    let mut pending = Vec::new();
+    let mut values = Vec::new();
+    push_block_exprs(block, &mut pending);
+    while let Some(expr) = pending.pop() {
+        match &expr.kind {
+            ExprKind::Break { value: Some(value) } => {
+                values.push(value.as_ref());
+                pending.push(value);
+            }
+            ExprKind::Loop { .. }
+            | ExprKind::Break { value: None }
+            | ExprKind::Continue
+            | ExprKind::Lit(_)
+            | ExprKind::Ident(_)
+            | ExprKind::Result => {}
+            ExprKind::While { condition, .. } => pending.push(condition),
+            ExprKind::ForEach { iterable, .. } => pending.push(iterable),
+            ExprKind::BinaryOp { lhs, rhs, .. }
+            | ExprKind::Index {
+                base: lhs,
+                index: rhs,
+            }
+            | ExprKind::Assign { lhs, rhs } => pending.extend([lhs.as_ref(), rhs.as_ref()]),
+            ExprKind::UnaryOp { operand, .. }
+            | ExprKind::Borrow { expr: operand }
+            | ExprKind::Question { expr: operand }
+            | ExprKind::Cast { expr: operand, .. }
+            | ExprKind::FieldAccess { base: operand, .. } => pending.push(operand),
+            ExprKind::Call { callee, args } => {
+                pending.push(callee);
+                pending.extend(args);
+            }
+            ExprKind::MethodCall { receiver, args, .. } => {
+                pending.push(receiver);
+                pending.extend(args);
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                pending.push(scrutinee);
+                pending.extend(arms.iter().map(|arm| &arm.body));
+            }
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                pending.push(condition);
+                push_block_exprs(then_branch, &mut pending);
+                if let Some(else_expr) = else_branch {
+                    pending.push(else_expr);
+                }
+            }
+            ExprKind::Return { value: Some(value) } => pending.push(value),
+            ExprKind::Return { value: None } => {}
+            ExprKind::Block(block) => push_block_exprs(block, &mut pending),
+            ExprKind::Tuple(items) | ExprKind::EnumConstruct { fields: items, .. } => {
+                pending.extend(items);
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                pending.extend(fields.iter().map(|(_, value)| value));
+            }
+        }
+    }
+    values
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Pat,
@@ -434,6 +516,143 @@ mod tests {
 
     fn dummy_span() -> Span {
         Span::new(0, 1)
+    }
+
+    fn expr(kind: ExprKind) -> Expr {
+        Expr {
+            kind,
+            span: dummy_span(),
+        }
+    }
+
+    fn break_value(value: u128) -> Expr {
+        expr(ExprKind::Break {
+            value: Some(Box::new(expr(ExprKind::Lit(Lit::Int(value))))),
+        })
+    }
+
+    fn block_with(expressions: Vec<Expr>) -> Block {
+        Block {
+            stmts: expressions
+                .into_iter()
+                .map(|expr| Stmt::Expr {
+                    expr,
+                    has_semicolon: true,
+                    span: dummy_span(),
+                })
+                .collect(),
+            trailing_expr: None,
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn loop_break_values_walks_expressions_but_stops_at_nested_loop_bodies() {
+        let unit_ty = || Type::Unit { span: dummy_span() };
+        let wildcard = || Pat {
+            kind: PatKind::Wildcard,
+            span: dummy_span(),
+        };
+        let body = block_with(vec![
+            expr(ExprKind::BinaryOp {
+                op: BinOp::Add,
+                lhs: Box::new(break_value(1)),
+                rhs: Box::new(break_value(2)),
+            }),
+            expr(ExprKind::UnaryOp {
+                op: UnOp::Neg,
+                operand: Box::new(break_value(3)),
+            }),
+            expr(ExprKind::Call {
+                callee: Box::new(break_value(4)),
+                args: vec![break_value(5)],
+            }),
+            expr(ExprKind::MethodCall {
+                receiver: Box::new(break_value(6)),
+                method: "m".into(),
+                args: vec![break_value(7)],
+            }),
+            expr(ExprKind::FieldAccess {
+                base: Box::new(break_value(8)),
+                field: "f".into(),
+            }),
+            expr(ExprKind::Index {
+                base: Box::new(break_value(9)),
+                index: Box::new(break_value(10)),
+            }),
+            expr(ExprKind::Match {
+                scrutinee: Box::new(break_value(11)),
+                arms: vec![MatchArm {
+                    pattern: wildcard(),
+                    body: break_value(12),
+                    span: dummy_span(),
+                }],
+            }),
+            expr(ExprKind::If {
+                condition: Box::new(break_value(13)),
+                then_branch: Box::new(block_with(vec![break_value(14)])),
+                else_branch: Some(Box::new(break_value(15))),
+            }),
+            expr(ExprKind::While {
+                condition: Box::new(break_value(16)),
+                vow: None,
+                body: Box::new(block_with(vec![break_value(900)])),
+            }),
+            expr(ExprKind::ForEach {
+                binding: "item".into(),
+                iterable: Box::new(break_value(17)),
+                vow: None,
+                body: Box::new(block_with(vec![break_value(901)])),
+            }),
+            expr(ExprKind::Loop {
+                vow: None,
+                body: Box::new(block_with(vec![break_value(902)])),
+            }),
+            expr(ExprKind::Return {
+                value: Some(Box::new(break_value(18))),
+            }),
+            expr(ExprKind::Block(Box::new(block_with(vec![break_value(19)])))),
+            expr(ExprKind::Borrow {
+                expr: Box::new(break_value(20)),
+            }),
+            expr(ExprKind::Question {
+                expr: Box::new(break_value(21)),
+            }),
+            expr(ExprKind::Cast {
+                expr: Box::new(break_value(22)),
+                target_ty: Box::new(unit_ty()),
+            }),
+            expr(ExprKind::Assign {
+                lhs: Box::new(break_value(23)),
+                rhs: Box::new(break_value(24)),
+            }),
+            expr(ExprKind::Tuple(vec![break_value(25)])),
+            expr(ExprKind::StructLiteral {
+                name: "S".into(),
+                fields: vec![("f".into(), break_value(26))],
+            }),
+            expr(ExprKind::EnumConstruct {
+                path: vec!["E".into(), "V".into()],
+                fields: vec![break_value(27)],
+            }),
+            break_value(28),
+            expr(ExprKind::Break { value: None }),
+            expr(ExprKind::Continue),
+            expr(ExprKind::Return { value: None }),
+            expr(ExprKind::Lit(Lit::Bool(true))),
+            expr(ExprKind::Ident("x".into())),
+            expr(ExprKind::Result),
+        ]);
+
+        let mut magnitudes: Vec<u128> = loop_break_values(&body)
+            .into_iter()
+            .filter_map(|value| match &value.kind {
+                ExprKind::Lit(Lit::Int(magnitude)) => Some(*magnitude),
+                _ => None,
+            })
+            .collect();
+        magnitudes.sort_unstable();
+        assert_eq!(magnitudes, (1..=28).collect::<Vec<_>>());
     }
 
     #[test]

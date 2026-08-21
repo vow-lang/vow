@@ -99,7 +99,8 @@ fn try_suffix(src: String, pos: i64, src_len: i64) -> i64 {
         if src.byte_at(pos + 1) == 56 && !is_ident_cont(src.byte_at(pos + 2)) {
             return tok_suffix_i8();
         }
-        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 50 && src.byte_at(pos + 3) == 56 && !is_ident_cont(src.byte_at(pos + 4)) {
+        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 50 && src.byte_at(pos + 3) == 56 &&
+           (pos + 4 >= src_len || !is_ident_cont(src.byte_at(pos + 4))) {
             return tok_suffix_i128();
         }
         if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 54 && !is_ident_cont(src.byte_at(pos + 3)) {
@@ -119,7 +120,8 @@ fn try_suffix(src: String, pos: i64, src_len: i64) -> i64 {
         if src.byte_at(pos + 1) == 56 && !is_ident_cont(src.byte_at(pos + 2)) {
             return tok_suffix_u8();
         }
-        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 50 && src.byte_at(pos + 3) == 56 && !is_ident_cont(src.byte_at(pos + 4)) {
+        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 50 && src.byte_at(pos + 3) == 56 &&
+           (pos + 4 >= src_len || !is_ident_cont(src.byte_at(pos + 4))) {
             return tok_suffix_u128();
         }
         if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 54 && !is_ident_cont(src.byte_at(pos + 3)) {
@@ -186,6 +188,38 @@ fn empty_str() -> String {
     String::from("")
 }
 
+struct WideLiteral {
+    lo: u64,
+    hi: u64,
+    overflow: bool,
+}
+
+// Multiply a two-limb unsigned magnitude by ten and add one decimal digit.
+// Splitting each limb into 32-bit halves keeps every intermediate below 2^36,
+// so overflow is detected only when the final high half exceeds 32 bits.
+fn wide_literal_push_digit(lo: u64, hi: u64, overflow: bool, digit: i64) -> WideLiteral {
+    if overflow {
+        return WideLiteral { lo: lo, hi: hi, overflow: true };
+    }
+    let mask: u64 = 4294967295u64;
+    let ten: u64 = 10u64;
+    let digit_u64: u64 = digit as u64;
+
+    let lo_low_product: u64 = (lo & mask) * ten + digit_u64;
+    let lo_high_product: u64 = (lo >> 32) * ten + (lo_low_product >> 32);
+    let next_lo: u64 = (lo_high_product << 32) | (lo_low_product & mask);
+    let carry: u64 = lo_high_product >> 32;
+
+    let hi_low_product: u64 = (hi & mask) * ten + carry;
+    let hi_high_product: u64 = (hi >> 32) * ten + (hi_low_product >> 32);
+    let next_hi: u64 = (hi_high_product << 32) | (hi_low_product & mask);
+    WideLiteral {
+        lo: next_lo,
+        hi: next_hi,
+        overflow: hi_high_product > mask,
+    }
+}
+
 fn lex(src: String) -> Vec<Token> {
     let mut pos: i64 = 0;
     let src_len: i64 = src.len();
@@ -209,20 +243,33 @@ fn lex(src: String) -> Vec<Token> {
             let tok: Token = make_token(tag, iv, 0, sv, start, pos - start);
             tokens.push(tok);
         } else if is_digit(b) {
-            let mut int_val: i64 = 0;
+            let mut wide_lo: u64 = 0u64;
+            let mut wide_hi: u64 = 0u64;
+            let mut wide_overflow: bool = false;
             while pos < src_len && is_digit(src.byte_at(pos)) {
                 let d: i64 = src.byte_at(pos) - 48;
-                int_val = int_val * 10 + d;
+                let next_wide: WideLiteral = wide_literal_push_digit(wide_lo, wide_hi, wide_overflow, d);
+                wide_lo = next_wide.lo;
+                wide_hi = next_wide.hi;
+                wide_overflow = next_wide.overflow;
                 pos = pos + 1;
             }
             let suffix: i64 = if pos < src_len { try_suffix(src, pos, src_len) } else { -1 };
             if suffix != -1 {
                 let slen: i64 = suffix_len(suffix);
                 pos = pos + slen;
-                let tok: Token = make_token(tok_lit_int_suffixed(), int_val, suffix, empty_str(), start, pos - start);
+                let tok: Token = if wide_overflow {
+                    make_token(tok_invalid_int(), 0, 0, String::from("integer literal out of range"), start, pos - start)
+                } else {
+                    make_wide_int_token(tok_lit_int_suffixed(), wide_lo, wide_hi, suffix, start, pos - start)
+                };
                 tokens.push(tok);
             } else {
-                let tok: Token = make_token(tok_lit_int(), int_val, 0, empty_str(), start, pos - start);
+                let tok: Token = if wide_overflow {
+                    make_token(tok_invalid_int(), 0, 0, String::from("integer literal out of range"), start, pos - start)
+                } else {
+                    make_wide_int_token(tok_lit_int(), wide_lo, wide_hi, 0, start, pos - start)
+                };
                 tokens.push(tok);
             }
         } else if b == 34 {

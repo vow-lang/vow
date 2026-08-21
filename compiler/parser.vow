@@ -781,17 +781,24 @@ fn parse_primary(p: Parser) -> i64 {
     let span_start: i64 = t.span_start;
     if tag == tok_lit_int() {
         let _adv: Token = advance(p);
-        arena_add_expr(p.arena, EXPR_LIT_INT(), t.int_val, 0, 0, 0)
+        arena_add_int_expr(p.arena, t.int_lo, t.int_hi, 0)
     } else if tag == tok_lit_int_suffixed() {
         let _adv: Token = advance(p);
-        let lit_eid: i64 = arena_add_expr(p.arena, EXPR_LIT_INT(), t.int_val, 0, 0, 0);
-        if t.int_val2 == tok_suffix_u64() {
-            let u64_sid: i64 = arena_intern_str(p.arena, String::from("u64"));
-            let target_tid: i64 = arena_add_type(p.arena, TY_NAMED(), u64_sid, 0, 0);
+        let lit_eid: i64 = arena_add_int_expr(p.arena, t.int_lo, t.int_hi, 0);
+        if t.int_val2 == tok_suffix_u64() || t.int_val2 == tok_suffix_i128() || t.int_val2 == tok_suffix_u128() {
+            let type_name: String = if t.int_val2 == tok_suffix_u64() { String::from("u64") }
+                else if t.int_val2 == tok_suffix_i128() { String::from("i128") }
+                else { String::from("u128") };
+            let type_sid: i64 = arena_intern_str(p.arena, type_name);
+            let target_tid: i64 = arena_add_type(p.arena, TY_NAMED(), type_sid, 0, 0);
             arena_add_expr(p.arena, EXPR_CAST(), lit_eid, target_tid, 0, 0)
         } else {
             lit_eid
         }
+    } else if tag == tok_invalid_int() {
+        push_error(p, t.str_val);
+        let _adv: Token = advance(p);
+        arena_add_int_expr(p.arena, 0u64, 0u64, 0)
     } else if tag == tok_lit_bool() {
         let _adv: Token = advance(p);
         arena_add_expr(p.arena, EXPR_LIT_BOOL(), t.int_val, 0, 0, 0)

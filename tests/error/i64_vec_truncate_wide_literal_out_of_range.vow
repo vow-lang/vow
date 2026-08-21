@@ -1,0 +1,5 @@
+module I64VecTruncateWideLiteralOutOfRange
+
+fn truncate(values: Vec<i64>) {
+    values.truncate(340282366920938463444927863358058659841);
+}

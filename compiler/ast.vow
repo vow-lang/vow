@@ -166,10 +166,16 @@ fn arena_add_expr(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -
     eid
 }
 
+fn arena_add_int_expr(a: AstArena, lo: u64, hi: u64, span: i64) -> i64 {
+    arena_add_expr(a, EXPR_LIT_INT(), lo as i64, hi as i64, 0, span)
+}
+
 fn expr_tag(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5] }
 fn expr_a(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 1] }
 fn expr_b(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 2] }
 fn expr_c(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 3] }
+fn expr_int_lo(a: AstArena, eid: i64) -> u64 { expr_a(a, eid) as u64 }
+fn expr_int_hi(a: AstArena, eid: i64) -> u64 { expr_b(a, eid) as u64 }
 
 fn expr_is_const_int(a: AstArena, eid: i64) -> bool {
     if expr_tag(a, eid) == EXPR_LIT_INT() { return true; }
@@ -209,6 +215,113 @@ fn stmt_tag(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5] }
 fn stmt_a(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 1] }
 fn stmt_b(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 2] }
 fn stmt_c(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 3] }
+
+fn loop_break_push_block_exprs(a: AstArena, bid: i64, pending: Vec<i64>) {
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        if stmt_tag(a, sid) == STMT_LET() {
+            pending.push(stmt_c(a, sid));
+        } else {
+            pending.push(stmt_a(a, sid));
+        }
+        i = i + 1;
+    }
+    let trail_eid: i64 = blk_trail(a, bid);
+    if trail_eid != -1 { pending.push(trail_eid); }
+}
+
+// Return values carried by breaks that target the loop owning `bid`. Nested
+// loop bodies are excluded because breaks target the innermost loop. A nested
+// while condition or for iterable is included because it executes before that
+// inner loop becomes the active break target.
+fn loop_break_value_eids(a: AstArena, bid: i64) -> Vec<i64> {
+    let pending: Vec<i64> = Vec::new();
+    let values: Vec<i64> = Vec::new();
+    loop_break_push_block_exprs(a, bid, pending);
+    while pending.len() > 0 {
+        let last: i64 = pending.len() - 1;
+        let eid: i64 = pending[last];
+        pending.pop();
+        if eid != -1 {
+            let tag: i64 = expr_tag(a, eid);
+            if tag == EXPR_BREAK() {
+                let value_eid: i64 = expr_a(a, eid);
+                if value_eid != -1 {
+                    values.push(value_eid);
+                    pending.push(value_eid);
+                }
+            } else if tag == EXPR_WHILE() || tag == EXPR_FOR() {
+                pending.push(expr_a(a, eid));
+            } else if tag == EXPR_CALL() {
+                pending.push(expr_a(a, eid));
+                let args_lid: i64 = expr_b(a, eid);
+                let mut i: i64 = 0;
+                while i < list_len(a, args_lid) {
+                    pending.push(list_get(a, args_lid, i));
+                    i = i + 1;
+                }
+            } else if tag == EXPR_METHOD() {
+                pending.push(expr_a(a, eid));
+                let args_lid: i64 = expr_c(a, eid);
+                let mut i: i64 = 0;
+                while i < list_len(a, args_lid) {
+                    pending.push(list_get(a, args_lid, i));
+                    i = i + 1;
+                }
+            } else if tag == EXPR_BINOP() {
+                pending.push(expr_b(a, eid));
+                pending.push(expr_c(a, eid));
+            } else if tag == EXPR_UNOP() {
+                pending.push(expr_b(a, eid));
+            } else if tag == EXPR_INDEX() || tag == EXPR_ASSIGN() {
+                pending.push(expr_a(a, eid));
+                pending.push(expr_b(a, eid));
+            } else if tag == EXPR_FIELD() || tag == EXPR_QUESTION() ||
+                      tag == EXPR_CAST() || tag == EXPR_RETURN() {
+                pending.push(expr_a(a, eid));
+            } else if tag == EXPR_IF() {
+                pending.push(expr_a(a, eid));
+                loop_break_push_block_exprs(a, expr_b(a, eid), pending);
+                pending.push(expr_c(a, eid));
+            } else if tag == EXPR_MATCH() {
+                pending.push(expr_a(a, eid));
+                let arms_lid: i64 = expr_b(a, eid);
+                let mut i: i64 = 0;
+                while i < list_len(a, arms_lid) / 2 {
+                    pending.push(list_get(a, arms_lid, i * 2 + 1));
+                    i = i + 1;
+                }
+            } else if tag == EXPR_BLOCK() {
+                loop_break_push_block_exprs(a, expr_a(a, eid), pending);
+            } else if tag == EXPR_SLIT() {
+                let fields_lid: i64 = expr_b(a, eid);
+                let mut i: i64 = 0;
+                while i < list_len(a, fields_lid) / 2 {
+                    pending.push(list_get(a, fields_lid, i * 2 + 1));
+                    i = i + 1;
+                }
+            } else if tag == EXPR_ECTOR() {
+                let fields_lid: i64 = expr_b(a, eid);
+                let mut i: i64 = 0;
+                while i < list_len(a, fields_lid) {
+                    pending.push(list_get(a, fields_lid, i));
+                    i = i + 1;
+                }
+            } else if tag == EXPR_TUPLE() {
+                let values_lid: i64 = expr_a(a, eid);
+                let mut i: i64 = 0;
+                while i < list_len(a, values_lid) {
+                    pending.push(list_get(a, values_lid, i));
+                    i = i + 1;
+                }
+            }
+        }
+    }
+    values
+}
 
 fn pat_tag(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4] }
 fn pat_a(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 1] }

@@ -41,6 +41,8 @@ fn opcode_name(opcode: &Opcode) -> &'static str {
     match opcode {
         Opcode::ConstI32 => "ConstI32",
         Opcode::ConstI64 => "ConstI64",
+        Opcode::ConstI128 => "ConstI128",
+        Opcode::ConstU128 => "ConstU128",
         Opcode::ConstF32 => "ConstF32",
         Opcode::ConstF64 => "ConstF64",
         Opcode::ConstBool => "ConstBool",
@@ -146,6 +148,8 @@ fn format_data(data: &InstData) -> Option<String> {
         )),
         InstData::ConstI32(v) => Some(v.to_string()),
         InstData::ConstI64(v) => Some(v.to_string()),
+        InstData::ConstI128(v) => Some(format!("{v}i128")),
+        InstData::ConstU128(v) => Some(format!("{v}u128")),
         InstData::ConstU64(v) => Some(format!("{v}u64")),
         InstData::ConstU8(v) => Some(format!("{v}u8")),
         InstData::ConstF32(v) => Some(v.to_string()),
@@ -401,6 +405,26 @@ mod tests {
         assert!(output.contains("ConstI64[42]"));
         assert!(output.contains("%0"));
         assert!(output.contains("Return"));
+    }
+
+    #[test]
+    fn print_wide_integer_constants_with_explicit_suffixes() {
+        let signed = make_inst(
+            0,
+            Opcode::ConstI128,
+            Ty::I128,
+            vec![],
+            InstData::ConstI128(i128::MAX),
+        );
+        let unsigned = make_inst(
+            1,
+            Opcode::ConstU128,
+            Ty::U128,
+            vec![],
+            InstData::ConstU128(u128::MAX),
+        );
+        assert!(print_inst(&signed).contains("170141183460469231731687303715884105727i128"));
+        assert!(print_inst(&unsigned).contains("340282366920938463463374607431768211455u128"));
     }
 
     #[test]

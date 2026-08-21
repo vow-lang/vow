@@ -86,6 +86,8 @@ impl IntegerType {
 pub enum Opcode {
     ConstI32,
     ConstI64,
+    ConstI128,
+    ConstU128,
     ConstF32,
     ConstF64,
     ConstBool,
@@ -205,6 +207,8 @@ pub enum InstData {
     },
     ConstI32(i32),
     ConstI64(i64),
+    ConstI128(i128),
+    ConstU128(u128),
     ConstF32(f32),
     ConstF64(f64),
     ConstBool(bool),

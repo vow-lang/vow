@@ -628,6 +628,12 @@ section_begin "Section 4: Run Tests"
 for vow_file in tests/run/*.vow; do
     name=$(basename "$vow_file" .vow)
 
+    skip_reason=$(sed -n 's|^// TEST: skip "\(.*\)"$|\1|p' "$vow_file" | head -1)
+    if [ -n "$skip_reason" ]; then
+        skip "${name}/test-build" "$skip_reason"
+        continue
+    fi
+
     # Build with both compilers
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST build --no-verify "$vow_file" -o "$TMPDIR/test_rust_${name}" 2>/dev/null) || rust_exit=$?

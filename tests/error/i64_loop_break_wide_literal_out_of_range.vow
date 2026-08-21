@@ -1,0 +1,9 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 340282366920938463463374607431768211455 does not fit in i64"
+module I64LoopBreakWideLiteralOutOfRange
+
+fn value() -> i64 {
+    loop {
+        break 340282366920938463463374607431768211455;
+    }
+}

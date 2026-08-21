@@ -6,7 +6,7 @@ use std::rc::Rc;
 use vow_diag::Blame;
 use vow_syntax::ast::{
     BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
-    Type as AstType, UnOp, VariantKind, VowBlock,
+    Type as AstType, UnOp, VariantKind, VowBlock, loop_break_values,
 };
 use vow_syntax::span::Span;
 pub use vow_types::check::{
@@ -342,7 +342,7 @@ fn tag_pattern_aggregate_metadata(ctx: &mut LowerCtx, result: InstId, info: Patt
     }
 }
 
-fn compatible_metadata_value<T: Clone + Eq>(
+fn compatible_metadata_value<T: Clone + PartialEq>(
     sources: &[InstId],
     get: impl Fn(InstId) -> Option<T>,
 ) -> Result<Option<T>, ()> {
@@ -399,6 +399,11 @@ fn copy_compatible_aggregate_metadata(ctx: &mut LowerCtx, sources: &[InstId], re
     }) else {
         return;
     };
+    let Ok(declared_ast_type) = compatible_metadata_value(sources, |source| {
+        ctx.inst_declared_ast_types.get(&source).cloned()
+    }) else {
+        return;
+    };
 
     ctx.inst_struct_type.insert(result, type_name);
     if let Some(types) = vec_elem_types {
@@ -415,6 +420,9 @@ fn copy_compatible_aggregate_metadata(ctx: &mut LowerCtx, sources: &[InstId], re
     }
     if let Some(types) = variant_payload_tys {
         ctx.inst_variant_payload_tys.insert(result, types);
+    }
+    if let Some(ast_type) = declared_ast_type {
+        ctx.inst_declared_ast_types.insert(result, ast_type);
     }
 }
 
@@ -594,7 +602,7 @@ fn scalar_ty_for_field_type_name(name: &str) -> Ty {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FuncSigInfo {
     id: FuncId,
     ret_ty: Ty,
@@ -602,6 +610,7 @@ pub(crate) struct FuncSigInfo {
     ret_vec_elem: Option<String>,
     ret_option_elem: Option<Ty>,
     param_tys: Vec<Ty>,
+    param_ast_tys: Vec<AstType>,
 }
 
 fn non_scalar_type_tag(
@@ -704,17 +713,31 @@ pub(crate) struct LowerCtx {
     pub(super) struct_field_map: HashMap<String, Vec<String>>,
     // enum name → variant names in declaration order (index = tag)
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
+    // enum name → variant tag → declared payload types
+    enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>>,
+    // enum name → variant tag → complete declared payload types
+    enum_variant_payload_ast_types: Rc<HashMap<String, Vec<Vec<AstType>>>>,
+    // Expressions inside a wide contextual control-flow expression, keyed by
+    // their stable AST address for the duration of function lowering.
+    wide_literal_contexts: HashMap<usize, Ty>,
     linear_owner_names: HashSet<String>,
     type_aliases: Rc<HashMap<String, AstType>>,
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
+    // InstId → complete declared source type when one is available.
+    // Container mutations use this to preserve nested wide literal contexts.
+    inst_declared_ast_types: HashMap<InstId, AstType>,
     inst_ty_cache: HashMap<InstId, Ty>,
     inst_locations: Vec<(BlockId, usize)>,
     phi_dependents: HashMap<InstId, Vec<InstId>>,
+    // Complete declared return type for contextual explicit-return lowering.
+    func_return_ast_ty: Option<AstType>,
     // source file path for vow entries
     file: String,
     // struct name → field type names (from AST declarations) for FieldGet auto-tagging
     pub(super) struct_field_type_names: HashMap<String, Vec<String>>,
+    // struct name → complete declared field types for contextual aggregate lowering
+    struct_field_ast_types: Rc<HashMap<String, Vec<AstType>>>,
     // expr addresses whose resolved type is String (from checker)
     string_exprs: StringExprSet,
     // const name → (compile-time value, declared type)
@@ -771,6 +794,7 @@ impl LowerCtx {
         linear_owner_names: HashSet<String>,
         type_aliases: Rc<HashMap<String, AstType>>,
         struct_field_type_names: HashMap<String, Vec<String>>,
+        struct_field_ast_types: Rc<HashMap<String, Vec<AstType>>>,
         struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
         pattern_aggregates: Rc<PatternAggregateMap>,
@@ -810,14 +834,20 @@ impl LowerCtx {
             func_index,
             struct_field_map,
             enum_variant_map,
+            enum_variant_payload_tys: HashMap::new(),
+            enum_variant_payload_ast_types: Rc::new(HashMap::new()),
+            wide_literal_contexts: HashMap::new(),
             linear_owner_names,
             type_aliases,
             inst_struct_type: HashMap::new(),
+            inst_declared_ast_types: HashMap::new(),
             inst_ty_cache: HashMap::new(),
             inst_locations: Vec::new(),
             phi_dependents: HashMap::new(),
+            func_return_ast_ty: None,
             file,
             struct_field_type_names,
+            struct_field_ast_types,
             string_exprs,
             const_map: HashMap::new(),
             loop_exit_blocks: Vec::new(),
@@ -1190,6 +1220,14 @@ fn expr_is_coercible_int_marker(expr: &Expr) -> bool {
             rhs,
         } => expr_is_coercible_int_marker(lhs) && expr_is_coercible_int_marker(rhs),
         ExprKind::Block(block) => block_result_is_coercible_int_marker(block),
+        ExprKind::If {
+            then_branch,
+            else_branch: Some(else_expr),
+            ..
+        } => {
+            block_result_is_coercible_int_marker(then_branch)
+                && expr_is_coercible_int_marker(else_expr)
+        }
         _ => false,
     }
 }
@@ -1278,13 +1316,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
     let span = expr.span;
     match &expr.kind {
         ExprKind::Lit(lit) => match lit {
-            Lit::Int(v) => ctx.emit(
-                Opcode::ConstI64,
-                Ty::I64,
-                vec![],
-                InstData::ConstI64(*v as i64),
-                span,
-            ),
+            Lit::Int(v) => match ctx
+                .wide_literal_contexts
+                .get(&(expr as *const _ as usize))
+                .copied()
+            {
+                Some(ty @ (Ty::I128 | Ty::U128)) => emit_narrow_integer_constant(ctx, *v, ty, span),
+                _ => ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(*v as i64),
+                    span,
+                ),
+            },
             Lit::Float(v) => ctx.emit(
                 Opcode::ConstF64,
                 Ty::F64,
@@ -1410,6 +1455,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 return phi;
             }
 
+            if expr_is_integer_literal(lhs)
+                && let Some(context_ty) = known_wide_expr_ty(ctx, rhs)
+            {
+                record_wide_control_flow_context(ctx, lhs, context_ty);
+            }
+            if expr_is_integer_literal(rhs)
+                && let Some(context_ty) = known_wide_expr_ty(ctx, lhs)
+            {
+                record_wide_control_flow_context(ctx, rhs, context_ty);
+            }
             let mut lhs_id = lower_expr(ctx, lhs);
             let mut rhs_id = lower_expr(ctx, rhs);
             let lhs_is_str = ctx
@@ -1454,6 +1509,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Ty::I32
                 } else if contextual_narrow_literal_ty(Ty::U32) {
                     Ty::U32
+                } else if contextual_narrow_literal_ty(Ty::I128) {
+                    Ty::I128
+                } else if contextual_narrow_literal_ty(Ty::U128) {
+                    Ty::U128
                 } else if is_bitwise && lhs_ty == Ty::I64 {
                     if rhs_ty != Ty::I64 { rhs_ty } else { lhs_ty }
                 } else {
@@ -1461,7 +1520,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 };
                 if matches!(
                     operand_ty,
-                    Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                    Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
                 ) {
                     lhs_id = lower_narrow_literal(ctx, lhs, lhs_id, operand_ty);
                     if !matches!(op, BinOp::Shl | BinOp::Shr) {
@@ -1480,7 +1539,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let operand_ty = ctx.inst_ty(val);
                     let result_ty = if matches!(
                         operand_ty,
-                        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I64 | Ty::U64
+                        Ty::I8
+                            | Ty::U8
+                            | Ty::I16
+                            | Ty::U16
+                            | Ty::I32
+                            | Ty::U32
+                            | Ty::I64
+                            | Ty::U64
+                            | Ty::I128
+                            | Ty::U128
                     ) {
                         operand_ty
                     } else {
@@ -1540,13 +1608,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .enumerate()
                 .map(|(i, a)| {
+                    if let Some(expected) = call_info
+                        .as_ref()
+                        .and_then(|info| info.param_ast_tys.get(i))
+                    {
+                        record_wide_expected_ast_context(ctx, a, expected);
+                    }
                     if let Some(info) = &call_info
                         && let Some(&param_ty) = info.param_tys.get(i)
                         && matches!(
                             param_ty,
-                            Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                            Ty::I8
+                                | Ty::U8
+                                | Ty::I16
+                                | Ty::U16
+                                | Ty::I32
+                                | Ty::U32
+                                | Ty::I128
+                                | Ty::U128
                         )
                     {
+                        record_wide_control_flow_context(ctx, a, param_ty);
                         let original = lower_consumed_expr(ctx, a);
                         lower_narrow_literal(ctx, a, original, param_ty)
                     } else {
@@ -1817,6 +1899,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Return { value } => {
             if let Some(val_expr) = value {
+                if let Some(expected) = ctx.func_return_ast_ty.clone() {
+                    record_wide_expected_ast_context(ctx, val_expr, &expected);
+                }
+                record_wide_control_flow_context(ctx, val_expr, ctx.func.return_ty);
                 let original = lower_expr(ctx, val_expr);
                 let val = lower_narrow_literal(ctx, val_expr, original, ctx.func.return_ty);
                 if let Some(vow_block) = ctx.vow_block.clone() {
@@ -1832,16 +1918,45 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Assign { lhs, rhs } => {
+            let index_ty = known_index_assignment_ty(ctx, lhs);
+            if let Some(expected) = known_assignment_ast_type(ctx, lhs) {
+                record_wide_expected_ast_context(ctx, rhs, &expected);
+            }
+            if let Some(field_ty) = known_field_assignment_ty(ctx, lhs) {
+                record_wide_control_flow_context(ctx, rhs, field_ty);
+            }
+            if let Some(index_ty) = index_ty {
+                record_wide_control_flow_context(ctx, rhs, index_ty);
+            }
+            if let ExprKind::Ident(name) = &lhs.kind
+                && let Some(current) = ctx.lookup(name)
+            {
+                record_wide_control_flow_context(ctx, rhs, ctx.inst_ty(current));
+                if let Some(expected) = ctx.inst_declared_ast_types.get(&current).cloned() {
+                    record_wide_expected_ast_context(ctx, rhs, &expected);
+                }
+            }
             let mut new_val = lower_expr(ctx, rhs);
             match &lhs.kind {
                 ExprKind::Ident(name) => {
                     if let Some(current) = ctx.lookup(name) {
                         let current_ty = ctx.inst_ty(current);
+                        let declared_ast_type = ctx.inst_declared_ast_types.get(&current).cloned();
                         if matches!(
                             current_ty,
-                            Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                            Ty::I8
+                                | Ty::U8
+                                | Ty::I16
+                                | Ty::U16
+                                | Ty::I32
+                                | Ty::U32
+                                | Ty::I128
+                                | Ty::U128
                         ) {
                             new_val = lower_narrow_literal(ctx, rhs, new_val, current_ty);
+                        }
+                        if let Some(ast_type) = declared_ast_type {
+                            ctx.inst_declared_ast_types.insert(new_val, ast_type);
                         }
                     }
                     ctx.assign(name, new_val);
@@ -1882,6 +1997,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         FIELD_IDX_SENTINEL
                     } as u32;
                     if field_idx != FIELD_IDX_SENTINEL as u32 {
+                        let field_ty = ctx
+                            .struct_field_type_names
+                            .get(&struct_name)
+                            .and_then(|types| types.get(field_idx as usize))
+                            .map(|type_name| scalar_ty_for_field_type_name(type_name));
+                        if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
+                            new_val = lower_narrow_literal(ctx, rhs, new_val, field_ty);
+                        }
                         // Field store transfers a linear RHS into the heap container.
                         ctx.emit_linear_consume_if_needed(new_val, span);
                         ctx.emit(
@@ -1896,6 +2019,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Index { base, index } => {
                     let vec_ptr = lower_expr(ctx, base);
                     let idx_id = lower_expr(ctx, index);
+                    if let Some(index_ty) = index_ty {
+                        new_val = lower_narrow_literal(ctx, rhs, new_val, index_ty);
+                    }
                     // Index store transfers a linear RHS into the heap container.
                     ctx.emit_linear_consume_if_needed(new_val, span);
                     ctx.emit(
@@ -2597,6 +2723,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::FieldIndex(field_idx),
                     span,
                 );
+                if let Some(ast_type) = ctx
+                    .struct_field_ast_types
+                    .get(&struct_name)
+                    .and_then(|types| types.get(field_idx as usize))
+                    .cloned()
+                {
+                    ctx.inst_declared_ast_types.insert(result_id, ast_type);
+                }
                 if !field_type_name.is_empty() && !is_scalar_field_type_name(&field_type_name) {
                     ctx.inst_struct_type.insert(result_id, field_type_name);
                 }
@@ -2653,8 +2787,30 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         FIELD_IDX_SENTINEL
                     }
                 } as u32;
-                let val_id = lower_consumed_expr(ctx, field_expr);
+                let field_ty = if idx != FIELD_IDX_SENTINEL as u32 {
+                    ctx.struct_field_type_names
+                        .get(name)
+                        .and_then(|types| types.get(idx as usize))
+                        .map(|type_name| scalar_ty_for_field_type_name(type_name))
+                } else {
+                    None
+                };
+                if let Some(expected) = ctx
+                    .struct_field_ast_types
+                    .get(name)
+                    .and_then(|types| types.get(idx as usize))
+                    .cloned()
+                {
+                    record_wide_expected_ast_context(ctx, field_expr, &expected);
+                }
+                if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
+                    record_wide_control_flow_context(ctx, field_expr, field_ty);
+                }
+                let mut val_id = lower_consumed_expr(ctx, field_expr);
                 if idx != FIELD_IDX_SENTINEL as u32 {
+                    if let Some(field_ty @ (Ty::I128 | Ty::U128)) = field_ty {
+                        val_id = lower_narrow_literal(ctx, field_expr, val_id, field_ty);
+                    }
                     ctx.emit(
                         Opcode::FieldSet,
                         Ty::Unit,
@@ -2833,13 +2989,44 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .get(enum_name)
                 .and_then(|vs| vs.iter().position(|v| v == variant_name))
                 .unwrap_or(0) as i64;
+            let payload_tys = ctx
+                .enum_variant_payload_tys
+                .get(enum_name)
+                .and_then(|variants| variants.get(tag as usize))
+                .cloned()
+                .unwrap_or_default();
+            let payload_ast_types = ctx
+                .enum_variant_payload_ast_types
+                .get(enum_name)
+                .and_then(|variants| variants.get(tag as usize))
+                .cloned()
+                .unwrap_or_default();
             // Evaluate and transfer payloads before allocating the wrapper so
             // built-in Option/Result constructors can inherit linear ownership
             // from their type-erased payload expression.
             let payload_values: Vec<InstId> = fields
                 .iter()
-                .map(|field| lower_consumed_expr(ctx, field))
+                .enumerate()
+                .map(|(index, field)| {
+                    if let Some(expected) = payload_ast_types.get(index) {
+                        record_wide_expected_ast_context(ctx, field, expected);
+                    }
+                    if let Some(ty @ (Ty::I128 | Ty::U128)) = payload_tys.get(index).copied() {
+                        record_wide_control_flow_context(ctx, field, ty);
+                    }
+                    let original = lower_consumed_expr(ctx, field);
+                    match payload_tys.get(index).copied() {
+                        Some(ty @ (Ty::I128 | Ty::U128)) => {
+                            lower_narrow_literal(ctx, field, original, ty)
+                        }
+                        _ => original,
+                    }
+                })
                 .collect();
+            let contextual_wide_payload_ty = payload_values
+                .first()
+                .map(|value| ctx.inst_ty(*value))
+                .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
             let owns_linear = ctx.linear_owner_names.contains(enum_name)
                 || payload_values
                     .iter()
@@ -2854,6 +3041,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             ctx.inst_struct_type.insert(ptr_id, enum_name.to_string());
+            if enum_name == "Option" && variant_name == "Some" {
+                if let Some(payload_ty) = contextual_wide_payload_ty {
+                    ctx.inst_option_elem_ty.insert(ptr_id, payload_ty);
+                }
+            } else if enum_name == "Result"
+                && matches!(variant_name, "Ok" | "Err")
+                && let Some(payload_ty) = contextual_wide_payload_ty
+            {
+                let variant_count = ctx.enum_variant_map.get(enum_name).map_or(2, Vec::len);
+                let mut variant_tys = vec![None; variant_count];
+                if let Some(slot) = variant_tys.get_mut(tag as usize) {
+                    *slot = Some(payload_ty);
+                }
+                ctx.inst_variant_payload_tys.insert(ptr_id, variant_tys);
+            }
             let tag_val = ctx.emit(
                 Opcode::ConstI64,
                 Ty::I64,
@@ -3156,7 +3358,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
             if matches!(
                 phi_ty,
-                Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+                Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
             ) {
                 for i in 0..arm_results.len() {
                     let arm_block = arm_results[i].0;
@@ -3380,15 +3582,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 ),
                 (Some("BTreeMap"), "insert") => {
+                    let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
                     let k_id = args
                         .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(ctx, e, key_ast_ty.as_ref())
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
                     let v_id = args
                         .get(1)
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(
+                                ctx,
+                                e,
+                                value_ast_ty.as_ref(),
+                            )
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
@@ -3435,15 +3646,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (Some("HashMap"), "insert") => {
+                    let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
                     let k_id = args
                         .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(ctx, e, key_ast_ty.as_ref())
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
                     let v_id = args
                         .get(1)
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(
+                                ctx,
+                                e,
+                                value_ast_ty.as_ref(),
+                            )
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
@@ -3508,9 +3728,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 ),
                 (_, "push") => {
+                    let elem_ty = ctx
+                        .inst_vec_elem_types
+                        .get(&recv_id)
+                        .and_then(|path| path.first())
+                        .filter(|name| is_scalar_field_type_name(name))
+                        .map(|name| scalar_ty_for_field_type_name(name))
+                        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
                     let elem_id = args
                         .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            if let Some(ty) = elem_ty {
+                                record_wide_control_flow_context(ctx, e, ty);
+                            }
+                            let original = lower_consumed_expr(ctx, e);
+                            elem_ty
+                                .map(|ty| lower_narrow_literal(ctx, e, original, ty))
+                                .unwrap_or(original)
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
@@ -3566,6 +3801,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Index { base, index } => {
+            let elem_ast_type = known_expr_ast_type(ctx, expr);
             let vec_ptr = lower_expr(ctx, base);
             let idx_id = lower_expr(ctx, index);
             let result = ctx.emit(
@@ -3576,6 +3812,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             propagate_vec_element_metadata(ctx, vec_ptr, result);
+            if let Some(ast_type) = elem_ast_type {
+                ctx.inst_declared_ast_types.insert(result, ast_type);
+            }
             result
         }
         // ? operator: unwrap Option::Some or short-circuit with None
@@ -3688,9 +3927,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             payload
         }
         ExprKind::Cast { expr, target_ty } => {
+            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names, &ctx.type_aliases);
+            if matches!(tgt, Ty::I128 | Ty::U128) {
+                record_wide_marker_context(ctx, expr, tgt);
+            }
             let val = lower_expr(ctx, expr);
             let src_ty = ctx.inst_ty(val);
-            let tgt = lower_ty_with_linear(target_ty, &ctx.linear_owner_names, &ctx.type_aliases);
             if let ExprKind::Lit(Lit::Int(v)) = &expr.kind {
                 match tgt {
                     Ty::U8 => ctx.emit(
@@ -3705,6 +3947,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         Ty::U64,
                         vec![],
                         InstData::ConstU64(*v as u64),
+                        span,
+                    ),
+                    Ty::I128 => ctx.emit(
+                        Opcode::ConstI128,
+                        Ty::I128,
+                        vec![],
+                        InstData::ConstI128(*v as i128),
+                        span,
+                    ),
+                    Ty::U128 => ctx.emit(
+                        Opcode::ConstU128,
+                        Ty::U128,
+                        vec![],
+                        InstData::ConstU128(*v),
                         span,
                     ),
                     _ if ir_ty_is_integer(tgt) => ctx.emit(
@@ -3807,7 +4063,313 @@ fn integer_marker_from_block(block: &Block) -> Option<&Expr> {
     None
 }
 
-fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: i64, ty: Ty, span: Span) -> InstId {
+fn known_wide_expr_ty(ctx: &LowerCtx, expr: &Expr) -> Option<Ty> {
+    let ty = match &expr.kind {
+        ExprKind::Ident(name) => ctx.lookup(name).map(|id| ctx.inst_ty(id)),
+        ExprKind::Cast { target_ty, .. } => Some(lower_ty_with_linear(
+            target_ty,
+            &ctx.linear_owner_names,
+            &ctx.type_aliases,
+        )),
+        ExprKind::Block(block) => {
+            integer_marker_from_block(block).and_then(|result| known_wide_expr_ty(ctx, result))
+        }
+        _ => None,
+    };
+    ty.filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
+}
+
+fn known_struct_expr_name(ctx: &LowerCtx, expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Ident(name) => ctx
+            .lookup(name)
+            .and_then(|id| ctx.inst_struct_type.get(&id).cloned()),
+        ExprKind::FieldAccess { base, field } => {
+            let base_name = known_struct_expr_name(ctx, base)?;
+            let field_idx = ctx
+                .struct_field_map
+                .get(&base_name)?
+                .iter()
+                .position(|name| name == field)?;
+            ctx.struct_field_type_names
+                .get(&base_name)
+                .and_then(|types| types.get(field_idx))
+                .cloned()
+        }
+        _ => None,
+    }
+}
+
+fn known_expr_ast_type(ctx: &LowerCtx, expr: &Expr) -> Option<AstType> {
+    match &expr.kind {
+        ExprKind::Ident(name) => ctx
+            .lookup(name)
+            .and_then(|id| ctx.inst_declared_ast_types.get(&id))
+            .cloned(),
+        ExprKind::FieldAccess { base, field } => {
+            let struct_name = known_struct_expr_name(ctx, base)?;
+            let field_idx = ctx
+                .struct_field_map
+                .get(&struct_name)?
+                .iter()
+                .position(|name| name == field)?;
+            ctx.struct_field_ast_types
+                .get(&struct_name)
+                .and_then(|types| types.get(field_idx))
+                .cloned()
+        }
+        ExprKind::Index { base, .. } => {
+            let base_ty = known_expr_ast_type(ctx, base)?;
+            match resolve_type_alias(&base_ty, &ctx.type_aliases) {
+                AstType::Generic { name, args, .. } if name == "Vec" => args.first().cloned(),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn known_assignment_ast_type(ctx: &LowerCtx, lhs: &Expr) -> Option<AstType> {
+    matches!(
+        lhs.kind,
+        ExprKind::FieldAccess { .. } | ExprKind::Index { .. }
+    )
+    .then(|| known_expr_ast_type(ctx, lhs))
+    .flatten()
+}
+
+fn known_map_argument_ast_types(
+    ctx: &LowerCtx,
+    recv_id: InstId,
+) -> (Option<AstType>, Option<AstType>) {
+    let Some(ast_ty) = ctx.inst_declared_ast_types.get(&recv_id) else {
+        return (None, None);
+    };
+    match resolve_type_alias(ast_ty, &ctx.type_aliases) {
+        AstType::Generic { name, args, .. } if name == "HashMap" || name == "BTreeMap" => {
+            (args.first().cloned(), args.get(1).cloned())
+        }
+        _ => (None, None),
+    }
+}
+
+fn known_field_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
+    let ExprKind::FieldAccess { base, field } = &lhs.kind else {
+        return None;
+    };
+    let struct_name = known_struct_expr_name(ctx, base)?;
+    let field_idx = ctx
+        .struct_field_map
+        .get(&struct_name)?
+        .iter()
+        .position(|name| name == field)?;
+    ctx.struct_field_type_names
+        .get(&struct_name)
+        .and_then(|types| types.get(field_idx))
+        .map(|name| scalar_ty_for_field_type_name(name))
+        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
+}
+
+fn known_vec_element_path(ctx: &LowerCtx, expr: &Expr) -> Option<Vec<String>> {
+    match &expr.kind {
+        ExprKind::Ident(name) => ctx
+            .lookup(name)
+            .and_then(|id| ctx.inst_vec_elem_types.get(&id))
+            .cloned(),
+        ExprKind::FieldAccess { base, field } => {
+            let struct_name = known_struct_expr_name(ctx, base)?;
+            let field_idx = ctx
+                .struct_field_map
+                .get(&struct_name)?
+                .iter()
+                .position(|name| name == field)?;
+            ctx.struct_field_vec_elems
+                .get(&struct_name)
+                .and_then(|types| types.get(field_idx))
+                .filter(|name| !name.is_empty())
+                .map(|name| vec![name.clone()])
+        }
+        ExprKind::Index { base, .. } => {
+            let mut path = known_vec_element_path(ctx, base)?;
+            if path.is_empty() {
+                return None;
+            }
+            path.remove(0);
+            Some(path)
+        }
+        _ => None,
+    }
+}
+
+fn known_index_assignment_ty(ctx: &LowerCtx, lhs: &Expr) -> Option<Ty> {
+    let ExprKind::Index { base, .. } = &lhs.kind else {
+        return None;
+    };
+    known_vec_element_path(ctx, base)
+        .and_then(|path| path.first().cloned())
+        .filter(|name| is_scalar_field_type_name(name))
+        .map(|name| scalar_ty_for_field_type_name(&name))
+        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128))
+}
+
+fn wide_context_contains_control_flow(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Loop { .. } => true,
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => wide_context_contains_control_flow(operand),
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            wide_context_contains_control_flow(lhs) || wide_context_contains_control_flow(rhs)
+        }
+        ExprKind::Block(block) => {
+            integer_marker_from_block(block).is_some_and(wide_context_contains_control_flow)
+        }
+        _ => false,
+    }
+}
+
+fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
+    if !matches!(ty, Ty::I128 | Ty::U128) {
+        return;
+    }
+    ctx.wide_literal_contexts
+        .insert(expr as *const _ as usize, ty);
+    match &expr.kind {
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => record_wide_marker_context(ctx, operand, ty),
+        ExprKind::BinaryOp { op, lhs, rhs } => {
+            record_wide_marker_context(ctx, lhs, ty);
+            if !matches!(op, BinOp::Shl | BinOp::Shr) {
+                record_wide_marker_context(ctx, rhs, ty);
+            }
+        }
+        ExprKind::Block(block) => {
+            if let Some(result) = integer_marker_from_block(block) {
+                record_wide_marker_context(ctx, result, ty);
+            }
+        }
+        ExprKind::If {
+            then_branch,
+            else_branch: Some(else_expr),
+            ..
+        } => {
+            if let Some(result) = integer_marker_from_block(then_branch) {
+                record_wide_marker_context(ctx, result, ty);
+            }
+            record_wide_marker_context(ctx, else_expr, ty);
+        }
+        ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                record_wide_marker_context(ctx, &arm.body, ty);
+            }
+        }
+        ExprKind::Loop { body, .. } => {
+            for value in loop_break_values(body) {
+                record_wide_marker_context(ctx, value, ty);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn record_wide_control_flow_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
+    if matches!(ty, Ty::I128 | Ty::U128) && wide_context_contains_control_flow(expr) {
+        record_wide_marker_context(ctx, expr, ty);
+    }
+}
+
+fn record_wide_expected_ast_context(ctx: &mut LowerCtx, expr: &Expr, expected: &AstType) {
+    let expected = resolve_type_alias(expected, &ctx.type_aliases).clone();
+    if matches!(expected, AstType::Generic { .. }) {
+        match &expr.kind {
+            ExprKind::Block(block) => {
+                if let Some(result) = block.trailing_expr.as_deref() {
+                    record_wide_expected_ast_context(ctx, result, &expected);
+                }
+                return;
+            }
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if let Some(result) = then_branch.trailing_expr.as_deref() {
+                    record_wide_expected_ast_context(ctx, result, &expected);
+                }
+                if let Some(else_expr) = else_branch.as_deref() {
+                    record_wide_expected_ast_context(ctx, else_expr, &expected);
+                }
+                return;
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    record_wide_expected_ast_context(ctx, &arm.body, &expected);
+                }
+                return;
+            }
+            ExprKind::Loop { body, .. } => {
+                for value in loop_break_values(body) {
+                    record_wide_expected_ast_context(ctx, value, &expected);
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
+    match expected {
+        AstType::Named { name, .. } => {
+            let ty = match name.as_str() {
+                "i128" => Some(Ty::I128),
+                "u128" => Some(Ty::U128),
+                _ => None,
+            };
+            if let Some(ty) = ty {
+                record_wide_marker_context(ctx, expr, ty);
+            }
+        }
+        AstType::Generic { name, args, .. } => {
+            let ExprKind::EnumConstruct { path, fields } = &expr.kind else {
+                return;
+            };
+            if path.first() != Some(&name) {
+                return;
+            }
+            let payload_index = match (name.as_str(), path.get(1).map(String::as_str)) {
+                ("Option", Some("Some")) | ("Result", Some("Ok")) => Some(0),
+                ("Result", Some("Err")) => Some(1),
+                _ => None,
+            };
+            if let Some(payload_ty) = payload_index.and_then(|index| args.get(index))
+                && let Some(field) = fields.first()
+            {
+                record_wide_expected_ast_context(ctx, field, payload_ty);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn lower_consumed_expr_with_expected_ast_type(
+    ctx: &mut LowerCtx,
+    expr: &Expr,
+    expected: Option<&AstType>,
+) -> InstId {
+    let wide_ty = expected
+        .map(|ast_ty| {
+            record_wide_expected_ast_context(ctx, expr, ast_ty);
+            lower_ty_with_linear(ast_ty, &ctx.linear_owner_names, &ctx.type_aliases)
+        })
+        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
+    let original = lower_consumed_expr(ctx, expr);
+    wide_ty
+        .map(|ty| lower_narrow_literal(ctx, expr, original, ty))
+        .unwrap_or(original)
+}
+
+fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: u128, ty: Ty, span: Span) -> InstId {
     match ty {
         Ty::I8 => ctx.emit(
             Opcode::ConstU8,
@@ -3837,13 +4399,27 @@ fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: i64, ty: Ty, span: Sp
             InstData::ConstI32(value as u32 as i32),
             span,
         ),
+        Ty::I128 => ctx.emit(
+            Opcode::ConstI128,
+            Ty::I128,
+            vec![],
+            InstData::ConstI128(value as i128),
+            span,
+        ),
+        Ty::U128 => ctx.emit(
+            Opcode::ConstU128,
+            Ty::U128,
+            vec![],
+            InstData::ConstU128(value),
+            span,
+        ),
         _ => unreachable!("non-narrow integer context: {ty:?}"),
     }
 }
 
 fn emit_integer_zero(ctx: &mut LowerCtx, ty: Ty, span: Span) -> InstId {
     match ty {
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 => {
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128 => {
             emit_narrow_integer_constant(ctx, 0, ty, span)
         }
         Ty::U64 => ctx.emit(
@@ -3868,12 +4444,9 @@ fn emit_integer_zero(ctx: &mut LowerCtx, ty: Ty, span: Span) -> InstId {
 /// instead of folding the whole expression into a wrapping constant.
 fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<InstId> {
     match &expr.kind {
-        ExprKind::Lit(Lit::Int(value)) => Some(emit_narrow_integer_constant(
-            ctx,
-            *value as i64,
-            ty,
-            expr.span,
-        )),
+        ExprKind::Lit(Lit::Int(value)) => {
+            Some(emit_narrow_integer_constant(ctx, *value, ty, expr.span))
+        }
         ExprKind::UnaryOp {
             op: UnOp::Neg,
             operand,
@@ -3911,7 +4484,18 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
 /// their overflow behavior; control-flow results are explicitly reduced after
 /// their Phi so later users observe the annotated type.
 fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
-    if !matches!(ty, Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32) {
+    if !matches!(
+        ty,
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
+    ) {
+        return original;
+    }
+    if matches!(ty, Ty::I128 | Ty::U128)
+        && ctx
+            .wide_literal_contexts
+            .get(&(expr as *const _ as usize))
+            .is_some_and(|context_ty| *context_ty == ty)
+    {
         return original;
     }
     if let Some(narrowed) = lower_integer_marker_as(ctx, expr, ty) {
@@ -3983,6 +4567,24 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
         Stmt::Let {
             pattern, init, ty, ..
         } => {
+            if let Some(expected) = ty {
+                record_wide_expected_ast_context(ctx, init, expected);
+            }
+            if let Some(AstType::Named {
+                name: type_name, ..
+            }) = ty
+                .as_ref()
+                .map(|ann| resolve_type_alias(ann, &ctx.type_aliases))
+            {
+                let context_ty = match type_name.as_str() {
+                    "i128" => Some(Ty::I128),
+                    "u128" => Some(Ty::U128),
+                    _ => None,
+                };
+                if let Some(context_ty) = context_ty {
+                    record_wide_control_flow_context(ctx, init, context_ty);
+                }
+            }
             let mut val = lower_expr(ctx, init);
             let span = init.span;
             if let Some(AstType::Named {
@@ -4003,6 +4605,10 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                     val = lower_narrow_literal(ctx, init, val, Ty::I32);
                 } else if type_name == "u32" {
                     val = lower_narrow_literal(ctx, init, val, Ty::U32);
+                } else if type_name == "i128" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::I128);
+                } else if type_name == "u128" {
+                    val = lower_narrow_literal(ctx, init, val, Ty::U128);
                 }
             }
             if let Some(AstType::Named {
@@ -4027,6 +4633,7 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
             }
             if let PatKind::Ident { name, .. } = &pattern.kind {
                 if let Some(ann) = ty {
+                    ctx.inst_declared_ast_types.insert(val, ann.clone());
                     let ann = resolve_type_alias(ann, &ctx.type_aliases);
                     match ann {
                         AstType::Named {
@@ -4107,9 +4714,12 @@ fn lower_function_with_pattern_aggregates(
     func_index: &HashMap<String, FuncSigInfo>,
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
+    enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>>,
+    enum_variant_payload_ast_types: Rc<HashMap<String, Vec<Vec<AstType>>>>,
     linear_owner_names: &HashSet<String>,
     type_aliases: Rc<HashMap<String, AstType>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
+    struct_field_ast_types: Rc<HashMap<String, Vec<AstType>>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
     pattern_aggregates: &Rc<PatternAggregateMap>,
@@ -4137,11 +4747,15 @@ fn lower_function_with_pattern_aggregates(
         linear_owner_names.clone(),
         Rc::clone(&type_aliases),
         struct_field_type_names,
+        struct_field_ast_types,
         struct_field_vec_elems,
         string_exprs.clone(),
         Rc::clone(pattern_aggregates),
     );
 
+    ctx.enum_variant_payload_tys = enum_variant_payload_tys;
+    ctx.enum_variant_payload_ast_types = enum_variant_payload_ast_types;
+    ctx.func_return_ast_ty = Some(fn_def.return_ty.clone());
     ctx.const_map = const_map.clone();
 
     if let Some(vow) = &fn_def.vow {
@@ -4157,6 +4771,7 @@ fn lower_function_with_pattern_aggregates(
             InstData::ArgIndex(idx as u32),
             fn_def.span,
         );
+        ctx.inst_declared_ast_types.insert(arg_id, param.ty.clone());
         match resolve_type_alias(&param.ty, &type_aliases) {
             AstType::Named { name, .. } if name == "str" || name == "String" => {
                 ctx.inst_struct_type.insert(arg_id, "String".to_string());
@@ -4203,13 +4818,17 @@ fn lower_function_with_pattern_aggregates(
         vow::lower_requires(&mut ctx, vow_block);
     }
 
+    if let Some(expr) = integer_marker_from_block(&fn_def.body) {
+        record_wide_expected_ast_context(&mut ctx, expr, &fn_def.return_ty);
+        record_wide_control_flow_context(&mut ctx, expr, return_ty);
+    }
     ctx.push_scope();
     let mut trailing = lower_block_inner(&mut ctx, &fn_def.body);
     ctx.pop_scope();
 
     if matches!(
         return_ty,
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
     ) && let Some(expr) = &fn_def.body.trailing_expr
     {
         trailing = lower_narrow_literal(&mut ctx, expr, trailing, return_ty);
@@ -4260,9 +4879,12 @@ fn lower_function(
         func_index,
         struct_field_map,
         enum_variant_map,
+        HashMap::new(),
+        Rc::new(HashMap::new()),
         linear_owner_names,
         Rc::new(HashMap::new()),
         struct_field_type_names,
+        Rc::new(HashMap::new()),
         struct_field_vec_elems,
         string_exprs,
         &Rc::new(PatternAggregateMap::new()),
@@ -4326,6 +4948,7 @@ pub fn lower_module_with_pattern_aggregates(
                         .iter()
                         .map(|p| lower_ty_with_linear(&p.ty, &linear_owner_names, &type_aliases))
                         .collect(),
+                    param_ast_tys: fn_def.params.iter().map(|p| p.ty.clone()).collect(),
                 },
             )
         })
@@ -4380,6 +5003,7 @@ pub fn lower_module_with_pattern_aggregates(
 
     // Build struct field type names for FieldGet auto-tagging
     let mut struct_field_type_names: HashMap<String, Vec<String>> = HashMap::new();
+    let mut struct_field_ast_types: HashMap<String, Vec<AstType>> = HashMap::new();
     // struct name → per-field Vec element type name (empty if not Vec<Named>)
     let mut struct_field_vec_elems: HashMap<String, Vec<String>> = HashMap::new();
     for item in &module.items {
@@ -4411,12 +5035,19 @@ pub fn lower_module_with_pattern_aggregates(
                 })
                 .collect();
             struct_field_type_names.insert(s.name.clone(), type_names);
+            struct_field_ast_types.insert(
+                s.name.clone(),
+                s.fields.iter().map(|field| field.ty.clone()).collect(),
+            );
             struct_field_vec_elems.insert(s.name.clone(), vec_elems);
         }
     }
+    let struct_field_ast_types = Rc::new(struct_field_ast_types);
 
     // Build enum layout info
     let mut enum_variant_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>> = HashMap::new();
+    let mut enum_variant_payload_ast_types: HashMap<String, Vec<Vec<AstType>>> = HashMap::new();
     let mut enum_layouts: Vec<EnumLayout> = Vec::new();
     for item in &module.items {
         if let Item::Enum(e) = item {
@@ -4451,13 +5082,31 @@ pub fn lower_module_with_pattern_aggregates(
                     }
                 })
                 .collect();
+            let payload_tys = variant_layouts
+                .iter()
+                .map(|variant| variant.payload.iter().map(|field| field.ty).collect())
+                .collect();
+            let payload_ast_types = e
+                .variants
+                .iter()
+                .map(|variant| match &variant.kind {
+                    VariantKind::Unit => vec![],
+                    VariantKind::Tuple(types) => types.clone(),
+                    VariantKind::Struct(fields) => {
+                        fields.iter().map(|field| field.ty.clone()).collect()
+                    }
+                })
+                .collect();
             enum_variant_map.insert(e.name.clone(), variant_names);
+            enum_variant_payload_tys.insert(e.name.clone(), payload_tys);
+            enum_variant_payload_ast_types.insert(e.name.clone(), payload_ast_types);
             enum_layouts.push(EnumLayout {
                 name: e.name.clone(),
                 variants: variant_layouts,
             });
         }
     }
+    let enum_variant_payload_ast_types = Rc::new(enum_variant_payload_ast_types);
 
     let mut all_strings: Vec<String> = Vec::new();
     let mut all_warnings: Vec<vow_diag::Diagnostic> = Vec::new();
@@ -4471,9 +5120,12 @@ pub fn lower_module_with_pattern_aggregates(
                 &func_index,
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
+                enum_variant_payload_tys.clone(),
+                Rc::clone(&enum_variant_payload_ast_types),
                 &linear_owner_names,
                 Rc::clone(&type_aliases),
                 struct_field_type_names.clone(),
+                Rc::clone(&struct_field_ast_types),
                 struct_field_vec_elems.clone(),
                 string_exprs,
                 &pattern_aggregates,
@@ -4566,7 +5218,7 @@ mod tests {
         }
     }
 
-    fn int_expr(v: i128) -> Expr {
+    fn int_expr(v: u128) -> Expr {
         Expr {
             kind: ExprKind::Lit(Lit::Int(v)),
             span: sp(),
@@ -4909,15 +5561,29 @@ type PairView = PairAlias;
     }
 
     #[test]
-    fn phase3_literals_lower_at_their_native_ir_width() {
+    fn integer_literals_lower_at_their_native_ir_width() {
         let cases = [
-            ("i8", Ty::I8, Opcode::ConstU8, InstData::ConstU8(7)),
-            ("i16", Ty::I16, Opcode::ConstI32, InstData::ConstI32(7)),
-            ("u16", Ty::U16, Opcode::ConstI32, InstData::ConstI32(7)),
-            ("u32", Ty::U32, Opcode::ConstI32, InstData::ConstI32(7)),
+            ("i8", 7, Ty::I8, Opcode::ConstU8, InstData::ConstU8(7)),
+            ("i16", 7, Ty::I16, Opcode::ConstI32, InstData::ConstI32(7)),
+            ("u16", 7, Ty::U16, Opcode::ConstI32, InstData::ConstI32(7)),
+            ("u32", 7, Ty::U32, Opcode::ConstI32, InstData::ConstI32(7)),
+            (
+                "i128",
+                i128::MAX as u128,
+                Ty::I128,
+                Opcode::ConstI128,
+                InstData::ConstI128(i128::MAX),
+            ),
+            (
+                "u128",
+                u128::MAX,
+                Ty::U128,
+                Opcode::ConstU128,
+                InstData::ConstU128(u128::MAX),
+            ),
         ];
 
-        for (name, expected_ty, expected_op, expected_data) in cases {
+        for (name, value, expected_ty, expected_op, expected_data) in cases {
             let fn_def = make_fn(
                 &format!("return_{name}"),
                 vec![],
@@ -4932,10 +5598,10 @@ type PairView = PairAlias;
                             span: sp(),
                         },
                         ty: Some(named_ty(name)),
-                        init: Box::new(int_expr(7)),
+                        init: Box::new(int_expr(value)),
                         span: sp(),
                     }],
-                    trailing_expr: Some(Box::new(int_expr(7))),
+                    trailing_expr: Some(Box::new(int_expr(value))),
                     span: sp(),
                 },
                 vec![],
@@ -4967,6 +5633,74 @@ type PairView = PairAlias;
                 "missing native {name} constant in {func:#?}"
             );
         }
+    }
+
+    #[test]
+    fn explicit_wide_suffixes_lower_through_the_parser_to_native_constants() {
+        let source = r#"
+module WideSuffixLowering
+
+fn signed_max() -> i128 {
+    170141183460469231731687303715884105727i128
+}
+
+fn signed_min() -> i128 {
+    -170141183460469231731687303715884105728i128
+}
+
+fn unsigned_max() -> u128 {
+    340282366920938463463374607431768211455u128
+}
+"#;
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, "wide_suffixes.vow");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let item_files = vec!["wide_suffixes.vow".to_string(); ast.items.len()];
+        let module = lower_module_with_pattern_aggregates(
+            &ast,
+            &item_files,
+            &StringExprSet::new(),
+            PatternAggregateMap::new(),
+        );
+
+        let signed_max = &module.functions[0];
+        assert!(
+            signed_max
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| inst.opcode == Opcode::ConstI128
+                    && inst.ty == Ty::I128
+                    && inst.data == InstData::ConstI128(i128::MAX))
+        );
+
+        let signed_min = &module.functions[1];
+        let signed_min_insts: Vec<_> = signed_min
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .collect();
+        assert!(signed_min_insts.iter().any(|inst| {
+            inst.opcode == Opcode::ConstI128
+                && inst.ty == Ty::I128
+                && inst.data == InstData::ConstI128(i128::MIN)
+        }));
+        assert!(signed_min_insts.iter().any(|inst| {
+            inst.opcode == Opcode::WrappingSub
+                && inst.ty == Ty::I128
+                && inst.data == InstData::Integer(IntegerType::I128)
+        }));
+
+        let unsigned_max = &module.functions[2];
+        assert!(
+            unsigned_max
+                .blocks
+                .iter()
+                .flat_map(|block| &block.insts)
+                .any(|inst| inst.opcode == Opcode::ConstU128
+                    && inst.ty == Ty::U128
+                    && inst.data == InstData::ConstU128(u128::MAX))
+        );
     }
 
     #[test]
@@ -5088,12 +5822,14 @@ type PairView = PairAlias;
     }
 
     #[test]
-    fn phase3_binary_literals_follow_the_typed_operand() {
+    fn integer_binary_literals_follow_the_typed_operand() {
         for (name, expected_ty) in [
             ("i8", Ty::I8),
             ("i16", Ty::I16),
             ("u16", Ty::U16),
             ("u32", Ty::U32),
+            ("i128", Ty::I128),
+            ("u128", Ty::U128),
         ] {
             let sum = Expr {
                 kind: ExprKind::BinaryOp {
@@ -5913,9 +6649,12 @@ fn parse_or_default(s: String) -> i64 {
             &HashMap::new(),
             HashMap::new(),
             enum_variant_map,
+            HashMap::new(),
+            Rc::new(HashMap::new()),
             &linear_structs,
             Rc::new(HashMap::new()),
             HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             &HashSet::new(),
             &patterns,
@@ -6043,9 +6782,12 @@ fn parse_or_default(s: String) -> i64 {
             &HashMap::new(),
             struct_field_map,
             enum_variant_map,
+            HashMap::new(),
+            Rc::new(HashMap::new()),
             &HashSet::new(),
             Rc::new(HashMap::new()),
             struct_field_types,
+            Rc::new(HashMap::new()),
             HashMap::new(),
             &HashSet::new(),
             &patterns,
@@ -6110,6 +6852,7 @@ fn parse_or_default(s: String) -> i64 {
             HashSet::new(),
             Rc::new(HashMap::new()),
             HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             HashSet::new(),
             Rc::new(HashMap::new()),
@@ -6153,6 +6896,7 @@ fn parse_or_default(s: String) -> i64 {
             HashSet::new(),
             Rc::new(HashMap::new()),
             HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             HashSet::new(),
             Rc::new(HashMap::new()),
@@ -6273,9 +7017,12 @@ fn parse_or_default(s: String) -> i64 {
             &HashMap::new(),
             HashMap::new(),
             enum_variant_map,
+            HashMap::new(),
+            Rc::new(HashMap::new()),
             &HashSet::new(),
             Rc::new(HashMap::new()),
             HashMap::new(),
+            Rc::new(HashMap::new()),
             HashMap::new(),
             &HashSet::new(),
             &patterns,
@@ -6867,6 +7614,7 @@ fn parse_or_default(s: String) -> i64 {
                 ret_vec_elem: None,
                 ret_option_elem: None,
                 param_tys: vec![],
+                param_ast_tys: vec![],
             },
         );
 
@@ -6926,6 +7674,7 @@ fn parse_or_default(s: String) -> i64 {
                 ret_vec_elem: None,
                 ret_option_elem: None,
                 param_tys: vec![Ty::U8],
+                param_ast_tys: vec![u8_ty()],
             },
         );
 
@@ -7002,6 +7751,7 @@ fn parse_or_default(s: String) -> i64 {
                 ret_vec_elem: None,
                 ret_option_elem: None,
                 param_tys: vec![],
+                param_ast_tys: vec![],
             },
         );
 

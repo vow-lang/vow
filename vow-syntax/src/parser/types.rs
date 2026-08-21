@@ -1,5 +1,5 @@
 use crate::ast::{Lit, Pat, PatKind, Type};
-use crate::token::TokenKind;
+use crate::token::{IntSuffix, TokenKind};
 
 use super::Parser;
 
@@ -167,6 +167,16 @@ impl Parser {
                 self.advance();
                 Pat {
                     kind: PatKind::Lit(Lit::Int(v)),
+                    span: start,
+                }
+            }
+            TokenKind::LitIntSuffixed {
+                value,
+                suffix: IntSuffix::I128 | IntSuffix::U128,
+            } => {
+                self.advance();
+                Pat {
+                    kind: PatKind::Lit(Lit::Int(value)),
                     span: start,
                 }
             }
@@ -520,6 +530,20 @@ mod tests {
     fn pat_lit_int() {
         let pat = parse_pat("42");
         assert!(matches!(&pat.kind, PatKind::Lit(Lit::Int(42))));
+    }
+
+    #[test]
+    fn pat_wide_integer_suffixes_preserve_the_full_magnitude() {
+        for (source, expected) in [
+            (
+                "170141183460469231731687303715884105727i128",
+                i128::MAX as u128,
+            ),
+            ("340282366920938463463374607431768211455u128", u128::MAX),
+        ] {
+            let pat = parse_pat(source);
+            assert!(matches!(&pat.kind, PatKind::Lit(Lit::Int(value)) if *value == expected));
+        }
     }
 
     #[test]

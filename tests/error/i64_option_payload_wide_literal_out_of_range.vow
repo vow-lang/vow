@@ -1,0 +1,7 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal 340282366920938463463374607431768211455 does not fit in i64"
+module I64OptionPayloadWideLiteralOutOfRange
+
+fn value() -> Option<i64> {
+    Option::Some(340282366920938463463374607431768211455)
+}
