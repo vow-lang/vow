@@ -1259,6 +1259,15 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
         }
         let tag: i64 = expr_tag(a, lit_eid);
         if tag == EXPR_UNOP() {
+            let is_unsigned_target: bool =
+                target_tag >= CTY_U8() && target_tag <= CTY_U128();
+            if expr_a(a, lit_eid) == UNOP_NEG() && is_unsigned_target {
+                let msg: String = String::from("unary negation is not allowed on unsigned type `");
+                msg.push_str(ty_tag_name(target_tag));
+                msg.push_str(String::from("`"));
+                env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, expr_span(a, lit_eid));
+                return;
+            }
             check_integer_literal_range(e, a, expr_b(a, lit_eid), target_tag);
             return;
         }

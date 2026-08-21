@@ -1212,7 +1212,17 @@ impl<'e> Checker<'e> {
             ExprKind::UnaryOp {
                 op: UnOp::Neg,
                 operand,
-            } => self.check_integer_literal_range(operand, target),
+            } => {
+                if target.is_unsigned() {
+                    self.emit_error(
+                        ErrorCode::TypeMismatch,
+                        format!("unary negation is not allowed on unsigned type `{target}`"),
+                        expr.span,
+                    );
+                } else {
+                    self.check_integer_literal_range(operand, target);
+                }
+            }
             ExprKind::BinaryOp { op, lhs, rhs } => {
                 self.check_integer_literal_range(lhs, target);
                 let rhs_target = if matches!(op, BinOp::Shl | BinOp::Shr) {

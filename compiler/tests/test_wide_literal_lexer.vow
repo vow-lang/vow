@@ -88,6 +88,19 @@ fn check_special_i64_operand_ranges() -> i32 [io] {
     0
 }
 
+fn check_unsigned_compound_negation() -> i32 [io] {
+    let compound_return: String = String::from(
+        "module WideRange\nfn value() -> u128 { -(1 + 0) }"
+    );
+    if checked_error_count(compound_return) == 0 { return 78; }
+
+    let compound_assignment: String = String::from(
+        "module WideRange\nfn value() { let mut result: u128 = 0; result = -(1 + 0); }"
+    );
+    if checked_error_count(compound_assignment) == 0 { return 79; }
+    0
+}
+
 fn check_pre128_targets_use_the_full_magnitude() -> i32 [io] {
     let i64_overflow: String = String::from(
         "module WideRange\nfn value() -> i64 { let x: i64 = 18446744073709551616; x }"
@@ -464,6 +477,8 @@ fn main() -> i32 [io] {
     if inferred_method_result != 0 { return inferred_method_result; }
     let special_operand_result: i32 = check_special_i64_operand_ranges();
     if special_operand_result != 0 { return special_operand_result; }
+    let unsigned_negation_result: i32 = check_unsigned_compound_negation();
+    if unsigned_negation_result != 0 { return unsigned_negation_result; }
     let lowering_result: i32 = check_aggregate_wide_literal_lowering();
     if lowering_result != 0 { return lowering_result; }
     check_unsigned_wide_ir_printing()

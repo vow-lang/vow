@@ -11,7 +11,7 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn assert_literal_out_of_range(name: &str) {
+fn assert_compile_error_code(name: &str, expected_error_code: &str) {
     let dir = tempfile::TempDir::new().unwrap();
     let output = dir.path().join("out");
     let command_output = Command::new(vow_bin())
@@ -42,13 +42,17 @@ fn assert_literal_out_of_range(name: &str) {
     );
     assert_eq!(json["status"], "CompileFailed");
     assert!(
-        error_codes.contains(&"LiteralOutOfRange"),
-        "{name} must report LiteralOutOfRange\nerror codes: {error_codes:?}\njson: {json}"
+        error_codes.contains(&expected_error_code),
+        "{name} must report {expected_error_code}\nerror codes: {error_codes:?}\njson: {json}"
     );
     assert!(
         !output.exists(),
         "{name} must not produce an executable after a frontend error"
     );
+}
+
+fn assert_literal_out_of_range(name: &str) {
+    assert_compile_error_code(name, "LiteralOutOfRange");
 }
 
 #[test]
@@ -164,4 +168,9 @@ fn string_raw_parts_rejects_wide_i64_operand_before_lowering() {
 #[test]
 fn vec_raw_parts_rejects_wide_i64_operand_before_lowering() {
     assert_literal_out_of_range("i64_vec_raw_parts_wide_literal_out_of_range.vow");
+}
+
+#[test]
+fn u128_context_rejects_compound_unary_negation() {
+    assert_compile_error_code("u128_compound_negation.vow", "TypeMismatch");
 }
