@@ -134,22 +134,10 @@ fn str_trim(s: String) -> String {
 }
 
 fn str_to_i64(s: String) -> i64 {
-    let n: i64 = s.len();
-    if n == 0 { return -1; }
-    let mut result: i64 = 0;
-    let mut i: i64 = 0;
-    let negative: bool = s.byte_at(0) == 45;
-    if negative { i = 1; }
-    while i < n {
-        let b: i64 = s.byte_at(i);
-        if b >= 48 && b <= 57 {
-            result = result * 10 + (b - 48);
-        } else {
-            return -1;
-        }
-        i = i + 1;
+    match parse_i64(s) {
+        Option::Some(v) => v,
+        Option::None => -1,
     }
-    if negative { 0 - result } else { result }
 }
 
 fn split_lines(s: String, lines: Vec<String>) {
@@ -1021,7 +1009,7 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
         if pty != ITY_UNIT() {
             if ir_idx < param_names.len() {
                 let pk: String = String::from("p");
-                pk.push_str(i64_to_str(cl_idx));
+                pk.push_str(i64_to_string(cl_idx));
                 map_keys.push(pk);
                 map_vals.push(param_names[ir_idx]);
             }
@@ -1043,7 +1031,7 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
                 let arg_idx: i64 = inst.dv;
                 if arg_idx < param_names.len() {
                     let vk: String = String::from("v");
-                    vk.push_str(i64_to_str(inst.id));
+                    vk.push_str(i64_to_string(inst.id));
                     map_keys.push(vk);
                     map_vals.push(param_names[arg_idx]);
                 }
@@ -1058,7 +1046,7 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
     let mut li: i64 = 0;
     while li < nln {
         let lk: String = String::from("v");
-        lk.push_str(i64_to_str(ln_ids[li]));
+        lk.push_str(i64_to_string(ln_ids[li]));
         if !map_has_key(map_keys, lk) {
             map_keys.push(lk);
             map_vals.push(ln_strs[li]);
