@@ -23,6 +23,7 @@ struct LowerCtx {
     func_ret_tags: Vec<String>,
     func_ret_vec_elems: Vec<String>,
     func_ret_option_elems: Vec<i64>,
+    func_return_ast_tid: i64,
     func_param_tys: Vec<Vec<i64>>,
     func_param_ast_tids: Vec<Vec<i64>>,
     struct_names: Vec<String>,
@@ -117,6 +118,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_ret_tags: Vec::new(),
         func_ret_vec_elems: Vec::new(),
         func_ret_option_elems: Vec::new(),
+        func_return_ast_tid: -1,
         func_param_tys: Vec::new(),
         func_param_ast_tids: Vec::new(),
         struct_names: Vec::new(),
@@ -3136,6 +3138,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let val_eid: i64 = expr_a(a, eid);
         let val_id: i64 = {
             if val_eid != -1 {
+                lctx_record_wide_expected_ast_context(
+                    ctx, a, val_eid, ctx.func_return_ast_tid
+                );
                 lctx_record_wide_control_flow_context(ctx, a, val_eid, ctx.func.return_ty);
                 let original: i64 = lower_expr(ctx, val_eid);
                 lower_narrow_literal(ctx, a, val_eid, original, ctx.func.return_ty)
@@ -4911,6 +4916,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     func.blocks.push(entry);
 
     ctx.func = func;
+    ctx.func_return_ast_tid = ret_tid;
     ctx.current_block = 0;
     ctx.next_inst_id = 0;
     ctx.inst_ty_by_id = Vec::new();

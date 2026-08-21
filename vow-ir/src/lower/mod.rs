@@ -719,6 +719,8 @@ pub(crate) struct LowerCtx {
     inst_ty_cache: HashMap<InstId, Ty>,
     inst_locations: Vec<(BlockId, usize)>,
     phi_dependents: HashMap<InstId, Vec<InstId>>,
+    // Complete declared return type for contextual explicit-return lowering.
+    func_return_ast_ty: Option<AstType>,
     // source file path for vow entries
     file: String,
     // struct name → field type names (from AST declarations) for FieldGet auto-tagging
@@ -830,6 +832,7 @@ impl LowerCtx {
             inst_ty_cache: HashMap::new(),
             inst_locations: Vec::new(),
             phi_dependents: HashMap::new(),
+            func_return_ast_ty: None,
             file,
             struct_field_type_names,
             struct_field_ast_types,
@@ -1884,6 +1887,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Return { value } => {
             if let Some(val_expr) = value {
+                if let Some(expected) = ctx.func_return_ast_ty.clone() {
+                    record_wide_expected_ast_context(ctx, val_expr, &expected);
+                }
                 record_wide_control_flow_context(ctx, val_expr, ctx.func.return_ty);
                 let original = lower_expr(ctx, val_expr);
                 let val = lower_narrow_literal(ctx, val_expr, original, ctx.func.return_ty);
@@ -4626,6 +4632,7 @@ fn lower_function_with_pattern_aggregates(
 
     ctx.enum_variant_payload_tys = enum_variant_payload_tys;
     ctx.enum_variant_payload_ast_types = enum_variant_payload_ast_types;
+    ctx.func_return_ast_ty = Some(fn_def.return_ty.clone());
     ctx.const_map = const_map.clone();
 
     if let Some(vow) = &fn_def.vow {

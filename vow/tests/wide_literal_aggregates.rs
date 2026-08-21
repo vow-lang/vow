@@ -143,6 +143,10 @@ fn make_nested_enum() -> NestedWideEnum {
 fn push_wide_vec(values: Vec<u128>) {
     values.push(340282366920938463463374607431768211440);
 }
+
+fn return_option() -> Option<u128> {
+    return Option::Some(340282366920938463463374607431768211439);
+}
 "#,
     )
     .unwrap();
@@ -246,6 +250,10 @@ fn push_wide_vec(values: Vec<u128>) {
     assert!(
         stdout.contains("ConstU128[340282366920938463463374607431768211440u128]"),
         "Vec::push argument lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211439u128]"),
+        "explicit generic return lost its contextual wide type:\n{stdout}"
     );
 }
 

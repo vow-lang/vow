@@ -774,6 +774,8 @@ fn first_unsupported_opcode(
             match inst.opcode {
                 Opcode::RemF32
                 | Opcode::RemF64
+                | Opcode::ConstI128
+                | Opcode::ConstU128
                 | Opcode::Load
                 | Opcode::Store
                 | Opcode::LinearConsume
@@ -3617,6 +3619,38 @@ mod tests {
             c.contains("/* opcode ConstU128 not modelled */"),
             "ConstU128 must use the deferred verifier fallback: {c}"
         );
+    }
+
+    #[test]
+    fn wide_constants_report_the_unsupported_opcode() {
+        for (opcode, ty, data, name) in [
+            (
+                Opcode::ConstI128,
+                Ty::I128,
+                InstData::ConstI128(i128::MAX),
+                "ConstI128",
+            ),
+            (
+                Opcode::ConstU128,
+                Ty::U128,
+                InstData::ConstU128(u128::MAX),
+                "ConstU128",
+            ),
+        ] {
+            let (func, module) = one_block_func_module(
+                "wide",
+                ty,
+                vec![
+                    inst(0, opcode, ty, vec![], data),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            );
+            let reason = non_modelable_reason(&func, &module, &HashMap::new());
+            assert!(
+                matches!(reason.as_deref(), Some(reason) if reason.contains(name)),
+                "wide constant reason should name {name}: {reason:?}"
+            );
+        }
     }
 
     #[test]
