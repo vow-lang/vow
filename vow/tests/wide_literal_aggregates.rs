@@ -22,6 +22,10 @@ struct WrappedWide {
     value: Option<u128>,
 }
 
+struct WideVec {
+    values: Vec<u128>,
+}
+
 enum WideEnum {
     Value(u128),
 }
@@ -106,6 +110,23 @@ fn choose_option(flag: bool) -> Option<u128> {
 fn assign_wide_vec(values: Vec<u128>) {
     values[0] = 340282366920938463463374607431768211446;
 }
+
+fn match_option(value: Option<i64>) -> Option<u128> {
+    match value {
+        Option::Some(_) => { Option::Some(340282366920938463463374607431768211445) },
+        Option::None => { Option::None },
+    }
+}
+
+fn loop_option() -> Option<u128> {
+    loop {
+        break Option::Some(340282366920938463463374607431768211444);
+    }
+}
+
+fn assign_wide_vec_field(target: WideVec) {
+    target.values[0] = 340282366920938463463374607431768211443;
+}
 "#,
     )
     .unwrap();
@@ -185,6 +206,18 @@ fn assign_wide_vec(values: Vec<u128>) {
     assert!(
         stdout.contains("ConstU128[340282366920938463463374607431768211446u128]"),
         "indexed Vec assignment lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211445u128]"),
+        "generic match payload lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211444u128]"),
+        "generic loop payload lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211443u128]"),
+        "Vec-valued struct field assignment lost its contextual wide type:\n{stdout}"
     );
 }
 
