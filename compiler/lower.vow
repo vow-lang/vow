@@ -36,6 +36,7 @@ struct LowerCtx {
     enum_names: Vec<String>,
     enum_variant_lists: Vec<Vec<String>>,
     enum_variant_payload_tys: Vec<Vec<Vec<i64>>>,
+    enum_variant_payload_ast_tids: Vec<Vec<Vec<i64>>>,
     wide_context_tys: Vec<i64>,
     tag_inst_ids: Vec<i64>,
     tag_names: Vec<String>,
@@ -129,6 +130,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         enum_names: Vec::new(),
         enum_variant_lists: Vec::new(),
         enum_variant_payload_tys: Vec::new(),
+        enum_variant_payload_ast_tids: Vec::new(),
         wide_context_tys: Vec::new(),
         tag_inst_ids: Vec::new(),
         tag_names: Vec::new(),
@@ -858,6 +860,19 @@ fn lctx_variant_payload_ty(
     if eidx == -1 || eidx >= ctx.enum_variant_payload_tys.len() { return -1; }
     let variant_index: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
     let variants: Vec<Vec<i64>> = ctx.enum_variant_payload_tys[eidx];
+    if variant_index < 0 || variant_index >= variants.len() { return -1; }
+    let payload: Vec<i64> = variants[variant_index];
+    if payload_index < 0 || payload_index >= payload.len() { return -1; }
+    payload[payload_index]
+}
+
+fn lctx_variant_payload_ast_tid(
+    ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
+) -> i64 {
+    let eidx: i64 = lctx_find_enum(ctx, enum_name);
+    if eidx == -1 || eidx >= ctx.enum_variant_payload_ast_tids.len() { return -1; }
+    let variant_index: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
+    let variants: Vec<Vec<i64>> = ctx.enum_variant_payload_ast_tids[eidx];
     if variant_index < 0 || variant_index >= variants.len() { return -1; }
     let payload: Vec<i64> = variants[variant_index];
     if payload_index < 0 || payload_index >= payload.len() { return -1; }
@@ -3448,6 +3463,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let payload_ty: i64 = lctx_variant_payload_ty(
                 ctx, enum_name, variant_name, pvi
             );
+            let payload_ast_tid: i64 = lctx_variant_payload_ast_tid(
+                ctx, enum_name, variant_name, pvi
+            );
+            lctx_record_wide_expected_ast_context(ctx, a, payload_eid0, payload_ast_tid);
             lctx_record_wide_control_flow_context(ctx, a, payload_eid0, payload_ty);
             let mut payload_value: i64 = lower_consumed_expr(ctx, payload_eid0);
             if payload_ty == ITY_I128() || payload_ty == ITY_U128() {
@@ -3790,10 +3809,17 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         if method_name == String::from("push") {
             let nargs: i64 = list_len(a, args_lid);
+            let elem_ty: i64 = ity_for_scalar_type_name(lctx_get_vec_elem(ctx, recv_id));
             let elem_id: i64 = {
                 if nargs > 0 {
                     let ae: i64 = list_get(a, args_lid, 0);
-                    lower_consumed_expr(ctx, ae)
+                    lctx_record_wide_control_flow_context(ctx, a, ae, elem_ty);
+                    let original: i64 = lower_consumed_expr(ctx, ae);
+                    if elem_ty == ITY_I128() || elem_ty == ITY_U128() {
+                        lower_narrow_literal(ctx, a, ae, original, elem_ty)
+                    } else {
+                        original
+                    }
                 } else {
                     let u_args: Vec<i64> = Vec::new();
                     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
@@ -5072,6 +5098,7 @@ fn lower_module_vow(
     let enum_names: Vec<String> = Vec::new();
     let enum_variant_lists: Vec<Vec<String>> = Vec::new();
     let enum_variant_payload_tys: Vec<Vec<Vec<i64>>> = Vec::new();
+    let enum_variant_payload_ast_tids: Vec<Vec<Vec<i64>>> = Vec::new();
 
     let n_items: i64 = m.items.len();
     let mut alias_i: i64 = 0;
@@ -5269,6 +5296,7 @@ fn lower_module_vow(
             let nv: i64 = n_pairs / 2;
             let vnames: Vec<String> = Vec::new();
             let variant_payload_tys: Vec<Vec<i64>> = Vec::new();
+            let variant_payload_ast_tids: Vec<Vec<i64>> = Vec::new();
             let ir_variants: Vec<IrVariantLayout> = Vec::new();
             let mut vi: i64 = 0;
             while vi < nv {
@@ -5279,11 +5307,13 @@ fn lower_module_vow(
                 let n_payload: i64 = list_len(a, payload_lid);
                 let payload: Vec<IrFieldLayout> = Vec::new();
                 let payload_tys: Vec<i64> = Vec::new();
+                let payload_ast_tids: Vec<i64> = Vec::new();
                 let mut pi: i64 = 0;
                 while pi < n_payload {
                     let p_ast_tid: i64 = list_get(a, payload_lid, pi);
                     let p_ir_ty: i64 = lower_ast_ty_linear(a, p_ast_tid, linear_owner_names, type_alias_names, type_alias_target_tids);
                     payload_tys.push(p_ir_ty);
+                    payload_ast_tids.push(p_ast_tid);
                     let fl: IrFieldLayout = IrFieldLayout { name: String::from(""), ty: p_ir_ty };
                     payload.push(fl);
                     pi = pi + 1;
@@ -5291,11 +5321,13 @@ fn lower_module_vow(
                 let vl: IrVariantLayout = IrVariantLayout { name: vname, tag: vi, payload: payload };
                 ir_variants.push(vl);
                 variant_payload_tys.push(payload_tys);
+                variant_payload_ast_tids.push(payload_ast_tids);
                 vi = vi + 1;
             }
             enum_names.push(ename);
             enum_variant_lists.push(vnames);
             enum_variant_payload_tys.push(variant_payload_tys);
+            enum_variant_payload_ast_tids.push(variant_payload_ast_tids);
             let el: IrEnumLayout = IrEnumLayout { name: ename, variants: ir_variants };
             ir_mod.enum_layouts.push(el);
         }
@@ -5308,6 +5340,7 @@ fn lower_module_vow(
     opt_variants.push(String::from("Some"));
     enum_variant_lists.push(opt_variants);
     enum_variant_payload_tys.push(Vec::new());
+    enum_variant_payload_ast_tids.push(Vec::new());
 
     enum_names.push(String::from("Result"));
     let res_variants: Vec<String> = Vec::new();
@@ -5315,6 +5348,7 @@ fn lower_module_vow(
     res_variants.push(String::from("Err"));
     enum_variant_lists.push(res_variants);
     enum_variant_payload_tys.push(Vec::new());
+    enum_variant_payload_ast_tids.push(Vec::new());
 
     let cnames: Vec<String> = Vec::new();
     let cvals: Vec<i64> = Vec::new();
@@ -5387,6 +5421,7 @@ fn lower_module_vow(
     ctx.enum_names = enum_names;
     ctx.enum_variant_lists = enum_variant_lists;
     ctx.enum_variant_payload_tys = enum_variant_payload_tys;
+    ctx.enum_variant_payload_ast_tids = enum_variant_payload_ast_tids;
     ctx.const_names = cnames;
     ctx.const_values = cvals;
     ctx.const_tids = ctids;

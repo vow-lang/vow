@@ -707,6 +707,8 @@ pub(crate) struct LowerCtx {
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
     // enum name → variant tag → declared payload types
     enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>>,
+    // enum name → variant tag → complete declared payload types
+    enum_variant_payload_ast_types: Rc<HashMap<String, Vec<Vec<AstType>>>>,
     // Expressions inside a wide contextual control-flow expression, keyed by
     // their stable AST address for the duration of function lowering.
     wide_literal_contexts: HashMap<usize, Ty>,
@@ -820,6 +822,7 @@ impl LowerCtx {
             struct_field_map,
             enum_variant_map,
             enum_variant_payload_tys: HashMap::new(),
+            enum_variant_payload_ast_types: Rc::new(HashMap::new()),
             wide_literal_contexts: HashMap::new(),
             linear_owner_names,
             type_aliases,
@@ -2956,6 +2959,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .and_then(|variants| variants.get(tag as usize))
                 .cloned()
                 .unwrap_or_default();
+            let payload_ast_types = ctx
+                .enum_variant_payload_ast_types
+                .get(enum_name)
+                .and_then(|variants| variants.get(tag as usize))
+                .cloned()
+                .unwrap_or_default();
             // Evaluate and transfer payloads before allocating the wrapper so
             // built-in Option/Result constructors can inherit linear ownership
             // from their type-erased payload expression.
@@ -2963,6 +2972,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .enumerate()
                 .map(|(index, field)| {
+                    if let Some(expected) = payload_ast_types.get(index) {
+                        record_wide_expected_ast_context(ctx, field, expected);
+                    }
                     if let Some(ty @ (Ty::I128 | Ty::U128)) = payload_tys.get(index).copied() {
                         record_wide_control_flow_context(ctx, field, ty);
                     }
@@ -3662,9 +3674,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 ),
                 (_, "push") => {
+                    let elem_ty = ctx
+                        .inst_vec_elem_types
+                        .get(&recv_id)
+                        .and_then(|path| path.first())
+                        .filter(|name| is_scalar_field_type_name(name))
+                        .map(|name| scalar_ty_for_field_type_name(name))
+                        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
                     let elem_id = args
                         .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
+                        .map(|e| {
+                            if let Some(ty) = elem_ty {
+                                record_wide_control_flow_context(ctx, e, ty);
+                            }
+                            let original = lower_consumed_expr(ctx, e);
+                            elem_ty
+                                .map(|ty| lower_narrow_literal(ctx, e, original, ty))
+                                .unwrap_or(original)
+                        })
                         .unwrap_or_else(|| {
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                         });
@@ -4559,6 +4586,7 @@ fn lower_function_with_pattern_aggregates(
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
     enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>>,
+    enum_variant_payload_ast_types: Rc<HashMap<String, Vec<Vec<AstType>>>>,
     linear_owner_names: &HashSet<String>,
     type_aliases: Rc<HashMap<String, AstType>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
@@ -4597,6 +4625,7 @@ fn lower_function_with_pattern_aggregates(
     );
 
     ctx.enum_variant_payload_tys = enum_variant_payload_tys;
+    ctx.enum_variant_payload_ast_types = enum_variant_payload_ast_types;
     ctx.const_map = const_map.clone();
 
     if let Some(vow) = &fn_def.vow {
@@ -4720,6 +4749,7 @@ fn lower_function(
         struct_field_map,
         enum_variant_map,
         HashMap::new(),
+        Rc::new(HashMap::new()),
         linear_owner_names,
         Rc::new(HashMap::new()),
         struct_field_type_names,
@@ -4886,6 +4916,7 @@ pub fn lower_module_with_pattern_aggregates(
     // Build enum layout info
     let mut enum_variant_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>> = HashMap::new();
+    let mut enum_variant_payload_ast_types: HashMap<String, Vec<Vec<AstType>>> = HashMap::new();
     let mut enum_layouts: Vec<EnumLayout> = Vec::new();
     for item in &module.items {
         if let Item::Enum(e) = item {
@@ -4924,14 +4955,27 @@ pub fn lower_module_with_pattern_aggregates(
                 .iter()
                 .map(|variant| variant.payload.iter().map(|field| field.ty).collect())
                 .collect();
+            let payload_ast_types = e
+                .variants
+                .iter()
+                .map(|variant| match &variant.kind {
+                    VariantKind::Unit => vec![],
+                    VariantKind::Tuple(types) => types.clone(),
+                    VariantKind::Struct(fields) => {
+                        fields.iter().map(|field| field.ty.clone()).collect()
+                    }
+                })
+                .collect();
             enum_variant_map.insert(e.name.clone(), variant_names);
             enum_variant_payload_tys.insert(e.name.clone(), payload_tys);
+            enum_variant_payload_ast_types.insert(e.name.clone(), payload_ast_types);
             enum_layouts.push(EnumLayout {
                 name: e.name.clone(),
                 variants: variant_layouts,
             });
         }
     }
+    let enum_variant_payload_ast_types = Rc::new(enum_variant_payload_ast_types);
 
     let mut all_strings: Vec<String> = Vec::new();
     let mut all_warnings: Vec<vow_diag::Diagnostic> = Vec::new();
@@ -4946,6 +4990,7 @@ pub fn lower_module_with_pattern_aggregates(
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
                 enum_variant_payload_tys.clone(),
+                Rc::clone(&enum_variant_payload_ast_types),
                 &linear_owner_names,
                 Rc::clone(&type_aliases),
                 struct_field_type_names.clone(),
@@ -6474,6 +6519,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             enum_variant_map,
             HashMap::new(),
+            Rc::new(HashMap::new()),
             &linear_structs,
             Rc::new(HashMap::new()),
             HashMap::new(),
@@ -6606,6 +6652,7 @@ fn parse_or_default(s: String) -> i64 {
             struct_field_map,
             enum_variant_map,
             HashMap::new(),
+            Rc::new(HashMap::new()),
             &HashSet::new(),
             Rc::new(HashMap::new()),
             struct_field_types,
@@ -6840,6 +6887,7 @@ fn parse_or_default(s: String) -> i64 {
             HashMap::new(),
             enum_variant_map,
             HashMap::new(),
+            Rc::new(HashMap::new()),
             &HashSet::new(),
             Rc::new(HashMap::new()),
             HashMap::new(),

@@ -30,6 +30,10 @@ enum WideEnum {
     Value(u128),
 }
 
+enum NestedWideEnum {
+    Value(Option<u128>),
+}
+
 fn make_struct() -> WideStruct {
     WideStruct { value: 18446744073709551616 }
 }
@@ -131,6 +135,14 @@ fn assign_wide_vec_field(target: WideVec) {
 fn cast_wide_marker() -> u128 {
     (340282366920938463463374607431768211442 + 0) as u128
 }
+
+fn make_nested_enum() -> NestedWideEnum {
+    NestedWideEnum::Value(Option::Some(340282366920938463463374607431768211441))
+}
+
+fn push_wide_vec(values: Vec<u128>) {
+    values.push(340282366920938463463374607431768211440);
+}
 "#,
     )
     .unwrap();
@@ -226,6 +238,14 @@ fn cast_wide_marker() -> u128 {
     assert!(
         stdout.contains("ConstU128[340282366920938463463374607431768211442u128]"),
         "explicit wide cast lost its compound marker limbs:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211441u128]"),
+        "nested user-enum payload lost its contextual wide type:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("ConstU128[340282366920938463463374607431768211440u128]"),
+        "Vec::push argument lost its contextual wide type:\n{stdout}"
     );
 }
 
