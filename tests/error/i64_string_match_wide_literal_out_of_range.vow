@@ -1,0 +1,5 @@
+module I64StringMatchWideLiteralOutOfRange
+
+fn value(text: String) -> i64 {
+    string_matches_literal_at(text, 340282366920938463463374607431768211455, "x")
+}

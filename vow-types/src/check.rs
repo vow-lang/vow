@@ -1496,6 +1496,10 @@ impl<'e> Checker<'e> {
                     | BinOp::DivChecked
                     | BinOp::RemChecked => self.check_same_numeric(lhs_ty, rhs_ty, expr.span),
                     BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                        if lhs_ty.is_lit_int() && rhs_ty.is_lit_int() {
+                            self.check_integer_literal_range(lhs, &Ty::I64);
+                            self.check_integer_literal_range(rhs, &Ty::I64);
+                        }
                         if lhs_ty != rhs_ty
                             && lhs_ty != Ty::Never
                             && rhs_ty != Ty::Never
@@ -1689,6 +1693,7 @@ impl<'e> Checker<'e> {
                     }
                     for (arg, expected_ty) in args.iter().zip(expected.iter()) {
                         let arg_ty = self.check_expr(arg);
+                        self.check_contextual_integer_literal_ranges(arg, expected_ty);
                         if !can_context_coerce(&arg_ty, expected_ty) {
                             self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
@@ -2007,6 +2012,7 @@ impl<'e> Checker<'e> {
             ExprKind::Index { base, index } => {
                 let base_ty = self.check_expr(base);
                 self.check_expr(index);
+                self.check_contextual_integer_literal_ranges(index, &Ty::I64);
                 match &base_ty {
                     Ty::Applied(_, args) => args.first().cloned().unwrap_or(Ty::Unit),
                     _ => {
@@ -2507,6 +2513,7 @@ impl<'e> Checker<'e> {
                         }
                         for field in fields {
                             let arg_ty = self.check_expr(field);
+                            self.check_contextual_integer_literal_ranges(field, &Ty::I64);
                             if !can_context_coerce(&arg_ty, &Ty::I64) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
@@ -2588,6 +2595,7 @@ impl<'e> Checker<'e> {
                         }
                         for field in fields {
                             let arg_ty = self.check_expr(field);
+                            self.check_contextual_integer_literal_ranges(field, &Ty::I64);
                             if !can_context_coerce(&arg_ty, &Ty::I64) {
                                 self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,

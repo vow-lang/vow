@@ -60,6 +60,34 @@ fn check_inferred_and_method_argument_ranges() -> i32 [io] {
     0
 }
 
+fn check_special_i64_operand_ranges() -> i32 [io] {
+    let literal_comparison: String = String::from(
+        "module WideRange\nfn value() -> bool { 340282366920938463463374607431768211455 > 0 }"
+    );
+    if checked_error_count(literal_comparison) == 0 { return 73; }
+
+    let index_operand: String = String::from(
+        "module WideRange\nfn value(values: Vec<i64>) -> i64 { values[340282366920938463463374607431768211455] }"
+    );
+    if checked_error_count(index_operand) == 0 { return 74; }
+
+    let string_match_position: String = String::from(
+        "module WideRange\nfn value(text: String) -> i64 { string_matches_literal_at(text, 340282366920938463463374607431768211455, \"x\") }"
+    );
+    if checked_error_count(string_match_position) == 0 { return 75; }
+
+    let string_raw_parts: String = String::from(
+        "module WideRange\nfn value() -> String { String::from_raw_parts_copy(340282366920938463463374607431768211455, 0) }"
+    );
+    if checked_error_count(string_raw_parts) == 0 { return 76; }
+
+    let vec_raw_parts: String = String::from(
+        "module WideRange\nfn value() -> Vec<i64> { Vec::from_raw_parts_copy(340282366920938463463374607431768211455, 0) }"
+    );
+    if checked_error_count(vec_raw_parts) == 0 { return 77; }
+    0
+}
+
 fn check_pre128_targets_use_the_full_magnitude() -> i32 [io] {
     let i64_overflow: String = String::from(
         "module WideRange\nfn value() -> i64 { let x: i64 = 18446744073709551616; x }"
@@ -434,6 +462,8 @@ fn main() -> i32 [io] {
     if contextual_result != 0 { return contextual_result; }
     let inferred_method_result: i32 = check_inferred_and_method_argument_ranges();
     if inferred_method_result != 0 { return inferred_method_result; }
+    let special_operand_result: i32 = check_special_i64_operand_ranges();
+    if special_operand_result != 0 { return special_operand_result; }
     let lowering_result: i32 = check_aggregate_wide_literal_lowering();
     if lowering_result != 0 { return lowering_result; }
     check_unsigned_wide_ir_printing()

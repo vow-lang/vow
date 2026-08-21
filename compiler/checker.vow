@@ -2205,6 +2205,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             return CTY_BOOL();
         }
         if op == BINOP_EQ() || op == BINOP_NE() || op == BINOP_LT() || op == BINOP_LE() || op == BINOP_GT() || op == BINOP_GE() {
+            if ty_is_lit_int(e.ts, lhs_tid) && ty_is_lit_int(e.ts, rhs_tid) {
+                check_integer_literal_range(e, a, lhs_eid, CTY_I64());
+                check_integer_literal_range(e, a, rhs_eid, CTY_I64());
+            }
             if ty_is_numeric_or_lit_int(e.ts, lhs_tid) && ty_is_numeric_or_lit_int(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, lhs_tid, rhs_tid) {
                 env_emit_error(e, String::from("comparison operands have different types"), expr_span(a, eid));
             }
@@ -2346,6 +2350,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 let s_tid: i64 = check_expr(e, m, s_eid);
                 let pos_tid: i64 = check_expr(e, m, pos_eid);
                 let literal_tid: i64 = check_expr(e, m, literal_eid);
+                check_contextual_integer_literal_ranges(e, a, pos_eid, CTY_I64());
                 if !is_coercible(e.ts, s_tid, CTY_STR()) {
                     env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, s_eid));
                 }
@@ -2620,6 +2625,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let idx_eid: i64 = expr_b(a, eid);
         let recv_tid: i64 = check_expr(e, m, recv_eid);
         let _idx_tid: i64 = check_expr(e, m, idx_eid);
+        check_contextual_integer_literal_ranges(e, a, idx_eid, CTY_I64());
         if is_opaque(recv_tid) {
             return recv_tid;
         }
@@ -3026,6 +3032,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
+                    check_method_argument_range(e, a, args_lid, 0, CTY_I64());
+                    check_method_argument_range(e, a, args_lid, 1, CTY_I64());
                     return CTY_NEVER();
                 }
             }
@@ -3038,6 +3046,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
+                    check_method_argument_range(e, a, args_lid, 0, CTY_I64());
+                    check_method_argument_range(e, a, args_lid, 1, CTY_I64());
                     return CTY_STR();
                 }
                 if second_name == String::from("from") {

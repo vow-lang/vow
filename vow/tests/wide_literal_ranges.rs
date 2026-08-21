@@ -140,3 +140,28 @@ fn inferred_option_payload_defaults_to_i64_before_storage() {
 fn vec_truncate_rejects_wide_i64_argument_before_lowering() {
     assert_literal_out_of_range("i64_vec_truncate_wide_literal_out_of_range.vow");
 }
+
+#[test]
+fn literal_only_comparison_defaults_operands_to_i64() {
+    assert_literal_out_of_range("i64_literal_comparison_wide_literal_out_of_range.vow");
+}
+
+#[test]
+fn index_rejects_wide_i64_operand_before_lowering() {
+    assert_literal_out_of_range("i64_index_wide_literal_out_of_range.vow");
+}
+
+#[test]
+fn string_match_rejects_wide_i64_position_before_lowering() {
+    assert_literal_out_of_range("i64_string_match_wide_literal_out_of_range.vow");
+}
+
+#[test]
+fn string_raw_parts_rejects_wide_i64_operand_before_lowering() {
+    assert_literal_out_of_range("i64_string_raw_parts_wide_literal_out_of_range.vow");
+}
+
+#[test]
+fn vec_raw_parts_rejects_wide_i64_operand_before_lowering() {
+    assert_literal_out_of_range("i64_vec_raw_parts_wide_literal_out_of_range.vow");
+}
