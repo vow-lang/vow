@@ -55,6 +55,10 @@ pub(crate) fn format_value(tag: u8, payload: u64) -> String {
     }
 }
 
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
+}
+
 /// Build the JSON and human-readable lines for a vow violation.
 ///
 /// `blame == 0` is the Caller (a `requires` violation); any other value is the
@@ -69,6 +73,8 @@ pub(crate) fn render_violation(
     bindings: &[ValueBinding<'_>],
 ) -> RenderedViolation {
     let blame_str = if blame == 0 { "Caller" } else { "Callee" };
+    let description_json = json_string(description);
+    let file_json = json_string(file);
 
     let (values_json, values_human) = if bindings.is_empty() {
         (String::new(), String::new())
@@ -92,7 +98,7 @@ pub(crate) fn render_violation(
     };
 
     let json = format!(
-        r#"{{"error":"VowViolation","vow_id":{vow_id},"blame":"{blame_str}","description":"{description}","file":"{file}","offset":{offset}{values_json}}}"#
+        r#"{{"error":"VowViolation","vow_id":{vow_id},"blame":"{blame_str}","description":{description_json},"file":{file_json},"offset":{offset}{values_json}}}"#
     );
     let human = format!(
         "vow violation: {description}, blame={blame_str}, file={file}, offset={offset}{values_human}"
@@ -135,6 +141,19 @@ mod tests {
             r.json,
             r#"{"error":"VowViolation","vow_id":0,"blame":"Caller","description":"y != 0","file":"divide.vow","offset":42,"values":{"y":0}}"#
         );
+    }
+
+    #[test]
+    fn render_violation_json_round_trips_description_and_file() {
+        let description = "string_matches_literal_at(s, pos, \"ab\") == 1 && path == \"C:\\tmp\"\n\t\u{0008}\u{000c}\r";
+        let file = "quoted \"source\"/unicode-люм\npath\\file.vow";
+
+        let r = render_violation(1, 0, description, file, 7, &[]);
+        let json: serde_json::Value =
+            serde_json::from_str(&r.json).expect("violation envelope must be valid JSON");
+
+        assert_eq!(json["description"], description);
+        assert_eq!(json["file"], file);
     }
 
     // Anchor: docs/level5-test-trace.md:373-374 (matched JSON + human pair).
