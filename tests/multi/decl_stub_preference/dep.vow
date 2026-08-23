@@ -1,0 +1,9 @@
+module Dep
+
+// DELIBERATELY ILL-TYPED. `main.vow` does `use dep`, and the loader must pick
+// the sibling `dep.vow.d` declaration stub instead of this file. Returning
+// `true` from an `-> i64` function is the poison that makes the fixture fail
+// loudly if that preference ever regresses -- do not "fix" this body.
+fn source_only() -> i64 {
+    true
+}

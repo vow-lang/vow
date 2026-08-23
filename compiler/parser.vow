@@ -283,9 +283,15 @@ fn parse_fn_def(p: Parser) -> i64 {
     }
     let eff: i64 = parse_effects(p);
     let vow_lid: i64 = parse_vow_block(p);
-    let body_bid: i64 = parse_block(p);
+    let is_declaration: i64 = if at(p, tok_semicolon()) { 1 } else { 0 };
+    let body_bid: i64 = if is_declaration == 1 {
+        let _semi: Token = advance(p);
+        arena_add_blk(p.arena, arena_add_list(p.arena, Vec::new()), -1, 0)
+    } else {
+        parse_block(p)
+    };
     let span: i64 = span_pack_to_here(p, span_start);
-    arena_add_fn(p.arena, name_sid, params_lid, ret_tid, eff, body_bid, vow_lid, span)
+    arena_add_fn(p.arena, name_sid, params_lid, ret_tid, eff, body_bid, vow_lid, is_declaration, span)
 }
 
 fn parse_struct_def(p: Parser, is_linear: i64) -> i64 {

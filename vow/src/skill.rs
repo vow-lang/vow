@@ -1020,7 +1020,7 @@ fn skill_json() -> String {
     },
     "modules": {
       "declaration": "module Name",
-      "import": "use foo.bar \u2014 resolves to <rootdir>/foo/bar.vow",
+      "import": "use foo.bar \u2014 prefers <rootdir>/foo/bar.vow.d when present; otherwise <rootdir>/foo/bar.vow",
       "visibility": "pub fn \u2014 public functions visible to importers"
     },
     "type_aliases": "type Name = Type",
@@ -1379,7 +1379,9 @@ Import other modules with dot-separated paths:
 use foo.bar
 ```
 
-This resolves to `<rootdir>/foo/bar.vow` relative to the main source file.
+This resolves relative to the main source file. The module loader first uses
+`<rootdir>/foo/bar.vow.d` when that declaration stub exists, and otherwise
+falls back to `<rootdir>/foo/bar.vow`.
 
 ## Const Declarations
 
@@ -1413,6 +1415,16 @@ fn main() -> i32 [io] {
 ```
 
 Effects appear in brackets after the return type: `[io]`, `[read, write]`, `[io, panic]`.
+
+### Declaration-Only Function
+
+```vow
+fn add(x: i64, y: i64) -> i64;
+```
+
+A semicolon in place of the body declares only the function signature. The
+type checker registers the signature, but body checking and IR lowering skip
+the declaration. `vow decl` emits these declarations in `.vow.d` stubs.
 
 ### Function with Vow Block
 
@@ -4480,8 +4492,10 @@ the contracts — see [Verification status](#verification-status).
 
 ## Consumption model
 
-`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,
-where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.
+`use` declarations resolve to a single directory: `use foo` loads
+`<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads
+`<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to
+`vow build`/`vow verify`.
 All transitive `use`s in dependency modules resolve against that **same** directory.
 There is no search path, and `--module-root` is only available on `vow test` — not
 `vow build` or `vow verify`.
@@ -6077,7 +6091,9 @@ Import other modules with dot-separated paths:
 use foo.bar
 ```
 
-This resolves to `<rootdir>/foo/bar.vow` relative to the main source file.
+This resolves relative to the main source file. The module loader first uses
+`<rootdir>/foo/bar.vow.d` when that declaration stub exists, and otherwise
+falls back to `<rootdir>/foo/bar.vow`.
 
 ## Const Declarations
 
@@ -6111,6 +6127,16 @@ fn main() -> i32 [io] {
 ```
 
 Effects appear in brackets after the return type: `[io]`, `[read, write]`, `[io, panic]`.
+
+### Declaration-Only Function
+
+```vow
+fn add(x: i64, y: i64) -> i64;
+```
+
+A semicolon in place of the body declares only the function signature. The
+type checker registers the signature, but body checking and IR lowering skip
+the declaration. `vow decl` emits these declarations in `.vow.d` stubs.
 
 ### Function with Vow Block
 
@@ -9183,8 +9209,10 @@ the contracts — see [Verification status](#verification-status).
 
 ## Consumption model
 
-`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,
-where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.
+`use` declarations resolve to a single directory: `use foo` loads
+`<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads
+`<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to
+`vow build`/`vow verify`.
 All transitive `use`s in dependency modules resolve against that **same** directory.
 There is no search path, and `--module-root` is only available on `vow test` — not
 `vow build` or `vow verify`.

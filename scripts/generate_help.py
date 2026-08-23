@@ -631,7 +631,10 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             },
             "modules": {
                 "declaration": "module Name",
-                "import": "use foo.bar \u2014 resolves to <rootdir>/foo/bar.vow",
+                "import": (
+                    "use foo.bar \u2014 prefers <rootdir>/foo/bar.vow.d when present; "
+                    "otherwise <rootdir>/foo/bar.vow"
+                ),
                 "visibility": "pub fn \u2014 public functions visible to importers",
             },
             "type_aliases": "type Name = Type",

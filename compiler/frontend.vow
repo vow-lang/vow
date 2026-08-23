@@ -78,7 +78,7 @@ fn frontend_dir_path(path: String) -> String {
     }
 }
 
-fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String {
+fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [read] {
     let r: String = String::from("");
     r.push_str(root_dir);
     let n: i64 = list_len(arena, use_lid);
@@ -91,7 +91,8 @@ fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String {
         i = i + 1;
     }
     r.push_str(String::from(".vow"));
-    r
+    let decl_path: String = str2(r, String::from(".d"));
+    if fs_exists(decl_path) == 1 { decl_path } else { r }
 }
 
 fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, item_files: Vec<String>, visited: Vec<String>, dctx: DiagCtx) [io] {

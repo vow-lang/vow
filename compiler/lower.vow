@@ -5267,7 +5267,7 @@ fn lower_module_vow(
         let item: i64 = m.items[ii];
         let ik: i64 = item_kind(item);
         let iid: i64 = item_id(item);
-        if ik == ITEM_FN() {
+        if ik == ITEM_FN() && !fn_is_declaration(a, iid) {
             let name_sid: i64 = fn_name_sid(a, iid);
             let name: String = arena_str(a, name_sid);
             let ret_tid: i64 = fn_ret_ast_tid(a, iid);
@@ -5518,7 +5518,7 @@ fn lower_module_vow(
         let item: i64 = m.items[ii2];
         let ik: i64 = item_kind(item);
         let iid: i64 = item_id(item);
-        if ik == ITEM_FN() {
+        if ik == ITEM_FN() && !fn_is_declaration(a, iid) {
             // Stamp the per-item source path onto ctx.file; lower_function_vow
             // forwards it into the constructed IrFunction's source_file field.
             ctx.file = item_files[ii2];

@@ -12,7 +12,7 @@
 |---|---|
 | Compile to native executable | ELF via Cranelift, linked with system `cc` |
 | Formal verification (ESBMC) | `vow build` (on by default), `vow verify` (verification only) |
-| Module system | `use foo.bar` resolves to `<root>/foo/bar.vow`, recursive DFS loading |
+| Module system | `use foo.bar` prefers `<root>/foo/bar.vow.d`, falls back to `.vow`; recursive DFS loading |
 | Declaration files | `vow decl` emits `.vow.d` type-signature stubs; importers prefer `.vow.d` over `.vow` |
 | Build modes | `--mode debug` (runtime contract checks), `release` (default), `profile` (call counters) |
 | Compilation + verification cache | On by default, disable with `--no-cache` |
@@ -29,7 +29,7 @@
 
 ### Module system details (`vow/src/module_loader.rs`)
 
-- `use foo.bar` maps to `<root_dir>/foo/bar.vow` (or `.vow.d` if present)
+- `use foo.bar` maps to `<root_dir>/foo/bar.vow.d` when present, otherwise `<root_dir>/foo/bar.vow`
 - Recursive dependency loading in DFS order
 - All modules merged into a single flat `Module` — no namespace isolation
 - Duplicate imports are deduplicated via visited set

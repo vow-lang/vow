@@ -1,0 +1,9 @@
+// TEST: stdout "stub selected"
+module Main
+
+use dep
+
+fn main() -> i32 [io] {
+    print_str("stub selected");
+    0
+}
