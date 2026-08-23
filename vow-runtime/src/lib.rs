@@ -275,15 +275,44 @@ pub unsafe extern "C" fn __vow_trace_vow(fn_name_ptr: *const c_char, vow_id: i64
 
 static PERF_OPERATION_COUNT: AtomicU64 = AtomicU64::new(0);
 
+fn perf_operation_count_add(amount: u64) {
+    let _ = PERF_OPERATION_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+        Some(count.saturating_add(amount))
+    });
+}
+
 /// Count one executed operation in a `vow-perf` instrumented artifact.
 ///
 /// Saturation preserves the strongest reportable lower bound instead of
 /// wrapping a long-running measurement back to a deceptively small value.
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_perf_count() {
-    let _ = PERF_OPERATION_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-        count.checked_add(1)
-    });
+    perf_operation_count_add(1);
+}
+
+/// Attribute the caller-side operation and size-dependent work performed by
+/// `__vow_vec_sort` in an instrumented artifact.
+///
+/// The synthetic cost is `1 + n * (2 + ceil(log2(n)))`: one call, one input
+/// copy and output push per item, and an `n log n` sorting term. Saturating
+/// arithmetic keeps an oversized measurement from wrapping to a false low.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_perf_count_vec_sort(vec: *const u8) {
+    let len = if vec.is_null() {
+        0
+    } else {
+        unsafe { (*(vec as *const VowVec)).len }
+    };
+    let logarithm = if len <= 1 {
+        0
+    } else {
+        u64::from(usize::BITS - (len - 1).leading_zeros())
+    };
+    let len = u64::try_from(len).unwrap_or(u64::MAX);
+    let cost = len
+        .saturating_mul(logarithm.saturating_add(2))
+        .saturating_add(1);
+    perf_operation_count_add(cost);
 }
 
 #[unsafe(no_mangle)]
@@ -4492,11 +4521,51 @@ mod tests {
     }
 
     #[test]
-    fn performance_operation_counter_can_be_reset_incremented_and_read() {
+    fn performance_operation_counter_attributes_vec_sort_work_and_saturates() {
         __vow_perf_counter_reset();
         __vow_perf_count();
         __vow_perf_count();
         assert_eq!(__vow_perf_counter_read(), 2);
+
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_vec_sort(std::ptr::null()) };
+        assert_eq!(
+            __vow_perf_counter_read(),
+            1,
+            "a null helper call still has its caller-side operation cost"
+        );
+
+        let four_items = VowVec {
+            ptr: std::ptr::dangling_mut(),
+            len: 4,
+            cap: 4,
+        };
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_vec_sort(&raw const four_items as *const u8) };
+        assert_eq!(__vow_perf_counter_read(), 17);
+
+        let eight_items = VowVec {
+            ptr: std::ptr::dangling_mut(),
+            len: 8,
+            cap: 8,
+        };
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_vec_sort(&raw const eight_items as *const u8) };
+        assert_eq!(__vow_perf_counter_read(), 41);
+
+        if usize::BITS == 64 {
+            let maximum_items = VowVec {
+                ptr: std::ptr::dangling_mut(),
+                len: usize::MAX,
+                cap: usize::MAX,
+            };
+            __vow_perf_counter_reset();
+            unsafe { __vow_perf_count_vec_sort(&raw const maximum_items as *const u8) };
+            assert_eq!(__vow_perf_counter_read(), u64::MAX);
+            __vow_perf_count();
+            assert_eq!(__vow_perf_counter_read(), u64::MAX);
+        }
+
         __vow_perf_counter_reset();
         assert_eq!(__vow_perf_counter_read(), 0);
     }
