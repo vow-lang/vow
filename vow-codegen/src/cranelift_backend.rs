@@ -2819,6 +2819,7 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_perf_counter_read" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        // Must match vow-clif-shim/src/lib.rs and the vow-runtime definition.
         "__vow_perf_count_vec_sort" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
         }

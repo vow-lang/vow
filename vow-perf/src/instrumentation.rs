@@ -56,9 +56,14 @@ impl std::error::Error for InstrumentationError {}
 /// IR instruction in the clone.
 ///
 /// Contract and complexity descriptors are non-executable metadata and are not
-/// counted. Calls to runtime helpers with size-dependent implementations use a
-/// helper-specific cost adapter that receives the original operands; ordinary
-/// executable instructions use the one-operation counter.
+/// counted. Calls to a catalogued size-dependent runtime helper use that
+/// helper's cost adapter, which receives the original operands; every other
+/// executable instruction uses the one-operation counter.
+///
+/// The catalogue currently holds only `__vow_vec_sort`. An uncatalogued
+/// size-dependent helper still counts as one operation, so a performance
+/// verdict built on these counts must fail closed as unverified when it reaches
+/// one. Completing the catalogue is tracked by #486.
 pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, InstrumentationError> {
     let mut module = source.clone();
 
@@ -121,6 +126,8 @@ fn counter_for(inst: &Inst) -> (&'static str, Vec<InstId>) {
         InstData::CallExtern(symbol) if symbol == "__vow_vec_sort" => {
             (VEC_SORT_COUNTER_SYMBOL, inst.args.clone())
         }
+        // Charges one operation even for an uncatalogued size-dependent helper
+        // such as `__vow_map_contains`; see `instrument_module` and #486.
         _ => (COUNTER_SYMBOL, vec![]),
     }
 }

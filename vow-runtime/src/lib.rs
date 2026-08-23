@@ -303,12 +303,12 @@ pub unsafe extern "C" fn __vow_perf_count_vec_sort(vec: *const u8) {
     } else {
         unsafe { (*(vec as *const VowVec)).len }
     };
+    let len = u64::try_from(len).unwrap_or(u64::MAX);
     let logarithm = if len <= 1 {
         0
     } else {
-        u64::from(usize::BITS - (len - 1).leading_zeros())
+        u64::from((len - 1).ilog2() + 1)
     };
-    let len = u64::try_from(len).unwrap_or(u64::MAX);
     let cost = len
         .saturating_mul(logarithm.saturating_add(2))
         .saturating_add(1);
@@ -4520,6 +4520,19 @@ mod tests {
         assert_eq!(__vow_u64_to_u32_sat(u64::from(u32::MAX) + 1), u32::MAX);
     }
 
+    fn vec_sort_cost(len: usize) -> u64 {
+        let vec = VowVec {
+            ptr: std::ptr::dangling_mut(),
+            len,
+            cap: len,
+        };
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_vec_sort(&raw const vec as *const u8) };
+        __vow_perf_counter_read()
+    }
+
+    // Every counter case shares the process-global PERF_OPERATION_COUNT, so they
+    // stay in one test rather than racing across cargo's parallel test threads.
     #[test]
     fn performance_operation_counter_attributes_vec_sort_work_and_saturates() {
         __vow_perf_counter_reset();
@@ -4535,33 +4548,12 @@ mod tests {
             "a null helper call still has its caller-side operation cost"
         );
 
-        let four_items = VowVec {
-            ptr: std::ptr::dangling_mut(),
-            len: 4,
-            cap: 4,
-        };
-        __vow_perf_counter_reset();
-        unsafe { __vow_perf_count_vec_sort(&raw const four_items as *const u8) };
-        assert_eq!(__vow_perf_counter_read(), 17);
-
-        let eight_items = VowVec {
-            ptr: std::ptr::dangling_mut(),
-            len: 8,
-            cap: 8,
-        };
-        __vow_perf_counter_reset();
-        unsafe { __vow_perf_count_vec_sort(&raw const eight_items as *const u8) };
-        assert_eq!(__vow_perf_counter_read(), 41);
+        assert_eq!(vec_sort_cost(1), 3);
+        assert_eq!(vec_sort_cost(4), 17);
+        assert_eq!(vec_sort_cost(8), 41);
 
         if usize::BITS == 64 {
-            let maximum_items = VowVec {
-                ptr: std::ptr::dangling_mut(),
-                len: usize::MAX,
-                cap: usize::MAX,
-            };
-            __vow_perf_counter_reset();
-            unsafe { __vow_perf_count_vec_sort(&raw const maximum_items as *const u8) };
-            assert_eq!(__vow_perf_counter_read(), u64::MAX);
+            assert_eq!(vec_sort_cost(usize::MAX), u64::MAX);
             __vow_perf_count();
             assert_eq!(__vow_perf_counter_read(), u64::MAX);
         }

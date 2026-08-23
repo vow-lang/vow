@@ -58,39 +58,27 @@ fn production_module() -> Module {
 }
 
 fn vec_sort_module() -> Module {
-    Module {
-        name: "vec_sort_cost".to_string(),
-        functions: vec![Function {
-            id: FuncId(0),
-            name: "sort_values".to_string(),
-            params: vec![Ty::Ptr],
-            param_names: vec!["values".to_string()],
-            return_ty: Ty::Ptr,
-            effects: vec![],
-            vows: vec![],
-            blocks: vec![BasicBlock {
-                id: BlockId(0),
-                insts: vec![
-                    instruction(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
-                    instruction(
-                        1,
-                        Opcode::Call,
-                        Ty::Ptr,
-                        vec![InstId(0)],
-                        InstData::CallExtern("__vow_vec_sort".to_string()),
-                    ),
-                    instruction(2, Opcode::Return, Ty::Unit, vec![InstId(1)], InstData::None),
-                ],
-            }],
-            local_names: HashMap::new(),
-            summary: RegionSummary::default(),
-            source_file: String::new(),
-        }],
-        strings: vec![],
-        struct_layouts: vec![],
-        enum_layouts: vec![],
-        warnings: vec![],
-    }
+    let mut module = production_module();
+    module.name = "vec_sort_cost".to_string();
+
+    let function = &mut module.functions[0];
+    function.name = "sort_values".to_string();
+    function.params = vec![Ty::Ptr];
+    function.param_names = vec!["values".to_string()];
+    function.return_ty = Ty::Ptr;
+    function.blocks[0].insts = vec![
+        instruction(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+        instruction(
+            1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![InstId(0)],
+            InstData::CallExtern("__vow_vec_sort".to_string()),
+        ),
+        instruction(2, Opcode::Return, Ty::Unit, vec![InstId(1)], InstData::None),
+    ];
+
+    module
 }
 
 #[test]
