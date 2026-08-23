@@ -447,7 +447,7 @@ the call, input copy, sort, and output pushes.
 The synthetic unit is intended for growth classification rather than elapsed
 time or an exact machine-instruction total. Charging once at the call site also
 avoids atomic counter traffic inside every sort comparison. The cost is a pure
-function of the input size, so adversarial-input search (step 3) cannot
+function of the input size, so the Step 4 adversarial-input search cannot
 distinguish best-case from worst-case inputs *inside* a catalogued helper; an
 adapter must therefore state the helper's worst-case growth, never its average
 case. A future performance verdict must fail closed as unverified when it
