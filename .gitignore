@@ -4,6 +4,9 @@ compiler/main
 build/
 compiler/*.o
 compiler/*.vow.c
+# `vow decl` defaults to writing <source>.vow.d; inside compiler/ such a
+# stub would shadow the real module during bootstrap module resolution.
+compiler/*.vow.d
 /.claude/*.local.json
 /.claude/worktrees/
 /.chief/
