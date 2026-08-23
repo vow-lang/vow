@@ -83,12 +83,13 @@ pub(crate) fn render_violation(
         let mut human_pairs = String::new();
         for (i, b) in bindings.iter().enumerate() {
             let name = b.name;
+            let name_json = json_string(name);
             let val = format_value(b.tag, b.payload);
             if i > 0 {
                 json_pairs.push(',');
                 human_pairs.push_str(", ");
             }
-            json_pairs.push_str(&format!(r#""{name}":{val}"#));
+            json_pairs.push_str(&format!("{name_json}:{val}"));
             human_pairs.push_str(&format!("{name}={val}"));
         }
         (
@@ -154,6 +155,22 @@ mod tests {
 
         assert_eq!(json["description"], description);
         assert_eq!(json["file"], file);
+    }
+
+    #[test]
+    fn render_violation_json_round_trips_binding_names() {
+        let name = "quoted\"name\\unicode-люм\n\t\u{0000}";
+        let bindings = [ValueBinding {
+            name,
+            tag: TAG_I64,
+            payload: 42,
+        }];
+
+        let r = render_violation(2, 0, "predicate", "source.vow", 11, &bindings);
+        let json: serde_json::Value =
+            serde_json::from_str(&r.json).expect("violation envelope must be valid JSON");
+
+        assert_eq!(json["values"][name], 42);
     }
 
     // Anchor: docs/level5-test-trace.md:373-374 (matched JSON + human pair).
