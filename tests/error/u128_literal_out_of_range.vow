@@ -1,0 +1,8 @@
+// TEST: error-code LiteralOutOfRange
+// TEST: stderr "literal -1 does not fit in u128"
+module U128LiteralOutOfRange
+
+fn main() -> i32 {
+    let x: u128 = -1;
+    0
+}

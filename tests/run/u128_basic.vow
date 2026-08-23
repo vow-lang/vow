@@ -1,0 +1,22 @@
+// TEST: verify-only
+module U128Basic
+
+fn minimum() -> u128 {
+    0
+}
+
+fn maximum() -> u128 {
+    340282366920938463463374607431768211455
+}
+
+fn widen_signed(value: i64) -> u128 {
+    value as u128
+}
+
+fn widen_unsigned(value: u64) -> u128 {
+    value as u128
+}
+
+fn same_width_signed(value: i128) -> u128 {
+    value as u128
+}

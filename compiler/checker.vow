@@ -1098,7 +1098,7 @@ fn expr_diverges(e: CheckEnv, m: Module, eid: i64) -> bool {
     false
 }
 
-fn wide_literal_out_of_range(a: AstArena, lit_eid: i64, target_tag: i64) -> bool {
+fn integer_literal_out_of_range(a: AstArena, lit_eid: i64, target_tag: i64) -> bool {
     let mut magnitude_eid: i64 = lit_eid;
     let mut negative: bool = false;
     if expr_tag(a, lit_eid) == EXPR_UNOP() && expr_a(a, lit_eid) == UNOP_NEG() {
@@ -1113,47 +1113,17 @@ fn wide_literal_out_of_range(a: AstArena, lit_eid: i64, target_tag: i64) -> bool
     }
     let lo: u64 = expr_int_lo(a, magnitude_eid);
     let hi: u64 = expr_int_hi(a, magnitude_eid);
-    if target_tag == CTY_U128() {
-        return negative && (lo != 0u64 || hi != 0u64);
-    }
-    if target_tag == CTY_I128() {
-        let sign_bit: u64 = 1u64 << 63;
-        if negative {
-            return hi > sign_bit || (hi == sign_bit && lo != 0u64);
-        }
-        return hi >= sign_bit;
-    }
-    false
-}
-
-fn pre128_wide_literal_out_of_range(a: AstArena, lit_eid: i64, target_tag: i64) -> bool {
-    let mut magnitude_eid: i64 = lit_eid;
-    let mut negative: bool = false;
-    if expr_tag(a, lit_eid) == EXPR_UNOP() && expr_a(a, lit_eid) == UNOP_NEG() {
-        negative = true;
-        magnitude_eid = expr_b(a, lit_eid);
-    }
-    if expr_tag(a, magnitude_eid) != EXPR_LIT_INT() {
+    if negative && lo == 0u64 && hi == 0u64 {
         return false;
     }
-
-    let lo: u64 = expr_int_lo(a, magnitude_eid);
-    let hi: u64 = expr_int_hi(a, magnitude_eid);
-    if hi != 0u64 {
-        return true;
-    }
-
-    let sign_bit: u64 = 1u64 << 63;
-    if lo < sign_bit {
-        return false;
-    }
-    if !negative && target_tag == CTY_U64() {
-        return false;
-    }
-    if negative && target_tag == CTY_I64() && lo == sign_bit {
-        return false;
-    }
-    true
+    let range: IntegerTypeRange = integer_tag_range(target_tag);
+    let maximum: IntegerMagnitude = if negative {
+        if !range.has_negative { return true; }
+        range.negative_max
+    } else {
+        range.positive_max
+    };
+    integer_magnitude_exceeds(lo, hi, maximum)
 }
 
 fn wide_literal_decimal(a: AstArena, lit_eid: i64) -> String {
@@ -1214,9 +1184,25 @@ fn integer_tag_range_text(tag: i64) -> String {
     if tag == CTY_U64() {
         return String::from("0..=18446744073709551615");
     }
-    let result: String = i64_to_string(integer_tag_min(tag));
+    let width: i64 = integer_tag_width(tag);
+    let is_unsigned: bool = tag >= CTY_U8() && tag <= CTY_U128();
+    let min_value: i64 = if is_unsigned {
+        0
+    } else if width == 64 {
+        -9223372036854775807 - 1
+    } else {
+        -(1 << (width - 1))
+    };
+    let max_value: i64 = if width == 64 {
+        9223372036854775807
+    } else if is_unsigned {
+        (1 << width) - 1
+    } else {
+        (1 << (width - 1)) - 1
+    };
+    let result: String = i64_to_string(min_value);
     result.push_str(String::from("..="));
-    result.push_str(i64_to_string(integer_tag_max(tag)));
+    result.push_str(i64_to_string(max_value));
     result
 }
 
@@ -1302,45 +1288,11 @@ fn check_integer_literal_range(e: CheckEnv, a: AstArena, lit_eid: i64, target_ta
         }
         return;
     }
-    if target_tag == CTY_I128() || target_tag == CTY_U128() {
-        if wide_literal_out_of_range(a, lit_eid, target_tag) {
-            env_emit_error_code(
-                e, EC_LITERAL_OUT_OF_RANGE(),
-                wide_literal_range_message(a, lit_eid, target_tag), expr_span(a, lit_eid)
-            );
-        }
-        return;
-    }
-    if pre128_wide_literal_out_of_range(a, lit_eid, target_tag) {
+    if integer_literal_out_of_range(a, lit_eid, target_tag) {
         env_emit_error_code(
             e, EC_LITERAL_OUT_OF_RANGE(),
             wide_literal_range_message(a, lit_eid, target_tag), expr_span(a, lit_eid)
         );
-        return;
-    }
-    let is_unsigned: bool = target_tag >= CTY_U8() && target_tag <= CTY_U128();
-    // The pre-i128 range path consumes the low limb through its i64
-    // compatibility view. A bare u64 magnitude above i64::MAX therefore
-    // appears negative here; its full magnitude was already checked by the
-    // lexer, so skip that one compatibility case. Explicit unary negation is
-    // still validated below.
-    if is_unsigned && integer_tag_width(target_tag) >= 64 && expr_tag(a, lit_eid) == EXPR_LIT_INT() && expr_a(a, lit_eid) < 0 {
-        return;
-    }
-    let literal_value: i64 = expr_const_int_value(a, lit_eid);
-    let min_value: i64 = integer_tag_min(target_tag);
-    let max_value: i64 = integer_tag_max(target_tag);
-    if literal_value < min_value || literal_value > max_value {
-        let msg: String = String::from("literal ");
-        msg.push_str(i64_to_string(literal_value));
-        msg.push_str(String::from(" does not fit in "));
-        msg.push_str(ty_tag_name(target_tag));
-        msg.push_str(String::from(" (range "));
-        msg.push_str(i64_to_string(min_value));
-        msg.push_str(String::from("..="));
-        msg.push_str(i64_to_string(max_value));
-        msg.push_str(String::from(")"));
-        env_emit_error_code(e, EC_LITERAL_OUT_OF_RANGE(), msg, expr_span(a, lit_eid));
     }
 }
 
@@ -2300,7 +2252,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 expr_tag(a, inner_eid) == EXPR_LIT_INT() &&
                 expr_int_lo(a, inner_eid) == 0u64 && expr_int_hi(a, inner_eid) == 0u64;
             if (is_signed_wide || is_unsigned_zero) && expr_tag(a, inner_eid) == EXPR_LIT_INT() {
-                if wide_literal_out_of_range(a, eid, target_tag) {
+                if integer_literal_out_of_range(a, eid, target_tag) {
                     env_emit_error_code(
                         e, EC_LITERAL_OUT_OF_RANGE(),
                         wide_literal_range_message(a, eid, target_tag),

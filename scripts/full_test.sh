@@ -634,6 +634,26 @@ for vow_file in tests/run/*.vow; do
         continue
     fi
 
+    if grep -q '^// TEST: verify-only$' "$vow_file"; then
+        rust_json="" self_json="" rust_exit=0 self_exit=0
+        rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
+        self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
+
+        if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
+            skip "${name}/test-verify" "empty output (rust=$rust_exit, self=$self_exit)"
+        else
+            compare_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+            # Parity alone would pass a regression that makes BOTH compilers
+            # reject the fixture, so pin the absolute expectation too (as
+            # Section 4b does for tests/verify/).
+            actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
+            if [ "$actual_status" != "Verified" ]; then
+                fail "${name}/test-verify-expected-pass" "expected Verified, got ${actual_status:-<none>}"
+            fi
+        fi
+        continue
+    fi
+
     # Build with both compilers
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST build --no-verify "$vow_file" -o "$TMPDIR/test_rust_${name}" 2>/dev/null) || rust_exit=$?
