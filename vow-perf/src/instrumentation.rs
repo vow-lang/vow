@@ -123,7 +123,11 @@ pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, Instrume
 
 fn counter_for(inst: &Inst) -> (&'static str, Vec<InstId>) {
     match &inst.data {
-        InstData::CallExtern(symbol) if symbol == "__vow_vec_sort" => {
+        // The adapter ABI is exactly `(vec ptr)`. Forwarding a different operand
+        // list would emit a call Cranelift cannot verify, so a helper whose
+        // shape drifts from the catalogue falls back to the plain counter and
+        // keeps the artifact compilable.
+        InstData::CallExtern(symbol) if symbol == "__vow_vec_sort" && inst.args.len() == 1 => {
             (VEC_SORT_COUNTER_SYMBOL, inst.args.clone())
         }
         // Charges one operation even for an uncatalogued size-dependent helper

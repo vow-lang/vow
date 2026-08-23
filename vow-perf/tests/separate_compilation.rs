@@ -75,7 +75,16 @@ fn vec_sort_module() -> Module {
             vec![InstId(0)],
             InstData::CallExtern("__vow_vec_sort".to_string()),
         ),
-        instruction(2, Opcode::Return, Ty::Unit, vec![InstId(1)], InstData::None),
+        instruction(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(7)),
+        // Uncatalogued size-dependent helper: it must keep the plain counter.
+        instruction(
+            3,
+            Opcode::Call,
+            Ty::Bool,
+            vec![InstId(1), InstId(2)],
+            InstData::CallExtern("__vow_map_contains".to_string()),
+        ),
+        instruction(4, Opcode::Return, Ty::Unit, vec![InstId(1)], InstData::None),
     ];
 
     module
@@ -132,8 +141,12 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
             ("__vow_perf_count_vec_sort", &[InstId(0)]),
             ("__vow_vec_sort", &[InstId(0)]),
             ("__vow_perf_count", &[]),
+            ("__vow_perf_count", &[]),
+            ("__vow_map_contains", &[InstId(1), InstId(2)]),
+            ("__vow_perf_count", &[]),
         ],
-        "Vec::sort must count its hidden size-dependent work without changing its operand"
+        "Vec::sort must count its hidden size-dependent work without changing its operand, \
+         and an uncatalogued helper must keep the plain operand-free counter"
     );
     assert_eq!(source, source_snapshot, "instrumentation mutated source IR");
     assert!(
@@ -141,9 +154,53 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
         "instrumented Vec::sort IR must remain valid"
     );
 
+    let encoded = encode_module(instrumented.as_module());
+    let decoded = decode_module(&encoded).expect("decode instrumented Vec::sort IR");
+    assert_eq!(
+        decoded,
+        *instrumented.as_module(),
+        "operand-carrying counter calls changed across the .vmod round trip"
+    );
+    assert_eq!(
+        encode_module(&decoded),
+        encoded,
+        "operand-carrying counter calls break canonical .vmod encoding"
+    );
+
     CraneliftBackend::new()
         .compile_module(instrumented.as_module(), BuildMode::Release, TraceMode::Off)
         .expect("compile instrumented Vec::sort wrapper");
+}
+
+#[test]
+fn vec_sort_call_with_unexpected_arity_falls_back_to_the_plain_counter() {
+    let mut source = vec_sort_module();
+    source.functions[0].blocks[0].insts[1].args.push(InstId(0));
+
+    let instrumented = instrument_module(&source).expect("instrument malformed Vec::sort call");
+    let counters: Vec<&str> = instrumented.as_module().functions[0].blocks[0]
+        .insts
+        .iter()
+        .filter_map(|inst| match &inst.data {
+            InstData::CallExtern(symbol) if symbol.starts_with("__vow_perf_count") => {
+                Some(symbol.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+
+    // The adapter takes exactly one operand. Forwarding a longer operand list
+    // would add a second, instrumentation-only arity mismatch on top of
+    // whatever the source call already is, so the catalogue declines the helper
+    // instead.
+    assert!(
+        !counters.contains(&"__vow_perf_count_vec_sort"),
+        "an operand list that does not match the adapter ABI must not reach the adapter"
+    );
+    assert!(
+        counters.iter().all(|symbol| *symbol == "__vow_perf_count"),
+        "off-ABI helper calls must fall back to the plain counter: {counters:?}"
+    );
 }
 
 #[test]
