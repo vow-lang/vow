@@ -1,0 +1,5 @@
+module Dep
+
+fn source_only() -> i64 {
+    true
+}

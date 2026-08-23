@@ -595,7 +595,7 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
-        if kind == ITEM_FN() {
+        if kind == ITEM_FN() && !fn_is_declaration(m.arena, id) {
             check_fn(e, m, id);
         }
         i = i + 1;
