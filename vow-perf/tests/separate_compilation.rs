@@ -71,13 +71,7 @@ fn vec_sort_module() -> Module {
             blocks: vec![BasicBlock {
                 id: BlockId(0),
                 insts: vec![
-                    instruction(
-                        0,
-                        Opcode::GetArg,
-                        Ty::Ptr,
-                        vec![],
-                        InstData::ArgIndex(0),
-                    ),
+                    instruction(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
                     instruction(
                         1,
                         Opcode::Call,
@@ -160,11 +154,7 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
     );
 
     CraneliftBackend::new()
-        .compile_module(
-            instrumented.as_module(),
-            BuildMode::Release,
-            TraceMode::Off,
-        )
+        .compile_module(instrumented.as_module(), BuildMode::Release, TraceMode::Off)
         .expect("compile instrumented Vec::sort wrapper");
 }
 
