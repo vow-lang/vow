@@ -194,6 +194,11 @@ fn vec_sort_call_with_unexpected_arity_is_rejected() {
             found: 2,
         }
     );
+    assert_eq!(
+        error.to_string(),
+        "operation-count instrumentation found `__vow_vec_sort` with 2 operands in \
+         function `sort_values`, but its cost adapter takes exactly 1"
+    );
 }
 
 #[test]

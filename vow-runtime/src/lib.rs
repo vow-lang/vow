@@ -4554,7 +4554,8 @@ mod tests {
         assert_eq!(vec_sort_cost(4), 17);
         assert_eq!(vec_sort_cost(8), 41);
 
-        if usize::BITS == 64 {
+        #[cfg(target_pointer_width = "64")]
+        {
             assert_eq!(vec_sort_cost(usize::MAX), u64::MAX);
             __vow_perf_count();
             assert_eq!(__vow_perf_counter_read(), u64::MAX);
