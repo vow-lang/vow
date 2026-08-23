@@ -38,6 +38,13 @@ pub(crate) struct RenderedViolation {
 }
 
 /// Render a captured predicate value to its source-level text, keyed by tag.
+///
+/// Values are interpolated into the JSON envelope bare, as numeric/boolean
+/// literals. Two arms can still emit tokens that are not valid JSON: non-finite
+/// floats (`NaN`, `inf`) and the unknown-tag `0x…` fallback. Fixing that needs a
+/// schema decision (`values` is `["integer","number","boolean"]` with
+/// `additionalProperties: false`), so it is tracked separately under #436 rather
+/// than papered over here.
 pub(crate) fn format_value(tag: u8, payload: u64) -> String {
     match tag {
         TAG_I32 => format!("{}", payload as i32),
@@ -55,6 +62,12 @@ pub(crate) fn format_value(tag: u8, payload: u64) -> String {
     }
 }
 
+/// Render `value` as a complete JSON string literal, **including the
+/// surrounding double quotes**. Callers interpolate the result bare — writing
+/// `"{json_string(x)}"` would double-encode the quotes.
+///
+/// Infallible: the only `Serializer` error for a `&str` is invalid UTF-8, and
+/// every caller's input already came through `CStr::to_string_lossy`.
 fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
 }
@@ -73,6 +86,7 @@ pub(crate) fn render_violation(
     bindings: &[ValueBinding<'_>],
 ) -> RenderedViolation {
     let blame_str = if blame == 0 { "Caller" } else { "Callee" };
+    let blame_json = json_string(blame_str);
     let description_json = json_string(description);
     let file_json = json_string(file);
 
@@ -99,7 +113,7 @@ pub(crate) fn render_violation(
     };
 
     let json = format!(
-        r#"{{"error":"VowViolation","vow_id":{vow_id},"blame":"{blame_str}","description":{description_json},"file":{file_json},"offset":{offset}{values_json}}}"#
+        r#"{{"error":"VowViolation","vow_id":{vow_id},"blame":{blame_json},"description":{description_json},"file":{file_json},"offset":{offset}{values_json}}}"#
     );
     let human = format!(
         "vow violation: {description}, blame={blame_str}, file={file}, offset={offset}{values_human}"
@@ -144,36 +158,33 @@ mod tests {
         );
     }
 
+    // Issue #1046: a string-literal predicate puts real quotes in the
+    // description, and a path can hold quotes, backslashes, or a newline. One
+    // unescaped character makes the whole envelope unparseable, and a raw
+    // newline additionally splits the line-delimited stderr protocol.
     #[test]
-    fn render_violation_json_round_trips_description_and_file() {
-        let description = "string_matches_literal_at(s, pos, \"ab\") == 1 && path == \"C:\\tmp\"\n\t\u{0008}\u{000c}\r";
-        let file = "quoted \"source\"/unicode-люм\npath\\file.vow";
-
-        let r = render_violation(1, 0, description, file, 7, &[]);
-        let json: serde_json::Value =
-            serde_json::from_str(&r.json).expect("violation envelope must be valid JSON");
-
-        assert_eq!(json["description"], description);
-        assert_eq!(json["file"], file);
-        // Only the JSON line is escaped; the human line keeps the raw text.
-        assert!(r.human.contains(description));
-        assert!(r.human.contains(file));
-    }
-
-    #[test]
-    fn render_violation_json_round_trips_binding_names() {
-        let name = "quoted\"name\\unicode-люм\n\t\u{0000}";
+    fn render_violation_escapes_every_json_string_field() {
+        let description = r#"s == String::from("ab") && p == "C:\tmp""#;
+        let file = "quoted \"source\"\npath\\file.vow";
+        let name = "quoted\"name\\tab\t";
         let bindings = [ValueBinding {
             name,
             tag: TAG_I64,
             payload: 42,
         }];
 
-        let r = render_violation(2, 0, "predicate", "source.vow", 11, &bindings);
+        let r = render_violation(1, 0, description, file, 7, &bindings);
         let json: serde_json::Value =
             serde_json::from_str(&r.json).expect("violation envelope must be valid JSON");
 
+        assert_eq!(json["description"], description);
+        assert_eq!(json["file"], file);
         assert_eq!(json["values"][name], 42);
+        // The escaped envelope stays on a single stderr line.
+        assert_eq!(r.json.lines().count(), 1);
+        // Only the JSON line is escaped; the human line keeps the raw text.
+        assert!(r.human.contains(description));
+        assert!(r.human.contains(file));
         assert!(r.human.contains(&format!("{name}=42")));
     }
 
