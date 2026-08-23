@@ -222,32 +222,91 @@ fn ty_is_integer_or_lit_int(ts: TyStore, tid: i64) -> bool {
     ty_is_integer(ts, tid) || ty_is_lit_int(ts, tid)
 }
 
-// Inclusive (min, max) representable by an integer type tag. Literal values
-// are stored as i64 in the self-hosted compiler, so the true u64/u128 maximum
-// is unrepresentable; i64::MAX is used as the effective upper bound since no
-// literal can exceed it anyway.
-fn integer_tag_min(tag: i64) -> i64 {
-    let is_unsigned: bool = tag >= CTY_U8() && tag <= CTY_U128();
-    if is_unsigned {
-        return 0;
-    }
-    let width: i64 = integer_tag_width(tag);
-    if width >= 64 {
-        return -9223372036854775807 - 1;
-    }
-    -(1 << (width - 1))
+struct IntegerMagnitude {
+    lo: u64,
+    hi: u64,
 }
 
-fn integer_tag_max(tag: i64) -> i64 {
-    let width: i64 = integer_tag_width(tag);
-    if width >= 64 {
-        return 9223372036854775807;
+struct IntegerTypeRange {
+    positive_max: IntegerMagnitude,
+    negative_max: IntegerMagnitude,
+    has_negative: bool,
+}
+
+fn integer_magnitude_exceeds(lo: u64, hi: u64, maximum: IntegerMagnitude) -> bool {
+    hi > maximum.hi || (hi == maximum.hi && lo > maximum.lo)
+}
+
+// Sign-and-magnitude bounds for every integer tag. The negative bound is a
+// magnitude so i128::MIN can be represented without pretending it fits i128's
+// positive range.
+fn integer_tag_range(tag: i64) -> IntegerTypeRange {
+    let zero: IntegerMagnitude = IntegerMagnitude { lo: 0u64, hi: 0u64 };
+    let u64_max: u64 = 18446744073709551615u64;
+    if tag == CTY_U128() {
+        let maximum: IntegerMagnitude = IntegerMagnitude { lo: u64_max, hi: u64_max };
+        return IntegerTypeRange {
+            positive_max: maximum,
+            negative_max: zero,
+            has_negative: false,
+        };
     }
+    if tag == CTY_I128() {
+        return IntegerTypeRange {
+            positive_max: IntegerMagnitude {
+                lo: u64_max,
+                hi: 9223372036854775807u64,
+            },
+            negative_max: IntegerMagnitude {
+                lo: 0u64,
+                hi: 9223372036854775808u64,
+            },
+            has_negative: true,
+        };
+    }
+
+    let width: i64 = integer_tag_width(tag);
     let is_unsigned: bool = tag >= CTY_U8() && tag <= CTY_U128();
+    if width == 64 {
+        if is_unsigned {
+            return IntegerTypeRange {
+                positive_max: IntegerMagnitude { lo: u64_max, hi: 0u64 },
+                negative_max: zero,
+                has_negative: false,
+            };
+        }
+        return IntegerTypeRange {
+            positive_max: IntegerMagnitude {
+                lo: 9223372036854775807u64,
+                hi: 0u64,
+            },
+            negative_max: IntegerMagnitude {
+                lo: 9223372036854775808u64,
+                hi: 0u64,
+            },
+            has_negative: true,
+        };
+    }
     if is_unsigned {
-        (1 << width) - 1
-    } else {
-        (1 << (width - 1)) - 1
+        return IntegerTypeRange {
+            positive_max: IntegerMagnitude {
+                lo: ((1 << width) - 1) as u64,
+                hi: 0u64,
+            },
+            negative_max: zero,
+            has_negative: false,
+        };
+    }
+    IntegerTypeRange {
+        positive_max: IntegerMagnitude {
+            lo: ((1 << (width - 1)) - 1) as u64,
+            hi: 0u64,
+        },
+        negative_max: IntegerMagnitude {
+            lo: (1 << (width - 1)) as u64,
+            hi: 0u64,
+        },
+        has_negative: true,
     }
 }
 

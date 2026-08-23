@@ -458,20 +458,42 @@ fn is_integer_or_lit_int(ty: &Ty) -> bool {
     ty.is_integer() || ty.is_lit_int()
 }
 
-/// Returns the largest positive magnitude and, for signed types, the largest
-/// negative magnitude representable at `width`.
-fn integer_type_magnitude_bounds(width: u16, is_unsigned: bool) -> (u128, Option<u128>) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IntegerTypeRange {
+    positive_max: u128,
+    negative_max: Option<u128>,
+}
+
+/// Returns the sign-and-magnitude bounds for an integer type. Signed minima
+/// need a separate magnitude because `i128::MIN` is one larger in magnitude
+/// than `i128::MAX`; unsigned types have no negative range.
+fn integer_type_range(target: &Ty) -> Option<IntegerTypeRange> {
+    let width = target.integer_width()?;
+    if *target == Ty::U128 {
+        return Some(IntegerTypeRange {
+            positive_max: u128::MAX,
+            negative_max: None,
+        });
+    }
+    if *target == Ty::I128 {
+        return Some(IntegerTypeRange {
+            positive_max: i128::MAX as u128,
+            negative_max: Some(i128::MIN.unsigned_abs()),
+        });
+    }
+
     let bits = u32::from(width);
-    if is_unsigned {
-        let max = if bits >= 128 {
-            u128::MAX
-        } else {
-            (1u128 << bits) - 1
-        };
-        (max, None)
+    if target.is_unsigned() {
+        Some(IntegerTypeRange {
+            positive_max: (1u128 << bits) - 1,
+            negative_max: None,
+        })
     } else {
-        let negative_magnitude = 1u128 << (bits - 1);
-        (negative_magnitude - 1, Some(negative_magnitude))
+        let negative_max = 1u128 << (bits - 1);
+        Some(IntegerTypeRange {
+            positive_max: negative_max - 1,
+            negative_max: Some(negative_max),
+        })
     }
 }
 
@@ -1316,32 +1338,30 @@ impl<'e> Checker<'e> {
     }
 
     fn check_integer_value_range(&mut self, value: ConstIntValue, target: &Ty, span: Span) {
-        let Some(width) = target.integer_width() else {
+        let Some(range) = integer_type_range(target) else {
             return;
         };
-        let (positive_max, negative_max) =
-            integer_type_magnitude_bounds(width, target.is_unsigned());
         let out_of_range = if value.negative {
-            negative_max.is_none_or(|max| value.magnitude > max)
+            range.negative_max.is_none_or(|max| value.magnitude > max)
         } else {
-            value.magnitude > positive_max
+            value.magnitude > range.positive_max
         };
         if !out_of_range {
             return;
         }
-        let range = match negative_max {
-            Some(max) => format!("-{max}..={positive_max}"),
-            None => format!("0..={positive_max}"),
+        let range_text = match range.negative_max {
+            Some(max) => format!("-{max}..={}", range.positive_max),
+            None => format!("0..={}", range.positive_max),
         };
         self.emit_error_with_hints(
             ErrorCode::LiteralOutOfRange,
             format!(
-                "literal {} does not fit in {target} (range {range})",
+                "literal {} does not fit in {target} (range {range_text})",
                 value.display()
             ),
             span,
             vec![format!(
-                "use a value in {range} or choose an explicit narrowing intrinsic"
+                "use a value in {range_text} or choose an explicit narrowing intrinsic"
             )],
         );
     }
