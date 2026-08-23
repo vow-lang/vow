@@ -436,6 +436,21 @@ Phi/Upsilon targets, vow bindings, and local-name metadata. The source-level
 check is that the instrumented module remains valid and its deterministic
 `.vmod` encoding satisfies `encode -> decode -> encode` byte stability.
 
+**Runtime-helper cost attribution.** A caller-side `Call` does not by itself
+measure size-dependent work hidden behind the runtime ABI. Instrumentation
+therefore maps each supported size-dependent runtime helper to a cost adapter
+inserted only in the cloned performance artifact. The adapter receives the
+original operands and adds the caller-side operation plus a saturating
+synthetic cost with the helper's asymptotic growth. `__vow_vec_sort`, for
+example, is preceded by `__vow_perf_count_vec_sort(vec)`, which adds
+`1 + n * (2 + ceil(log2(n)))` for the call, input copy, sort, and output pushes.
+The synthetic unit is intended for growth classification rather than elapsed
+time or an exact machine-instruction total. Charging once at the call site also
+avoids atomic counter traffic inside every sort comparison and keeps all
+counter calls out of production execution. A future performance verdict must
+fail closed as unverified when it reaches a size-dependent helper without a
+catalogued adapter; completing that broader helper catalog is tracked by #486.
+
 ### CLI Integration
 
 ```bash
