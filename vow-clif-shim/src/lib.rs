@@ -3710,6 +3710,13 @@ mod tests {
         assert_eq!(sig.params[0].value_type, types::I64);
         assert!(sig.returns.is_empty());
 
+        // The adapter is handed the sort call's own operands, so its parameter
+        // list must stay identical to `__vow_vec_sort`'s.
+        assert_eq!(
+            sig.params,
+            make_extern_sig("__vow_vec_sort", &module_ctx.obj_module).params
+        );
+
         unsafe { __vow_clif_destroy(ctx) };
     }
 
