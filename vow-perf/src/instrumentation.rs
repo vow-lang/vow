@@ -101,10 +101,9 @@ impl std::error::Error for InstrumentationError {}
 /// helper's cost adapter, which receives the original operands; every other
 /// executable instruction uses the one-operation counter.
 ///
-/// The catalogue currently holds only `__vow_vec_sort`. An uncatalogued
-/// size-dependent helper still counts as one operation, so a performance
-/// verdict built on these counts must fail closed as unverified when it reaches
-/// one. Completing the catalogue is tracked by #486.
+/// An uncatalogued size-dependent helper still counts as one operation, so a
+/// performance verdict built on these counts must fail closed as unverified
+/// when it reaches one. Completing the catalogue is tracked by #486.
 ///
 /// A catalogued helper whose operand list no longer matches its cost adapter
 /// is an error rather than a degraded count: charging the one-operation counter
@@ -170,16 +169,16 @@ fn counter_for(
     inst: &Inst,
     function: &str,
 ) -> Result<(&'static str, Vec<InstId>), InstrumentationError> {
+    let entry = match &inst.data {
+        InstData::CallExtern(symbol) => COST_ADAPTERS
+            .iter()
+            .find(|entry| entry.helper == symbol.as_str()),
+        _ => None,
+    };
     // Charges one operation for anything uncatalogued, including a
     // size-dependent helper such as `__vow_map_contains`; see
     // `instrument_module` and #486.
-    let InstData::CallExtern(symbol) = &inst.data else {
-        return Ok((COUNTER_SYMBOL, vec![]));
-    };
-    let Some(entry) = COST_ADAPTERS
-        .iter()
-        .find(|entry| entry.helper == symbol.as_str())
-    else {
+    let Some(entry) = entry else {
         return Ok((COUNTER_SYMBOL, vec![]));
     };
 
@@ -188,7 +187,7 @@ fn counter_for(
     if inst.args.len() != entry.operands {
         return Err(InstrumentationError::CatalogedHelperArity {
             function: function.to_string(),
-            symbol: symbol.clone(),
+            symbol: entry.helper.to_string(),
             expected: entry.operands,
             found: inst.args.len(),
         });
