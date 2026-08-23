@@ -190,6 +190,7 @@ parse_annotations() {
   TEST_CX_ARG_OFFSET=""
   TEST_ERROR_CODE=""
   TEST_SKIP=""
+  TEST_VERIFY_ONLY=""
   TEST_STDIN=""
   TEST_STDIN_FILE=""
   TEST_BUILD_JSON=""
@@ -237,6 +238,8 @@ parse_annotations() {
       TEST_STDIN_FILE="$(dirname "$file")/${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ skip\ \"(.+)\" ]]; then
       TEST_SKIP="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ verify-only$ ]]; then
+      TEST_VERIFY_ONLY="true"
     elif [[ "$line" =~ ^//\ TEST:\ build-json\ (.+) ]]; then
       # Only enforced by Phase 5 (error/) — annotation is parsed elsewhere but not checked.
       TEST_BUILD_JSON="${BASH_REMATCH[1]}"
@@ -309,6 +312,24 @@ for f in "$SCRIPT_DIR"/run/*.vow; do
   parse_annotations "$f"
   if [[ -n "$TEST_SKIP" ]]; then
     skip "$name" "$TEST_SKIP"
+    continue
+  fi
+
+  if [[ -n "$TEST_VERIFY_ONLY" ]]; then
+    if [[ "$NO_VERIFY" == true ]]; then
+      skip "$name" "--no-verify"
+      continue
+    fi
+    set +e
+    verify_json="$(run_vowc verify "$f" 2>/dev/null)"
+    verify_exit=$?
+    set -e
+    verify_status="$(json_field "$verify_json" "status")"
+    if [[ "$verify_exit" -ne 0 || "$verify_status" != "Verified" ]]; then
+      fail "$name" "verify failed: exit=$verify_exit status=$verify_status"
+    else
+      pass "$name"
+    fi
     continue
   fi
 
