@@ -301,9 +301,8 @@ pub unsafe extern "C" fn __vow_perf_count_vec_sort(vec: *const u8) {
     let len = if vec.is_null() {
         0
     } else {
-        unsafe { __vow_vec_len(vec) }
+        u64::try_from(unsafe { __vow_vec_len(vec) }).unwrap_or(u64::MAX)
     };
-    let len = u64::try_from(len).unwrap_or(u64::MAX);
     let logarithm = if len <= 1 {
         0
     } else {
