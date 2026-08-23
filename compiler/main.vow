@@ -3104,7 +3104,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"modules\": {\n"));
     r.push_str(String::from("      \"declaration\": \"module Name\",\n"));
-    r.push_str(String::from("      \"import\": \"use foo.bar \\u2014 resolves to <rootdir>/foo/bar.vow\",\n"));
+    r.push_str(String::from("      \"import\": \"use foo.bar \\u2014 prefers <rootdir>/foo/bar.vow.d when present; otherwise <rootdir>/foo/bar.vow\",\n"));
     r.push_str(String::from("      \"visibility\": \"pub fn \\u2014 public functions visible to importers\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"type_aliases\": \"type Name = Type\",\n"));
@@ -6576,8 +6576,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Consumption model\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,\n"));
-    r.push_str(String::from("where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.\n"));
+    r.push_str(String::from("`use` declarations resolve to a single directory: `use foo` loads\n"));
+    r.push_str(String::from("`<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads\n"));
+    r.push_str(String::from("`<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to\n"));
+    r.push_str(String::from("`vow build`/`vow verify`.\n"));
     r.push_str(String::from("All transitive `use`s in dependency modules resolve against that **same** directory.\n"));
     r.push_str(String::from("There is no search path, and `--module-root` is only available on `vow test` -- not\n"));
     r.push_str(String::from("`vow build` or `vow verify`.\n"));
@@ -11318,8 +11320,10 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Consumption model\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,\n"));
-    r.push_str(String::from("where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.\n"));
+    r.push_str(String::from("`use` declarations resolve to a single directory: `use foo` loads\n"));
+    r.push_str(String::from("`<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads\n"));
+    r.push_str(String::from("`<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to\n"));
+    r.push_str(String::from("`vow build`/`vow verify`.\n"));
     r.push_str(String::from("All transitive `use`s in dependency modules resolve against that **same** directory.\n"));
     r.push_str(String::from("There is no search path, and `--module-root` is only available on `vow test` -- not\n"));
     r.push_str(String::from("`vow build` or `vow verify`.\n"));

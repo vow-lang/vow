@@ -1020,7 +1020,7 @@ fn skill_json() -> String {
     },
     "modules": {
       "declaration": "module Name",
-      "import": "use foo.bar \u2014 resolves to <rootdir>/foo/bar.vow",
+      "import": "use foo.bar \u2014 prefers <rootdir>/foo/bar.vow.d when present; otherwise <rootdir>/foo/bar.vow",
       "visibility": "pub fn \u2014 public functions visible to importers"
     },
     "type_aliases": "type Name = Type",
@@ -4492,8 +4492,10 @@ the contracts — see [Verification status](#verification-status).
 
 ## Consumption model
 
-`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,
-where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.
+`use` declarations resolve to a single directory: `use foo` loads
+`<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads
+`<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to
+`vow build`/`vow verify`.
 All transitive `use`s in dependency modules resolve against that **same** directory.
 There is no search path, and `--module-root` is only available on `vow test` — not
 `vow build` or `vow verify`.
@@ -9207,8 +9209,10 @@ the contracts — see [Verification status](#verification-status).
 
 ## Consumption model
 
-`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,
-where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.
+`use` declarations resolve to a single directory: `use foo` loads
+`<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads
+`<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to
+`vow build`/`vow verify`.
 All transitive `use`s in dependency modules resolve against that **same** directory.
 There is no search path, and `--module-root` is only available on `vow test` — not
 `vow build` or `vow verify`.

@@ -30,8 +30,10 @@ the contracts — see [Verification status](#verification-status).
 
 ## Consumption model
 
-`use` declarations resolve to a single directory: `use foo` loads `<dir>/foo.vow`,
-where `<dir>` is the directory of the **entry file** passed to `vow build`/`vow verify`.
+`use` declarations resolve to a single directory: `use foo` loads
+`<dir>/foo.vow.d` when that declaration stub exists, and otherwise loads
+`<dir>/foo.vow`, where `<dir>` is the directory of the **entry file** passed to
+`vow build`/`vow verify`.
 All transitive `use`s in dependency modules resolve against that **same** directory.
 There is no search path, and `--module-root` is only available on `vow test` — not
 `vow build` or `vow verify`.
