@@ -6,7 +6,7 @@ use vow_ir::{
     BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId,
     RegionSummary, Ty, VowEntry, VowId, decode_module, encode_module, validate,
 };
-use vow_perf::instrument_module;
+use vow_perf::{InstrumentationError, instrument_module};
 use vow_syntax::span::Span;
 
 fn instruction(id: u32, opcode: Opcode, ty: Ty, args: Vec<InstId>, data: InstData) -> Inst {
@@ -173,33 +173,23 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
 }
 
 #[test]
-fn vec_sort_call_with_unexpected_arity_falls_back_to_the_plain_counter() {
+fn vec_sort_call_with_unexpected_arity_is_rejected() {
     let mut source = vec_sort_module();
     source.functions[0].blocks[0].insts[1].args.push(InstId(0));
 
-    let instrumented = instrument_module(&source).expect("instrument malformed Vec::sort call");
-    let counters: Vec<&str> = instrumented.as_module().functions[0].blocks[0]
-        .insts
-        .iter()
-        .filter_map(|inst| match &inst.data {
-            InstData::CallExtern(symbol) if symbol.starts_with("__vow_perf_count") => {
-                Some(symbol.as_str())
-            }
-            _ => None,
-        })
-        .collect();
+    // Falling back to the plain counter here would charge one operation for a
+    // sort and let a Linear verdict pass on n log n work, so a catalogued
+    // helper whose operands no longer match its adapter must fail closed.
+    let error = instrument_module(&source).expect_err("off-ABI Vec::sort call must fail closed");
 
-    // The adapter takes exactly one operand. Forwarding a longer operand list
-    // would add a second, instrumentation-only arity mismatch on top of
-    // whatever the source call already is, so the catalogue declines the helper
-    // instead.
-    assert!(
-        !counters.contains(&"__vow_perf_count_vec_sort"),
-        "an operand list that does not match the adapter ABI must not reach the adapter"
-    );
-    assert!(
-        counters.iter().all(|symbol| *symbol == "__vow_perf_count"),
-        "off-ABI helper calls must fall back to the plain counter: {counters:?}"
+    assert_eq!(
+        error,
+        InstrumentationError::CatalogedHelperArity {
+            function: "sort_values".to_string(),
+            symbol: "__vow_vec_sort".to_string(),
+            expected: 1,
+            found: 2,
+        }
     );
 }
 
