@@ -301,6 +301,7 @@ pub unsafe extern "C" fn __vow_perf_count_vec_sort(vec: *const u8) {
     let len = if vec.is_null() {
         0
     } else {
+        sanitize_on_read(vec as usize, 0);
         unsafe { (*(vec as *const VowVec)).len }
     };
     let len = u64::try_from(len).unwrap_or(u64::MAX);
@@ -6082,6 +6083,28 @@ mod tests {
             eprintln!("rodata_trap_worker: vec reserve overflow did NOT trap");
             std::process::exit(42);
         }
+        if op == "perf_vec_sort_use_after_free" {
+            let vec = VowVec {
+                ptr: std::ptr::dangling_mut(),
+                len: 4,
+                cap: 4,
+            };
+            let vec_addr = &raw const vec as usize;
+            __vow_sanitize_init();
+            {
+                let mut table = SHADOW_TABLE.lock().unwrap();
+                shadow_table_get_or_init(&mut table).insert(
+                    vec_addr,
+                    ShadowVec {
+                        generations: Vec::new(),
+                        freed: true,
+                    },
+                );
+            }
+            unsafe { __vow_perf_count_vec_sort(vec_addr as *const u8) };
+            eprintln!("rodata_trap_worker: perf Vec::sort UAF did NOT trap");
+            std::process::exit(42);
+        }
         if op == "Vec::new_in_arena_null" {
             let _ = unsafe { __vow_vec_new_in_arena(std::ptr::null_mut(), 8, 8) };
             eprintln!("rodata_trap_worker: null arena constructor did NOT trap");
@@ -6422,6 +6445,24 @@ mod tests {
         assert!(
             stderr.contains(r#""reason":"null arena""#),
             "stderr missing null arena reason:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn perf_vec_sort_cost_adapter_checks_sanitizer_before_reading_header() {
+        let (out, stderr) = spawn_trap_worker("perf_vec_sort_use_after_free");
+        assert_eq!(
+            out.status.code(),
+            Some(VOW_RUNTIME_ABORT_EXIT),
+            "cost adapter should reject a freed Vec descriptor; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""error":"UseAfterFree""#),
+            "stderr missing UseAfterFree for Vec::sort cost adapter:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""op":"read""#),
+            "stderr missing read operation for Vec::sort cost adapter:\n{stderr}"
         );
     }
 
