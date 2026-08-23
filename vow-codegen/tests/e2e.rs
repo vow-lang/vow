@@ -282,6 +282,94 @@ fn vow_violation_exits_with_reserved_abort_code_and_blames_caller() {
     );
 }
 
+// Issue #1046: a predicate holding a string literal renders a description with
+// real quotes, and a source path may hold quotes, backslashes, or a newline.
+// Both travel through the rodata C string into __vow_violation, so the escaping
+// has to hold end to end, not just in the renderer unit tests. The newline
+// matters twice: unescaped it would also split the line-delimited stderr
+// protocol that `stderr.lines().next()` and vow/src/replay.rs depend on.
+#[test]
+fn vow_violation_escapes_quoted_description_and_file() {
+    // fn main() -> i32
+    //   vow requires: <false>  (blame = Caller, captures y = 0)
+    //
+    // The vow entry is what this test is about, so main carries it directly --
+    // no callee is needed to reach __vow_violation.
+    //   block0:
+    //     v0 = const_i64(0)     [y, the captured binding]
+    //     v1 = ne_i64(v0, v0)   [0 != 0 -> false, so the requires fails]
+    //     v2 = vow_requires(v1) [vow_id=0, blame=Caller]
+    //     v3 = const_i32(0)
+    //     return v3
+    use vow_diag::Blame;
+
+    let description = r#"requires s == String::from("ab")"#;
+    let file = "C:\\src\\quoted \"unit\"\nnewline.vow";
+
+    let main_fn = Function {
+        id: FuncId(0),
+        name: "main".to_string(),
+        params: vec![],
+        param_names: vec![],
+        return_ty: Ty::I32,
+        effects: vec![],
+        vows: vec![VowEntry {
+            id: VowId(0),
+            description: description.to_string(),
+            blame: Blame::Caller,
+            bindings: vec![("y".to_string(), InstId(0))],
+            file: file.to_string(),
+            offset: 7,
+        }],
+        blocks: vec![BasicBlock {
+            id: BlockId(0),
+            insts: vec![
+                inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                inst(1, Opcode::Ne, Ty::Bool, vec![0, 0], InstData::None),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::VowRequires,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1)],
+                    data: InstData::VowId(VowId(0)),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(3, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(0)),
+                inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+            ],
+        }],
+        local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
+        source_file: String::new(),
+    };
+
+    let module = Module {
+        name: "quoted_description_test".to_string(),
+        strings: vec![],
+        struct_layouts: vec![],
+        enum_layouts: vec![],
+        warnings: vec![],
+        functions: vec![main_fn],
+    };
+
+    let dir = TempDir::new().unwrap();
+    let Some(exe) = compile_and_link(&module, BuildMode::Debug, &dir) else {
+        eprintln!("SKIP: vow-runtime not found");
+        return;
+    };
+    let out = run_exe(&exe);
+    assert_eq!(out.status.code(), Some(134));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // assert_eq! on the whole line, not `contains`: the field order is itself
+    // the contract agents parse (docs/spec/cli.md), so it is worth pinning.
+    assert_eq!(
+        stderr.lines().next().unwrap_or_default(),
+        r#"{"error":"VowViolation","vow_id":0,"blame":"Caller","description":"requires s == String::from(\"ab\")","file":"C:\\src\\quoted \"unit\"\nnewline.vow","offset":7,"values":{"y":0}}"#,
+        "quoted description/file must render as a valid JSON envelope, got: {stderr}"
+    );
+}
+
 #[test]
 fn vow_violation_reports_variable_values() {
     // fn nonneg(x: i64) -> i64
