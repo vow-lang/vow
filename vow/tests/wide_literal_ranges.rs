@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -173,4 +174,86 @@ fn vec_raw_parts_rejects_wide_i64_operand_before_lowering() {
 #[test]
 fn u128_context_rejects_compound_unary_negation() {
     assert_compile_error_code("u128_compound_negation.vow", "TypeMismatch");
+}
+
+#[test]
+fn i128_let_binding_rejects_out_of_range_literal() {
+    assert_literal_out_of_range("i128_literal_out_of_range.vow");
+}
+
+#[test]
+fn i128_let_binding_rejects_literal_one_below_the_minimum() {
+    assert_literal_out_of_range("i128_literal_below_range.vow");
+}
+
+#[test]
+fn u128_let_binding_rejects_negative_literal() {
+    assert_literal_out_of_range("u128_literal_out_of_range.vow");
+}
+
+/// The full-width admission boundaries: `i128::MIN` is one larger in magnitude
+/// than `i128::MAX`, and `u128::MAX` occupies both limbs. A bound that models
+/// the negative side as `i128::MAX` (or the positive side as anything narrower)
+/// rejects these, so assert they reach the IR intact.
+#[test]
+fn full_width_boundary_literals_are_admitted() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source_path = dir.path().join("wide_boundaries.vow");
+    fs::write(
+        &source_path,
+        r#"module WideBoundaries
+
+fn i128_minimum() -> i128 {
+    -170141183460469231731687303715884105728
+}
+
+fn i128_maximum() -> i128 {
+    170141183460469231731687303715884105727
+}
+
+fn u128_maximum() -> u128 {
+    340282366920938463463374607431768211455
+}
+
+fn u64_above_i64_max() -> u64 {
+    18446744073709551615
+}
+
+fn i64_minimum() -> i64 {
+    -9223372036854775808
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--dump-ir",
+            source_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "full-width boundary literals must be admitted\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    for expected in [
+        "ConstI128[-170141183460469231731687303715884105728i128]",
+        "ConstI128[170141183460469231731687303715884105727i128]",
+        "ConstU128[340282366920938463463374607431768211455u128]",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "missing {expected} in IR:\n{stdout}"
+        );
+    }
+    assert!(
+        !stdout.contains("LiteralOutOfRange") && !stderr.contains("LiteralOutOfRange"),
+        "boundary literals must not be range-rejected\nstdout: {stdout}\nstderr: {stderr}"
+    );
 }
