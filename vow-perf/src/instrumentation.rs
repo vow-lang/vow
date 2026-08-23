@@ -9,6 +9,7 @@ use std::fmt;
 use vow_ir::{InsertionSet, Inst, InstData, InstId, Module, Opcode, RegionId, Ty};
 
 const COUNTER_SYMBOL: &str = "__vow_perf_count";
+const VEC_SORT_COUNTER_SYMBOL: &str = "__vow_perf_count_vec_sort";
 
 /// A cloned IR module containing operation-counter calls.
 ///
@@ -55,8 +56,9 @@ impl std::error::Error for InstrumentationError {}
 /// IR instruction in the clone.
 ///
 /// Contract and complexity descriptors are non-executable metadata and are not
-/// counted. Runtime-helper internals require their own counter coverage rather
-/// than being inferred from the caller-side `Call` instruction.
+/// counted. Calls to runtime helpers with size-dependent implementations use a
+/// helper-specific cost adapter that receives the original operands; ordinary
+/// executable instructions use the one-operation counter.
 pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, InstrumentationError> {
     let mut module = source.clone();
 
@@ -92,14 +94,15 @@ pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, Instrume
                 if !is_counted(inst.opcode) {
                     continue;
                 }
+                let (counter_symbol, counter_args) = counter_for(inst);
                 insertions.insert_before(
                     index,
                     Inst {
                         id: InstId(next_id as u32),
                         opcode: Opcode::Call,
                         ty: Ty::Unit,
-                        args: vec![],
-                        data: InstData::CallExtern(COUNTER_SYMBOL.to_string()),
+                        args: counter_args,
+                        data: InstData::CallExtern(counter_symbol.to_string()),
                         origin: inst.origin,
                         region: RegionId::Root,
                     },
@@ -111,6 +114,15 @@ pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, Instrume
     }
 
     Ok(InstrumentedModule { module })
+}
+
+fn counter_for(inst: &Inst) -> (&'static str, Vec<InstId>) {
+    match &inst.data {
+        InstData::CallExtern(symbol) if symbol == "__vow_vec_sort" => {
+            (VEC_SORT_COUNTER_SYMBOL, inst.args.clone())
+        }
+        _ => (COUNTER_SYMBOL, vec![]),
+    }
 }
 
 fn is_counted(opcode: Opcode) -> bool {

@@ -57,6 +57,48 @@ fn production_module() -> Module {
     }
 }
 
+fn vec_sort_module() -> Module {
+    Module {
+        name: "vec_sort_cost".to_string(),
+        functions: vec![Function {
+            id: FuncId(0),
+            name: "sort_values".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["values".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    instruction(
+                        0,
+                        Opcode::GetArg,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::ArgIndex(0),
+                    ),
+                    instruction(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![InstId(0)],
+                        InstData::CallExtern("__vow_vec_sort".to_string()),
+                    ),
+                    instruction(2, Opcode::Return, Ty::Unit, vec![InstId(1)], InstData::None),
+                ],
+            }],
+            local_names: HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }],
+        strings: vec![],
+        struct_layouts: vec![],
+        enum_layouts: vec![],
+        warnings: vec![],
+    }
+}
+
 #[test]
 fn instrumentation_is_a_separate_compilation_artifact() {
     let source = production_module();
@@ -84,6 +126,46 @@ fn instrumentation_is_a_separate_compilation_artifact() {
         production_before.bytes, instrumented_object.bytes,
         "instrumented object must be distinct from the production object"
     );
+}
+
+#[test]
+fn vec_sort_calls_receive_size_dependent_cost_adapter() {
+    let source = vec_sort_module();
+    let source_snapshot = source.clone();
+
+    let instrumented = instrument_module(&source).expect("instrument Vec::sort wrapper");
+    let instructions = &instrumented.as_module().functions[0].blocks[0].insts;
+    let extern_calls: Vec<(&str, &[InstId])> = instructions
+        .iter()
+        .filter_map(|inst| match &inst.data {
+            InstData::CallExtern(symbol) => Some((symbol.as_str(), inst.args.as_slice())),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        extern_calls,
+        vec![
+            ("__vow_perf_count", &[] as &[InstId]),
+            ("__vow_perf_count_vec_sort", &[InstId(0)]),
+            ("__vow_vec_sort", &[InstId(0)]),
+            ("__vow_perf_count", &[]),
+        ],
+        "Vec::sort must count its hidden size-dependent work without changing its operand"
+    );
+    assert_eq!(source, source_snapshot, "instrumentation mutated source IR");
+    assert!(
+        validate(instrumented.as_module()).is_ok(),
+        "instrumented Vec::sort IR must remain valid"
+    );
+
+    CraneliftBackend::new()
+        .compile_module(
+            instrumented.as_module(),
+            BuildMode::Release,
+            TraceMode::Off,
+        )
+        .expect("compile instrumented Vec::sort wrapper");
 }
 
 #[test]
