@@ -4550,9 +4550,13 @@ mod tests {
             "a null helper call still has its caller-side operation cost"
         );
 
+        assert_eq!(vec_sort_cost(0), 1);
         assert_eq!(vec_sort_cost(1), 3);
         assert_eq!(vec_sort_cost(4), 17);
         assert_eq!(vec_sort_cost(8), 41);
+        // Powers of two alone cannot tell ceil(log2 n) from floor(log2 n).
+        // n = 5 charges 5 * (3 + 2) + 1, not the floor model's 5 * (2 + 2) + 1.
+        assert_eq!(vec_sort_cost(5), 26);
 
         #[cfg(target_pointer_width = "64")]
         {
