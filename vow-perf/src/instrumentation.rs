@@ -12,13 +12,14 @@ const COUNTER_SYMBOL: &str = "__vow_perf_count";
 
 /// A size-dependent runtime helper and the cost adapter that charges its work.
 ///
-/// `operands` is the helper's IR operand count before codegen's arena routing,
-/// which may prepend a hidden arena argument and so make the helper's ABI arity
-/// larger. The adapter is handed the helper's own operands unchanged, so its
-/// parameter list must mirror the helper's. Adding a
-/// row here also requires the adapter's `extern "C"` definition in `vow-runtime`
-/// and a matching arm in both `make_extern_sig` implementations (`vow-codegen`
-/// and `vow-clif-shim`); a row on its own will not link. See #486.
+/// `operands` is the helper's IR operand count. Codegen may prepend a hidden
+/// arena argument when it routes the helper, so the helper's ABI arity can
+/// exceed this. The adapter call is never routed and receives the helper's IR
+/// operands unchanged, so the adapter's parameter list must mirror the helper's
+/// *unrouted* signature. Adding a row here also requires the adapter's
+/// `extern "C"` definition in `vow-runtime` and a matching arm in both
+/// `make_extern_sig` implementations (`vow-codegen` and `vow-clif-shim`); a row
+/// on its own will not link. See #486.
 struct CostAdapter {
     helper: &'static str,
     adapter: &'static str,
