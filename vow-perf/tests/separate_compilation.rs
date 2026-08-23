@@ -57,6 +57,20 @@ fn production_module() -> Module {
     }
 }
 
+fn assert_vmod_round_trip(module: &Module) {
+    let encoded = encode_module(module);
+    let decoded = decode_module(&encoded).expect("decode instrumented IR");
+    assert_eq!(
+        decoded, *module,
+        "instrumented IR changed across the .vmod round trip"
+    );
+    assert_eq!(
+        encode_module(&decoded),
+        encoded,
+        "instrumented IR encoding is not canonical"
+    );
+}
+
 fn vec_sort_module() -> Module {
     let mut module = production_module();
     module.name = "vec_sort_cost".to_string();
@@ -154,18 +168,7 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
         "instrumented Vec::sort IR must remain valid"
     );
 
-    let encoded = encode_module(instrumented.as_module());
-    let decoded = decode_module(&encoded).expect("decode instrumented Vec::sort IR");
-    assert_eq!(
-        decoded,
-        *instrumented.as_module(),
-        "operand-carrying counter calls changed across the .vmod round trip"
-    );
-    assert_eq!(
-        encode_module(&decoded),
-        encoded,
-        "operand-carrying counter calls break canonical .vmod encoding"
-    );
+    assert_vmod_round_trip(instrumented.as_module());
 
     CraneliftBackend::new()
         .compile_module(instrumented.as_module(), BuildMode::Release, TraceMode::Off)
@@ -280,15 +283,5 @@ fn instrumented_multiblock_ir_preserves_canonical_ids_and_round_trips() {
         "existing ID references must keep naming the original instruction"
     );
 
-    let encoded = encode_module(module);
-    let decoded = decode_module(&encoded).expect("decode instrumented IR");
-    assert_eq!(
-        decoded, *module,
-        "instrumented IR changed across round trip"
-    );
-    assert_eq!(
-        encode_module(&decoded),
-        encoded,
-        "instrumented IR encoding is not canonical"
-    );
+    assert_vmod_round_trip(module);
 }

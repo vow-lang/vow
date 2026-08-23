@@ -301,8 +301,7 @@ pub unsafe extern "C" fn __vow_perf_count_vec_sort(vec: *const u8) {
     let len = if vec.is_null() {
         0
     } else {
-        sanitize_on_read(vec as usize, 0);
-        unsafe { (*(vec as *const VowVec)).len }
+        unsafe { __vow_vec_len(vec) }
     };
     let len = u64::try_from(len).unwrap_or(u64::MAX);
     let logarithm = if len <= 1 {
@@ -2909,6 +2908,8 @@ pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
 // Utility builtins
 // ---------------------------------------------------------------------------
 
+// `__vow_perf_count_vec_sort` mirrors this function's growth; update that cost
+// model if this algorithm changes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_sort(vec: *const u8) -> *mut u8 {
     let result = __vow_vec_new_val();
@@ -6091,6 +6092,9 @@ mod tests {
             };
             let vec_addr = &raw const vec as usize;
             __vow_sanitize_init();
+            // The guard must be dropped before the call below: it re-locks
+            // SHADOW_TABLE via sanitize_on_read, so flattening this scope
+            // deadlocks the worker.
             {
                 let mut table = SHADOW_TABLE.lock().unwrap();
                 shadow_table_get_or_init(&mut table).insert(

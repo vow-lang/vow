@@ -3248,15 +3248,7 @@ mod tests {
 
         // The adapter is handed the sort call's own operands, so its parameter
         // list must stay identical to `__vow_vec_sort`'s.
-        let sort_sig = extern_sig("__vow_vec_sort");
-        assert_eq!(
-            sig.params.iter().map(|p| p.value_type).collect::<Vec<_>>(),
-            sort_sig
-                .params
-                .iter()
-                .map(|p| p.value_type)
-                .collect::<Vec<_>>(),
-        );
+        assert_eq!(sig.params, extern_sig("__vow_vec_sort").params);
     }
 
     fn make_module(name: &str, funcs: Vec<Function>) -> Module {

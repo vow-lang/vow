@@ -9,9 +9,25 @@ use std::fmt;
 use vow_ir::{InsertionSet, Inst, InstData, InstId, Module, Opcode, RegionId, Ty};
 
 const COUNTER_SYMBOL: &str = "__vow_perf_count";
-const VEC_SORT_SYMBOL: &str = "__vow_vec_sort";
-const VEC_SORT_COUNTER_SYMBOL: &str = "__vow_perf_count_vec_sort";
-const VEC_SORT_COUNTER_ARITY: usize = 1;
+
+/// A size-dependent runtime helper and the cost adapter that charges its work.
+///
+/// `operands` is the helper's ABI arity. The adapter is handed the helper's own
+/// operands unchanged, so its parameter list must mirror the helper's. Adding a
+/// row here also requires the adapter's `extern "C"` definition in `vow-runtime`
+/// and a matching arm in both `make_extern_sig` implementations (`vow-codegen`
+/// and `vow-clif-shim`); a row on its own will not link. See #486.
+struct CostAdapter {
+    helper: &'static str,
+    adapter: &'static str,
+    operands: usize,
+}
+
+const COST_ADAPTERS: &[CostAdapter] = &[CostAdapter {
+    helper: "__vow_vec_sort",
+    adapter: "__vow_perf_count_vec_sort",
+    operands: 1,
+}];
 
 /// A cloned IR module containing operation-counter calls.
 ///
@@ -119,14 +135,14 @@ pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, Instrume
         }
 
         let mut next_id = first_fresh_id;
-        let function_name = function.name.clone();
+        let function_name = &function.name;
         for block in &mut function.blocks {
             let mut insertions = InsertionSet::new();
             for (index, inst) in block.insts.iter().enumerate() {
                 if !is_counted(inst.opcode) {
                     continue;
                 }
-                let (counter_symbol, counter_args) = counter_for(inst, &function_name)?;
+                let (counter_symbol, counter_args) = counter_for(inst, function_name)?;
                 insertions.insert_before(
                     index,
                     Inst {
@@ -152,26 +168,30 @@ fn counter_for(
     inst: &Inst,
     function: &str,
 ) -> Result<(&'static str, Vec<InstId>), InstrumentationError> {
-    match &inst.data {
-        InstData::CallExtern(symbol) if symbol == VEC_SORT_SYMBOL => {
-            // The adapter ABI is exactly `(vec ptr)`. A drifted operand list
-            // can neither be forwarded (Cranelift would reject the call) nor
-            // replaced by the plain counter, which would silently charge one
-            // operation for a sort. Fail closed instead.
-            if inst.args.len() != VEC_SORT_COUNTER_ARITY {
-                return Err(InstrumentationError::CatalogedHelperArity {
-                    function: function.to_string(),
-                    symbol: symbol.clone(),
-                    expected: VEC_SORT_COUNTER_ARITY,
-                    found: inst.args.len(),
-                });
-            }
-            Ok((VEC_SORT_COUNTER_SYMBOL, inst.args.clone()))
-        }
-        // Charges one operation even for an uncatalogued size-dependent helper
-        // such as `__vow_map_contains`; see `instrument_module` and #486.
-        _ => Ok((COUNTER_SYMBOL, vec![])),
+    // Charges one operation for anything uncatalogued, including a
+    // size-dependent helper such as `__vow_map_contains`; see
+    // `instrument_module` and #486.
+    let InstData::CallExtern(symbol) = &inst.data else {
+        return Ok((COUNTER_SYMBOL, vec![]));
+    };
+    let Some(entry) = COST_ADAPTERS
+        .iter()
+        .find(|entry| entry.helper == symbol.as_str())
+    else {
+        return Ok((COUNTER_SYMBOL, vec![]));
+    };
+
+    // A drifted operand list cannot be forwarded: Cranelift would reject the
+    // call against the adapter's signature.
+    if inst.args.len() != entry.operands {
+        return Err(InstrumentationError::CatalogedHelperArity {
+            function: function.to_string(),
+            symbol: symbol.clone(),
+            expected: entry.operands,
+            found: inst.args.len(),
+        });
     }
+    Ok((entry.adapter, inst.args.clone()))
 }
 
 fn is_counted(opcode: Opcode) -> bool {
