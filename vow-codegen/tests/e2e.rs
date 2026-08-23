@@ -282,6 +282,109 @@ fn vow_violation_exits_with_reserved_abort_code_and_blames_caller() {
     );
 }
 
+// Issue #1046: a predicate holding a string literal renders a description with
+// real quotes, and a source path may hold quotes or backslashes. Both travel
+// through the rodata C string into __vow_violation, so the escaping has to hold
+// end to end, not just in the renderer unit tests.
+#[test]
+fn vow_violation_escapes_quoted_description_and_file() {
+    use vow_diag::Blame;
+
+    let description = r#"requires s == String::from("ab")"#;
+    let file = r#"C:\src\quoted "unit".vow"#;
+
+    let check = Function {
+        id: FuncId(0),
+        name: "check".to_string(),
+        params: vec![Ty::I64],
+        param_names: vec![],
+        return_ty: Ty::I64,
+        effects: vec![],
+        vows: vec![VowEntry {
+            id: VowId(0),
+            description: description.to_string(),
+            blame: Blame::Caller,
+            bindings: vec![("y".to_string(), InstId(0))],
+            file: file.to_string(),
+            offset: 7,
+        }],
+        blocks: vec![BasicBlock {
+            id: BlockId(0),
+            insts: vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                inst(2, Opcode::Ne, Ty::Bool, vec![0, 1], InstData::None),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::VowRequires,
+                    ty: Ty::Unit,
+                    args: vec![InstId(2)],
+                    data: InstData::VowId(VowId(0)),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        }],
+        local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
+        source_file: String::new(),
+    };
+
+    let main_fn = Function {
+        id: FuncId(1),
+        name: "main".to_string(),
+        params: vec![],
+        param_names: vec![],
+        return_ty: Ty::I32,
+        effects: vec![],
+        vows: vec![],
+        blocks: vec![BasicBlock {
+            id: BlockId(0),
+            insts: vec![
+                inst(10, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                Inst {
+                    id: InstId(11),
+                    opcode: Opcode::Call,
+                    ty: Ty::I64,
+                    args: vec![InstId(10)],
+                    data: InstData::CallTarget(FuncId(0)),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(12, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(0)),
+                inst(13, Opcode::Return, Ty::Unit, vec![12], InstData::None),
+            ],
+        }],
+        local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
+        source_file: String::new(),
+    };
+
+    let module = Module {
+        name: "quoted_description_test".to_string(),
+        strings: vec![],
+        struct_layouts: vec![],
+        enum_layouts: vec![],
+        warnings: vec![],
+        functions: vec![check, main_fn],
+    };
+
+    let dir = TempDir::new().unwrap();
+    let Some(exe) = compile_and_link(&module, BuildMode::Debug, &dir) else {
+        eprintln!("SKIP: vow-runtime not found");
+        return;
+    };
+    let out = run_exe(&exe);
+    assert_eq!(out.status.code(), Some(134));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next().unwrap_or_default(),
+        r#"{"error":"VowViolation","vow_id":0,"blame":"Caller","description":"requires s == String::from(\"ab\")","file":"C:\\src\\quoted \"unit\".vow","offset":7,"values":{"y":0}}"#,
+        "quoted description/file must render as a valid JSON envelope, got: {stderr}"
+    );
+}
+
 #[test]
 fn vow_violation_reports_variable_values() {
     // fn nonneg(x: i64) -> i64

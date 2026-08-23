@@ -155,6 +155,9 @@ mod tests {
 
         assert_eq!(json["description"], description);
         assert_eq!(json["file"], file);
+        // Only the JSON line is escaped; the human line keeps the raw text.
+        assert!(r.human.contains(description));
+        assert!(r.human.contains(file));
     }
 
     #[test]
@@ -171,6 +174,7 @@ mod tests {
             serde_json::from_str(&r.json).expect("violation envelope must be valid JSON");
 
         assert_eq!(json["values"][name], 42);
+        assert!(r.human.contains(&format!("{name}=42")));
     }
 
     // Anchor: docs/level5-test-trace.md:373-374 (matched JSON + human pair).
