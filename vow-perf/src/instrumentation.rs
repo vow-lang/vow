@@ -12,8 +12,10 @@ const COUNTER_SYMBOL: &str = "__vow_perf_count";
 
 /// A size-dependent runtime helper and the cost adapter that charges its work.
 ///
-/// `operands` is the helper's ABI arity. The adapter is handed the helper's own
-/// operands unchanged, so its parameter list must mirror the helper's. Adding a
+/// `operands` is the helper's IR operand count before codegen's arena routing,
+/// which may prepend a hidden arena argument and so make the helper's ABI arity
+/// larger. The adapter is handed the helper's own operands unchanged, so its
+/// parameter list must mirror the helper's. Adding a
 /// row here also requires the adapter's `extern "C"` definition in `vow-runtime`
 /// and a matching arm in both `make_extern_sig` implementations (`vow-codegen`
 /// and `vow-clif-shim`); a row on its own will not link. See #486.
@@ -135,14 +137,13 @@ pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, Instrume
         }
 
         let mut next_id = first_fresh_id;
-        let function_name = &function.name;
         for block in &mut function.blocks {
             let mut insertions = InsertionSet::new();
             for (index, inst) in block.insts.iter().enumerate() {
                 if !is_counted(inst.opcode) {
                     continue;
                 }
-                let (counter_symbol, counter_args) = counter_for(inst, function_name)?;
+                let (counter_symbol, counter_args) = counter_for(inst, &function.name)?;
                 insertions.insert_before(
                     index,
                     Inst {

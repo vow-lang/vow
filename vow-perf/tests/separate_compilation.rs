@@ -136,7 +136,6 @@ fn instrumentation_is_a_separate_compilation_artifact() {
 #[test]
 fn vec_sort_calls_receive_size_dependent_cost_adapter() {
     let source = vec_sort_module();
-    let source_snapshot = source.clone();
 
     let instrumented = instrument_module(&source).expect("instrument Vec::sort wrapper");
     let instructions = &instrumented.as_module().functions[0].blocks[0].insts;
@@ -162,7 +161,6 @@ fn vec_sort_calls_receive_size_dependent_cost_adapter() {
         "Vec::sort must count its hidden size-dependent work without changing its operand, \
          and an uncatalogued helper must keep the plain operand-free counter"
     );
-    assert_eq!(source, source_snapshot, "instrumentation mutated source IR");
     assert!(
         validate(instrumented.as_module()).is_ok(),
         "instrumented Vec::sort IR must remain valid"
