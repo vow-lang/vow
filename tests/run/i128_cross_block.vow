@@ -1,0 +1,61 @@
+// TEST: stdout "171 0\n171 0\n171 3\n170 253"
+module I128CrossBlock
+
+// Wide values that live across a block boundary go through the shim's stack
+// slots. An 8-byte slot drops the high limb, so every line below prints both
+// limbs of a value that only exists after a branch or loop merge.
+fn hi_byte(v: i128) -> u8 {
+    u128_to_u8_wrap((v as u128) >> 64)
+}
+
+fn lo_byte(v: i128) -> u8 {
+    u128_to_u8_wrap(v as u128)
+}
+
+fn show(v: i128) -> () [io] {
+    print_i64(hi_byte(v) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v) as i64);
+    print_str("\n");
+}
+
+fn pick(flag: bool) -> i128 {
+    let mut acc: i128 = 0;
+    if flag {
+        acc = 3154393236604333326336;
+    } else {
+        acc = 1;
+    }
+    acc
+}
+
+fn ternary(flag: bool) -> i128 {
+    if flag { 3154393236604333326336 } else { 1 }
+}
+
+fn accumulate(times: i64) -> i128 {
+    let mut sum: i128 = 3154393236604333326336;
+    let mut i: i64 = 0;
+    while i < times {
+        sum = sum + 1;
+        i = i + 1;
+    }
+    sum
+}
+
+fn countdown(times: i64) -> i128 {
+    let mut sum: i128 = 3154393236604333326336;
+    let mut i: i64 = 0;
+    while i < times {
+        sum = sum - 1;
+        i = i + 1;
+    }
+    sum
+}
+
+fn main() -> () [io] {
+    show(pick(true));
+    show(ternary(true));
+    show(accumulate(3));
+    show(countdown(3));
+}

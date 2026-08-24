@@ -1,0 +1,11 @@
+// TEST: exit 132
+module U128CheckedUnderflow
+
+fn underflow() -> u128 {
+    0 -! 1
+}
+
+fn main() -> i32 {
+    underflow();
+    0
+}

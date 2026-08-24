@@ -1,0 +1,55 @@
+// TEST: stdout "171 0\n171 5\n170 255\n86 0\n171 3\n170 254\n171 0\n171 7\n0 0\n0 171\n16 0\n255 255\nT\nT\nF\nT\nT\nT"
+module I128Codegen
+
+// 0xAB << 64: high limb 0xAB, low limb 0. Every assertion below reads both
+// limbs separately, so a backend that silently truncates to 64 bits fails on
+// the high-limb column rather than passing by correlated truncation.
+fn high_seed() -> i128 {
+    3154393236604333326336
+}
+
+fn hi_byte(v: i128) -> u8 {
+    u128_to_u8_wrap((v as u128) >> 64)
+}
+
+fn lo_byte(v: i128) -> u8 {
+    u128_to_u8_wrap(v as u128)
+}
+
+fn show(v: i128) -> () [io] {
+    print_i64(hi_byte(v) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v) as i64);
+    print_str("\n");
+}
+
+fn show_bool(b: bool) -> () [io] {
+    if b {
+        print_str("T\n");
+    } else {
+        print_str("F\n");
+    }
+}
+
+fn main() -> () [io] {
+    let seed: i128 = high_seed();
+    show(seed);
+    show(seed + 5);
+    show(seed - 1);
+    show(seed * 2);
+    show(seed +! 3);
+    show(seed -! 2);
+    show(seed & 3154393236604333326336);
+    show(seed | 7);
+    show(seed ^ 3154393236604333326336);
+    show(seed >> 64);
+    show(1 << 68);
+    show(-1);
+
+    show_bool(seed == high_seed());
+    show_bool(seed > 0);
+    show_bool(seed < 0);
+    show_bool(-1 < 0);
+    show_bool(seed != 0);
+    show_bool(seed >= high_seed());
+}

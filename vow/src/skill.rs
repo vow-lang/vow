@@ -1625,6 +1625,32 @@ Wrapping operators silently wrap on overflow. For unsigned operands, including
 
 Checked operators abort with `ArithmeticOverflow` on overflow.
 
+**128-bit codegen limitations.** `/`, `%`, `/!`, `%!`, and `*!` are not yet
+executable for `i128`/`u128` operands: the native backend rejects them with a
+compile error naming the unimplemented seam. Every other operator — `+`, `-`,
+`*`, `+!`, `-!`, the comparisons, the bitwise operators, and the shifts — works
+on 128-bit operands.
+
+128-bit values are also **scalar-only** for now. Locals, parameters, returns,
+and temporaries carry both limbs correctly, but a 128-bit value placed inside
+an aggregate does not, and the compiler rejects every such program rather than
+producing one that computes on a truncated value: `Vec<i128>`/`Vec<u128>`
+elements are refused because the element helpers are i64-only, and a 128-bit
+struct field or enum payload (including `Option<i128>`) fails codegen. Do not
+store 128-bit values in aggregates yet.
+
+One 128-bit gap is not yet fail-closed: a 128-bit binding captured by a `vow`
+block reports `0` instead of its real value in the runtime `VowViolation`
+`values` map. The check itself is evaluated at full width, so the violation
+fires correctly — only the reported value is wrong.
+
+These are backend gaps, not language rules; the type checker accepts all of
+these at 128-bit width. Verification is a separate matter: a contracted
+function whose body contains a 128-bit *constant* is reported as `Skipped`
+with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
+yet modelled in the verifier. Contracts over 128-bit parameters alone do
+verify.
+
 ### Saturating Arithmetic
 
 Saturating arithmetic uses named compiler intrinsics rather than a third
@@ -6336,6 +6362,32 @@ Wrapping operators silently wrap on overflow. For unsigned operands, including
 | `%!`     | Rem (checked)     |
 
 Checked operators abort with `ArithmeticOverflow` on overflow.
+
+**128-bit codegen limitations.** `/`, `%`, `/!`, `%!`, and `*!` are not yet
+executable for `i128`/`u128` operands: the native backend rejects them with a
+compile error naming the unimplemented seam. Every other operator — `+`, `-`,
+`*`, `+!`, `-!`, the comparisons, the bitwise operators, and the shifts — works
+on 128-bit operands.
+
+128-bit values are also **scalar-only** for now. Locals, parameters, returns,
+and temporaries carry both limbs correctly, but a 128-bit value placed inside
+an aggregate does not, and the compiler rejects every such program rather than
+producing one that computes on a truncated value: `Vec<i128>`/`Vec<u128>`
+elements are refused because the element helpers are i64-only, and a 128-bit
+struct field or enum payload (including `Option<i128>`) fails codegen. Do not
+store 128-bit values in aggregates yet.
+
+One 128-bit gap is not yet fail-closed: a 128-bit binding captured by a `vow`
+block reports `0` instead of its real value in the runtime `VowViolation`
+`values` map. The check itself is evaluated at full width, so the violation
+fires correctly — only the reported value is wrong.
+
+These are backend gaps, not language rules; the type checker accepts all of
+these at 128-bit width. Verification is a separate matter: a contracted
+function whose body contains a 128-bit *constant* is reported as `Skipped`
+with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
+yet modelled in the verifier. Contracts over 128-bit parameters alone do
+verify.
 
 ### Saturating Arithmetic
 

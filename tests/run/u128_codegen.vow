@@ -1,0 +1,55 @@
+// TEST: stdout "205 0\n205 5\n204 255\n154 0\n205 3\n204 254\n205 0\n205 7\n0 0\n0 205\n16 0\n255 255\nT\nT\nT\nT\nT"
+module U128Codegen
+
+// 0xCD << 64: high limb 0xCD, low limb 0. Both limbs are read separately so a
+// 64-bit truncation shows up in the high-limb column.
+fn high_seed() -> u128 {
+    3781582535110458081280
+}
+
+fn hi_byte(v: u128) -> u8 {
+    u128_to_u8_wrap(v >> 64)
+}
+
+fn lo_byte(v: u128) -> u8 {
+    u128_to_u8_wrap(v)
+}
+
+fn show(v: u128) -> () [io] {
+    print_i64(hi_byte(v) as i64);
+    print_str(" ");
+    print_i64(lo_byte(v) as i64);
+    print_str("\n");
+}
+
+fn show_bool(b: bool) -> () [io] {
+    if b {
+        print_str("T\n");
+    } else {
+        print_str("F\n");
+    }
+}
+
+fn main() -> () [io] {
+    let seed: u128 = high_seed();
+    show(seed);
+    show(seed + 5);
+    show(seed - 1);
+    show(seed * 2);
+    show(seed +! 3);
+    show(seed -! 2);
+    show(seed & 3781582535110458081280);
+    show(seed | 7);
+    show(seed ^ 3781582535110458081280);
+    show(seed >> 64);
+    show(1 << 68);
+    show(340282366920938463463374607431768211455);
+
+    show_bool(seed == high_seed());
+    show_bool(seed > 0);
+    // u128 comparisons must be unsigned: the all-ones value is the maximum,
+    // not -1.
+    show_bool(340282366920938463463374607431768211455 > seed);
+    show_bool(seed != 0);
+    show_bool(seed >= high_seed());
+}
