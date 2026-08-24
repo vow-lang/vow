@@ -65,6 +65,36 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
     summary
 }
 
+/// Map a single contract clause to its status string from the `--multi-property`
+/// per-claim verdicts, falling back to the function's overall outcome when ESBMC
+/// did not report the clause individually.
+///
+/// The per-claim verdict wins when present (`true` → `proven`, `false` →
+/// `failed`). Otherwise the fallback mirrors the fail-closed status set (see
+/// [`contracts_summary_has_failure`]): every non-proven outcome maps to a
+/// non-proven status. In particular an overall [`VerificationResult::Failed`]
+/// with no individual verdict for this clause is `unknown` — the whole function
+/// failed but ESBMC never refuted *this* clause, so it is genuinely undecided,
+/// not `failed`.
+fn resolve_clause_status(
+    vow_id: u32,
+    verdicts: &std::collections::HashMap<u32, bool>,
+    overall: &VerificationResult,
+) -> &'static str {
+    match verdicts.get(&vow_id) {
+        Some(true) => "proven",
+        Some(false) => "failed",
+        None => match overall {
+            VerificationResult::Proven | VerificationResult::ProvenIr => "proven",
+            VerificationResult::Timeout => "timeout",
+            VerificationResult::Unknown { .. } => "unknown",
+            VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => "error",
+            VerificationResult::Skipped { .. } => "skipped",
+            VerificationResult::Failed(_) => "unknown",
+        },
+    }
+}
+
 fn update_contract_statuses(
     entries: &mut [ContractEntryJson],
     ir_module: &vow_ir::Module,
@@ -110,21 +140,7 @@ fn update_contract_statuses(
             if entry.function_id != func.id.0 {
                 continue;
             }
-            entry.status = match verdicts.get(&entry.vow_id) {
-                Some(true) => "proven",
-                Some(false) => "failed",
-                None => match &overall {
-                    VerificationResult::Proven | VerificationResult::ProvenIr => "proven",
-                    VerificationResult::Timeout => "timeout",
-                    VerificationResult::Unknown { .. } => "unknown",
-                    VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => "error",
-                    VerificationResult::Skipped { .. } => "skipped",
-                    // Overall verification failed but ESBMC did not report this
-                    // specific clause individually — genuinely undecided.
-                    VerificationResult::Failed(_) => "unknown",
-                },
-            }
-            .to_string();
+            entry.status = resolve_clause_status(entry.vow_id, &verdicts, &overall).to_string();
         }
 
         // Vacuity probe (#81 PR-B): if the function's `requires` are
@@ -442,6 +458,71 @@ mod tests {
         ] {
             assert!(contracts_summary_has_failure(&failing));
         }
+    }
+
+    // ---- Per-clause verdict mapping (resolve_clause_status) ----
+
+    #[test]
+    fn resolve_clause_status_prefers_per_claim_verdict_over_overall() {
+        // The `--multi-property` per-claim verdict map wins over the function's
+        // overall rollup, in both directions: a clause ESBMC proved individually
+        // stays `proven` even when the function overall failed, and a clause
+        // ESBMC refuted individually is `failed` even when the function overall
+        // proved.
+        let mut verdicts = std::collections::HashMap::new();
+        verdicts.insert(7u32, true);
+        verdicts.insert(8u32, false);
+
+        let overall_failed = VerificationResult::Failed(vow_verify::parse_esbmc_output("unknown"));
+        assert_eq!(
+            resolve_clause_status(7, &verdicts, &overall_failed),
+            "proven"
+        );
+        assert_eq!(
+            resolve_clause_status(8, &verdicts, &VerificationResult::Proven),
+            "failed"
+        );
+    }
+
+    #[test]
+    fn resolve_clause_status_falls_back_to_overall_when_clause_unreported() {
+        // When a clause's vow_id is absent from the per-claim map (ESBMC did not
+        // report it individually), its status comes from the function's overall
+        // outcome. Pins all fallback arms — in particular the deliberate
+        // `Failed(_) -> "unknown"`: an overall failure with no individual verdict
+        // is genuinely undecided, NOT `failed` (see the doc note at the mapping).
+        let empty: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
+        let missing = 99u32; // never inserted
+
+        let cases: [(VerificationResult, &str); 7] = [
+            (VerificationResult::Proven, "proven"),
+            (VerificationResult::ProvenIr, "proven"),
+            (VerificationResult::Timeout, "timeout"),
+            (
+                VerificationResult::Unknown {
+                    reason: "k-induction forward condition".to_string(),
+                },
+                "unknown",
+            ),
+            (VerificationResult::ToolError("boom".to_string()), "error"),
+            (VerificationResult::ToolNotFound, "error"),
+            (
+                VerificationResult::Skipped {
+                    reason: "non-modelable".to_string(),
+                },
+                "skipped",
+            ),
+        ];
+        for (overall, expected) in &cases {
+            assert_eq!(resolve_clause_status(missing, &empty, overall), *expected);
+        }
+
+        // The `Failed(_)` fallback is intentionally `unknown`, not `failed`.
+        let overall_failed = VerificationResult::Failed(vow_verify::parse_esbmc_output("unknown"));
+        assert_eq!(
+            resolve_clause_status(missing, &empty, &overall_failed),
+            "unknown"
+        );
     }
 
     // ---- Contract-entry assembly (build_contract_entries) ----
