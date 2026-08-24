@@ -6,7 +6,7 @@ use vow_ir::{
     BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId,
     RegionSummary, Ty, VowEntry, VowId, decode_module, encode_module, validate,
 };
-use vow_perf::instrument_module;
+use vow_perf::{InstrumentationError, instrument_module};
 use vow_syntax::span::Span;
 
 fn instruction(id: u32, opcode: Opcode, ty: Ty, args: Vec<InstId>, data: InstData) -> Inst {
@@ -57,6 +57,53 @@ fn production_module() -> Module {
     }
 }
 
+fn assert_vmod_round_trip(module: &Module) {
+    let encoded = encode_module(module);
+    let decoded = decode_module(&encoded).expect("decode instrumented IR");
+    assert_eq!(
+        decoded, *module,
+        "instrumented IR changed across the .vmod round trip"
+    );
+    assert_eq!(
+        encode_module(&decoded),
+        encoded,
+        "instrumented IR encoding is not canonical"
+    );
+}
+
+fn vec_sort_module() -> Module {
+    let mut module = production_module();
+    module.name = "vec_sort_cost".to_string();
+
+    let function = &mut module.functions[0];
+    function.name = "sort_values".to_string();
+    function.params = vec![Ty::Ptr];
+    function.param_names = vec!["values".to_string()];
+    function.return_ty = Ty::Ptr;
+    function.blocks[0].insts = vec![
+        instruction(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+        instruction(
+            1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![InstId(0)],
+            InstData::CallExtern("__vow_vec_sort".to_string()),
+        ),
+        instruction(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(7)),
+        // Uncatalogued size-dependent helper: it must keep the plain counter.
+        instruction(
+            3,
+            Opcode::Call,
+            Ty::Bool,
+            vec![InstId(1), InstId(2)],
+            InstData::CallExtern("__vow_map_contains".to_string()),
+        ),
+        instruction(4, Opcode::Return, Ty::Unit, vec![InstId(1)], InstData::None),
+    ];
+
+    module
+}
+
 #[test]
 fn instrumentation_is_a_separate_compilation_artifact() {
     let source = production_module();
@@ -83,6 +130,72 @@ fn instrumentation_is_a_separate_compilation_artifact() {
     assert_ne!(
         production_before.bytes, instrumented_object.bytes,
         "instrumented object must be distinct from the production object"
+    );
+}
+
+#[test]
+fn vec_sort_calls_receive_size_dependent_cost_adapter() {
+    let source = vec_sort_module();
+
+    let instrumented = instrument_module(&source).expect("instrument Vec::sort wrapper");
+    let instructions = &instrumented.as_module().functions[0].blocks[0].insts;
+    let extern_calls: Vec<(&str, &[InstId])> = instructions
+        .iter()
+        .filter_map(|inst| match &inst.data {
+            InstData::CallExtern(symbol) => Some((symbol.as_str(), inst.args.as_slice())),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        extern_calls,
+        vec![
+            ("__vow_perf_count", &[] as &[InstId]),
+            ("__vow_perf_count_vec_sort", &[InstId(0)]),
+            ("__vow_vec_sort", &[InstId(0)]),
+            ("__vow_perf_count", &[]),
+            ("__vow_perf_count", &[]),
+            ("__vow_map_contains", &[InstId(1), InstId(2)]),
+            ("__vow_perf_count", &[]),
+        ],
+        "Vec::sort must count its hidden size-dependent work without changing its operand, \
+         and an uncatalogued helper must keep the plain operand-free counter"
+    );
+    assert!(
+        validate(instrumented.as_module()).is_ok(),
+        "instrumented Vec::sort IR must remain valid"
+    );
+
+    assert_vmod_round_trip(instrumented.as_module());
+
+    CraneliftBackend::new()
+        .compile_module(instrumented.as_module(), BuildMode::Release, TraceMode::Off)
+        .expect("compile instrumented Vec::sort wrapper");
+}
+
+#[test]
+fn vec_sort_call_with_unexpected_arity_is_rejected() {
+    let mut source = vec_sort_module();
+    source.functions[0].blocks[0].insts[1].args.push(InstId(0));
+
+    // Falling back to the plain counter here would charge one operation for a
+    // sort and let a Linear verdict pass on n log n work, so a catalogued
+    // helper whose operands no longer match its adapter must fail closed.
+    let error = instrument_module(&source).expect_err("off-ABI Vec::sort call must fail closed");
+
+    assert_eq!(
+        error,
+        InstrumentationError::CatalogedHelperArity {
+            function: "sort_values".to_string(),
+            symbol: "__vow_vec_sort".to_string(),
+            expected: 1,
+            found: 2,
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "operation-count instrumentation found `__vow_vec_sort` with 2 operands in \
+         function `sort_values`, but its cost adapter takes exactly 1"
     );
 }
 
@@ -173,15 +286,5 @@ fn instrumented_multiblock_ir_preserves_canonical_ids_and_round_trips() {
         "existing ID references must keep naming the original instruction"
     );
 
-    let encoded = encode_module(module);
-    let decoded = decode_module(&encoded).expect("decode instrumented IR");
-    assert_eq!(
-        decoded, *module,
-        "instrumented IR changed across round trip"
-    );
-    assert_eq!(
-        encode_module(&decoded),
-        encoded,
-        "instrumented IR encoding is not canonical"
-    );
+    assert_vmod_round_trip(module);
 }

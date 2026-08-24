@@ -3544,6 +3544,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_perf_counter_read" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        // Must match vow-codegen/src/cranelift_backend.rs and the vow-runtime
+        // definition.
+        "__vow_perf_count_vec_sort" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+        }
         "__vow_perf_count"
         | "__vow_perf_counter_reset"
         | "__vow_profile_init"
@@ -3690,6 +3695,27 @@ mod tests {
         assert_eq!(sig.params[1].value_type, types::I64);
         assert_eq!(sig.returns.len(), 1);
         assert_eq!(sig.returns[0].value_type, types::I64);
+
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
+    #[test]
+    fn perf_vec_sort_cost_extern_accepts_vec_argument() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+        let sig = make_extern_sig("__vow_perf_count_vec_sort", &module_ctx.obj_module);
+
+        assert_eq!(sig.params.len(), 1);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert!(sig.returns.is_empty());
+
+        // The adapter is handed the sort call's own operands, so its parameter
+        // list must stay identical to `__vow_vec_sort`'s.
+        assert_eq!(
+            sig.params,
+            make_extern_sig("__vow_vec_sort", &module_ctx.obj_module).params
+        );
 
         unsafe { __vow_clif_destroy(ctx) };
     }

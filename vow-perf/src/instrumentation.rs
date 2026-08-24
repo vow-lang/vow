@@ -10,6 +10,28 @@ use vow_ir::{InsertionSet, Inst, InstData, InstId, Module, Opcode, RegionId, Ty}
 
 const COUNTER_SYMBOL: &str = "__vow_perf_count";
 
+/// A size-dependent runtime helper and the cost adapter that charges its work.
+///
+/// `operands` is the helper's IR operand count. Codegen may prepend a hidden
+/// arena argument when it routes the helper, so the helper's ABI arity can
+/// exceed this. The adapter call is never routed and receives the helper's IR
+/// operands unchanged, so the adapter's parameter list must mirror the helper's
+/// *unrouted* signature. Adding a row here also requires the adapter's
+/// `extern "C"` definition in `vow-runtime` and a matching arm in both
+/// `make_extern_sig` implementations (`vow-codegen` and `vow-clif-shim`); a row
+/// on its own will not link. See #486.
+struct CostAdapter {
+    helper: &'static str,
+    adapter: &'static str,
+    operands: usize,
+}
+
+const COST_ADAPTERS: &[CostAdapter] = &[CostAdapter {
+    helper: "__vow_vec_sort",
+    adapter: "__vow_perf_count_vec_sort",
+    operands: 1,
+}];
+
 /// A cloned IR module containing operation-counter calls.
 ///
 /// The source [`Module`] passed to [`instrument_module`] is never mutated. A
@@ -32,10 +54,20 @@ impl InstrumentedModule {
     }
 }
 
-/// Instrumentation could not allocate function-unique instruction IDs.
+/// Instrumentation could not produce a faithful operation count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstrumentationError {
-    InstructionIdSpaceExhausted { function: String },
+    InstructionIdSpaceExhausted {
+        function: String,
+    },
+    /// A catalogued size-dependent helper carried an operand list its cost
+    /// adapter cannot accept, so its hidden work is unmeasurable.
+    CatalogedHelperArity {
+        function: String,
+        symbol: String,
+        expected: usize,
+        found: usize,
+    },
 }
 
 impl fmt::Display for InstrumentationError {
@@ -44,6 +76,16 @@ impl fmt::Display for InstrumentationError {
             Self::InstructionIdSpaceExhausted { function } => write!(
                 formatter,
                 "operation-count instrumentation exhausted instruction IDs in function `{function}`"
+            ),
+            Self::CatalogedHelperArity {
+                function,
+                symbol,
+                expected,
+                found,
+            } => write!(
+                formatter,
+                "operation-count instrumentation found `{symbol}` with {found} operands in \
+                 function `{function}`, but its cost adapter takes exactly {expected}"
             ),
         }
     }
@@ -55,8 +97,17 @@ impl std::error::Error for InstrumentationError {}
 /// IR instruction in the clone.
 ///
 /// Contract and complexity descriptors are non-executable metadata and are not
-/// counted. Runtime-helper internals require their own counter coverage rather
-/// than being inferred from the caller-side `Call` instruction.
+/// counted. Calls to a catalogued size-dependent runtime helper use that
+/// helper's cost adapter, which receives the original operands; every other
+/// executable instruction uses the one-operation counter.
+///
+/// An uncatalogued size-dependent helper still counts as one operation, so a
+/// performance verdict built on these counts must fail closed as unverified
+/// when it reaches one. Completing the catalogue is tracked by #486.
+///
+/// A catalogued helper whose operand list no longer matches its cost adapter
+/// is an error rather than a degraded count: charging the one-operation counter
+/// would report a sort as constant work and let a wrong complexity class pass.
 pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, InstrumentationError> {
     let mut module = source.clone();
 
@@ -92,14 +143,15 @@ pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, Instrume
                 if !is_counted(inst.opcode) {
                     continue;
                 }
+                let (counter_symbol, counter_args) = counter_for(inst, &function.name)?;
                 insertions.insert_before(
                     index,
                     Inst {
                         id: InstId(next_id as u32),
                         opcode: Opcode::Call,
                         ty: Ty::Unit,
-                        args: vec![],
-                        data: InstData::CallExtern(COUNTER_SYMBOL.to_string()),
+                        args: counter_args,
+                        data: InstData::CallExtern(counter_symbol.to_string()),
                         origin: inst.origin,
                         region: RegionId::Root,
                     },
@@ -111,6 +163,36 @@ pub fn instrument_module(source: &Module) -> Result<InstrumentedModule, Instrume
     }
 
     Ok(InstrumentedModule { module })
+}
+
+fn counter_for(
+    inst: &Inst,
+    function: &str,
+) -> Result<(&'static str, Vec<InstId>), InstrumentationError> {
+    let entry = match &inst.data {
+        InstData::CallExtern(symbol) => COST_ADAPTERS
+            .iter()
+            .find(|entry| entry.helper == symbol.as_str()),
+        _ => None,
+    };
+    // Charges one operation for anything uncatalogued, including a
+    // size-dependent helper such as `__vow_map_contains`; see
+    // `instrument_module` and #486.
+    let Some(entry) = entry else {
+        return Ok((COUNTER_SYMBOL, vec![]));
+    };
+
+    // A drifted operand list cannot be forwarded: Cranelift would reject the
+    // call against the adapter's signature.
+    if inst.args.len() != entry.operands {
+        return Err(InstrumentationError::CatalogedHelperArity {
+            function: function.to_string(),
+            symbol: entry.helper.to_string(),
+            expected: entry.operands,
+            found: inst.args.len(),
+        });
+    }
+    Ok((entry.adapter, inst.args.clone()))
 }
 
 fn is_counted(opcode: Opcode) -> bool {

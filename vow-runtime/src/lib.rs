@@ -275,15 +275,43 @@ pub unsafe extern "C" fn __vow_trace_vow(fn_name_ptr: *const c_char, vow_id: i64
 
 static PERF_OPERATION_COUNT: AtomicU64 = AtomicU64::new(0);
 
+fn perf_operation_count_add(amount: u64) {
+    let _ = PERF_OPERATION_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+        Some(count.saturating_add(amount))
+    });
+}
+
 /// Count one executed operation in a `vow-perf` instrumented artifact.
 ///
 /// Saturation preserves the strongest reportable lower bound instead of
 /// wrapping a long-running measurement back to a deceptively small value.
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_perf_count() {
-    let _ = PERF_OPERATION_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-        count.checked_add(1)
-    });
+    perf_operation_count_add(1);
+}
+
+/// Attribute the caller-side operation and size-dependent work performed by
+/// `__vow_vec_sort` in an instrumented artifact.
+///
+/// The synthetic cost is `1 + n * (2 + ceil(log2(n)))`: one call, one input
+/// copy and output push per item, and an `n log n` sorting term. Saturating
+/// arithmetic keeps an oversized measurement from wrapping to a false low.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_perf_count_vec_sort(vec: *const u8) {
+    let len = if vec.is_null() {
+        0
+    } else {
+        u64::try_from(unsafe { __vow_vec_len(vec) }).unwrap_or(u64::MAX)
+    };
+    let logarithm = if len <= 1 {
+        0
+    } else {
+        u64::from((len - 1).ilog2() + 1)
+    };
+    let cost = len
+        .saturating_mul(logarithm.saturating_add(2))
+        .saturating_add(1);
+    perf_operation_count_add(cost);
 }
 
 #[unsafe(no_mangle)]
@@ -2879,6 +2907,8 @@ pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
 // Utility builtins
 // ---------------------------------------------------------------------------
 
+// `__vow_perf_count_vec_sort` mirrors this function's growth; update that cost
+// model if this algorithm changes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_sort(vec: *const u8) -> *mut u8 {
     let result = __vow_vec_new_val();
@@ -4491,12 +4521,49 @@ mod tests {
         assert_eq!(__vow_u64_to_u32_sat(u64::from(u32::MAX) + 1), u32::MAX);
     }
 
+    fn vec_sort_cost(len: usize) -> u64 {
+        let vec = VowVec {
+            ptr: std::ptr::dangling_mut(),
+            len,
+            cap: len,
+        };
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_vec_sort(&raw const vec as *const u8) };
+        __vow_perf_counter_read()
+    }
+
+    // Every counter case shares the process-global PERF_OPERATION_COUNT, so they
+    // stay in one test rather than racing across cargo's parallel test threads.
     #[test]
-    fn performance_operation_counter_can_be_reset_incremented_and_read() {
+    fn performance_operation_counter_attributes_vec_sort_work_and_saturates() {
         __vow_perf_counter_reset();
         __vow_perf_count();
         __vow_perf_count();
         assert_eq!(__vow_perf_counter_read(), 2);
+
+        __vow_perf_counter_reset();
+        unsafe { __vow_perf_count_vec_sort(std::ptr::null()) };
+        assert_eq!(
+            __vow_perf_counter_read(),
+            1,
+            "a null helper call still has its caller-side operation cost"
+        );
+
+        assert_eq!(vec_sort_cost(0), 1);
+        assert_eq!(vec_sort_cost(1), 3);
+        assert_eq!(vec_sort_cost(4), 17);
+        assert_eq!(vec_sort_cost(8), 41);
+        // Powers of two alone cannot tell ceil(log2 n) from floor(log2 n).
+        // n = 5 charges 5 * (3 + 2) + 1, not the floor model's 5 * (2 + 2) + 1.
+        assert_eq!(vec_sort_cost(5), 26);
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            assert_eq!(vec_sort_cost(usize::MAX), u64::MAX);
+            __vow_perf_count();
+            assert_eq!(__vow_perf_counter_read(), u64::MAX);
+        }
+
         __vow_perf_counter_reset();
         assert_eq!(__vow_perf_counter_read(), 0);
     }
@@ -6021,6 +6088,31 @@ mod tests {
             eprintln!("rodata_trap_worker: vec reserve overflow did NOT trap");
             std::process::exit(42);
         }
+        if op == "perf_vec_sort_use_after_free" {
+            let vec = VowVec {
+                ptr: std::ptr::dangling_mut(),
+                len: 4,
+                cap: 4,
+            };
+            let vec_addr = &raw const vec as usize;
+            __vow_sanitize_init();
+            // The guard must be dropped before the call below: it re-locks
+            // SHADOW_TABLE via sanitize_on_read, so flattening this scope
+            // deadlocks the worker.
+            {
+                let mut table = SHADOW_TABLE.lock().unwrap();
+                shadow_table_get_or_init(&mut table).insert(
+                    vec_addr,
+                    ShadowVec {
+                        generations: Vec::new(),
+                        freed: true,
+                    },
+                );
+            }
+            unsafe { __vow_perf_count_vec_sort(vec_addr as *const u8) };
+            eprintln!("rodata_trap_worker: perf Vec::sort UAF did NOT trap");
+            std::process::exit(42);
+        }
         if op == "Vec::new_in_arena_null" {
             let _ = unsafe { __vow_vec_new_in_arena(std::ptr::null_mut(), 8, 8) };
             eprintln!("rodata_trap_worker: null arena constructor did NOT trap");
@@ -6361,6 +6453,24 @@ mod tests {
         assert!(
             stderr.contains(r#""reason":"null arena""#),
             "stderr missing null arena reason:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn perf_vec_sort_cost_adapter_checks_sanitizer_before_reading_header() {
+        let (out, stderr) = spawn_trap_worker("perf_vec_sort_use_after_free");
+        assert_eq!(
+            out.status.code(),
+            Some(VOW_RUNTIME_ABORT_EXIT),
+            "cost adapter should reject a freed Vec descriptor; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""error":"UseAfterFree""#),
+            "stderr missing UseAfterFree for Vec::sort cost adapter:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""op":"read""#),
+            "stderr missing read operation for Vec::sort cost adapter:\n{stderr}"
         );
     }
 

@@ -2819,6 +2819,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_perf_counter_read" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        // Must match vow-clif-shim/src/lib.rs and the vow-runtime definition.
+        "__vow_perf_count_vec_sort" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+        }
         "__vow_perf_count"
         | "__vow_perf_counter_reset"
         | "__vow_profile_init"
@@ -3219,6 +3223,32 @@ mod tests {
         let clif = function.display().to_string();
         assert_eq!(clif.matches("sextend.i64").count(), 2, "{clif}");
         assert_eq!(clif.matches("uextend.i64").count(), 2, "{clif}");
+    }
+
+    fn extern_sig(sym: &str) -> Signature {
+        let isa = make_isa(BuildMode::Release).expect("native isa");
+        let obj_builder = ObjectBuilder::new(
+            isa,
+            b"extern_sig".to_vec(),
+            cranelift_module::default_libcall_names(),
+        )
+        .expect("object builder");
+        make_extern_sig(sym, &ObjectModule::new(obj_builder))
+    }
+
+    // Pins the other half of the hand-maintained ABI pair asserted by
+    // vow-clif-shim's `perf_vec_sort_cost_extern_accepts_vec_argument`.
+    #[test]
+    fn perf_vec_sort_cost_extern_accepts_vec_argument() {
+        let sig = extern_sig("__vow_perf_count_vec_sort");
+
+        assert_eq!(sig.params.len(), 1);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert!(sig.returns.is_empty());
+
+        // The adapter is handed the sort call's own operands, so its parameter
+        // list must stay identical to `__vow_vec_sort`'s.
+        assert_eq!(sig.params, extern_sig("__vow_vec_sort").params);
     }
 
     fn make_module(name: &str, funcs: Vec<Function>) -> Module {
