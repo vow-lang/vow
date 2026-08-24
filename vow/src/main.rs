@@ -52,6 +52,21 @@ pub enum BuildStatus {
     },
 }
 
+/// Process exit code for a completed build/verify run. Fail closed: every
+/// terminal non-success status exits 1; `Verified`/`Unverified` exit 0. This is
+/// the same fail-closed set as `vow contracts --verify` (#479) and mirrors the
+/// per-status exit notes on [`crate::verify_outcome::VerifyOutcome`]. The
+/// exhaustive `match` makes the policy a machine-checked contract — a new
+/// `BuildStatus` variant is a compile error here, not a silent exit 0.
+fn build_exit_code(status: &BuildStatus) -> i32 {
+    match status {
+        BuildStatus::Verified | BuildStatus::Unverified => 0,
+        BuildStatus::Skipped
+        | BuildStatus::CompileFailed { .. }
+        | BuildStatus::VerifyFailed { .. } => 1,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CeSource {
     pub file: String,
@@ -677,11 +692,9 @@ fn run_build_command(
     if !dump_ir {
         result.emit_json();
     }
-    if matches!(
-        &result.status,
-        BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. } | BuildStatus::Skipped
-    ) {
-        std::process::exit(1);
+    let code = build_exit_code(&result.status);
+    if code != 0 {
+        std::process::exit(code);
     }
 }
 
@@ -767,11 +780,9 @@ fn run_verify_command(
         session.finish();
     }
     result.emit_json();
-    if matches!(
-        &result.status,
-        BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. } | BuildStatus::Skipped
-    ) {
-        std::process::exit(1);
+    let code = build_exit_code(&result.status);
+    if code != 0 {
+        std::process::exit(code);
     }
 }
 
@@ -1062,6 +1073,31 @@ mod tests {
             BuildStatus::VerifyFailed { description, .. }
                 if description.contains("ESBMC not found")
         )
+    }
+
+    // The fail-closed exit contract for `vow build --verify` / `vow verify`
+    // (#479): every terminal non-success status exits 1. `Skipped` => 1 is the
+    // surprising arm — a vowed function ESBMC could not model does not silently
+    // pass. `build_exit_code` makes this policy an exhaustive `match`, so adding
+    // a `BuildStatus` variant is a compile error rather than a silent exit 0.
+    #[test]
+    fn build_exit_code_fails_closed_on_terminal_statuses() {
+        assert_eq!(build_exit_code(&BuildStatus::Verified), 0);
+        assert_eq!(build_exit_code(&BuildStatus::Unverified), 0);
+        assert_eq!(build_exit_code(&BuildStatus::Skipped), 1);
+        assert_eq!(
+            build_exit_code(&BuildStatus::CompileFailed {
+                message: "parse error".to_string(),
+            }),
+            1
+        );
+        assert_eq!(
+            build_exit_code(&BuildStatus::VerifyFailed {
+                function: "f".to_string(),
+                description: "counterexample".to_string(),
+            }),
+            1
+        );
     }
 
     struct EmitFailingDiagnosticEmitter {
