@@ -149,6 +149,24 @@ class ExpectedSignalTest(unittest.TestCase):
                              equivalence.read_directives(p)["expected_exit"])
 
 
+class SignalClassificationTest(unittest.TestCase):
+    """Signals both compilers agree on: a trap is the language working."""
+
+    def test_deliberate_traps_are_classified(self):
+        # SIGILL from checked-overflow, SIGABRT from a debug vow violation.
+        self.assertIn(4, equivalence.TRAP_SIGNALS)
+        self.assertIn(6, equivalence.TRAP_SIGNALS)
+
+    def test_memory_unsafety_signals_are_never_traps(self):
+        # #905 makes "no input produces a SIGSEGV binary" an invariant that
+        # holds regardless of whether the two compilers agree.
+        self.assertIn(11, equivalence.UNSAFE_SIGNALS)
+        self.assertNotIn(11, equivalence.TRAP_SIGNALS)
+        self.assertFalse(
+            set(equivalence.TRAP_SIGNALS) & set(equivalence.UNSAFE_SIGNALS)
+        )
+
+
 class CorpusTest(unittest.TestCase):
     def test_corpus_is_sorted_and_deduplicated(self):
         # Shard k of n must mean the same file set on every run, so ordering is

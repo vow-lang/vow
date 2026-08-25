@@ -44,6 +44,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # `ulimit -v` equivalent for self-hosted binaries, in bytes (2 GB).
 SELF_MEM_LIMIT = 2_000_000 * 1024
 
+# Signals Vow uses deliberately: a checked-arithmetic overflow, a vow violation
+# in debug mode, and a division guard all terminate the process on purpose. When
+# BOTH compilers produce the same one, that is agreement about designed
+# behaviour, not a divergence.
+TRAP_SIGNALS = {4: "SIGILL", 5: "SIGTRAP", 6: "SIGABRT", 8: "SIGFPE"}
+
+# Memory-unsafety signals. Worth reporting even when both compilers agree: #905
+# names "no input may produce a binary that dies on SIGSEGV" as an invariant
+# that holds independently of equivalence.
+UNSAFE_SIGNALS = {7: "SIGBUS", 11: "SIGSEGV"}
+
 # A compiler that panics is always a bug, however the panic is spelled.
 PANIC_MARKERS = (
     "thread 'main' panicked",
@@ -302,8 +313,12 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
     cross-compiler comparison — reporting it as a divergence would be a false
     positive, so it is reported as skipped-nondeterministic instead.
     """
-    r1 = run_binary(rust_bin, stdin_data, timeout, limit_memory=False)
-    r2 = run_binary(rust_bin, stdin_data, timeout, limit_memory=False)
+    # Both binaries run under the SAME limits. Limiting only the self-hosted
+    # side (the repo's `ulimit -v` convention, which exists for running the
+    # memory-hungry self-hosted *compiler*) would make any program needing more
+    # than the cap look like a miscompile.
+    r1 = run_binary(rust_bin, stdin_data, timeout, limit_memory=True)
+    r2 = run_binary(rust_bin, stdin_data, timeout, limit_memory=True)
     if r1["timeout"] or r2["timeout"]:
         return [], "runtime-timeout"
     if r1["stdout"] != r2["stdout"] or r1["exit"] != r2["exit"]:
@@ -331,19 +346,33 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
                 ),
             }
         )
-    for who, res in (("rust", r1), ("self-hosted", s)):
-        if res["exit"] is not None and res["exit"] < 0:
-            signal = -res["exit"]
-            if signal == expect_signal:
-                continue
-            div.append(
-                {
-                    "observable": "fail_closed",
-                    "detail": (
-                        f"{who}-built binary died on signal {signal}"
-                    ),
-                }
-            )
+    # A signal death the two compilers DISAGREE on is already reported above as
+    # an exit-code divergence. What is left to judge is a signal both produced:
+    # a deliberate trap is the language working, memory unsafety never is.
+    both = {-r1["exit"] if r1["exit"] is not None and r1["exit"] < 0 else None,
+            -s["exit"] if s["exit"] is not None and s["exit"] < 0 else None}
+    if len(both) == 1:
+        signal = both.pop()
+        if signal is not None and signal != expect_signal:
+            if signal in UNSAFE_SIGNALS:
+                div.append(
+                    {
+                        "observable": "fail_closed",
+                        "detail": (
+                            f"both binaries died on {UNSAFE_SIGNALS[signal]} "
+                            f"({signal}) — memory unsafety, not a trap"
+                        ),
+                    }
+                )
+            elif signal not in TRAP_SIGNALS:
+                div.append(
+                    {
+                        "observable": "fail_closed",
+                        "detail": (
+                            f"both binaries died on unclassified signal {signal}"
+                        ),
+                    }
+                )
     return div, None
 
 
