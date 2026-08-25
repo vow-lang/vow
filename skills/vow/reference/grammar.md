@@ -268,11 +268,13 @@ Wrapping operators silently wrap on overflow. For unsigned operands, including
 
 Checked operators abort with `ArithmeticOverflow` on overflow.
 
-**128-bit codegen limitations.** `/`, `%`, `/!`, `%!`, and `*!` are not yet
-executable for `i128`/`u128` operands: the native backend rejects them with a
-compile error naming the unimplemented seam. Every other operator — `+`, `-`,
-`*`, `+!`, `-!`, the comparisons, the bitwise operators, and the shifts — works
-on 128-bit operands.
+**128-bit arithmetic.** All operators work on `i128`/`u128` operands. `/`, `%`,
+`/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler
+routes them through runtime helpers; this is invisible in the language, and
+their trap behaviour matches the narrower widths exactly. Division or
+remainder by zero aborts, as does `/` and `/!` on `MIN / -1` for `i128`, whose
+quotient is not representable. `MIN % -1` is `0` and does not abort, at every
+width.
 
 128-bit values are also **scalar-only** for now. Locals, parameters, returns,
 and temporaries carry both limbs correctly, but a 128-bit value placed inside

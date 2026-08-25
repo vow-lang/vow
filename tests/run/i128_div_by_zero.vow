@@ -1,0 +1,18 @@
+// TEST: exit 132
+module I128DivByZero
+
+// 128-bit `/` routes through a vow-runtime helper, so the divisor-zero trap is
+// emitted by the backend rather than by Cranelift's own `sdiv` lowering. It
+// must still abort exactly like `i64 / 0` does, in every build mode.
+fn zero() -> i128 {
+    0
+}
+
+fn divide() -> i128 {
+    10 / zero()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}

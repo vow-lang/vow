@@ -1,4 +1,4 @@
-// TEST: stdout "171 0\n171 5\n170 255\n86 0\n171 3\n170 254\n171 0\n171 7\n0 0\n0 171\n16 0\n255 255\nT\nT\nF\nT\nT\nT"
+// TEST: stdout "171 0\n171 5\n170 255\n86 0\n171 3\n170 254\n171 0\n171 7\n0 0\n0 171\n16 0\n255 255\n57 0\n0 0\n57 0\n0 0\n86 0\n255 254\n255 255\n255 254\n255 255\nT\nT\nF\nT\nT\nT"
 module I128Codegen
 
 // 0xAB << 64: high limb 0xAB, low limb 0. Every assertion below reads both
@@ -45,6 +45,19 @@ fn main() -> () [io] {
     show(seed >> 64);
     show(1 << 68);
     show(-1);
+
+    // Division, remainder, and checked multiply on I128 have no native
+    // Cranelift lowering; they route through vow-runtime helpers. Both limbs
+    // are still read separately so a truncating helper ABI fails here.
+    show(seed / 3);
+    show(seed % 3);
+    show(seed /! 3);
+    show(seed %! 3);
+    show(seed *! 2);
+    show(-7 / 3);
+    show(-7 % 3);
+    show(-7 /! 3);
+    show(-7 %! 3);
 
     show_bool(seed == high_seed());
     show_bool(seed > 0);

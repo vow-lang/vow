@@ -380,26 +380,63 @@ fn wide_values_in_aggregates_fail_closed() {
     );
 }
 
-/// Division, remainder, and checked multiply on 128-bit operands are the one
-/// deferred piece of the Cranelift backend (a later seam of epic #526 routes
-/// them through `vow-runtime`). They must fail with a diagnostic rather than
-/// erroring or panicking inside Cranelift.
+/// Division, remainder, and checked multiply on 128-bit operands have no
+/// native Cranelift lowering, so they route through `vow-runtime` helpers
+/// (epic #526 seam 3b). End to end they must build and produce the same
+/// answers native `u128` arithmetic does.
 #[test]
-fn deferred_wide_division_fails_closed_without_panicking() {
-    for (name, expression, expected) in [
-        ("div", "x / y", "128-bit division"),
-        ("rem", "x % y", "128-bit remainder"),
-        ("checked_div", "x /! y", "128-bit checked division"),
-        ("checked_rem", "x %! y", "128-bit checked remainder"),
-        ("checked_mul", "x *! y", "128-bit checked multiply"),
+fn wide_division_and_checked_multiply_run_through_runtime_helpers() {
+    for (name, expression, x, y, expected) in [
+        (
+            "div",
+            "x / y",
+            340282366920938463463374607431768211455u128,
+            5,
+            68056473384187692692674921486353642291u128,
+        ),
+        (
+            "rem",
+            "x % y",
+            340282366920938463463374607431768211455,
+            7,
+            3,
+        ),
+        (
+            "checked_div",
+            "x /! y",
+            3781582535110458081280,
+            5,
+            756316507022091616256,
+        ),
+        ("checked_rem", "x %! y", 3781582535110458081280, 7, 4),
+        (
+            "checked_mul",
+            "x *! y",
+            3781582535110458081280,
+            2,
+            7563165070220916162560,
+        ),
     ] {
         let dir = tempfile::TempDir::new().unwrap();
         let source_path = dir.path().join("wide_div.vow");
         let output_path = dir.path().join("wide_div");
+        // The result is printed one byte at a time, low limb then high, so a
+        // helper ABI that truncated to 64 bits would fail on the high column
+        // rather than pass by correlated truncation.
         fs::write(
             &source_path,
             format!(
-                "module WideDiv\nfn f(x: u128, y: u128) -> u128 {{ {expression} }}\nfn main() -> i32 {{ f(10, 3); 0 }}\n"
+                "module WideDiv\n\
+                 fn f(x: u128, y: u128) -> u128 {{ {expression} }}\n\
+                 fn main() -> () [io] {{\n\
+                 let r: u128 = f({x}, {y});\n\
+                 let mut i: u128 = 0;\n\
+                 while i < 16 {{\n\
+                 print_i64(u128_to_u8_wrap(r >> (i * 8)) as i64);\n\
+                 print_str(\" \");\n\
+                 i = i + 1;\n\
+                 }}\n\
+                 }}\n"
             ),
         )
         .unwrap();
@@ -416,25 +453,73 @@ fn deferred_wide_division_fails_closed_without_panicking() {
             .expect("failed to run vow");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|error| {
-            panic!("{name}: invalid JSON from build: {error}\nstdout: {stdout}")
-        });
-
         assert_eq!(
             output.status.code(),
-            Some(1),
-            "{name}: deferred wide division must fail closed\nstdout: {stdout}\nstderr: {stderr}"
+            Some(0),
+            "{name}: build failed\nstdout: {stdout}\nstderr: {stderr}"
         );
-        assert_eq!(json["status"], "CompileFailed", "{name}");
-        assert!(
-            json["message"]
-                .as_str()
-                .is_some_and(|message| message.contains(expected)),
-            "{name}: build must name the deferred backend seam: {json}"
+        assert!(output_path.exists(), "{name}: no executable produced");
+
+        let run = Command::new(&output_path)
+            .output()
+            .expect("failed to run compiled program");
+        assert_eq!(run.status.code(), Some(0), "{name}: program aborted");
+        let want: String = (0..16)
+            .map(|i| format!("{} ", (expected >> (i * 8)) as u8))
+            .collect();
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            want,
+            "{name}: wrong 128-bit result"
         );
-        assert!(
-            !output_path.exists(),
-            "{name}: failed wide codegen must not leave an executable"
+    }
+}
+
+/// The divisor-zero trap on the routed path must abort rather than reach the
+/// runtime helper, matching what `i64 / 0` does today.
+#[test]
+fn wide_division_by_zero_traps() {
+    for (name, expression) in [
+        ("div", "x / y"),
+        ("rem", "x % y"),
+        ("checked_div", "x /! y"),
+        ("checked_rem", "x %! y"),
+    ] {
+        let dir = tempfile::TempDir::new().unwrap();
+        let source_path = dir.path().join("wide_div_zero.vow");
+        let output_path = dir.path().join("wide_div_zero");
+        fs::write(
+            &source_path,
+            format!(
+                "module WideDivZero\nfn f(x: u128, y: u128) -> u128 {{ {expression} }}\nfn main() -> i32 {{ f(10, 0); 0 }}\n"
+            ),
+        )
+        .unwrap();
+
+        let output = Command::new(vow_bin())
+            .args([
+                "build",
+                "--no-verify",
+                source_path.to_str().unwrap(),
+                "-o",
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to run vow");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{name}: build failed\nstdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+
+        let run = Command::new(&output_path)
+            .output()
+            .expect("failed to run compiled program");
+        assert_eq!(
+            run.status.code(),
+            None,
+            "{name}: division by zero must abort, not return"
         );
     }
 }

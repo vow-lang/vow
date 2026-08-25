@@ -1,0 +1,20 @@
+// TEST: stdout "0 0"
+module I128RemMinByNegOne
+
+// `MIN % -1` is 0 and must NOT trap: `srem` does not trap where `sdiv` does,
+// and `i64::MIN % -1` returns 0 today. Both limbs are read separately so a
+// helper that wrapped to MIN instead would fail on the high column.
+fn neg_one() -> i128 {
+    -1
+}
+
+fn minimum() -> i128 {
+    -170141183460469231731687303715884105728
+}
+
+fn main() -> () [io] {
+    let r: i128 = minimum() % neg_one();
+    print_i64(u128_to_u8_wrap((r as u128) >> 64) as i64);
+    print_str(" ");
+    print_i64(u128_to_u8_wrap(r as u128) as i64);
+}

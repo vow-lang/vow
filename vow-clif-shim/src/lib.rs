@@ -2069,64 +2069,83 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, val);
                 }
                 IOP_WDIV | IOP_WREM => {
-                    let what = if op == IOP_WDIV {
-                        "division"
+                    let val = if let Some(sym) = wide_helper_symbol(op, ity) {
+                        let Some(&fr) = extern_func_refs.get(sym) else {
+                            report_missing_wide_helper(sym);
+                            return -1;
+                        };
+                        emit_divisor_traps(&mut builder, op, ity, arg!(0), arg!(1));
+                        let call = builder.ins().call(fr, &[arg!(0), arg!(1)]);
+                        builder.inst_results(call)[0]
                     } else {
-                        "remainder"
-                    };
-                    if is_wide_operand(&builder, arg!(0)) {
-                        report_unsupported_wide_op(what);
-                        return -1;
-                    }
-                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
-                    let val = match (op, signed) {
-                        (IOP_WDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
-                        (IOP_WDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
-                        (IOP_WREM, true) => builder.ins().srem(arg!(0), arg!(1)),
-                        (IOP_WREM, false) => builder.ins().urem(arg!(0), arg!(1)),
-                        _ => unreachable!(),
+                        let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                        match (op, signed) {
+                            (IOP_WDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
+                            (IOP_WDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
+                            (IOP_WREM, true) => builder.ins().srem(arg!(0), arg!(1)),
+                            (IOP_WREM, false) => builder.ins().urem(arg!(0), arg!(1)),
+                            _ => unreachable!(),
+                        }
                     };
                     set_val!(iid, val);
                 }
                 IOP_CADD | IOP_CSUB | IOP_CMUL => {
-                    if op == IOP_CMUL && is_wide_operand(&builder, arg!(0)) {
-                        report_unsupported_wide_op("checked multiply");
-                        return -1;
-                    }
-                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
-                    let (result, overflow) = match (op, signed) {
-                        (IOP_CADD, true) => builder.ins().sadd_overflow(arg!(0), arg!(1)),
-                        (IOP_CADD, false) => builder.ins().uadd_overflow(arg!(0), arg!(1)),
-                        (IOP_CSUB, true) => builder.ins().ssub_overflow(arg!(0), arg!(1)),
-                        (IOP_CSUB, false) => builder.ins().usub_overflow(arg!(0), arg!(1)),
-                        (IOP_CMUL, true) => builder.ins().smul_overflow(arg!(0), arg!(1)),
-                        (IOP_CMUL, false) => builder.ins().umul_overflow(arg!(0), arg!(1)),
-                        _ => unreachable!(),
+                    // `imul.i128` lowers fine; only the overflow flag needs a
+                    // helper, so the trap stays on the shared
+                    // `emit_overflow_check` path and 128-bit `*!` reports
+                    // overflow exactly like every other width.
+                    let (result, overflow) = if let Some(sym) = wide_helper_symbol(op, ity) {
+                        let Some(&fr) = extern_func_refs.get(sym) else {
+                            report_missing_wide_helper(sym);
+                            return -1;
+                        };
+                        let call = builder.ins().call(fr, &[arg!(0), arg!(1)]);
+                        let overflow = builder.inst_results(call)[0];
+                        (builder.ins().imul(arg!(0), arg!(1)), overflow)
+                    } else {
+                        let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                        match (op, signed) {
+                            (IOP_CADD, true) => builder.ins().sadd_overflow(arg!(0), arg!(1)),
+                            (IOP_CADD, false) => builder.ins().uadd_overflow(arg!(0), arg!(1)),
+                            (IOP_CSUB, true) => builder.ins().ssub_overflow(arg!(0), arg!(1)),
+                            (IOP_CSUB, false) => builder.ins().usub_overflow(arg!(0), arg!(1)),
+                            (IOP_CMUL, true) => builder.ins().smul_overflow(arg!(0), arg!(1)),
+                            (IOP_CMUL, false) => builder.ins().umul_overflow(arg!(0), arg!(1)),
+                            _ => unreachable!(),
+                        }
                     };
                     emit_overflow_check(&mut builder, overflow, overflow_ref);
                     set_val!(iid, result);
                 }
                 IOP_CDIV | IOP_CREM => {
-                    let what = if op == IOP_CDIV {
-                        "checked division"
-                    } else {
-                        "checked remainder"
-                    };
-                    if is_wide_operand(&builder, arg!(0)) {
-                        report_unsupported_wide_op(what);
-                        return -1;
-                    }
-                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let wide = wide_helper_symbol(op, ity);
                     let cl_ty = builder.func.dfg.value_type(arg!(1));
-                    let zero = builder.ins().iconst(cl_ty, 0);
-                    let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-                    emit_overflow_check(&mut builder, is_zero, overflow_ref);
-                    let val = match (op, signed) {
-                        (IOP_CDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
-                        (IOP_CDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
-                        (IOP_CREM, true) => builder.ins().srem(arg!(0), arg!(1)),
-                        (IOP_CREM, false) => builder.ins().urem(arg!(0), arg!(1)),
-                        _ => unreachable!(),
+                    // Cranelift's own `sdiv` traps on `MIN / -1` at the
+                    // narrower widths; the routed 128-bit path has to
+                    // reproduce that, and on `/!` it is an ArithmeticOverflow.
+                    let trap_if = if cl_ty == types::I128 {
+                        wide_divisor_trap_condition(&mut builder, op, ity, arg!(0), arg!(1))
+                    } else {
+                        let zero = builder.ins().iconst(cl_ty, 0);
+                        builder.ins().icmp(IntCC::Equal, arg!(1), zero)
+                    };
+                    emit_overflow_check(&mut builder, trap_if, overflow_ref);
+                    let val = if let Some(sym) = wide {
+                        let Some(&fr) = extern_func_refs.get(sym) else {
+                            report_missing_wide_helper(sym);
+                            return -1;
+                        };
+                        let call = builder.ins().call(fr, &[arg!(0), arg!(1)]);
+                        builder.inst_results(call)[0]
+                    } else {
+                        let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                        match (op, signed) {
+                            (IOP_CDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
+                            (IOP_CDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
+                            (IOP_CREM, true) => builder.ins().srem(arg!(0), arg!(1)),
+                            (IOP_CREM, false) => builder.ins().urem(arg!(0), arg!(1)),
+                            _ => unreachable!(),
+                        }
                     };
                     set_val!(iid, val);
                 }
@@ -2886,17 +2905,91 @@ fn emit_overflow_check(
     builder.seal_block(cont_block);
 }
 
-fn is_wide_operand(builder: &FunctionBuilder<'_>, value: Value) -> bool {
-    builder.func.dfg.value_type(value) == types::I128
-}
-
 /// Cranelift 0.134 cannot lower division, remainder, or checked multiply on
 /// I128: `sdiv`/`udiv`/`urem` report `Unsupported`, `srem` panics outright on
 /// x86_64, and `smul_overflow`/`umul_overflow` are rejected by Cranelift's own
-/// IR verifier. The shim rejects them rather than letting codegen die inside
-/// Cranelift; this mirrors `reject_wide_operand` in `vow-codegen`.
-fn report_unsupported_wide_op(op: &str) {
-    eprintln!("clif_shim: 128-bit {op} is not supported by the Cranelift backend yet (epic #526)");
+/// IR verifier. Those five opcodes are routed through `vow-runtime` helpers
+/// instead; this mirrors `wide_helper_symbol` in `vow-codegen`.
+///
+/// The instruction's own ITY — not the Cranelift value type — selects the
+/// symbol, because it carries signedness as well as width and is the one
+/// source both `collect_extern_syms` in `compiler/clif.vow` and this lowering
+/// can read. Reading two different sources would let the import pre-pass
+/// declare `__vow_i128_div` while lowering asks for `__vow_u128_div`.
+fn wide_helper_symbol(op: i64, ity: i64) -> Option<&'static str> {
+    let signed = match ity {
+        ITY_I128 => true,
+        ITY_U128 => false,
+        _ => return None,
+    };
+    Some(match (op, signed) {
+        (IOP_WDIV | IOP_CDIV, true) => "__vow_i128_div",
+        (IOP_WDIV | IOP_CDIV, false) => "__vow_u128_div",
+        (IOP_WREM | IOP_CREM, true) => "__vow_i128_rem",
+        (IOP_WREM | IOP_CREM, false) => "__vow_u128_rem",
+        (IOP_CMUL, true) => "__vow_i128_mul_overflow",
+        (IOP_CMUL, false) => "__vow_u128_mul_overflow",
+        _ => return None,
+    })
+}
+
+/// Materialize a 128-bit constant from its two limbs. Cranelift has no
+/// 128-bit `iconst`, so they are built separately and rejoined with `iconcat`.
+fn wide_iconst(builder: &mut FunctionBuilder<'_>, bits: u128) -> Value {
+    let lo = builder.ins().iconst(types::I64, bits as u64 as i64);
+    let hi = builder.ins().iconst(types::I64, (bits >> 64) as u64 as i64);
+    builder.ins().iconcat(lo, hi)
+}
+
+/// Build the divisor condition Cranelift traps on for the narrower widths: a
+/// zero divisor always, plus `MIN / -1` for signed division, whose true
+/// quotient has no representation. Signed remainder is excluded deliberately —
+/// `sdiv` traps on `MIN / -1` but `srem` does not, and `i64::MIN % -1` returns
+/// 0 today, which `wrapping_rem` in the helper also gives.
+fn wide_divisor_trap_condition(
+    builder: &mut FunctionBuilder<'_>,
+    op: i64,
+    ity: i64,
+    dividend: Value,
+    divisor: Value,
+) -> Value {
+    let zero = wide_iconst(builder, 0);
+    let mut condition = builder.ins().icmp(IntCC::Equal, divisor, zero);
+    if ity == ITY_I128 && (op == IOP_WDIV || op == IOP_CDIV) {
+        let min = wide_iconst(builder, i128::MIN as u128);
+        let neg_one = wide_iconst(builder, -1i128 as u128);
+        let dividend_is_min = builder.ins().icmp(IntCC::Equal, dividend, min);
+        let divisor_is_neg_one = builder.ins().icmp(IntCC::Equal, divisor, neg_one);
+        let overflows = builder.ins().band(dividend_is_min, divisor_is_neg_one);
+        condition = builder.ins().bor(condition, overflows);
+    }
+    condition
+}
+
+/// Trap on [`wide_divisor_trap_condition`], so 128-bit `/` and `%` abort
+/// exactly where `i64` `/` and `%` do rather than reaching the runtime helper.
+fn emit_divisor_traps(
+    builder: &mut FunctionBuilder<'_>,
+    op: i64,
+    ity: i64,
+    dividend: Value,
+    divisor: Value,
+) {
+    let condition = wide_divisor_trap_condition(builder, op, ity, dividend, divisor);
+    let trap_block = builder.create_block();
+    let cont_block = builder.create_block();
+    builder
+        .ins()
+        .brif(condition, trap_block, &[], cont_block, &[]);
+    builder.switch_to_block(trap_block);
+    builder.seal_block(trap_block);
+    builder.ins().trap(TrapCode::INTEGER_DIVISION_BY_ZERO);
+    builder.switch_to_block(cont_block);
+    builder.seal_block(cont_block);
+}
+
+fn report_missing_wide_helper(sym: &str) {
+    eprintln!("clif_shim: 128-bit runtime helper {sym} was not declared as an import");
 }
 
 fn load_slotted_value(
@@ -3125,6 +3218,25 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         sig.params.push(AbiParam::new(types::I8));
         sig.params.push(AbiParam::new(types::I8));
         sig.returns.push(AbiParam::new(types::I8));
+        return sig;
+    }
+    if matches!(
+        sym,
+        "__vow_i128_div"
+            | "__vow_i128_rem"
+            | "__vow_u128_div"
+            | "__vow_u128_rem"
+            | "__vow_i128_mul_overflow"
+            | "__vow_u128_mul_overflow"
+    ) {
+        sig.params.push(AbiParam::new(types::I128));
+        sig.params.push(AbiParam::new(types::I128));
+        sig.returns
+            .push(AbiParam::new(if sym.ends_with("_mul_overflow") {
+                types::I8
+            } else {
+                types::I128
+            }));
         return sig;
     }
     match sym {
@@ -4522,47 +4634,97 @@ mod tests {
         builder.finalize(isa.frontend_config());
     }
 
+    /// Cranelift 0.134 cannot lower division, remainder, or checked multiply
+    /// on I128, so those five opcodes are routed through `vow-runtime`
+    /// helpers (epic #526 seam 3b). The symbol is chosen from the
+    /// instruction's own ITY, which carries signedness as well as width —
+    /// the same source `collect_extern_syms` in `compiler/clif.vow` reads.
     #[test]
-    fn wide_division_remainder_and_checked_multiply_are_rejected() {
-        for (name, op) in [
-            ("i128_div", IOP_WDIV),
-            ("i128_rem", IOP_WREM),
-            ("i128_checked_div", IOP_CDIV),
-            ("i128_checked_rem", IOP_CREM),
-            ("i128_checked_mul", IOP_CMUL),
+    fn wide_helper_symbols_cover_every_unsupported_opcode() {
+        for (op, signed, unsigned) in [
+            (IOP_WDIV, "__vow_i128_div", "__vow_u128_div"),
+            (IOP_CDIV, "__vow_i128_div", "__vow_u128_div"),
+            (IOP_WREM, "__vow_i128_rem", "__vow_u128_rem"),
+            (IOP_CREM, "__vow_i128_rem", "__vow_u128_rem"),
+            (
+                IOP_CMUL,
+                "__vow_i128_mul_overflow",
+                "__vow_u128_mul_overflow",
+            ),
         ] {
-            let ctx = __vow_clif_create(0, 0);
-            assert_ne!(ctx, 0);
-            declare_test_function(ctx, 0, name, ITY_I128, false);
-            unsafe {
-                assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
-            }
-            add_test_block(ctx);
-            add_test_inst(
-                ctx,
-                0,
-                IOP_CONST_I128,
+            assert_eq!(wide_helper_symbol(op, ITY_I128), Some(signed), "op {op}");
+            assert_eq!(wide_helper_symbol(op, ITY_U128), Some(unsigned), "op {op}");
+            assert_eq!(wide_helper_symbol(op, ITY_I64), None, "op {op}");
+            assert_eq!(wide_helper_symbol(op, ITY_U64), None, "op {op}");
+        }
+        for op in [IOP_WADD, IOP_WMUL, IOP_CADD, IOP_CSUB] {
+            assert_eq!(wide_helper_symbol(op, ITY_I128), None, "op {op}");
+        }
+    }
+
+    /// With the helper imported, the five redirected opcodes compile; without
+    /// it the shim fails closed rather than emitting an unresolvable call.
+    #[test]
+    fn wide_division_remainder_and_checked_multiply_call_runtime_helpers() {
+        for (name, op, ity, sym) in [
+            ("i128_div", IOP_WDIV, ITY_I128, "__vow_i128_div"),
+            ("i128_rem", IOP_WREM, ITY_I128, "__vow_i128_rem"),
+            ("i128_checked_div", IOP_CDIV, ITY_I128, "__vow_i128_div"),
+            ("i128_checked_rem", IOP_CREM, ITY_I128, "__vow_i128_rem"),
+            (
+                "i128_checked_mul",
+                IOP_CMUL,
                 ITY_I128,
-                IDATA_CONST_I128,
-                10,
-                0,
-                &[],
-            );
-            add_test_inst(
-                ctx,
-                1,
-                IOP_CONST_I128,
-                ITY_I128,
-                IDATA_CONST_I128,
-                3,
-                0,
-                &[],
-            );
-            add_test_inst(ctx, 2, op, ITY_I128, IDATA_INTEGER, ITY_I128, 0, &[0, 1]);
-            add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[2]);
-            unsafe {
-                assert_eq!(__vow_clif_fn_end(ctx), -1, "{name}");
-                __vow_clif_destroy(ctx);
+                "__vow_i128_mul_overflow",
+            ),
+            ("u128_div", IOP_WDIV, ITY_U128, "__vow_u128_div"),
+            ("u128_rem", IOP_WREM, ITY_U128, "__vow_u128_rem"),
+            ("u128_checked_div", IOP_CDIV, ITY_U128, "__vow_u128_div"),
+            ("u128_checked_rem", IOP_CREM, ITY_U128, "__vow_u128_rem"),
+            (
+                "u128_checked_mul",
+                IOP_CMUL,
+                ITY_U128,
+                "__vow_u128_mul_overflow",
+            ),
+        ] {
+            for declare_helper in [true, false] {
+                let ctx = __vow_clif_create(0, 0);
+                assert_ne!(ctx, 0);
+                if declare_helper {
+                    let sym_vec = vow_string(sym);
+                    unsafe {
+                        __vow_clif_declare_extern(ctx, &sym_vec as *const VowVec as i64);
+                    }
+                }
+                declare_test_function(ctx, 0, name, ity, false);
+                unsafe {
+                    assert_eq!(__vow_clif_fn_begin(ctx, 0, ity, 0), 0);
+                }
+                add_test_block(ctx);
+                let const_op = if ity == ITY_I128 {
+                    IOP_CONST_I128
+                } else {
+                    IOP_CONST_U128
+                };
+                let const_dk = if ity == ITY_I128 {
+                    IDATA_CONST_I128
+                } else {
+                    IDATA_CONST_U128
+                };
+                add_test_inst(ctx, 0, const_op, ity, const_dk, 10, 0, &[]);
+                add_test_inst(ctx, 1, const_op, ity, const_dk, 3, 0, &[]);
+                add_test_inst(ctx, 2, op, ity, IDATA_INTEGER, ity, 0, &[0, 1]);
+                add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[2]);
+                unsafe {
+                    let expected = if declare_helper { 0 } else { -1 };
+                    assert_eq!(
+                        __vow_clif_fn_end(ctx),
+                        expected,
+                        "{name}: helper declared = {declare_helper}"
+                    );
+                    __vow_clif_destroy(ctx);
+                }
             }
         }
     }
