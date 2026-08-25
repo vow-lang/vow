@@ -206,5 +206,81 @@ class CorpusTest(unittest.TestCase):
                              sorted((f for s in shards for f in s), key=str))
 
 
+class ReconcileTest(unittest.TestCase):
+    """A ledger that suppresses real findings is worse than no ledger."""
+
+    def test_untracked_divergence_is_new(self):
+        recs = [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}]
+
+        new, known, fixed = equivalence.reconcile(recs, {})
+
+        self.assertEqual(["a.vow"], [r["file"] for r in new])
+        self.assertEqual([], known)
+        self.assertEqual([], fixed)
+
+    def test_tracked_divergence_is_known_not_new(self):
+        recs = [{"file": "a.vow", "divergences": [{"observable": "error_code"}]}]
+        ledger = {"a.vow": {"status": "expected", "issue": 588}}
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual([], new)
+        self.assertEqual(["a.vow"], [r["file"] for r in known])
+
+    def test_tracked_divergence_that_stopped_is_reported_fixed(self):
+        # Mirrors verify_eval.py's GAP_FIXED: a welcome change must force the
+        # ledger to be updated rather than silently drifting out of date.
+        recs = [{"file": "a.vow", "divergences": []}]
+        ledger = {"a.vow": {"status": "open", "issue": 1087}}
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual(["a.vow"], fixed)
+
+    def test_clean_untracked_file_is_silent(self):
+        recs = [{"file": "a.vow", "divergences": []}]
+
+        new, known, fixed = equivalence.reconcile(recs, {})
+
+        self.assertEqual(([], [], []), (new, known, fixed))
+
+    def test_already_fixed_ledger_entry_does_not_re_report(self):
+        # status 'fixed' is retained so a REAPPEARANCE reads as a regression;
+        # it must not itself be re-reported as newly fixed on every run.
+        recs = [{"file": "a.vow", "divergences": []}]
+        ledger = {"a.vow": {"status": "fixed", "issue": 1087}}
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual([], fixed)
+
+    def test_reappearance_of_a_fixed_entry_is_known_not_new(self):
+        recs = [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}]
+        ledger = {"a.vow": {"status": "fixed", "issue": 1087}}
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual(["a.vow"], [r["file"] for r in known])
+
+
+class LedgerLoadTest(unittest.TestCase):
+    def test_missing_ledger_is_empty_not_fatal(self):
+        self.assertEqual({}, equivalence.load_ledger("/nonexistent/ledger.json"))
+
+    def test_corrupt_ledger_is_empty_not_fatal(self):
+        # Fail open to "everything is new": a broken ledger must never
+        # suppress findings.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "ledger.json"
+            p.write_text("{not json")
+
+            self.assertEqual({}, equivalence.load_ledger(p))
+
+    def test_real_repo_ledger_loads(self):
+        ledger = equivalence.load_ledger()
+
+        self.assertIn("benchmarks/medium/M13_gcd/reference.vow", ledger)
+
+
 if __name__ == "__main__":
     unittest.main()

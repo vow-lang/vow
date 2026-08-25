@@ -173,12 +173,24 @@ else:
     rm -f "$rust_f" "$self_f"
 }
 
+# A fixture may carry `// TEST: known-divergence <issue> "<why>"` to document a
+# tracked Rust-vs-self-hosted runtime divergence (docs/equivalence/README.md).
+# Such a fixture is committed deliberately: it pins a real miscompile so the
+# suite regression-guards the eventual fix. It reports as a loud SKIP rather
+# than a FAIL, and — mirroring verify_eval.py's GAP_FIXED — becomes a hard
+# FAIL once the two compilers agree again, so the directive must be removed in
+# the same PR that fixes the bug instead of silently going stale.
 compare_runtime() {
-    local label="$1" rust_bin="$2" self_bin="$3" stdin_file="${4:-}"
+    local label="$1" rust_bin="$2" self_bin="$3" stdin_file="${4:-}" vow_file="${5:-}"
 
     if [ ! -x "$rust_bin" ] || [ ! -x "$self_bin" ]; then
         skip "$label" "binary not found"
         return
+    fi
+
+    local known_div=""
+    if [ -n "$vow_file" ]; then
+        known_div=$(sed -n 's|^// TEST: known-divergence \([0-9]*\) "\(.*\)"$|#\1: \2|p' "$vow_file" | head -1)
     fi
 
     local rust_out="" self_out="" rust_exit=0 self_exit=0
@@ -196,6 +208,15 @@ compare_runtime() {
     fi
     if [ "$rust_out" != "$self_out" ]; then
         errors+=("stdout differs")
+    fi
+
+    if [ -n "$known_div" ]; then
+        if [ ${#errors[@]} -eq 0 ]; then
+            fail "$label" "known-divergence ($known_div) no longer reproduces — remove the directive and update docs/equivalence/ledger.json"
+        else
+            skip "$label" "known divergence ($known_div)"
+        fi
+        return
     fi
 
     if [ ${#errors[@]} -eq 0 ]; then
@@ -694,7 +715,7 @@ for vow_file in tests/run/*.vow; do
     fi
 
     # Compare runtime output between compilers
-    compare_runtime "${name}/test-run" "$TMPDIR/test_rust_${name}" "$TMPDIR/test_self_${name}" "$stdin_path"
+    compare_runtime "${name}/test-run" "$TMPDIR/test_rust_${name}" "$TMPDIR/test_self_${name}" "$stdin_path" "$vow_file"
 
     # Validate against // TEST: stdout directive if present
     expected=$(sed -n 's|^// TEST: stdout "\(.*\)"$|\1|p' "$vow_file" | head -1)
