@@ -1,0 +1,20 @@
+// TEST: stdout "42 42"
+module I128AddLiteral
+
+// Direct regression test for the Cranelift verifier crash reported in #1057:
+// `iadd` on an I128 parameter and a literal constant. `unsuffixed` covers the
+// I64-typed literal the crash was originally reported against; `suffixed`
+// covers the explicitly widened form.
+fn unsuffixed(x: i128) -> i128 {
+    return x + 1;
+}
+
+fn suffixed(x: i128) -> i128 {
+    return x + 1i128;
+}
+
+fn main() -> () [io] {
+    print_i64(i128_to_u8_wrap(unsuffixed(41i128)) as i64);
+    print_str(" ");
+    print_i64(i128_to_u8_wrap(suffixed(41i128)) as i64);
+}

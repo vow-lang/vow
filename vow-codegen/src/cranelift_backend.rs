@@ -148,6 +148,11 @@ fn make_isa(mode: BuildMode) -> Result<Arc<dyn TargetIsa>, CodegenError> {
     flag_builder
         .set("is_pic", "true")
         .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
+    // I128 function parameters and returns are gated behind this flag; without
+    // it Cranelift panics as soon as an i128/u128 crosses an ABI boundary.
+    flag_builder
+        .set("enable_llvm_abi_extensions", "true")
+        .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
     if mode == BuildMode::Release || mode == BuildMode::Profile {
         flag_builder
             .set("opt_level", "speed")
@@ -252,6 +257,34 @@ fn hidden_region_idx_for_store_target(
     None
 }
 
+/// Materialize a 128-bit constant as two I64 halves joined by `iconcat`.
+/// Cranelift has no 128-bit `iconst`, so the low and high limbs are built
+/// separately and concatenated low-first.
+fn wide_iconst(builder: &mut FunctionBuilder<'_>, bits: u128) -> Value {
+    let lo = builder.ins().iconst(types::I64, bits as u64 as i64);
+    let hi = builder.ins().iconst(types::I64, (bits >> 64) as u64 as i64);
+    builder.ins().iconcat(lo, hi)
+}
+
+/// Cranelift 0.134 cannot lower division, remainder, or checked multiply on
+/// I128: `sdiv`/`udiv`/`urem` report `Unsupported`, `srem` panics outright on
+/// x86_64, and `smul_overflow`/`umul_overflow` are rejected by Cranelift's own
+/// IR verifier. Reject them with a diagnostic rather than letting codegen die
+/// inside Cranelift; a follow-up seam of epic #526 routes these through
+/// `vow-runtime` helpers.
+fn reject_wide_operand(
+    builder: &FunctionBuilder<'_>,
+    value: Value,
+    op: &str,
+) -> Result<(), CodegenError> {
+    if builder.func.dfg.value_type(value) == types::I128 {
+        return Err(CodegenError::UnsupportedOpcode(format!(
+            "128-bit {op} is not supported by the Cranelift backend yet (epic #526)"
+        )));
+    }
+    Ok(())
+}
+
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty: IrTy) -> Value {
     let val_ty = builder.func.dfg.value_type(val);
     match (val_ty, ir_ty_to_cranelift(return_ty)) {
@@ -259,6 +292,16 @@ fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty:
         (types::I64, Some(types::I16)) => builder.ins().ireduce(types::I16, val),
         (types::I64, Some(types::I32)) => builder.ins().ireduce(types::I32, val),
         (types::I32, Some(types::I64)) => builder.ins().sextend(types::I64, val),
+        // A narrower value reaching a 128-bit return means lowering did not
+        // insert an IntCast; extend by the declared return signedness so the
+        // ABI sees the width its signature promises.
+        (from, Some(types::I128)) if from.is_int() && from.bits() < 128 => {
+            if ir_ty_is_signed_integer(return_ty) {
+                builder.ins().sextend(types::I128, val)
+            } else {
+                builder.ins().uextend(types::I128, val)
+            }
+        }
         _ => val,
     }
 }
@@ -278,22 +321,35 @@ fn coerce_call_argument(
     value: Value,
     source_ty: IrTy,
     expected_ty: types::Type,
-) -> Value {
+) -> Result<Value, CodegenError> {
     let actual_ty = builder.func.dfg.value_type(value);
     if !actual_ty.is_int() || !expected_ty.is_int() {
-        return value;
+        return Ok(value);
     }
     if actual_ty.bits() > expected_ty.bits() {
-        return builder.ins().ireduce(expected_ty, value);
+        // Narrowing a 128-bit value here would silently drop its high limb.
+        // The builtins that legitimately narrow (`i128_to_u8_*` and friends)
+        // declare an I128 parameter, so they never reach this branch — a
+        // 128-bit value arriving at a narrower slot means the callee has no
+        // 128-bit-aware ABI yet (e.g. the i64-only `Vec` element helpers).
+        // Refuse rather than hand back a truncated value.
+        if actual_ty == types::I128 {
+            return Err(CodegenError::UnsupportedOpcode(
+                "128-bit values are not supported in aggregates or by this builtin yet \
+                 (epic #526); narrowing here would silently drop the high 64 bits"
+                    .to_string(),
+            ));
+        }
+        return Ok(builder.ins().ireduce(expected_ty, value));
     }
     if actual_ty.bits() < expected_ty.bits() {
-        return if ir_ty_is_signed_integer(source_ty) {
+        return Ok(if ir_ty_is_signed_integer(source_ty) {
             builder.ins().sextend(expected_ty, value)
         } else {
             builder.ins().uextend(expected_ty, value)
-        };
+        });
     }
-    value
+    Ok(value)
 }
 
 fn extend_field_store_value(
@@ -792,9 +848,17 @@ fn lower_inst(
             }
         }
         Opcode::ConstI128 | Opcode::ConstU128 => {
-            return Err(CodegenError::UnsupportedOpcode(
-                "wide constant codegen belongs to a later seam (epic #526)".to_string(),
-            ));
+            let bits = match inst.data {
+                InstData::ConstI128(v) => v as u128,
+                InstData::ConstU128(v) => v,
+                _ => {
+                    return Err(CodegenError::UnsupportedOpcode(
+                        "wide constant requires ConstI128/ConstU128 metadata".to_string(),
+                    ));
+                }
+            };
+            let val = wide_iconst(builder, bits);
+            ctx.value_map.insert(inst.id, val);
         }
         Opcode::ConstU64 => {
             if let InstData::ConstU64(v) = inst.data {
@@ -905,6 +969,7 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::WrappingDiv => {
+            reject_wide_operand(builder, arg!(0), "division")?;
             let val = if integer_is_signed {
                 builder.ins().sdiv(arg!(0), arg!(1))
             } else {
@@ -913,6 +978,7 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::WrappingRem => {
+            reject_wide_operand(builder, arg!(0), "remainder")?;
             let val = if integer_is_signed {
                 builder.ins().srem(arg!(0), arg!(1))
             } else {
@@ -942,6 +1008,7 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, result);
         }
         Opcode::CheckedMul => {
+            reject_wide_operand(builder, arg!(0), "checked multiply")?;
             let (result, overflow) = if integer_is_signed {
                 builder.ins().smul_overflow(arg!(0), arg!(1))
             } else {
@@ -951,6 +1018,12 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, result);
         }
         Opcode::CheckedDiv | Opcode::CheckedRem => {
+            let what = if inst.opcode == Opcode::CheckedDiv {
+                "checked division"
+            } else {
+                "checked remainder"
+            };
+            reject_wide_operand(builder, arg!(0), what)?;
             let cl_ty = builder.func.dfg.value_type(arg!(1));
             let zero = builder.ins().iconst(cl_ty, 0);
             let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
@@ -1340,9 +1413,9 @@ fn lower_inst(
                             let source_ty = ctx.inst_ty_map.get(id).copied().unwrap_or(IrTy::I64);
                             return coerce_call_argument(builder, v, source_ty, expected_ty);
                         }
-                        v
+                        Ok(v)
                     })
-                    .collect();
+                    .collect::<Result<_, _>>()?;
                 builder.ins().call(func_ref, &call_args);
             }
             let unit = builder.ins().iconst(types::I32, 0);
@@ -1445,7 +1518,7 @@ fn lower_inst(
                 });
                 let v = if let Some(&expected_ty) = expected_types.get(i + hidden_arg_offset) {
                     let source_ty = ctx.inst_ty_map.get(id).copied().unwrap_or(IrTy::I64);
-                    coerce_call_argument(builder, v, source_ty, expected_ty)
+                    coerce_call_argument(builder, v, source_ty, expected_ty)?
                 } else {
                     v
                 };
@@ -3209,9 +3282,9 @@ mod tests {
         builder.switch_to_block(block);
 
         let signed_i8 = builder.ins().iconst(types::I8, -1);
-        coerce_call_argument(&mut builder, signed_i8, IrTy::I8, types::I64);
+        coerce_call_argument(&mut builder, signed_i8, IrTy::I8, types::I64).unwrap();
         let unsigned_i8 = builder.ins().iconst(types::I8, -1);
-        coerce_call_argument(&mut builder, unsigned_i8, IrTy::U8, types::I64);
+        coerce_call_argument(&mut builder, unsigned_i8, IrTy::U8, types::I64).unwrap();
         let signed_i16 = builder.ins().iconst(types::I16, -1);
         extend_field_store_value(&mut builder, signed_i16, IrTy::I16);
         let unsigned_i16 = builder.ins().iconst(types::I16, -1);
@@ -3223,6 +3296,126 @@ mod tests {
         let clif = function.display().to_string();
         assert_eq!(clif.matches("sextend.i64").count(), 2, "{clif}");
         assert_eq!(clif.matches("uextend.i64").count(), 2, "{clif}");
+    }
+
+    /// The remaining `coerce_call_argument` branches: a non-integer value
+    /// passes through, an equal-width value passes through, an ordinary
+    /// narrowing reduces, and a 128-bit narrowing is refused rather than
+    /// silently dropping the high limb.
+    #[test]
+    fn call_argument_coercion_refuses_only_wide_narrowing() {
+        let mut function = cranelift_codegen::ir::Function::new();
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut function, &mut builder_ctx);
+        let block = builder.create_block();
+        builder.switch_to_block(block);
+
+        let float = builder.ins().f64const(1.0);
+        let passed = coerce_call_argument(&mut builder, float, IrTy::F64, types::I64).unwrap();
+        assert_eq!(passed, float, "non-integer values pass through untouched");
+
+        let same = builder.ins().iconst(types::I64, 7);
+        let passed = coerce_call_argument(&mut builder, same, IrTy::I64, types::I64).unwrap();
+        assert_eq!(passed, same, "equal-width values pass through untouched");
+
+        let wide_i64 = builder.ins().iconst(types::I64, 0x1234);
+        let reduced = coerce_call_argument(&mut builder, wide_i64, IrTy::I64, types::I8).unwrap();
+        assert_eq!(
+            builder.func.dfg.value_type(reduced),
+            types::I8,
+            "sub-128-bit narrowing still reduces"
+        );
+
+        let lo = builder.ins().iconst(types::I64, 0);
+        let hi = builder.ins().iconst(types::I64, 0xAB);
+        let wide = builder.ins().iconcat(lo, hi);
+        let refused = coerce_call_argument(&mut builder, wide, IrTy::I128, types::I64);
+        let Err(CodegenError::UnsupportedOpcode(message)) = refused else {
+            panic!("128-bit narrowing must be refused, not truncated");
+        };
+        assert!(
+            message.contains("silently drop the high 64 bits"),
+            "{message}"
+        );
+
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        builder.finalize(make_isa(BuildMode::Release).unwrap().frontend_config());
+    }
+
+    /// A narrower value reaching a 128-bit return is extended by the declared
+    /// return signedness rather than handed to the ABI at the wrong width.
+    #[test]
+    fn narrow_return_values_extend_to_declared_wide_width() {
+        for return_ty in [Ty::I128, Ty::U128] {
+            let module = make_module(
+                "test",
+                vec![simple_fn(
+                    0,
+                    "f",
+                    vec![],
+                    return_ty,
+                    vec![
+                        inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(7)),
+                        inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                    ],
+                )],
+            );
+            let result =
+                CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+            assert!(result.is_ok(), "{return_ty:?}: {:?}", result.err());
+        }
+
+        // Pin the extension direction itself, which compile_module cannot show.
+        let mut function = cranelift_codegen::ir::Function::new();
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut function, &mut builder_ctx);
+        let block = builder.create_block();
+        builder.switch_to_block(block);
+        let narrow = builder.ins().iconst(types::I64, -1);
+        coerce_return_value(&mut builder, narrow, IrTy::I128);
+        let narrow = builder.ins().iconst(types::I64, -1);
+        coerce_return_value(&mut builder, narrow, IrTy::U128);
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        builder.finalize(make_isa(BuildMode::Release).unwrap().frontend_config());
+        let clif = function.display().to_string();
+        assert_eq!(clif.matches("sextend.i128").count(), 1, "{clif}");
+        assert_eq!(clif.matches("uextend.i128").count(), 1, "{clif}");
+    }
+
+    /// A wide-constant opcode carrying the wrong `InstData` must be rejected,
+    /// not silently skipped into a `value_map` miss further down.
+    #[test]
+    fn wide_constant_with_mismatched_metadata_is_rejected() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::I128,
+                vec![
+                    inst(
+                        0,
+                        Opcode::ConstI128,
+                        Ty::I128,
+                        vec![],
+                        InstData::ConstI64(1),
+                    ),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        let Err(CodegenError::UnsupportedOpcode(message)) = result else {
+            panic!("mismatched wide-constant metadata must be rejected");
+        };
+        assert!(
+            message.contains("ConstI128/ConstU128 metadata"),
+            "{message}"
+        );
     }
 
     fn extern_sig(sym: &str) -> Signature {
@@ -3846,6 +4039,138 @@ mod tests {
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_wide_constant_opcodes() {
+        for (name, ty, data) in [
+            ("i128_max", Ty::I128, InstData::ConstI128(i128::MAX)),
+            ("i128_min", Ty::I128, InstData::ConstI128(i128::MIN)),
+            ("u128_max", Ty::U128, InstData::ConstU128(u128::MAX)),
+        ] {
+            let module = make_module(
+                "test",
+                vec![simple_fn(
+                    0,
+                    name,
+                    vec![],
+                    ty,
+                    vec![
+                        inst(0, wide_const_opcode(ty), ty, vec![], data),
+                        inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                    ],
+                )],
+            );
+            let result =
+                CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+            assert!(result.is_ok(), "{name}: {:?}", result.err());
+        }
+    }
+
+    /// Cranelift 0.134 cannot lower division, remainder, or checked multiply
+    /// on I128 — a follow-up seam of epic #526 routes them through
+    /// `vow-runtime`. Until then they must fail with a diagnostic rather than
+    /// erroring or panicking inside Cranelift.
+    #[test]
+    fn wide_division_remainder_and_checked_multiply_are_rejected() {
+        for op in [
+            Opcode::WrappingDiv,
+            Opcode::WrappingRem,
+            Opcode::CheckedDiv,
+            Opcode::CheckedRem,
+            Opcode::CheckedMul,
+        ] {
+            let module = make_module(
+                "test",
+                vec![simple_fn(
+                    0,
+                    "f",
+                    vec![],
+                    Ty::I128,
+                    vec![
+                        inst(
+                            0,
+                            Opcode::ConstI128,
+                            Ty::I128,
+                            vec![],
+                            InstData::ConstI128(10),
+                        ),
+                        inst(
+                            1,
+                            Opcode::ConstI128,
+                            Ty::I128,
+                            vec![],
+                            InstData::ConstI128(3),
+                        ),
+                        inst(2, op, Ty::I128, vec![0, 1], InstData::None),
+                        inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                )],
+            );
+            let result =
+                CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+            let Err(CodegenError::UnsupportedOpcode(message)) = result else {
+                panic!("{op:?}: expected UnsupportedOpcode");
+            };
+            assert!(message.contains("128-bit"), "{op:?}: {message}");
+        }
+    }
+
+    /// The ops Cranelift *does* support natively on I128 must keep compiling,
+    /// so the guard above stays narrow.
+    #[test]
+    fn wide_supported_arithmetic_still_compiles() {
+        for op in [
+            Opcode::WrappingAdd,
+            Opcode::WrappingSub,
+            Opcode::WrappingMul,
+            Opcode::CheckedAdd,
+            Opcode::CheckedSub,
+            Opcode::BitAnd,
+            Opcode::BitOr,
+            Opcode::BitXor,
+            Opcode::Shl,
+            Opcode::Shr,
+        ] {
+            let module = make_module(
+                "test",
+                vec![simple_fn(
+                    0,
+                    "f",
+                    vec![],
+                    Ty::I128,
+                    vec![
+                        inst(
+                            0,
+                            Opcode::ConstI128,
+                            Ty::I128,
+                            vec![],
+                            InstData::ConstI128(10),
+                        ),
+                        inst(
+                            1,
+                            Opcode::ConstI128,
+                            Ty::I128,
+                            vec![],
+                            InstData::ConstI128(3),
+                        ),
+                        inst(2, op, Ty::I128, vec![0, 1], InstData::None),
+                        inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                )],
+            );
+            let result =
+                CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+            assert!(result.is_ok(), "{op:?}: {:?}", result.err());
+        }
+    }
+
+    fn wide_const_opcode(ty: Ty) -> Opcode {
+        if ty == Ty::I128 {
+            Opcode::ConstI128
+        } else {
+            Opcode::ConstU128
+        }
     }
 
     #[test]

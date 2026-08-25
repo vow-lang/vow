@@ -290,13 +290,60 @@ fn assign_option_vec(values: Vec<Option<u128>>) {
 }
 
 #[test]
-fn deferred_wide_codegen_fails_closed_without_panicking() {
+fn wide_codegen_produces_an_executable() {
     let dir = tempfile::TempDir::new().unwrap();
     let source_path = dir.path().join("wide_codegen.vow");
     let output_path = dir.path().join("wide_codegen");
     fs::write(
         &source_path,
-        "module WideCodegen\nfn value() -> u128 { 42u128 }\n",
+        "module WideCodegen\nfn value() -> u128 { 42u128 }\nfn main() -> i32 { 0 }\n",
+    )
+    .unwrap();
+
+    let output = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            source_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("invalid JSON from build: {error}\nstdout: {stdout}"));
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "wide constant codegen must succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(json["status"], "Unverified");
+    assert!(
+        output_path.exists(),
+        "successful wide codegen must produce an executable"
+    );
+}
+
+/// A 128-bit value handed to an i64-only builtin (the `Vec` element helpers)
+/// must fail closed. Before the guard it compiled and silently returned the
+/// low limb — worse than the hard Cranelift panic it replaced.
+#[test]
+fn wide_values_in_aggregates_fail_closed() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source_path = dir.path().join("wide_vec.vow");
+    let output_path = dir.path().join("wide_vec");
+    fs::write(
+        &source_path,
+        "module WideVec\n\
+         fn main() -> i32 {\n\
+         let v: Vec<i128> = Vec::new();\n\
+         v.push(3154393236604333326345);\n\
+         v[0];\n\
+         0\n\
+         }\n",
     )
     .unwrap();
 
@@ -318,17 +365,76 @@ fn deferred_wide_codegen_fails_closed_without_panicking() {
     assert_eq!(
         output.status.code(),
         Some(1),
-        "deferred wide codegen must fail closed\nstdout: {stdout}\nstderr: {stderr}"
+        "128-bit Vec elements must fail closed\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert_eq!(json["status"], "CompileFailed");
     assert!(
         json["message"]
             .as_str()
-            .is_some_and(|message| message.contains("wide constant codegen")),
-        "build must explain the deferred backend seam: {json}"
+            .is_some_and(|message| message.contains("silently drop the high 64 bits")),
+        "build must explain why it refused: {json}"
     );
     assert!(
         !output_path.exists(),
-        "failed wide codegen must not leave an executable"
+        "refused wide aggregate must not leave an executable"
     );
+}
+
+/// Division, remainder, and checked multiply on 128-bit operands are the one
+/// deferred piece of the Cranelift backend (a later seam of epic #526 routes
+/// them through `vow-runtime`). They must fail with a diagnostic rather than
+/// erroring or panicking inside Cranelift.
+#[test]
+fn deferred_wide_division_fails_closed_without_panicking() {
+    for (name, expression, expected) in [
+        ("div", "x / y", "128-bit division"),
+        ("rem", "x % y", "128-bit remainder"),
+        ("checked_div", "x /! y", "128-bit checked division"),
+        ("checked_rem", "x %! y", "128-bit checked remainder"),
+        ("checked_mul", "x *! y", "128-bit checked multiply"),
+    ] {
+        let dir = tempfile::TempDir::new().unwrap();
+        let source_path = dir.path().join("wide_div.vow");
+        let output_path = dir.path().join("wide_div");
+        fs::write(
+            &source_path,
+            format!(
+                "module WideDiv\nfn f(x: u128, y: u128) -> u128 {{ {expression} }}\nfn main() -> i32 {{ f(10, 3); 0 }}\n"
+            ),
+        )
+        .unwrap();
+
+        let output = Command::new(vow_bin())
+            .args([
+                "build",
+                "--no-verify",
+                source_path.to_str().unwrap(),
+                "-o",
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to run vow");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|error| {
+            panic!("{name}: invalid JSON from build: {error}\nstdout: {stdout}")
+        });
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: deferred wide division must fail closed\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert_eq!(json["status"], "CompileFailed", "{name}");
+        assert!(
+            json["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(expected)),
+            "{name}: build must name the deferred backend seam: {json}"
+        );
+        assert!(
+            !output_path.exists(),
+            "{name}: failed wide codegen must not leave an executable"
+        );
+    }
 }

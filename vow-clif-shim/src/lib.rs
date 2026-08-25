@@ -113,6 +113,10 @@ fn ity_is_signed(ty: i64) -> bool {
     matches!(ty, ITY_I8 | ITY_I16 | ITY_I32 | ITY_I64 | ITY_I128)
 }
 
+fn ity_is_wide(ty: i64) -> bool {
+    matches!(ty, ITY_I128 | ITY_U128)
+}
+
 fn ity_bits(ty: i64) -> i64 {
     match ty {
         ITY_I8 | ITY_U8 => 8,
@@ -124,27 +128,43 @@ fn ity_bits(ty: i64) -> i64 {
     }
 }
 
+/// Returns `None` when the coercion would silently drop a 128-bit value's high
+/// limb. The builtins that legitimately narrow (`i128_to_u8_*` and friends)
+/// declare an I128 parameter, so they never hit that branch — a 128-bit value
+/// arriving at a narrower slot means the callee has no 128-bit-aware ABI yet
+/// (e.g. the i64-only `Vec` element helpers). Callers must fail closed rather
+/// than pass a truncated value.
 fn coerce_call_argument(
     builder: &mut FunctionBuilder<'_>,
     value: Value,
     source_ty: i64,
     expected_ty: types::Type,
-) -> Value {
+) -> Option<Value> {
     let actual_ty = builder.func.dfg.value_type(value);
     if !actual_ty.is_int() || !expected_ty.is_int() {
-        return value;
+        return Some(value);
     }
     if actual_ty.bits() > expected_ty.bits() {
-        return builder.ins().ireduce(expected_ty, value);
+        if actual_ty == types::I128 {
+            return None;
+        }
+        return Some(builder.ins().ireduce(expected_ty, value));
     }
     if actual_ty.bits() < expected_ty.bits() {
-        return if ity_is_signed(source_ty) {
+        return Some(if ity_is_signed(source_ty) {
             builder.ins().sextend(expected_ty, value)
         } else {
             builder.ins().uextend(expected_ty, value)
-        };
+        });
     }
-    value
+    Some(value)
+}
+
+fn report_narrowed_wide_argument() {
+    eprintln!(
+        "clif_shim: 128-bit values are not supported in aggregates or by this builtin yet \
+         (epic #526); narrowing here would silently drop the high 64 bits"
+    );
 }
 
 fn extend_field_store_value(
@@ -823,6 +843,8 @@ const IOP_SHL: i64 = 136;
 const IOP_SHR: i64 = 137;
 const IOP_CONST_U8: i64 = 138;
 const IOP_INT_CAST: i64 = 139;
+const IOP_CONST_I128: i64 = 140;
+const IOP_CONST_U128: i64 = 141;
 
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
@@ -848,6 +870,8 @@ const IDATA_CONST_U64: i64 = 17;
 const IDATA_INTEGER: i64 = 18;
 const IDATA_CONST_U8: i64 = 19;
 const IDATA_INTEGER_CAST: i64 = 20;
+const IDATA_CONST_I128: i64 = 21;
+const IDATA_CONST_U128: i64 = 22;
 
 // ---------------------------------------------------------------------------
 // Module context (opaque handle passed through FFI)
@@ -973,6 +997,12 @@ fn create_module_context(
     }
     if let Err(e) = flag_builder.set("is_pic", "true") {
         eprintln!("clif_shim: error setting is_pic: {e}");
+        return 0;
+    }
+    // I128 function parameters and returns are gated behind this flag; without
+    // it Cranelift panics as soon as an i128/u128 crosses an ABI boundary.
+    if let Err(e) = flag_builder.set("enable_llvm_abi_extensions", "true") {
+        eprintln!("clif_shim: error setting enable_llvm_abi_extensions: {e}");
         return 0;
     }
     if (mode == 0 || mode == 2)
@@ -1813,15 +1843,19 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
     }
 
-    // Allocate stack slots for cross-block referenced values.
-    // Each slot holds one i64 (8 bytes), which is sufficient for all Vow types.
+    // Allocate stack slots for cross-block referenced values. Every Vow type
+    // fits in one i64 except the 128-bit integers, which need a 16-byte slot
+    // — an 8-byte slot would silently drop their high limb.
     let mut slot_map: BTreeMap<i64, StackSlot> = BTreeMap::new();
+    let is_wide_inst =
+        |iid: &i64| -> bool { inst_ty_map.get(iid).copied().is_some_and(ity_is_wide) };
     for &iid in &inst_ids[..n_insts] {
         if cross_block_refs.contains(&iid) {
+            let (size, align_shift) = if is_wide_inst(&iid) { (16, 4) } else { (8, 3) };
             let slot = builder.create_sized_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
-                8,
-                3, // align to 8 bytes (2^3)
+                size,
+                align_shift,
             ));
             slot_map.insert(iid, slot);
         }
@@ -1839,8 +1873,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     // refs that happen to work in C codegen due to this.
     if nb > 0 {
         let zero = builder.ins().iconst(types::I64, 0);
-        for &slot in slot_map.values() {
+        for (&iid, &slot) in &slot_map {
             builder.ins().stack_store(types::I64, zero, slot, 0);
+            if is_wide_inst(&iid) {
+                builder.ins().stack_store(types::I64, zero, slot, 8);
+            }
         }
         for payload in block_arena_ids {
             let slot = block_arena_slot(&mut builder, &mut block_arena_slots, payload);
@@ -2032,6 +2069,15 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, val);
                 }
                 IOP_WDIV | IOP_WREM => {
+                    let what = if op == IOP_WDIV {
+                        "division"
+                    } else {
+                        "remainder"
+                    };
+                    if is_wide_operand(&builder, arg!(0)) {
+                        report_unsupported_wide_op(what);
+                        return -1;
+                    }
                     let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
                     let val = match (op, signed) {
                         (IOP_WDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
@@ -2043,6 +2089,10 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, val);
                 }
                 IOP_CADD | IOP_CSUB | IOP_CMUL => {
+                    if op == IOP_CMUL && is_wide_operand(&builder, arg!(0)) {
+                        report_unsupported_wide_op("checked multiply");
+                        return -1;
+                    }
                     let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
                     let (result, overflow) = match (op, signed) {
                         (IOP_CADD, true) => builder.ins().sadd_overflow(arg!(0), arg!(1)),
@@ -2057,6 +2107,15 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, result);
                 }
                 IOP_CDIV | IOP_CREM => {
+                    let what = if op == IOP_CDIV {
+                        "checked division"
+                    } else {
+                        "checked remainder"
+                    };
+                    if is_wide_operand(&builder, arg!(0)) {
+                        report_unsupported_wide_op(what);
+                        return -1;
+                    }
                     let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
                     let cl_ty = builder.func.dfg.value_type(arg!(1));
                     let zero = builder.ins().iconst(cl_ty, 0);
@@ -2202,6 +2261,22 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         let val = builder.ins().iconst(types::I64, dv);
                         set_val!(iid, val);
                     }
+                }
+
+                // Wide constants arrive pre-split by `compiler/lower.vow`:
+                // `dv` is the low 64 bits, `dv2` the high 64 bits. Cranelift
+                // has no 128-bit `iconst`, so rejoin them with `iconcat`.
+                IOP_CONST_I128 | IOP_CONST_U128 => {
+                    if dk != IDATA_CONST_I128 && dk != IDATA_CONST_U128 {
+                        eprintln!(
+                            "clif_shim: wide constant requires ConstI128/ConstU128 metadata, got data kind {dk}"
+                        );
+                        return -1;
+                    }
+                    let lo = builder.ins().iconst(types::I64, dv);
+                    let hi = builder.ins().iconst(types::I64, dv2);
+                    let val = builder.ins().iconcat(lo, hi);
+                    set_val!(iid, val);
                 }
 
                 IOP_INT_CAST => {
@@ -2466,7 +2541,13 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             expected_types.get(i + hidden_arg_offset)
                         {
                             let source_ty = inst_ty_map.get(&arg_id).copied().unwrap_or(ITY_I64);
-                            coerce_call_argument(&mut builder, v, source_ty, expected_ty)
+                            match coerce_call_argument(&mut builder, v, source_ty, expected_ty) {
+                                Some(coerced) => coerced,
+                                None => {
+                                    report_narrowed_wide_argument();
+                                    return -1;
+                                }
+                            }
                         } else {
                             v
                         };
@@ -2547,7 +2628,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 .iter()
                                 .map(|p| p.value_type)
                                 .collect();
-                            let call_args: Vec<Value> = (0..alen)
+                            let call_args: Option<Vec<Value>> = (0..alen)
                                 .map(|i| {
                                     let arg_id = all_args[aoff + i];
                                     let v = *value_map.get(&arg_id).unwrap_or_else(|| {
@@ -2567,9 +2648,13 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                             expected_ty,
                                         );
                                     }
-                                    v
+                                    Some(v)
                                 })
                                 .collect();
+                            let Some(call_args) = call_args else {
+                                report_narrowed_wide_argument();
+                                return -1;
+                            };
                             builder.ins().call(fr, &call_args);
                         }
                     }
@@ -2801,13 +2886,28 @@ fn emit_overflow_check(
     builder.seal_block(cont_block);
 }
 
+fn is_wide_operand(builder: &FunctionBuilder<'_>, value: Value) -> bool {
+    builder.func.dfg.value_type(value) == types::I128
+}
+
+/// Cranelift 0.134 cannot lower division, remainder, or checked multiply on
+/// I128: `sdiv`/`udiv`/`urem` report `Unsupported`, `srem` panics outright on
+/// x86_64, and `smul_overflow`/`umul_overflow` are rejected by Cranelift's own
+/// IR verifier. The shim rejects them rather than letting codegen die inside
+/// Cranelift; this mirrors `reject_wide_operand` in `vow-codegen`.
+fn report_unsupported_wide_op(op: &str) {
+    eprintln!("clif_shim: 128-bit {op} is not supported by the Cranelift backend yet (epic #526)");
+}
+
 fn load_slotted_value(
     builder: &mut FunctionBuilder<'_>,
     slot: StackSlot,
     value_ty: types::Type,
 ) -> Value {
     match value_ty {
-        types::F32 | types::F64 => builder.ins().stack_load(types::I64, value_ty, slot, 0),
+        types::F32 | types::F64 | types::I128 => {
+            builder.ins().stack_load(types::I64, value_ty, slot, 0)
+        }
         types::I16 | types::I32 => {
             let raw = builder.ins().stack_load(types::I64, types::I64, slot, 0);
             builder.ins().ireduce(value_ty, raw)
@@ -3639,9 +3739,9 @@ mod tests {
         builder.switch_to_block(block);
 
         let signed_i8 = builder.ins().iconst(types::I8, -1);
-        coerce_call_argument(&mut builder, signed_i8, ITY_I8, types::I64);
+        coerce_call_argument(&mut builder, signed_i8, ITY_I8, types::I64).unwrap();
         let unsigned_i8 = builder.ins().iconst(types::I8, -1);
-        coerce_call_argument(&mut builder, unsigned_i8, ITY_U8, types::I64);
+        coerce_call_argument(&mut builder, unsigned_i8, ITY_U8, types::I64).unwrap();
         let signed_i16 = builder.ins().iconst(types::I16, -1);
         extend_field_store_value(&mut builder, signed_i16, ITY_I16);
         let unsigned_i16 = builder.ins().iconst(types::I16, -1);
@@ -4109,6 +4209,409 @@ mod tests {
             add_test_block(ctx);
             add_test_inst(ctx, 0, op, ty, data_kind, 7, 0, &[]);
             add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+            unsafe {
+                assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
+                __vow_clif_destroy(ctx);
+            }
+        }
+    }
+
+    #[test]
+    fn wide_constants_compile_through_streamed_ffi() {
+        for (name, ty, op, data_kind) in [
+            ("i128_const", ITY_I128, IOP_CONST_I128, IDATA_CONST_I128),
+            ("u128_const", ITY_U128, IOP_CONST_U128, IDATA_CONST_U128),
+        ] {
+            let ctx = __vow_clif_create(0, 0);
+            assert_ne!(ctx, 0);
+            declare_test_function(ctx, 0, name, ty, false);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, ty, 0), 0);
+            }
+            add_test_block(ctx);
+            // dv is the low limb, dv2 the high limb.
+            add_test_inst(ctx, 0, op, ty, data_kind, 7, 0x00AB, &[]);
+            add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+            unsafe {
+                assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
+                __vow_clif_destroy(ctx);
+            }
+        }
+    }
+
+    /// A 128-bit value referenced from a sibling block goes through a stack
+    /// slot. The slot must be 16 bytes wide, or Cranelift rejects the
+    /// I128-typed store against an 8-byte slot.
+    #[test]
+    fn wide_cross_block_values_compile_through_streamed_ffi() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "i128_cross_block", ITY_I128, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            7,
+            0x00AB,
+            &[],
+        );
+        add_test_inst(ctx, 1, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 1, 0, &[]);
+        add_test_block(ctx);
+        add_test_inst(ctx, 2, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    /// The 16-byte slot must round-trip *both* limbs, not merely compile: an
+    /// 8-byte slot, or a slot loaded as I64, still produces valid CLIF while
+    /// silently dropping the high limb. Build a 128-bit Phi fed from two
+    /// sibling blocks, add to it, and have `main` compare the result against
+    /// the expected 128-bit constant — exit code 0 only if both limbs survived.
+    #[test]
+    fn wide_phi_loaded_from_cross_block_slot_returns_expected_runtime_value() {
+        const HI: i64 = 0x00AB;
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "cross_block_i128", ITY_I128, false);
+        declare_test_function(ctx, 1, "main", ITY_I32, true);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            1,
+            IOP_CONST_BOOL,
+            ITY_BOOL,
+            IDATA_CONST_BOOL,
+            1,
+            0,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            2,
+            IOP_BRANCH,
+            ITY_UNIT,
+            IDATA_BRANCH_TARGETS,
+            1,
+            2,
+            &[1],
+        );
+
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            3,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            7,
+            HI,
+            &[],
+        );
+        add_test_inst(ctx, 4, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 8, 0, &[3]);
+        add_test_inst(ctx, 5, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 3, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            6,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            9,
+            HI,
+            &[],
+        );
+        add_test_inst(ctx, 7, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 8, 0, &[6]);
+        add_test_inst(ctx, 9, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 3, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 8, IOP_PHI, ITY_I128, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            10,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            1,
+            0,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            11,
+            IOP_WADD,
+            ITY_I128,
+            IDATA_INTEGER,
+            ITY_I128,
+            0,
+            &[8, 10],
+        );
+        add_test_inst(ctx, 12, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[11]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 1, ITY_I32, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 1, IOP_CALL, ITY_I128, IDATA_CALL_TARGET, 0, 0, &[]);
+        // Taking the `then` branch above, the Phi carries 0x00AB_..._0007, so
+        // the callee returns 0x00AB_..._0008.
+        add_test_inst(
+            ctx,
+            2,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            8,
+            HI,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            3,
+            IOP_NE,
+            ITY_BOOL,
+            IDATA_INTEGER,
+            ITY_I128,
+            0,
+            &[1, 2],
+        );
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join("cross_block_i128.o");
+        let executable_path = temp_dir.path().join("cross_block_i128");
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        // `__vow_clif_finish` consumes the context; do not also destroy it.
+        unsafe {
+            assert_eq!(
+                __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64),
+                0
+            );
+        }
+        link_float_phi_test_object(&object_path, &executable_path);
+
+        let output = std::process::Command::new(&executable_path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "cross-block 128-bit Phi lost a limb\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    /// Cranelift 0.134 cannot lower these on I128 (see `epic #526`). The shim
+    /// must reject them rather than let Cranelift error or panic mid-codegen.
+    /// Mirror of vow-codegen's `wide_constant_with_mismatched_metadata_is_rejected`:
+    /// a wide-constant opcode carrying the wrong data kind must fail closed
+    /// rather than silently skip and leave a `value_map` hole for the next
+    /// instruction to trip over at the FFI boundary.
+    #[test]
+    fn wide_constant_with_mismatched_metadata_is_rejected() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "bad_wide_const", ITY_I128, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 0, IOP_CONST_I128, ITY_I128, IDATA_CONST_I64, 7, 0, &[]);
+        add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), -1);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    /// A 128-bit value handed to an i64-only extern must be refused, not
+    /// truncated. Covers both the ordinary call path and the debug-call path,
+    /// which coerce arguments through separate code.
+    #[test]
+    fn wide_arguments_to_narrow_externs_are_rejected() {
+        for (name, op, sym_name, ret_ty, mode) in [
+            ("call", IOP_CALL, "__vow_print_i64", ITY_UNIT, 0),
+            ("debug_call", IOP_DEBUG_CALL, "__vow_debug_i64", ITY_UNIT, 1),
+        ] {
+            let ctx = __vow_clif_create(mode, 0);
+            assert_ne!(ctx, 0);
+            let sym = vow_string(sym_name);
+            unsafe {
+                __vow_clif_declare_extern(ctx, &sym as *const VowVec as i64);
+            }
+            declare_test_function(ctx, 0, name, ITY_UNIT, false);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+            }
+            add_test_block(ctx);
+            add_test_inst(
+                ctx,
+                0,
+                IOP_CONST_I128,
+                ITY_I128,
+                IDATA_CONST_I128,
+                0,
+                0x00AB,
+                &[],
+            );
+            add_test_string_inst(ctx, 1, op, ret_ty, IDATA_CALL_EXTERN, &sym, &[0]);
+            add_test_inst(ctx, 2, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+            unsafe {
+                assert_eq!(
+                    __vow_clif_fn_end(ctx),
+                    -1,
+                    "{name}: 128-bit argument must be refused, not truncated"
+                );
+                __vow_clif_destroy(ctx);
+            }
+        }
+    }
+
+    /// The non-refusing `coerce_call_argument` branches: non-integer and
+    /// equal-width values pass through, sub-128-bit narrowing still reduces.
+    #[test]
+    fn narrow_call_argument_coercions_are_unaffected() {
+        let mut function = cranelift_codegen::ir::Function::new();
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut function, &mut builder_ctx);
+        let block = builder.create_block();
+        builder.switch_to_block(block);
+
+        let float = builder.ins().f64const(1.0);
+        assert_eq!(
+            coerce_call_argument(&mut builder, float, ITY_F64, types::I64),
+            Some(float),
+            "non-integer values pass through untouched"
+        );
+
+        let same = builder.ins().iconst(types::I64, 7);
+        assert_eq!(
+            coerce_call_argument(&mut builder, same, ITY_I64, types::I64),
+            Some(same),
+            "equal-width values pass through untouched"
+        );
+
+        let wide_i64 = builder.ins().iconst(types::I64, 0x1234);
+        let reduced = coerce_call_argument(&mut builder, wide_i64, ITY_I64, types::I8)
+            .expect("sub-128-bit narrowing is allowed");
+        assert_eq!(builder.func.dfg.value_type(reduced), types::I8);
+
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        let flags = settings::Flags::new(settings::builder());
+        let isa = cranelift_native::builder().unwrap().finish(flags).unwrap();
+        builder.finalize(isa.frontend_config());
+    }
+
+    #[test]
+    fn wide_division_remainder_and_checked_multiply_are_rejected() {
+        for (name, op) in [
+            ("i128_div", IOP_WDIV),
+            ("i128_rem", IOP_WREM),
+            ("i128_checked_div", IOP_CDIV),
+            ("i128_checked_rem", IOP_CREM),
+            ("i128_checked_mul", IOP_CMUL),
+        ] {
+            let ctx = __vow_clif_create(0, 0);
+            assert_ne!(ctx, 0);
+            declare_test_function(ctx, 0, name, ITY_I128, false);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+            }
+            add_test_block(ctx);
+            add_test_inst(
+                ctx,
+                0,
+                IOP_CONST_I128,
+                ITY_I128,
+                IDATA_CONST_I128,
+                10,
+                0,
+                &[],
+            );
+            add_test_inst(
+                ctx,
+                1,
+                IOP_CONST_I128,
+                ITY_I128,
+                IDATA_CONST_I128,
+                3,
+                0,
+                &[],
+            );
+            add_test_inst(ctx, 2, op, ITY_I128, IDATA_INTEGER, ITY_I128, 0, &[0, 1]);
+            add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[2]);
+            unsafe {
+                assert_eq!(__vow_clif_fn_end(ctx), -1, "{name}");
+                __vow_clif_destroy(ctx);
+            }
+        }
+    }
+
+    /// Checked add/sub and the wrapping ops Cranelift *does* support on I128
+    /// must keep compiling, so the guard above stays narrow.
+    #[test]
+    fn wide_supported_arithmetic_still_compiles() {
+        for (name, op) in [
+            ("i128_add", IOP_WADD),
+            ("i128_sub", IOP_WSUB),
+            ("i128_mul", IOP_WMUL),
+            ("i128_checked_add", IOP_CADD),
+            ("i128_checked_sub", IOP_CSUB),
+            ("i128_bitand", IOP_BITAND),
+            ("i128_bitor", IOP_BITOR),
+            ("i128_bitxor", IOP_BITXOR),
+            ("i128_shl", IOP_SHL),
+            ("i128_shr", IOP_SHR),
+        ] {
+            let ctx = __vow_clif_create(0, 0);
+            assert_ne!(ctx, 0);
+            declare_test_function(ctx, 0, name, ITY_I128, false);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+            }
+            add_test_block(ctx);
+            add_test_inst(
+                ctx,
+                0,
+                IOP_CONST_I128,
+                ITY_I128,
+                IDATA_CONST_I128,
+                10,
+                0,
+                &[],
+            );
+            add_test_inst(
+                ctx,
+                1,
+                IOP_CONST_I128,
+                ITY_I128,
+                IDATA_CONST_I128,
+                3,
+                0,
+                &[],
+            );
+            add_test_inst(ctx, 2, op, ITY_I128, IDATA_INTEGER, ITY_I128, 0, &[0, 1]);
+            add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[2]);
             unsafe {
                 assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
                 __vow_clif_destroy(ctx);
