@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "updated": "2026-08-25",
+  "pairs": {
+    "lexer": {
+      "rust": "vow-syntax/src/lexer.rs, vow-syntax/src/token.rs",
+      "self_hosted": "compiler/lexer.vow",
+      "content_hash": "a9b07dc98d256e180af9dde52e8e674253e2b8e87d4d0f41209b892214f18eaa",
+      "last_reviewed": "never",
+      "outcome": "clean",
+      "confirmed_issues": []
+    },
+    "parser": {
+      "rust": "vow-syntax/src/parser",
+      "self_hosted": "compiler/parser.vow",
+      "content_hash": "5d7c5c041086ae3c7aa945e4de0afca5cf0db93cd6103f5b784240efbe0a0c5d",
+      "last_reviewed": "never",
+      "outcome": "clean",
+      "confirmed_issues": []
+    },
+    "checker": {
+      "rust": "vow-types/src/check.rs, vow-types/src/linear.rs, vow-types/src/exhaustiveness.rs, vow-types/src/effects.rs",
+      "self_hosted": "compiler/checker.vow",
+      "content_hash": "8f62f4f6e0484668e6193aa19e343b4fc80e17c615de6aac48a11a5fdc6e1f5c",
+      "last_reviewed": "never",
+      "outcome": "clean",
+      "confirmed_issues": []
+    },
+    "lower": {
+      "rust": "vow-ir/src/lower",
+      "self_hosted": "compiler/lower.vow",
+      "content_hash": "c943f292852522bb1ff4b2e4fe25499da59133d874008f05a28f7aeb53f4b73e",
+      "last_reviewed": "never",
+      "outcome": "clean",
+      "confirmed_issues": []
+    },
+    "c_emitter": {
+      "rust": "vow-verify/src/c_emitter.rs",
+      "self_hosted": "compiler/c_emitter.vow",
+      "content_hash": "478c3845bc62ba1e992ca7d915603ab3673c381df046d19c6713a893555cd2a0",
+      "last_reviewed": "never",
+      "outcome": "clean",
+      "confirmed_issues": []
+    }
+  },
+  "corpus": {
+    "benchmarks/medium/M13_gcd/reference.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "runtime",
+      "status": "open",
+      "note": "gcd returns 0 for every input under the self-hosted compiler: a loop-body `let` reads its initializer after a later same-iteration reassignment.",
+      "issue": 1087,
+      "fixture": "tests/run/euclid_gcd_swap_loop.vow"
+    },
+    "tests/error/linear_for_mutation_phi_leak.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/linear_if_mutation_phi_leak.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/linear_loop_mutation_phi_leak.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/linear_match_mutation_phi_leak.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/linear_match_wrong_enum_qualifier.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/linear_region_branch_partial.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/linear_region_branch_phi_leak.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/linear_region_loop_break.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/linear_region_unconsumed.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/linear_while_mutation_phi_leak.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
+      "issue": 588
+    },
+    "tests/error/match_arm_missing_comma_block.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Both reject with UnexpectedToken (#904, correctly closed); only the diagnostic count differs (2 vs 3). Cosmetic.",
+      "issue": 1088
+    },
+    "tests/error/match_arm_missing_comma_scalar.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Both reject with UnexpectedToken (#904, correctly closed); only the diagnostic count differs (2 vs 3). Cosmetic.",
+      "issue": 1088
+    },
+    "tests/error/undefined_function.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "expected",
+      "note": "Same code (TypeMismatch), different cascade depth: Rust also reports the dependent let-binding error. Cosmetic.",
+      "issue": 1088
+    },
+    "tests/fixtures/mutants/sample_extern.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "error_code",
+      "status": "open",
+      "note": "Self-hosted parser does not support `extern \"C\"` blocks: 3x UnexpectedToken vs Rust's MissingContract.",
+      "issue": 1088
+    },
+    "tests/run/euclid_gcd_swap_loop.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "runtime",
+      "status": "open",
+      "note": "Euclid-level reproducer for #1087, promoted as a tier-1 regression fixture. Diverges by design until #1087 is fixed.",
+      "issue": 1087,
+      "fixture": "tests/run/euclid_gcd_swap_loop.vow"
+    },
+    "tests/run/loop_body_let_from_carried_var.vow": {
+      "first_seen": "2026-08-25",
+      "observable": "runtime",
+      "status": "open",
+      "note": "Minimal 9-line reproducer for #1087, promoted as a tier-1 regression fixture. Diverges by design until #1087 is fixed.",
+      "issue": 1087,
+      "fixture": "tests/run/loop_body_let_from_carried_var.vow"
+    }
+  }
+}

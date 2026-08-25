@@ -462,6 +462,48 @@ def check_file(vow_file, rust, slf, outdir, timeout):
 
 
 # ---------------------------------------------------------------------------
+# Ledger
+# ---------------------------------------------------------------------------
+
+LEDGER_PATH = REPO_ROOT / "docs" / "equivalence" / "ledger.json"
+
+
+def load_ledger(path=None):
+    """Known divergences, keyed by repo-relative path.
+
+    A tracked divergence is not news. Without this the nightly reports the same
+    13 known-gap fixtures every run, and a genuinely new finding is lost in the
+    noise — the failure mode that makes recurring jobs get ignored.
+    """
+    p = Path(path) if path else LEDGER_PATH
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text()).get("corpus", {})
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def reconcile(records, ledger):
+    """Split findings into new, known, and disappeared.
+
+    A tracked divergence that stopped reproducing is reported as `fixed` and
+    treated as a failure, mirroring verify_eval.py's GAP_FIXED: a welcome change
+    must force the ledger to be updated rather than silently drifting out of
+    date. A ledger nobody maintains is worse than none, because it suppresses
+    real findings.
+    """
+    new, known, fixed = [], [], []
+    for rec in records:
+        entry = ledger.get(rec["file"])
+        if rec["divergences"]:
+            (known if entry else new).append(rec)
+        elif entry and entry.get("status") in ("open", "expected"):
+            fixed.append(rec["file"])
+    return new, known, fixed
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -483,6 +525,10 @@ def main():
                     help="substring filter; repeatable")
     ap.add_argument("--min-compared", type=int, default=1,
                     help="fail the run if fewer than N files were actually compared")
+    ap.add_argument("--ledger", default=None,
+                    help="path to ledger.json (default: docs/equivalence/ledger.json)")
+    ap.add_argument("--no-ledger", action="store_true",
+                    help="report every divergence as new, ignoring tracked ones")
     args = ap.parse_args()
 
     roots = args.roots or [
@@ -513,6 +559,7 @@ def main():
     print(f"  self: {slf}")
     print()
 
+    ledger = {} if args.no_ledger else load_ledger(args.ledger)
     started = time.time()
     records, diverged, skipped, compared = [], [], [], 0
     for i, f in enumerate(corpus, 1):
@@ -530,6 +577,7 @@ def main():
         if i % 25 == 0:
             print(f"  ... {i}/{len(corpus)}")
 
+    new, known, fixed = reconcile(records, ledger)
     elapsed = int(time.time() - started)
     results = {
         "schema_version": 1,
@@ -537,6 +585,9 @@ def main():
         "corpus_size": len(corpus),
         "compared": compared,
         "diverged": len(diverged),
+        "new_divergences": [r["file"] for r in new],
+        "known_divergences": [r["file"] for r in known],
+        "no_longer_diverging": fixed,
         "skipped": len(skipped),
         "elapsed_secs": elapsed,
         "records": records,
@@ -548,7 +599,7 @@ def main():
     print()
     print("=== Summary ===")
     print(f"  compared : {compared}")
-    print(f"  diverged : {len(diverged)}")
+    print(f"  diverged : {len(diverged)}  (new: {len(new)}, tracked: {len(known)})")
     print(f"  skipped  : {len(skipped)}")
     print(f"  elapsed  : {elapsed}s")
     if skipped:
@@ -561,6 +612,14 @@ def main():
             print(f"    {count:5d}  {reason}")
     print(f"  results  : {outdir / 'results.json'}")
 
+    if fixed:
+        print()
+        print("  NO LONGER DIVERGING — update docs/equivalence/ledger.json:")
+        for f in fixed:
+            entry = ledger.get(f, {})
+            issue = entry.get("issue")
+            print(f"    {f}" + (f"  (issue #{issue})" if issue else ""))
+
     if compared < args.min_compared:
         print(
             f"\nFAIL: only {compared} files compared, need >= {args.min_compared}"
@@ -568,7 +627,9 @@ def main():
             file=sys.stderr,
         )
         return 2
-    return 1 if diverged else 0
+    # Tracked divergences do not fail the run; new ones and stale ledger
+    # entries do.
+    return 1 if (new or fixed) else 0
 
 
 if __name__ == "__main__":
