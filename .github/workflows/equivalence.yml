@@ -18,10 +18,6 @@ on:
     # never contend for runners.
     - cron: "41 4 * * *"
   workflow_dispatch:
-    inputs:
-      shards:
-        description: "Number of shards to split the corpus across"
-        default: "4"
 
 env:
   ESBMC_VERSION: "8.1"
