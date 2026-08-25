@@ -95,3 +95,26 @@ skipped. For the corpus it records which files have ever diverged, so a
 regression is distinguishable from a new finding.
 
 Schema: see `ledger.schema.json`.
+
+## Running it
+
+```bash
+# Tier 2 — full-corpus differential sweep (deterministic, no credentials)
+python3 scripts/equivalence.py --rust target/release/vow --self build/vowc
+
+# Tier 3 — adversarial pair review (needs ANTHROPIC_API_KEY or OPENAI_API_KEY)
+python3 scripts/pair_review.py --model claude-sonnet-4-20250514
+```
+
+Bootstrap first (`cargo build --all --release && scripts/bootstrap.sh --skip-cargo`): both tiers must
+compare the verified fixed point, for the attribution reason above.
+
+The monthly cadence is `/equivalence-review` (see `.claude/commands/equivalence-review.md`), which runs
+both tiers, triages what they find, and publishes `report.md` + `recap.md` here.
+
+## Index
+
+| Month | Verdict | Report | Recap |
+|---|---|---|---|
+
+<!-- Add a row per cycle, most recent first. -->
