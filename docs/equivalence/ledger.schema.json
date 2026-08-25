@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Vow equivalence ledger",
+  "description": "Cross-run state for the equivalence-validation tiers. Makes recurring runs incremental (only changed module pairs are re-reviewed) and comparable (a regression is distinguishable from a new finding).",
+  "type": "object",
+  "required": ["schema_version", "pairs", "corpus"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "updated": {
+      "type": "string",
+      "description": "ISO-8601 date of the last write. Stamped by the caller, not derived in-process: workflow scripts here must stay deterministic."
+    },
+    "pairs": {
+      "type": "object",
+      "description": "Adversarial pair review (tier 3), keyed by pair name e.g. 'lexer'.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["rust", "self_hosted", "content_hash", "last_reviewed", "outcome"],
+        "additionalProperties": false,
+        "properties": {
+          "rust": { "type": "string", "description": "Repo-relative path of the Rust side." },
+          "self_hosted": { "type": "string", "description": "Repo-relative path of the self-hosted side." },
+          "content_hash": {
+            "type": "string",
+            "description": "sha256 over both files' contents. A pair whose hash is unchanged since last_reviewed is skipped and reported as skipped — never silently omitted."
+          },
+          "last_reviewed": { "type": "string" },
+          "outcome": {
+            "enum": ["clean", "hypotheses", "confirmed"],
+            "description": "clean: reviewed, nothing found. hypotheses: claims raised but none confirmed by the runner. confirmed: at least one runner-confirmed divergence."
+          },
+          "confirmed_issues": {
+            "type": "array",
+            "items": { "type": "integer" },
+            "description": "GitHub issue numbers for runner-confirmed divergences."
+          }
+        }
+      }
+    },
+    "corpus": {
+      "type": "object",
+      "description": "Per-file divergence history (tier 2), keyed by repo-relative .vow path. Presence here means a file has diverged at least once, so a reappearance is a regression rather than a new finding.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["first_seen", "observable", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "first_seen": { "type": "string" },
+          "observable": {
+            "enum": ["accept_reject", "error_code", "runtime", "fail_closed"]
+          },
+          "status": {
+            "enum": ["open", "fixed", "expected"],
+            "description": "open: live divergence. fixed: resolved, retained so a reappearance reads as a regression. expected: a known, documented asymmetry (e.g. a diagnostic a phase-shifted checker cannot emit) — must carry a note and an issue."
+          },
+          "note": { "type": "string" },
+          "issue": { "type": "integer" },
+          "fixture": {
+            "type": "string",
+            "description": "Repo-relative path of the promoted tier-1 regression fixture, once one exists."
+          }
+        }
+      }
+    }
+  }
+}
