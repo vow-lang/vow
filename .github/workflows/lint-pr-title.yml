@@ -1,9 +1,21 @@
-# Enforces that PR titles follow the Conventional Commits spec.
-# https://www.conventionalcommits.org/  |  https://github.com/amannn/action-semantic-pull-request
+# Enforces Conventional Commits on PR titles.
+#
+# Why the title and not the commits: the repo only allows squash merges, and the
+# squash subject is taken verbatim from the PR title. So the PR title *is* the
+# commit message that lands on main and gets linted by commitlint.yml.
+#
+# This job therefore runs commitlint itself, against the repo's own
+# commitlint.config.cjs, rather than a second lookalike ruleset. Two rulesets
+# gating one string is how "Cranelift I128 codegen" (#1079) passed review and
+# then broke commitlint on main: subject-case is a commitlint rule that the
+# generic PR-title actions do not check.
 name: Lint PR title
 
-# pull_request_target is required so the check also runs on fork PRs. It is safe
-# here: no PR code is checked out and the token is read-only on pull-requests.
+# pull_request_target is required so the check also runs on fork PRs, and it
+# makes the checkout resolve to the *base* commit — so a PR cannot weaken the
+# ruleset it is being judged by. No PR code is checked out or executed, and the
+# untrusted title is passed through the environment, never interpolated into a
+# shell command.
 on: # zizmor: ignore[dangerous-triggers]
   pull_request_target:
     types:
@@ -13,7 +25,7 @@ on: # zizmor: ignore[dangerous-triggers]
       - synchronize
 
 permissions:
-  pull-requests: read
+  contents: read
 
 jobs:
   validate:
@@ -22,6 +34,15 @@ jobs:
     steps:
       # Tag-pinned, not hash-pinned: a deliberate tradeoff for readability over the
       # marginal supply-chain hardening SHA-pinning would add.
-      - uses: amannn/action-semantic-pull-request@v6.1.1 # zizmor: ignore[unpinned-uses]
+      - uses: actions/checkout@v7.0.0 # zizmor: ignore[unpinned-uses]
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.0.0 # zizmor: ignore[unpinned-uses]
+        with:
+          node-version: lts/*
+      - name: Install commitlint
+        run: npm install --no-save @commitlint/cli@21 @commitlint/config-conventional@21 # zizmor: ignore[adhoc-packages]
+      - name: Lint PR title
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s' "$PR_TITLE" | npx commitlint --verbose

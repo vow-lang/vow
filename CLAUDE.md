@@ -42,9 +42,42 @@ Contracts express **semantic correctness** — what is mathematically required f
 - **Only add bounds that reflect genuine semantic constraints.** Overflow guards (e.g., `requires: x > -9223372036854775807` for `abs`) are legitimate — they prevent undefined behavior in the implementation. Loop iteration caps for ESBMC are not.
 - **Use the backend-independence test.** Replacing ESBMC with a stronger verifier must not require editing a source contract.
 
+## Commit Messages
+
+Every commit message and every PR title MUST follow [Conventional Commits](https://www.conventionalcommits.org/):
+`type(optional-scope): subject`. `commitlint.config.cjs` (`@commitlint/config-conventional`) is the
+single ruleset, enforced in three places: the `commit-msg` pre-commit hook locally, `Lint PR title`
+on every PR, and `Lint commits` on pushes to `main`. All three run the same commitlint config, so a
+message that passes locally cannot fail in CI.
+
+Install the hooks once per clone — without this the local gate is simply absent:
+
+```bash
+pre-commit install --install-hooks   # installs both pre-commit and commit-msg hooks
+```
+
+Rules that are easy to get wrong:
+
+- **Subject must be lower-case.** `subject-case` rejects sentence-case, start-case, PascalCase, and
+  UPPER-CASE subjects. Write `feat(codegen): add Cranelift I128 codegen`, not
+  `feat(codegen): Cranelift I128 codegen` — the leading capital fails even when the capitalized word
+  is a proper noun. Start the subject with a lower-case verb and the problem disappears. Capitals
+  later in the subject (`Vec`, `VowViolation`, `I128`) are fine.
+- **No trailing period.** `subject-full-stop` rejects a subject ending in `.`. Imperative mood
+  (`count`, not `counts`/`counted`) is convention rather than a lint rule, but follow it:
+  `fix(vow-perf): count Vec sort runtime work`.
+- **Type must be one of** `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`,
+  `style`, `test`. `@semantic-release/commit-analyzer` derives the release version from these, so the
+  type is load-bearing, not decoration.
+- **Header ≤ 100 characters.** Detail belongs in the body.
+
 ## Pull Requests
 
-Always merge PRs via a merge commit (`gh pr merge --merge`). Do not squash or rebase-merge — preserving the individual commit history is required.
+The repository allows **squash merges only** (`gh pr merge --squash`); merge commits and rebase
+merges are disabled in the repo settings. The squash subject is taken verbatim from the **PR title**,
+so the PR title is the commit message that lands on `main` — it must satisfy the Conventional Commits
+rules above, and `Lint PR title` checks it with commitlint for exactly that reason. Fix a rejected
+title by editing the PR title, not by amending commits.
 
 ## Vow Compiler
 

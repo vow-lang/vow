@@ -40,8 +40,16 @@ repos:
     hooks:
       - id: pydoclint
 
-  - repo: https://github.com/compilerla/conventional-pre-commit
-    rev: v4.4.0
+  # commitlint, not a lookalike conventional-commit checker: this is the same
+  # engine and the same commitlint.config.cjs that commitlint.yml runs on main,
+  # so a message that passes here cannot fail there.
+  - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
+    rev: v9.26.0
     hooks:
-      - id: conventional-pre-commit
+      - id: commitlint
         stages: [commit-msg]
+        additional_dependencies: ["@commitlint/config-conventional@21"]
+        # Lint the message file git actually hands the hook. The upstream hook
+        # defaults to reading .git/COMMIT_EDITMSG, which breaks `pre-commit run
+        # --commit-msg-filename` and anything that stages a message elsewhere.
+        pass_filenames: true
