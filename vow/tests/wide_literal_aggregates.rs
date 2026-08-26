@@ -6,6 +6,50 @@ fn vow_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_vow"))
 }
 
+/// Codegen tests below link real executables, which needs `libvow_runtime.a`.
+/// `cargo test` builds only the crates under test, so on a clean checkout with
+/// no prior `cargo build --all` that archive does not exist and every such
+/// test fails on a link error rather than on the behavior it means to check.
+///
+/// Build it on demand once per test binary and point the compiler at it via
+/// `VOW_RUNTIME_PATH`, so these tests are self-contained instead of silently
+/// depending on the order the developer happened to run cargo in. Building
+/// (rather than tolerating the link failure, as `effect_gating.rs` does for
+/// its frontend-only assertions) is what keeps the runtime behavior these
+/// tests exist to verify actually under test.
+fn ensure_runtime_archive() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // Honor an archive the caller already provisioned.
+        if std::env::var_os("VOW_RUNTIME_PATH").is_some_and(|p| PathBuf::from(p).exists()) {
+            return;
+        }
+        let target_dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target"));
+        for profile in ["release", "debug"] {
+            let candidate = target_dir.join(profile).join("libvow_runtime.a");
+            if candidate.exists() {
+                return; // the linker's own search finds this unaided
+            }
+        }
+        let status = Command::new(env!("CARGO"))
+            .args(["build", "-p", "vow-runtime"])
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+            .status()
+            .expect("spawn cargo to build vow-runtime");
+        assert!(status.success(), "failed to build vow-runtime staticlib");
+        let built = target_dir.join("debug").join("libvow_runtime.a");
+        assert!(
+            built.exists(),
+            "cargo build -p vow-runtime did not produce {}",
+            built.display()
+        );
+        // SAFETY: single-threaded `Once` initializer, before any test spawns a
+        // child process that reads the environment.
+        unsafe { std::env::set_var("VOW_RUNTIME_PATH", &built) };
+    });
+}
+
 #[test]
 fn aggregate_contexts_lower_wide_literal_magnitudes_at_the_declared_width() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -291,6 +335,7 @@ fn assign_option_vec(values: Vec<Option<u128>>) {
 
 #[test]
 fn wide_codegen_produces_an_executable() {
+    ensure_runtime_archive();
     let dir = tempfile::TempDir::new().unwrap();
     let source_path = dir.path().join("wide_codegen.vow");
     let output_path = dir.path().join("wide_codegen");
@@ -386,6 +431,7 @@ fn wide_values_in_aggregates_fail_closed() {
 /// answers native `u128` arithmetic does.
 #[test]
 fn wide_division_and_checked_multiply_run_through_runtime_helpers() {
+    ensure_runtime_archive();
     for (name, expression, x, y, expected) in [
         (
             "div",
@@ -479,6 +525,7 @@ fn wide_division_and_checked_multiply_run_through_runtime_helpers() {
 /// runtime helper, matching what `i64 / 0` does today.
 #[test]
 fn wide_division_by_zero_traps() {
+    ensure_runtime_archive();
     for (name, expression) in [
         ("div", "x / y"),
         ("rem", "x % y"),
