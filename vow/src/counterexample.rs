@@ -164,6 +164,24 @@ fn build_structured_counterexample(
     build_structured_counterexample_with_module(func, None, ce, file, call_site_index)
 }
 
+/// Blame attribution for a structured counterexample. A callee-precondition CE
+/// (`caller_precondition`) is always blamed on the caller — the caller passed an
+/// argument that tripped the callee's `requires` — and this overrides whatever
+/// blame the tripped vow entry itself recorded. Otherwise blame follows the vow
+/// entry's own [`vow_diag::Blame`], and a CE with no vow entry falls back to
+/// `"none"`. The exhaustive `match` makes the mapping a machine-checked contract:
+/// a new `Blame` variant is a compile error here, not a silent miscategorization.
+fn resolve_ce_blame(caller_precondition: bool, vow_blame: Option<vow_diag::Blame>) -> &'static str {
+    if caller_precondition {
+        return "caller";
+    }
+    match vow_blame {
+        Some(vow_diag::Blame::Caller) => "caller",
+        Some(vow_diag::Blame::Callee) => "callee",
+        Some(vow_diag::Blame::None) | None => "none",
+    }
+}
+
 pub(crate) fn build_structured_counterexample_with_module(
     func: &vow_ir::Function,
     module: Option<&vow_ir::Module>,
@@ -209,18 +227,7 @@ pub(crate) fn build_structured_counterexample_with_module(
     } else {
         ce.description.clone()
     };
-    let blame = if caller_precondition {
-        "caller".to_string()
-    } else {
-        vow_entry
-            .map(|v| match v.blame {
-                vow_diag::Blame::Caller => "caller",
-                vow_diag::Blame::Callee => "callee",
-                vow_diag::Blame::None => "none",
-            })
-            .unwrap_or("none")
-            .to_string()
-    };
+    let blame = resolve_ce_blame(caller_precondition, vow_entry.map(|v| v.blame)).to_string();
     let source = if unsupported_op {
         None
     } else {
@@ -1726,5 +1733,29 @@ mod tests {
         assert_eq!(sce.branch_decisions[0].taken, "else");
         assert_eq!(sce.branch_decisions[0].condition_offset, 20);
         assert_eq!(sce.branch_decisions[0].condition_length, 8);
+    }
+
+    // The blame-precedence policy for a structured counterexample (same shape as
+    // the `resolve_clause_status` seam of #1073): a callee-precondition CE is
+    // ALWAYS blamed on the caller, overriding whatever blame the vow entry
+    // itself records, and a CE with no vow entry defaults to "none".
+    // `resolve_ce_blame` makes this an exhaustive, pure mapping, so adding a
+    // `Blame` variant is a compile error here rather than a silent fall-through.
+    #[test]
+    fn resolve_ce_blame_precedence() {
+        use vow_diag::Blame;
+
+        // A callee-precondition CE overrides the vow entry's recorded blame.
+        assert_eq!(resolve_ce_blame(true, Some(Blame::Callee)), "caller");
+        assert_eq!(resolve_ce_blame(true, Some(Blame::None)), "caller");
+        assert_eq!(resolve_ce_blame(true, None), "caller");
+
+        // Otherwise blame follows the vow entry's own record.
+        assert_eq!(resolve_ce_blame(false, Some(Blame::Caller)), "caller");
+        assert_eq!(resolve_ce_blame(false, Some(Blame::Callee)), "callee");
+        assert_eq!(resolve_ce_blame(false, Some(Blame::None)), "none");
+
+        // Not a caller precondition and no vow entry => fail to "none".
+        assert_eq!(resolve_ce_blame(false, None), "none");
     }
 }
