@@ -69,7 +69,10 @@ Rules that are easy to get wrong:
 - **Type must be one of** `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`,
   `style`, `test`. `@semantic-release/commit-analyzer` derives the release version from these, so the
   type is load-bearing, not decoration.
-- **Header ≤ 100 characters.** Detail belongs in the body.
+- **Header ≤ 100 characters, including the ` (#N)` GitHub appends.** The squash subject is
+  `<PR title> (#<number>)`, so a PR title has roughly 92 characters to work with, not 100.
+  `Lint PR title` checks the title with that suffix attached for this reason. Detail belongs
+  in the body.
 
 ## Pull Requests
 

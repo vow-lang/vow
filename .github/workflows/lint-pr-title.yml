@@ -42,7 +42,12 @@ jobs:
           node-version: lts/*
       - name: Install commitlint
         run: npm install --no-save @commitlint/cli@21 @commitlint/config-conventional@21 # zizmor: ignore[adhoc-packages]
+      # Lint the subject as it will actually land: GitHub appends " (#N)" to the
+      # squash subject, which is 8+ characters commitlint counts against
+      # header-max-length on main but would not see in the bare title. Linting
+      # the title alone lets a 98-character title pass here and fail there.
       - name: Lint PR title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: printf '%s' "$PR_TITLE" | npx commitlint --verbose
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: printf '%s (#%s)' "$PR_TITLE" "$PR_NUMBER" | npx commitlint --verbose
