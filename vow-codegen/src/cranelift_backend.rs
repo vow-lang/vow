@@ -317,6 +317,13 @@ fn call_wide_helper(
 /// `MIN / -1` for signed division, whose true quotient has no representation.
 /// Both are emitted in every build mode, matching `sdiv`/`udiv` lowering.
 ///
+/// The two conditions trap separately so each carries the same `TrapCode`
+/// Cranelift's own lowering uses — `INTEGER_DIVISION_BY_ZERO` for the zero
+/// divisor, `INTEGER_OVERFLOW` for `MIN / -1` (see `isa/*/lower.isle`, which
+/// distinguishes them). Collapsing both into one branch would be cheaper, but
+/// this seam exists to reproduce native behavior, and the trap code is part of
+/// that behavior even though nothing decodes it today.
+///
 /// Signed remainder is deliberately excluded from the `MIN % -1` check:
 /// `sdiv` traps there but `srem` does not, and `i64::MIN % -1` returns 0
 /// today. `wrapping_rem` in the helper gives the same 0.
@@ -328,7 +335,8 @@ fn emit_divisor_traps(
     divisor: Value,
 ) {
     let zero = wide_iconst(builder, 0);
-    let mut condition = builder.ins().icmp(IntCC::Equal, divisor, zero);
+    let is_zero = builder.ins().icmp(IntCC::Equal, divisor, zero);
+    emit_conditional_trap(builder, is_zero, TrapCode::INTEGER_DIVISION_BY_ZERO);
 
     let is_signed_division =
         ty == IrTy::I128 && matches!(opcode, Opcode::WrappingDiv | Opcode::CheckedDiv);
@@ -338,9 +346,12 @@ fn emit_divisor_traps(
         let dividend_is_min = builder.ins().icmp(IntCC::Equal, dividend, min);
         let divisor_is_neg_one = builder.ins().icmp(IntCC::Equal, divisor, neg_one);
         let overflows = builder.ins().band(dividend_is_min, divisor_is_neg_one);
-        condition = builder.ins().bor(condition, overflows);
+        emit_conditional_trap(builder, overflows, TrapCode::INTEGER_OVERFLOW);
     }
+}
 
+/// Trap with `code` when `condition` holds, continuing in a fresh block.
+fn emit_conditional_trap(builder: &mut FunctionBuilder<'_>, condition: Value, code: TrapCode) {
     let trap_block = builder.create_block();
     let cont_block = builder.create_block();
     builder
@@ -348,7 +359,7 @@ fn emit_divisor_traps(
         .brif(condition, trap_block, &[], cont_block, &[]);
     builder.switch_to_block(trap_block);
     builder.seal_block(trap_block);
-    builder.ins().trap(TrapCode::INTEGER_DIVISION_BY_ZERO);
+    builder.ins().trap(code);
     builder.switch_to_block(cont_block);
     builder.seal_block(cont_block);
 }

@@ -2966,8 +2966,16 @@ fn wide_divisor_trap_condition(
     condition
 }
 
-/// Trap on [`wide_divisor_trap_condition`], so 128-bit `/` and `%` abort
-/// exactly where `i64` `/` and `%` do rather than reaching the runtime helper.
+/// Trap so 128-bit `/` and `%` abort exactly where `i64` `/` and `%` do
+/// rather than reaching the runtime helper.
+///
+/// The two conditions trap separately so each carries the same `TrapCode`
+/// Cranelift's own lowering uses — `INTEGER_DIVISION_BY_ZERO` for the zero
+/// divisor, `INTEGER_OVERFLOW` for `MIN / -1` (see `isa/*/lower.isle`, which
+/// distinguishes them). The checked operators still merge both conditions via
+/// [`wide_divisor_trap_condition`], because they report a single
+/// `ArithmeticOverflow` through `emit_overflow_check` rather than trapping
+/// with a code.
 fn emit_divisor_traps(
     builder: &mut FunctionBuilder<'_>,
     op: i64,
@@ -2975,7 +2983,22 @@ fn emit_divisor_traps(
     dividend: Value,
     divisor: Value,
 ) {
-    let condition = wide_divisor_trap_condition(builder, op, ity, dividend, divisor);
+    let zero = wide_iconst(builder, 0);
+    let is_zero = builder.ins().icmp(IntCC::Equal, divisor, zero);
+    emit_conditional_trap(builder, is_zero, TrapCode::INTEGER_DIVISION_BY_ZERO);
+
+    if ity == ITY_I128 && (op == IOP_WDIV || op == IOP_CDIV) {
+        let min = wide_iconst(builder, i128::MIN as u128);
+        let neg_one = wide_iconst(builder, -1i128 as u128);
+        let dividend_is_min = builder.ins().icmp(IntCC::Equal, dividend, min);
+        let divisor_is_neg_one = builder.ins().icmp(IntCC::Equal, divisor, neg_one);
+        let overflows = builder.ins().band(dividend_is_min, divisor_is_neg_one);
+        emit_conditional_trap(builder, overflows, TrapCode::INTEGER_OVERFLOW);
+    }
+}
+
+/// Trap with `code` when `condition` holds, continuing in a fresh block.
+fn emit_conditional_trap(builder: &mut FunctionBuilder<'_>, condition: Value, code: TrapCode) {
     let trap_block = builder.create_block();
     let cont_block = builder.create_block();
     builder
@@ -2983,7 +3006,7 @@ fn emit_divisor_traps(
         .brif(condition, trap_block, &[], cont_block, &[]);
     builder.switch_to_block(trap_block);
     builder.seal_block(trap_block);
-    builder.ins().trap(TrapCode::INTEGER_DIVISION_BY_ZERO);
+    builder.ins().trap(code);
     builder.switch_to_block(cont_block);
     builder.seal_block(cont_block);
 }
