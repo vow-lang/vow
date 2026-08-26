@@ -2876,6 +2876,64 @@ pub extern "C" fn __vow_mul_sat_u8(a: u8, b: u8) -> u8 {
     a.saturating_mul(b)
 }
 
+// ---------------------------------------------------------------------------
+// 128-bit division, remainder, and multiply-overflow detection
+//
+// Cranelift 0.134 cannot lower `sdiv`/`udiv`/`urem` on I128 (it reports
+// `Unsupported`), `srem.i128` panics inside Cranelift itself on x86_64, and
+// `smul_overflow`/`umul_overflow` are rejected by Cranelift's own IR verifier
+// because their type-constraint tables exclude I128. Both backends therefore
+// emit calls to these helpers instead of the native opcodes.
+//
+// The backends emit the same divisor traps Cranelift itself inserts for the
+// narrower widths — a zero divisor for all four, plus `MIN / -1` for signed
+// division — so neither case reaches this code. The guards below are
+// unreachable backstops that keep the helpers total: a Rust panic crossing an
+// `extern "C"` boundary would abort with no diagnostic at all. They call the
+// same `__vow_arithmetic_overflow` reporter the checked operators use.
+//
+// `wrapping_div`/`wrapping_rem` (rather than `/`/`%`) make the `MIN / -1` and
+// `MIN % -1` cases total too; `MIN % -1` is 0 at every width and deliberately
+// does not trap, matching `srem`.
+// ---------------------------------------------------------------------------
+
+macro_rules! define_wide_div_rem {
+    ($div_name:ident, $rem_name:ident, $ty:ty) => {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $div_name(a: $ty, b: $ty) -> $ty {
+            if b == 0 {
+                __vow_arithmetic_overflow();
+            }
+            a.wrapping_div(b)
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $rem_name(a: $ty, b: $ty) -> $ty {
+            if b == 0 {
+                __vow_arithmetic_overflow();
+            }
+            a.wrapping_rem(b)
+        }
+    };
+}
+
+define_wide_div_rem!(__vow_i128_div, __vow_i128_rem, i128);
+define_wide_div_rem!(__vow_u128_div, __vow_u128_rem, u128);
+
+/// Returns 1 when `a * b` overflows, 0 otherwise. The product itself is
+/// computed by a native `imul.i128`, which Cranelift does lower; only the
+/// overflow flag needs a helper, so the checked-multiply trap stays on the
+/// backends' shared `emit_overflow_check` path.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_i128_mul_overflow(a: i128, b: i128) -> i8 {
+    a.checked_mul(b).is_none() as i8
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_u128_mul_overflow(a: u128, b: u128) -> i8 {
+    a.checked_mul(b).is_none() as i8
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
     let ptr = __vow_vec_new(8, 8) as *mut i64;
@@ -4438,6 +4496,115 @@ pub extern "C" fn __vow_sanitize_check_generation(vec: *const u8, index: usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 128-bit division helpers must agree with native Rust `i128`/`u128`
+    /// arithmetic across both limbs, including the sign rules that differ
+    /// between the signed and unsigned symbol.
+    #[test]
+    fn wide_division_helpers_match_native_arithmetic() {
+        for (a, b) in [
+            (10i128, 3i128),
+            (-7, 3),
+            (7, -3),
+            (-7, -3),
+            (i128::MAX, 5),
+            (i128::MIN, 5),
+            (3154393236604333326336, 3),
+        ] {
+            assert_eq!(__vow_i128_div(a, b), a / b, "{a} / {b}");
+            assert_eq!(__vow_i128_rem(a, b), a % b, "{a} % {b}");
+        }
+        for (a, b) in [
+            (10u128, 3u128),
+            (u128::MAX, 5),
+            (u128::MAX, 7),
+            (3781582535110458081280, 5),
+        ] {
+            assert_eq!(__vow_u128_div(a, b), a / b, "{a} / {b}");
+            assert_eq!(__vow_u128_rem(a, b), a % b, "{a} % {b}");
+        }
+    }
+
+    /// The zero guards are unreachable in a compiled program — both backends
+    /// trap before the call — but they must abort rather than let a Rust
+    /// divide-by-zero panic cross the `extern "C"` boundary. Spawned as
+    /// subprocesses because the guard calls `std::process::exit`.
+    #[test]
+    fn wide_division_helpers_abort_on_a_zero_divisor() {
+        for (helper, arg) in [
+            ("i128_div", "0"),
+            ("i128_rem", "0"),
+            ("u128_div", "0"),
+            ("u128_rem", "0"),
+        ] {
+            let exe = std::env::current_exe().expect("test binary path");
+            let output = std::process::Command::new(exe)
+                .args(["--exact", "tests::wide_zero_divisor_child", "--nocapture"])
+                .env("VOW_WIDE_ZERO_HELPER", helper)
+                .env("VOW_WIDE_ZERO_ARG", arg)
+                .output()
+                .expect("spawn child");
+            assert_eq!(
+                output.status.code(),
+                Some(VOW_RUNTIME_ABORT_EXIT),
+                "{helper}: expected the runtime abort exit code"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("ArithmeticOverflow"),
+                "{helper}: expected the ArithmeticOverflow envelope, got: {stderr}"
+            );
+        }
+    }
+
+    /// Child half of `wide_division_helpers_abort_on_a_zero_divisor`. Inert
+    /// unless the parent sets `VOW_WIDE_ZERO_HELPER`, so a normal test run
+    /// executes it as a no-op.
+    #[test]
+    fn wide_zero_divisor_child() {
+        let Ok(helper) = std::env::var("VOW_WIDE_ZERO_HELPER") else {
+            return;
+        };
+        match helper.as_str() {
+            "i128_div" => {
+                __vow_i128_div(10, 0);
+            }
+            "i128_rem" => {
+                __vow_i128_rem(10, 0);
+            }
+            "u128_div" => {
+                __vow_u128_div(10, 0);
+            }
+            "u128_rem" => {
+                __vow_u128_rem(10, 0);
+            }
+            other => panic!("unknown helper {other}"),
+        }
+        unreachable!("the zero guard must have exited the process");
+    }
+
+    /// `MIN / -1` and `MIN % -1` are the two cases native `/` and `%` would
+    /// panic on. The backends trap on the division before the call, so these
+    /// wrap rather than panic across the `extern "C"` boundary; `MIN % -1` is
+    /// 0, which is also what `srem` gives at the narrower widths.
+    #[test]
+    fn wide_division_helpers_are_total_at_the_signed_extreme() {
+        assert_eq!(__vow_i128_div(i128::MIN, -1), i128::MIN);
+        assert_eq!(__vow_i128_rem(i128::MIN, -1), 0);
+    }
+
+    #[test]
+    fn wide_multiply_overflow_helpers_match_checked_mul() {
+        for (a, b) in [(0i128, 0i128), (10, 3), (-10, 3), (i128::MAX, 1)] {
+            assert_eq!(__vow_i128_mul_overflow(a, b), 0, "{a} * {b} fits");
+        }
+        for (a, b) in [(i128::MAX, 2i128), (i128::MIN, 2), (i128::MIN, -1)] {
+            assert_eq!(__vow_i128_mul_overflow(a, b), 1, "{a} * {b} overflows");
+        }
+        assert_eq!(__vow_u128_mul_overflow(10, 3), 0);
+        assert_eq!(__vow_u128_mul_overflow(u128::MAX, 1), 0);
+        assert_eq!(__vow_u128_mul_overflow(u128::MAX, 2), 1);
+    }
 
     fn borrowed_vow_string(text: &str) -> VowVec {
         VowVec {

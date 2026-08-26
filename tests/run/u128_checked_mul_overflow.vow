@@ -1,0 +1,11 @@
+// TEST: exit 132
+module U128CheckedMulOverflow
+
+fn overflow() -> u128 {
+    340282366920938463463374607431768211455 *! 2
+}
+
+fn main() -> i32 {
+    overflow();
+    0
+}

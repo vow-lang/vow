@@ -1,0 +1,14 @@
+// TEST: exit 132
+module I128CheckedMulOverflow
+
+// `*!` on I128 computes the product with a native `imul` and gets its overflow
+// flag from a vow-runtime helper, because Cranelift's IR verifier rejects
+// `smul_overflow.i128` outright. The trap must still fire.
+fn overflow() -> i128 {
+    170141183460469231731687303715884105727 *! 2
+}
+
+fn main() -> i32 {
+    overflow();
+    0
+}

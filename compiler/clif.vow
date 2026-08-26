@@ -393,6 +393,32 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
     sym
 }
 
+// 128-bit division, remainder, and checked multiply lower to vow-runtime
+// helpers rather than native Cranelift opcodes (Cranelift 0.134 cannot lower
+// sdiv/udiv/urem on I128, srem.i128 panics inside Cranelift on x86_64, and
+// smul_overflow/umul_overflow are rejected by its own IR verifier). No
+// CallExtern instruction names those symbols, so the import pre-pass has to
+// derive them from the instruction itself. This mirrors `wide_helper_symbol`
+// in vow-clif-shim, and must keep reading `inst.ty` for both width and
+// signedness so the two never disagree on which symbol to use.
+fn wide_helper_symbol(op: i64, ty: i64) -> String {
+    let signed: bool = ty == ITY_I128();
+    if !signed && ty != ITY_U128() { return String::from(""); }
+    if op == IOP_WDIV() || op == IOP_CDIV() {
+        if signed { return String::from("__vow_i128_div"); }
+        return String::from("__vow_u128_div");
+    }
+    if op == IOP_WREM() || op == IOP_CREM() {
+        if signed { return String::from("__vow_i128_rem"); }
+        return String::from("__vow_u128_rem");
+    }
+    if op == IOP_CMUL() {
+        if signed { return String::from("__vow_i128_mul_overflow"); }
+        return String::from("__vow_u128_mul_overflow");
+    }
+    String::from("")
+}
+
 fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
     let result: Vec<String> = Vec::new();
     let has_debug: bool = mode == 1 || mode == 3;
@@ -414,6 +440,10 @@ fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
                     if !vec_contains_str(result, sym) {
                         result.push(sym);
                     }
+                }
+                let wide: String = wide_helper_symbol(inst.op, inst.ty);
+                if wide.len() > 0 && !vec_contains_str(result, wide) {
+                    result.push(wide);
                 }
                 ii = ii + 1;
             }

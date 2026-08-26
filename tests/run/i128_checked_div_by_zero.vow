@@ -1,0 +1,17 @@
+// TEST: exit 132
+module I128CheckedDivByZero
+
+// `/!` traps through the shared overflow-check path, which the 128-bit routing
+// must not bypass.
+fn zero() -> i128 {
+    0
+}
+
+fn divide() -> i128 {
+    10 /! zero()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}

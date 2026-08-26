@@ -269,20 +269,99 @@ fn wide_iconst(builder: &mut FunctionBuilder<'_>, bits: u128) -> Value {
 /// Cranelift 0.134 cannot lower division, remainder, or checked multiply on
 /// I128: `sdiv`/`udiv`/`urem` report `Unsupported`, `srem` panics outright on
 /// x86_64, and `smul_overflow`/`umul_overflow` are rejected by Cranelift's own
-/// IR verifier. Reject them with a diagnostic rather than letting codegen die
-/// inside Cranelift; a follow-up seam of epic #526 routes these through
-/// `vow-runtime` helpers.
-fn reject_wide_operand(
-    builder: &FunctionBuilder<'_>,
-    value: Value,
-    op: &str,
-) -> Result<(), CodegenError> {
-    if builder.func.dfg.value_type(value) == types::I128 {
+/// IR verifier. Those five opcodes are routed through `vow-runtime` helpers
+/// instead (epic #526 seam 3b).
+///
+/// The instruction's own `IrTy` — not the Cranelift value type — selects the
+/// symbol, because it carries signedness as well as width and is the one
+/// source both the import pre-pass and this lowering can read. Reading two
+/// different sources would let the pre-pass declare `__vow_i128_div` while
+/// lowering asks for `__vow_u128_div`.
+fn wide_helper_symbol(opcode: Opcode, ty: IrTy) -> Option<&'static str> {
+    let signed = match ty {
+        IrTy::I128 => true,
+        IrTy::U128 => false,
+        _ => return None,
+    };
+    Some(match (opcode, signed) {
+        (Opcode::WrappingDiv | Opcode::CheckedDiv, true) => "__vow_i128_div",
+        (Opcode::WrappingDiv | Opcode::CheckedDiv, false) => "__vow_u128_div",
+        (Opcode::WrappingRem | Opcode::CheckedRem, true) => "__vow_i128_rem",
+        (Opcode::WrappingRem | Opcode::CheckedRem, false) => "__vow_u128_rem",
+        (Opcode::CheckedMul, true) => "__vow_i128_mul_overflow",
+        (Opcode::CheckedMul, false) => "__vow_u128_mul_overflow",
+        _ => return None,
+    })
+}
+
+/// Call a two-operand 128-bit runtime helper resolved by [`wide_helper_symbol`].
+fn call_wide_helper(
+    builder: &mut FunctionBuilder<'_>,
+    ctx: &LowerCtx,
+    sym: &str,
+    lhs: Value,
+    rhs: Value,
+) -> Result<Value, CodegenError> {
+    let Some(&func_ref) = ctx.extern_func_refs.get(sym) else {
         return Err(CodegenError::UnsupportedOpcode(format!(
-            "128-bit {op} is not supported by the Cranelift backend yet (epic #526)"
+            "128-bit runtime helper {sym} was not declared as an import"
         )));
+    };
+    let call = builder.ins().call(func_ref, &[lhs, rhs]);
+    Ok(builder.inst_results(call)[0])
+}
+
+/// Trap on the two divisor conditions Cranelift traps on for the narrower
+/// widths, so 128-bit `/` and `%` abort exactly where `i64` `/` and `%` do
+/// rather than reaching the runtime helper: a zero divisor always, and
+/// `MIN / -1` for signed division, whose true quotient has no representation.
+/// Both are emitted in every build mode, matching `sdiv`/`udiv` lowering.
+///
+/// The two conditions trap separately so each carries the same `TrapCode`
+/// Cranelift's own lowering uses — `INTEGER_DIVISION_BY_ZERO` for the zero
+/// divisor, `INTEGER_OVERFLOW` for `MIN / -1` (see `isa/*/lower.isle`, which
+/// distinguishes them). Collapsing both into one branch would be cheaper, but
+/// this seam exists to reproduce native behavior, and the trap code is part of
+/// that behavior even though nothing decodes it today.
+///
+/// Signed remainder is deliberately excluded from the `MIN % -1` check:
+/// `sdiv` traps there but `srem` does not, and `i64::MIN % -1` returns 0
+/// today. `wrapping_rem` in the helper gives the same 0.
+fn emit_divisor_traps(
+    builder: &mut FunctionBuilder<'_>,
+    opcode: Opcode,
+    ty: IrTy,
+    dividend: Value,
+    divisor: Value,
+) {
+    let zero = wide_iconst(builder, 0);
+    let is_zero = builder.ins().icmp(IntCC::Equal, divisor, zero);
+    emit_conditional_trap(builder, is_zero, TrapCode::INTEGER_DIVISION_BY_ZERO);
+
+    let is_signed_division =
+        ty == IrTy::I128 && matches!(opcode, Opcode::WrappingDiv | Opcode::CheckedDiv);
+    if is_signed_division {
+        let min = wide_iconst(builder, i128::MIN as u128);
+        let neg_one = wide_iconst(builder, -1i128 as u128);
+        let dividend_is_min = builder.ins().icmp(IntCC::Equal, dividend, min);
+        let divisor_is_neg_one = builder.ins().icmp(IntCC::Equal, divisor, neg_one);
+        let overflows = builder.ins().band(dividend_is_min, divisor_is_neg_one);
+        emit_conditional_trap(builder, overflows, TrapCode::INTEGER_OVERFLOW);
     }
-    Ok(())
+}
+
+/// Trap with `code` when `condition` holds, continuing in a fresh block.
+fn emit_conditional_trap(builder: &mut FunctionBuilder<'_>, condition: Value, code: TrapCode) {
+    let trap_block = builder.create_block();
+    let cont_block = builder.create_block();
+    builder
+        .ins()
+        .brif(condition, trap_block, &[], cont_block, &[]);
+    builder.switch_to_block(trap_block);
+    builder.seal_block(trap_block);
+    builder.ins().trap(code);
+    builder.switch_to_block(cont_block);
+    builder.seal_block(cont_block);
 }
 
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty: IrTy) -> Value {
@@ -968,21 +1047,18 @@ fn lower_inst(
             let val = builder.ins().imul(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::WrappingDiv => {
-            reject_wide_operand(builder, arg!(0), "division")?;
-            let val = if integer_is_signed {
-                builder.ins().sdiv(arg!(0), arg!(1))
+        Opcode::WrappingDiv | Opcode::WrappingRem => {
+            let is_div = inst.opcode == Opcode::WrappingDiv;
+            let val = if let Some(sym) = wide_helper_symbol(inst.opcode, inst.ty) {
+                emit_divisor_traps(builder, inst.opcode, inst.ty, arg!(0), arg!(1));
+                call_wide_helper(builder, ctx, sym, arg!(0), arg!(1))?
             } else {
-                builder.ins().udiv(arg!(0), arg!(1))
-            };
-            ctx.value_map.insert(inst.id, val);
-        }
-        Opcode::WrappingRem => {
-            reject_wide_operand(builder, arg!(0), "remainder")?;
-            let val = if integer_is_signed {
-                builder.ins().srem(arg!(0), arg!(1))
-            } else {
-                builder.ins().urem(arg!(0), arg!(1))
+                match (is_div, integer_is_signed) {
+                    (true, true) => builder.ins().sdiv(arg!(0), arg!(1)),
+                    (true, false) => builder.ins().udiv(arg!(0), arg!(1)),
+                    (false, true) => builder.ins().srem(arg!(0), arg!(1)),
+                    (false, false) => builder.ins().urem(arg!(0), arg!(1)),
+                }
             };
             ctx.value_map.insert(inst.id, val);
         }
@@ -1008,8 +1084,13 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, result);
         }
         Opcode::CheckedMul => {
-            reject_wide_operand(builder, arg!(0), "checked multiply")?;
-            let (result, overflow) = if integer_is_signed {
+            // `imul.i128` lowers fine; only the overflow flag needs a helper,
+            // so the trap stays on the shared `emit_overflow_check` path and
+            // 128-bit `*!` reports overflow exactly like every other width.
+            let (result, overflow) = if let Some(sym) = wide_helper_symbol(inst.opcode, inst.ty) {
+                let overflow = call_wide_helper(builder, ctx, sym, arg!(0), arg!(1))?;
+                (builder.ins().imul(arg!(0), arg!(1)), overflow)
+            } else if integer_is_signed {
                 builder.ins().smul_overflow(arg!(0), arg!(1))
             } else {
                 builder.ins().umul_overflow(arg!(0), arg!(1))
@@ -1018,22 +1099,36 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, result);
         }
         Opcode::CheckedDiv | Opcode::CheckedRem => {
-            let what = if inst.opcode == Opcode::CheckedDiv {
-                "checked division"
-            } else {
-                "checked remainder"
-            };
-            reject_wide_operand(builder, arg!(0), what)?;
+            let wide = wide_helper_symbol(inst.opcode, inst.ty);
             let cl_ty = builder.func.dfg.value_type(arg!(1));
-            let zero = builder.ins().iconst(cl_ty, 0);
-            let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-            emit_overflow_check(builder, is_zero, ctx)?;
-            let val = match (inst.opcode, integer_is_signed) {
-                (Opcode::CheckedDiv, true) => builder.ins().sdiv(arg!(0), arg!(1)),
-                (Opcode::CheckedDiv, false) => builder.ins().udiv(arg!(0), arg!(1)),
-                (Opcode::CheckedRem, true) => builder.ins().srem(arg!(0), arg!(1)),
-                (Opcode::CheckedRem, false) => builder.ins().urem(arg!(0), arg!(1)),
-                _ => unreachable!(),
+            let zero = if cl_ty == types::I128 {
+                wide_iconst(builder, 0)
+            } else {
+                builder.ins().iconst(cl_ty, 0)
+            };
+            let mut trap_if = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
+            // Cranelift's own `sdiv` traps on `MIN / -1` at the narrower
+            // widths; the routed 128-bit path has to reproduce that, and on
+            // the checked operator it surfaces as ArithmeticOverflow.
+            if inst.ty == IrTy::I128 && inst.opcode == Opcode::CheckedDiv {
+                let min = wide_iconst(builder, i128::MIN as u128);
+                let neg_one = wide_iconst(builder, -1i128 as u128);
+                let dividend_is_min = builder.ins().icmp(IntCC::Equal, arg!(0), min);
+                let divisor_is_neg_one = builder.ins().icmp(IntCC::Equal, arg!(1), neg_one);
+                let overflows = builder.ins().band(dividend_is_min, divisor_is_neg_one);
+                trap_if = builder.ins().bor(trap_if, overflows);
+            }
+            emit_overflow_check(builder, trap_if, ctx)?;
+            let val = if let Some(sym) = wide {
+                call_wide_helper(builder, ctx, sym, arg!(0), arg!(1))?
+            } else {
+                match (inst.opcode, integer_is_signed) {
+                    (Opcode::CheckedDiv, true) => builder.ins().sdiv(arg!(0), arg!(1)),
+                    (Opcode::CheckedDiv, false) => builder.ins().udiv(arg!(0), arg!(1)),
+                    (Opcode::CheckedRem, true) => builder.ins().srem(arg!(0), arg!(1)),
+                    (Opcode::CheckedRem, false) => builder.ins().urem(arg!(0), arg!(1)),
+                    _ => unreachable!(),
+                }
             };
             ctx.value_map.insert(inst.id, val);
         }
@@ -2283,6 +2378,25 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         sig.returns.push(AbiParam::new(types::I8));
         return sig;
     }
+    if matches!(
+        sym,
+        "__vow_i128_div"
+            | "__vow_i128_rem"
+            | "__vow_u128_div"
+            | "__vow_u128_rem"
+            | "__vow_i128_mul_overflow"
+            | "__vow_u128_mul_overflow"
+    ) {
+        sig.params.push(AbiParam::new(types::I128));
+        sig.params.push(AbiParam::new(types::I128));
+        sig.returns
+            .push(AbiParam::new(if sym.ends_with("_mul_overflow") {
+                types::I8
+            } else {
+                types::I128
+            }));
+        return sig;
+    }
     match sym {
         "__vow_print_str" => {
             sig.params.push(AbiParam::new(types::I64)); // ptr
@@ -2988,6 +3102,13 @@ impl Backend for CraneliftBackend {
                         let (routed_sym, _) =
                             routed_vec_extern(sym, inst, &inst_index, &func.summary, &phi_data);
                         extern_syms.insert(routed_sym.to_string());
+                    }
+                    // 128-bit division, remainder, and checked multiply lower
+                    // to runtime helpers rather than native opcodes, so their
+                    // symbols must be imported even though no `CallExtern`
+                    // instruction names them.
+                    if let Some(sym) = wide_helper_symbol(inst.opcode, inst.ty) {
+                        extern_syms.insert(sym.to_string());
                     }
                 }
             }
@@ -4067,12 +4188,12 @@ mod tests {
         }
     }
 
-    /// Cranelift 0.134 cannot lower division, remainder, or checked multiply
-    /// on I128 — a follow-up seam of epic #526 routes them through
-    /// `vow-runtime`. Until then they must fail with a diagnostic rather than
-    /// erroring or panicking inside Cranelift.
+    /// The narrow-width fallback arms of the five routed opcodes must keep
+    /// emitting native Cranelift instructions, in both signednesses — the
+    /// 128-bit routing is an `if let` on top of them, so a mistake in the
+    /// guard would silently divert (or strand) i64/u64 division.
     #[test]
-    fn wide_division_remainder_and_checked_multiply_are_rejected() {
+    fn narrow_division_and_checked_arithmetic_use_native_opcodes() {
         for op in [
             Opcode::WrappingDiv,
             Opcode::WrappingRem,
@@ -4080,39 +4201,122 @@ mod tests {
             Opcode::CheckedRem,
             Opcode::CheckedMul,
         ] {
+            for (ty, signedness) in [
+                (Ty::I64, IntegerSignedness::Signed),
+                (Ty::U64, IntegerSignedness::Unsigned),
+            ] {
+                let module = make_module(
+                    "test",
+                    vec![simple_fn(
+                        0,
+                        "f",
+                        vec![],
+                        ty,
+                        vec![
+                            inst(0, Opcode::ConstI64, ty, vec![], InstData::ConstI64(10)),
+                            inst(1, Opcode::ConstI64, ty, vec![], InstData::ConstI64(3)),
+                            inst(
+                                2,
+                                op,
+                                ty,
+                                vec![0, 1],
+                                InstData::Integer(IntegerType {
+                                    signedness,
+                                    width: IntegerWidth::W64,
+                                }),
+                            ),
+                            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                        ],
+                    )],
+                );
+                let result = CraneliftBackend::new().compile_module(
+                    &module,
+                    BuildMode::Debug,
+                    TraceMode::Off,
+                );
+                assert!(result.is_ok(), "{op:?}/{ty:?}: {:?}", result.err());
+            }
+        }
+    }
+
+    /// Cranelift 0.134 cannot lower division, remainder, or checked multiply
+    /// on I128, so those five opcodes are routed through `vow-runtime`
+    /// helpers (epic #526 seam 3b). The symbol is chosen from the
+    /// instruction's own `IrTy`, which carries signedness as well as width.
+    #[test]
+    fn wide_helper_symbols_cover_every_unsupported_opcode() {
+        for (op, signed, unsigned) in [
+            (Opcode::WrappingDiv, "__vow_i128_div", "__vow_u128_div"),
+            (Opcode::CheckedDiv, "__vow_i128_div", "__vow_u128_div"),
+            (Opcode::WrappingRem, "__vow_i128_rem", "__vow_u128_rem"),
+            (Opcode::CheckedRem, "__vow_i128_rem", "__vow_u128_rem"),
+            (
+                Opcode::CheckedMul,
+                "__vow_i128_mul_overflow",
+                "__vow_u128_mul_overflow",
+            ),
+        ] {
+            assert_eq!(wide_helper_symbol(op, IrTy::I128), Some(signed), "{op:?}");
+            assert_eq!(wide_helper_symbol(op, IrTy::U128), Some(unsigned), "{op:?}");
+            // Narrower widths keep the native opcode.
+            assert_eq!(wide_helper_symbol(op, IrTy::I64), None, "{op:?}");
+            assert_eq!(wide_helper_symbol(op, IrTy::U64), None, "{op:?}");
+        }
+        // Opcodes Cranelift lowers natively on I128 must not be redirected.
+        for op in [
+            Opcode::WrappingAdd,
+            Opcode::WrappingMul,
+            Opcode::CheckedAdd,
+            Opcode::CheckedSub,
+        ] {
+            assert_eq!(wide_helper_symbol(op, IrTy::I128), None, "{op:?}");
+        }
+    }
+
+    /// The five redirected opcodes must compile on both 128-bit types and
+    /// leave an import of the matching helper in the emitted object.
+    #[test]
+    fn wide_division_remainder_and_checked_multiply_call_runtime_helpers() {
+        for (op, ty, sym) in [
+            (Opcode::WrappingDiv, Ty::I128, "__vow_i128_div"),
+            (Opcode::WrappingRem, Ty::I128, "__vow_i128_rem"),
+            (Opcode::CheckedDiv, Ty::I128, "__vow_i128_div"),
+            (Opcode::CheckedRem, Ty::I128, "__vow_i128_rem"),
+            (Opcode::CheckedMul, Ty::I128, "__vow_i128_mul_overflow"),
+            (Opcode::WrappingDiv, Ty::U128, "__vow_u128_div"),
+            (Opcode::WrappingRem, Ty::U128, "__vow_u128_rem"),
+            (Opcode::CheckedDiv, Ty::U128, "__vow_u128_div"),
+            (Opcode::CheckedRem, Ty::U128, "__vow_u128_rem"),
+            (Opcode::CheckedMul, Ty::U128, "__vow_u128_mul_overflow"),
+        ] {
             let module = make_module(
                 "test",
                 vec![simple_fn(
                     0,
                     "f",
                     vec![],
-                    Ty::I128,
+                    ty,
                     vec![
                         inst(
                             0,
-                            Opcode::ConstI128,
-                            Ty::I128,
+                            wide_const_opcode(ty),
+                            ty,
                             vec![],
-                            InstData::ConstI128(10),
+                            wide_const_data(ty, 10),
                         ),
-                        inst(
-                            1,
-                            Opcode::ConstI128,
-                            Ty::I128,
-                            vec![],
-                            InstData::ConstI128(3),
-                        ),
-                        inst(2, op, Ty::I128, vec![0, 1], InstData::None),
+                        inst(1, wide_const_opcode(ty), ty, vec![], wide_const_data(ty, 3)),
+                        inst(2, op, ty, vec![0, 1], InstData::None),
                         inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                     ],
                 )],
             );
-            let result =
-                CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
-            let Err(CodegenError::UnsupportedOpcode(message)) = result else {
-                panic!("{op:?}: expected UnsupportedOpcode");
-            };
-            assert!(message.contains("128-bit"), "{op:?}: {message}");
+            let object = CraneliftBackend::new()
+                .compile_module(&module, BuildMode::Debug, TraceMode::Off)
+                .unwrap_or_else(|e| panic!("{op:?}/{ty:?}: {e:?}"));
+            assert!(
+                object.bytes.windows(sym.len()).any(|w| w == sym.as_bytes()),
+                "{op:?}/{ty:?}: object does not import {sym}"
+            );
         }
     }
 
@@ -4162,6 +4366,14 @@ mod tests {
             let result =
                 CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
             assert!(result.is_ok(), "{op:?}: {:?}", result.err());
+        }
+    }
+
+    fn wide_const_data(ty: Ty, value: i128) -> InstData {
+        if ty == Ty::I128 {
+            InstData::ConstI128(value)
+        } else {
+            InstData::ConstU128(value as u128)
         }
     }
 

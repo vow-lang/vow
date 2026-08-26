@@ -1,0 +1,22 @@
+// TEST: exit 132
+module I128DivMinByNegOne
+
+// `MIN / -1` has no representable quotient. Cranelift's own `sdiv` traps on it
+// at the narrower widths (`i64::MIN / -1` aborts today); the routed 128-bit
+// path emits that check itself, so this must abort rather than wrap to MIN.
+fn neg_one() -> i128 {
+    -1
+}
+
+fn minimum() -> i128 {
+    -170141183460469231731687303715884105728
+}
+
+fn divide() -> i128 {
+    minimum() / neg_one()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}

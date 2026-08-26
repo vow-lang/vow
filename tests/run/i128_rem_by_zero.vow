@@ -1,0 +1,15 @@
+// TEST: exit 132
+module I128RemByZero
+
+fn zero() -> i128 {
+    0
+}
+
+fn remainder() -> i128 {
+    10 % zero()
+}
+
+fn main() -> i32 {
+    remainder();
+    0
+}

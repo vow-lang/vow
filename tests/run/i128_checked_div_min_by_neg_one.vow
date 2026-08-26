@@ -1,0 +1,20 @@
+// TEST: exit 132
+module I128CheckedDivMinByNegOne
+
+// The checked operator reports the same case as ArithmeticOverflow.
+fn neg_one() -> i128 {
+    -1
+}
+
+fn minimum() -> i128 {
+    -170141183460469231731687303715884105728
+}
+
+fn divide() -> i128 {
+    minimum() /! neg_one()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}

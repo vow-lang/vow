@@ -1,0 +1,15 @@
+// TEST: exit 132
+module U128DivByZero
+
+fn zero() -> u128 {
+    0
+}
+
+fn divide() -> u128 {
+    10 / zero()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}
