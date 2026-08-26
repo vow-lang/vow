@@ -4525,6 +4525,64 @@ mod tests {
         }
     }
 
+    /// The zero guards are unreachable in a compiled program — both backends
+    /// trap before the call — but they must abort rather than let a Rust
+    /// divide-by-zero panic cross the `extern "C"` boundary. Spawned as
+    /// subprocesses because the guard calls `std::process::exit`.
+    #[test]
+    fn wide_division_helpers_abort_on_a_zero_divisor() {
+        for (helper, arg) in [
+            ("i128_div", "0"),
+            ("i128_rem", "0"),
+            ("u128_div", "0"),
+            ("u128_rem", "0"),
+        ] {
+            let exe = std::env::current_exe().expect("test binary path");
+            let output = std::process::Command::new(exe)
+                .args(["--exact", "tests::wide_zero_divisor_child", "--nocapture"])
+                .env("VOW_WIDE_ZERO_HELPER", helper)
+                .env("VOW_WIDE_ZERO_ARG", arg)
+                .output()
+                .expect("spawn child");
+            assert_eq!(
+                output.status.code(),
+                Some(VOW_RUNTIME_ABORT_EXIT),
+                "{helper}: expected the runtime abort exit code"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("ArithmeticOverflow"),
+                "{helper}: expected the ArithmeticOverflow envelope, got: {stderr}"
+            );
+        }
+    }
+
+    /// Child half of `wide_division_helpers_abort_on_a_zero_divisor`. Inert
+    /// unless the parent sets `VOW_WIDE_ZERO_HELPER`, so a normal test run
+    /// executes it as a no-op.
+    #[test]
+    fn wide_zero_divisor_child() {
+        let Ok(helper) = std::env::var("VOW_WIDE_ZERO_HELPER") else {
+            return;
+        };
+        match helper.as_str() {
+            "i128_div" => {
+                __vow_i128_div(10, 0);
+            }
+            "i128_rem" => {
+                __vow_i128_rem(10, 0);
+            }
+            "u128_div" => {
+                __vow_u128_div(10, 0);
+            }
+            "u128_rem" => {
+                __vow_u128_rem(10, 0);
+            }
+            other => panic!("unknown helper {other}"),
+        }
+        unreachable!("the zero guard must have exited the process");
+    }
+
     /// `MIN / -1` and `MIN % -1` are the two cases native `/` and `%` would
     /// panic on. The backends trap on the division before the call, so these
     /// wrap rather than panic across the `extern "C"` boundary; `MIN % -1` is

@@ -4634,6 +4634,41 @@ mod tests {
         builder.finalize(isa.frontend_config());
     }
 
+    /// The narrow-width fallback arms of the five routed opcodes must keep
+    /// emitting native Cranelift instructions, in both signednesses — the
+    /// 128-bit routing is an `if let` on top of them, so a mistake in the
+    /// guard would silently divert (or strand) i64/u64 division.
+    #[test]
+    fn narrow_division_and_checked_arithmetic_use_native_opcodes() {
+        for (name, op) in [
+            ("div", IOP_WDIV),
+            ("rem", IOP_WREM),
+            ("checked_div", IOP_CDIV),
+            ("checked_rem", IOP_CREM),
+            ("checked_add", IOP_CADD),
+            ("checked_sub", IOP_CSUB),
+            ("checked_mul", IOP_CMUL),
+        ] {
+            for (sign_name, ity) in [("i64", ITY_I64), ("u64", ITY_U64)] {
+                let ctx = __vow_clif_create(0, 0);
+                assert_ne!(ctx, 0);
+                declare_test_function(ctx, 0, &format!("{sign_name}_{name}"), ity, false);
+                unsafe {
+                    assert_eq!(__vow_clif_fn_begin(ctx, 0, ity, 0), 0);
+                }
+                add_test_block(ctx);
+                add_test_inst(ctx, 0, IOP_CONST_I64, ity, IDATA_CONST_I64, 10, 0, &[]);
+                add_test_inst(ctx, 1, IOP_CONST_I64, ity, IDATA_CONST_I64, 3, 0, &[]);
+                add_test_inst(ctx, 2, op, ity, IDATA_INTEGER, ity, 0, &[0, 1]);
+                add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[2]);
+                unsafe {
+                    assert_eq!(__vow_clif_fn_end(ctx), 0, "{sign_name}_{name}");
+                    __vow_clif_destroy(ctx);
+                }
+            }
+        }
+    }
+
     /// Cranelift 0.134 cannot lower division, remainder, or checked multiply
     /// on I128, so those five opcodes are routed through `vow-runtime`
     /// helpers (epic #526 seam 3b). The symbol is chosen from the

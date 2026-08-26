@@ -4177,6 +4177,57 @@ mod tests {
         }
     }
 
+    /// The narrow-width fallback arms of the five routed opcodes must keep
+    /// emitting native Cranelift instructions, in both signednesses — the
+    /// 128-bit routing is an `if let` on top of them, so a mistake in the
+    /// guard would silently divert (or strand) i64/u64 division.
+    #[test]
+    fn narrow_division_and_checked_arithmetic_use_native_opcodes() {
+        for op in [
+            Opcode::WrappingDiv,
+            Opcode::WrappingRem,
+            Opcode::CheckedDiv,
+            Opcode::CheckedRem,
+            Opcode::CheckedMul,
+        ] {
+            for (ty, signedness) in [
+                (Ty::I64, IntegerSignedness::Signed),
+                (Ty::U64, IntegerSignedness::Unsigned),
+            ] {
+                let module = make_module(
+                    "test",
+                    vec![simple_fn(
+                        0,
+                        "f",
+                        vec![],
+                        ty,
+                        vec![
+                            inst(0, Opcode::ConstI64, ty, vec![], InstData::ConstI64(10)),
+                            inst(1, Opcode::ConstI64, ty, vec![], InstData::ConstI64(3)),
+                            inst(
+                                2,
+                                op,
+                                ty,
+                                vec![0, 1],
+                                InstData::Integer(IntegerType {
+                                    signedness,
+                                    width: IntegerWidth::W64,
+                                }),
+                            ),
+                            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                        ],
+                    )],
+                );
+                let result = CraneliftBackend::new().compile_module(
+                    &module,
+                    BuildMode::Debug,
+                    TraceMode::Off,
+                );
+                assert!(result.is_ok(), "{op:?}/{ty:?}: {:?}", result.err());
+            }
+        }
+    }
+
     /// Cranelift 0.134 cannot lower division, remainder, or checked multiply
     /// on I128, so those five opcodes are routed through `vow-runtime`
     /// helpers (epic #526 seam 3b). The symbol is chosen from the
