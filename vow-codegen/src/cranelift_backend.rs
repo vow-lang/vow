@@ -889,6 +889,27 @@ pub(crate) fn build_inst_index(func: &IrFunction) -> HashMap<InstId, &Inst> {
     index
 }
 
+/// Maps an integer comparison opcode and its operand signedness to the
+/// Cranelift condition code used by `icmp`. `Eq`/`Ne` are signedness-agnostic;
+/// the four ordering comparisons select the signed variant when `signed` is
+/// true and the unsigned variant otherwise. Only called with the six
+/// comparison opcodes the `lower_inst` dispatch guards on.
+fn integer_compare_cc(opcode: Opcode, signed: bool) -> IntCC {
+    match (opcode, signed) {
+        (Opcode::Eq, _) => IntCC::Equal,
+        (Opcode::Ne, _) => IntCC::NotEqual,
+        (Opcode::Lt, true) => IntCC::SignedLessThan,
+        (Opcode::Lt, false) => IntCC::UnsignedLessThan,
+        (Opcode::Le, true) => IntCC::SignedLessThanOrEqual,
+        (Opcode::Le, false) => IntCC::UnsignedLessThanOrEqual,
+        (Opcode::Gt, true) => IntCC::SignedGreaterThan,
+        (Opcode::Gt, false) => IntCC::UnsignedGreaterThan,
+        (Opcode::Ge, true) => IntCC::SignedGreaterThanOrEqual,
+        (Opcode::Ge, false) => IntCC::UnsignedGreaterThanOrEqual,
+        _ => unreachable!("integer_compare_cc called with non-comparison opcode {opcode:?}"),
+    }
+}
+
 fn lower_inst(
     builder: &mut FunctionBuilder,
     inst: &Inst,
@@ -1136,19 +1157,7 @@ fn lower_inst(
         // Integer comparisons (return Bool)
         // ------------------------------------------------------------------
         Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
-            let cc = match (inst.opcode, integer_is_signed) {
-                (Opcode::Eq, _) => IntCC::Equal,
-                (Opcode::Ne, _) => IntCC::NotEqual,
-                (Opcode::Lt, true) => IntCC::SignedLessThan,
-                (Opcode::Lt, false) => IntCC::UnsignedLessThan,
-                (Opcode::Le, true) => IntCC::SignedLessThanOrEqual,
-                (Opcode::Le, false) => IntCC::UnsignedLessThanOrEqual,
-                (Opcode::Gt, true) => IntCC::SignedGreaterThan,
-                (Opcode::Gt, false) => IntCC::UnsignedGreaterThan,
-                (Opcode::Ge, true) => IntCC::SignedGreaterThanOrEqual,
-                (Opcode::Ge, false) => IntCC::UnsignedGreaterThanOrEqual,
-                _ => unreachable!(),
-            };
+            let cc = integer_compare_cc(inst.opcode, integer_is_signed);
             let cmp = builder.ins().icmp(cc, arg!(0), arg!(1));
             let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
@@ -7193,5 +7202,48 @@ mod tests {
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// `integer_compare_cc` maps each comparison opcode to a Cranelift
+    /// condition code. `Eq`/`Ne` are signedness-agnostic; the four ordering
+    /// comparisons select the signed variant when `signed` is true and the
+    /// unsigned variant otherwise. Getting the unsigned arms wrong silently
+    /// miscompiles ordering of high-bit-set unsigned operands.
+    #[test]
+    fn integer_compare_cc_selects_signed_and_unsigned_condition_codes() {
+        assert_eq!(integer_compare_cc(Opcode::Eq, true), IntCC::Equal);
+        assert_eq!(integer_compare_cc(Opcode::Eq, false), IntCC::Equal);
+        assert_eq!(integer_compare_cc(Opcode::Ne, true), IntCC::NotEqual);
+        assert_eq!(integer_compare_cc(Opcode::Ne, false), IntCC::NotEqual);
+
+        assert_eq!(integer_compare_cc(Opcode::Lt, true), IntCC::SignedLessThan);
+        assert_eq!(
+            integer_compare_cc(Opcode::Lt, false),
+            IntCC::UnsignedLessThan
+        );
+        assert_eq!(
+            integer_compare_cc(Opcode::Le, true),
+            IntCC::SignedLessThanOrEqual
+        );
+        assert_eq!(
+            integer_compare_cc(Opcode::Le, false),
+            IntCC::UnsignedLessThanOrEqual
+        );
+        assert_eq!(
+            integer_compare_cc(Opcode::Gt, true),
+            IntCC::SignedGreaterThan
+        );
+        assert_eq!(
+            integer_compare_cc(Opcode::Gt, false),
+            IntCC::UnsignedGreaterThan
+        );
+        assert_eq!(
+            integer_compare_cc(Opcode::Ge, true),
+            IntCC::SignedGreaterThanOrEqual
+        );
+        assert_eq!(
+            integer_compare_cc(Opcode::Ge, false),
+            IntCC::UnsignedGreaterThanOrEqual
+        );
     }
 }
