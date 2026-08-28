@@ -100,6 +100,17 @@ class CompilerExitCodeTest(unittest.TestCase):
 
         self.assertEqual(["exit_code"], [d["observable"] for d in div])
 
+    def test_same_executable_parity_but_differing_status_diverges(self):
+        # Unverified vs Verified: both exit 0, both carry an executable, but
+        # they are distinct CLI outcomes.
+        rust = result(status="Unverified", executable="/tmp/a")
+        slf = result(status="Verified", executable="/tmp/b")
+
+        div = equivalence.compare_build(rust, slf)
+
+        self.assertEqual(["accept_reject"], [d["observable"] for d in div])
+        self.assertIn("status differs", div[0]["detail"])
+
     def test_matching_process_exit_is_not_a_divergence(self):
         rust = result(status="Unverified", executable="/tmp/a", exit_code=0)
         slf = result(status="Unverified", executable="/tmp/b", exit_code=0)
@@ -323,10 +334,11 @@ class CompareRuntimeTest(unittest.TestCase):
 
         self.assertEqual(["fail_closed"], [d["observable"] for d in div])
 
-    def test_an_abnormal_exit_difference_is_fail_closed_not_runtime(self):
-        # A `runtime` ledger entry documents a wrong-stdout gap; it must not
-        # also suppress the binary starting to abort. 134 is the reserved
-        # runtime-abort exit per docs/spec/errors.md.
+    def test_an_exit_difference_is_never_labelled_runtime(self):
+        # A `runtime` ledger entry documents a wrong-stdout gap; exit parity is
+        # tracked separately so that entry cannot also hide a wrong exit
+        # status. 134 is the reserved runtime-abort exit (errors.md), but an
+        # ordinary nonzero exit must be separated just as strictly.
         div, why = self.run_with(
             [
                 binary_result(b"ok"),
@@ -337,9 +349,11 @@ class CompareRuntimeTest(unittest.TestCase):
 
         # Same stdout, so the exit difference is the only finding — and it must
         # not be labelled `runtime`, or a `runtime` ledger entry would hide it.
-        self.assertEqual(["fail_closed"], [d["observable"] for d in div])
+        self.assertEqual(["runtime_exit"], [d["observable"] for d in div])
 
-    def test_an_ordinary_exit_difference_stays_runtime(self):
+    def test_an_ordinary_exit_difference_is_also_runtime_exit(self):
+        # A normal nonzero exit is ordinary Vow behaviour, so singling out
+        # aborts would have left this half suppressible.
         div, why = self.run_with(
             [
                 binary_result(b"ok"),
@@ -348,7 +362,21 @@ class CompareRuntimeTest(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(["runtime"], [d["observable"] for d in div])
+        self.assertEqual(["runtime_exit"], [d["observable"] for d in div])
+
+    def test_a_one_sided_crash_is_reported_once(self):
+        # The crash explains the exit difference, so it yields one finding —
+        # check_fail_closed's "one bug, one finding" rule.
+        div, why = self.run_with(
+            [
+                binary_result(b"ok"),
+                binary_result(b"ok"),
+                binary_result(b"ok", exit_code=-11),
+            ]
+        )
+
+        self.assertEqual(["fail_closed"], [d["observable"] for d in div])
+        self.assertIn("self-hosted binary died on SIGSEGV", div[0]["detail"])
 
     def test_agreeing_binaries_produce_no_divergence(self):
         div, why = self.run_with(

@@ -6,7 +6,9 @@ observables (#1081):
 
   accept/reject  both compile, or both reject
   error_code     when both reject, the multiset of diagnostic codes agrees
-  runtime        when both compile, stdout + exit code of the two binaries agree
+  runtime        when both compile, the two binaries' stdout agrees
+  runtime_exit   ... and so do their exit codes, tracked separately so a known
+                 wrong-output gap cannot also hide a wrong exit status
   exit_code      the two compiler PROCESSES agree on their own exit status,
                  which docs/spec/cli.md defines as part of the CLI contract
   verify_status  for `// TEST: verify-only` fixtures, the two verifiers agree
@@ -263,25 +265,6 @@ def panic_markers(result):
     return [m for m in PANIC_MARKERS if m in hay]
 
 
-# docs/spec/errors.md reserves this exit code for every runtime abort — a
-# contract violation, arithmetic overflow, unwrap-on-None, OOB, stack overflow
-# or OOM — and states it is "never a plain 1". It is a clean exit, not a signal
-# death, so signal_of() does not see it.
-RUNTIME_ABORT_EXIT = 134
-
-
-def aborted(result):
-    """Did this process terminate abnormally rather than just non-zero?
-
-    Args:
-        result: A run_binary or run_compiler result dict.
-
-    Returns:
-        bool: True for a signal death or the reserved runtime-abort exit.
-    """
-    return signal_of(result) is not None or result["exit"] == RUNTIME_ABORT_EXIT
-
-
 def signal_of(result):
     """The signal a process died on, or None if it exited normally.
 
@@ -347,6 +330,22 @@ def compare_build(rust, slf):
                     "detail": f"both rejected but codes differ: {rc} vs {sc}",
                 }
             )
+
+    # Executable parity agreeing does not mean the verdicts agree: `Unverified`
+    # vs `Verified` (both exit 0, both with an executable) and `CompileFailed`
+    # vs `VerifyFailed` (both exit 1, matching diagnostics) are distinct CLI
+    # outcomes per docs/spec/cli.md.
+    r_status, s_status = status_of(rust), status_of(slf)
+    if r_status != s_status:
+        div.append(
+            {
+                "observable": "accept_reject",
+                "detail": (
+                    f"same executable parity but status differs: "
+                    f"{r_status} vs {s_status}"
+                ),
+            }
+        )
 
     # The two compilers reached the same verdict; their PROCESS exit status is
     # a separate promise. docs/spec/cli.md pins an exit code per outcome and
@@ -512,18 +511,37 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
         ], None
 
     div = []
-    if r1["exit"] != s["exit"]:
-        # A `runtime` ledger entry documents one specific difference — almost
-        # always a wrong stdout. It must not also suppress a binary that starts
-        # ABORTING: per docs/spec/errors.md every runtime abort (contract
-        # violation, overflow, OOB, unwrap-on-None) exits with the reserved
-        # 134, and Cranelift-inserted checked-arithmetic traps die on a signal.
-        # Either is a new failure mode, so it is reported as fail_closed, which
-        # a `runtime` entry cannot match.
-        abnormal = aborted(r1) or aborted(s)
+
+    # Memory unsafety is a property of ONE emitted binary, so each side is
+    # judged independently and first. A SIGSEGV on one side only would
+    # otherwise surface as a plain exit difference.
+    crashed = set()
+    for name, res in (("rust", r1), ("self-hosted", s)):
+        crash = signal_of(res)
+        if crash in UNSAFE_SIGNALS:
+            crashed.add(name)
+            div.append(
+                {
+                    "observable": "fail_closed",
+                    "detail": (
+                        f"{name} binary died on {UNSAFE_SIGNALS[crash]} "
+                        f"({crash}) — memory unsafety, not a trap"
+                    ),
+                }
+            )
+
+    # Exit parity gets its OWN observable, separate from stdout. A ledger entry
+    # documenting a wrong-output `runtime` gap must not also suppress the file
+    # later returning the wrong exit status — and a normal nonzero exit is
+    # ordinary Vow behaviour (tests/run/short_circuit.vow returns 1), so
+    # singling out aborts would have left that half open.
+    #
+    # Skipped when a per-side crash above already explains the difference:
+    # check_fail_closed's rule is that one bug yields one finding.
+    if r1["exit"] != s["exit"] and not crashed:
         div.append(
             {
-                "observable": "fail_closed" if abnormal else "runtime",
+                "observable": "runtime_exit",
                 "detail": f"exit code {r1['exit']} vs {s['exit']}",
             }
         )
@@ -536,24 +554,6 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
                 ),
             }
         )
-    # Memory unsafety is a property of ONE emitted binary, so each side is
-    # judged independently and before any agreement logic. A SIGSEGV on one
-    # side only would otherwise surface as a plain `runtime` exit difference —
-    # and since reconciliation matches on the observable name, a crash on a
-    # file already tracked for `runtime` would then be suppressed as known.
-    for name, res in (("rust", r1), ("self-hosted", s)):
-        crash = signal_of(res)
-        if crash in UNSAFE_SIGNALS:
-            div.append(
-                {
-                    "observable": "fail_closed",
-                    "detail": (
-                        f"{name} binary died on {UNSAFE_SIGNALS[crash]} "
-                        f"({crash}) — memory unsafety, not a trap"
-                    ),
-                }
-            )
-
     # A signal death the two compilers DISAGREE on is already reported above as
     # an exit-code divergence. What is left to judge is a signal both produced:
     # a deliberate trap is the language working. Memory unsafety was handled
