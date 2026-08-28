@@ -3,6 +3,11 @@
   "title": "Vow equivalence ledger",
   "description": "Cross-run state for the equivalence-validation tiers. Makes recurring runs incremental (only changed module pairs are re-reviewed) and comparable (a regression is distinguishable from a new finding).",
   "type": "object",
+  "$defs": {
+    "observableName": {
+      "enum": ["accept_reject", "error_code", "exit_code", "verify_status", "runtime", "fail_closed"]
+    }
+  },
   "required": ["schema_version", "pairs", "corpus"],
   "additionalProperties": false,
   "properties": {
@@ -48,7 +53,16 @@
         "properties": {
           "first_seen": { "type": "string" },
           "observable": {
-            "enum": ["accept_reject", "error_code", "exit_code", "verify_status", "runtime", "fail_closed"]
+            "oneOf": [
+              { "$ref": "#/$defs/observableName" },
+              {
+                "type": "array",
+                "items": { "$ref": "#/$defs/observableName" },
+                "minItems": 1,
+                "uniqueItems": true
+              }
+            ],
+            "description": "The observable(s) this entry documents. reconcile() matches on (file, observable), so a divergence on any observable NOT listed here is reported as new rather than suppressed. Use the array form for a file that legitimately diverges on more than one."
           },
           "status": {
             "enum": ["open", "fixed", "expected"],

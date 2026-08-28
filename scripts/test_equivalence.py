@@ -663,15 +663,14 @@ class LedgerLoadTest(unittest.TestCase):
                 / "ledger.schema.json"
             ).read_text()
         )
-        allowed = set(
-            schema["properties"]["corpus"]["additionalProperties"]["properties"][
-                "observable"
-            ]["enum"]
-        )
+        allowed = set(schema["$defs"]["observableName"]["enum"])
 
         for path, entry in equivalence.load_ledger().items():
             with self.subTest(path=path):
-                self.assertIn(entry.get("observable"), allowed)
+                # Both schema forms: a bare name, or a list of them.
+                declared = equivalence.tracked_observables(entry)
+                self.assertTrue(declared, "no observable declared")
+                self.assertLessEqual(declared, allowed)
 
     def test_real_repo_ledger_loads(self):
         ledger = equivalence.load_ledger()
