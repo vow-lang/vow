@@ -244,12 +244,27 @@ class CompareRuntimeTest(unittest.TestCase):
         self.assertEqual(["runtime"], [d["observable"] for d in div])
         self.assertIn("timed out", div[0]["detail"])
 
-    def test_rust_timeout_is_inconclusive(self):
-        # The reference side never finished, so there is nothing to compare.
+    def test_one_sided_rust_timeout_is_also_a_divergence(self):
+        # Symmetric with the self-hosted case: one implementation hanging where
+        # the other terminates distinguishes them, in either direction.
         div, why = self.run_with(
             [
                 binary_result(timeout=True, exit_code=None),
+                binary_result(timeout=True, exit_code=None),
                 binary_result(b"ok"),
+            ]
+        )
+
+        self.assertIsNone(why)
+        self.assertEqual(["runtime"], [d["observable"] for d in div])
+        self.assertIn("rust binary timed out", div[0]["detail"])
+
+    def test_both_sides_timing_out_is_inconclusive(self):
+        div, why = self.run_with(
+            [
+                binary_result(timeout=True, exit_code=None),
+                binary_result(timeout=True, exit_code=None),
+                binary_result(timeout=True, exit_code=None),
             ]
         )
 
@@ -281,8 +296,8 @@ class CompareRuntimeTest(unittest.TestCase):
         )
 
         self.assertIsNone(why)
-        self.assertEqual(["fail_closed"], [d["observable"] for d in div])
-        self.assertIn("memory unsafety", div[0]["detail"])
+        self.assertEqual(["fail_closed", "fail_closed"], [d["observable"] for d in div])
+        self.assertTrue(all("memory unsafety" in d["detail"] for d in div))
 
     def test_declared_trap_signal_is_still_suppressed(self):
         # SIGILL from a checked-arithmetic overflow is the feature working.
@@ -415,11 +430,72 @@ class VerifyOnlyTest(unittest.TestCase):
         )
 
 
+class CompilerTimeoutTest(unittest.TestCase):
+    """One compiler hanging where the other completes is a finding."""
+
+    def run_check(self, rust_res, self_res):
+        """Drive check_file with two stubbed compiler results.
+
+        Args:
+            rust_res: run_compiler result for the Rust compiler.
+            self_res: run_compiler result for the self-hosted compiler.
+
+        Returns:
+            dict: The check_file record.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            outdir = Path(d) / "out"
+            outdir.mkdir()
+            vow = Path(d) / "case.vow"
+            vow.write_text("fn main() -> i64 { return 0; }\n")
+            pending = [rust_res, self_res]
+            with mock.patch.object(
+                equivalence, "run_compiler", side_effect=lambda *a, **k: pending.pop(0)
+            ):
+                return equivalence.check_file(vow, "rust", "self", outdir, 5)
+
+    def timed_out(self):
+        return {
+            "timeout": True,
+            "exit": None,
+            "stdout": "",
+            "stderr": "",
+            "json": None,
+        }
+
+    def test_one_sided_compiler_timeout_is_a_divergence(self):
+        rec = self.run_check(
+            result(status="Unverified", executable="/tmp/a"), self.timed_out()
+        )
+
+        self.assertEqual(["fail_closed"], [d["observable"] for d in rec["divergences"]])
+        self.assertIn("self-hosted compiler timed out", rec["divergences"][0]["detail"])
+
+    def test_both_compilers_timing_out_is_a_skip(self):
+        rec = self.run_check(self.timed_out(), self.timed_out())
+
+        self.assertEqual([], rec["divergences"])
+        self.assertEqual("compile timeout (both)", rec["skipped"])
+
+
 class CompareVerifyTest(unittest.TestCase):
     def test_matching_verdicts_are_not_a_divergence(self):
         ok = result(status="Verified")
 
         self.assertEqual([], equivalence.compare_verify(ok, ok))
+
+    def test_shared_verify_failed_with_different_backends_diverges(self):
+        # cli.md: VerifyFailed covers both a real counterexample and a soft
+        # backend failure, and both commonly carry exit 1 and no diagnostics.
+        rust = result(status="VerifyFailed", exit_code=1)
+        rust["json"]["counterexamples"] = [{"function": "f"}]
+        slf = result(status="VerifyFailed", exit_code=1)
+        slf["json"]["verify_status"] = "timeout"
+        slf["json"]["counterexamples"] = []
+
+        div = equivalence.compare_verify(rust, slf)
+
+        self.assertEqual(["verify_status"], [d["observable"] for d in div])
 
     def test_differing_diagnostics_are_reported(self):
         rust = result(status="Unverified", diagnostics=[{"error_code": "A"}])
@@ -507,11 +583,11 @@ class ReconcileTest(unittest.TestCase):
         # Mirrors verify_eval.py's GAP_FIXED: a welcome change must force the
         # ledger to be updated rather than silently drifting out of date.
         recs = [{"file": "a.vow", "divergences": []}]
-        ledger = {"a.vow": {"status": "open", "issue": 1087}}
+        ledger = {"a.vow": {"status": "open", "observable": "runtime", "issue": 1087}}
 
         new, known, fixed = equivalence.reconcile(recs, ledger)
 
-        self.assertEqual(["a.vow"], fixed)
+        self.assertEqual([{"file": "a.vow", "observables": ["runtime"]}], fixed)
 
     def test_clean_untracked_file_is_silent(self):
         recs = [{"file": "a.vow", "divergences": []}]
@@ -564,13 +640,17 @@ class ReconcileTest(unittest.TestCase):
 
         self.assertEqual([], fixed)
 
-    def test_reappearance_of_a_fixed_entry_is_known_not_new(self):
+    def test_reappearance_of_a_fixed_entry_is_a_regression(self):
+        # The schema retains `fixed` entries precisely so a reappearance reads
+        # as a regression; folding it into `known` would let the run pass.
         recs = [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}]
         ledger = {"a.vow": {"status": "fixed", "observable": "runtime", "issue": 1087}}
 
         new, known, fixed = equivalence.reconcile(recs, ledger)
 
-        self.assertEqual(["a.vow"], [r["file"] for r in known])
+        self.assertEqual(["a.vow"], [r["file"] for r in new])
+        self.assertEqual([], known)
+        self.assertEqual([], fixed)
 
     def test_untracked_observable_on_a_tracked_file_is_new(self):
         # The suppression the ledger exists to prevent, one level down: a file
@@ -606,7 +686,19 @@ class ReconcileTest(unittest.TestCase):
 
         self.assertEqual(["a.vow"], [r["file"] for r in new])
         self.assertEqual([], known)
-        self.assertEqual(["a.vow"], fixed)
+        self.assertEqual([{"file": "a.vow", "observables": ["error_code"]}], fixed)
+
+    def test_one_stale_half_of_a_multi_observable_entry_is_reported(self):
+        # Only `runtime` still reproduces; the tracked `error_code` half is
+        # stale and would otherwise keep suppressing its next recurrence.
+        recs = [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}]
+        ledger = {"a.vow": {"status": "open", "observable": ["error_code", "runtime"]}}
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual([], new)
+        self.assertEqual(["a.vow"], [r["file"] for r in known])
+        self.assertEqual([{"file": "a.vow", "observables": ["error_code"]}], fixed)
 
     def test_entry_may_track_several_observables(self):
         recs = [

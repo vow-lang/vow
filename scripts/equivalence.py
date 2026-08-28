@@ -240,6 +240,19 @@ def panic_markers(result):
     return [m for m in PANIC_MARKERS if m in hay]
 
 
+def signal_of(result):
+    """The signal a process died on, or None if it exited normally.
+
+    Args:
+        result: A run_binary or run_compiler result dict.
+
+    Returns:
+        int | None: The signal number, or None.
+    """
+    code = result["exit"]
+    return -code if code is not None and code < 0 else None
+
+
 def check_fail_closed(name, result):
     """A panic or a signal death is a bug regardless of what the peer did.
 
@@ -311,6 +324,23 @@ def compare_build(rust, slf):
     return div
 
 
+def verify_outcome(result):
+    """The backend verification outcome behind an aggregate status.
+
+    `VerifyFailed` covers both a real counterexample and a soft backend failure
+    (timeout, unknown, tool error, panic), which cli.md distinguishes through
+    `verify_status` and `counterexamples[]` rather than the status alone.
+
+    Args:
+        result: A run_compiler result dict.
+
+    Returns:
+        tuple: (verify_status, number of structured counterexamples).
+    """
+    j = result["json"] or {}
+    return (j.get("verify_status"), len(j.get("counterexamples") or []))
+
+
 def compare_verify(rust, slf):
     """Verification-verdict parity for `// TEST: verify-only` fixtures.
 
@@ -335,6 +365,20 @@ def compare_verify(rust, slf):
                 "detail": f"verification verdict differs: {r_status} vs {s_status}",
             }
         )
+    # A shared `VerifyFailed` is not agreement: one side may have produced a
+    # counterexample while the other merely timed out or errored. cli.md makes
+    # verify_status ("timeout"/"unknown"/"error"/"tool_not_found"/"panicked")
+    # and counterexamples[] the fields that distinguish those, and both cases
+    # commonly carry exit 1 and no diagnostics.
+    r_backend, s_backend = verify_outcome(rust), verify_outcome(slf)
+    if r_backend != s_backend:
+        div.append(
+            {
+                "observable": "verify_status",
+                "detail": (f"verifier outcome differs: {r_backend} vs {s_backend}"),
+            }
+        )
+
     rc, sc = error_codes(rust), error_codes(slf)
     if rc != sc:
         div.append(
@@ -383,25 +427,25 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
     # than the cap look like a miscompile.
     r1 = run_binary(rust_bin, stdin_data, timeout, limit_memory=True)
     r2 = run_binary(rust_bin, stdin_data, timeout, limit_memory=True)
-    if r1["timeout"] or r2["timeout"]:
-        # The reference side never finished, so there is nothing to compare
-        # against: genuinely inconclusive.
-        return [], "runtime-timeout"
-    if r1["stdout"] != r2["stdout"] or r1["exit"] != r2["exit"]:
+    rust_hung = r1["timeout"] or r2["timeout"]
+    if not rust_hung and (r1["stdout"] != r2["stdout"] or r1["exit"] != r2["exit"]):
         return [], "nondeterministic"
 
+    # The peer runs even when the reference hung: "one hangs, one terminates"
+    # is itself a difference between the implementations, in either direction.
     s = run_binary(self_bin, stdin_data, timeout, limit_memory=True)
-    if s["timeout"]:
-        # One-sided: the Rust binary terminated deterministically and the
-        # self-hosted one did not. That distinguishes the two implementations,
-        # so it is a finding — a codegen regression turning a terminating
-        # program into an infinite loop must not read as merely "skipped".
+
+    if rust_hung and s["timeout"]:
+        # Neither side finished, so nothing distinguishes them.
+        return [], "runtime-timeout"
+    if rust_hung != s["timeout"]:
+        hung, ran = ("rust", "self-hosted") if rust_hung else ("self-hosted", "rust")
+        ran_exit = s["exit"] if rust_hung else r1["exit"]
         return [
             {
                 "observable": "runtime",
                 "detail": (
-                    f"self-hosted binary timed out after {timeout}s; "
-                    f"rust exited {r1['exit']}"
+                    f"{hung} binary timed out after {timeout}s; {ran} exited {ran_exit}"
                 ),
             }
         ], None
@@ -423,40 +467,43 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
                 ),
             }
         )
+    # Memory unsafety is a property of ONE emitted binary, so each side is
+    # judged independently and before any agreement logic. A SIGSEGV on one
+    # side only would otherwise surface as a plain `runtime` exit difference —
+    # and since reconciliation matches on the observable name, a crash on a
+    # file already tracked for `runtime` would then be suppressed as known.
+    for name, res in (("rust", r1), ("self-hosted", s)):
+        crash = signal_of(res)
+        if crash in UNSAFE_SIGNALS:
+            div.append(
+                {
+                    "observable": "fail_closed",
+                    "detail": (
+                        f"{name} binary died on {UNSAFE_SIGNALS[crash]} "
+                        f"({crash}) — memory unsafety, not a trap"
+                    ),
+                }
+            )
+
     # A signal death the two compilers DISAGREE on is already reported above as
     # an exit-code divergence. What is left to judge is a signal both produced:
-    # a deliberate trap is the language working, memory unsafety never is.
-    both = {
-        -r1["exit"] if r1["exit"] is not None and r1["exit"] < 0 else None,
-        -s["exit"] if s["exit"] is not None and s["exit"] < 0 else None,
-    }
+    # a deliberate trap is the language working. Memory unsafety was handled
+    # per-side above and is never suppressed by a declared exit.
+    both = {signal_of(r1), signal_of(s)}
     if len(both) == 1:
         signal = both.pop()
-        if signal is not None:
-            # Memory unsafety is classified BEFORE the declared-exit check. A
-            # fixture may carry `// TEST: exit 139`, but #905 makes "no input
-            # produces a binary that dies on SIGSEGV" an invariant that holds
-            # independently of equivalence and independently of what the
-            # fixture declares — a declaration cannot license the finding away.
-            if signal in UNSAFE_SIGNALS:
-                div.append(
-                    {
-                        "observable": "fail_closed",
-                        "detail": (
-                            f"both binaries died on {UNSAFE_SIGNALS[signal]} "
-                            f"({signal}) — memory unsafety, not a trap"
-                        ),
-                    }
-                )
-            elif signal != expect_signal and signal not in TRAP_SIGNALS:
-                div.append(
-                    {
-                        "observable": "fail_closed",
-                        "detail": (
-                            f"both binaries died on unclassified signal {signal}"
-                        ),
-                    }
-                )
+        if (
+            signal is not None
+            and signal not in UNSAFE_SIGNALS
+            and signal != expect_signal
+            and signal not in TRAP_SIGNALS
+        ):
+            div.append(
+                {
+                    "observable": "fail_closed",
+                    "detail": f"both binaries died on unclassified signal {signal}",
+                }
+            )
     return div, None
 
 
@@ -504,9 +551,25 @@ def check_file(vow_file, rust, slf, outdir, timeout):
         record["divergences"] += check_fail_closed("rust", r)
         record["divergences"] += check_fail_closed("self-hosted", s)
 
+        if r["timeout"] and s["timeout"]:
+            record["skipped"] = "compile timeout (both)"
+            return record
         if r["timeout"] or s["timeout"]:
-            which = "rust" if r["timeout"] else "self-hosted"
-            record["skipped"] = f"compile timeout ({which})"
+            # Only a timeout on BOTH sides is inconclusive. One compiler
+            # hanging on an input the other compiles is a finding: otherwise a
+            # regression that makes the self-hosted compiler loop forever rides
+            # out the sweep as a skip.
+            hung, ran = (
+                ("rust", "self-hosted") if r["timeout"] else ("self-hosted", "rust")
+            )
+            record["divergences"].append(
+                {
+                    "observable": "fail_closed",
+                    "detail": (
+                        f"{hung} compiler timed out after {timeout}s; {ran} completed"
+                    ),
+                }
+            )
             return record
 
         # No parseable JSON from a compiler that did not panic means the contract
@@ -634,31 +697,40 @@ def reconcile(records, ledger):
     Returns:
         tuple: (new, known, fixed) — new/known are record lists carrying only
         their untracked/tracked divergences respectively; fixed is a list of
-        paths whose tracked observable no longer reproduces.
+        {"file", "observables"} dicts naming the tracked observables that no
+        longer reproduce.
     """
     new, known, fixed = [], [], []
     for rec in records:
         entry = ledger.get(rec["file"])
         tracked = tracked_observables(entry)
+        # Only `open` and `expected` entries suppress anything. A `fixed` entry
+        # is retained precisely so a reappearance reads as a regression, so its
+        # observables must NOT be folded into `known` — that would let the very
+        # regression the entry was kept to catch exit the run successfully.
+        suppresses = entry is not None and entry.get("status") in ("open", "expected")
         matched = [d for d in rec["divergences"] if d["observable"] in tracked]
         untracked = [d for d in rec["divergences"] if d["observable"] not in tracked]
-        if untracked:
-            new.append({**rec, "divergences": untracked})
-        if matched:
+
+        as_new = untracked if suppresses else rec["divergences"]
+        if as_new:
+            new.append({**rec, "divergences": as_new})
+        if suppresses and matched:
             known.append({**rec, "divergences": matched})
-        # `not matched` alone is not evidence the gap closed: a file that was
-        # never compared this run (a skip directive, a compile timeout, a
-        # nondeterministic binary) also carries no divergences. Reporting that
-        # as `fixed` would fail the run and tell a human to edit the ledger
-        # because a CI runner was loaded — a stale-ledger signal manufactured
-        # by infra flakiness, which is the opposite of what the ledger is for.
-        if (
-            entry
-            and entry.get("status") in ("open", "expected")
-            and not matched
-            and not rec.get("skipped")
-        ):
-            fixed.append(rec["file"])
+
+        # Per-observable, not all-or-nothing: an entry tracking `error_code`
+        # and `runtime` where only `runtime` still reproduces has a stale half,
+        # and leaving it listed would suppress that observable's next
+        # recurrence as known.
+        #
+        # A file that was not actually compared this run (a skip directive, a
+        # compile timeout, a nondeterministic binary) is never reported: it
+        # collected no evidence either way, and calling that "fixed" fails the
+        # run and demands a ledger edit over infra flakiness.
+        if suppresses and not rec.get("skipped"):
+            gone = sorted(tracked - {d["observable"] for d in matched})
+            if gone:
+                fixed.append({"file": rec["file"], "observables": gone})
     return new, known, fixed
 
 
@@ -752,7 +824,12 @@ def main():
             print(f"  DIVERGE {rec['file']}")
             for d in rec["divergences"]:
                 print(f"          [{d['observable']}] {d['detail']}")
-        elif rec["skipped"]:
+        # Coverage counts files that reached a real comparison, which includes
+        # every file that diverged. Counting only agreeing files made a
+        # divergence-heavy shard — or a single-reproducer run under the default
+        # --min-compared 1 — fail as "did not measure enough" instead of
+        # reporting the divergence it did measure.
+        if rec["skipped"]:
             skipped.append(rec)
         else:
             compared += 1
@@ -798,9 +875,12 @@ def main():
         print()
         print("  NO LONGER DIVERGING — update docs/equivalence/ledger.json:")
         for f in fixed:
-            entry = ledger.get(f, {})
+            entry = ledger.get(f["file"], {})
             issue = entry.get("issue")
-            print(f"    {f}" + (f"  (issue #{issue})" if issue else ""))
+            obs = ", ".join(f["observables"])
+            print(
+                f"    {f['file']}  [{obs}]" + (f"  (issue #{issue})" if issue else "")
+            )
 
     if compared < args.min_compared:
         print(
