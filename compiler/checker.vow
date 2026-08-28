@@ -2458,6 +2458,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         CTY_UNIT()
                     };
                     if mname == String::from("unwrap") {
+                        // `unwrap` takes no arguments. Without this the lowerer
+                        // accepts them and drops them unevaluated, silently
+                        // discarding their side effects (#1108 review).
+                        if n_args > 0 {
+                            let uerr_msg: String = String::from("method `unwrap` expects 0 arguments but got ");
+                            uerr_msg.push_str(i64_to_string(n_args));
+                            env_emit_error_code(e, EC_TYPE_MISMATCH(), uerr_msg, expr_span(a, eid));
+                        }
                         // The unwrap payload reaches IR through a FieldGet, so
                         // it needs the same aggregate metadata `?` records.
                         record_question_aggregate(e, eid, inner_tid);

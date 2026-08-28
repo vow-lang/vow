@@ -1934,6 +1934,19 @@ impl<'e> Checker<'e> {
                             "unwrap" => Some(type_args.first().cloned().unwrap_or(Ty::Unit)),
                             _ => None,
                         };
+                        // `unwrap` takes no arguments. Without this the lowerer
+                        // accepts them and drops them unevaluated, silently
+                        // discarding their side effects (#1108 review).
+                        if method == "unwrap" && !args.is_empty() {
+                            self.emit_error(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "method `unwrap` expects 0 arguments but got {}",
+                                    args.len()
+                                ),
+                                expr.span,
+                            );
+                        }
                         // The unwrap payload reaches IR through a FieldGet, so
                         // it needs the same aggregate metadata `?` records.
                         if let Some(payload_ty) = ty.as_ref() {

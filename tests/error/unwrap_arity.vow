@@ -1,0 +1,19 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "expects 0 arguments but got 1"
+//
+// Issue #1108 review: the method checker accepted arbitrary argument counts for
+// `.unwrap()`, and the dedicated unwrap lowering returns before the catch-all
+// that used to lower those arguments — so `o.unwrap(side())` type-checked and
+// silently discarded the argument's side effects.
+module unwrap_arity
+
+fn side() -> i64 [io] {
+    print_str("side\n");
+    1
+}
+
+fn main() -> i32 [io, panic] {
+    let o: Option<i64> = Option::Some(7);
+    print_i64(o.unwrap(side()));
+    0
+}
