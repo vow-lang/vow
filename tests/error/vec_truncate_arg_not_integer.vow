@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "expects an integer type"
+module VecTruncateArgNotInteger
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    v.truncate(String::from("n"));
+    0
+}

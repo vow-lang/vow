@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "argument has type"
+module PushStrArgTypeMismatch
+
+fn main() -> i32 {
+    let s: String = String::from("hi");
+    s.push_str(42);
+    0
+}

@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "expects an integer type"
+module ByteAtArgNotInteger
+
+fn main() -> i32 {
+    let s: String = String::from("hi");
+    let c: i64 = s.byte_at(String::from("x"));
+    0
+}

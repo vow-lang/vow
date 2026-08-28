@@ -1413,13 +1413,55 @@ fn default_literal_integer_tid(e: CheckEnv, tid: i64) -> i64 {
     tid
 }
 
-fn check_method_argument_range(
-    e: CheckEnv, a: AstArena, args_lid: i64, index: i64, target_tid: i64
+// The `index`-th type argument of a generic receiver, or Unknown when the
+// receiver is malformed. Keeps a missing type argument from manufacturing a
+// bogus expectation, matching the Rust checker's empty expectation list.
+fn ts_arg_or_unknown(ts: TyStore, args_lid: i64, index: i64) -> i64 {
+    if index < 0 || index >= ts_arg_len(ts, args_lid) { return CTY_UNKNOWN(); }
+    ts_arg_get(ts, args_lid, index)
+}
+
+// Value-shaped builtin-method argument: the actual type must coerce to
+// `target_tid`, mirroring the Rust checker's `ArgExpect::Exact`. Argument types
+// come from the caller's pre-check loop; re-checking here would double-emit
+// diagnostics and double-consume linear values.
+fn check_method_argument_exact(
+    e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64, target_tid: i64
 ) {
     if index < 0 || index >= list_len(a, args_lid) { return; }
-    check_contextual_integer_literal_ranges(
-        e, a, list_get(a, args_lid, index), target_tid
-    );
+    let arg_eid: i64 = list_get(a, args_lid, index);
+    check_contextual_integer_literal_ranges(e, a, arg_eid, target_tid);
+    if is_opaque(target_tid) { return; }
+    if index >= arg_tids.len() { return; }
+    let arg_tid: i64 = arg_tids[index];
+    if is_opaque(arg_tid) { return; }
+    if !is_coercible(e.ts, arg_tid, target_tid) {
+        let msg: String = String::from("argument has type '");
+        msg.push_str(ty_tag_name(ty_tag(e.ts, arg_tid)));
+        msg.push_str(String::from("' but method expects '"));
+        msg.push_str(ty_tag_name(ty_tag(e.ts, target_tid)));
+        msg.push_str(String::from("'"));
+        env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, expr_span(a, arg_eid));
+    }
+}
+
+// Index-shaped builtin-method argument: any integer width or signedness is
+// accepted. Tightening this to a single type is a later migration phase.
+fn check_method_argument_integer(
+    e: CheckEnv, a: AstArena, args_lid: i64, arg_tids: Vec<i64>, index: i64
+) {
+    if index < 0 || index >= list_len(a, args_lid) { return; }
+    let arg_eid: i64 = list_get(a, args_lid, index);
+    check_contextual_integer_literal_ranges(e, a, arg_eid, CTY_I64());
+    if index >= arg_tids.len() { return; }
+    let arg_tid: i64 = arg_tids[index];
+    if is_opaque(arg_tid) { return; }
+    if !ty_is_integer_or_lit_int(e.ts, arg_tid) {
+        let msg: String = String::from("argument has type '");
+        msg.push_str(ty_tag_name(ty_tag(e.ts, arg_tid)));
+        msg.push_str(String::from("' but method expects an integer type"));
+        env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, expr_span(a, arg_eid));
+    }
 }
 
 fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
@@ -2372,10 +2414,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let recv_tid: i64 = check_expr(e, m, recv_eid);
         let mname: String = arena_str(a, mname_sid);
         let n_args: i64 = list_len(a, args_lid);
+        let arg_tids: Vec<i64> = Vec::new();
         let mut i: i64 = 0;
         while i < n_args {
             let arg_eid: i64 = list_get(a, args_lid, i);
-            let _arg_tid: i64 = check_expr(e, m, arg_eid);
+            let arg_tid: i64 = check_expr(e, m, arg_eid);
+            arg_tids.push(arg_tid);
             i = i + 1;
         }
         if is_opaque(recv_tid) {
@@ -2385,14 +2429,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if recv_tag == CTY_STR() {
             if mname == String::from("push_str") || mname == String::from("eq") ||
                mname == String::from("contains") {
-                check_method_argument_range(e, a, args_lid, 0, CTY_STR());
+                check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_STR());
             }
             if mname == String::from("byte_at") || mname == String::from("push_byte") {
-                check_method_argument_range(e, a, args_lid, 0, CTY_I64());
+                check_method_argument_integer(e, a, args_lid, arg_tids, 0);
             }
             if mname == String::from("substring") {
-                check_method_argument_range(e, a, args_lid, 0, CTY_I64());
-                check_method_argument_range(e, a, args_lid, 1, CTY_I64());
+                check_method_argument_integer(e, a, args_lid, arg_tids, 0);
+                check_method_argument_integer(e, a, args_lid, arg_tids, 1);
             }
             if mname == String::from("len") { return CTY_I64(); }
             if mname == String::from("byte_at") { return CTY_I64(); }
@@ -2433,10 +2477,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         CTY_UNIT()
                     };
                     if mname == String::from("push") {
-                        check_method_argument_range(e, a, args_lid, 0, inner_tid);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
                     }
                     if mname == String::from("get") || mname == String::from("truncate") {
-                        check_method_argument_range(e, a, args_lid, 0, CTY_I64());
+                        check_method_argument_integer(e, a, args_lid, arg_tids, 0);
                     }
                     if mname == String::from("len") { return CTY_I64(); }
                     if mname == String::from("push") { return CTY_UNIT(); }
@@ -2492,13 +2536,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         CTY_UNIT()
                     };
                     if mname == String::from("insert") {
-                        check_method_argument_range(e, a, args_lid, 0, key_tid);
-                        check_method_argument_range(e, a, args_lid, 1, val_tid);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, hargs_lid, 1));
                     }
                     if mname == String::from("get") ||
                        mname == String::from("contains_key") ||
                        mname == String::from("remove") {
-                        check_method_argument_range(e, a, args_lid, 0, key_tid);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, hargs_lid, 0));
                     }
                     if mname == String::from("insert") { return CTY_UNIT(); }
                     if mname == String::from("get") { return val_tid; }
@@ -2531,11 +2575,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                         env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, expr_span(a, eid));
                     }
                     if mname == String::from("insert") {
-                        check_method_argument_range(e, a, args_lid, 0, bkey_tid);
-                        check_method_argument_range(e, a, args_lid, 1, bval_tid);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0));
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 1, ts_arg_or_unknown(e.ts, bargs_lid, 1));
                     }
                     if mname == String::from("get") || mname == String::from("contains") {
-                        check_method_argument_range(e, a, args_lid, 0, bkey_tid);
+                        check_method_argument_exact(e, a, args_lid, arg_tids, 0, ts_arg_or_unknown(e.ts, bargs_lid, 0));
                     }
                     if mname == String::from("len") { return CTY_I64(); }
                     if mname == String::from("contains") { return CTY_BOOL(); }
@@ -2601,8 +2645,14 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let recv_eid: i64 = expr_a(a, eid);
         let idx_eid: i64 = expr_b(a, eid);
         let recv_tid: i64 = check_expr(e, m, recv_eid);
-        let _idx_tid: i64 = check_expr(e, m, idx_eid);
+        let idx_tid: i64 = check_expr(e, m, idx_eid);
         check_contextual_integer_literal_ranges(e, a, idx_eid, CTY_I64());
+        if !is_opaque(idx_tid) && !ty_is_integer_or_lit_int(e.ts, idx_tid) {
+            let imsg: String = String::from("index has type '");
+            imsg.push_str(ty_tag_name(ty_tag(e.ts, idx_tid)));
+            imsg.push_str(String::from("' but must be an integer type"));
+            env_emit_error_code(e, EC_TYPE_MISMATCH(), imsg, expr_span(a, idx_eid));
+        }
         if is_opaque(recv_tid) {
             return recv_tid;
         }
@@ -2957,9 +3007,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let n_args: i64 = list_len(a, args_lid);
         let mut i: i64 = 0;
         let mut first_arg_tid: i64 = CTY_UNKNOWN();
+        let arg_tids: Vec<i64> = Vec::new();
         while i < n_args {
             let arg_eid: i64 = list_get(a, args_lid, i);
             let arg_tid: i64 = check_expr(e, m, arg_eid);
+            arg_tids.push(arg_tid);
             if i == 0 {
                 first_arg_tid = arg_tid;
             }
@@ -3009,8 +3061,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_range(e, a, args_lid, 0, CTY_I64());
-                    check_method_argument_range(e, a, args_lid, 1, CTY_I64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_I64());
                     return CTY_NEVER();
                 }
             }
@@ -3023,8 +3075,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
                     }
-                    check_method_argument_range(e, a, args_lid, 0, CTY_I64());
-                    check_method_argument_range(e, a, args_lid, 1, CTY_I64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 0, CTY_I64());
+                    check_method_argument_exact(e, a, args_lid, arg_tids, 1, CTY_I64());
                     return CTY_STR();
                 }
                 if second_name == String::from("from") {

@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "must be an integer type"
+module IndexTypeString
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let a: i64 = v[String::from("x")];
+    0
+}

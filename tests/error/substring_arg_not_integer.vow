@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "expects an integer type"
+module SubstringArgNotInteger
+
+fn main() -> i32 {
+    let s: String = String::from("hi");
+    let d: String = s.substring(String::from("a"), true);
+    0
+}

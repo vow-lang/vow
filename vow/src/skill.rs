@@ -2187,6 +2187,8 @@ let val: i64 = v[0];
 v[i] = new_val;
 ```
 
+The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i128`, `u8` … `u128`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, `String::push_byte`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`.
+
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
 
 For primitive types (`i64`, `bool`), this is a genuine value copy — the result is independent of the container. For heap types (`Vec<T>`, `String`, structs, enums), the 8-byte slot holds a pointer, so indexing copies the pointer, creating an **alias**. Both the container slot and the local variable point to the same heap data:
@@ -6930,6 +6932,8 @@ The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the
 let val: i64 = v[0];
 v[i] = new_val;
 ```
+
+The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i128`, `u8` … `u128`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, `String::push_byte`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`.
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
 

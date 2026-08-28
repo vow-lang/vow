@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "argument has type"
+module HashMapInsertArgTypeMismatch
+
+fn main() -> i32 {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(String::from("k"), true);
+    0
+}
