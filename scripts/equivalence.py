@@ -11,6 +11,8 @@ observables (#1081):
                  which docs/spec/cli.md defines as part of the CLI contract
   verify_status  for `// TEST: verify-only` fixtures, the two verifiers agree
                  on the verification verdict
+  fixture_error  the corpus itself is broken (e.g. a declared stdin-file is
+                 missing) — a finding about the fixture, not either compiler
   fail_closed    neither compiler may panic, and neither emitted binary may die
                  on a signal — a clean `error[...]` is always acceptable
 
@@ -128,10 +130,31 @@ def read_directives(path):
     }
 
 
+class MissingStdinFile(Exception):
+    """A fixture declares `// TEST: stdin-file` naming a file that is absent."""
+
+
 def stdin_bytes(directives):
+    """The stdin a fixture declares.
+
+    Args:
+        directives: The parsed `// TEST:` directives for one fixture.
+
+    Returns:
+        bytes: The declared stdin, empty when none is declared.
+
+    Raises:
+        MissingStdinFile: The declared stdin-file does not exist. Substituting
+            empty stdin would let both binaries agree only because both got the
+            wrong input, hiding the behaviour the fixture exists to exercise —
+            and it would still count as a completed comparison. full_test.sh
+            treats this as a hard fixture error, so this does too.
+    """
     if directives["stdin_file"]:
         p = Path(directives["stdin_file"])
-        return p.read_bytes() if p.exists() else b""
+        if not p.exists():
+            raise MissingStdinFile(directives["stdin_file"])
+        return p.read_bytes()
     if directives["stdin"] is not None:
         return directives["stdin"].encode()
     return b""
@@ -646,10 +669,23 @@ def check_file(vow_file, rust, slf, outdir, timeout):
         record["divergences"] += compare_build(r, s)
 
         if compiled_ok(r) and compiled_ok(s) and not record["divergences"]:
+            try:
+                declared_stdin = stdin_bytes(directives)
+            except MissingStdinFile as exc:
+                # A broken fixture is a finding about the CORPUS, not about
+                # either compiler, so it gets its own observable rather than
+                # being dressed up as a compiler divergence.
+                record["divergences"].append(
+                    {
+                        "observable": "fixture_error",
+                        "detail": (f"declared stdin-file does not exist: {exc}"),
+                    }
+                )
+                return record
             rt_div, why = compare_runtime(
                 rust_out,
                 self_out,
-                stdin_bytes(directives),
+                declared_stdin,
                 timeout,
                 expect_signal=expected_signal(directives),
             )

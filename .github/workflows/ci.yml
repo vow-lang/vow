@@ -48,6 +48,8 @@ jobs:
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
+      - name: Equivalence runner unit tests
+        run: python3 scripts/test_equivalence.py
       - name: Benchmark skeleton fidelity unit tests
         run: |
           python3 scripts/test_benchmark_contracts.py

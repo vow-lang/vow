@@ -457,6 +457,31 @@ class VerifyOnlyTest(unittest.TestCase):
         )
 
 
+class MissingStdinFileTest(unittest.TestCase):
+    """A fixture whose declared stdin is absent must not read as a pass."""
+
+    def test_missing_stdin_file_raises(self):
+        with self.assertRaises(equivalence.MissingStdinFile):
+            equivalence.stdin_bytes(
+                {"stdin_file": "/nonexistent/input.txt", "stdin": None}
+            )
+
+    def test_declared_inline_stdin_still_works(self):
+        self.assertEqual(
+            b"hi", equivalence.stdin_bytes({"stdin_file": None, "stdin": "hi"})
+        )
+
+    def test_present_stdin_file_is_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "in.txt"
+            f.write_bytes(b"payload")
+
+            self.assertEqual(
+                b"payload",
+                equivalence.stdin_bytes({"stdin_file": str(f), "stdin": None}),
+            )
+
+
 class CompilerTimeoutTest(unittest.TestCase):
     """One compiler hanging where the other completes is a finding."""
 

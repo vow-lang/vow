@@ -5,7 +5,7 @@
   "type": "object",
   "$defs": {
     "observableName": {
-      "enum": ["accept_reject", "error_code", "exit_code", "verify_status", "runtime", "fail_closed"]
+      "enum": ["accept_reject", "error_code", "exit_code", "verify_status", "runtime", "fail_closed", "fixture_error"]
     }
   },
   "required": ["schema_version", "pairs", "corpus"],
