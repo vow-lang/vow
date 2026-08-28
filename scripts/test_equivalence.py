@@ -9,6 +9,7 @@ nondeterministic program mistaken for a miscompile.
 
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import equivalence
@@ -186,6 +187,67 @@ class SignalClassificationTest(unittest.TestCase):
         self.assertFalse(
             set(equivalence.TRAP_SIGNALS) & set(equivalence.UNSAFE_SIGNALS)
         )
+
+
+def binary_result(stdout=b"", exit_code=0, timeout=False):
+    return {"timeout": timeout, "exit": exit_code, "stdout": stdout}
+
+
+class CompareRuntimeTest(unittest.TestCase):
+    """A timeout that DISTINGUISHES the two binaries is a finding, not a skip."""
+
+    def run_with(self, results, **kwargs):
+        with mock.patch.object(equivalence, "run_binary", side_effect=results):
+            return equivalence.compare_runtime("rust", "self", b"", 30, **kwargs)
+
+    def test_one_sided_self_hosted_timeout_is_a_divergence(self):
+        # A codegen regression turning a terminating program into an infinite
+        # loop must not be able to leave the sweep green as a mere skip.
+        div, why = self.run_with(
+            [
+                binary_result(b"ok"),
+                binary_result(b"ok"),
+                binary_result(timeout=True, exit_code=None),
+            ]
+        )
+
+        self.assertIsNone(why)
+        self.assertEqual(["runtime"], [d["observable"] for d in div])
+        self.assertIn("timed out", div[0]["detail"])
+
+    def test_rust_timeout_is_inconclusive(self):
+        # The reference side never finished, so there is nothing to compare.
+        div, why = self.run_with(
+            [
+                binary_result(timeout=True, exit_code=None),
+                binary_result(b"ok"),
+            ]
+        )
+
+        self.assertEqual([], div)
+        self.assertEqual("runtime-timeout", why)
+
+    def test_nondeterministic_rust_is_skipped(self):
+        div, why = self.run_with(
+            [
+                binary_result(b"one"),
+                binary_result(b"two"),
+            ]
+        )
+
+        self.assertEqual([], div)
+        self.assertEqual("nondeterministic", why)
+
+    def test_agreeing_binaries_produce_no_divergence(self):
+        div, why = self.run_with(
+            [
+                binary_result(b"ok"),
+                binary_result(b"ok"),
+                binary_result(b"ok"),
+            ]
+        )
+
+        self.assertEqual(([], None), (div, why))
 
 
 class CorpusTest(unittest.TestCase):

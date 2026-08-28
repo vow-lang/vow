@@ -320,13 +320,27 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
     r1 = run_binary(rust_bin, stdin_data, timeout, limit_memory=True)
     r2 = run_binary(rust_bin, stdin_data, timeout, limit_memory=True)
     if r1["timeout"] or r2["timeout"]:
+        # The reference side never finished, so there is nothing to compare
+        # against: genuinely inconclusive.
         return [], "runtime-timeout"
     if r1["stdout"] != r2["stdout"] or r1["exit"] != r2["exit"]:
         return [], "nondeterministic"
 
     s = run_binary(self_bin, stdin_data, timeout, limit_memory=True)
     if s["timeout"]:
-        return [], "runtime-timeout"
+        # One-sided: the Rust binary terminated deterministically and the
+        # self-hosted one did not. That distinguishes the two implementations,
+        # so it is a finding — a codegen regression turning a terminating
+        # program into an infinite loop must not read as merely "skipped".
+        return [
+            {
+                "observable": "runtime",
+                "detail": (
+                    f"self-hosted binary timed out after {timeout}s; "
+                    f"rust exited {r1['exit']}"
+                ),
+            }
+        ], None
 
     div = []
     if r1["exit"] != s["exit"]:
