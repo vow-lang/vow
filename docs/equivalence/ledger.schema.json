@@ -19,11 +19,11 @@
         "required": ["rust", "self_hosted", "content_hash", "last_reviewed", "outcome"],
         "additionalProperties": false,
         "properties": {
-          "rust": { "type": "string", "description": "Repo-relative path of the Rust side." },
-          "self_hosted": { "type": "string", "description": "Repo-relative path of the self-hosted side." },
+          "rust": { "type": "string", "description": "The Rust side: one or more repo-relative paths, comma-separated. A path may name a directory (e.g. 'vow-syntax/src/parser')." },
+          "self_hosted": { "type": "string", "description": "The self-hosted side: one or more repo-relative paths, comma-separated." },
           "content_hash": {
             "type": "string",
-            "description": "sha256 over both files' contents. A pair whose hash is unchanged since last_reviewed is skipped and reported as skipped — never silently omitted."
+            "description": "sha256 over the contents of every file named by 'rust' and 'self_hosted' — a pair routinely spans several files per side, not one each. A pair whose hash is unchanged since last_reviewed is skipped and reported as skipped — never silently omitted."
           },
           "last_reviewed": { "type": "string" },
           "outcome": {
