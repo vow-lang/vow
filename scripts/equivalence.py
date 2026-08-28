@@ -624,7 +624,8 @@ def reconcile(records, ledger):
     treated as a failure, mirroring verify_eval.py's GAP_FIXED: a welcome change
     must force the ledger to be updated rather than silently drifting out of
     date. A ledger nobody maintains is worse than none, because it suppresses
-    real findings.
+    real findings. Only a file that was actually compared this run can be
+    reported `fixed`; a skipped file proves nothing either way.
 
     Args:
         records: Per-file result records from check_file.
@@ -645,7 +646,18 @@ def reconcile(records, ledger):
             new.append({**rec, "divergences": untracked})
         if matched:
             known.append({**rec, "divergences": matched})
-        if entry and entry.get("status") in ("open", "expected") and not matched:
+        # `not matched` alone is not evidence the gap closed: a file that was
+        # never compared this run (a skip directive, a compile timeout, a
+        # nondeterministic binary) also carries no divergences. Reporting that
+        # as `fixed` would fail the run and tell a human to edit the ledger
+        # because a CI runner was loaded — a stale-ledger signal manufactured
+        # by infra flakiness, which is the opposite of what the ledger is for.
+        if (
+            entry
+            and entry.get("status") in ("open", "expected")
+            and not matched
+            and not rec.get("skipped")
+        ):
             fixed.append(rec["file"])
     return new, known, fixed
 

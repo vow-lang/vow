@@ -520,6 +520,40 @@ class ReconcileTest(unittest.TestCase):
 
         self.assertEqual(([], [], []), (new, known, fixed))
 
+    def test_a_skipped_file_is_never_reported_fixed(self):
+        # A compile timeout on a loaded CI runner carries no divergences, but
+        # it is not evidence the tracked gap closed. Reporting it as fixed
+        # would fail the run and demand a ledger edit over infra flakiness.
+        recs = [
+            {
+                "file": "a.vow",
+                "divergences": [],
+                "skipped": "compile timeout (self-hosted)",
+            }
+        ]
+        ledger = {"a.vow": {"status": "open", "observable": "runtime", "issue": 1087}}
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual(([], [], []), (new, known, fixed))
+
+    def test_a_directive_skipped_file_is_never_reported_fixed(self):
+        recs = [
+            {"file": "a.vow", "divergences": [], "skipped": "directive: needs stdin"}
+        ]
+        ledger = {
+            "a.vow": {
+                "status": "expected",
+                "observable": "error_code",
+                "note": "n",
+                "issue": 588,
+            }
+        }
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual([], fixed)
+
     def test_already_fixed_ledger_entry_does_not_re_report(self):
         # status 'fixed' is retained so a REAPPEARANCE reads as a regression;
         # it must not itself be re-reported as newly fixed on every run.
