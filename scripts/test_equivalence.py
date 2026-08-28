@@ -323,6 +323,33 @@ class CompareRuntimeTest(unittest.TestCase):
 
         self.assertEqual(["fail_closed"], [d["observable"] for d in div])
 
+    def test_an_abnormal_exit_difference_is_fail_closed_not_runtime(self):
+        # A `runtime` ledger entry documents a wrong-stdout gap; it must not
+        # also suppress the binary starting to abort. 134 is the reserved
+        # runtime-abort exit per docs/spec/errors.md.
+        div, why = self.run_with(
+            [
+                binary_result(b"ok"),
+                binary_result(b"ok"),
+                binary_result(b"ok", exit_code=134),
+            ]
+        )
+
+        # Same stdout, so the exit difference is the only finding — and it must
+        # not be labelled `runtime`, or a `runtime` ledger entry would hide it.
+        self.assertEqual(["fail_closed"], [d["observable"] for d in div])
+
+    def test_an_ordinary_exit_difference_stays_runtime(self):
+        div, why = self.run_with(
+            [
+                binary_result(b"ok"),
+                binary_result(b"ok"),
+                binary_result(b"ok", exit_code=1),
+            ]
+        )
+
+        self.assertEqual(["runtime"], [d["observable"] for d in div])
+
     def test_agreeing_binaries_produce_no_divergence(self):
         div, why = self.run_with(
             [
@@ -471,6 +498,20 @@ class CompilerTimeoutTest(unittest.TestCase):
         self.assertEqual(["fail_closed"], [d["observable"] for d in rec["divergences"]])
         self.assertIn("self-hosted compiler timed out", rec["divergences"][0]["detail"])
 
+    def test_agreeing_rejections_count_as_a_completed_comparison(self):
+        # Every applicable build observable was compared; the absence of a
+        # runtime phase does not make this an unexamined file.
+        rejected = result(
+            status="CompileFailed",
+            exit_code=1,
+            diagnostics=[{"error_code": "TypeMismatch"}],
+        )
+
+        rec = self.run_check(rejected, rejected)
+
+        self.assertEqual([], rec["divergences"])
+        self.assertIsNone(rec["skipped"])
+
     def test_both_compilers_timing_out_is_a_skip(self):
         rec = self.run_check(self.timed_out(), self.timed_out())
 
@@ -496,6 +537,29 @@ class CompareVerifyTest(unittest.TestCase):
         div = equivalence.compare_verify(rust, slf)
 
         self.assertEqual(["verify_status"], [d["observable"] for d in div])
+
+    def test_same_counterexample_count_different_identity_diverges(self):
+        rust = result(status="VerifyFailed", exit_code=1)
+        rust["json"]["counterexamples"] = [
+            {"function": "f", "vow_id": 1, "blame": "Callee"}
+        ]
+        slf = result(status="VerifyFailed", exit_code=1)
+        slf["json"]["counterexamples"] = [
+            {"function": "g", "vow_id": 2, "blame": "Caller"}
+        ]
+
+        div = equivalence.compare_verify(rust, slf)
+
+        self.assertEqual(["verify_status"], [d["observable"] for d in div])
+
+    def test_identical_counterexamples_agree(self):
+        cex = [{"function": "f", "vow_id": 1, "blame": "Callee"}]
+        rust = result(status="VerifyFailed", exit_code=1)
+        rust["json"]["counterexamples"] = list(cex)
+        slf = result(status="VerifyFailed", exit_code=1)
+        slf["json"]["counterexamples"] = list(cex)
+
+        self.assertEqual([], equivalence.compare_verify(rust, slf))
 
     def test_differing_diagnostics_are_reported(self):
         rust = result(status="Unverified", diagnostics=[{"error_code": "A"}])

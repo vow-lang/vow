@@ -240,6 +240,25 @@ def panic_markers(result):
     return [m for m in PANIC_MARKERS if m in hay]
 
 
+# docs/spec/errors.md reserves this exit code for every runtime abort — a
+# contract violation, arithmetic overflow, unwrap-on-None, OOB, stack overflow
+# or OOM — and states it is "never a plain 1". It is a clean exit, not a signal
+# death, so signal_of() does not see it.
+RUNTIME_ABORT_EXIT = 134
+
+
+def aborted(result):
+    """Did this process terminate abnormally rather than just non-zero?
+
+    Args:
+        result: A run_binary or run_compiler result dict.
+
+    Returns:
+        bool: True for a signal death or the reserved runtime-abort exit.
+    """
+    return signal_of(result) is not None or result["exit"] == RUNTIME_ABORT_EXIT
+
+
 def signal_of(result):
     """The signal a process died on, or None if it exited normally.
 
@@ -335,10 +354,21 @@ def verify_outcome(result):
         result: A run_compiler result dict.
 
     Returns:
-        tuple: (verify_status, number of structured counterexamples).
+        tuple: (verify_status, sorted (function, vow_id, blame) identities).
     """
     j = result["json"] or {}
-    return (j.get("verify_status"), len(j.get("counterexamples") or []))
+    # Identity, not count: two runs each reporting one counterexample are not
+    # in agreement when they name different functions, vow_ids or blame, and
+    # full_test.sh::compare_json already treats those fields as significant.
+    cexs = sorted(
+        (
+            str(c.get("function")),
+            str(c.get("vow_id")),
+            str(c.get("blame")),
+        )
+        for c in (j.get("counterexamples") or [])
+    )
+    return (j.get("verify_status"), cexs)
 
 
 def compare_verify(rust, slf):
@@ -433,6 +463,14 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
 
     # The peer runs even when the reference hung: "one hangs, one terminates"
     # is itself a difference between the implementations, in either direction.
+    #
+    # Deliberately run ONCE, against the reference's two runs. The double-run
+    # exists to spot a program whose own output varies, which would make any
+    # cross-compiler comparison meaningless; establishing that on one side is
+    # enough. If the self-hosted binary is the unstable one, a single
+    # mismatching run against a stable r1/r2 is reported as a runtime
+    # divergence — which is the right answer, since self-hosted-only
+    # instability is itself a miscompile. Three runs, not four.
     s = run_binary(self_bin, stdin_data, timeout, limit_memory=True)
 
     if rust_hung and s["timeout"]:
@@ -452,9 +490,17 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
 
     div = []
     if r1["exit"] != s["exit"]:
+        # A `runtime` ledger entry documents one specific difference — almost
+        # always a wrong stdout. It must not also suppress a binary that starts
+        # ABORTING: per docs/spec/errors.md every runtime abort (contract
+        # violation, overflow, OOB, unwrap-on-None) exits with the reserved
+        # 134, and Cranelift-inserted checked-arithmetic traps die on a signal.
+        # Either is a new failure mode, so it is reported as fail_closed, which
+        # a `runtime` entry cannot match.
+        abnormal = aborted(r1) or aborted(s)
         div.append(
             {
-                "observable": "runtime",
+                "observable": "fail_closed" if abnormal else "runtime",
                 "detail": f"exit code {r1['exit']} vs {s['exit']}",
             }
         )
@@ -610,12 +656,11 @@ def check_file(vow_file, rust, slf, outdir, timeout):
             record["divergences"] += rt_div
             if why:
                 record["skipped"] = why
-        elif not record["divergences"] and not compiled_ok(r):
-            # Both rejected and agreed on why: the build observables did their job,
-            # there is simply no binary to compare. Not a divergence, and not an
-            # unexamined file either. A file that DID diverge is never labelled
-            # skipped — that would understate coverage in the skip histogram.
-            record["skipped"] = record["skipped"] or "both rejected (no runtime check)"
+        # Both rejected and agreed on why: every applicable build observable
+        # was compared, so this is a COMPLETED comparison, not a skip. Labelling
+        # it skipped excluded error fixtures from `compared` — enough that a
+        # single error fixture under the default --min-compared 1 exited 2 for
+        # insufficient coverage despite having compared everything there was.
 
     finally:
         # Codegen leaves a sibling .o next to each executable, and a full-corpus
