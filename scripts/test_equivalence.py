@@ -238,6 +238,47 @@ class CompareRuntimeTest(unittest.TestCase):
         self.assertEqual([], div)
         self.assertEqual("nondeterministic", why)
 
+    def test_declared_segv_is_still_a_fail_closed_finding(self):
+        # A fixture may carry `// TEST: exit 139`, but #905's "no input
+        # produces a SIGSEGV binary" invariant is not something a fixture can
+        # declare away.
+        div, why = self.run_with(
+            [
+                binary_result(b"", exit_code=-11),
+                binary_result(b"", exit_code=-11),
+                binary_result(b"", exit_code=-11),
+            ],
+            expect_signal=11,
+        )
+
+        self.assertIsNone(why)
+        self.assertEqual(["fail_closed"], [d["observable"] for d in div])
+        self.assertIn("memory unsafety", div[0]["detail"])
+
+    def test_declared_trap_signal_is_still_suppressed(self):
+        # SIGILL from a checked-arithmetic overflow is the feature working.
+        div, why = self.run_with(
+            [
+                binary_result(b"", exit_code=-4),
+                binary_result(b"", exit_code=-4),
+                binary_result(b"", exit_code=-4),
+            ],
+            expect_signal=4,
+        )
+
+        self.assertEqual(([], None), (div, why))
+
+    def test_undeclared_unclassified_signal_is_a_finding(self):
+        div, why = self.run_with(
+            [
+                binary_result(b"", exit_code=-9),
+                binary_result(b"", exit_code=-9),
+                binary_result(b"", exit_code=-9),
+            ]
+        )
+
+        self.assertEqual(["fail_closed"], [d["observable"] for d in div])
+
     def test_agreeing_binaries_produce_no_divergence(self):
         div, why = self.run_with(
             [

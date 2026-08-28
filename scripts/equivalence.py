@@ -368,7 +368,12 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
     }
     if len(both) == 1:
         signal = both.pop()
-        if signal is not None and signal != expect_signal:
+        if signal is not None:
+            # Memory unsafety is classified BEFORE the declared-exit check. A
+            # fixture may carry `// TEST: exit 139`, but #905 makes "no input
+            # produces a binary that dies on SIGSEGV" an invariant that holds
+            # independently of equivalence and independently of what the
+            # fixture declares — a declaration cannot license the finding away.
             if signal in UNSAFE_SIGNALS:
                 div.append(
                     {
@@ -379,7 +384,7 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
                         ),
                     }
                 )
-            elif signal not in TRAP_SIGNALS:
+            elif signal != expect_signal and signal not in TRAP_SIGNALS:
                 div.append(
                     {
                         "observable": "fail_closed",
