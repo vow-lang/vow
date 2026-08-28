@@ -210,8 +210,22 @@ compare_runtime() {
         errors+=("stdout differs")
     fi
 
+    # The directive documents a stdout miscompile and nothing else. An exit-code
+    # change — a crash, or a signal death such as 139 — is never what it covers,
+    # so it must still FAIL on a fixture carrying the directive. Suppressing the
+    # whole errors array would let a documented stdout gap hide a new crash.
     if [ -n "$known_div" ]; then
-        if [ ${#errors[@]} -eq 0 ]; then
+        local uncovered="" stdout_diverged=0 e
+        for e in ${errors[@]+"${errors[@]}"}; do
+            if [ "$e" = "stdout differs" ]; then
+                stdout_diverged=1
+            else
+                uncovered="${uncovered:+$uncovered; }$e"
+            fi
+        done
+        if [ -n "$uncovered" ]; then
+            fail "$label" "known-divergence ($known_div) does not cover: $uncovered"
+        elif [ "$stdout_diverged" -eq 0 ]; then
             fail "$label" "known-divergence ($known_div) no longer reproduces — remove the directive and update docs/equivalence/ledger.json"
         else
             skip "$label" "known divergence ($known_div)"
