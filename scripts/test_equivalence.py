@@ -357,6 +357,79 @@ class CorpusTest(unittest.TestCase):
             )
 
 
+class VerifyOnlyTest(unittest.TestCase):
+    """`// TEST: verify-only` fixtures must actually reach the verifier."""
+
+    def run_check(self, rust_res, self_res):
+        """Drive check_file over a verify-only fixture.
+
+        Args:
+            rust_res: run_compiler result for the Rust compiler.
+            self_res: run_compiler result for the self-hosted compiler.
+
+        Returns:
+            tuple: (record, list of argv lists the stub was called with).
+        """
+        seen = []
+        with tempfile.TemporaryDirectory() as d:
+            outdir = Path(d) / "out"
+            outdir.mkdir()
+            vow = Path(d) / "lib.vow"
+            vow.write_text("// TEST: verify-only\nfn f(x: i64) -> i64 { return x; }\n")
+
+            pending = [rust_res, self_res]
+
+            def fake_run_compiler(binary, args, timeout, limit_memory):
+                seen.append(args)
+                return pending.pop(0)
+
+            with mock.patch.object(
+                equivalence, "run_compiler", side_effect=fake_run_compiler
+            ):
+                rec = equivalence.check_file(vow, "rust", "self", outdir, 5)
+        return rec, seen
+
+    def test_verify_only_dispatches_to_the_verifier(self):
+        ok = result(status="Verified")
+
+        rec, seen = self.run_check(ok, ok)
+
+        self.assertTrue(all(a[0] == "verify" for a in seen))
+        self.assertTrue(all("-o" not in a for a in seen))
+
+    def test_agreeing_verdicts_count_as_compared_not_skipped(self):
+        # Previously these files were recorded as "both rejected (no runtime
+        # check)", understating coverage on top of never verifying.
+        ok = result(status="Verified")
+
+        rec, _ = self.run_check(ok, ok)
+
+        self.assertEqual([], rec["divergences"])
+        self.assertIsNone(rec["skipped"])
+
+    def test_differing_verdicts_are_a_divergence(self):
+        rec, _ = self.run_check(result(status="Verified"), result(status="Unverified"))
+
+        self.assertEqual(
+            ["verify_status"], [d["observable"] for d in rec["divergences"]]
+        )
+
+
+class CompareVerifyTest(unittest.TestCase):
+    def test_matching_verdicts_are_not_a_divergence(self):
+        ok = result(status="Verified")
+
+        self.assertEqual([], equivalence.compare_verify(ok, ok))
+
+    def test_differing_diagnostics_are_reported(self):
+        rust = result(status="Unverified", diagnostics=[{"error_code": "A"}])
+        slf = result(status="Unverified", diagnostics=[{"error_code": "B"}])
+
+        div = equivalence.compare_verify(rust, slf)
+
+        self.assertEqual(["error_code"], [d["observable"] for d in div])
+
+
 class CheckFileCleanupTest(unittest.TestCase):
     """Partial binaries must not survive the early-return paths."""
 

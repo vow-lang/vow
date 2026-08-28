@@ -9,6 +9,8 @@ observables (#1081):
   runtime        when both compile, stdout + exit code of the two binaries agree
   exit_code      the two compiler PROCESSES agree on their own exit status,
                  which docs/spec/cli.md defines as part of the CLI contract
+  verify_status  for `// TEST: verify-only` fixtures, the two verifiers agree
+                 on the verification verdict
   fail_closed    neither compiler may panic, and neither emitted binary may die
                  on a signal — a clean `error[...]` is always acceptable
 
@@ -309,6 +311,50 @@ def compare_build(rust, slf):
     return div
 
 
+def compare_verify(rust, slf):
+    """Verification-verdict parity for `// TEST: verify-only` fixtures.
+
+    These fixtures are library modules with no `main`, so `build` yields no
+    executable on either side and the build observables can only ever report
+    "both rejected". The verifier verdict is the whole point of the directive,
+    so it is compared directly instead.
+
+    Args:
+        rust: run_compiler result for the Rust compiler.
+        slf: run_compiler result for the self-hosted compiler.
+
+    Returns:
+        list: Divergence dicts, empty when the two verifiers agree.
+    """
+    div = []
+    r_status, s_status = status_of(rust), status_of(slf)
+    if r_status != s_status:
+        div.append(
+            {
+                "observable": "verify_status",
+                "detail": f"verification verdict differs: {r_status} vs {s_status}",
+            }
+        )
+    rc, sc = error_codes(rust), error_codes(slf)
+    if rc != sc:
+        div.append(
+            {
+                "observable": "error_code",
+                "detail": f"verify diagnostics differ: {rc} vs {sc}",
+            }
+        )
+    if rust["exit"] != slf["exit"]:
+        div.append(
+            {
+                "observable": "exit_code",
+                "detail": (
+                    f"verify process exit differs: {rust['exit']} vs {slf['exit']}"
+                ),
+            }
+        )
+    return div
+
+
 def expected_signal(directives):
     """The signal a fixture DECLARES it dies on, if any.
 
@@ -442,9 +488,18 @@ def check_file(vow_file, rust, slf, outdir, timeout):
         # compiler binary, and both compilers share $VOW_CACHE_DIR. Without it a
         # cached object from the peer compiler can be linked in and the runtime
         # observable silently compares a binary to itself.
-        args = ["build", "--no-verify", "--no-cache", str(vow_file)]
-        r = run_compiler(rust, args + ["-o", str(rust_out)], timeout, False)
-        s = run_compiler(slf, args + ["-o", str(self_out)], timeout, True)
+        # A `// TEST: verify-only` fixture is a library module with no main.
+        # Building it produces no executable on either side, so the build path
+        # could only ever record "both rejected (no runtime check)" — and the
+        # verifier, which is the only thing the directive asks about, never ran.
+        if directives["verify_only"]:
+            rust_args = self_args = ["verify", "--no-cache", str(vow_file)]
+        else:
+            args = ["build", "--no-verify", "--no-cache", str(vow_file)]
+            rust_args = args + ["-o", str(rust_out)]
+            self_args = args + ["-o", str(self_out)]
+        r = run_compiler(rust, rust_args, timeout, False)
+        s = run_compiler(slf, self_args, timeout, True)
 
         record["divergences"] += check_fail_closed("rust", r)
         record["divergences"] += check_fail_closed("self-hosted", s)
@@ -472,6 +527,13 @@ def check_file(vow_file, rust, slf, outdir, timeout):
             return record
 
         record["status"] = {"rust": status_of(r), "self": status_of(s)}
+
+        if directives["verify_only"]:
+            # Agreement here is a real comparison, so the record stays
+            # unskipped and counts toward the coverage floor.
+            record["divergences"] += compare_verify(r, s)
+            return record
+
         record["divergences"] += compare_build(r, s)
 
         if compiled_ok(r) and compiled_ok(s) and not record["divergences"]:
