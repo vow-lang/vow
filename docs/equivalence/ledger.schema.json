@@ -48,7 +48,7 @@
         "properties": {
           "first_seen": { "type": "string" },
           "observable": {
-            "enum": ["accept_reject", "error_code", "runtime", "fail_closed"]
+            "enum": ["accept_reject", "error_code", "exit_code", "runtime", "fail_closed"]
           },
           "status": {
             "enum": ["open", "fixed", "expected"],

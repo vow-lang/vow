@@ -7,6 +7,8 @@ observables (#1081):
   accept/reject  both compile, or both reject
   error_code     when both reject, the multiset of diagnostic codes agrees
   runtime        when both compile, stdout + exit code of the two binaries agree
+  exit_code      the two compiler PROCESSES agree on their own exit status,
+                 which docs/spec/cli.md defines as part of the CLI contract
   fail_closed    neither compiler may panic, and neither emitted binary may die
                  on a signal — a clean `error[...]` is always acceptable
 
@@ -288,6 +290,22 @@ def compare_build(rust, slf):
                     "detail": f"both rejected but codes differ: {rc} vs {sc}",
                 }
             )
+
+    # The two compilers reached the same verdict; their PROCESS exit status is
+    # a separate promise. docs/spec/cli.md pins an exit code per outcome and
+    # full_test.sh::compare_json already enforces it, so a compiler returning 0
+    # for CompileFailed (or nonzero for a clean build) is a CLI-contract
+    # regression this sweep would otherwise pass.
+    if rust["exit"] != slf["exit"]:
+        div.append(
+            {
+                "observable": "exit_code",
+                "detail": (
+                    f"same verdict but process exit differs: "
+                    f"{rust['exit']} vs {slf['exit']}"
+                ),
+            }
+        )
     return div
 
 

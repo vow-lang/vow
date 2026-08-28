@@ -88,6 +88,34 @@ class CompareBuildTest(unittest.TestCase):
         self.assertEqual(["accept_reject"], [d["observable"] for d in div])
 
 
+class CompilerExitCodeTest(unittest.TestCase):
+    """docs/spec/cli.md pins an exit code per outcome; agreement is not enough."""
+
+    def test_same_verdict_but_differing_process_exit_is_a_divergence(self):
+        rust = result(status="CompileFailed", exit_code=1)
+        slf = result(status="CompileFailed", exit_code=0)
+
+        div = equivalence.compare_build(rust, slf)
+
+        self.assertEqual(["exit_code"], [d["observable"] for d in div])
+
+    def test_matching_process_exit_is_not_a_divergence(self):
+        rust = result(status="Unverified", executable="/tmp/a", exit_code=0)
+        slf = result(status="Unverified", executable="/tmp/b", exit_code=0)
+
+        self.assertEqual([], equivalence.compare_build(rust, slf))
+
+    def test_accept_reject_divergence_does_not_also_report_exit_code(self):
+        # The exit difference is a consequence of the disagreement already
+        # reported, not independent information.
+        rust = result(status="CompileFailed", exit_code=1)
+        slf = result(status="Unverified", executable="/tmp/a", exit_code=0)
+
+        div = equivalence.compare_build(rust, slf)
+
+        self.assertEqual(["accept_reject"], [d["observable"] for d in div])
+
+
 class FailClosedTest(unittest.TestCase):
     def test_panic_in_stderr_is_a_finding(self):
         res = result(
