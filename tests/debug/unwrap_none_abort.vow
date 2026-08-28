@@ -1,0 +1,12 @@
+// TEST: exit 134
+// TEST: stderr "UnwrapOnNone"
+//
+// Issue #1108: `__vow_unwrap_panic` was dead code — declared in vow-runtime and
+// documented in docs/spec/errors.md, but never called, so `None.unwrap()` ran
+// off with value 0 and exit 0 in every build mode.
+module UnwrapNoneAbort
+
+fn main() -> () [io, panic] {
+    let empty: Option<i64> = Option::None;
+    print_i64(empty.unwrap());
+}

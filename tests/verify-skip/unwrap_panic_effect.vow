@@ -1,0 +1,22 @@
+// TEST: category unverifiable
+module UnwrapPanicEffect
+
+// Issue #1108. Both C emitters model `__vow_unwrap_panic` as
+// `__ESBMC_assert(0, "unwrap-none")`, so the guarded call is a real
+// verification obligation. That obligation is inert today: `.unwrap()` carries
+// the [panic] effect, and the verifier model is restricted to pure functions,
+// so a contracted caller is Skipped before the assert is ever reached.
+//
+// This file pins that Skipped status. When the panic-effect restriction lifts,
+// promote it to tests/verify-fail/ — `payload` cannot honour `result >= 0`,
+// because the unwrap is unproven.
+fn payload(o: Option<i64>) -> i64 [panic] vow {
+  ensures: result >= 0
+} {
+    o.unwrap()
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

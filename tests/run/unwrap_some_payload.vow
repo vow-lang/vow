@@ -1,0 +1,46 @@
+// TEST: exit 0
+// TEST: stdout "42\n84\nhi\n77\n5\n"
+//
+// Regression test for issue #1108. Both lowerers dropped `.unwrap()` into the
+// method-call catch-all and emitted ConstUnit, so every unwrap produced 0 —
+// a wrong value on Some/Ok, not merely a missing panic. Each payload shape
+// below (scalar, struct, String, narrowed u64, Result::Ok) reads field 1 at
+// its real IR type.
+module UnwrapSomePayload
+
+struct Pair { a: i64, b: i64 }
+
+fn find(k: i64) -> Option<Pair> {
+    if k > 0 {
+        Option::Some(Pair { a: k, b: k * 2 })
+    } else {
+        Option::None
+    }
+}
+
+fn ok_payload(r: Result<i64, ()>) -> i64 [panic] {
+    r.unwrap()
+}
+
+fn main() -> () [io, panic] {
+    let scalar: Option<i64> = Option::Some(42);
+    print_i64(scalar.unwrap());
+    print_str("\n");
+
+    let pair: Pair = find(42).unwrap();
+    print_i64(pair.b);
+    print_str("\n");
+
+    let text: Option<String> = Option::Some(String::from("hi"));
+    let unwrapped: String = text.unwrap();
+    print_str(unwrapped);
+    print_str("\n");
+
+    let parsed: Option<u64> = String::from("77").parse_u64();
+    print_u64(parsed.unwrap());
+    print_str("\n");
+
+    let ok: Result<i64, ()> = Result::Ok(5);
+    print_i64(ok_payload(ok));
+    print_str("\n");
+}

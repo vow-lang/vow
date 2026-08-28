@@ -1934,6 +1934,16 @@ impl<'e> Checker<'e> {
                             "unwrap" => Some(type_args.first().cloned().unwrap_or(Ty::Unit)),
                             _ => None,
                         };
+                        // The unwrap payload reaches IR through a FieldGet, so
+                        // it needs the same aggregate metadata `?` records.
+                        if let Some(payload_ty) = ty.as_ref() {
+                            let is_linear =
+                                crate::linear::is_linear_owner_ty(payload_ty, &self.env);
+                            if let Some(info) = pattern_aggregate_info(payload_ty, is_linear) {
+                                self.pattern_aggregates
+                                    .insert(expr as *const Expr as usize, info);
+                            }
+                        }
                         (methods, ty)
                     } else {
                         (&[] as &[&str], None)

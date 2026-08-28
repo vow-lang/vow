@@ -1850,6 +1850,9 @@ fn pattern_vec_variant_payload_ty_path(ts: TyStore, tid: i64) -> Vec<Vec<i64>> {
     result
 }
 
+// Records payload aggregate metadata for an expression that extracts an
+// Option/Result payload via FieldGet. Both `?` and `.unwrap()` register here;
+// the arrays are keyed by expression id, so the two never collide.
 fn record_question_aggregate(e: CheckEnv, eid: i64, payload_tid: i64) {
     let aggregate_name: String = pattern_aggregate_name(e.ts, payload_tid);
     if aggregate_name.len() == 0 {
@@ -2454,7 +2457,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     } else {
                         CTY_UNIT()
                     };
-                    if mname == String::from("unwrap") { return inner_tid; }
+                    if mname == String::from("unwrap") {
+                        // The unwrap payload reaches IR through a FieldGet, so
+                        // it needs the same aggregate metadata `?` records.
+                        record_question_aggregate(e, eid, inner_tid);
+                        return inner_tid;
+                    }
                     let oerr_msg: String = String::from("unknown method '");
                     oerr_msg.push_str(mname);
                     oerr_msg.push_str(String::from("' on type '"));

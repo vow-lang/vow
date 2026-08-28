@@ -3792,6 +3792,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     )
                 }
+                // Result's empty variant is `Err` (tag 1); Option's is `None`
+                // (tag 0). The struct tag alone is not enough — parameters carry
+                // only a declared AST type — so consult both sources. The type
+                // checker admits `unwrap` on nothing else, so anything neither
+                // source calls a Result is an Option.
+                (recv, "unwrap") => {
+                    let declared = ctx
+                        .inst_declared_ast_types
+                        .get(&recv_id)
+                        .cloned()
+                        .and_then(|ast_ty| non_scalar_type_tag(&ast_ty, &ctx.type_aliases));
+                    let is_result = recv == Some("Result") || declared.as_deref() == Some("Result");
+                    lower_unwrap(ctx, expr, recv_id, i64::from(is_result), span)
+                }
                 _ => {
                     for a in args {
                         lower_consumed_expr(ctx, a);
@@ -4020,6 +4034,90 @@ fn lower_static_string_literal(
         expr.span,
     );
     Some((ptr, len))
+}
+
+/// `.unwrap()` on Option/Result: abort when the discriminant is the empty
+/// variant (`None` = 0, `Err` = 1), otherwise yield the payload from field 1.
+///
+/// The abort is emitted in every build mode. `.unwrap()` is a language-level
+/// partial operation, not a vow check, so release builds must trap too (#1108).
+fn lower_unwrap(
+    ctx: &mut LowerCtx,
+    expr: &Expr,
+    recv_id: InstId,
+    empty_tag: i64,
+    span: Span,
+) -> InstId {
+    let tag_id = ctx.emit(
+        Opcode::FieldGet,
+        Ty::I64,
+        vec![recv_id],
+        InstData::FieldIndex(0),
+        span,
+    );
+    let empty_id = ctx.emit(
+        Opcode::ConstI64,
+        Ty::I64,
+        vec![],
+        InstData::ConstI64(empty_tag),
+        span,
+    );
+    let is_empty = ctx.emit(
+        Opcode::Eq,
+        Ty::Bool,
+        vec![tag_id, empty_id],
+        InstData::Integer(IntegerType::I64),
+        span,
+    );
+    let panic_block = ctx.new_block();
+    let payload_block = ctx.new_block();
+    ctx.emit(
+        Opcode::Branch,
+        Ty::Unit,
+        vec![is_empty],
+        InstData::BranchTargets {
+            then_block: panic_block,
+            else_block: payload_block,
+        },
+        span,
+    );
+
+    ctx.switch_to_block(panic_block);
+    ctx.emit(
+        Opcode::Call,
+        Ty::Unit,
+        vec![],
+        InstData::CallExtern("__vow_unwrap_panic".to_string()),
+        span,
+    );
+    ctx.emit(Opcode::Unreachable, Ty::Unit, vec![], InstData::None, span);
+
+    ctx.switch_to_block(payload_block);
+    let aggregate = ctx
+        .pattern_aggregates
+        .get(&(expr as *const Expr as usize))
+        .cloned();
+    let payload_ty = if aggregate.as_ref().is_some_and(|info| info.is_linear) {
+        Ty::LinearPtr
+    } else if aggregate.is_some() {
+        Ty::Ptr
+    } else {
+        ctx.inst_option_elem_ty
+            .get(&recv_id)
+            .copied()
+            .unwrap_or(Ty::I64)
+    };
+    let payload = ctx.emit(
+        Opcode::FieldGet,
+        payload_ty,
+        vec![recv_id],
+        InstData::FieldIndex(1),
+        span,
+    );
+    if let Some(info) = aggregate {
+        tag_pattern_aggregate_metadata(ctx, payload, info);
+    }
+    payload
 }
 
 fn lower_consumed_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {

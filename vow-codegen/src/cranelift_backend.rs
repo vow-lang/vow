@@ -3019,7 +3019,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_perf_count_vec_sort" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
         }
-        "__vow_perf_count"
+        // Zero-arg, zero-return runtime aborts and hooks. Must match
+        // vow-clif-shim/src/lib.rs and the vow-runtime definitions.
+        "__vow_unwrap_panic"
+        | "__vow_perf_count"
         | "__vow_perf_counter_reset"
         | "__vow_profile_init"
         | "__vow_init_stack_guard"

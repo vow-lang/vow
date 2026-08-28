@@ -169,7 +169,8 @@ fn is_string_fresh_helper(name: String) -> bool {
 fn is_known_builtin(name: String) -> bool {
     if is_string_fresh_helper(name) || is_u8_numeric_intrinsic(name) ||
        is_i32_numeric_intrinsic(name) || cemit_narrow_intrinsic_target(name) != -1 { return true; }
-    name == String::from("__vow_vec_new")
+    name == String::from("__vow_unwrap_panic")
+    || name == String::from("__vow_vec_new")
     || name == String::from("__vow_vec_new_val")
     || name == String::from("__vow_vec_new_in_arena")
     || name == String::from("__vow_vec_new_val_in_arena")
@@ -1462,6 +1463,12 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
     }
     if op == IOP_UNREACHABLE() {
         out.push_str(String::from("  __ESBMC_assume(0); /* unreachable */\n"));
+        return;
+    }
+    // `.unwrap()` on the empty variant. The lowerer guards this call with a
+    // discriminant branch, so reaching it *is* the unwrap-on-None failure.
+    if op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.ds == String::from("__vow_unwrap_panic") {
+        out.push_str(String::from("  __ESBMC_assert(0, \"unwrap-none\");\n"));
         return;
     }
 
