@@ -527,7 +527,7 @@ Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runti
 {"error":"UnwrapOnNone"}
 ```
 
-Emitted when `.unwrap()` is called on `Option::None`.
+Emitted when `.unwrap()` is called on `Option::None` or `Result::Err`.
 
 ### IndexOutOfBounds
 

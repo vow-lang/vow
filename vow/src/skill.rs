@@ -2172,7 +2172,11 @@ prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler ou
 
 | Method      | Signature                              |
 |-------------|----------------------------------------|
-| `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |
+| `.unwrap()` | `() -> T` (takes no arguments; aborts with `UnwrapOnNone` on `None`; requires `[panic]` effect) |
+
+`.unwrap()` is also available on `Result<T, E>`, where it returns the `Ok` payload
+and aborts with the same `UnwrapOnNone` diagnostic on `Err`. The abort is emitted in
+every build mode — `.unwrap()` is a partial operation, not a vow check.
 
 The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).
 
@@ -3016,7 +3020,7 @@ Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runti
 {"error":"UnwrapOnNone"}
 ```
 
-Emitted when `.unwrap()` is called on `Option::None`.
+Emitted when `.unwrap()` is called on `Option::None` or `Result::Err`.
 
 ### IndexOutOfBounds
 
@@ -4407,7 +4411,7 @@ The `blame` field indicates who is at fault:
 
 ### UnwrapOnNone
 
-**When:** `.unwrap()` is called on `Option::None`.
+**When:** `.unwrap()` is called on `Option::None` or `Result::Err`.
 
 ```json
 {"error":"UnwrapOnNone"}
@@ -6912,7 +6916,11 @@ prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler ou
 
 | Method      | Signature                              |
 |-------------|----------------------------------------|
-| `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |
+| `.unwrap()` | `() -> T` (takes no arguments; aborts with `UnwrapOnNone` on `None`; requires `[panic]` effect) |
+
+`.unwrap()` is also available on `Result<T, E>`, where it returns the `Ok` payload
+and aborts with the same `UnwrapOnNone` diagnostic on `Err`. The abort is emitted in
+every build mode — `.unwrap()` is a partial operation, not a vow check.
 
 The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).
 
@@ -7757,7 +7765,7 @@ Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runti
 {"error":"UnwrapOnNone"}
 ```
 
-Emitted when `.unwrap()` is called on `Option::None`.
+Emitted when `.unwrap()` is called on `Option::None` or `Result::Err`.
 
 ### IndexOutOfBounds
 
@@ -9151,7 +9159,7 @@ The `blame` field indicates who is at fault:
 
 ### UnwrapOnNone
 
-**When:** `.unwrap()` is called on `Option::None`.
+**When:** `.unwrap()` is called on `Option::None` or `Result::Err`.
 
 ```json
 {"error":"UnwrapOnNone"}

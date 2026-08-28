@@ -4256,7 +4256,11 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Method      | Signature                              |\n"));
     r.push_str(String::from("|-------------|----------------------------------------|\n"));
-    r.push_str(String::from("| `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |\n"));
+    r.push_str(String::from("| `.unwrap()` | `() -> T` (takes no arguments; aborts with `UnwrapOnNone` on `None`; requires `[panic]` effect) |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`.unwrap()` is also available on `Result<T, E>`, where it returns the `Ok` payload\n"));
+    r.push_str(String::from("and aborts with the same `UnwrapOnNone` diagnostic on `Err`. The abort is emitted in\n"));
+    r.push_str(String::from("every build mode -- `.unwrap()` is a partial operation, not a vow check.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).\n"));
     r.push_str(String::from("\n"));
@@ -5100,7 +5104,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("{\"error\":\"UnwrapOnNone\"}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Emitted when `.unwrap()` is called on `Option::None`.\n"));
+    r.push_str(String::from("Emitted when `.unwrap()` is called on `Option::None` or `Result::Err`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### IndexOutOfBounds\n"));
     r.push_str(String::from("\n"));
@@ -6491,7 +6495,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnwrapOnNone\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**When:** `.unwrap()` is called on `Option::None`.\n"));
+    r.push_str(String::from("**When:** `.unwrap()` is called on `Option::None` or `Result::Err`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\"error\":\"UnwrapOnNone\"}\n"));
@@ -9018,7 +9022,11 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Method      | Signature                              |\n"));
     r.push_str(String::from("|-------------|----------------------------------------|\n"));
-    r.push_str(String::from("| `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |\n"));
+    r.push_str(String::from("| `.unwrap()` | `() -> T` (takes no arguments; aborts with `UnwrapOnNone` on `None`; requires `[panic]` effect) |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`.unwrap()` is also available on `Result<T, E>`, where it returns the `Ok` payload\n"));
+    r.push_str(String::from("and aborts with the same `UnwrapOnNone` diagnostic on `Err`. The abort is emitted in\n"));
+    r.push_str(String::from("every build mode -- `.unwrap()` is a partial operation, not a vow check.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).\n"));
     r.push_str(String::from("\n"));
@@ -9864,7 +9872,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("{\"error\":\"UnwrapOnNone\"}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Emitted when `.unwrap()` is called on `Option::None`.\n"));
+    r.push_str(String::from("Emitted when `.unwrap()` is called on `Option::None` or `Result::Err`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### IndexOutOfBounds\n"));
     r.push_str(String::from("\n"));
@@ -11261,7 +11269,7 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### UnwrapOnNone\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**When:** `.unwrap()` is called on `Option::None`.\n"));
+    r.push_str(String::from("**When:** `.unwrap()` is called on `Option::None` or `Result::Err`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\"error\":\"UnwrapOnNone\"}\n"));

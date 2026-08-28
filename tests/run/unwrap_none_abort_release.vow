@@ -1,0 +1,11 @@
+// TEST: exit 134
+//
+// Issue #1108: `.unwrap()` is a language-level partial operation, not a vow
+// check, so the abort must survive a release build. This lane compiles without
+// --mode debug; tests/debug/unwrap_none_abort.vow asserts the JSON envelope.
+module UnwrapNoneAbortRelease
+
+fn main() -> () [io, panic] {
+    let empty: Option<i64> = Option::None;
+    print_i64(empty.unwrap());
+}

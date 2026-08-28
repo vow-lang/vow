@@ -3935,6 +3935,22 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_truncate"));
         }
 
+        if method_name == String::from("unwrap") {
+            // Result's empty variant is `Err` (tag 1); Option's is `None`
+            // (tag 0). The struct tag alone is not enough - parameters carry
+            // only a declared AST type - so consult both sources. The type
+            // checker admits `unwrap` on nothing else, so anything neither
+            // source calls a Result is an Option.
+            let declared: String = lower_ast_type_tag_name(
+                a, lctx_get_declared_ast_tid(ctx, recv_id),
+                ctx.type_alias_names, ctx.type_alias_target_tids
+            );
+            let is_result: bool =
+                recv_tag_str == String::from("Result") || declared == String::from("Result");
+            let empty_tag: i64 = if is_result { 1 } else { 0 };
+            return lower_unwrap(ctx, eid, recv_id, empty_tag);
+        }
+
         let nargs: i64 = list_len(a, args_lid);
         let mut mai: i64 = 0;
         while mai < nargs {
@@ -4557,6 +4573,68 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
     let u_args: Vec<i64> = Vec::new();
     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+}
+
+// `.unwrap()` on Option/Result: abort when the discriminant is the empty
+// variant (`None` = 0, `Err` = 1), otherwise yield the payload from field 1.
+//
+// The abort is emitted in every build mode. `.unwrap()` is a language-level
+// partial operation, not a vow check, so release builds must trap too (#1108).
+fn lower_unwrap(ctx: LowerCtx, eid: i64, recv_id: i64, empty_tag: i64) -> i64 {
+    let tag_args: Vec<i64> = Vec::new();
+    tag_args.push(recv_id);
+    let tag_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), tag_args, IDATA_FIELD(), 0, 0, String::from(""));
+
+    let empty_args: Vec<i64> = Vec::new();
+    let empty_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), empty_args, IDATA_CONST_I64(), empty_tag, 0, String::from(""));
+
+    let cmp_args: Vec<i64> = Vec::new();
+    cmp_args.push(tag_id);
+    cmp_args.push(empty_id);
+    let is_empty: i64 = lctx_emit(ctx, IOP_EQ(), ITY_BOOL(), cmp_args, IDATA_INTEGER(), ITY_I64(), 0, String::from(""));
+
+    let panic_block: i64 = lctx_new_block(ctx);
+    let payload_block: i64 = lctx_new_block(ctx);
+    let br_args: Vec<i64> = Vec::new();
+    br_args.push(is_empty);
+    lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), panic_block, payload_block, String::from(""));
+
+    lctx_switch_to_block(ctx, panic_block);
+    let panic_args: Vec<i64> = Vec::new();
+    lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), panic_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_unwrap_panic"));
+    let unreachable_args: Vec<i64> = Vec::new();
+    lctx_emit(ctx, IOP_UNREACHABLE(), ITY_UNIT(), unreachable_args, IDATA_NONE(), 0, 0, String::from(""));
+
+    lctx_switch_to_block(ctx, payload_block);
+    let aggregate_name: String = lctx_get_question_aggregate(ctx, eid);
+    let aggregate_vec_elems: Vec<String> = lctx_get_question_vec_elem_path(ctx, eid);
+    let aggregate_vec_options: Vec<i64> = lctx_get_question_vec_option_elem_ty_path(ctx, eid);
+    let aggregate_option_elem: i64 = lctx_get_question_option_elem_ty(ctx, eid);
+    let payload_ty: i64 = {
+        if aggregate_name.len() > 0 && lctx_question_is_linear(ctx, eid) == 1 {
+            ITY_LPTR()
+        } else if aggregate_name.len() > 0 {
+            ITY_PTR()
+        } else {
+            lctx_get_option_elem_ty(ctx, recv_id)
+        }
+    };
+    let payload_args: Vec<i64> = Vec::new();
+    payload_args.push(recv_id);
+    let payload_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), payload_ty, payload_args, IDATA_FIELD(), 1, 0, String::from(""));
+    if aggregate_name.len() > 0 {
+        lctx_tag(ctx, payload_id, aggregate_name);
+    }
+    if aggregate_vec_elems.len() > 0 {
+        lctx_tag_vec_elem_path(ctx, payload_id, aggregate_vec_elems);
+    }
+    if aggregate_vec_options.len() > 0 {
+        lctx_tag_vec_option_elem_ty_path(ctx, payload_id, aggregate_vec_options);
+    }
+    if aggregate_option_elem != -1 {
+        lctx_tag_option_elem(ctx, payload_id, aggregate_option_elem);
+    }
+    payload_id
 }
 
 fn lower_consumed_expr(ctx: LowerCtx, eid: i64) -> i64 {

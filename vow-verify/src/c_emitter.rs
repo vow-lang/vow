@@ -436,7 +436,8 @@ fn is_known_builtin(name: &str) -> bool {
 
     matches!(
         name,
-        "__vow_vec_new"
+        "__vow_unwrap_panic"
+            | "__vow_vec_new"
             | "__vow_vec_new_val"
             | "__vow_vec_new_in_arena"
             | "__vow_vec_new_val_in_arena"
@@ -1157,6 +1158,13 @@ fn emit_inst(
         }
         Opcode::Unreachable => {
             out.push_str("  __ESBMC_assume(0); /* unreachable */\n");
+        }
+
+        // `.unwrap()` on the empty variant. The lowerer guards this call with a
+        // discriminant branch, so reaching it *is* the unwrap-on-None failure.
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(name) if name == "__vow_unwrap_panic") =>
+        {
+            out.push_str("  __ESBMC_assert(0, \"unwrap-none\");\n");
         }
 
         // Phi — already pre-declared at function top; nothing to emit here
@@ -3337,6 +3345,31 @@ mod tests {
             summary: RegionSummary::default(),
             source_file: String::new(),
         }
+    }
+
+    #[test]
+    fn unwrap_panic_call_asserts_unwrap_none() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::Call,
+                Ty::Unit,
+                vec![],
+                InstData::CallExtern("__vow_unwrap_panic".to_string()),
+            ),
+            inst(1, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let func = make_func("unwrap_none", vec![], Ty::Unit, insts);
+
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains(r#"__ESBMC_assert(0, "unwrap-none")"#),
+            "the guarded unwrap panic must become a verification obligation:\n{c}"
+        );
+        assert!(
+            !c.contains("not modelled"),
+            "__vow_unwrap_panic must be modelled, not skipped:\n{c}"
+        );
     }
 
     #[test]

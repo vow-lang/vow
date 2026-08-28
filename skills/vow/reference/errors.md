@@ -503,7 +503,7 @@ The `blame` field indicates who is at fault:
 
 ### UnwrapOnNone
 
-**When:** `.unwrap()` is called on `Option::None`.
+**When:** `.unwrap()` is called on `Option::None` or `Result::Err`.
 
 ```json
 {"error":"UnwrapOnNone"}
