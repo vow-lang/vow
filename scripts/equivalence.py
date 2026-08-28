@@ -436,69 +436,74 @@ def check_file(vow_file, rust, slf, outdir, timeout):
     rust_out = outdir / f"rust_{stem}"
     self_out = outdir / f"self_{stem}"
 
-    # `--no-cache` is mandatory, not hygiene: the compile-object cache is keyed
-    # on dependency content + mode + a hand-bumped ABI string, NOT on the
-    # compiler binary, and both compilers share $VOW_CACHE_DIR. Without it a
-    # cached object from the peer compiler can be linked in and the runtime
-    # observable silently compares a binary to itself.
-    args = ["build", "--no-verify", "--no-cache", str(vow_file)]
-    r = run_compiler(rust, args + ["-o", str(rust_out)], timeout, False)
-    s = run_compiler(slf, args + ["-o", str(self_out)], timeout, True)
+    try:
+        # `--no-cache` is mandatory, not hygiene: the compile-object cache is keyed
+        # on dependency content + mode + a hand-bumped ABI string, NOT on the
+        # compiler binary, and both compilers share $VOW_CACHE_DIR. Without it a
+        # cached object from the peer compiler can be linked in and the runtime
+        # observable silently compares a binary to itself.
+        args = ["build", "--no-verify", "--no-cache", str(vow_file)]
+        r = run_compiler(rust, args + ["-o", str(rust_out)], timeout, False)
+        s = run_compiler(slf, args + ["-o", str(self_out)], timeout, True)
 
-    record["divergences"] += check_fail_closed("rust", r)
-    record["divergences"] += check_fail_closed("self-hosted", s)
+        record["divergences"] += check_fail_closed("rust", r)
+        record["divergences"] += check_fail_closed("self-hosted", s)
 
-    if r["timeout"] or s["timeout"]:
-        which = "rust" if r["timeout"] else "self-hosted"
-        record["skipped"] = f"compile timeout ({which})"
-        return record
+        if r["timeout"] or s["timeout"]:
+            which = "rust" if r["timeout"] else "self-hosted"
+            record["skipped"] = f"compile timeout ({which})"
+            return record
 
-    # No parseable JSON from a compiler that did not panic means the contract
-    # "always emit structured output" was broken — that is itself a finding,
-    # not a reason to skip.
-    for name, res in (("rust", r), ("self-hosted", s)):
-        if res["json"] is None and not panic_markers(res):
-            record["divergences"].append(
-                {
-                    "observable": "fail_closed",
-                    "detail": (
-                        f"{name} emitted no parseable JSON (exit {res['exit']})"
-                    ),
-                }
-            )
-    if r["json"] is None or s["json"] is None:
+        # No parseable JSON from a compiler that did not panic means the contract
+        # "always emit structured output" was broken — that is itself a finding,
+        # not a reason to skip.
+        for name, res in (("rust", r), ("self-hosted", s)):
+            if res["json"] is None and not panic_markers(res):
+                record["divergences"].append(
+                    {
+                        "observable": "fail_closed",
+                        "detail": (
+                            f"{name} emitted no parseable JSON (exit {res['exit']})"
+                        ),
+                    }
+                )
+        if r["json"] is None or s["json"] is None:
+            record["status"] = {"rust": status_of(r), "self": status_of(s)}
+            return record
+
         record["status"] = {"rust": status_of(r), "self": status_of(s)}
-        return record
+        record["divergences"] += compare_build(r, s)
 
-    record["status"] = {"rust": status_of(r), "self": status_of(s)}
-    record["divergences"] += compare_build(r, s)
+        if compiled_ok(r) and compiled_ok(s) and not record["divergences"]:
+            rt_div, why = compare_runtime(
+                rust_out,
+                self_out,
+                stdin_bytes(directives),
+                timeout,
+                expect_signal=expected_signal(directives),
+            )
+            record["divergences"] += rt_div
+            if why:
+                record["skipped"] = why
+        elif not record["divergences"] and not compiled_ok(r):
+            # Both rejected and agreed on why: the build observables did their job,
+            # there is simply no binary to compare. Not a divergence, and not an
+            # unexamined file either. A file that DID diverge is never labelled
+            # skipped — that would understate coverage in the skip histogram.
+            record["skipped"] = record["skipped"] or "both rejected (no runtime check)"
 
-    if compiled_ok(r) and compiled_ok(s) and not record["divergences"]:
-        rt_div, why = compare_runtime(
-            rust_out,
-            self_out,
-            stdin_bytes(directives),
-            timeout,
-            expect_signal=expected_signal(directives),
-        )
-        record["divergences"] += rt_div
-        if why:
-            record["skipped"] = why
-    elif not record["divergences"] and not compiled_ok(r):
-        # Both rejected and agreed on why: the build observables did their job,
-        # there is simply no binary to compare. Not a divergence, and not an
-        # unexamined file either. A file that DID diverge is never labelled
-        # skipped — that would understate coverage in the skip histogram.
-        record["skipped"] = record["skipped"] or "both rejected (no runtime check)"
-
-    # Codegen leaves a sibling .o next to each executable; a full-corpus sweep
-    # would otherwise accumulate one per file per compiler.
-    for p in (rust_out, self_out):
-        for victim in (p, p.with_suffix(".o")):
-            try:
-                os.unlink(victim)
-            except OSError:
-                pass
+    finally:
+        # Codegen leaves a sibling .o next to each executable, and a full-corpus
+        # sweep would otherwise accumulate one per file per compiler. This runs
+        # on EVERY exit path: the compile-timeout and unparseable-JSON returns
+        # above can each leave a partially written binary behind, and those are
+        # exactly the paths a sweep hits when something is going wrong.
+        for out in (rust_out, self_out):
+            for victim in (out, out.with_suffix(".o")):
+                try:
+                    os.unlink(victim)
+                except OSError:
+                    pass
     return record
 
 

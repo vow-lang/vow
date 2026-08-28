@@ -356,6 +356,56 @@ class CorpusTest(unittest.TestCase):
             )
 
 
+class CheckFileCleanupTest(unittest.TestCase):
+    """Partial binaries must not survive the early-return paths."""
+
+    def run_check(self, compiler_results):
+        """Drive check_file with a stubbed compiler that writes its -o target.
+
+        Args:
+            compiler_results: One run_compiler return value per invocation.
+
+        Returns:
+            list: Leftover file names in the output directory.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            outdir = Path(d) / "out"
+            outdir.mkdir()
+            vow = Path(d) / "case.vow"
+            vow.write_text("fn main() -> i64 { return 0; }\n")
+
+            pending = list(compiler_results)
+
+            def fake_run_compiler(binary, args, timeout, limit_memory):
+                target = Path(args[args.index("-o") + 1])
+                target.write_bytes(b"partial")
+                target.with_suffix(".o").write_bytes(b"partial")
+                return pending.pop(0)
+
+            with mock.patch.object(
+                equivalence, "run_compiler", side_effect=fake_run_compiler
+            ):
+                equivalence.check_file(vow, "rust", "self", outdir, 5)
+
+            return sorted(f.name for f in outdir.iterdir())
+
+    def test_compile_timeout_leaves_nothing_behind(self):
+        timed_out = {
+            "timeout": True,
+            "exit": None,
+            "stdout": "",
+            "stderr": "",
+            "json": None,
+        }
+
+        self.assertEqual([], self.run_check([timed_out, timed_out]))
+
+    def test_unparseable_json_leaves_nothing_behind(self):
+        garbage = result(parsed=False, exit_code=1)
+
+        self.assertEqual([], self.run_check([garbage, garbage]))
+
+
 class ReconcileTest(unittest.TestCase):
     """A ledger that suppresses real findings is worse than no ledger."""
 
