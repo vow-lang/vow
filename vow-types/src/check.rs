@@ -4793,6 +4793,113 @@ mod tests {
         assert!(emitter.0[0].message.contains("Result propagation"));
     }
 
+    /// `.unwrap()` takes no arguments. The dedicated unwrap lowering returns
+    /// before the method-call catch-all that used to evaluate them, so an
+    /// accepted argument would have its side effects silently dropped (#1108).
+    #[test]
+    fn unwrap_rejects_arguments() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let opt_i64 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I64]);
+        checker.env.define("v", opt_i64);
+        checker.check_expr(&make_expr(ExprKind::MethodCall {
+            receiver: Box::new(ident("v")),
+            method: "unwrap".to_string(),
+            args: vec![int_lit()],
+        }));
+        assert!(checker.has_errors());
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("expects 0 arguments but got 1"),
+            "unexpected diagnostic: {}",
+            emitter.0[0].message
+        );
+    }
+
+    /// The zero-argument form stays accepted and yields the payload type.
+    #[test]
+    fn unwrap_without_arguments_returns_payload_type() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let opt_i64 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I64]);
+        checker.env.define("v", opt_i64);
+        let ty = checker.check_expr(&make_expr(ExprKind::MethodCall {
+            receiver: Box::new(ident("v")),
+            method: "unwrap".to_string(),
+            args: vec![],
+        }));
+        assert_eq!(ty, Ty::I64);
+        assert!(!checker.has_errors());
+    }
+
+    /// An aggregate payload (here `String`) must be recorded in
+    /// `pattern_aggregates` so the lowerer loads it as a pointer rather than
+    /// falling back to the scalar `I64` default.
+    #[test]
+    fn unwrap_records_aggregate_payload_metadata() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let opt_str = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::Str]);
+        checker.env.define("v", opt_str);
+        let expr = make_expr(ExprKind::MethodCall {
+            receiver: Box::new(ident("v")),
+            method: "unwrap".to_string(),
+            args: vec![],
+        });
+        let ty = checker.check_expr(&expr);
+        assert_eq!(ty, Ty::Str);
+        assert!(!checker.has_errors());
+
+        let info = checker
+            .pattern_aggregates
+            .get(&(&expr as *const Expr as usize))
+            .expect("unwrap must record aggregate payload metadata");
+        assert_eq!(info.type_name, "String");
+        assert!(!info.is_linear);
+    }
+
+    /// A scalar payload records nothing — `pattern_aggregate_info` returns None
+    /// for it, so the lowerer takes the recorded-element-type path instead.
+    #[test]
+    fn unwrap_records_no_metadata_for_scalar_payload() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let opt_i64 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I64]);
+        checker.env.define("v", opt_i64);
+        let expr = make_expr(ExprKind::MethodCall {
+            receiver: Box::new(ident("v")),
+            method: "unwrap".to_string(),
+            args: vec![],
+        });
+        checker.check_expr(&expr);
+        assert!(
+            checker
+                .pattern_aggregates
+                .get(&(&expr as *const Expr as usize))
+                .is_none()
+        );
+    }
+
+    /// `Result<T, E>.unwrap()` yields the Ok payload, not the error type.
+    #[test]
+    fn unwrap_on_result_returns_ok_payload_type() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let res = Ty::Applied(
+            Box::new(Ty::Enum("Result".to_string())),
+            vec![Ty::I64, Ty::I32],
+        );
+        checker.env.define("r", res);
+        let ty = checker.check_expr(&make_expr(ExprKind::MethodCall {
+            receiver: Box::new(ident("r")),
+            method: "unwrap".to_string(),
+            args: vec![],
+        }));
+        assert_eq!(ty, Ty::I64);
+        assert!(!checker.has_errors());
+    }
+
     #[test]
     fn question_on_non_option_error() {
         let mut emitter = TestEmitter(vec![]);

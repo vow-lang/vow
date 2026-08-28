@@ -5801,6 +5801,254 @@ fn unsigned_max() -> u128 {
         );
     }
 
+    fn lower_source_to_module(source: &str, file: &str) -> Module {
+        let (ast, diagnostics) = vow_syntax::parser::parse_module(source, file);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let item_files = vec![file.to_string(); ast.items.len()];
+        lower_module_with_pattern_aggregates(
+            &ast,
+            &item_files,
+            &StringExprSet::new(),
+            PatternAggregateMap::new(),
+        )
+    }
+
+    fn insts_of(func: &Function) -> Vec<&Inst> {
+        func.blocks.iter().flat_map(|block| &block.insts).collect()
+    }
+
+    /// `.unwrap()` must lower to a guarded tag check, not the method-call
+    /// catch-all's ConstUnit (#1108).
+    #[test]
+    fn unwrap_lowers_to_guarded_tag_check_and_panic() {
+        let module = lower_source_to_module(
+            r#"
+module UnwrapLowering
+
+fn payload(o: Option<i64>) -> i64 [panic] {
+    o.unwrap()
+}
+"#,
+            "unwrap_lowering.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+
+        assert!(
+            !insts.iter().any(|inst| inst.opcode == Opcode::ConstUnit),
+            "unwrap must not fall through to the ConstUnit catch-all:\n{func:#?}"
+        );
+        assert!(
+            insts.iter().any(|inst| inst.opcode == Opcode::FieldGet
+                && inst.data == InstData::FieldIndex(0)),
+            "missing discriminant load:\n{func:#?}"
+        );
+        assert!(
+            insts
+                .iter()
+                .any(|inst| inst.opcode == Opcode::ConstI64 && inst.data == InstData::ConstI64(0)),
+            "Option's empty variant is tag 0:\n{func:#?}"
+        );
+        assert!(
+            insts.iter().any(|inst| inst.opcode == Opcode::Eq),
+            "missing tag comparison:\n{func:#?}"
+        );
+        assert!(
+            insts
+                .iter()
+                .any(|inst| matches!(inst.data, InstData::BranchTargets { .. })),
+            "missing guard branch:\n{func:#?}"
+        );
+        assert!(
+            insts.iter().any(|inst| inst.opcode == Opcode::Call
+                && inst.data == InstData::CallExtern("__vow_unwrap_panic".to_string())),
+            "missing unwrap-panic call:\n{func:#?}"
+        );
+        assert!(
+            insts.iter().any(|inst| inst.opcode == Opcode::Unreachable),
+            "panic block must be terminated by Unreachable:\n{func:#?}"
+        );
+        assert!(
+            insts.iter().any(|inst| inst.opcode == Opcode::FieldGet
+                && inst.data == InstData::FieldIndex(1)),
+            "missing payload load:\n{func:#?}"
+        );
+    }
+
+    /// Result's empty variant is `Err` (tag 1), not `None` (tag 0). A parameter
+    /// receiver carries only a declared AST type, so the polarity has to come
+    /// from there — this is the case that regressed during #1108.
+    #[test]
+    fn unwrap_on_result_parameter_compares_against_err_tag() {
+        let module = lower_source_to_module(
+            r#"
+module UnwrapResultLowering
+
+fn payload(r: Result<i64, i32>) -> i64 [panic] {
+    r.unwrap()
+}
+"#,
+            "unwrap_result_lowering.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+
+        assert!(
+            insts
+                .iter()
+                .any(|inst| inst.opcode == Opcode::ConstI64 && inst.data == InstData::ConstI64(1)),
+            "Result's empty variant is tag 1 (Err):\n{func:#?}"
+        );
+        assert!(
+            !insts
+                .iter()
+                .any(|inst| inst.opcode == Opcode::ConstI64 && inst.data == InstData::ConstI64(0)),
+            "Option's tag-0 polarity must not be used for Result:\n{func:#?}"
+        );
+        assert!(
+            insts.iter().any(|inst| inst.opcode == Opcode::Call
+                && inst.data == InstData::CallExtern("__vow_unwrap_panic".to_string())),
+            "missing unwrap-panic call:\n{func:#?}"
+        );
+    }
+
+    /// The payload load must carry the receiver's recorded element type rather
+    /// than the `Ty::I64` fallback whenever that metadata exists.
+    #[test]
+    fn unwrap_payload_uses_recorded_option_element_type() {
+        let module = lower_source_to_module(
+            r#"
+module UnwrapNarrowPayload
+
+fn payload(o: Option<u8>) -> u8 [panic] {
+    o.unwrap()
+}
+"#,
+            "unwrap_narrow_payload.vow",
+        );
+
+        let func = &module.functions[0];
+        assert!(
+            insts_of(func)
+                .iter()
+                .any(|inst| inst.opcode == Opcode::FieldGet
+                    && inst.data == InstData::FieldIndex(1)
+                    && inst.ty == Ty::U8),
+            "payload load must use the recorded u8 element type:\n{func:#?}"
+        );
+    }
+
+    /// An aggregate payload must load as a pointer and carry its struct tag
+    /// forward, exactly as the `?` operator's payload does. `is_linear` selects
+    /// LinearPtr over Ptr.
+    fn lower_unwrap_with_aggregate_payload(
+        is_linear: bool,
+    ) -> (Function, Vec<vow_diag::Diagnostic>) {
+        let fn_def = make_fn(
+            "payload",
+            vec![make_param(
+                "o",
+                Type::Generic {
+                    name: "Option".to_string(),
+                    args: vec![Type::Named {
+                        name: "Pair".to_string(),
+                        span: sp(),
+                    }],
+                    span: sp(),
+                },
+            )],
+            Type::Named {
+                name: "Pair".to_string(),
+                span: sp(),
+            },
+            Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(Expr {
+                    kind: ExprKind::MethodCall {
+                        receiver: Box::new(ident_expr("o")),
+                        method: "unwrap".to_string(),
+                        args: vec![],
+                    },
+                    span: sp(),
+                })),
+                span: sp(),
+            },
+            vec![Effect::Panic],
+        );
+
+        let unwrap_key =
+            fn_def.body.trailing_expr.as_ref().unwrap().as_ref() as *const Expr as usize;
+        let patterns = Rc::new(HashMap::from([(
+            unwrap_key,
+            vow_types::check::PatternAggregateInfo {
+                type_name: "Pair".to_string(),
+                vec_elem_types: vec![],
+                vec_option_elem_types: vec![],
+                vec_variant_payload_types: vec![],
+                option_elem_type: None,
+                variant_payload_types: vec![],
+                is_linear,
+            },
+        )]));
+        let linear_structs = if is_linear {
+            HashSet::from(["Pair".to_string()])
+        } else {
+            HashSet::new()
+        };
+
+        let (func, _, warnings) = lower_function_with_pattern_aggregates(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            Rc::new(HashMap::new()),
+            &linear_structs,
+            Rc::new(HashMap::new()),
+            HashMap::new(),
+            Rc::new(HashMap::new()),
+            HashMap::new(),
+            &HashSet::new(),
+            &patterns,
+            &HashMap::new(),
+        );
+        (func, warnings)
+    }
+
+    #[test]
+    fn unwrap_aggregate_payload_loads_as_pointer_and_keeps_its_tag() {
+        let (func, warnings) = lower_unwrap_with_aggregate_payload(false);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+        let payload = insts_of(&func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("missing payload load");
+        assert_eq!(
+            payload.ty,
+            Ty::Ptr,
+            "aggregate payload must load as a pointer:\n{func:#?}"
+        );
+    }
+
+    #[test]
+    fn unwrap_linear_aggregate_payload_loads_as_linear_pointer() {
+        let (func, _) = lower_unwrap_with_aggregate_payload(true);
+
+        let payload = insts_of(&func)
+            .into_iter()
+            .find(|inst| inst.opcode == Opcode::FieldGet && inst.data == InstData::FieldIndex(1))
+            .expect("missing payload load");
+        assert_eq!(
+            payload.ty,
+            Ty::LinearPtr,
+            "linear aggregate payload must load as a linear pointer:\n{func:#?}"
+        );
+    }
+
     #[test]
     fn checked_marker_return_keeps_narrow_overflow_operation() {
         let checked_add = Expr {
