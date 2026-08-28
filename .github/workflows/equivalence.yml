@@ -57,18 +57,38 @@ jobs:
         # wrong compiler is worse than not finding it.
         run: scripts/bootstrap.sh --skip-cargo --stage3-no-verify
       - name: Differential equivalence sweep
-        # continue-on-error so a divergence is REPORTED rather than breaking
-        # the nightly. The artifact and the summary below carry the verdict;
-        # triage is a human step, and a red X on a scheduled job trains people
-        # to ignore it.
-        continue-on-error: true
+        # A divergence is REPORTED rather than breaking the nightly: the
+        # artifact and the summary below carry the verdict, triage is a human
+        # step, and a red X on a scheduled job trains people to ignore it.
+        #
+        # That tolerance covers the divergence verdict and nothing else. A
+        # runner that missed its coverage floor (exit 2), crashed, or rejected
+        # its arguments measured nothing, and a green job would then read as
+        # "all clear" when the sweep never ran. `continue-on-error: true` could
+        # not tell those apart, so the status is inspected explicitly.
+        #
+        # Exit 1 is the divergence verdict, but an uncaught exception also
+        # exits 1 — results.json is only written once the sweep completes, so
+        # its presence is what separates a real verdict from a crash.
         run: |
+          set +e
           python3 scripts/equivalence.py \
             --rust target/release/vow \
             --self build/vowc \
             --shard ${{ matrix.shard }}/4 \
             --output-dir equivalence.out \
             --min-compared 20
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$status" -eq 1 ] && [ -f equivalence.out/results.json ]; then
+            echo "::warning::Equivalence sweep reported divergences; see the job summary and the uploaded artifact."
+            exit 0
+          fi
+          echo "::error::Equivalence runner exited $status without producing a usable verdict — the sweep did not measure this shard."
+          exit "$status"
       - name: Summarize
         if: always()
         # Surfaces compared/diverged/skipped in the job summary so a reader
