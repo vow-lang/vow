@@ -505,6 +505,11 @@ The report lists the top 20 most-called functions sorted by call count. No vow c
 
 When a compiled program runs in debug mode (`--mode debug`) or sanitize mode (`--mode sanitize`) and violates a vow at runtime, it emits JSON to stderr before aborting.
 
+Two of the diagnostics below are **mode-independent** and are emitted in release
+builds as well: `UnwrapOnNone` and `IndexOutOfBounds`. Both report a partial
+operation failing on its own terms rather than a vow check, so they are never
+compiled out. Each is marked below.
+
 ### VowViolation
 
 ```json
@@ -527,7 +532,9 @@ Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runti
 {"error":"UnwrapOnNone"}
 ```
 
-Emitted when `.unwrap()` is called on `Option::None` or `Result::Err`.
+Emitted when `.unwrap()` is called on `Option::None` or `Result::Err`. Emitted in
+**every build mode**, release included — `.unwrap()` is a partial operation, not a
+vow check.
 
 ### IndexOutOfBounds
 
@@ -535,7 +542,8 @@ Emitted when `.unwrap()` is called on `Option::None` or `Result::Err`.
 {"error":"IndexOutOfBounds"}
 ```
 
-Emitted when a `Vec` index is out of bounds.
+Emitted when a `Vec` index is out of bounds. Emitted in **every build mode**,
+release included.
 
 ### UseAfterFree (sanitize mode only)
 
