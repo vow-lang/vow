@@ -60,7 +60,19 @@
             "type": "string",
             "description": "Repo-relative path of the promoted tier-1 regression fixture, once one exists."
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "status": { "const": "expected" } },
+              "required": ["status"]
+            },
+            "then": {
+              "required": ["note", "issue"],
+              "description": "An 'expected' asymmetry is a standing decision to suppress a finding, so it must carry the rationale and the tracking issue that justify it. Without this the status enum's own prose is unenforced and an entry can bless a divergence silently."
+            }
+          }
+        ]
       }
     }
   }

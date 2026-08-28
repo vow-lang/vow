@@ -7,6 +7,7 @@ divergence that is not reported, a skip that is counted as coverage, or a
 nondeterministic program mistaken for a miscompile.
 """
 
+import json
 import tempfile
 import unittest
 from unittest import mock
@@ -531,6 +532,39 @@ class LedgerLoadTest(unittest.TestCase):
             p.write_text("{not json")
 
             self.assertEqual({}, equivalence.load_ledger(p))
+
+    def test_expected_entries_document_themselves(self):
+        # The schema conditionally requires note+issue on an 'expected' entry:
+        # a standing decision to suppress a finding must carry the rationale
+        # and the tracking issue that justify it. Enforced here too, so the
+        # rule holds without adding a jsonschema dependency.
+        for path, entry in equivalence.load_ledger().items():
+            if entry.get("status") != "expected":
+                continue
+            with self.subTest(path=path):
+                self.assertTrue(entry.get("note"), "missing note")
+                self.assertIsInstance(entry.get("issue"), int)
+
+    def test_every_entry_declares_a_known_observable(self):
+        # reconcile() matches on (file, observable); an entry without a valid
+        # observable would suppress nothing and silently read as untracked.
+        schema = json.loads(
+            (
+                Path(equivalence.REPO_ROOT)
+                / "docs"
+                / "equivalence"
+                / "ledger.schema.json"
+            ).read_text()
+        )
+        allowed = set(
+            schema["properties"]["corpus"]["additionalProperties"]["properties"][
+                "observable"
+            ]["enum"]
+        )
+
+        for path, entry in equivalence.load_ledger().items():
+            with self.subTest(path=path):
+                self.assertIn(entry.get("observable"), allowed)
 
     def test_real_repo_ledger_loads(self):
         ledger = equivalence.load_ledger()
