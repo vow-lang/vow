@@ -341,16 +341,17 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
             {
                 "observable": "runtime",
                 "detail": (
-                    f"stdout differs ({len(r1['stdout'])} vs "
-                    f"{len(s['stdout'])} bytes)"
+                    f"stdout differs ({len(r1['stdout'])} vs {len(s['stdout'])} bytes)"
                 ),
             }
         )
     # A signal death the two compilers DISAGREE on is already reported above as
     # an exit-code divergence. What is left to judge is a signal both produced:
     # a deliberate trap is the language working, memory unsafety never is.
-    both = {-r1["exit"] if r1["exit"] is not None and r1["exit"] < 0 else None,
-            -s["exit"] if s["exit"] is not None and s["exit"] < 0 else None}
+    both = {
+        -r1["exit"] if r1["exit"] is not None and r1["exit"] < 0 else None,
+        -s["exit"] if s["exit"] is not None and s["exit"] < 0 else None,
+    }
     if len(both) == 1:
         signal = both.pop()
         if signal is not None and signal != expect_signal:
@@ -382,7 +383,11 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
 
 
 def check_file(vow_file, rust, slf, outdir, timeout):
-    rel = str(Path(vow_file).relative_to(REPO_ROOT)) if str(vow_file).startswith(str(REPO_ROOT)) else str(vow_file)
+    rel = (
+        str(Path(vow_file).relative_to(REPO_ROOT))
+        if str(vow_file).startswith(str(REPO_ROOT))
+        else str(vow_file)
+    )
     directives = read_directives(vow_file)
     record = {"file": rel, "divergences": [], "skipped": None}
 
@@ -420,8 +425,7 @@ def check_file(vow_file, rust, slf, outdir, timeout):
                 {
                     "observable": "fail_closed",
                     "detail": (
-                        f"{name} emitted no parseable JSON "
-                        f"(exit {res['exit']})"
+                        f"{name} emitted no parseable JSON (exit {res['exit']})"
                     ),
                 }
             )
@@ -512,23 +516,46 @@ def main():
     ap = argparse.ArgumentParser(
         description="Differential equivalence runner: Rust vs self-hosted (#1081)"
     )
-    ap.add_argument("roots", nargs="*", default=None,
-                    help="files or directories to sweep (default: the standard corpus)")
+    ap.add_argument(
+        "roots",
+        nargs="*",
+        default=None,
+        help="files or directories to sweep (default: the standard corpus)",
+    )
     ap.add_argument("--rust", default="target/release/vow")
     ap.add_argument("--self", dest="self_bin", default="build/vowc")
     ap.add_argument("--output-dir", default="equivalence.out")
-    ap.add_argument("--timeout", type=int, default=300,
-                    help="per-invocation timeout in seconds (default: 300)")
-    ap.add_argument("--shard", default=None, metavar="K/N",
-                    help="run only shard K of N (round-robin over the sorted corpus)")
-    ap.add_argument("--exclude", action="append", default=[],
-                    help="substring filter; repeatable")
-    ap.add_argument("--min-compared", type=int, default=1,
-                    help="fail the run if fewer than N files were actually compared")
-    ap.add_argument("--ledger", default=None,
-                    help="path to ledger.json (default: docs/equivalence/ledger.json)")
-    ap.add_argument("--no-ledger", action="store_true",
-                    help="report every divergence as new, ignoring tracked ones")
+    ap.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="per-invocation timeout in seconds (default: 300)",
+    )
+    ap.add_argument(
+        "--shard",
+        default=None,
+        metavar="K/N",
+        help="run only shard K of N (round-robin over the sorted corpus)",
+    )
+    ap.add_argument(
+        "--exclude", action="append", default=[], help="substring filter; repeatable"
+    )
+    ap.add_argument(
+        "--min-compared",
+        type=int,
+        default=1,
+        help="fail the run if fewer than N files were actually compared",
+    )
+    ap.add_argument(
+        "--ledger",
+        default=None,
+        help="path to ledger.json (default: docs/equivalence/ledger.json)",
+    )
+    ap.add_argument(
+        "--no-ledger",
+        action="store_true",
+        help="report every divergence as new, ignoring tracked ones",
+    )
     args = ap.parse_args()
 
     roots = args.roots or [

@@ -14,14 +14,23 @@ from pathlib import Path
 import equivalence
 
 
-def result(status=None, executable=None, diagnostics=None, exit_code=0,
-           stderr="", parsed=True):
+def result(
+    status=None, executable=None, diagnostics=None, exit_code=0, stderr="", parsed=True
+):
     j = None
     if parsed:
-        j = {"status": status, "executable": executable,
-             "diagnostics": diagnostics or []}
-    return {"timeout": False, "exit": exit_code, "stdout": "",
-            "stderr": stderr, "json": j}
+        j = {
+            "status": status,
+            "executable": executable,
+            "diagnostics": diagnostics or [],
+        }
+    return {
+        "timeout": False,
+        "exit": exit_code,
+        "stdout": "",
+        "stderr": stderr,
+        "json": j,
+    }
 
 
 class CompareBuildTest(unittest.TestCase):
@@ -41,10 +50,12 @@ class CompareBuildTest(unittest.TestCase):
         self.assertEqual([], equivalence.compare_build(rust, slf))
 
     def test_differing_error_codes_when_both_reject(self):
-        rust = result(status="CompileFailed",
-                      diagnostics=[{"error_code": "TypeMismatch"}])
-        slf = result(status="CompileFailed",
-                     diagnostics=[{"error_code": "UnexpectedToken"}])
+        rust = result(
+            status="CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}]
+        )
+        slf = result(
+            status="CompileFailed", diagnostics=[{"error_code": "UnexpectedToken"}]
+        )
 
         div = equivalence.compare_build(rust, slf)
 
@@ -52,18 +63,23 @@ class CompareBuildTest(unittest.TestCase):
         self.assertEqual("error_code", div[0]["observable"])
 
     def test_same_error_codes_in_different_order_agree(self):
-        rust = result(status="CompileFailed", diagnostics=[
-            {"error_code": "A"}, {"error_code": "B"}])
-        slf = result(status="CompileFailed", diagnostics=[
-            {"error_code": "B"}, {"error_code": "A"}])
+        rust = result(
+            status="CompileFailed",
+            diagnostics=[{"error_code": "A"}, {"error_code": "B"}],
+        )
+        slf = result(
+            status="CompileFailed",
+            diagnostics=[{"error_code": "B"}, {"error_code": "A"}],
+        )
 
         self.assertEqual([], equivalence.compare_build(rust, slf))
 
     def test_accept_reject_divergence_suppresses_error_code_noise(self):
         # When one side accepted, the other's diagnostics are not comparable;
         # reporting both would double-count one underlying bug.
-        rust = result(status="CompileFailed",
-                      diagnostics=[{"error_code": "TypeMismatch"}])
+        rust = result(
+            status="CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}]
+        )
         slf = result(status="Unverified", executable="/tmp/a")
 
         div = equivalence.compare_build(rust, slf)
@@ -73,8 +89,9 @@ class CompareBuildTest(unittest.TestCase):
 
 class FailClosedTest(unittest.TestCase):
     def test_panic_in_stderr_is_a_finding(self):
-        res = result(status="CompileFailed",
-                     stderr="thread 'main' panicked at src/lib.rs:1")
+        res = result(
+            status="CompileFailed", stderr="thread 'main' panicked at src/lib.rs:1"
+        )
 
         div = equivalence.check_fail_closed("rust", res)
 
@@ -94,8 +111,11 @@ class FailClosedTest(unittest.TestCase):
         self.assertIn("signal 11", div[0]["detail"])
 
     def test_clean_rejection_is_not_a_finding(self):
-        res = result(status="CompileFailed", exit_code=1,
-                     diagnostics=[{"error_code": "TypeMismatch"}])
+        res = result(
+            status="CompileFailed",
+            exit_code=1,
+            diagnostics=[{"error_code": "TypeMismatch"}],
+        )
 
         self.assertEqual([], equivalence.check_fail_closed("rust", res))
 
@@ -113,16 +133,18 @@ class DirectiveTest(unittest.TestCase):
             p = Path(d) / "t.vow"
             p.write_text('// TEST: stdin "a\\nb"\nmodule T\n')
 
-            self.assertEqual(b"a\nb",
-                             equivalence.stdin_bytes(equivalence.read_directives(p)))
+            self.assertEqual(
+                b"a\nb", equivalence.stdin_bytes(equivalence.read_directives(p))
+            )
 
     def test_absent_stdin_is_empty(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "t.vow"
             p.write_text("module T\n")
 
-            self.assertEqual(b"", equivalence.stdin_bytes(
-                equivalence.read_directives(p)))
+            self.assertEqual(
+                b"", equivalence.stdin_bytes(equivalence.read_directives(p))
+            )
 
 
 class ExpectedSignalTest(unittest.TestCase):
@@ -145,8 +167,7 @@ class ExpectedSignalTest(unittest.TestCase):
             p = Path(d) / "t.vow"
             p.write_text("// TEST: exit 132\nmodule T\n")
 
-            self.assertEqual(132,
-                             equivalence.read_directives(p)["expected_exit"])
+            self.assertEqual(132, equivalence.read_directives(p)["expected_exit"])
 
 
 class SignalClassificationTest(unittest.TestCase):
@@ -178,8 +199,7 @@ class CorpusTest(unittest.TestCase):
 
             got = equivalence.collect_corpus([root, root], exclude=[])
 
-            self.assertEqual(["a.vow", "b.vow", "c.vow"],
-                             [p.name for p in got])
+            self.assertEqual(["a.vow", "b.vow", "c.vow"], [p.name for p in got])
 
     def test_exclude_filters_by_substring(self):
         with tempfile.TemporaryDirectory() as d:
@@ -198,12 +218,11 @@ class CorpusTest(unittest.TestCase):
                 (root / f"f{i}.vow").write_text("module M\n")
             corpus = equivalence.collect_corpus([root], exclude=[])
 
-            shards = [
-                [f for i, f in enumerate(corpus) if i % 3 == k] for k in range(3)
-            ]
+            shards = [[f for i, f in enumerate(corpus) if i % 3 == k] for k in range(3)]
 
-            self.assertEqual(sorted(corpus, key=str),
-                             sorted((f for s in shards for f in s), key=str))
+            self.assertEqual(
+                sorted(corpus, key=str), sorted((f for s in shards for f in s), key=str)
+            )
 
 
 class ReconcileTest(unittest.TestCase):
