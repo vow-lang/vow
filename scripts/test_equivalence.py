@@ -239,7 +239,9 @@ class ReconcileTest(unittest.TestCase):
 
     def test_tracked_divergence_is_known_not_new(self):
         recs = [{"file": "a.vow", "divergences": [{"observable": "error_code"}]}]
-        ledger = {"a.vow": {"status": "expected", "issue": 588}}
+        ledger = {
+            "a.vow": {"status": "expected", "observable": "error_code", "issue": 588}
+        }
 
         new, known, fixed = equivalence.reconcile(recs, ledger)
 
@@ -275,11 +277,65 @@ class ReconcileTest(unittest.TestCase):
 
     def test_reappearance_of_a_fixed_entry_is_known_not_new(self):
         recs = [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}]
-        ledger = {"a.vow": {"status": "fixed", "issue": 1087}}
+        ledger = {"a.vow": {"status": "fixed", "observable": "runtime", "issue": 1087}}
 
         new, known, fixed = equivalence.reconcile(recs, ledger)
 
         self.assertEqual(["a.vow"], [r["file"] for r in known])
+
+    def test_untracked_observable_on_a_tracked_file_is_new(self):
+        # The suppression the ledger exists to prevent, one level down: a file
+        # tracked for an error_code gap that ALSO starts dying on a signal has
+        # produced a genuinely new finding.
+        recs = [
+            {
+                "file": "a.vow",
+                "divergences": [
+                    {"observable": "error_code"},
+                    {"observable": "fail_closed"},
+                ],
+            }
+        ]
+        ledger = {
+            "a.vow": {"status": "expected", "observable": "error_code", "issue": 588}
+        }
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual(["a.vow"], [r["file"] for r in new])
+        self.assertEqual([{"observable": "fail_closed"}], new[0]["divergences"])
+        self.assertEqual([{"observable": "error_code"}], known[0]["divergences"])
+        self.assertEqual([], fixed)
+
+    def test_tracked_observable_gone_is_fixed_even_when_another_appears(self):
+        # The tracked gap stopped reproducing; that must still force a ledger
+        # update even though the file is not clean.
+        recs = [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}]
+        ledger = {"a.vow": {"status": "open", "observable": "error_code", "issue": 588}}
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual(["a.vow"], [r["file"] for r in new])
+        self.assertEqual([], known)
+        self.assertEqual(["a.vow"], fixed)
+
+    def test_entry_may_track_several_observables(self):
+        recs = [
+            {
+                "file": "a.vow",
+                "divergences": [
+                    {"observable": "error_code"},
+                    {"observable": "runtime"},
+                ],
+            }
+        ]
+        ledger = {"a.vow": {"status": "open", "observable": ["error_code", "runtime"]}}
+
+        new, known, fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual([], new)
+        self.assertEqual(["a.vow"], [r["file"] for r in known])
+        self.assertEqual([], fixed)
 
 
 class LedgerLoadTest(unittest.TestCase):

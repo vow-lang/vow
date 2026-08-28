@@ -488,21 +488,60 @@ def load_ledger(path=None):
         return {}
 
 
+def tracked_observables(entry):
+    """The observable(s) a ledger entry documents.
+
+    A list is accepted alongside the schema's single string so an entry can
+    grow a second tracked observable without a schema migration.
+
+    Args:
+        entry: A ledger entry dict, or None for an untracked file.
+
+    Returns:
+        frozenset: The observable names this entry documents.
+    """
+    obs = (entry or {}).get("observable")
+    if obs is None:
+        return frozenset()
+    return frozenset([obs] if isinstance(obs, str) else obs)
+
+
 def reconcile(records, ledger):
     """Split findings into new, known, and disappeared.
+
+    Matching is on (file, observable) — never on the path alone. A ledger entry
+    documents one specific asymmetry, so a file tracked for an `error_code` gap
+    that ALSO starts dying on SIGSEGV has produced a genuinely new finding.
+    Folding that into `known` because the path happens to be listed would
+    reintroduce the exact suppression the ledger exists to prevent, one level
+    down. A record therefore contributes to both lists when it carries a mix.
 
     A tracked divergence that stopped reproducing is reported as `fixed` and
     treated as a failure, mirroring verify_eval.py's GAP_FIXED: a welcome change
     must force the ledger to be updated rather than silently drifting out of
     date. A ledger nobody maintains is worse than none, because it suppresses
     real findings.
+
+    Args:
+        records: Per-file result records from check_file.
+        ledger: Known divergences keyed by repo-relative path.
+
+    Returns:
+        tuple: (new, known, fixed) — new/known are record lists carrying only
+        their untracked/tracked divergences respectively; fixed is a list of
+        paths whose tracked observable no longer reproduces.
     """
     new, known, fixed = [], [], []
     for rec in records:
         entry = ledger.get(rec["file"])
-        if rec["divergences"]:
-            (known if entry else new).append(rec)
-        elif entry and entry.get("status") in ("open", "expected"):
+        tracked = tracked_observables(entry)
+        matched = [d for d in rec["divergences"] if d["observable"] in tracked]
+        untracked = [d for d in rec["divergences"] if d["observable"] not in tracked]
+        if untracked:
+            new.append({**rec, "divergences": untracked})
+        if matched:
+            known.append({**rec, "divergences": matched})
+        if entry and entry.get("status") in ("open", "expected") and not matched:
             fixed.append(rec["file"])
     return new, known, fixed
 
