@@ -759,9 +759,11 @@ m.contains_key(k)
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> i64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
-| `.truncate(n)` | `(i64) -> ()` — shrinks to n elements, frees excess memory |
+| `.truncate(n)` | `(<int>) -> ()` — shrinks to n elements, frees excess memory |
 | `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
 | `v[i] = val`   | Index write — copies value into slot |
+
+`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
 ### String Methods
 
@@ -771,15 +773,17 @@ m.contains_key(k)
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
 | `.len()`            | `() -> i64`                 |
-| `.byte_at(i)`       | `(i64) -> i64`              |
-| `.push_byte(b)`     | `(i64) -> ()`               |
+| `.byte_at(i)`       | `(<int>) -> i64`            |
+| `.push_byte(b)`     | `(<int>) -> ()`             |
 | `.push_str(s)`      | `(String) -> ()`            |
 | `.clear()`          | `() -> ()` — frees buffer, resets to empty |
 | `.contains(s)`      | `(String) -> bool`          |
 | `.eq(s)`            | `(String) -> bool`          |
-| `.substring(start, end)` | `(i64, i64) -> String` |
+| `.substring(start, end)` | `(<int>, <int>) -> String` |
 | `.parse_i64()`      | `() -> Option<i64>`         |
 | `.parse_u64()`      | `() -> Option<u64>`         |
+
+`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
 ### HashMap<K, V> Methods
 
