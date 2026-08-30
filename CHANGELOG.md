@@ -1,3 +1,24 @@
+# [0.7.0](https://github.com/vow-lang/vow/compare/v0.6.0...v0.7.0) (2026-08-30)
+
+
+### Bug Fixes
+
+* **compiler:** prefer declaration stubs in self-hosted loader ([#1072](https://github.com/vow-lang/vow/issues/1072)) ([3636203](https://github.com/vow-lang/vow/commit/3636203c63edb8965fde3226b346929dbbeba351))
+* **ir:** lower .unwrap() to a tag check instead of ConstUnit ([#1123](https://github.com/vow-lang/vow/issues/1123)) ([8cb5169](https://github.com/vow-lang/vow/commit/8cb5169d44db5298c7d2d19d690e2ad589a9894c))
+* **lower:** preserve aggregate types in match payload bindings ([#1020](https://github.com/vow-lang/vow/issues/1020)) ([f280f31](https://github.com/vow-lang/vow/commit/f280f31247d4dc959501b639c0670fcdb45ec951))
+* **types:** admit full-range i128 and u128 literals ([#1071](https://github.com/vow-lang/vow/issues/1071)) ([c265799](https://github.com/vow-lang/vow/commit/c2657994a230edffb3399f0469bdfd017bc3fb8c))
+* **vow-perf:** count Vec sort runtime work ([#1070](https://github.com/vow-lang/vow/issues/1070)) ([fd91dc8](https://github.com/vow-lang/vow/commit/fd91dc873827d52f154ef954d135d2d327a33617))
+* **vow-runtime:** escape VowViolation JSON strings ([#1069](https://github.com/vow-lang/vow/issues/1069)) ([23dc672](https://github.com/vow-lang/vow/commit/23dc6729fc969c49ea79a87de4e2d7f526730837))
+
+
+### Features
+
+* **codegen:** Cranelift I128 codegen for basic ops ([#1079](https://github.com/vow-lang/vow/issues/1079)) ([05cd632](https://github.com/vow-lang/vow/commit/05cd63276b86f0525a096d6ce78d0db76ba91f7a))
+* **codegen:** recover safe projection arena routing ([#999](https://github.com/vow-lang/vow/issues/999)) ([b57db6b](https://github.com/vow-lang/vow/commit/b57db6b006b337ce7aff12fe848c1539b9fbe28d))
+* **codegen:** route I128 div/rem/checked-mul through runtime ([#1085](https://github.com/vow-lang/vow/issues/1085)) ([2feeb7d](https://github.com/vow-lang/vow/commit/2feeb7d6fd8af26adb792fa42da8adeacde5803e))
+* **ir:** add two-limb i128 and u128 literal constants ([#1063](https://github.com/vow-lang/vow/issues/1063)) ([1dbef4d](https://github.com/vow-lang/vow/commit/1dbef4daa38064a8e4ae99241e1d4070a3993494))
+* **numeric:** make remaining narrow integers first-class ([#995](https://github.com/vow-lang/vow/issues/995)) ([f5d2a16](https://github.com/vow-lang/vow/commit/f5d2a16e8e5ecece6d4c774e5f5768d4684d1e49)), closes [#1030](https://github.com/vow-lang/vow/issues/1030) [1030#issuecomment-5312897156](https://github.com/1030/issues/issuecomment-5312897156) [#1030](https://github.com/vow-lang/vow/issues/1030) [3/#4](https://github.com/vow-lang/vow/issues/4) [#5](https://github.com/vow-lang/vow/issues/5) [980/#983](https://github.com/vow-lang/vow/issues/983)
+
 # [0.6.0](https://github.com/vow-lang/vow/compare/v0.5.1...v0.6.0) (2026-08-09)
 
 
