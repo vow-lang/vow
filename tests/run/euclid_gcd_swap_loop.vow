@@ -1,0 +1,25 @@
+// TEST: stdout "21"
+// TEST: known-divergence 1087 "self-hosted gcd returns 0 for every input"
+// Regression: Euclid's algorithm via the classic three-line swap. Guards the
+// same loop-body-`let` lowering bug as loop_body_let_from_carried_var.vow, but
+// at the level a real program hits it — the self-hosted compiler returned 0
+// for every input, so gcd was silently and totally broken while the binary
+// fixed point stayed green (#1081).
+module EuclidGcdSwapLoop
+
+fn gcd(a: i64, b: i64) -> i64 {
+  let mut x: i64 = a;
+  let mut y: i64 = b;
+  while y > 0 {
+    let tmp: i64 = y;
+    y = x % y;
+    x = tmp;
+  }
+  x
+}
+
+fn main() -> i32 [io] {
+  print_i64(gcd(6, 4));
+  print_i64(gcd(7, 3));
+  0
+}

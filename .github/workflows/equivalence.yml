@@ -1,0 +1,122 @@
+name: equivalence
+
+# Tier 2 of the equivalence-validation programme (docs/equivalence/README.md).
+#
+# The binary fixed point proves the self-hosted compiler reproduces itself over
+# the exact source of the compiler; it says nothing about inputs outside that
+# source. This sweep cross-checks the Rust and self-hosted compilers over the
+# whole .vow corpus. It found a total miscompile of Euclid's algorithm in
+# benchmarks/medium/M13_gcd that both the fixed point and full_test.sh had
+# sailed past, because no suite swept benchmarks/ differentially.
+#
+# Nightly rather than per-PR: a full sweep needs a bootstrapped build/vowc,
+# which is a ~30-minute job on its own. Per-PR protection comes from the
+# promoted fixtures in tests/ (tier 1), which the normal suite already runs.
+on:
+  schedule:
+    # 04:41 UTC — offset from cargo-mutants (02:17) so the two nightly jobs
+    # never contend for runners.
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+env:
+  ESBMC_VERSION: "8.1"
+  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
+
+# Read-only: checkout + build + sweep, plus upload-artifact (which uses the
+# Actions runtime token, not GITHUB_TOKEN).
+permissions:
+  contents: read
+
+jobs:
+  equivalence:
+    name: shard ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      # One shard's divergence must not cancel the others: partial results
+      # across the whole corpus are the point of sharding.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+        with:
+          version: ${{ env.ESBMC_VERSION }}
+          sha256: ${{ env.ESBMC_SHA256 }}
+      - run: cargo build --all --release
+      - name: Bootstrap self-hosted compiler
+        # The sweep must compare the VERIFIED FIXED POINT, not a stage-1
+        # binary. A divergence found against stage 1 could live either in the
+        # self-hosted source or in the Rust compiler's lowering of it; only a
+        # fixed-point binary separates those two, and attributing a bug to the
+        # wrong compiler is worse than not finding it.
+        run: scripts/bootstrap.sh --skip-cargo --stage3-no-verify
+      - name: Differential equivalence sweep
+        # A divergence is REPORTED rather than breaking the nightly: the
+        # artifact and the summary below carry the verdict, triage is a human
+        # step, and a red X on a scheduled job trains people to ignore it.
+        #
+        # That tolerance covers the divergence verdict and nothing else. A
+        # runner that missed its coverage floor (exit 2), crashed, or rejected
+        # its arguments measured nothing, and a green job would then read as
+        # "all clear" when the sweep never ran. `continue-on-error: true` could
+        # not tell those apart, so the status is inspected explicitly.
+        #
+        # Exit 1 is the divergence verdict, but an uncaught exception also
+        # exits 1 — results.json is only written once the sweep completes, so
+        # its presence is what separates a real verdict from a crash.
+        run: |
+          set +e
+          python3 scripts/equivalence.py \
+            --rust target/release/vow \
+            --self build/vowc \
+            --shard ${{ matrix.shard }}/4 \
+            --output-dir equivalence.out \
+            --min-compared 20
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$status" -eq 1 ] && [ -f equivalence.out/results.json ]; then
+            echo "::warning::Equivalence sweep reported divergences; see the job summary and the uploaded artifact."
+            exit 0
+          fi
+          echo "::error::Equivalence runner exited $status without producing a usable verdict — the sweep did not measure this shard."
+          exit "$status"
+      - name: Summarize
+        if: always()
+        # Surfaces compared/diverged/skipped in the job summary so a reader
+        # sees coverage without downloading the artifact. A sweep that skipped
+        # most of its shard must not read as "all clear".
+        run: |
+          if [ -f equivalence.out/results.json ]; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          d = json.load(open("equivalence.out/results.json"))
+          c = d["compilers"]
+          print(f"### Shard: {d['compared']} compared, "
+                f"{d['diverged']} diverged, {d['skipped']} skipped")
+          print()
+          print(f"- rust `{c['rust']['sha256'][:16]}`")
+          print(f"- self-hosted `{c['self_hosted']['sha256'][:16]}`")
+          print()
+          for r in d["records"]:
+              for v in r["divergences"]:
+                  print(f"- **{r['file']}** [{v['observable']}] {v['detail']}")
+          PY
+          else
+            echo "### Sweep produced no results.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload results
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: equivalence-shard-${{ matrix.shard }}
+          path: equivalence.out
+          if-no-files-found: warn

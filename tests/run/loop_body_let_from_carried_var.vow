@@ -1,0 +1,22 @@
+// TEST: stdout "1"
+// TEST: known-divergence 1087 "self-hosted reads the loop-carried var after its later reassignment"
+// Regression: a loop-body `let` initialized from a loop-carried mutable
+// variable must observe that variable's value at the point of the `let`, not
+// its post-reassignment value. Found by scripts/equivalence.py (#1081) as a
+// runtime divergence: the self-hosted compiler printed 0 while the Rust
+// compiler printed 1. Minimized from benchmarks/medium/M13_gcd/reference.vow,
+// whose Euclid swap (`let tmp = b; b = a % b; a = tmp;`) returned 0 for every
+// input under the self-hosted compiler.
+module LoopBodyLetFromCarriedVar
+
+fn main() -> i32 [io] {
+  let mut a: i64 = 0;
+  let mut b: i64 = 1;
+  while b > 0 {
+    let tmp: i64 = b;
+    b = 0;
+    a = tmp;
+  }
+  print_i64(a);
+  0
+}
