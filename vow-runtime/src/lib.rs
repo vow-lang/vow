@@ -5733,15 +5733,19 @@ mod tests {
         };
 
         assert_eq!(foreign.desc.len, 1);
-        // The descriptor went in holding the `dangling_mut` sentinel `Vec::new`
-        // uses for len=0; the push must have replaced it with a real backing.
-        // Establish that here so the read below is a dereference of a pointer
-        // this test has itself proven live, not of the sentinel it seeded.
+        // The descriptor went in holding the len=0 sentinel `Vec::new` uses
+        // (`dangling_mut`, i.e. address 1 — non-null, but not an allocation).
+        // Prove the push replaced it before reading through it: the first
+        // assertion rejects the seeded sentinel, which is what a regression
+        // would leave behind, and the second rejects a null backing. Only a
+        // pointer that is neither reaches the dereference below.
         let data = foreign.desc.ptr;
-        assert!(
-            !data.is_null(),
+        assert_ne!(
+            data,
+            std::ptr::dangling_mut::<u8>(),
             "push must have installed a real backing over the len=0 sentinel"
         );
+        assert!(!data.is_null(), "a real backing is never null");
         assert_eq!(unsafe { *data }, b'x');
         assert_eq!(
             candidate.last_alloc_start, candidate_last_alloc,
