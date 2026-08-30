@@ -509,7 +509,11 @@ The `blame` field indicates who is at fault:
 {"error":"UnwrapOnNone"}
 ```
 
-**Fix:** Use `match` to handle `None`, or add contracts that guarantee the value is `Some`.
+**Fix:** Use `match` to handle the empty variant — `None` for `Option`, `Err` for
+`Result` — or add contracts that guarantee the value is `Some`/`Ok`.
+
+The abort is emitted in every build mode, release included, so this cannot be
+deferred to a debug run.
 
 ### IndexOutOfBounds
 
