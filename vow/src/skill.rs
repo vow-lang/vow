@@ -1882,13 +1882,17 @@ while i > 0 {
 
 ```vow
 while i < n vow {
-    invariant: i >= 0,
-    invariant: i <= n
+    invariant: i <= n,
+    invariant: v.len() == i
 } {
     v.push(i);
     i = i + 1;
 }
 ```
+
+State the bound the loop actually maintains. `invariant: i >= 0` looks like a
+lower bound but is always true once `i` is unsigned, and the type checker
+rejects it as `TautologicalComparison`.
 
 ### For-Each Loop
 
@@ -4035,6 +4039,25 @@ fn f(x: u8) -> u8 {
 
 **Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
+### TautologicalComparison
+
+**Phase:** Type Checker
+**Meaning:** A comparison against a constant `0` can never fail (or can never hold) because the other operand has an unsigned integer type. `x >= 0` and `0 <= x` are always true for unsigned `x`; `x < 0` and `0 > x` are always false. Such a clause admits every implementation while reading like a real bound, so it is rejected rather than warned about — there is no suppression form. The const fold sees through `as` casts, so `x >= 0 as u64` is caught too.
+
+`x > 0`, `x <= 0`, `x == 0` and `x != 0` all constrain an unsigned value and keep compiling. Signed operands are untouched.
+
+```vow
+fn sum(n: u64) -> u64 vow {
+    ensures: result >= 0
+} {
+    n
+}
+```
+
+**Output:** ``comparison with 0 is always true for unsigned type `u64` ``
+
+**Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.
+
 ### StaticLiteralRequired
 
 **Phase:** Type Checker
@@ -4439,7 +4462,7 @@ deferred to a debug run.
 {"error":"IndexOutOfBounds"}
 ```
 
-**Fix:** Add a bounds check before indexing, or add contracts: `requires: i >= 0, requires: i < v.len()`.
+**Fix:** Add a bounds check before indexing, or add a contract: `requires: i < v.len()`. Do not pair it with `requires: i >= 0` — on an unsigned index that clause is always true and is rejected as [TautologicalComparison](#tautologicalcomparison).
 
 ### RegionLiteralMutation
 
@@ -6638,13 +6661,17 @@ while i > 0 {
 
 ```vow
 while i < n vow {
-    invariant: i >= 0,
-    invariant: i <= n
+    invariant: i <= n,
+    invariant: v.len() == i
 } {
     v.push(i);
     i = i + 1;
 }
 ```
+
+State the bound the loop actually maintains. `invariant: i >= 0` looks like a
+lower bound but is always true once `i` is unsigned, and the type checker
+rejects it as `TautologicalComparison`.
 
 ### For-Each Loop
 
@@ -8795,6 +8822,25 @@ fn f(x: u8) -> u8 {
 
 **Fix:** Use a count less than the LHS bit-width. To shift a narrow value by a larger amount, widen first: `(x as u32) << 8` is legal (it shifts the widened `u32` value by 8), but the result is `u32`; to get back to `u8`, use a narrowing intrinsic such as `u32_to_u8_wrap`.
 
+### TautologicalComparison
+
+**Phase:** Type Checker
+**Meaning:** A comparison against a constant `0` can never fail (or can never hold) because the other operand has an unsigned integer type. `x >= 0` and `0 <= x` are always true for unsigned `x`; `x < 0` and `0 > x` are always false. Such a clause admits every implementation while reading like a real bound, so it is rejected rather than warned about — there is no suppression form. The const fold sees through `as` casts, so `x >= 0 as u64` is caught too.
+
+`x > 0`, `x <= 0`, `x == 0` and `x != 0` all constrain an unsigned value and keep compiling. Signed operands are untouched.
+
+```vow
+fn sum(n: u64) -> u64 vow {
+    ensures: result >= 0
+} {
+    n
+}
+```
+
+**Output:** ``comparison with 0 is always true for unsigned type `u64` ``
+
+**Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.
+
 ### StaticLiteralRequired
 
 **Phase:** Type Checker
@@ -9199,7 +9245,7 @@ deferred to a debug run.
 {"error":"IndexOutOfBounds"}
 ```
 
-**Fix:** Add a bounds check before indexing, or add contracts: `requires: i >= 0, requires: i < v.len()`.
+**Fix:** Add a bounds check before indexing, or add a contract: `requires: i < v.len()`. Do not pair it with `requires: i >= 0` — on an unsigned index that clause is always true and is rejected as [TautologicalComparison](#tautologicalcomparison).
 
 ### RegionLiteralMutation
 

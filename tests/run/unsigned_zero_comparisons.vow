@@ -1,0 +1,32 @@
+// TEST: stdout "1010101111"
+// Zero comparisons that stay meaningful on unsigned operands, plus the signed
+// forms, must keep compiling: only `x >= 0` / `0 <= x` (always true) and
+// `x < 0` / `0 > x` (always false) are TautologicalComparison errors.
+module UnsignedZeroComparisons
+
+fn bool_digit(b: bool) -> i64 {
+  if b { 1 } else { 0 }
+}
+
+fn main() -> i32 [io] {
+  let u: u64 = 7u64;
+  let n: u8 = 3u8;
+  let w: u32 = 5u32;
+  let s: i64 = -2;
+  let t: i32 = 4;
+
+  // Meaningful on unsigned operands.
+  print_i64(bool_digit(u > 0));
+  print_i64(bool_digit(u <= 0));
+  print_i64(bool_digit(u != 0));
+  print_i64(bool_digit(u == 0));
+  print_i64(bool_digit((0 as u64) < u));
+  print_i64(bool_digit(0 as u64 >= u));
+  print_i64(bool_digit(n > 0));
+  print_i64(bool_digit(w != 0));
+
+  // Signed operands are untouched by the rule.
+  print_i64(bool_digit(s < 0));
+  print_i64(bool_digit(t >= 0));
+  0
+}

@@ -337,6 +337,18 @@ fn operands_compatible(lhs: &Ty, rhs: &Ty) -> bool {
     can_operand_coerce(lhs, rhs) || can_operand_coerce(rhs, lhs)
 }
 
+/// The unsigned integer type two comparison operands share, if any. An
+/// unsuffixed integer literal takes the other operand's type, so `u64` against
+/// a literal counts.
+fn unsigned_comparison_ty(lhs: &Ty, rhs: &Ty) -> Option<Ty> {
+    match (lhs.is_unsigned(), rhs.is_unsigned()) {
+        (true, true) if lhs == rhs => Some(lhs.clone()),
+        (true, false) if rhs.is_lit_int() => Some(lhs.clone()),
+        (false, true) if lhs.is_lit_int() => Some(rhs.clone()),
+        _ => None,
+    }
+}
+
 fn merge_result_ty(current: &Ty, incoming: &Ty) -> Option<Ty> {
     if current == incoming {
         Some(current.clone())
@@ -392,6 +404,40 @@ fn const_int_value(expr: &Expr) -> Option<ConstIntValue> {
             }),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+/// True when `expr` is the constant `0`, seeing through `as` casts and a
+/// redundant unary negation (`0 as u64`, `0u32 as u64`, `-0`).
+///
+/// Deliberately separate from [`const_int_value`]: that fold also drives
+/// `ShiftCountOutOfRange` and the integer-literal-marker path, where peeling a
+/// cast would silently change which shift counts are diagnosed.
+fn folds_to_zero(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Lit(Lit::Int(value)) => *value == 0,
+        ExprKind::Cast { expr, .. } => folds_to_zero(expr),
+        ExprKind::UnaryOp {
+            op: UnOp::Neg,
+            operand,
+        } => folds_to_zero(operand),
+        _ => false,
+    }
+}
+
+/// The verdict for a comparison against a constant `0` whose other operand has
+/// an unsigned integer type. `Some(true)` means the comparison always holds,
+/// `Some(false)` that it never does; `None` means the shape is meaningful and
+/// must keep compiling (`x > 0`, `x <= 0`, `x == 0`, `x != 0`).
+fn unsigned_zero_comparison_verdict(op: BinOp, lhs: &Expr, rhs: &Expr) -> Option<bool> {
+    match op {
+        // `x >= 0` / `0 <= x` — always true.
+        BinOp::Ge if folds_to_zero(rhs) => Some(true),
+        BinOp::Le if folds_to_zero(lhs) => Some(true),
+        // `x < 0` / `0 > x` — always false.
+        BinOp::Lt if folds_to_zero(rhs) => Some(false),
+        BinOp::Gt if folds_to_zero(lhs) => Some(false),
         _ => None,
     }
 }
@@ -1544,6 +1590,20 @@ impl<'e> Checker<'e> {
                                 vec![
                                     "convert one operand so both sides have the same type".to_string()
                                 ],
+                            );
+                        } else if let Some(unsigned_ty) = unsigned_comparison_ty(&lhs_ty, &rhs_ty)
+                            && let Some(always) = unsigned_zero_comparison_verdict(*op, lhs, rhs)
+                        {
+                            self.emit_error_with_hints(
+                                ErrorCode::TautologicalComparison,
+                                format!(
+                                    "comparison with 0 is always {} for unsigned type `{unsigned_ty}`",
+                                    if always { "true" } else { "false" }
+                                ),
+                                expr.span,
+                                vec![format!(
+                                    "`{unsigned_ty}` values are never negative; drop the clause, or state the real bound (e.g. `i < v.len()`)"
+                                )],
                             );
                         }
                         Ty::Bool
@@ -4123,6 +4183,150 @@ mod tests {
         checker.check_expr(&i32_shl_with_count(32));
         assert!(checker.has_errors());
         assert_eq!(emitter.0[0].code, ErrorCode::ShiftCountOutOfRange);
+    }
+
+    // --- TautologicalComparison: unsigned comparisons against 0 ---
+
+    fn cast_to(value: u128, ty: &str) -> Expr {
+        make_expr(ExprKind::Cast {
+            expr: Box::new(make_expr(ExprKind::Lit(Lit::Int(value)))),
+            target_ty: Box::new(Type::Named {
+                name: ty.to_string(),
+                span: dummy_span(),
+            }),
+        })
+    }
+
+    fn cmp(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
+        make_expr(ExprKind::BinaryOp {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        })
+    }
+
+    fn lit_int(value: u128) -> Expr {
+        make_expr(ExprKind::Lit(Lit::Int(value)))
+    }
+
+    fn assert_tautological(expr: &Expr, always: &str, ty: &str) {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        assert_eq!(checker.check_expr(expr), Ty::Bool);
+        assert!(checker.has_errors());
+        assert_eq!(
+            emitter.0.len(),
+            1,
+            "expected exactly one diagnostic, got: {:?}",
+            emitter.0
+        );
+        assert_eq!(emitter.0[0].code, ErrorCode::TautologicalComparison);
+        assert_eq!(
+            emitter.0[0].message,
+            format!("comparison with 0 is always {always} for unsigned type `{ty}`")
+        );
+    }
+
+    fn assert_comparison_clean(expr: &Expr) {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        assert_eq!(checker.check_expr(expr), Ty::Bool);
+        assert!(
+            !checker.has_errors(),
+            "expected no diagnostics, got: {:?}",
+            emitter.0
+        );
+    }
+
+    #[test]
+    fn unsigned_ge_zero_rejected() {
+        assert_tautological(
+            &cmp(BinOp::Ge, cast_to(1, "u64"), lit_int(0)),
+            "true",
+            "u64",
+        );
+    }
+
+    #[test]
+    fn zero_le_unsigned_rejected() {
+        assert_tautological(
+            &cmp(BinOp::Le, lit_int(0), cast_to(1, "u64")),
+            "true",
+            "u64",
+        );
+    }
+
+    #[test]
+    fn unsigned_lt_zero_rejected() {
+        assert_tautological(
+            &cmp(BinOp::Lt, cast_to(1, "u64"), lit_int(0)),
+            "false",
+            "u64",
+        );
+    }
+
+    #[test]
+    fn zero_gt_unsigned_rejected() {
+        assert_tautological(
+            &cmp(BinOp::Gt, lit_int(0), cast_to(1, "u64")),
+            "false",
+            "u64",
+        );
+    }
+
+    #[test]
+    fn unsigned_ge_zero_cast_rejected() {
+        // The `#1104` migration bridge shape: `x >= 0 as u64`.
+        assert_tautological(
+            &cmp(BinOp::Ge, cast_to(1, "u64"), cast_to(0, "u64")),
+            "true",
+            "u64",
+        );
+    }
+
+    #[test]
+    fn zero_cast_le_unsigned_rejected() {
+        assert_tautological(
+            &cmp(BinOp::Le, cast_to(0, "u64"), cast_to(1, "u64")),
+            "true",
+            "u64",
+        );
+    }
+
+    #[test]
+    fn narrow_unsigned_ge_zero_rejected() {
+        assert_tautological(&cmp(BinOp::Ge, u8_cast(1), lit_int(0)), "true", "u8");
+        assert_tautological(
+            &cmp(BinOp::Lt, cast_to(1, "u32"), lit_int(0)),
+            "false",
+            "u32",
+        );
+    }
+
+    #[test]
+    fn signed_comparisons_with_zero_allowed() {
+        assert_comparison_clean(&cmp(BinOp::Ge, i32_cast(1), lit_int(0)));
+        assert_comparison_clean(&cmp(BinOp::Lt, i32_cast(1), lit_int(0)));
+        assert_comparison_clean(&cmp(BinOp::Le, lit_int(0), i32_cast(1)));
+        assert_comparison_clean(&cmp(BinOp::Gt, lit_int(0), i32_cast(1)));
+    }
+
+    #[test]
+    fn meaningful_unsigned_comparisons_with_zero_allowed() {
+        // `x > 0`, `x <= 0`, `x == 0`, `x != 0` all constrain an unsigned value.
+        assert_comparison_clean(&cmp(BinOp::Gt, cast_to(1, "u64"), lit_int(0)));
+        assert_comparison_clean(&cmp(BinOp::Le, cast_to(1, "u64"), lit_int(0)));
+        assert_comparison_clean(&cmp(BinOp::Eq, cast_to(1, "u64"), lit_int(0)));
+        assert_comparison_clean(&cmp(BinOp::Ne, cast_to(1, "u64"), lit_int(0)));
+        // And the mirrored forms.
+        assert_comparison_clean(&cmp(BinOp::Lt, lit_int(0), cast_to(1, "u64")));
+        assert_comparison_clean(&cmp(BinOp::Ge, lit_int(0), cast_to(1, "u64")));
+    }
+
+    #[test]
+    fn unsigned_comparison_with_nonzero_constant_allowed() {
+        assert_comparison_clean(&cmp(BinOp::Ge, cast_to(3, "u64"), lit_int(1)));
+        assert_comparison_clean(&cmp(BinOp::Lt, cast_to(3, "u64"), cast_to(1, "u64")));
     }
 
     #[test]

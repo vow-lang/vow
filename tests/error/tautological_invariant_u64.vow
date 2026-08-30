@@ -1,0 +1,14 @@
+// TEST: stderr "comparison with 0 is always true for unsigned type `u64`"
+module TautologicalInvariantU64
+
+fn sum(n: u64) -> u64 {
+  let mut i: u64 = n;
+  let mut s: u64 = 0;
+  while i > 0 vow { invariant: i >= 0, invariant: i <= n } {
+    i = i - 1;
+    s = s + i;
+  }
+  s
+}
+
+fn main() -> i32 { 0 }

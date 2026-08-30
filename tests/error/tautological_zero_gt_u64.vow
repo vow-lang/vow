@@ -1,0 +1,8 @@
+// TEST: stderr "comparison with 0 is always false for unsigned type `u64`"
+module TautologicalZeroGtU64
+
+fn f(x: u64) -> bool {
+  0 > x
+}
+
+fn main() -> i32 { 0 }

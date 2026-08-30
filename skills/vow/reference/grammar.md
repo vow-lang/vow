@@ -525,13 +525,17 @@ while i > 0 {
 
 ```vow
 while i < n vow {
-    invariant: i >= 0,
-    invariant: i <= n
+    invariant: i <= n,
+    invariant: v.len() == i
 } {
     v.push(i);
     i = i + 1;
 }
 ```
+
+State the bound the loop actually maintains. `invariant: i >= 0` looks like a
+lower bound but is always true once `i` is unsigned, and the type checker
+rejects it as `TautologicalComparison`.
 
 ### For-Each Loop
 

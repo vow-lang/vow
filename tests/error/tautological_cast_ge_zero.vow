@@ -1,0 +1,10 @@
+// TEST: stderr "comparison with 0 is always true for unsigned type `u64`"
+// The `v.len() as u64` migration bridge produces exactly this shape, so the
+// const fold behind the diagnostic must see through `as` casts.
+module TautologicalCastGeZero
+
+fn f(x: u64) -> bool {
+  x >= 0 as u64
+}
+
+fn main() -> i32 { 0 }
