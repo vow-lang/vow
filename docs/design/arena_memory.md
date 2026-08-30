@@ -152,6 +152,16 @@ requests (e.g., 16-byte-aligned SIMD backings) would exceed the
 chunk's usable range and trigger repeated fallback allocation or
 out-of-bounds arithmetic.
 
+Reads and writes of both header words go through four accessors in
+`vow-runtime` (`next_chunk`, `set_next_chunk`, `chunk_total`,
+`chunk_is_oversized`). Each rejects a null chunk base with
+`RuntimeInvariantViolation` and `reason = "null chunk"`. Every chain
+walk already tests the link before recursing, so the trap is
+unreachable while the chain is well formed; testing at the access
+rather than at the walk keeps the proof local to the `unsafe` block
+and makes a walk that loses the invariant fail closed instead of
+reading address 0.
+
 The total-size word carries an additional bit (CHUNK_OVERSIZED_FLAG)
 that records *which allocation path* produced the chunk — not just
 its size. The chain walker in §7.1 consults this flag, not a
@@ -201,6 +211,13 @@ Every boolean-valued runtime primitive in this spec MUST follow the
 same convention. In the C header the type is written `int64_t`
 (from `<stdint.h>`); in the Rust definition and in Vow FFI bindings
 the corresponding `i64` ABI-compatible type is used.
+
+All five arena primitives above are exported C entry points that
+generated code may call directly, so each traps with
+`RuntimeInvariantViolation` and `reason = "null arena"` on a null `a`
+before dereferencing it — the same guard the explicit-arena Vec,
+String, and HashMap entries apply, stated here because the primitives
+are reachable without going through those wrappers.
 
 **`__vow_arena_init_closed(a)`**: initializes `*a` to the closed
 all-zero state. The compiler emits this once when a block-arena stack

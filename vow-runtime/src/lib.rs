@@ -785,8 +785,12 @@ unsafe fn alloc_chunk(total: usize, oversized: bool) -> *mut u8 {
 }
 
 // Read the total-size word written by `alloc_chunk`, masking off the
-// oversized-flag bit.
+// oversized-flag bit. See the chunk-header safety note below for why the
+// non-null test sits here rather than at the chain walk that calls it.
 unsafe fn chunk_total(base: *const u8) -> usize {
+    if base.is_null() {
+        runtime_invariant_trap("arena_chunk_total", "null chunk");
+    }
     unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *const usize) & !CHUNK_OVERSIZED_FLAG }
 }
 
@@ -795,6 +799,9 @@ unsafe fn chunk_total(base: *const u8) -> usize {
 // `arena_try_free_oversized_chunk` consults to decide whether a chunk is
 // single-resident and safe to free.
 unsafe fn chunk_is_oversized(base: *const u8) -> bool {
+    if base.is_null() {
+        runtime_invariant_trap("arena_chunk_is_oversized", "null chunk");
+    }
     unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *const usize) & CHUNK_OVERSIZED_FLAG != 0 }
 }
 
@@ -810,16 +817,33 @@ unsafe fn chunk_is_oversized(base: *const u8) -> bool {
 // Safety: `chunk` must be a base pointer returned by `alloc_chunk` — a live
 // `libc::malloc(total)` block with `total >= CHUNK_LINK_BYTES` (16) — and not
 // yet freed. The 8-byte link word at offset 0 is therefore fully in-bounds and
-// was initialized by `alloc_chunk`. The C ESBMC mirror in
+// was initialized by `alloc_chunk`.
+//
+// The non-null half of that precondition is re-tested here, and in the two
+// header accessors above, rather than left to the caller. Every chain walk
+// already tests the pointer before calling, but that test is a whole function
+// away from the dereference: neither a reader nor a static analyser can
+// discharge the obligation locally, and a future walk that forgets it fails
+// silently into undefined behaviour. Testing at the dereference makes the
+// proof local and costs one predictable branch per chunk visited. A null base
+// means the chain itself is corrupt, so it is a runtime invariant violation
+// rather than a recoverable condition. The C ESBMC mirror in
 // `vow-runtime/verify/arena.c` performs the identical `*(void**)chunk` access
-// under the same invariant, so the model check exercises this exact reasoning.
+// under the same non-null invariant, so the model check exercises this exact
+// reasoning for every chunk that reaches the access.
 #[inline]
 unsafe fn next_chunk(chunk: *mut u8) -> *mut u8 {
+    if chunk.is_null() {
+        runtime_invariant_trap("arena_next_chunk", "null chunk");
+    }
     unsafe { *(chunk as *mut *mut u8) }
 }
 
 #[inline]
 unsafe fn set_next_chunk(chunk: *mut u8, next: *mut u8) {
+    if chunk.is_null() {
+        runtime_invariant_trap("arena_set_next_chunk", "null chunk");
+    }
     unsafe { *(chunk as *mut *mut u8) = next };
 }
 
@@ -835,8 +859,18 @@ unsafe fn chunk_usable_start(base: *mut u8, align: usize) -> usize {
     align_up(base as usize + CHUNK_LINK_BYTES, align)
 }
 
+// The five exported `__vow_arena_*` entry points below are part of the
+// runtime's C ABI: generated code calls them directly, so a null handle is
+// reachable from outside this crate and must fail closed rather than be
+// undefined behaviour. Each therefore opens with the same `null_arena_trap`
+// guard every `*_in_arena` entry point already applies, which also keeps the
+// `&mut *a` reborrow provably valid at its own site instead of relying on a
+// precondition established by some distant caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_arena_init_closed(a: *mut VowArena) {
+    if a.is_null() {
+        null_arena_trap("arena_init_closed");
+    }
     let arena = unsafe { &mut *a };
     arena.first_chunk = core::ptr::null_mut();
     arena.current_chunk = core::ptr::null_mut();
@@ -849,6 +883,9 @@ pub unsafe extern "C" fn __vow_arena_init_closed(a: *mut VowArena) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_arena_open(a: *mut VowArena) {
+    if a.is_null() {
+        null_arena_trap("arena_open");
+    }
     let arena = unsafe { &mut *a };
     if !arena.first_chunk.is_null() {
         return;
@@ -872,6 +909,9 @@ pub unsafe extern "C" fn __vow_arena_open(a: *mut VowArena) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_arena_close(a: *mut VowArena) {
+    if a.is_null() {
+        null_arena_trap("arena_close");
+    }
     let arena = unsafe { &mut *a };
     let retained_bytes = arena.retained_bytes;
     let mut chunk = arena.first_chunk;
@@ -899,6 +939,9 @@ pub unsafe extern "C" fn __vow_arena_alloc(
     bytes: usize,
     align: usize,
 ) -> *mut u8 {
+    if a.is_null() {
+        null_arena_trap("arena_alloc");
+    }
     // Overflow guard: all downstream arithmetic in this function
     // (`align_up`, the fit-check, `oversized_chunk_total`) sums `bytes`
     // and `align`, so both individually AND combined must fit in the
@@ -982,6 +1025,9 @@ pub unsafe extern "C" fn __vow_arena_try_extend(
     old_size: usize,
     new_size: usize,
 ) -> i64 {
+    if a.is_null() {
+        null_arena_trap("arena_try_extend");
+    }
     let arena = unsafe { &mut *a };
     if ptr != arena.last_alloc_start || arena.last_alloc_size != old_size {
         return 0;
@@ -1018,6 +1064,9 @@ pub unsafe extern "C" fn __vow_arena_try_extend(
 // truncate loop that motivated this fix stays effectively O(1) per growth
 // — the cost is dominated by normal-chunk count, not by growth count.
 unsafe fn arena_try_free_oversized_chunk(a: *mut VowArena, ptr: *const u8) -> bool {
+    if a.is_null() {
+        null_arena_trap("arena_free_oversized_chunk");
+    }
     if ptr.is_null() {
         return false;
     }
@@ -5684,7 +5733,16 @@ mod tests {
         };
 
         assert_eq!(foreign.desc.len, 1);
-        assert_eq!(unsafe { *foreign.desc.ptr }, b'x');
+        // The descriptor went in holding the `dangling_mut` sentinel `Vec::new`
+        // uses for len=0; the push must have replaced it with a real backing.
+        // Establish that here so the read below is a dereference of a pointer
+        // this test has itself proven live, not of the sentinel it seeded.
+        let data = foreign.desc.ptr;
+        assert!(
+            !data.is_null(),
+            "push must have installed a real backing over the len=0 sentinel"
+        );
+        assert_eq!(unsafe { *data }, b'x');
         assert_eq!(
             candidate.last_alloc_start, candidate_last_alloc,
             "a foreign descriptor must fall back even when preceding bytes match the candidate"
@@ -6280,6 +6338,58 @@ mod tests {
             eprintln!("rodata_trap_worker: perf Vec::sort UAF did NOT trap");
             std::process::exit(42);
         }
+        // The arena primitives are exported C entry points in their own
+        // right: generated code can call them without going through a
+        // `*_in_arena` wrapper, so each must trap on a null handle rather
+        // than reborrow it.
+        if op == "arena_init_closed_null" {
+            unsafe { __vow_arena_init_closed(std::ptr::null_mut()) };
+            eprintln!("rodata_trap_worker: null arena init_closed did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "arena_open_null" {
+            unsafe { __vow_arena_open(std::ptr::null_mut()) };
+            eprintln!("rodata_trap_worker: null arena open did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "arena_close_null" {
+            unsafe { __vow_arena_close(std::ptr::null_mut()) };
+            eprintln!("rodata_trap_worker: null arena close did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "arena_alloc_null" {
+            let _ = unsafe { __vow_arena_alloc(std::ptr::null_mut(), 8, 8) };
+            eprintln!("rodata_trap_worker: null arena alloc did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "arena_try_extend_null" {
+            let _ = unsafe { __vow_arena_try_extend(std::ptr::null_mut(), 8 as *mut u8, 8, 16) };
+            eprintln!("rodata_trap_worker: null arena try_extend did NOT trap");
+            std::process::exit(42);
+        }
+        // A null chunk base means the intrusive chain is corrupt. The
+        // accessors test for it themselves so the walk that lost the
+        // invariant fails closed instead of reading address 0.
+        if op == "arena_next_chunk_null" {
+            let _ = unsafe { next_chunk(std::ptr::null_mut()) };
+            eprintln!("rodata_trap_worker: null chunk next_chunk did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "arena_set_next_chunk_null" {
+            unsafe { set_next_chunk(std::ptr::null_mut(), std::ptr::null_mut()) };
+            eprintln!("rodata_trap_worker: null chunk set_next_chunk did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "arena_chunk_total_null" {
+            let _ = unsafe { chunk_total(std::ptr::null()) };
+            eprintln!("rodata_trap_worker: null chunk chunk_total did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "arena_chunk_is_oversized_null" {
+            let _ = unsafe { chunk_is_oversized(std::ptr::null()) };
+            eprintln!("rodata_trap_worker: null chunk chunk_is_oversized did NOT trap");
+            std::process::exit(42);
+        }
         if op == "Vec::new_in_arena_null" {
             let _ = unsafe { __vow_vec_new_in_arena(std::ptr::null_mut(), 8, 8) };
             eprintln!("rodata_trap_worker: null arena constructor did NOT trap");
@@ -6602,7 +6712,7 @@ mod tests {
         }
     }
 
-    fn assert_runtime_invariant_null_arena(op: &str, expected_op_in_json: &str) {
+    fn assert_runtime_invariant(op: &str, expected_op_in_json: &str, expected_reason: &str) {
         let (out, stderr) = spawn_trap_worker(op);
         assert_eq!(
             out.status.code(),
@@ -6618,9 +6728,13 @@ mod tests {
             "stderr missing operation={expected_op_in_json}:\n{stderr}"
         );
         assert!(
-            stderr.contains(r#""reason":"null arena""#),
-            "stderr missing null arena reason:\n{stderr}"
+            stderr.contains(&format!(r#""reason":"{expected_reason}""#)),
+            "stderr missing reason={expected_reason}:\n{stderr}"
         );
+    }
+
+    fn assert_runtime_invariant_null_arena(op: &str, expected_op_in_json: &str) {
+        assert_runtime_invariant(op, expected_op_in_json, "null arena");
     }
 
     #[test]
@@ -6750,6 +6864,33 @@ mod tests {
     #[test]
     fn explicit_arena_map_remove_null_arena_traps() {
         assert_runtime_invariant_null_arena("HashMap::remove_in_arena_null", "HashMap::remove");
+    }
+
+    #[test]
+    fn arena_primitive_null_arena_traps() {
+        let cases = [
+            ("arena_init_closed_null", "arena_init_closed"),
+            ("arena_open_null", "arena_open"),
+            ("arena_close_null", "arena_close"),
+            ("arena_alloc_null", "arena_alloc"),
+            ("arena_try_extend_null", "arena_try_extend"),
+        ];
+        for (op, expected) in cases {
+            assert_runtime_invariant_null_arena(op, expected);
+        }
+    }
+
+    #[test]
+    fn chunk_header_accessor_null_chunk_traps() {
+        let cases = [
+            ("arena_next_chunk_null", "arena_next_chunk"),
+            ("arena_set_next_chunk_null", "arena_set_next_chunk"),
+            ("arena_chunk_total_null", "arena_chunk_total"),
+            ("arena_chunk_is_oversized_null", "arena_chunk_is_oversized"),
+        ];
+        for (op, expected) in cases {
+            assert_runtime_invariant(op, expected, "null chunk");
+        }
     }
 
     #[test]
