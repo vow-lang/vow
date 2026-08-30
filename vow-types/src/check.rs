@@ -1865,17 +1865,13 @@ impl<'e> Checker<'e> {
                         expect.literal_range_target(),
                     );
                     if !expect.accepts(arg_ty) {
-                        self.emit_error_with_hints(
+                        self.emit_error(
                             ErrorCode::TypeMismatch,
                             format!(
                                 "argument has type `{arg_ty}` but `{method}` expects {}",
                                 expect.describe()
                             ),
                             arg.span,
-                            vec![format!(
-                                "`{method}` expects {}, got `{arg_ty}`",
-                                expect.describe()
-                            )],
                         );
                     }
                 }
