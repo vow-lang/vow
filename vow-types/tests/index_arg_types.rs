@@ -212,14 +212,41 @@ fn each_violation_produces_exactly_one_diagnostic() {
 }
 
 #[test]
-fn an_unresolved_receiver_does_not_cascade() {
-    // When the receiver's own type is already an error, the argument check must
-    // stay silent rather than pile a second diagnostic onto the same mistake.
+fn a_failed_call_used_as_an_index_does_not_cascade() {
+    // An undefined call is bottom, so the index check stays quiet and only the
+    // real error is reported. Both compilers agree here.
     let src = "module Test\n\nfn main() -> i32 {\n    let v: Vec<i64> = Vec::new();\n    let x: i64 = v[unknown_fn()];\n    0\n}\n";
-    let diags = type_mismatches(src);
+    let diags = typecheck_source(src);
+    assert_eq!(
+        diags.len(),
+        1,
+        "expected only the undefined-function error, got {:?}",
+        diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    assert!(diags[0].message.contains("undefined function"));
+}
+
+#[test]
+fn an_unrelated_nested_error_still_reports_the_real_argument_mismatch() {
+    // Regression guard: an earlier attempt suppressed the argument check
+    // whenever *anything* errored while checking the argument. That swallowed
+    // this `bool`-vs-`String` mismatch, because the block contains an unrelated
+    // failed call. The argument's type is perfectly determinate, so the
+    // mismatch must still be reported.
+    let src = "module Test\n\nfn main() -> i32 {\n    let s: String = String::from(\"s\");\n    s.push_str({ missing(); true });\n    0\n}\n";
+    let diags = typecheck_source(src);
     assert!(
-        diags.len() <= 1,
-        "an unresolved index expression must not cascade, got {:?}",
+        diags
+            .iter()
+            .any(|d| d.message.contains("undefined function")),
+        "the nested error must still be reported, got {:?}",
+        diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("argument has type `bool`")),
+        "the real argument mismatch must not be swallowed, got {:?}",
         diags.iter().map(|d| &d.message).collect::<Vec<_>>()
     );
 }

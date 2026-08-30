@@ -1812,7 +1812,10 @@ impl<'e> Checker<'e> {
                         for arg in args {
                             self.check_expr(arg);
                         }
-                        return Ty::Unit;
+                        // Match the self-hosted checker (`compiler/checker.vow`,
+                        // undefined-function arm), which returns bottom here so a
+                        // failed call does not cascade into its consumers.
+                        return Ty::Never;
                     }
                 };
                 if args.len() != param_tys.len() {
@@ -1854,17 +1857,8 @@ impl<'e> Checker<'e> {
                 args,
             } => {
                 let recv_ty = self.check_expr(receiver);
-                // Track whether each argument's own check emitted an error, so a
-                // broken argument is not reported a second time as a bad one.
-                let arg_tys: Vec<(Ty, bool)> = args
-                    .iter()
-                    .map(|arg| {
-                        let before = self.error_count;
-                        let ty = self.check_expr(arg);
-                        (ty, self.error_count > before)
-                    })
-                    .collect();
-                for ((arg, (arg_ty, arg_errored)), expect) in args
+                let arg_tys: Vec<Ty> = args.iter().map(|arg| self.check_expr(arg)).collect();
+                for ((arg, arg_ty), expect) in args
                     .iter()
                     .zip(arg_tys.iter())
                     .zip(method_argument_expectations(&recv_ty, method).iter())
@@ -1873,7 +1867,7 @@ impl<'e> Checker<'e> {
                         arg,
                         expect.literal_range_target(),
                     );
-                    if !arg_errored && !expect.accepts(arg_ty) {
+                    if !expect.accepts(arg_ty) {
                         self.emit_error(
                             ErrorCode::TypeMismatch,
                             format!(
@@ -2129,17 +2123,9 @@ impl<'e> Checker<'e> {
             }
             ExprKind::Index { base, index } => {
                 let base_ty = self.check_expr(base);
-                let errors_before_index = self.error_count;
                 let index_ty = self.check_expr(index);
-                // An index expression that failed to check has a placeholder
-                // type; reporting it as a bad index would just pile a second
-                // diagnostic onto the same mistake.
-                let index_already_errored = self.error_count > errors_before_index;
                 self.check_contextual_integer_literal_ranges(index, &Ty::I64);
-                if index_ty != Ty::Never
-                    && !index_already_errored
-                    && !is_integer_or_lit_int(&index_ty)
-                {
+                if index_ty != Ty::Never && !is_integer_or_lit_int(&index_ty) {
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!("index has type `{index_ty}` but must be an integer type"),
