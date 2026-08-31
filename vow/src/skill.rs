@@ -4450,6 +4450,10 @@ The `blame` field indicates who is at fault:
 
 **Fix:** Use wrapping arithmetic (`+`, `-`, etc.) if overflow is acceptable, or add bounds contracts to prevent overflow.
 
+The abort is emitted in every build mode, release included, so this cannot be
+deferred to a debug run. A checked operator's abort is part of the operator's
+meaning, not a debug-mode check: wrapping arithmetic is spelled `+`, `-`, `*`.
+
 ### UnwrapOnNone
 
 **When:** `.unwrap()` is called on `Option::None` or `Result::Err`.
@@ -9242,6 +9246,10 @@ The `blame` field indicates who is at fault:
 ```
 
 **Fix:** Use wrapping arithmetic (`+`, `-`, etc.) if overflow is acceptable, or add bounds contracts to prevent overflow.
+
+The abort is emitted in every build mode, release included, so this cannot be
+deferred to a debug run. A checked operator's abort is part of the operator's
+meaning, not a debug-mode check: wrapping arithmetic is spelled `+`, `-`, `*`.
 
 ### UnwrapOnNone
 

@@ -1,4 +1,5 @@
-// TEST: exit 132
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
 module I128CheckedDivMinByNegOne
 
 // The checked operator reports the same case as ArithmeticOverflow.

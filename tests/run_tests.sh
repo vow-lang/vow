@@ -352,13 +352,14 @@ for f in "$SCRIPT_DIR"/run/*.vow; do
   # Run (pipe stdin if TEST_STDIN is set)
   # Disable pipefail in the stdin subshell so we capture the binary's exit
   # code, not printf's SIGPIPE (141) when the binary exits early.
+  run_stderr="$TMPDIR/run_${name}_stderr"
   set +e
   if [[ -n "$TEST_STDIN_FILE" ]]; then
-    actual_stdout="$(run_bin "$out" < "$TEST_STDIN_FILE" 2>/dev/null)"
+    actual_stdout="$(run_bin "$out" < "$TEST_STDIN_FILE" 2>"$run_stderr")"
   elif [[ -n "$TEST_STDIN" ]]; then
-    actual_stdout="$(set +o pipefail; printf '%b' "$TEST_STDIN" | run_bin "$out" 2>/dev/null)"
+    actual_stdout="$(set +o pipefail; printf '%b' "$TEST_STDIN" | run_bin "$out" 2>"$run_stderr")"
   else
-    actual_stdout="$(run_bin "$out" 2>/dev/null)"
+    actual_stdout="$(run_bin "$out" 2>"$run_stderr")"
   fi
   actual_exit=$?
   set -e
@@ -376,6 +377,17 @@ for f in "$SCRIPT_DIR"/run/*.vow; do
       fail "$name" "stdout mismatch"
       echo "    expected: $(echo "$expected_stdout" | head -3)"
       echo "    actual:   $(echo "$actual_stdout" | head -3)"
+      continue
+    fi
+  fi
+
+  # Check stderr (substring match, as in the debug lane)
+  if [[ -n "$TEST_STDERR" ]]; then
+    expected_stderr="$(echo -e "$TEST_STDERR")"
+    actual_stderr="$(cat "$run_stderr" 2>/dev/null)"
+    if [[ "$actual_stderr" != *"$expected_stderr"* ]]; then
+      fail "$name" "stderr missing: $expected_stderr"
+      echo "    actual stderr: $(echo "$actual_stderr" | head -3)"
       continue
     fi
   fi

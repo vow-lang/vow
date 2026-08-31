@@ -465,7 +465,7 @@ struct LowerCtx<'a> {
     return_ty: IrTy,
     ir_func_id_to_ref: &'a HashMap<IrFuncId, FuncRef>,
     vow_violation_ref: Option<FuncRef>,
-    overflow_ref: Option<FuncRef>,
+    overflow_ref: FuncRef,
     arena_alloc_ref: FuncRef,
     arena_open_ref: FuncRef,
     arena_close_ref: FuncRef,
@@ -1832,9 +1832,7 @@ fn emit_overflow_check(
 
     builder.switch_to_block(trap_block);
     builder.seal_block(trap_block);
-    if let Some(overflow_ref) = ctx.overflow_ref {
-        builder.ins().call(overflow_ref, &[]);
-    }
+    builder.ins().call(ctx.overflow_ref, &[]);
     builder.ins().trap(TrapCode::INTEGER_OVERFLOW);
 
     builder.switch_to_block(cont_block);
@@ -2013,7 +2011,7 @@ fn emit_vow_violation_body(
 
 struct RuntimeIds {
     vow_violation_id: Option<CraneliftFuncId>,
-    overflow_id: Option<CraneliftFuncId>,
+    overflow_id: CraneliftFuncId,
     arena_alloc_id: CraneliftFuncId,
     arena_init_id: CraneliftFuncId,
     arena_open_id: CraneliftFuncId,
@@ -2082,7 +2080,7 @@ fn compile_ir_function(
     // Pre-declare external func refs (before value_map / instruction loop)
     let vow_violation_ref =
         vow_violation_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
-    let overflow_ref = overflow_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
+    let overflow_ref = obj_module.declare_func_in_func(overflow_id, builder.func);
     let arena_alloc_ref = obj_module.declare_func_in_func(runtime.arena_alloc_id, builder.func);
     let arena_init_ref = obj_module.declare_func_in_func(runtime.arena_init_id, builder.func);
     let arena_open_ref = obj_module.declare_func_in_func(runtime.arena_open_id, builder.func);
@@ -3220,8 +3218,19 @@ impl Backend for CraneliftBackend {
             .declare_data("__vow_root_arena", Linkage::Import, true, false)
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
+        // A checked operator's overflow abort is not a mode feature: it is the
+        // operator's specified behaviour (grammar.md "Checked operators abort
+        // with `ArithmeticOverflow`"), so the reporter is declared in every
+        // build mode. The trap block is unreachable in a correct program, so
+        // this costs nothing on the hot path. `__vow_violation` stays
+        // debug-gated below -- runtime vow checks *are* a mode feature.
+        let overflow_sig = obj_module.make_signature();
+        let overflow_id = obj_module
+            .declare_function("__vow_arithmetic_overflow", Linkage::Import, &overflow_sig)
+            .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+
         // Declare external runtime functions (debug/sanitize mode only)
-        let (vow_violation_id, overflow_id) = if mode.has_debug_checks() {
+        let vow_violation_id = if mode.has_debug_checks() {
             let mut violation_sig = obj_module.make_signature();
             violation_sig.params.push(AbiParam::new(types::I32)); // vow_id
             violation_sig.params.push(AbiParam::new(types::I8)); // blame
@@ -3234,14 +3243,9 @@ impl Backend for CraneliftBackend {
                 .declare_function("__vow_violation", Linkage::Import, &violation_sig)
                 .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
-            let overflow_sig = obj_module.make_signature();
-            let ov_id = obj_module
-                .declare_function("__vow_arithmetic_overflow", Linkage::Import, &overflow_sig)
-                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
-
-            (Some(vv_id), Some(ov_id))
+            Some(vv_id)
         } else {
-            (None, None)
+            None
         };
 
         // Declare trace runtime functions

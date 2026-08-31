@@ -1,4 +1,5 @@
-// TEST: exit 132
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
 module NarrowCheckedExpressionOverflow
 
 fn overflow() -> i8 {
