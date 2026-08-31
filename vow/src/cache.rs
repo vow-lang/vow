@@ -139,6 +139,11 @@ impl CachedFailure {
             description: self.description.clone(),
             vow_id: self.vow_id,
             callee_precondition: self.callee_precondition,
+            // Re-derived from the cached ESBMC output rather than stored as its
+            // own field: the on-disk format then needs no migration, and a
+            // replayed `arith:` diagnostic cannot drift from what a fresh run
+            // would report.
+            arith_overflow: vow_verify::extract_arith_site(&self.raw_output),
             values: self.values.clone(),
             block_visits: self.block_visits.clone(),
             raw_output: self.raw_output.clone(),
@@ -366,6 +371,7 @@ mod tests {
 
     fn sample_ce() -> Counterexample {
         Counterexample {
+            arith_overflow: None,
             description: "x overflows".to_string(),
             vow_id: Some(5),
             callee_precondition: Some(CalleePrecondition {

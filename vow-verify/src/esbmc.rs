@@ -12,7 +12,7 @@ use crate::solver_strategy::{
 };
 
 use crate::c_emitter::{
-    ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
+    ArithAbort, ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
     emit_c_module_with_callees, non_modelable_reason, verifier_c_func_name,
 };
 
@@ -32,9 +32,25 @@ pub struct Counterexample {
     pub description: String,
     pub vow_id: Option<u32>,
     pub callee_precondition: Option<CalleePrecondition>,
+    /// Set when the violated property was an `arith:` obligation rather than a
+    /// contract clause: a checked operator whose abort is reachable (#585).
+    /// Mutually exclusive with `vow_id` in practice — ESBMC reports one violated
+    /// property per run, and the two label namespaces are disjoint.
+    pub arith_overflow: Option<ArithOverflowSite>,
     pub values: Vec<(String, String)>,
     pub block_visits: Vec<u32>,
     pub raw_output: String,
+}
+
+/// A checked-arithmetic site whose `ArithmeticOverflow` abort ESBMC proved
+/// reachable. Carries the operator's source span, as the raw
+/// `vow_syntax::span::Span` field pair, so the driver can point the diagnostic at
+/// the operator without vow-verify taking a dependency on vow-syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArithOverflowSite {
+    pub abort: ArithAbort,
+    pub span_start: u32,
+    pub span_len: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +144,7 @@ pub fn parse_esbmc_output(output: &str) -> Counterexample {
     let label = extract_vow_label(output);
     let vow_id = label.as_ref().map(VowLabel::vow_id);
     let callee_precondition = label.and_then(VowLabel::callee_precondition);
+    let arith_overflow = extract_arith_site(output);
     let all_assignments = extract_variable_assignments(output);
 
     let mut values = Vec::new();
@@ -157,10 +174,52 @@ pub fn parse_esbmc_output(output: &str) -> Counterexample {
         description,
         vow_id,
         callee_precondition,
+        arith_overflow,
         values,
         block_visits,
         raw_output: output.to_string(),
     }
+}
+
+/// Parse the `arith:<cause>:<span_start>:<span_len>` property label the C
+/// emitter attaches to a checked-arithmetic obligation (`emit_checked_arith`).
+///
+/// This is a property class of its own, deliberately outside the `vow:`
+/// namespace: a reachable `+!` abort is specified behaviour, not a contract
+/// violation, and must not be reported as one. `extract_vow_label` therefore
+/// never matches it, and a counterexample carrying an `arith:` label has
+/// `vow_id: None`.
+pub fn extract_arith_site(output: &str) -> Option<ArithOverflowSite> {
+    let mut in_violated = false;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed == "Violated property:" {
+            in_violated = true;
+            continue;
+        }
+        if in_violated
+            && let Some(rest) = trimmed.strip_prefix("arith:")
+            && let Some(site) = parse_arith_label(rest)
+        {
+            return Some(site);
+        }
+    }
+    None
+}
+
+fn parse_arith_label(rest: &str) -> Option<ArithOverflowSite> {
+    let mut parts = rest.split(':');
+    let abort = ArithAbort::from_label(parts.next()?)?;
+    let start = parts.next()?.parse::<u32>().ok()?;
+    let len = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(ArithOverflowSite {
+        abort,
+        span_start: start,
+        span_len: len,
+    })
 }
 
 enum VowLabel {
@@ -686,6 +745,12 @@ pub fn run_esbmc_k_induction(
     )
 }
 
+/// Run ESBMC and capture its combined output, or the terminal
+/// [`VerificationResult`] that stands in for a run that never produced any.
+///
+/// The error is boxed because `VerificationResult::Failed` carries a whole
+/// `Counterexample`; returning it inline would make every `Ok` path pay for the
+/// size of the failure case on the stack.
 fn run_esbmc_capture(
     esbmc: &std::path::Path,
     c_src: &str,
@@ -693,16 +758,16 @@ fn run_esbmc_capture(
     func_name: &str,
     config: &SolverConfig,
     extra_args: &[&str],
-) -> Result<String, VerificationResult> {
+) -> Result<String, Box<VerificationResult>> {
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
         Ok(f) => f,
-        Err(e) => return Err(VerificationResult::ToolError(e.to_string())),
+        Err(e) => return Err(Box::new(VerificationResult::ToolError(e.to_string()))),
     };
     if let Err(e) = tmp.write_all(c_src.as_bytes()) {
-        return Err(VerificationResult::ToolError(e.to_string()));
+        return Err(Box::new(VerificationResult::ToolError(e.to_string())));
     }
     if let Err(e) = tmp.flush() {
-        return Err(VerificationResult::ToolError(e.to_string()));
+        return Err(Box::new(VerificationResult::ToolError(e.to_string())));
     }
 
     save_esbmc_debug(esbmc, c_src, func_name, max_k_step, config, extra_args);
@@ -740,7 +805,7 @@ fn run_esbmc_capture(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return Err(VerificationResult::ToolError(e.to_string())),
+        Err(e) => return Err(Box::new(VerificationResult::ToolError(e.to_string()))),
     };
 
     // Drain stdout/stderr on background threads to prevent pipe buffer deadlock.
@@ -781,14 +846,14 @@ fn run_esbmc_capture(
                 let _ = child.wait();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
-                return Err(VerificationResult::ToolError(format!("wait error: {e}")));
+                return Err(Box::new(VerificationResult::ToolError(format!("wait error: {e}"))));
             }
         }
     };
     if timed_out {
         let _ = stdout_thread.join();
         let _ = stderr_thread.join();
-        return Err(VerificationResult::Timeout);
+        return Err(Box::new(VerificationResult::Timeout));
     }
 
     let stdout = stdout_thread.join().unwrap_or_default();
@@ -827,7 +892,7 @@ pub fn run_esbmc_with_max_k_step(
 ) -> VerificationResult {
     match run_esbmc_capture(esbmc, c_src, max_k_step, func_name, config, &[]) {
         Ok(combined) => classify_esbmc_output(&combined),
-        Err(r) => r,
+        Err(r) => *r,
     }
 }
 
@@ -880,7 +945,7 @@ pub fn run_esbmc_multi_property(
             classify_esbmc_output(&combined),
             parse_multi_property_verdicts(&combined),
         ),
-        Err(r) => (r, std::collections::HashMap::new()),
+        Err(r) => (*r, std::collections::HashMap::new()),
     }
 }
 
@@ -1651,6 +1716,82 @@ VERIFICATION FAILED";
         assert_eq!(ce.vow_id, Some(2));
         assert_eq!(ce.values.len(), 1);
         assert_eq!(ce.values[0], ("v0".to_string(), "42".to_string()));
+    }
+
+    // #585: an `arith:` property is a class of its own. It must be recognised as
+    // a reachable checked-arithmetic abort and must NOT be reported as a
+    // contract violation, so `vow_id` stays None. The trace shape below is real
+    // ESBMC 8.3.0 output for an emitted `__vow_ovf_*` guard.
+    #[test]
+    fn parse_esbmc_recognises_arith_property_as_its_own_class() {
+        let output = "\
+[Counterexample]
+
+
+State 1 file /tmp/m.c line 10 column 3 function f thread 0
+----------------------------------------------------
+  v0 = 4611686018427387904 (01000000)
+
+State 3 file /tmp/m.c line 5 column 3 function f thread 0
+----------------------------------------------------
+Violated property:
+  file /tmp/m.c line 5 column 3 function f
+  arith:add:92:6
+  !return_value$___vow_ovf_add_i64$1
+
+
+VERIFICATION FAILED";
+
+        let ce = parse_esbmc_output(output);
+        assert_eq!(
+            ce.arith_overflow,
+            Some(ArithOverflowSite {
+                abort: ArithAbort::Add,
+                span_start: 92,
+                span_len: 6,
+            })
+        );
+        assert_eq!(
+            ce.vow_id, None,
+            "an arith property must never be reported as a contract violation"
+        );
+        assert_eq!(ce.callee_precondition, None);
+    }
+
+    // A contract violation carries no arith site, so the driver cannot mistake
+    // one for the other.
+    #[test]
+    fn parse_esbmc_contract_violation_has_no_arith_site() {
+        let output = "\
+Violated property:
+  file /tmp/m.c line 12 column 3 function f
+  vow:0
+  v3
+
+
+VERIFICATION FAILED";
+        let ce = parse_esbmc_output(output);
+        assert_eq!(ce.vow_id, Some(0));
+        assert_eq!(ce.arith_overflow, None);
+    }
+
+    #[test]
+    fn parse_arith_label_rejects_malformed_labels() {
+        for (label, why) in [
+            ("add:92", "missing length"),
+            ("add:92:6:1", "trailing field"),
+            ("bogus:92:6", "unknown cause"),
+            ("add:x:6", "non-numeric offset"),
+            ("add:92:y", "non-numeric length"),
+        ] {
+            assert_eq!(parse_arith_label(label), None, "should reject: {why}");
+        }
+        for cause in ["add", "sub", "mul", "div-zero", "div-overflow"] {
+            let parsed = parse_arith_label(&format!("{cause}:1:2"))
+                .unwrap_or_else(|| panic!("{cause} must parse"));
+            assert_eq!(parsed.abort.label(), cause);
+            assert_eq!((parsed.span_start, parsed.span_len), (1, 2));
+        }
     }
 
     #[test]

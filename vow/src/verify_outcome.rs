@@ -16,7 +16,7 @@ use vow_diag::{Diagnostic, Severity};
 use crate::{BuildOutput, BuildStatus, StructuredCounterexample};
 
 /// The verifier's verdict for a whole module. Produced by the verification
-/// driver in `verification.rs` and consumed by [`to_output`] / [`to_output_with_skipped`].
+/// driver in `verification.rs` and consumed by [`to_output`] / [`to_output_with_warnings`].
 pub(crate) enum VerifyOutcome {
     /// ESBMC not invoked (`--no-verify`); maps to `BuildStatus::Unverified` (exit 0).
     /// Named `NotRun` (not `Skipped`) to avoid colliding with `SkippedNonModelable`,
@@ -54,6 +54,82 @@ pub(crate) struct SkippedFunction {
     pub(crate) reason: String,
 }
 
+/// A checked operator whose `ArithmeticOverflow` abort the verifier proved
+/// reachable (#585). Surfaces as an `ArithOverflowReachable` Warning.
+#[derive(Debug, Clone)]
+pub(crate) struct ArithOverflowWarning {
+    pub(crate) function: String,
+    /// Why it aborts, from `ArithAbort::description()`.
+    pub(crate) cause: &'static str,
+    pub(crate) file: String,
+    pub(crate) offset: u32,
+    pub(crate) length: u32,
+}
+
+/// A non-fatal finding from verifying one function. The two kinds differ in
+/// consequence, not just wording: a skip means a contract went **unproved** and
+/// fails the run closed, whereas a reachable checked-arithmetic abort leaves
+/// every contract proved and only reports a runtime behaviour. Keeping them in
+/// one enum is what lets [`crate::verification::run_pool`] aggregate both while
+/// still asking `is_skip` before it lifts the build status.
+#[derive(Debug, Clone)]
+pub(crate) enum VerifyWarning {
+    Skipped(SkippedFunction),
+    ArithOverflow(ArithOverflowWarning),
+}
+
+impl VerifyWarning {
+    /// True for the kind that means something went unproved, and so must fail
+    /// the run closed.
+    pub(crate) fn is_skip(&self) -> bool {
+        matches!(self, Self::Skipped(_))
+    }
+
+    fn to_diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Skipped(s) => Diagnostic {
+                severity: Severity::Warning,
+                code: vow_diag::ErrorCode::VerificationSkipped,
+                message: format!("skipped verification of `{}`: {}", s.function, s.reason),
+                primary: vow_diag::SourceLocation {
+                    file: String::new(),
+                    byte_offset: 0,
+                    byte_len: 0,
+                },
+                secondary: vec![],
+                blame: vow_diag::Blame::None,
+                hints: vec![
+                    "the contract is documentary; runtime checks still apply in --mode debug"
+                        .to_string(),
+                ],
+            },
+            Self::ArithOverflow(a) => Diagnostic {
+                severity: Severity::Warning,
+                code: vow_diag::ErrorCode::ArithOverflowReachable,
+                message: format!(
+                    "checked arithmetic in `{}` can abort: {}",
+                    a.function, a.cause
+                ),
+                primary: vow_diag::SourceLocation {
+                    file: a.file.clone(),
+                    byte_offset: a.offset,
+                    byte_len: a.length,
+                },
+                secondary: vec![],
+                blame: vow_diag::Blame::None,
+                hints: vec![
+                    "the contract is proved for every execution that returns; this abort is a \
+                     separate runtime outcome"
+                        .to_string(),
+                    "constrain the operands in `requires` to rule the abort out, or use the \
+                     wrapping operator if wrapping is intended"
+                        .to_string(),
+                ],
+            },
+        }
+    }
+}
+
 /// Map a counterexample `blame` string to the diagnostic error code.
 ///
 /// Note the fallback asymmetry with [`blame_to_diag_blame`]: an unrecognised
@@ -82,35 +158,19 @@ pub(crate) fn to_output(
     diagnostics: Vec<Diagnostic>,
     executable: Option<PathBuf>,
 ) -> BuildOutput {
-    to_output_with_skipped(outcome, diagnostics, &[], executable)
+    to_output_with_warnings(outcome, diagnostics, &[], executable)
 }
 
-/// As [`to_output`], but also emits a `VerificationSkipped` warning for each
-/// vowed function the verifier skipped. Skipped warnings are appended *before*
-/// counterexample errors.
-pub(crate) fn to_output_with_skipped(
+/// As [`to_output`], but also emits a Warning for each non-fatal finding the
+/// verifier accumulated. Warnings are appended *before* counterexample errors.
+pub(crate) fn to_output_with_warnings(
     outcome: VerifyOutcome,
     mut diagnostics: Vec<Diagnostic>,
-    skipped: &[SkippedFunction],
+    warnings: &[VerifyWarning],
     executable: Option<PathBuf>,
 ) -> BuildOutput {
-    for s in skipped {
-        diagnostics.push(Diagnostic {
-            severity: Severity::Warning,
-            code: vow_diag::ErrorCode::VerificationSkipped,
-            message: format!("skipped verification of `{}`: {}", s.function, s.reason),
-            primary: vow_diag::SourceLocation {
-                file: String::new(),
-                byte_offset: 0,
-                byte_len: 0,
-            },
-            secondary: vec![],
-            blame: vow_diag::Blame::None,
-            hints: vec![
-                "the contract is documentary; runtime checks still apply in --mode debug"
-                    .to_string(),
-            ],
-        });
+    for w in warnings {
+        diagnostics.push(w.to_diagnostic());
     }
     let (status, counterexamples, verify_status, verify_message) = match outcome {
         VerifyOutcome::Failed {
@@ -558,20 +618,53 @@ mod tests {
         assert_eq!(d.primary.byte_len, 0);
     }
 
+    // #585: the arith warning must keep the build Verified (exit 0). A reachable
+    // `+!` abort is the operator's specified behaviour, not an unproved
+    // obligation, so unlike a skip it does not fail the run closed.
     #[test]
-    fn to_output_with_skipped_prepends_warning_before_ce_errors() {
+    fn arith_overflow_warning_keeps_status_verified() {
+        let out = to_output_with_warnings(
+            VerifyOutcome::Proven,
+            vec![],
+            &[VerifyWarning::ArithOverflow(ArithOverflowWarning {
+                function: "twice".to_string(),
+                cause: "addition overflows",
+                file: "t.vow".to_string(),
+                offset: 92,
+                length: 6,
+            })],
+            None,
+        );
+        assert!(matches!(out.status, BuildStatus::Verified));
+        assert_eq!(out.diagnostics.len(), 1);
+        let d = &out.diagnostics[0];
+        assert_eq!(d.severity, Severity::Warning);
+        assert_eq!(d.code, ErrorCode::ArithOverflowReachable);
+        assert_eq!(
+            d.message,
+            "checked arithmetic in `twice` can abort: addition overflows"
+        );
+        assert_eq!(d.blame, Blame::None);
+        // The span points at the operator, unlike a skip warning's empty span.
+        assert_eq!(d.primary.file, "t.vow");
+        assert_eq!(d.primary.byte_offset, 92);
+        assert_eq!(d.primary.byte_len, 6);
+    }
+
+    #[test]
+    fn to_output_with_warnings_prepends_warning_before_ce_errors() {
         let existing = diag("pre-existing");
-        let out = to_output_with_skipped(
+        let out = to_output_with_warnings(
             VerifyOutcome::Failed {
                 function: "f".to_string(),
                 description: "contract".to_string(),
                 counterexamples: vec![ce("f", "caller")],
             },
             vec![existing],
-            &[SkippedFunction {
+            &[VerifyWarning::Skipped(SkippedFunction {
                 function: "g".to_string(),
                 reason: "nonmodelable".to_string(),
-            }],
+            })],
             None,
         );
         assert_eq!(out.diagnostics.len(), 3);
@@ -584,13 +677,13 @@ mod tests {
 
     #[test]
     fn skipped_warning_has_expected_shape() {
-        let out = to_output_with_skipped(
+        let out = to_output_with_warnings(
             VerifyOutcome::Proven,
             vec![],
-            &[SkippedFunction {
+            &[VerifyWarning::Skipped(SkippedFunction {
                 function: "h".to_string(),
                 reason: "why".to_string(),
-            }],
+            })],
             None,
         );
         assert!(matches!(out.status, BuildStatus::Verified));

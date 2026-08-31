@@ -87,6 +87,14 @@ pub enum ErrorCode {
     // The build still succeeds; the contract is documentary, not statically
     // checked. Runtime checks still apply in --mode debug.
     VerificationSkipped,
+    // Emitted as a Warning when the verifier proves that a checked operator
+    // (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its ArithmeticOverflow abort.
+    // This is not a verification gap: aborting is the operator's *specified*
+    // behaviour, and the contract is still proved for every returning
+    // execution. It is reported because an abort is rarely what the author
+    // wanted, and it is invisible in the contract verdict. Does not change the
+    // build status (#585).
+    ArithOverflowReachable,
 }
 
 pub trait DiagnosticEmitter {

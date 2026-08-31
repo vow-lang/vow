@@ -23,17 +23,27 @@ use crate::counterexample::CallSiteInfo;
 /// delegate its catch-all arm here) and for operands that do not fold. The two
 /// i64 evaluators below share this — the only difference between them is their
 /// leaf rules, which each supplies through `eval_operand`.
+///
+/// Wrapping and checked opcodes are folded *differently* (#585). A wrapping
+/// operator is specified to wrap, so `wrapping_*` is its exact semantics. A
+/// checked operator aborts instead: an execution that overflows never reaches
+/// the next instruction, so there is no value to fold and `checked_*` correctly
+/// yields `None`. Folding it as wrapping would invent a value the program can
+/// never observe and enrich a counterexample with it.
 fn fold_binary_i64(inst: &vow_ir::Inst, eval_operand: impl Fn(u32) -> Option<i64>) -> Option<i64> {
     use vow_ir::Opcode;
-    let op: fn(i64, i64) -> i64 = match inst.opcode {
-        Opcode::WrappingAdd | Opcode::CheckedAdd => i64::wrapping_add,
-        Opcode::WrappingSub | Opcode::CheckedSub => i64::wrapping_sub,
-        Opcode::WrappingMul | Opcode::CheckedMul => i64::wrapping_mul,
+    let op: fn(i64, i64) -> Option<i64> = match inst.opcode {
+        Opcode::WrappingAdd => |a, b| Some(i64::wrapping_add(a, b)),
+        Opcode::WrappingSub => |a, b| Some(i64::wrapping_sub(a, b)),
+        Opcode::WrappingMul => |a, b| Some(i64::wrapping_mul(a, b)),
+        Opcode::CheckedAdd => i64::checked_add,
+        Opcode::CheckedSub => i64::checked_sub,
+        Opcode::CheckedMul => i64::checked_mul,
         _ => return None,
     };
     let lhs = eval_operand(inst.args.first()?.0)?;
     let rhs = eval_operand(inst.args.get(1)?.0)?;
-    Some(op(lhs, rhs))
+    op(lhs, rhs)
 }
 
 /// Fold an instruction to an `i64` in the *callee* context, resolving `GetArg`
@@ -241,6 +251,9 @@ mod tests {
                 Opcode::WrappingAdd
                     | Opcode::WrappingSub
                     | Opcode::WrappingMul
+                    | Opcode::CheckedAdd
+                    | Opcode::CheckedSub
+                    | Opcode::CheckedMul
                     | Opcode::Eq
                     | Opcode::Ne
                     | Opcode::Lt
@@ -381,6 +394,40 @@ mod tests {
         assert_eq!(eval_const_i64_for_counterexample(5, &map), Some(6));
         assert_eq!(eval_const_i64_for_counterexample(8, &map), Some(42));
         assert_eq!(eval_const_i64_for_counterexample(11, &map), Some(i64::MIN));
+    }
+
+    // #585: the two operator families must fold differently at the overflow
+    // boundary. A wrapping operator wraps (that is its specification); a checked
+    // operator aborts, so the overflowing execution has no value at all and the
+    // fold must decline rather than invent the wrapped one.
+    #[test]
+    fn counterexample_declines_to_fold_overflowing_checked_arithmetic() {
+        let insts = [
+            inst(0, Opcode::ConstI64, &[], InstData::ConstI64(i64::MAX)),
+            inst(1, Opcode::ConstI64, &[], InstData::ConstI64(1)),
+            inst(2, Opcode::WrappingAdd, &[0, 1], InstData::None),
+            inst(3, Opcode::CheckedAdd, &[0, 1], InstData::None),
+            inst(4, Opcode::ConstI64, &[], InstData::ConstI64(i64::MIN)),
+            inst(5, Opcode::CheckedSub, &[4, 1], InstData::None),
+            inst(6, Opcode::ConstI64, &[], InstData::ConstI64(2)),
+            inst(7, Opcode::CheckedMul, &[0, 6], InstData::None),
+            // A checked op that does *not* overflow still folds.
+            inst(8, Opcode::CheckedAdd, &[1, 6], InstData::None),
+        ];
+        let map = index(&insts);
+        assert_eq!(
+            eval_const_i64_for_counterexample(2, &map),
+            Some(i64::MIN),
+            "wrapping add is specified to wrap"
+        );
+        for (id, what) in [(3, "add"), (5, "sub"), (7, "mul")] {
+            assert_eq!(
+                eval_const_i64_for_counterexample(id, &map),
+                None,
+                "overflowing checked {what} aborts; it has no foldable value"
+            );
+        }
+        assert_eq!(eval_const_i64_for_counterexample(8, &map), Some(3));
     }
 
     #[test]

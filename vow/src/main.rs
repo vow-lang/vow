@@ -31,7 +31,7 @@ use cli::{Args, Command, ModeArg, SkillAction};
 use frontend::{
     FrontendBundle, FrontendError, FrontendGoal, prepare_frontend, prepare_frontend_with_root,
 };
-use verify_outcome::{SkippedFunction, VerifyOutcome};
+use verify_outcome::{VerifyOutcome, VerifyWarning};
 
 // ---------------------------------------------------------------------------
 // Build output
@@ -284,7 +284,7 @@ fn run_verify_only_inner(
     let verify_cache = if no_cache { None } else { VerifyCache::new() };
     let file = source.to_string_lossy().to_string();
     let call_site_index = counterexample::build_call_site_index(ir_module, &file);
-    let (outcome, skipped) = verification::run_verification_sync(
+    let (outcome, warnings) = verification::run_verification_sync(
         ir_module,
         &file,
         &call_site_index,
@@ -294,7 +294,7 @@ fn run_verify_only_inner(
         config,
         prof,
     );
-    verify_outcome::to_output_with_skipped(outcome, all_diagnostics, &skipped, None)
+    verify_outcome::to_output_with_warnings(outcome, all_diagnostics, &warnings, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -433,7 +433,7 @@ pub(crate) fn run_pipeline_from_frontend(
     // Owned clone (Arc-backed) moved into the verify thread so it can record
     // proof spans on its own track; the synchronous side keeps `prof`.
     let verify_prof = prof.cloned();
-    let verify_handle = thread::spawn(move || -> (VerifyOutcome, Vec<SkippedFunction>) {
+    let verify_handle = thread::spawn(move || -> (VerifyOutcome, Vec<VerifyWarning>) {
         let driver_start = verify_prof.as_ref().map(|p| p.now_us()).unwrap_or(0);
         let result = if no_verify {
             (VerifyOutcome::NotRun, Vec::new())
@@ -527,14 +527,14 @@ pub(crate) fn run_pipeline_from_frontend(
                 vec![],
             );
         }
-        let (verify_outcome, skipped) = match verify_handle.join() {
+        let (verify_outcome, warnings) = match verify_handle.join() {
             Ok(result) => result,
             Err(_) => return verify_outcome::panicked_output(all_diagnostics, exe_path),
         };
-        return verify_outcome::to_output_with_skipped(
+        return verify_outcome::to_output_with_warnings(
             verify_outcome,
             all_diagnostics,
-            &skipped,
+            &warnings,
             exe_path,
         );
     }
@@ -596,11 +596,11 @@ pub(crate) fn run_pipeline_from_frontend(
         );
     }
 
-    let (verify_outcome, skipped) = match verify_handle.join() {
+    let (verify_outcome, warnings) = match verify_handle.join() {
         Ok(result) => result,
         Err(_) => return verify_outcome::panicked_output(all_diagnostics, exe_path),
     };
-    verify_outcome::to_output_with_skipped(verify_outcome, all_diagnostics, &skipped, exe_path)
+    verify_outcome::to_output_with_warnings(verify_outcome, all_diagnostics, &warnings, exe_path)
 }
 
 // ---------------------------------------------------------------------------
