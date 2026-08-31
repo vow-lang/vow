@@ -5055,6 +5055,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |\n"));
     r.push_str(String::from("| `substantive`  | Everything else -- equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` -- a cast never makes a constant bound substantive. This matters because the cast form is the idiom a `v.len() as u64`-style bridge produces at every consuming site; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("An always-true or always-false comparison against `0` on an unsigned -- or zero-extended unsigned -- operand is not a quality verdict at all: it is the hard [`TautologicalComparison`](errors.md#tautologicalcomparison) type error, so such a clause never reaches `vow contracts`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Trace Output (stderr, --debug-trace)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `--debug-trace=calls` or `--debug-trace=full` is used, the compiled binary emits JSON lines to stderr:\n"));
@@ -5972,11 +5976,33 @@ fn skill_bundle() -> String {
     r.push_str(String::from("status and quality tallies, so an author or CI can gate on hollow proofs.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static\n"));
-    r.push_str(String::from("quality of the self-hosted compiler's own contracts: it reads\n"));
-    r.push_str(String::from("`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count\n"));
-    r.push_str(String::from("exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in\n"));
-    r.push_str(String::from("unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to\n"));
-    r.push_str(String::from("ratchet down as contracts harden. The dispatch-totality example above\n"));
+    r.push_str(String::from("quality of the self-hosted compiler's own contracts: it fails if the `weak` or\n"));
+    r.push_str(String::from("`tautological` count exceeds a committed baseline, so a new `ensures result >= 0`\n"));
+    r.push_str(String::from("cannot slip in unnoticed. It runs in `scripts/full_test.sh`. The baseline is an\n"));
+    r.push_str(String::from("upper bound to ratchet down as contracts harden.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`vow contracts` follows `use` edges, so an entry point covers its own module\n"));
+    r.push_str(String::from("graph and nothing outside it. The gate therefore runs once per entry point,\n"));
+    r.push_str(String::from("with `--label` so a breach names which one regressed:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Entry point              | Why it is gated |\n"));
+    r.push_str(String::from("|--------------------------|-----------------|\n"));
+    r.push_str(String::from("| `compiler/main.vow`      | the compiler's own `use` graph |\n"));
+    r.push_str(String::from("| `compiler/module_io.vow` | deliberately-unwired `.vmod` parity infrastructure, **not** in `main.vow`'s `use` graph -- it had zero coverage until it was listed here, and it must not drift |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`tests/`, `stdlib/`, `examples/` and `benchmarks/` are deliberately **not**\n"));
+    r.push_str(String::from("gated. They are the corpus -- the *input* to contract cleanup -- and they\n"));
+    r.push_str(String::from("legitimately carry weak and tautological clauses today; a baseline aggregated\n"));
+    r.push_str(String::from("over hundreds of files is a number nobody can ratchet down meaningfully.\n"));
+    r.push_str(String::from("Corpus-side cleanup is enforced instead by the hard\n"));
+    r.push_str(String::from("[`TautologicalComparison`](errors.md#tautologicalcomparison) type error, which\n"));
+    r.push_str(String::from("fails the build per site rather than counting, plus reviewer discipline.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The ratchet runs the self-hosted compiler only, so `scripts/full_test.sh` also\n"));
+    r.push_str(String::from("carries a `contract-quality/parity` case comparing the `(function, kind,\n"));
+    r.push_str(String::from("quality)` triples both compilers derive from\n"));
+    r.push_str(String::from("`tests/fixtures/contracts/quality_shapes.vow`. Without it the Rust classifier\n"));
+    r.push_str(String::from("has no end-to-end coverage and the two can drift. The dispatch-totality example above\n"));
     r.push_str(String::from("(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`\n"));
     r.push_str(String::from("(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)\n"));
     r.push_str(String::from("are enforced in `compiler/lower.vow` today.\n"));
@@ -6149,6 +6175,18 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Output:** ``comparison with 0 is always true for unsigned type `u64` ``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Widening casts do not launder the tautology.** A cast can move the compared type to a signed one while leaving the value provably non-negative, so the rule follows the value, not the printed type. Because `as` is widening-only plus same-width signedness change (see [Type Cast](grammar.md#type-cast)), the condition is exact: the comparison is tautological iff the source is unsigned **and** the target is strictly wider, i.e. the cast zero-extends.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(x: u32) -> bool { (x as i64) >= 0 }   // error -- u32 zero-extends into i64\n"));
+    r.push_str(String::from("fn g(x: u64) -> bool { (x as i64) >= 0 }   // ok -- same width, `u64::MAX as i64` is -1\n"));
+    r.push_str(String::from("fn h(x: i32) -> bool { (x as i64) >= 0 }   // ok -- a signed source sign-extends\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A chain does not hide it either: `(x as i32 as i64) >= 0` with `x: u32` is rejected, and the diagnostic names the original unsigned source.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``comparison with 0 is always true for `u32` zero-extended to `i64` ``\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.\n"));
     r.push_str(String::from("\n"));
@@ -9868,6 +9906,10 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |\n"));
     r.push_str(String::from("| `substantive`  | Everything else -- equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` -- a cast never makes a constant bound substantive. This matters because the cast form is the idiom a `v.len() as u64`-style bridge produces at every consuming site; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("An always-true or always-false comparison against `0` on an unsigned -- or zero-extended unsigned -- operand is not a quality verdict at all: it is the hard [`TautologicalComparison`](errors.md#tautologicalcomparison) type error, so such a clause never reaches `vow contracts`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Trace Output (stderr, --debug-trace)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `--debug-trace=calls` or `--debug-trace=full` is used, the compiled binary emits JSON lines to stderr:\n"));
@@ -10789,11 +10831,33 @@ fn skill_support_content_reference_contracts_methodology_md_3030be1e() -> String
     r.push_str(String::from("status and quality tallies, so an author or CI can gate on hollow proofs.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static\n"));
-    r.push_str(String::from("quality of the self-hosted compiler's own contracts: it reads\n"));
-    r.push_str(String::from("`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count\n"));
-    r.push_str(String::from("exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in\n"));
-    r.push_str(String::from("unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to\n"));
-    r.push_str(String::from("ratchet down as contracts harden. The dispatch-totality example above\n"));
+    r.push_str(String::from("quality of the self-hosted compiler's own contracts: it fails if the `weak` or\n"));
+    r.push_str(String::from("`tautological` count exceeds a committed baseline, so a new `ensures result >= 0`\n"));
+    r.push_str(String::from("cannot slip in unnoticed. It runs in `scripts/full_test.sh`. The baseline is an\n"));
+    r.push_str(String::from("upper bound to ratchet down as contracts harden.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`vow contracts` follows `use` edges, so an entry point covers its own module\n"));
+    r.push_str(String::from("graph and nothing outside it. The gate therefore runs once per entry point,\n"));
+    r.push_str(String::from("with `--label` so a breach names which one regressed:\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Entry point              | Why it is gated |\n"));
+    r.push_str(String::from("|--------------------------|-----------------|\n"));
+    r.push_str(String::from("| `compiler/main.vow`      | the compiler's own `use` graph |\n"));
+    r.push_str(String::from("| `compiler/module_io.vow` | deliberately-unwired `.vmod` parity infrastructure, **not** in `main.vow`'s `use` graph -- it had zero coverage until it was listed here, and it must not drift |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`tests/`, `stdlib/`, `examples/` and `benchmarks/` are deliberately **not**\n"));
+    r.push_str(String::from("gated. They are the corpus -- the *input* to contract cleanup -- and they\n"));
+    r.push_str(String::from("legitimately carry weak and tautological clauses today; a baseline aggregated\n"));
+    r.push_str(String::from("over hundreds of files is a number nobody can ratchet down meaningfully.\n"));
+    r.push_str(String::from("Corpus-side cleanup is enforced instead by the hard\n"));
+    r.push_str(String::from("[`TautologicalComparison`](errors.md#tautologicalcomparison) type error, which\n"));
+    r.push_str(String::from("fails the build per site rather than counting, plus reviewer discipline.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The ratchet runs the self-hosted compiler only, so `scripts/full_test.sh` also\n"));
+    r.push_str(String::from("carries a `contract-quality/parity` case comparing the `(function, kind,\n"));
+    r.push_str(String::from("quality)` triples both compilers derive from\n"));
+    r.push_str(String::from("`tests/fixtures/contracts/quality_shapes.vow`. Without it the Rust classifier\n"));
+    r.push_str(String::from("has no end-to-end coverage and the two can drift. The dispatch-totality example above\n"));
     r.push_str(String::from("(`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`\n"));
     r.push_str(String::from("(`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)\n"));
     r.push_str(String::from("are enforced in `compiler/lower.vow` today.\n"));
@@ -10968,6 +11032,18 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Output:** ``comparison with 0 is always true for unsigned type `u64` ``\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Widening casts do not launder the tautology.** A cast can move the compared type to a signed one while leaving the value provably non-negative, so the rule follows the value, not the printed type. Because `as` is widening-only plus same-width signedness change (see [Type Cast](grammar.md#type-cast)), the condition is exact: the comparison is tautological iff the source is unsigned **and** the target is strictly wider, i.e. the cast zero-extends.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(x: u32) -> bool { (x as i64) >= 0 }   // error -- u32 zero-extends into i64\n"));
+    r.push_str(String::from("fn g(x: u64) -> bool { (x as i64) >= 0 }   // ok -- same width, `u64::MAX as i64` is -1\n"));
+    r.push_str(String::from("fn h(x: i32) -> bool { (x as i64) >= 0 }   // ok -- a signed source sign-extends\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A chain does not hide it either: `(x as i32 as i64) >= 0` with `x: u32` is rejected, and the diagnostic names the original unsigned source.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** ``comparison with 0 is always true for `u32` zero-extended to `i64` ``\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.\n"));
     r.push_str(String::from("\n"));
@@ -13277,6 +13353,57 @@ fn cq_has_alpha(s: String) -> bool {
     false
 }
 
+fn cq_is_cast_target(name: String) -> bool {
+    name == String::from("<type>") ||
+    name == String::from("i8") || name == String::from("i16") ||
+    name == String::from("i32") || name == String::from("i64") ||
+    name == String::from("i128") ||
+    name == String::from("u8") || name == String::from("u16") ||
+    name == String::from("u32") || name == String::from("u64") ||
+    name == String::from("u128") ||
+    name == String::from("f32") || name == String::from("f64")
+}
+
+// The text with every ` as <type>` cast removed, trimmed. Mirrors
+// `without_casts` in vow/src/contract_quality.rs.
+//
+// A cast is transparent to shape classification: `0 as u64` bounds a value
+// exactly as `0` does, and `result as i64` names the same value as `result`.
+// Only a primitive numeric type name is stripped, so `x as Foo` is left alone.
+// The self-hosted printer emits the placeholder `as <type>` rather than the
+// type name (compiler/lower.vow), so that form is accepted too.
+fn cq_without_casts(s: String) -> String {
+    let out: String = String::from("");
+    let mut rest: String = clone_string(s);
+    let marker: String = String::from(" as ");
+    let mut pos: i64 = str_find_str(rest, marker);
+    while pos >= 0 {
+        let n: i64 = rest.len();
+        let after: String = str_substring(rest, pos + 4, n);
+        let an: i64 = after.len();
+        let mut end: i64 = 0;
+        while end < an {
+            let b: i64 = after.byte_at(end);
+            let is_word: bool = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) ||
+                                (b >= 97 && b <= 122) || b == 60 || b == 62;
+            if !is_word {
+                break;
+            }
+            end = end + 1;
+        }
+        if cq_is_cast_target(str_substring(after, 0, end)) {
+            out.push_str(str_substring(rest, 0, pos));
+            rest = str_substring(after, end, an);
+        } else {
+            out.push_str(str_substring(rest, 0, pos + 4));
+            rest = after;
+        }
+        pos = str_find_str(rest, marker);
+    }
+    out.push_str(rest);
+    str_trim(out)
+}
+
 fn cq_is_int_literal(s: String) -> bool {
     let t: String = str_trim(s);
     let n: i64 = t.len();
@@ -13314,6 +13441,8 @@ fn cq_side_has_ordering(s: String) -> bool {
     str_contains_byte(s, 60) || str_contains_byte(s, 62)
 }
 
+// Both sides arrive already cast-stripped by cq_is_weak_result_bound, so
+// `result >= 0 as <type>` reads exactly as `result >= 0` does here.
 fn cq_weak_sides(lhs: String, rhs: String) -> bool {
     let l: String = str_trim(lhs);
     let r: String = str_trim(rhs);
@@ -13325,7 +13454,14 @@ fn cq_weak_sides(lhs: String, rhs: String) -> bool {
 }
 
 // True for a single ordering comparison between `result` and an integer literal.
-fn cq_is_weak_result_bound(pred: String) -> bool {
+fn cq_is_weak_result_bound(raw_pred: String) -> bool {
+    // Casts come out before any operator scanning, not after the split. This
+    // printer renders a cast as ` as <type>` (compiler/lower.vow), and those
+    // angle brackets would otherwise be picked up as the `<` / `>` comparison
+    // operator — splitting `result > 0 as <type>` at the wrong place and
+    // classifying it `substantive` where the Rust printer's ` as i64` reads
+    // `weak`. Stripping first makes the two compilers agree by construction.
+    let pred: String = cq_without_casts(raw_pred);
     if str_find_str(pred, String::from("&&")) >= 0 {
         return false;
     }
@@ -13369,7 +13505,11 @@ fn cq_classify(kind: String, desc: String) -> String {
     if pred == String::from("true") {
         return String::from("tautological");
     }
-    if !cq_has_alpha(pred) {
+    // "References no program value" is tested by the absence of an identifier
+    // character, so cast syntax has to come out first: `0 as i64 >= 0` is as
+    // constant as `0 >= 0`, but its `as i64` would otherwise read as a value
+    // reference and hide the tautology.
+    if !cq_has_alpha(cq_without_casts(pred)) {
         return String::from("tautological");
     }
     if kind == String::from("ensures") && cq_is_weak_result_bound(pred) {

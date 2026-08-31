@@ -470,18 +470,26 @@ fn folds_to_zero(expr: &Expr) -> bool {
     }
 }
 
-/// The verdict for a comparison against a constant `0` whose other operand has
-/// an unsigned integer type. `Some(true)` means the comparison always holds,
-/// `Some(false)` that it never does; `None` means the shape is meaningful and
+/// Which side of `op` carries the compared value when the other side is a
+/// constant `0`, together with the verdict. `true` means the comparison always
+/// holds, `false` that it never does; `None` means the shape is meaningful and
 /// must keep compiling (`x > 0`, `x <= 0`, `x == 0`, `x != 0`).
-fn unsigned_zero_comparison_verdict(op: BinOp, lhs: &Expr, rhs: &Expr) -> Option<bool> {
+///
+/// The side matters: `0 <= x` and `x <= 0` share an operator but only the first
+/// is the tautological shape, so the caller must test *that* side for
+/// non-negativity.
+fn zero_comparison_verdict<'e>(
+    op: BinOp,
+    lhs: &'e Expr,
+    rhs: &'e Expr,
+) -> Option<(&'e Expr, bool)> {
     match op {
         // `x >= 0` / `0 <= x` — always true.
-        BinOp::Ge if folds_to_zero(rhs) => Some(true),
-        BinOp::Le if folds_to_zero(lhs) => Some(true),
+        BinOp::Ge if folds_to_zero(rhs) => Some((lhs, true)),
+        BinOp::Le if folds_to_zero(lhs) => Some((rhs, true)),
         // `x < 0` / `0 > x` — always false.
-        BinOp::Lt if folds_to_zero(rhs) => Some(false),
-        BinOp::Gt if folds_to_zero(lhs) => Some(false),
+        BinOp::Lt if folds_to_zero(rhs) => Some((lhs, false)),
+        BinOp::Gt if folds_to_zero(lhs) => Some((rhs, false)),
         _ => None,
     }
 }
@@ -606,6 +614,22 @@ pub struct Checker<'e> {
     pub(crate) emitter: &'e mut dyn DiagnosticEmitter,
     string_exprs: StringExprSet,
     pattern_aggregates: PatternAggregateMap,
+    /// Cast expressions whose value is provably non-negative in their own
+    /// (signed) target type, keyed by `&Expr` address, holding `(source,
+    /// target)` for the diagnostic. Populated by the `Cast` arm of
+    /// `check_expr_inner`; read by the comparison arm to catch
+    /// `(u32_value as i64) >= 0`, which `unsigned_comparison_ty` cannot see
+    /// because the cast has already moved the compared type to a signed one.
+    /// Keyed on casts alone, so it is bounded by the cast count, not the
+    /// expression count.
+    ///
+    /// Address keying is sound because the AST is fully built before checking
+    /// and never mutated during it, so no `Expr` is freed and reallocated
+    /// mid-run and two live nodes cannot share an address. `string_exprs` above
+    /// already relies on the same invariant; note it is load-bearing here in a
+    /// stronger way, because a stale hit would reject valid code rather than
+    /// merely misplace a lowering hint.
+    nonneg_casts: HashMap<usize, (Ty, Ty)>,
     in_loop: u32,
     /// Stack of break-value type collectors. `Some(vec)` for `loop` (collects
     /// break types), `None` for `while` (break-with-value is an error).
@@ -651,6 +675,7 @@ impl<'e> Checker<'e> {
             emitter,
             string_exprs: HashSet::new(),
             pattern_aggregates: HashMap::new(),
+            nonneg_casts: HashMap::new(),
             in_loop: 0,
             break_types_stack: Vec::new(),
             const_values: HashMap::new(),
@@ -1555,6 +1580,55 @@ impl<'e> Checker<'e> {
         }
     }
 
+    /// Why `value_side` can never be negative, as `(unsigned_ty, widened_to)`.
+    ///
+    /// Two routes reach the same conclusion. `widened_to == None` is the plain
+    /// case — the compared type is itself unsigned. `Some(tgt)` is the cast
+    /// case: the operand is an unsigned value zero-extended into the strictly
+    /// wider *signed* `tgt`, which `unsigned_comparison_ty` cannot detect
+    /// because the compared type it sees is already signed. Both make a
+    /// comparison against 0 a tautology.
+    fn never_negative_operand(
+        &self,
+        value_side: &Expr,
+        lhs_ty: &Ty,
+        rhs_ty: &Ty,
+    ) -> Option<(Ty, Option<Ty>)> {
+        if let Some(unsigned_ty) = unsigned_comparison_ty(lhs_ty, rhs_ty) {
+            return Some((unsigned_ty, None));
+        }
+        self.nonneg_casts
+            .get(&(value_side as *const Expr as usize))
+            .map(|(src, tgt)| (src.clone(), Some(tgt.clone())))
+    }
+
+    /// The unsigned type whose zero-extension makes a cast `operand as tgt_ty`
+    /// provably non-negative *in the signed target type*, if any.
+    ///
+    /// `as` is widening-only plus same-width signedness change
+    /// (`docs/spec/grammar.md`), which makes the rule exact: zero-extension
+    /// happens iff the source is unsigned and the target is strictly wider.
+    /// Both excluded cases really are meaningful comparisons and must keep
+    /// compiling — a same-width `u64 as i64` is a bit reinterpretation
+    /// (`u64::MAX as i64` is `-1`), and a signed source sign-extends. Casts to
+    /// an unsigned target are left alone so `unsigned_comparison_ty` reports
+    /// them once, rather than both paths firing on one site.
+    fn zero_extended_source(&self, operand: &Expr, src_ty: &Ty, tgt_ty: &Ty) -> Option<Ty> {
+        if tgt_ty.is_unsigned() {
+            return None;
+        }
+        let (src_width, tgt_width) = (src_ty.integer_width()?, tgt_ty.integer_width()?);
+        if src_ty.is_unsigned() && tgt_width > src_width {
+            return Some(src_ty.clone());
+        }
+        // A chain (`v as u32 as i64`) stays non-negative: every further `as` is
+        // widening or a same-width reinterpretation of an already-non-negative
+        // value, so carry the original unsigned source through.
+        self.nonneg_casts
+            .get(&(operand as *const Expr as usize))
+            .map(|(root_src, _)| root_src.clone())
+    }
+
     fn check_expr(&mut self, expr: &Expr) -> Ty {
         let ty = self.check_expr_inner(expr);
         if ty == Ty::Str {
@@ -1635,19 +1709,35 @@ impl<'e> Checker<'e> {
                                     "convert one operand so both sides have the same type".to_string()
                                 ],
                             );
-                        } else if let Some(unsigned_ty) = unsigned_comparison_ty(&lhs_ty, &rhs_ty)
-                            && let Some(always) = unsigned_zero_comparison_verdict(*op, lhs, rhs)
+                        } else if let Some((value_side, always)) =
+                            zero_comparison_verdict(*op, lhs, rhs)
+                            && let Some((unsigned_ty, widened_to)) =
+                                self.never_negative_operand(value_side, &lhs_ty, &rhs_ty)
                         {
+                            let verdict = if always { "true" } else { "false" };
+                            let (what, hint) = match &widened_to {
+                                // `(u32_value as i64) >= 0` — the cast moved the
+                                // compared type to a signed one, so the plain
+                                // unsigned rule cannot see it, but a widened
+                                // unsigned value is still never negative.
+                                Some(tgt) => (
+                                    format!("for `{unsigned_ty}` zero-extended to `{tgt}`"),
+                                    format!(
+                                        "`{unsigned_ty}` zero-extends into `{tgt}`, so the result is never negative; drop the clause, or state the real bound (e.g. `i < v.len()`)"
+                                    ),
+                                ),
+                                None => (
+                                    format!("for unsigned type `{unsigned_ty}`"),
+                                    format!(
+                                        "`{unsigned_ty}` values are never negative; drop the clause, or state the real bound (e.g. `i < v.len()`)"
+                                    ),
+                                ),
+                            };
                             self.emit_error_with_hints(
                                 ErrorCode::TautologicalComparison,
-                                format!(
-                                    "comparison with 0 is always {} for unsigned type `{unsigned_ty}`",
-                                    if always { "true" } else { "false" }
-                                ),
+                                format!("comparison with 0 is always {verdict} {what}"),
                                 expr.span,
-                                vec![format!(
-                                    "`{unsigned_ty}` values are never negative; drop the clause, or state the real bound (e.g. `i < v.len()`)"
-                                )],
+                                vec![hint],
                             );
                         }
                         Ty::Bool
@@ -2611,8 +2701,11 @@ impl<'e> Checker<'e> {
                     }
                 }
             }
-            ExprKind::Cast { expr, target_ty } => {
-                let src_ty = self.check_expr(expr);
+            ExprKind::Cast {
+                expr: operand,
+                target_ty,
+            } => {
+                let src_ty = self.check_expr(operand);
                 let tgt_ty = match target_ty.as_ref() {
                     vow_syntax::ast::Type::Named { name, .. } => {
                         Ty::from_primitive_name(name).unwrap_or(Ty::Unit)
@@ -2620,7 +2713,7 @@ impl<'e> Checker<'e> {
                     _ => Ty::Unit,
                 };
                 if src_ty.is_lit_int() && tgt_ty.is_integer() {
-                    self.check_integer_literal_range(expr, &tgt_ty);
+                    self.check_integer_literal_range(operand, &tgt_ty);
                 } else if let (Some(src_width), Some(tgt_width)) =
                     (src_ty.integer_width(), tgt_ty.integer_width())
                 {
@@ -2628,7 +2721,7 @@ impl<'e> Checker<'e> {
                         self.emit_error_with_hints(
                             ErrorCode::NarrowingCastNotAllowed,
                             format!("cannot cast {src_ty} to {tgt_ty} via as"),
-                            expr.span,
+                            operand.span,
                             vec![format!(
                                 "use a `{src_ty}_to_{tgt_ty}_try`, `_wrap`, or `_sat` narrowing intrinsic"
                             )],
@@ -2638,9 +2731,13 @@ impl<'e> Checker<'e> {
                     self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!("cannot cast `{src_ty}` to `{tgt_ty}`"),
-                        expr.span,
+                        operand.span,
                         vec!["`as` only permits same-width or widening integer casts".to_string()],
                     );
+                }
+                if let Some(root_src) = self.zero_extended_source(operand, &src_ty, &tgt_ty) {
+                    self.nonneg_casts
+                        .insert(expr as *const Expr as usize, (root_src, tgt_ty.clone()));
                 }
                 tgt_ty
             }
@@ -4264,6 +4361,18 @@ mod tests {
         })
     }
 
+    /// `<inner> as <ty>` — a cast whose operand is an arbitrary expression,
+    /// for building the widening chains the cast bypass turns on.
+    fn cast_of(inner: Expr, ty: &str) -> Expr {
+        make_expr(ExprKind::Cast {
+            expr: Box::new(inner),
+            target_ty: Box::new(Type::Named {
+                name: ty.to_string(),
+                span: dummy_span(),
+            }),
+        })
+    }
+
     fn cmp(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
         make_expr(ExprKind::BinaryOp {
             op,
@@ -4388,6 +4497,145 @@ mod tests {
         // And the mirrored forms.
         assert_comparison_clean(&cmp(BinOp::Lt, lit_int(0), cast_to(1, "u64")));
         assert_comparison_clean(&cmp(BinOp::Ge, lit_int(0), cast_to(1, "u64")));
+    }
+
+    fn assert_tautological_widened(expr: &Expr, always: &str, src: &str, tgt: &str) {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        assert_eq!(checker.check_expr(expr), Ty::Bool);
+        assert!(checker.has_errors());
+        assert_eq!(
+            emitter.0.len(),
+            1,
+            "expected exactly one diagnostic, got: {:?}",
+            emitter.0
+        );
+        assert_eq!(emitter.0[0].code, ErrorCode::TautologicalComparison);
+        assert_eq!(
+            emitter.0[0].message,
+            format!("comparison with 0 is always {always} for `{src}` zero-extended to `{tgt}`")
+        );
+    }
+
+    #[test]
+    fn widened_unsigned_ge_zero_rejected() {
+        // `(x as i64) >= 0` with `x: u32`. The cast moves the compared type to a
+        // signed one, so the plain unsigned rule cannot see it — but a u32
+        // zero-extends into i64, so the clause is still always true. This is the
+        // shape #1104's `v.len() as u64` cast bridge invites, and it bypassed the
+        // #1112 guarantee until this rule existed.
+        assert_tautological_widened(
+            &cmp(BinOp::Ge, cast_of(cast_to(1, "u32"), "i64"), lit_int(0)),
+            "true",
+            "u32",
+            "i64",
+        );
+        // Mirrored, and the always-false operators.
+        assert_tautological_widened(
+            &cmp(BinOp::Le, lit_int(0), cast_of(cast_to(1, "u32"), "i64")),
+            "true",
+            "u32",
+            "i64",
+        );
+        assert_tautological_widened(
+            &cmp(BinOp::Lt, cast_of(cast_to(1, "u32"), "i64"), lit_int(0)),
+            "false",
+            "u32",
+            "i64",
+        );
+        assert_tautological_widened(
+            &cmp(BinOp::Gt, lit_int(0), cast_of(cast_to(1, "u32"), "i64")),
+            "false",
+            "u32",
+            "i64",
+        );
+    }
+
+    #[test]
+    fn widened_unsigned_chain_reports_the_root_source() {
+        // `(x as i32 as i64) >= 0` with `x: u16` — non-negativity is established
+        // by the first widening and carried through the second, so the
+        // diagnostic names `u16`, not the intermediate `i32`.
+        assert_tautological_widened(
+            &cmp(
+                BinOp::Ge,
+                cast_of(cast_of(cast_to(1, "u16"), "i32"), "i64"),
+                lit_int(0),
+            ),
+            "true",
+            "u16",
+            "i64",
+        );
+    }
+
+    #[test]
+    fn same_width_signedness_cast_comparison_allowed() {
+        // `(x as i64) >= 0` with `x: u64` is a bit reinterpretation, not a
+        // widening: `u64::MAX as i64` is `-1`, so the comparison genuinely
+        // discriminates and MUST keep compiling. Verified at runtime in
+        // `tests/run/unsigned_zero_comparisons.vow`.
+        assert_comparison_clean(&cmp(
+            BinOp::Ge,
+            cast_of(cast_to(1, "u64"), "i64"),
+            lit_int(0),
+        ));
+        assert_comparison_clean(&cmp(
+            BinOp::Lt,
+            cast_of(cast_to(1, "u64"), "i64"),
+            lit_int(0),
+        ));
+        assert_comparison_clean(&cmp(
+            BinOp::Le,
+            lit_int(0),
+            cast_of(cast_to(1, "u64"), "i64"),
+        ));
+    }
+
+    #[test]
+    fn widened_signed_cast_comparison_allowed() {
+        // A signed source sign-extends, so `(x as i64) >= 0` with `x: i32` still
+        // discriminates.
+        assert_comparison_clean(&cmp(BinOp::Ge, cast_of(i32_cast(1), "i64"), lit_int(0)));
+        assert_comparison_clean(&cmp(BinOp::Lt, cast_of(i32_cast(1), "i64"), lit_int(0)));
+    }
+
+    #[test]
+    fn widened_unsigned_meaningful_comparisons_allowed() {
+        // `<= 0` (means `== 0`), `> 0` (means `!= 0`), and equality all still
+        // constrain a widened unsigned value.
+        assert_comparison_clean(&cmp(
+            BinOp::Le,
+            cast_of(cast_to(1, "u32"), "i64"),
+            lit_int(0),
+        ));
+        assert_comparison_clean(&cmp(
+            BinOp::Gt,
+            cast_of(cast_to(1, "u32"), "i64"),
+            lit_int(0),
+        ));
+        assert_comparison_clean(&cmp(
+            BinOp::Eq,
+            cast_of(cast_to(1, "u32"), "i64"),
+            lit_int(0),
+        ));
+        // `0 >= (x as i64)` is `x <= 0`, not the tautological direction.
+        assert_comparison_clean(&cmp(
+            BinOp::Ge,
+            lit_int(0),
+            cast_of(cast_to(1, "u32"), "i64"),
+        ));
+    }
+
+    #[test]
+    fn widened_unsigned_cast_to_unsigned_reports_once() {
+        // `(x as u64) >= 0` — the compared type is unsigned, so the plain rule
+        // fires. The widened-cast rule must stay quiet here so the site gets
+        // exactly one diagnostic, naming the unsigned type.
+        assert_tautological(
+            &cmp(BinOp::Ge, cast_of(cast_to(1, "u32"), "u64"), lit_int(0)),
+            "true",
+            "u64",
+        );
     }
 
     #[test]

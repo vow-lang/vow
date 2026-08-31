@@ -2971,6 +2971,10 @@ The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g
 | `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
 | `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
+`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` — a cast never makes a constant bound substantive. This matters because the cast form is the idiom a `v.len() as u64`-style bridge produces at every consuming site; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).
+
+An always-true or always-false comparison against `0` on an unsigned — or zero-extended unsigned — operand is not a quality verdict at all: it is the hard [`TautologicalComparison`](errors.md#tautologicalcomparison) type error, so such a clause never reaches `vow contracts`.
+
 ## Trace Output (stderr, --debug-trace)
 
 When `--debug-trace=calls` or `--debug-trace=full` is used, the compiled binary emits JSON lines to stderr:
@@ -3888,11 +3892,33 @@ The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
 status and quality tallies, so an author or CI can gate on hollow proofs.
 
 **CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
-quality of the self-hosted compiler's own contracts: it reads
-`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
-exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
-unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
-ratchet down as contracts harden. The dispatch-totality example above
+quality of the self-hosted compiler's own contracts: it fails if the `weak` or
+`tautological` count exceeds a committed baseline, so a new `ensures result >= 0`
+cannot slip in unnoticed. It runs in `scripts/full_test.sh`. The baseline is an
+upper bound to ratchet down as contracts harden.
+
+`vow contracts` follows `use` edges, so an entry point covers its own module
+graph and nothing outside it. The gate therefore runs once per entry point,
+with `--label` so a breach names which one regressed:
+
+| Entry point              | Why it is gated |
+|--------------------------|-----------------|
+| `compiler/main.vow`      | the compiler's own `use` graph |
+| `compiler/module_io.vow` | deliberately-unwired `.vmod` parity infrastructure, **not** in `main.vow`'s `use` graph — it had zero coverage until it was listed here, and it must not drift |
+
+`tests/`, `stdlib/`, `examples/` and `benchmarks/` are deliberately **not**
+gated. They are the corpus — the *input* to contract cleanup — and they
+legitimately carry weak and tautological clauses today; a baseline aggregated
+over hundreds of files is a number nobody can ratchet down meaningfully.
+Corpus-side cleanup is enforced instead by the hard
+[`TautologicalComparison`](errors.md#tautologicalcomparison) type error, which
+fails the build per site rather than counting, plus reviewer discipline.
+
+The ratchet runs the self-hosted compiler only, so `scripts/full_test.sh` also
+carries a `contract-quality/parity` case comparing the `(function, kind,
+quality)` triples both compilers derive from
+`tests/fixtures/contracts/quality_shapes.vow`. Without it the Rust classifier
+has no end-to-end coverage and the two can drift. The dispatch-totality example above
 (`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`
 (`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)
 are enforced in `compiler/lower.vow` today.
@@ -4065,6 +4091,18 @@ fn sum(n: u64) -> u64 vow {
 ```
 
 **Output:** ``comparison with 0 is always true for unsigned type `u64` ``
+
+**Widening casts do not launder the tautology.** A cast can move the compared type to a signed one while leaving the value provably non-negative, so the rule follows the value, not the printed type. Because `as` is widening-only plus same-width signedness change (see [Type Cast](grammar.md#type-cast)), the condition is exact: the comparison is tautological iff the source is unsigned **and** the target is strictly wider, i.e. the cast zero-extends.
+
+```vow
+fn f(x: u32) -> bool { (x as i64) >= 0 }   // error — u32 zero-extends into i64
+fn g(x: u64) -> bool { (x as i64) >= 0 }   // ok — same width, `u64::MAX as i64` is -1
+fn h(x: i32) -> bool { (x as i64) >= 0 }   // ok — a signed source sign-extends
+```
+
+A chain does not hide it either: `(x as i32 as i64) >= 0` with `x: u32` is rejected, and the diagnostic names the original unsigned source.
+
+**Output:** ``comparison with 0 is always true for `u32` zero-extended to `i64` ``
 
 **Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.
 
@@ -7761,6 +7799,10 @@ The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g
 | `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
 | `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
+`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` — a cast never makes a constant bound substantive. This matters because the cast form is the idiom a `v.len() as u64`-style bridge produces at every consuming site; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).
+
+An always-true or always-false comparison against `0` on an unsigned — or zero-extended unsigned — operand is not a quality verdict at all: it is the hard [`TautologicalComparison`](errors.md#tautologicalcomparison) type error, so such a clause never reaches `vow contracts`.
+
 ## Trace Output (stderr, --debug-trace)
 
 When `--debug-trace=calls` or `--debug-trace=full` is used, the compiled binary emits JSON lines to stderr:
@@ -8680,11 +8722,33 @@ The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
 status and quality tallies, so an author or CI can gate on hollow proofs.
 
 **CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
-quality of the self-hosted compiler's own contracts: it reads
-`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
-exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
-unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
-ratchet down as contracts harden. The dispatch-totality example above
+quality of the self-hosted compiler's own contracts: it fails if the `weak` or
+`tautological` count exceeds a committed baseline, so a new `ensures result >= 0`
+cannot slip in unnoticed. It runs in `scripts/full_test.sh`. The baseline is an
+upper bound to ratchet down as contracts harden.
+
+`vow contracts` follows `use` edges, so an entry point covers its own module
+graph and nothing outside it. The gate therefore runs once per entry point,
+with `--label` so a breach names which one regressed:
+
+| Entry point              | Why it is gated |
+|--------------------------|-----------------|
+| `compiler/main.vow`      | the compiler's own `use` graph |
+| `compiler/module_io.vow` | deliberately-unwired `.vmod` parity infrastructure, **not** in `main.vow`'s `use` graph — it had zero coverage until it was listed here, and it must not drift |
+
+`tests/`, `stdlib/`, `examples/` and `benchmarks/` are deliberately **not**
+gated. They are the corpus — the *input* to contract cleanup — and they
+legitimately carry weak and tautological clauses today; a baseline aggregated
+over hundreds of files is a number nobody can ratchet down meaningfully.
+Corpus-side cleanup is enforced instead by the hard
+[`TautologicalComparison`](errors.md#tautologicalcomparison) type error, which
+fails the build per site rather than counting, plus reviewer discipline.
+
+The ratchet runs the self-hosted compiler only, so `scripts/full_test.sh` also
+carries a `contract-quality/parity` case comparing the `(function, kind,
+quality)` triples both compilers derive from
+`tests/fixtures/contracts/quality_shapes.vow`. Without it the Rust classifier
+has no end-to-end coverage and the two can drift. The dispatch-totality example above
 (`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`
 (`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)
 are enforced in `compiler/lower.vow` today.
@@ -8858,6 +8922,18 @@ fn sum(n: u64) -> u64 vow {
 ```
 
 **Output:** ``comparison with 0 is always true for unsigned type `u64` ``
+
+**Widening casts do not launder the tautology.** A cast can move the compared type to a signed one while leaving the value provably non-negative, so the rule follows the value, not the printed type. Because `as` is widening-only plus same-width signedness change (see [Type Cast](grammar.md#type-cast)), the condition is exact: the comparison is tautological iff the source is unsigned **and** the target is strictly wider, i.e. the cast zero-extends.
+
+```vow
+fn f(x: u32) -> bool { (x as i64) >= 0 }   // error — u32 zero-extends into i64
+fn g(x: u64) -> bool { (x as i64) >= 0 }   // ok — same width, `u64::MAX as i64` is -1
+fn h(x: i32) -> bool { (x as i64) >= 0 }   // ok — a signed source sign-extends
+```
+
+A chain does not hide it either: `(x as i32 as i64) >= 0` with `x: u32` is rejected, and the diagnostic names the original unsigned source.
+
+**Output:** ``comparison with 0 is always true for `u32` zero-extended to `i64` ``
 
 **Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.
 

@@ -1,0 +1,9 @@
+// TEST: stderr "comparison with 0 is always true for `u16` zero-extended to `i64`"
+// TEST: error-code TautologicalComparison
+module TautologicalWidenedUnsignedZeroLe
+
+fn f(x: u16) -> bool {
+  0 <= (x as i64)
+}
+
+fn main() -> i32 { 0 }

@@ -382,11 +382,33 @@ The `summary` carries `vacuous` and `trivially_satisfiable` counts alongside the
 status and quality tallies, so an author or CI can gate on hollow proofs.
 
 **CI weak-gate.** `scripts/check_contract_quality.py` ratchets on the static
-quality of the self-hosted compiler's own contracts: it reads
-`vow contracts compiler/main.vow` and fails if the `weak` or `tautological` count
-exceeds a committed baseline, so a new `ensures result >= 0` cannot slip in
-unnoticed. It runs in `scripts/full_test.sh`. The baseline is an upper bound to
-ratchet down as contracts harden. The dispatch-totality example above
+quality of the self-hosted compiler's own contracts: it fails if the `weak` or
+`tautological` count exceeds a committed baseline, so a new `ensures result >= 0`
+cannot slip in unnoticed. It runs in `scripts/full_test.sh`. The baseline is an
+upper bound to ratchet down as contracts harden.
+
+`vow contracts` follows `use` edges, so an entry point covers its own module
+graph and nothing outside it. The gate therefore runs once per entry point,
+with `--label` so a breach names which one regressed:
+
+| Entry point              | Why it is gated |
+|--------------------------|-----------------|
+| `compiler/main.vow`      | the compiler's own `use` graph |
+| `compiler/module_io.vow` | deliberately-unwired `.vmod` parity infrastructure, **not** in `main.vow`'s `use` graph — it had zero coverage until it was listed here, and it must not drift |
+
+`tests/`, `stdlib/`, `examples/` and `benchmarks/` are deliberately **not**
+gated. They are the corpus — the *input* to contract cleanup — and they
+legitimately carry weak and tautological clauses today; a baseline aggregated
+over hundreds of files is a number nobody can ratchet down meaningfully.
+Corpus-side cleanup is enforced instead by the hard
+[`TautologicalComparison`](errors.md#tautologicalcomparison) type error, which
+fails the build per site rather than counting, plus reviewer discipline.
+
+The ratchet runs the self-hosted compiler only, so `scripts/full_test.sh` also
+carries a `contract-quality/parity` case comparing the `(function, kind,
+quality)` triples both compilers derive from
+`tests/fixtures/contracts/quality_shapes.vow`. Without it the Rust classifier
+has no end-to-end coverage and the two can drift. The dispatch-totality example above
 (`binop_opcode`, `ensures: result != -1`) and `binop_result_ty`
 (`ensures: result == ITY_BOOL() || result == ITY_U64() || result == ITY_I64()`)
 are enforced in `compiler/lower.vow` today.

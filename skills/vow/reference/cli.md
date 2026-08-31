@@ -464,6 +464,10 @@ The `proven` / `proven-ir` split and the rule that a resource-limited retry (e.g
 | `tautological` | A constant clause that references no program value (e.g. `true`, `0 >= 0`). Constrains nothing. |
 | `substantive`  | Everything else — equality, relational, inverse/round-trip, dispatch-totality, or function-call shapes. The classifier is conservative: anything not provably weak/tautological is reported `substantive`. |
 
+`as` casts are transparent to both verdicts. `result >= 0 as i64` is `weak` exactly as `result >= 0` is, `result as i64 >= 0` folds the same way, and `0 as i64 >= 0` is `tautological` — a cast never makes a constant bound substantive. This matters because the cast form is the idiom a `v.len() as u64`-style bridge produces at every consuming site; without the fold a `weak` ratchet stops meaning anything. Only a primitive numeric target is folded, so `x as Foo` is left alone, and a cast never turns a program value into a literal (`result >= x as i64` stays `substantive`).
+
+An always-true or always-false comparison against `0` on an unsigned — or zero-extended unsigned — operand is not a quality verdict at all: it is the hard [`TautologicalComparison`](errors.md#tautologicalcomparison) type error, so such a clause never reaches `vow contracts`.
+
 ## Trace Output (stderr, --debug-trace)
 
 When `--debug-trace=calls` or `--debug-trace=full` is used, the compiled binary emits JSON lines to stderr:
