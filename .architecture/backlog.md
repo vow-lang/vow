@@ -15,7 +15,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   diagnostics and the `nonneg_casts` mutation at the call site.
 - **First seen**: 2026-08-31
 - **Report**: `.architecture/reviews/2026-08-31-cast-legality-verdict.md`
-- **PR**: (pending)
+- **PR**: #1161
 
 ## integer-literal-range-fit
 
