@@ -73,7 +73,10 @@ pub struct VowBinding {
     pub tag: u8,
     _pad: [u8; 7],
     pub payload: u64,
+    pub payload_hi: u64,
 }
+
+const _: () = assert!(core::mem::size_of::<VowBinding>() == 32);
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_violation(
@@ -101,7 +104,11 @@ pub unsafe extern "C" fn __vow_violation(
     let decoded: Vec<(String, u8, u128)> = (0..binding_count as usize)
         .map(|i| {
             let b = unsafe { &*bindings_ptr.add(i) };
-            (decode(b.name), b.tag, u128::from(b.payload))
+            (
+                decode(b.name),
+                b.tag,
+                u128::from(b.payload) | (u128::from(b.payload_hi) << 64),
+            )
         })
         .collect();
     let bindings: Vec<ValueBinding<'_>> = decoded
@@ -4579,6 +4586,14 @@ pub extern "C" fn __vow_sanitize_check_generation(vec: *const u8, index: usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vow_binding_carries_a_high_limb() {
+        assert_eq!(core::mem::size_of::<VowBinding>(), 32);
+        assert_eq!(core::mem::align_of::<VowBinding>(), 8);
+        assert_eq!(core::mem::offset_of!(VowBinding, payload), 16);
+        assert_eq!(core::mem::offset_of!(VowBinding, payload_hi), 24);
+    }
 
     /// The 128-bit division helpers must agree with native Rust `i128`/`u128`
     /// arithmetic across both limbs, including the sign rules that differ

@@ -1935,20 +1935,20 @@ fn emit_vow_violation_body(
         let (bindings_ptr, count_val) = if n > 0 {
             let slot: StackSlot = builder.create_sized_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
-                (24 * n) as u32,
+                (32 * n) as u32,
                 3,
             ));
             for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
                 let name_ptr = builder.ins().symbol_value(types::I64, *name_gv);
                 builder
                     .ins()
-                    .stack_store(types::I64, name_ptr, slot, (i * 24) as i32);
+                    .stack_store(types::I64, name_ptr, slot, (i * 32) as i32);
                 let tag_val = builder
                     .ins()
                     .iconst(types::I8, tag_for_ir_ty(*ir_ty) as i64);
                 builder
                     .ins()
-                    .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
+                    .stack_store(types::I64, tag_val, slot, (i * 32 + 8) as i32);
                 let payload: Value = match ir_ty {
                     IrTy::I8 => builder.ins().sextend(types::I64, *cl_val),
                     IrTy::U8 => builder.ins().uextend(types::I64, *cl_val),
@@ -1971,7 +1971,11 @@ fn emit_vow_violation_body(
                 };
                 builder
                     .ins()
-                    .stack_store(types::I64, payload, slot, (i * 24 + 16) as i32);
+                    .stack_store(types::I64, payload, slot, (i * 32 + 16) as i32);
+                let payload_hi = builder.ins().iconst(types::I64, 0);
+                builder
+                    .ins()
+                    .stack_store(types::I64, payload_hi, slot, (i * 32 + 24) as i32);
             }
             let base = builder.ins().stack_addr(types::I64, slot, 0);
             let cnt = builder.ins().iconst(types::I32, n as i64);
