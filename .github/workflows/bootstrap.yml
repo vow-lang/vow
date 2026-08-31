@@ -1,0 +1,100 @@
+name: Bootstrap
+
+# The three-stage bootstrap and its SHA-256 fixed-point check, moved off the
+# pull-request path. Together the two jobs are ~900s of runner time and, once
+# `build-and-test` was cut to ~280s, the Linux one alone *was* the critical
+# path -- a pull request waited on it and on nothing else.
+#
+# It runs on every push to `main` as well as nightly. That matters more than
+# the cron: a self-hosting break is attributed to the merge commit that caused
+# it, not to a day of commits. The nightly run is the backstop for anything
+# push-triggered misses (a force-push, a skipped run, an infrastructure blip).
+#
+# The trade this accepts: a pull request can no longer tell you that the
+# compiler still compiles itself byte-identically. That is caught one merge
+# later instead. `build-and-test` still builds the concatenated self-hosted
+# compiler on both platforms, so a change that stops it compiling at all is
+# still a pull-request failure -- what moves here is specifically the
+# fixed-point guarantee and Stage 1/2 ESBMC verification.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 03:53 UTC -- offset from cargo-mutants (02:17), equivalence (04:41) and
+    # arena-verify (06:29) so the nightly jobs never contend for runners.
+    - cron: "53 3 * * *"
+  workflow_dispatch: {}
+
+# Checkout, a toolchain, an ESBMC download, and a build. Nothing here writes.
+permissions:
+  contents: read
+
+jobs:
+  # Same docs-only gate as ci.yml: a prose commit cannot break a bootstrap.
+  # Job-level `if:` rather than a top-level `paths-ignore:`, so a skipped job
+  # reports success instead of leaving a status check Pending forever.
+  #
+  # `schedule` and `workflow_dispatch` carry no commit range, which
+  # `ci_docs_only.py` reports as `code=true` -- so the nightly run needs no
+  # condition of its own.
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Both ends of the range have to be present for `git diff base...head`.
+          fetch-depth: 0
+      - id: classify
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  bootstrap:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression
+    # (failing Stage 1/2 verification, or a broken SHA-256 fixed point)
+    # is caught. Stage 3 skips ESBMC to roughly halve wall time;
+    # verification does not affect codegen, so the fixed-point check
+    # remains meaningful.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
+        run: scripts/bootstrap.sh --stage3-no-verify
+      - name: Verifier-evaluation suite (self-hosted)
+        # Holds the fixed-point self-hosted compiler to the same exact
+        # ground-truth blame/vow_id corpus as the Rust verifier.
+        run: |
+          ulimit -v 2000000
+          python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
+
+  bootstrap-macos:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # Mirrors `bootstrap` but with --no-verify. The SHA-256 fixed-point check
+    # is preserved: verification does not change codegen, so a successful
+    # match here still proves the self-hosted compiler is a fixed point on
+    # macOS.
+    #
+    # The --no-verify is no longer forced on us -- ESBMC 8.4+ ships
+    # `esbmc-macos.zip` (arm64, Boolector bundled, same archive layout). Wiring
+    # it up is #1156.
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Bootstrap (no verification -- see #1156)
+        run: scripts/bootstrap.sh --no-verify
