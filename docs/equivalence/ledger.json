@@ -140,7 +140,7 @@
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "fixed",
-      "note": "Same code (TypeMismatch), different cascade depth: Rust also reports the dependent let-binding error. Cosmetic.",
+      "note": "Was a cascade-depth difference (same TypeMismatch code, Rust also reported the dependent let-binding error). Both now emit exactly one TypeMismatch; retained so a reappearance reads as a regression.",
       "issue": 1088
     },
     "tests/fixtures/mutants/sample_extern.vow": {

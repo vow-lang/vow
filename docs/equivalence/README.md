@@ -99,12 +99,14 @@ Schema: see `ledger.schema.json`.
 
 ### Tier-1 parity suppressions
 
-Known `diagnostics[].error_code` divergences in `full_test.sh` use the corpus
-entries in `ledger.json`. An entry suppresses only the observable it names and
-only while its status is `open` or `expected`; agreement becomes a hard failure
-that requires marking the entry fixed, and a divergence on a fixed entry is a
+Known `diagnostics[].error_code` divergences in the compile-error comparator
+(`compare_error`, the `tests/error/` suite) use the corpus entries in
+`ledger.json`. An entry suppresses only the observable it names and only while
+its status is `open` or `expected`; agreement becomes a hard failure that
+requires marking the entry fixed, and a divergence on a fixed entry is a
 regression. This lets the per-fixture parity harness and the Tier-2 sweep share
-one registry.
+one registry. `compare_json` has no ledger path: a fixture that reaches it must
+agree outright.
 
 Known `counterexamples[].values` divergences instead use a fixture-local
 `// TEST: known-cex-divergence <issue> "<why>"` directive. The Tier-2 runner
@@ -113,6 +115,22 @@ ledger would make `reconcile()` incorrectly report them as fixed on every
 nightly run. The directive is scoped to values only, reports as a loud skip
 while the mismatch reproduces, and becomes a hard failure once the values
 agree so stale directives cannot accumulate.
+
+Two suppressions are unconditional rather than per-fixture, so they are the
+ones to revisit first when widening the comparison:
+
+- **`compare_json` compares no diagnostics at all when `status` is
+  `VerifyFailed`.** This predates the comparator extraction and currently masks
+  #1138 — the self-hosted compiler emits an empty `diagnostics[]` for
+  `VerifyFailed` while Rust emits one entry per counterexample. Because that
+  gap covers the whole `tests/verify-fail/` suite, the `error_code`/`blame`
+  multiset is exercised only outside `VerifyFailed`. Dropping the guard is
+  blocked on #1138, the same ordering constraint #1136 records for spans and
+  `violation`.
+- **Counterexample value names prefixed `_esbmc` are dropped before
+  comparison.** These are ESBMC's own temporaries, not the agent-facing CEGIS
+  payload the two compilers owe each other; `vowc --help` documents the prefix
+  as internal. Everything without the prefix is compared exactly.
 
 ## Running it
 
