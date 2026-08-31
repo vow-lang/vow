@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-08-25",
+  "updated": "2026-08-31",
   "pairs": {
     "lexer": {
       "rust": "vow-syntax/src/lexer.rs, vow-syntax/src/token.rs",
@@ -57,90 +57,114 @@
       "observable": "error_code",
       "status": "expected",
       "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["RegionLinear"]
     },
     "tests/error/linear_if_mutation_phi_leak.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["RegionLinear"]
     },
     "tests/error/linear_loop_mutation_phi_leak.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["RegionLinear"]
     },
     "tests/error/linear_match_mutation_phi_leak.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["RegionLinear"]
     },
     "tests/error/linear_match_wrong_enum_qualifier.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
-      "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "note": "Both reject during linear checking, but Rust emits one additional cascading TypeMismatch diagnostic.",
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation", "TypeMismatch", "TypeMismatch", "TypeMismatch", "TypeMismatch"],
+      "self_hosted_error_codes": ["LinearTypeViolation", "TypeMismatch", "TypeMismatch", "TypeMismatch"]
     },
     "tests/error/linear_region_branch_partial.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["RegionLinear"]
     },
     "tests/error/linear_region_branch_phi_leak.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["RegionLinear"]
     },
     "tests/error/linear_region_loop_break.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["RegionLinear"]
     },
     "tests/error/linear_region_unconsumed.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["RegionLinear"]
     },
     "tests/error/linear_while_mutation_phi_leak.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Rust emits LinearTypeViolation (type checker); self-hosted emits RegionLinear (region inference). Self-hosted has no AST linear tracker.",
-      "issue": 588
+      "issue": 588,
+      "rust_error_codes": ["LinearTypeViolation"],
+      "self_hosted_error_codes": ["RegionLinear"]
     },
     "tests/error/match_arm_missing_comma_block.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Both reject with UnexpectedToken (#904, correctly closed); only the diagnostic count differs (2 vs 3). Cosmetic.",
-      "issue": 1088
+      "issue": 1088,
+      "rust_error_codes": ["UnexpectedToken", "UnexpectedToken"],
+      "self_hosted_error_codes": ["UnexpectedToken", "UnexpectedToken", "UnexpectedToken"]
     },
     "tests/error/match_arm_missing_comma_scalar.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
       "status": "expected",
       "note": "Both reject with UnexpectedToken (#904, correctly closed); only the diagnostic count differs (2 vs 3). Cosmetic.",
-      "issue": 1088
+      "issue": 1088,
+      "rust_error_codes": ["UnexpectedToken", "UnexpectedToken"],
+      "self_hosted_error_codes": ["UnexpectedToken", "UnexpectedToken", "UnexpectedToken"]
     },
     "tests/error/undefined_function.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
-      "status": "expected",
-      "note": "Same code (TypeMismatch), different cascade depth: Rust also reports the dependent let-binding error. Cosmetic.",
+      "status": "fixed",
+      "note": "Was a cascade-depth difference (same TypeMismatch code, Rust also reported the dependent let-binding error). Both now emit exactly one TypeMismatch; retained so a reappearance reads as a regression.",
       "issue": 1088
     },
     "tests/fixtures/mutants/sample_extern.vow": {
@@ -148,7 +172,9 @@
       "observable": "error_code",
       "status": "open",
       "note": "Self-hosted parser does not support `extern \"C\"` blocks: 3x UnexpectedToken vs Rust's MissingContract.",
-      "issue": 1088
+      "issue": 1088,
+      "rust_error_codes": ["MissingContract"],
+      "self_hosted_error_codes": ["UnexpectedToken", "UnexpectedToken", "UnexpectedToken"]
     },
     "tests/run/euclid_gcd_swap_loop.vow": {
       "first_seen": "2026-08-25",

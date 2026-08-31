@@ -3579,7 +3579,10 @@ argument span when Vow can recover it. If `violating_args[].value` is `""`,
 Vow could not statically recover the caller argument value; `arg_offset` and
 `arg_length` still identify the argument expression.
 
-Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
+Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
+appear in a Vow identifier, so the prefix cannot collide with a source name.
+Named inputs map directly to function parameters, including source names that
+begin with `_esbmc`.
 
 ## Unsigned Integer Contracts
 
@@ -5940,7 +5943,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names or ESBMC variable names to counterexample values"
+      "description": "Map of source names or $esbmc$-prefixed internal variable names to counterexample values"
     },
     "violation": {
       "type": "string",
@@ -8566,7 +8569,10 @@ argument span when Vow can recover it. If `violating_args[].value` is `""`,
 Vow could not statically recover the caller argument value; `arg_offset` and
 `arg_length` still identify the argument expression.
 
-Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
+Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot
+appear in a Vow identifier, so the prefix cannot collide with a source name.
+Named inputs map directly to function parameters, including source names that
+begin with `_esbmc`.
 
 ## Unsigned Integer Contracts
 
@@ -10924,7 +10930,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names or ESBMC variable names to counterexample values"
+      "description": "Map of source names or $esbmc$-prefixed internal variable names to counterexample values"
     },
     "violation": {
       "type": "string",

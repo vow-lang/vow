@@ -52,6 +52,30 @@ fn check_memory_limit_classifier_ignores_echoed_memlimit_option() -> i64 {
     0
 }
 
+fn check_counterexample_value_names() -> i64 {
+    let c_names: Vec<String> = Vec::new();
+    c_names.push(String::from("v1"));
+    c_names.push(String::from("v2"));
+    let c_values: Vec<String> = Vec::new();
+    c_values.push(String::from("1"));
+    c_values.push(String::from("2"));
+    let map_keys: Vec<String> = Vec::new();
+    map_keys.push(String::from("v1"));
+    let map_vals: Vec<String> = Vec::new();
+    map_vals.push(String::from("_esbmc_x"));
+    let out_names: Vec<String> = Vec::new();
+    let out_values: Vec<String> = Vec::new();
+
+    map_ce_values(c_names, c_values, map_keys, map_vals, out_names, out_values);
+
+    if out_names.len() != 2 { return 18; }
+    if out_names[0] != String::from("_esbmc_x") { return 19; }
+    if out_names[1] != String::from("$esbmc$v2") { return 20; }
+    if out_values[0] != String::from("1") { return 21; }
+    if out_values[1] != String::from("2") { return 22; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -61,5 +85,7 @@ fn main() -> i32 {
     if r3 != 0 { return i64_to_i32_wrap(r3); }
     let r4: i64 = check_memory_limit_classifier_ignores_echoed_memlimit_option();
     if r4 != 0 { return i64_to_i32_wrap(r4); }
+    let r5: i64 = check_counterexample_value_names();
+    if r5 != 0 { return i64_to_i32_wrap(r5); }
     0
 }

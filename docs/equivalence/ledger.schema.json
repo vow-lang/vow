@@ -73,6 +73,16 @@
           "fixture": {
             "type": "string",
             "description": "Repo-relative path of the promoted tier-1 regression fixture, once one exists."
+          },
+          "rust_error_codes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Exact sorted Rust diagnostic-code multiset for an active error_code divergence."
+          },
+          "self_hosted_error_codes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Exact sorted self-hosted diagnostic-code multiset for an active error_code divergence."
           }
         },
         "allOf": [
@@ -84,6 +94,37 @@
             "then": {
               "required": ["note", "issue"],
               "description": "An 'expected' asymmetry is a standing decision to suppress a finding, so it must carry the rationale and the tracking issue that justify it. Without this the status enum's own prose is unenforced and an entry can bless a divergence silently."
+            }
+          },
+          {
+            "if": {
+              "allOf": [
+                {
+                  "properties": { "status": { "enum": ["open", "expected"] } },
+                  "required": ["status"]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "properties": { "observable": { "const": "error_code" } },
+                      "required": ["observable"]
+                    },
+                    {
+                      "properties": {
+                        "observable": {
+                          "type": "array",
+                          "contains": { "const": "error_code" }
+                        }
+                      },
+                      "required": ["observable"]
+                    }
+                  ]
+                }
+              ]
+            },
+            "then": {
+              "required": ["rust_error_codes", "self_hosted_error_codes"],
+              "description": "An active error-code suppression must pin both exact multisets so a different diagnostic regression cannot inherit the exception."
             }
           }
         ]

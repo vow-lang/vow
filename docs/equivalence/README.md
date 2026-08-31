@@ -16,11 +16,12 @@ reproduces *itself*, byte for byte. That is a strong property over exactly one
 input — the compiler's own source. It says nothing about any construct the
 compiler's source never uses.
 
-`full_test.sh` covers more, over a fixed corpus, but it compares diagnostic
-*counts* rather than error codes, and sweeps neither `benchmarks/` nor
-`stdlib/` uniformly. The first full-corpus differential sweep found a total
-miscompile of Euclid's algorithm in `benchmarks/medium/M13_gcd` that both
-guards had sailed past for the entire life of the benchmark suite.
+`full_test.sh` covers more over a fixed corpus. It compares diagnostic
+error-code/blame multisets and source-level counterexample values, but sweeps
+neither `benchmarks/` nor `stdlib/` uniformly. The first full-corpus
+differential sweep found a total miscompile of Euclid's algorithm in
+`benchmarks/medium/M13_gcd` that both guards had sailed past for the entire
+life of the benchmark suite.
 
 The prompt for this work was Google's
 [Scaling Memory Safety](https://bughunters.google.com/blog/scaling-memory-safety)
@@ -95,6 +96,55 @@ skipped. For the corpus it records which files have ever diverged, so a
 regression is distinguishable from a new finding.
 
 Schema: see `ledger.schema.json`.
+
+### Tier-1 parity suppressions
+
+Known `diagnostics[].error_code` divergences in the compile-error comparator
+(`compare_error`, the `tests/error/` suite) use the corpus entries in
+`ledger.json`. An entry suppresses only the observable it names and only while
+its status is `open` or `expected`; agreement becomes a hard failure that
+requires marking the entry fixed, and a divergence on a fixed entry is a
+regression. Active error-code entries also pin the exact sorted Rust and
+self-hosted code multisets; a different mismatch on the same fixture is a new
+failure, not an inherited exception. This lets the per-fixture parity harness
+and the Tier-2 sweep share one registry. `compare_json` has no ledger path: a
+fixture that reaches it must agree outright.
+
+Known `counterexamples[].values` divergences instead use a fixture-local
+`// TEST: known-cex-divergence <issue> "<why>" rust-name=<name>
+self-name=<name>` directive. The Tier-2 runner does not emit a
+counterexample-values observable, so adding those gaps to the ledger would make
+`reconcile()` incorrectly report them as fixed on every nightly run. The
+directive is scoped to one declared source-label rename: after applying that
+rename, every source-level value map must agree exactly. A changed value or any
+additional mismatch remains a failure. The directive reports as a loud skip
+while that exact rename reproduces and becomes a hard failure once it agrees so
+stale directives cannot accumulate.
+
+Every `compare_json` path enforces the expected counterexample count: zero for
+soft verification failures and equal between compilers otherwise. Because the
+values directive is scoped to values only, it cannot mask a count divergence.
+Known count divergences use the separate fixture-local
+`// TEST: known-cex-count-divergence <issue> "<why>"` directive. It applies only
+to a hard `VerifyFailed` count mismatch, cannot cover any per-counterexample
+field mismatch, and becomes a hard failure once the counts agree.
+
+Two suppressions are unconditional rather than per-fixture, so they are the
+ones to revisit first when widening the comparison:
+
+- **`compare_json` compares no diagnostics at all when `status` is
+  `VerifyFailed`.** This predates the comparator extraction and currently masks
+  #1138 — the self-hosted compiler emits an empty `diagnostics[]` for
+  `VerifyFailed` while Rust emits one entry per counterexample. Because that
+  gap covers the whole `tests/verify-fail/` suite, the `error_code`/`blame`
+  multiset is exercised only outside `VerifyFailed`. Dropping the guard is
+  blocked on #1138, the same ordering constraint #1136 records for spans.
+  Contract-backed counterexample `violation` text is already compared; only
+  blame-`none` fallback text remains excluded pending #1144.
+- **Counterexample value names prefixed `$esbmc$` are dropped before
+  comparison.** These are ESBMC's own temporaries, not the agent-facing CEGIS
+  payload the two compilers owe each other; `vowc --help` documents the prefix
+  as internal. Everything without the prefix is compared exactly.
 
 ## Running it
 

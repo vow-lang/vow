@@ -10,8 +10,8 @@ nondeterministic program mistaken for a miscompile.
 import json
 import tempfile
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 import equivalence
 
@@ -324,7 +324,7 @@ class CompareRuntimeTest(unittest.TestCase):
         self.assertEqual(([], None), (div, why))
 
     def test_undeclared_unclassified_signal_is_a_finding(self):
-        div, why = self.run_with(
+        div, _why = self.run_with(
             [
                 binary_result(b"", exit_code=-9),
                 binary_result(b"", exit_code=-9),
@@ -339,7 +339,7 @@ class CompareRuntimeTest(unittest.TestCase):
         # tracked separately so that entry cannot also hide a wrong exit
         # status. 134 is the reserved runtime-abort exit (errors.md), but an
         # ordinary nonzero exit must be separated just as strictly.
-        div, why = self.run_with(
+        div, _why = self.run_with(
             [
                 binary_result(b"ok"),
                 binary_result(b"ok"),
@@ -354,7 +354,7 @@ class CompareRuntimeTest(unittest.TestCase):
     def test_an_ordinary_exit_difference_is_also_runtime_exit(self):
         # A normal nonzero exit is ordinary Vow behaviour, so singling out
         # aborts would have left this half suppressible.
-        div, why = self.run_with(
+        div, _why = self.run_with(
             [
                 binary_result(b"ok"),
                 binary_result(b"ok"),
@@ -367,7 +367,7 @@ class CompareRuntimeTest(unittest.TestCase):
     def test_a_one_sided_crash_is_reported_once(self):
         # The crash explains the exit difference, so it yields one finding —
         # check_fail_closed's "one bug, one finding" rule.
-        div, why = self.run_with(
+        div, _why = self.run_with(
             [
                 binary_result(b"ok"),
                 binary_result(b"ok"),
@@ -462,7 +462,7 @@ class VerifyOnlyTest(unittest.TestCase):
     def test_verify_only_dispatches_to_the_verifier(self):
         ok = result(status="Verified")
 
-        rec, seen = self.run_check(ok, ok)
+        _rec, seen = self.run_check(ok, ok)
 
         self.assertTrue(all(a[0] == "verify" for a in seen))
         self.assertTrue(all("-o" not in a for a in seen))
@@ -686,15 +686,55 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual([], fixed)
 
     def test_tracked_divergence_is_known_not_new(self):
-        recs = [{"file": "a.vow", "divergences": [{"observable": "error_code"}]}]
+        divergence = {
+            "observable": "error_code",
+            "rust": ["A"],
+            "self_hosted": ["B"],
+        }
+        recs = [{"file": "a.vow", "divergences": [divergence]}]
         ledger = {
-            "a.vow": {"status": "expected", "observable": "error_code", "issue": 588}
+            "a.vow": {
+                "status": "expected",
+                "observable": "error_code",
+                "issue": 588,
+                "rust_error_codes": ["A"],
+                "self_hosted_error_codes": ["B"],
+            }
+        }
+
+        new, known, _fixed = equivalence.reconcile(recs, ledger)
+
+        self.assertEqual([], new)
+        self.assertEqual(["a.vow"], [r["file"] for r in known])
+
+    def test_changed_error_code_payload_is_new_and_the_old_gap_is_fixed(self):
+        recs = [
+            {
+                "file": "a.vow",
+                "divergences": [
+                    {
+                        "observable": "error_code",
+                        "rust": ["LinearTypeViolation"],
+                        "self_hosted": ["TypeMismatch"],
+                    }
+                ],
+            }
+        ]
+        ledger = {
+            "a.vow": {
+                "status": "expected",
+                "observable": "error_code",
+                "issue": 588,
+                "rust_error_codes": ["LinearTypeViolation"],
+                "self_hosted_error_codes": ["RegionLinear"],
+            }
         }
 
         new, known, fixed = equivalence.reconcile(recs, ledger)
 
-        self.assertEqual([], new)
-        self.assertEqual(["a.vow"], [r["file"] for r in known])
+        self.assertEqual(["a.vow"], [record["file"] for record in new])
+        self.assertEqual([], known)
+        self.assertEqual([{"file": "a.vow", "observables": ["error_code"]}], fixed)
 
     def test_tracked_divergence_that_stopped_is_reported_fixed(self):
         # Mirrors verify_eval.py's GAP_FIXED: a welcome change must force the
@@ -702,7 +742,7 @@ class ReconcileTest(unittest.TestCase):
         recs = [{"file": "a.vow", "divergences": []}]
         ledger = {"a.vow": {"status": "open", "observable": "runtime", "issue": 1087}}
 
-        new, known, fixed = equivalence.reconcile(recs, ledger)
+        _new, _known, fixed = equivalence.reconcile(recs, ledger)
 
         self.assertEqual([{"file": "a.vow", "observables": ["runtime"]}], fixed)
 
@@ -743,7 +783,7 @@ class ReconcileTest(unittest.TestCase):
             }
         }
 
-        new, known, fixed = equivalence.reconcile(recs, ledger)
+        _new, _known, fixed = equivalence.reconcile(recs, ledger)
 
         self.assertEqual([], fixed)
 
@@ -753,7 +793,7 @@ class ReconcileTest(unittest.TestCase):
         recs = [{"file": "a.vow", "divergences": []}]
         ledger = {"a.vow": {"status": "fixed", "issue": 1087}}
 
-        new, known, fixed = equivalence.reconcile(recs, ledger)
+        _new, _known, fixed = equivalence.reconcile(recs, ledger)
 
         self.assertEqual([], fixed)
 
@@ -777,20 +817,39 @@ class ReconcileTest(unittest.TestCase):
             {
                 "file": "a.vow",
                 "divergences": [
-                    {"observable": "error_code"},
+                    {
+                        "observable": "error_code",
+                        "rust": ["A"],
+                        "self_hosted": ["B"],
+                    },
                     {"observable": "fail_closed"},
                 ],
             }
         ]
         ledger = {
-            "a.vow": {"status": "expected", "observable": "error_code", "issue": 588}
+            "a.vow": {
+                "status": "expected",
+                "observable": "error_code",
+                "issue": 588,
+                "rust_error_codes": ["A"],
+                "self_hosted_error_codes": ["B"],
+            }
         }
 
         new, known, fixed = equivalence.reconcile(recs, ledger)
 
         self.assertEqual(["a.vow"], [r["file"] for r in new])
         self.assertEqual([{"observable": "fail_closed"}], new[0]["divergences"])
-        self.assertEqual([{"observable": "error_code"}], known[0]["divergences"])
+        self.assertEqual(
+            [
+                {
+                    "observable": "error_code",
+                    "rust": ["A"],
+                    "self_hosted": ["B"],
+                }
+            ],
+            known[0]["divergences"],
+        )
         self.assertEqual([], fixed)
 
     def test_tracked_observable_gone_is_fixed_even_when_another_appears(self):
@@ -822,12 +881,23 @@ class ReconcileTest(unittest.TestCase):
             {
                 "file": "a.vow",
                 "divergences": [
-                    {"observable": "error_code"},
+                    {
+                        "observable": "error_code",
+                        "rust": ["A"],
+                        "self_hosted": ["B"],
+                    },
                     {"observable": "runtime"},
                 ],
             }
         ]
-        ledger = {"a.vow": {"status": "open", "observable": ["error_code", "runtime"]}}
+        ledger = {
+            "a.vow": {
+                "status": "open",
+                "observable": ["error_code", "runtime"],
+                "rust_error_codes": ["A"],
+                "self_hosted_error_codes": ["B"],
+            }
+        }
 
         new, known, fixed = equivalence.reconcile(recs, ledger)
 
@@ -860,6 +930,20 @@ class LedgerLoadTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(entry.get("note"), "missing note")
                 self.assertIsInstance(entry.get("issue"), int)
+
+    def test_active_error_code_entries_pin_exact_sorted_multisets(self):
+        for path, entry in equivalence.load_ledger().items():
+            if entry.get("status") not in ("open", "expected"):
+                continue
+            if "error_code" not in equivalence.tracked_observables(entry):
+                continue
+            with self.subTest(path=path):
+                rust_codes = entry.get("rust_error_codes")
+                self_codes = entry.get("self_hosted_error_codes")
+                self.assertIsInstance(rust_codes, list)
+                self.assertIsInstance(self_codes, list)
+                self.assertEqual(sorted(rust_codes), rust_codes)
+                self.assertEqual(sorted(self_codes), self_codes)
 
     def test_every_entry_declares_a_known_observable(self):
         # reconcile() matches on (file, observable); an entry without a valid

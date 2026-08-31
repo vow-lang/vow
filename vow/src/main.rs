@@ -2949,8 +2949,8 @@ fn main() -> i32 {
                 let ce = &result.counterexamples[0];
                 for (name, _) in &ce.values {
                     assert!(
-                        name == "x" || name == "y" || name.starts_with("_esbmc_"),
-                        "expected source name or _esbmc_ prefix, got: {name}"
+                        name == "x" || name == "y" || name.starts_with("$esbmc$"),
+                        "expected source name or $esbmc$ prefix, got: {name}"
                     );
                 }
                 let has_source_name = ce.values.iter().any(|(n, _)| n == "x" || n == "y");
@@ -3051,7 +3051,7 @@ fn main() -> i32 {
                 );
                 for (name, _) in &ce.values {
                     assert!(
-                        name == "a" || name == "b" || name.starts_with("_esbmc_"),
+                        name == "a" || name == "b" || name.starts_with("$esbmc$"),
                         "unexpected variable name: {name}"
                     );
                 }

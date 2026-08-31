@@ -72,7 +72,7 @@ fn map_counterexample_values(
             let source_name = name_map
                 .get(c_name)
                 .cloned()
-                .unwrap_or_else(|| format!("_esbmc_{c_name}"));
+                .unwrap_or_else(|| format!("$esbmc${c_name}"));
             (source_name, value.clone())
         })
         .collect()
@@ -613,14 +613,17 @@ mod tests {
         name_map.insert("p1".to_string(), "y".to_string());
         name_map.insert("v0".to_string(), "x".to_string());
         name_map.insert("v1".to_string(), "y".to_string());
+        name_map.insert("v2".to_string(), "_esbmc_x".to_string());
 
         let values = vec![
             ("v1".to_string(), "0".to_string()),
+            ("v2".to_string(), "1".to_string()),
             ("v3".to_string(), "0".to_string()),
         ];
         let mapped = map_counterexample_values(&values, &name_map);
         assert_eq!(mapped[0], ("y".to_string(), "0".to_string()));
-        assert_eq!(mapped[1], ("_esbmc_v3".to_string(), "0".to_string()));
+        assert_eq!(mapped[1], ("_esbmc_x".to_string(), "1".to_string()));
+        assert_eq!(mapped[2], ("$esbmc$v3".to_string(), "0".to_string()));
     }
 
     #[test]

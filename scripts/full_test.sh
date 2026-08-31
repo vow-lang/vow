@@ -82,119 +82,35 @@ skip() {
     SKIP=$((SKIP + 1))
 }
 
-compare_json() {
-    local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5"
+# Run one scripts/parity.py comparator. The optional fixture path lets the
+# comparator find a fixture's known-divergence suppression (a `// TEST:`
+# directive, or docs/equivalence/ledger.json), which it reports as `SKIP:`.
+run_parity() {
+    local mode="$1" label="$2" rust_json="$3" self_json="$4" rust_exit="$5" self_exit="$6" fixture_path="${7:-}"
 
     # Counterexample JSON can blow past ARG_MAX (~128 KiB on Linux), so
     # write to temp files and pass paths instead of passing the JSON
     # itself as command-line arguments.
-    local rust_f="$TMPDIR/cmp_rust_$$.json"
-    local self_f="$TMPDIR/cmp_self_$$.json"
+    local rust_f="$TMPDIR/cmp_${mode}_rust_$$.json"
+    local self_f="$TMPDIR/cmp_${mode}_self_$$.json"
     printf '%s' "$rust_json" > "$rust_f"
     printf '%s' "$self_json" > "$self_f"
 
     local result
-    if result=$(python3 -c "
-import json, sys
-
-rust_exit = int(sys.argv[1])
-self_exit = int(sys.argv[2])
-try:
-    with open(sys.argv[3]) as f: r = json.load(f)
-    with open(sys.argv[4]) as f: s = json.load(f)
-except (json.JSONDecodeError, OSError) as e:
-    print(f'FAIL: JSON parse error: {e}')
-    sys.exit(1)
-
-errors = []
-
-if rust_exit != self_exit:
-    errors.append(f'exit code: {rust_exit} vs {self_exit}')
-
-rs = r.get('status', '')
-ss = s.get('status', '')
-if rs != ss:
-    errors.append(f'status: {rs} vs {ss}')
-
-if rs != 'VerifyFailed':
-    rd = len(r.get('diagnostics', []))
-    sd = len(s.get('diagnostics', []))
-    if rd != sd:
-        errors.append(f'diagnostics count: {rd} vs {sd}')
-
-rc = r.get('counterexamples', [])
-sc = s.get('counterexamples', [])
-def violation_aware_fields(base, rce, sce):
-    # `violation` carries the rendered contract-clause text, so it is the field
-    # that catches Rust-vs-self-hosted printer drift (#1113 Half B). Compare it
-    # only when the counterexample is actually attributable to a contract
-    # clause: with blame 'none' no vow matched, and each compiler falls back to
-    # its own placeholder (Rust leaks the raw ESBMC '[Counterexample]' marker,
-    # self-hosted an empty string). That fallback divergence is a separate
-    # pre-existing defect tracked in #1144, not contract-text drift, so it must
-    # not be conflated with this gate; closing #1144 removes this helper and
-    # compares `violation` unconditionally.
-    fields = list(base)
-    if rce.get('blame') != 'none' and sce.get('blame') != 'none':
-        fields.append('violation')
-    return fields
-
-# A VerifyFailed with a non-empty verify_status is a 'soft' ESBMC outcome
-# (timeout / unknown / error / tool_not_found) — ESBMC produced no
-# counterexample by design, so the parity check must not require one.
-rvs = r.get('verify_status') or ''
-svs = s.get('verify_status') or ''
-soft_fail = rs == 'VerifyFailed' and ss == 'VerifyFailed' and rvs and svs
-if soft_fail:
-    if rvs != svs:
-        errors.append(f'verify_status: {rvs} vs {svs}')
-    if len(rc) != 0:
-        errors.append(f'rust soft VerifyFailed has {len(rc)} counterexamples')
-    if len(sc) != 0:
-        errors.append(f'self soft VerifyFailed has {len(sc)} counterexamples')
-    # For deterministic inputs the same function should trigger the soft fail on
-    # both compilers; a divergence on which function was selected would otherwise
-    # pass silently (verify_message is still skipped — ESBMC text is non-deterministic).
-    rfn = r.get('function') or ''
-    sfn = s.get('function') or ''
-    if rfn != sfn:
-        errors.append(f'function: {rfn} vs {sfn}')
-elif rs == 'VerifyFailed' and ss == 'VerifyFailed':
-    if len(rc) == 0:
-        errors.append('rust has no counterexamples for VerifyFailed')
-    if len(sc) == 0:
-        errors.append('self has no counterexamples for VerifyFailed')
-    if rc and sc:
-        for field in violation_aware_fields(('function', 'blame'), rc[0], sc[0]):
-            rv = rc[0].get(field)
-            sv = sc[0].get(field)
-            if rv != sv:
-                errors.append(f'counterexample[0].{field}: {rv} vs {sv}')
-else:
-    if len(rc) != len(sc):
-        errors.append(f'counterexamples count: {len(rc)} vs {len(sc)}')
-    else:
-        for i, (rce, sce) in enumerate(zip(rc, sc)):
-            for field in violation_aware_fields(('function', 'vow_id', 'blame'), rce, sce):
-                rv = rce.get(field)
-                sv = sce.get(field)
-                if field == 'vow_id' and (rv in (0, -1, None) and sv in (0, -1, None)):
-                    continue
-                if rv != sv:
-                    errors.append(f'counterexample[{i}].{field}: {rv} vs {sv}')
-
-if errors:
-    print('FAIL: ' + '; '.join(errors))
-    sys.exit(1)
-else:
-    print('OK')
-    sys.exit(0)
-" "$rust_exit" "$self_exit" "$rust_f" "$self_f" 2>&1); then
-        pass "$label"
+    if result=$(python3 scripts/parity.py "$mode" "$rust_f" "$self_f" "$rust_exit" "$self_exit" "$fixture_path" 2>&1); then
+        if [[ "$result" == SKIP:* ]]; then
+            skip "$label" "${result#SKIP: }"
+        else
+            pass "$label"
+        fi
     else
         fail "$label" "$result"
     fi
     rm -f "$rust_f" "$self_f"
+}
+
+compare_json() {
+    run_parity json "$@"
 }
 
 # A fixture may carry `// TEST: known-divergence <issue> "<why>"` to document a
@@ -283,49 +199,7 @@ run_discard_with_optional_stdin() {
 }
 
 compare_error() {
-    local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5"
-
-    local rust_f="$TMPDIR/cmp_err_rust_$$.json"
-    local self_f="$TMPDIR/cmp_err_self_$$.json"
-    printf '%s' "$rust_json" > "$rust_f"
-    printf '%s' "$self_json" > "$self_f"
-
-    local result
-    if result=$(python3 -c "
-import json, sys
-
-rust_exit = int(sys.argv[1])
-self_exit = int(sys.argv[2])
-try:
-    with open(sys.argv[3]) as f: r = json.load(f)
-    with open(sys.argv[4]) as f: s = json.load(f)
-except (json.JSONDecodeError, OSError) as e:
-    print(f'FAIL: JSON parse error: {e}')
-    sys.exit(1)
-
-errors = []
-if rust_exit == 0:
-    errors.append('rust exited 0, expected failure')
-if self_exit == 0:
-    errors.append('self exited 0, expected failure')
-for name, j in [('rust', r), ('self', s)]:
-    if j.get('status') != 'CompileFailed':
-        errors.append(f'{name} status={j.get(\"status\")}, expected CompileFailed')
-    if len(j.get('diagnostics', [])) < 1:
-        errors.append(f'{name} has no diagnostics')
-
-if errors:
-    print('FAIL: ' + '; '.join(errors))
-    sys.exit(1)
-else:
-    print('OK')
-    sys.exit(0)
-" "$rust_exit" "$self_exit" "$rust_f" "$self_f" 2>&1); then
-        pass "$label"
-    else
-        fail "$label" "$result"
-    fi
-    rm -f "$rust_f" "$self_f"
+    run_parity error "$@"
 }
 
 bootstrap_stage_failure() {
@@ -543,7 +417,7 @@ for vow_file in examples/*.vow; do
         continue
     fi
 
-    compare_json "${name}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 
     # Save JSON for Section 3 (runtime execution)
     echo "$rust_json" > "$TMPDIR/rust_${name}.json"
@@ -569,7 +443,7 @@ for vow_file in examples/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 done
 echo ""
 
@@ -701,7 +575,7 @@ for vow_file in tests/run/*.vow; do
         if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
             skip "${name}/test-verify" "empty output (rust=$rust_exit, self=$self_exit)"
         else
-            compare_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+            compare_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
             # Parity alone would pass a regression that makes BOTH compilers
             # reject the fixture, so pin the absolute expectation too (as
             # Section 4b does for tests/verify/).
@@ -723,7 +597,7 @@ for vow_file in tests/run/*.vow; do
         continue
     fi
 
-    compare_json "${name}/test-build" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/test-build" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 
     # Extract executables
     rust_exe=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('executable') or '')" <<< "$rust_json" 2>/dev/null) || rust_exe=""
@@ -797,7 +671,7 @@ for vow_file in tests/verify/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "Verified" ]; then
         fail "${name}/verify-expected-pass" "expected Verified, got $actual_status"
@@ -820,7 +694,7 @@ for vow_file in tests/verify-fail/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "VerifyFailed" ]; then
         fail "${name}/verify-expected-fail" "expected VerifyFailed, got $actual_status"
@@ -987,7 +861,7 @@ for vow_file in tests/verify-skip/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "Skipped" ]; then
         fail "${name}/verify-expected-skip" "expected Skipped, got $actual_status"
@@ -1169,7 +1043,7 @@ for multi in stack geometry bignum gc math heap; do
     if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
         skip "${multi}/build-no-verify" "empty output (rust=$rust_exit, self=$self_exit)"
     else
-        compare_json "${multi}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+        compare_json "${multi}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
     # verify
@@ -1180,7 +1054,7 @@ for multi in stack geometry bignum gc math heap; do
     if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
         skip "${multi}/verify" "empty output (rust=$rust_exit, self=$self_exit)"
     else
-        compare_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+        compare_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
     # runtime execution
@@ -1211,7 +1085,7 @@ for dir in tests/multi/*/; do
         skip "${name}/build" "empty output (rust=$rust_exit, self=$self_exit)"
         continue
     fi
-    compare_json "${name}/build" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/build" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
 
     # rust/self runtime parity (exit code + stdout)
     compare_runtime "${name}/runtime" "$TMPDIR/rust_multi_${name}" "$TMPDIR/self_multi_${name}"
@@ -1286,7 +1160,7 @@ for fixture_path in \
         continue
     fi
 
-    compare_error "${fixture}/error" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_error "${fixture}/error" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$fixture_path"
 done
 echo ""
 
@@ -1512,7 +1386,7 @@ for name in clamp max callee_blame cegis_broken; do
         continue
     fi
 
-    compare_json "${name}/build-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/build-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 done
 echo ""
 

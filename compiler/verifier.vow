@@ -1191,7 +1191,7 @@ fn map_ce_values(c_names: Vec<String>, c_values: Vec<String>, map_keys: Vec<Stri
         if src.len() > 0 {
             out_names.push(src);
         } else {
-            let fallback: String = String::from("_esbmc_");
+            let fallback: String = String::from("$esbmc$");
             fallback.push_str(c_names[i]);
             out_names.push(fallback);
         }
