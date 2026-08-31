@@ -94,102 +94,7 @@ compare_json() {
     printf '%s' "$self_json" > "$self_f"
 
     local result
-    if result=$(python3 -c "
-import json, sys
-
-rust_exit = int(sys.argv[1])
-self_exit = int(sys.argv[2])
-try:
-    with open(sys.argv[3]) as f: r = json.load(f)
-    with open(sys.argv[4]) as f: s = json.load(f)
-except (json.JSONDecodeError, OSError) as e:
-    print(f'FAIL: JSON parse error: {e}')
-    sys.exit(1)
-
-errors = []
-
-if rust_exit != self_exit:
-    errors.append(f'exit code: {rust_exit} vs {self_exit}')
-
-rs = r.get('status', '')
-ss = s.get('status', '')
-if rs != ss:
-    errors.append(f'status: {rs} vs {ss}')
-
-if rs != 'VerifyFailed':
-    rd = len(r.get('diagnostics', []))
-    sd = len(s.get('diagnostics', []))
-    if rd != sd:
-        errors.append(f'diagnostics count: {rd} vs {sd}')
-
-rc = r.get('counterexamples', [])
-sc = s.get('counterexamples', [])
-def violation_aware_fields(base, rce, sce):
-    # `violation` carries the rendered contract-clause text, so it is the field
-    # that catches Rust-vs-self-hosted printer drift (#1113 Half B). Compare it
-    # only when the counterexample is actually attributable to a contract
-    # clause: with blame 'none' no vow matched, and each compiler falls back to
-    # its own placeholder (Rust leaks the raw ESBMC '[Counterexample]' marker,
-    # self-hosted an empty string). That fallback divergence is a separate
-    # pre-existing defect tracked in #1144, not contract-text drift, so it must
-    # not be conflated with this gate; closing #1144 removes this helper and
-    # compares `violation` unconditionally.
-    fields = list(base)
-    if rce.get('blame') != 'none' and sce.get('blame') != 'none':
-        fields.append('violation')
-    return fields
-
-# A VerifyFailed with a non-empty verify_status is a 'soft' ESBMC outcome
-# (timeout / unknown / error / tool_not_found) — ESBMC produced no
-# counterexample by design, so the parity check must not require one.
-rvs = r.get('verify_status') or ''
-svs = s.get('verify_status') or ''
-soft_fail = rs == 'VerifyFailed' and ss == 'VerifyFailed' and rvs and svs
-if soft_fail:
-    if rvs != svs:
-        errors.append(f'verify_status: {rvs} vs {svs}')
-    if len(rc) != 0:
-        errors.append(f'rust soft VerifyFailed has {len(rc)} counterexamples')
-    if len(sc) != 0:
-        errors.append(f'self soft VerifyFailed has {len(sc)} counterexamples')
-    # For deterministic inputs the same function should trigger the soft fail on
-    # both compilers; a divergence on which function was selected would otherwise
-    # pass silently (verify_message is still skipped — ESBMC text is non-deterministic).
-    rfn = r.get('function') or ''
-    sfn = s.get('function') or ''
-    if rfn != sfn:
-        errors.append(f'function: {rfn} vs {sfn}')
-elif rs == 'VerifyFailed' and ss == 'VerifyFailed':
-    if len(rc) == 0:
-        errors.append('rust has no counterexamples for VerifyFailed')
-    if len(sc) == 0:
-        errors.append('self has no counterexamples for VerifyFailed')
-    if rc and sc:
-        for field in violation_aware_fields(('function', 'blame'), rc[0], sc[0]):
-            rv = rc[0].get(field)
-            sv = sc[0].get(field)
-            if rv != sv:
-                errors.append(f'counterexample[0].{field}: {rv} vs {sv}')
-else:
-    if len(rc) != len(sc):
-        errors.append(f'counterexamples count: {len(rc)} vs {len(sc)}')
-    else:
-        for i, (rce, sce) in enumerate(zip(rc, sc)):
-            for field in violation_aware_fields(('function', 'vow_id', 'blame'), rce, sce):
-                rv = rce.get(field)
-                sv = sce.get(field)
-                if field == 'vow_id' and (rv in (0, -1, None) and sv in (0, -1, None)):
-                    continue
-                if rv != sv:
-                    errors.append(f'counterexample[{i}].{field}: {rv} vs {sv}')
-
-if errors:
-    print('FAIL: ' + '; '.join(errors))
-    sys.exit(1)
-else:
-    print('OK')
-    sys.exit(0)
-" "$rust_exit" "$self_exit" "$rust_f" "$self_f" 2>&1); then
+    if result=$(python3 scripts/parity.py json "$rust_f" "$self_f" "$rust_exit" "$self_exit" 2>&1); then
         pass "$label"
     else
         fail "$label" "$result"
@@ -291,36 +196,7 @@ compare_error() {
     printf '%s' "$self_json" > "$self_f"
 
     local result
-    if result=$(python3 -c "
-import json, sys
-
-rust_exit = int(sys.argv[1])
-self_exit = int(sys.argv[2])
-try:
-    with open(sys.argv[3]) as f: r = json.load(f)
-    with open(sys.argv[4]) as f: s = json.load(f)
-except (json.JSONDecodeError, OSError) as e:
-    print(f'FAIL: JSON parse error: {e}')
-    sys.exit(1)
-
-errors = []
-if rust_exit == 0:
-    errors.append('rust exited 0, expected failure')
-if self_exit == 0:
-    errors.append('self exited 0, expected failure')
-for name, j in [('rust', r), ('self', s)]:
-    if j.get('status') != 'CompileFailed':
-        errors.append(f'{name} status={j.get(\"status\")}, expected CompileFailed')
-    if len(j.get('diagnostics', [])) < 1:
-        errors.append(f'{name} has no diagnostics')
-
-if errors:
-    print('FAIL: ' + '; '.join(errors))
-    sys.exit(1)
-else:
-    print('OK')
-    sys.exit(0)
-" "$rust_exit" "$self_exit" "$rust_f" "$self_f" 2>&1); then
+    if result=$(python3 scripts/parity.py error "$rust_f" "$self_f" "$rust_exit" "$self_exit" 2>&1); then
         pass "$label"
     else
         fail "$label" "$result"
