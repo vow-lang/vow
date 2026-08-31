@@ -6,14 +6,15 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## builtin-method-result-type-seam
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
-- **Files**: ~1 estimated
+- **Files**: ~1 estimated (actual: 1)
 - **Modules**: `vow-types/src/check.rs` (`ExprKind::MethodCall` arm of `check_expr`, ~L1941-2122)
 - **Summary**: extract the inline builtin-method result-type and known-methods resolution into pure
   free functions mirroring the existing `method_argument_expectations` seam, leaving diagnostics in
   `check_expr`.
 - **First seen**: 2026-08-31
+- **PR**: #1153
 - **Report**: `.architecture/reviews/2026-08-31-builtin-method-result-type-seam.md`
 
 ## vec-reserve-next-capacity-seam
