@@ -235,4 +235,71 @@ from.
 
 ## Design
 
-_Written in step 4, after this report was first committed._
+Three interfaces were produced by parallel sub-agents, each briefed to a radically different
+optimisation target, then adjudicated by the fixed criteria (depth → locality → seam placement →
+test surface → blast radius). All three keep the same impure effects at the call site
+(`check_integer_literal_range`, the two `emit_error_with_hints` calls, and the verdict-independent
+`nonneg_casts` insertion); they differ in what the pure seam returns.
+
+### Design A — neutral verdict enum (WINNER)
+
+```rust
+enum CastVerdict { LiteralRange, Narrowing, Mismatch, Ok }
+fn cast_verdict(src: &Ty, tgt: &Ty) -> CastVerdict
+```
+
+The seam returns the smallest total description of the four outcomes; the arm `match`es it and owns
+every diagnostic string and `ErrorCode`. Mirrors the file's sibling seams `method_result_type` and
+`integer_type_range`, which return neutral values and leave diagnostics to the caller. `Ok` folds
+valid-widening and `src == Never` (both observationally do-nothing).
+
+### Design B — rich verdict carrying the diagnostic (runner-up design)
+
+```rust
+struct CastDiagnostic { code: ErrorCode, message: String, hints: Vec<String> }
+enum CastVerdict { CheckLiteralRange, Reject(CastDiagnostic), Allow }
+fn classify_cast(src: &Ty, tgt: &Ty) -> CastVerdict
+```
+
+Pulls the `ErrorCode`, message, and hints into the pure function so the arm's three error branches
+collapse to a single generic emit. Centralises cast *diagnostic content* in one place.
+
+### Design C — decomposed predicate cluster
+
+```rust
+struct CastPair<'a> { src: &'a Ty, tgt: &'a Ty }
+impl CastPair { fn requires_literal_range_check; fn is_narrowing; fn is_widening_or_same_width; fn is_invalid }
+```
+
+A cluster of predicates the arm composes. Its own author adjudicates it as **shallower** than a
+verdict function: the four-outcome priority order leaks back to the caller (every future caller must
+re-derive it), one predicate is unused by the sole call site, and a *partition property test* is
+needed to prove by test what a `match CastVerdict` gets for free from the compiler's exhaustiveness
+check.
+
+### Verdict — Design A
+
+- **Depth**: A's interface (two `&Ty` in, a four-variant `Copy` enum out) is the narrowest of the
+  three for the same decision. B widens the return with a `String`/`Vec`-bearing struct; C exposes
+  four symbols (one unused) — the "interface nearly as wide as the implementation" smell.
+- **Locality**: the axis that actually churns is cast *classification* (#1142 closed an `as` bypass,
+  #1157 resolved cast target types) — not message wording. A concentrates exactly that axis. B
+  concentrates diagnostic *prose*, which is stable, and leaves classification changes touching the
+  same function anyway — a locality win against a non-problem.
+- **Seam placement**: the legality rule is the thing that varies; A puts the seam precisely there. B
+  bundles a second, non-varying concern (diagnostic content, coupled to `vow-diag::ErrorCode`)
+  behind the same seam — one adapter, a hypothetical second axis. C distributes the seam across N
+  predicates and leaks the ordering.
+- **Test surface**: A is exercised as `cast_verdict(&Ty, &Ty) -> CastVerdict` with exhaustive
+  `assert_eq!`, identical in style to the sibling seam tests at `check.rs:6863`. B tempts brittle
+  exact-string assertions on message prose; C needs an extra partition property test to defend an
+  invariant the compiler would otherwise enforce.
+- **Blast radius**: A is the smallest diff — add an enum and a free fn, swap the `if/else if` chain
+  for a `match`, leave the diagnostics verbatim in place. B moves message strings into the function;
+  C adds a newtype, four methods, and a property test.
+
+**Runner-up design: B.** It lost because it raises the seam one altitude notch above its siblings —
+speaking diagnostics rather than types — and couples the pure classifier to `vow-diag::ErrorCode`
+and prose, widening the return type and inviting string-equality tests, with no locality gain against
+the real bug surface. C is recorded as the deliberate "maximise decomposition" answer that its own
+adjudication shows to be the wrong answer to "maximise depth".
