@@ -38,8 +38,13 @@ SCRATCH_SCRIPTS = {
 KILL_SIGNALS = {"INT", "TERM", "HUP"}
 
 TRAP = re.compile(
-    r"^\s*trap\s+(?P<body>'[^']*'|\"[^\"]*\")\s+(?P<signals>[A-Z0-9 ]+)$", re.M
+    r"^(?P<indent>\s*)trap\s+(?P<body>'[^']*'|\"[^\"]*\")\s+(?P<signals>[A-Z0-9 ]+)$",
+    re.M,
 )
+
+# A handler body counts as exiting only on a real `exit` word: a substring test
+# would accept `'echo exiting'`.
+EXITS = re.compile(r"\bexit\b")
 
 
 def trap_entries(text):
@@ -54,6 +59,46 @@ def trap_entries(text):
     return [
         (m.group("body"), set(m.group("signals").split())) for m in TRAP.finditer(text)
     ]
+
+
+def trap_blocks(text):
+    """The traps of a script, grouped into the block each was written in.
+
+    A cleanup trap must be judged against the handlers registered beside it, not
+    against every trap in the file. `scripts/bootstrap.sh` is why: it has two
+    structurally identical cleanup scopes (`run_logged` and `run_verify_logged`),
+    so a file-wide union lets either scope satisfy the rule on the other's
+    behalf, and deleting one scope's kill-signal traps still lints clean.
+
+    A block is a run of `trap` lines separated only by blank or comment lines --
+    the shape every cleanup site in this repo is written in.
+
+    Args:
+        text: The full source of a shell script.
+
+    Returns:
+        list[list[tuple[str, set[str]]]]: One list of traps per block.
+    """
+    lines = text.splitlines()
+    traps = {}
+    for m in TRAP.finditer(text):
+        lineno = text[: m.start()].count("\n")
+        traps[lineno] = (m.group("body"), set(m.group("signals").split()))
+
+    blocks, current, previous = [], [], None
+    for lineno in sorted(traps):
+        if previous is not None:
+            gap = lines[previous + 1 : lineno]
+            joined = [ln.strip() for ln in gap]
+            contiguous = all(not ln or ln.startswith("#") for ln in joined)
+            if not contiguous:
+                blocks.append(current)
+                current = []
+        current.append(traps[lineno])
+        previous = lineno
+    if current:
+        blocks.append(current)
+    return blocks
 
 
 def trap_signals(text):
@@ -235,14 +280,18 @@ class TrapLintTest(unittest.TestCase):
         return sorted(SCRIPTS.glob("*.sh"))
 
     def test_every_cleanup_trap_covers_the_kill_signals(self):
+        # Per block, not per file: see trap_blocks() for why a file-wide union
+        # lets one cleanup scope vouch for another that is actually broken.
         offenders = []
         for path in self.shell_scripts():
-            every, cleanup = trap_signals(path.read_text())
-            if "EXIT" not in cleanup:
-                continue
-            missing = {"INT", "TERM", "HUP"} - every
-            if missing:
-                offenders.append(f"{path.name}: missing {sorted(missing)}")
+            for block in trap_blocks(path.read_text()):
+                cleanup = {s for body, names in block if "rm " in body for s in names}
+                if "EXIT" not in cleanup:
+                    continue
+                covered = {s for _, names in block for s in names}
+                missing = KILL_SIGNALS - covered
+                if missing:
+                    offenders.append(f"{path.name}: block missing {sorted(missing)}")
 
         self.assertEqual([], offenders)
 
@@ -266,7 +315,7 @@ class TrapLintTest(unittest.TestCase):
         offenders = []
         for path in self.shell_scripts():
             for body, names in trap_entries(path.read_text()):
-                if names & KILL_SIGNALS and "exit" not in body:
+                if names & KILL_SIGNALS and not EXITS.search(body):
                     offenders.append(f"{path.name}: {sorted(names)} -> {body}")
 
         self.assertEqual([], offenders)
