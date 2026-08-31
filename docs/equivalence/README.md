@@ -16,11 +16,12 @@ reproduces *itself*, byte for byte. That is a strong property over exactly one
 input — the compiler's own source. It says nothing about any construct the
 compiler's source never uses.
 
-`full_test.sh` covers more, over a fixed corpus, but it compares diagnostic
-*counts* rather than error codes, and sweeps neither `benchmarks/` nor
-`stdlib/` uniformly. The first full-corpus differential sweep found a total
-miscompile of Euclid's algorithm in `benchmarks/medium/M13_gcd` that both
-guards had sailed past for the entire life of the benchmark suite.
+`full_test.sh` covers more over a fixed corpus. It compares diagnostic
+error-code/blame multisets and source-level counterexample values, but sweeps
+neither `benchmarks/` nor `stdlib/` uniformly. The first full-corpus
+differential sweep found a total miscompile of Euclid's algorithm in
+`benchmarks/medium/M13_gcd` that both guards had sailed past for the entire
+life of the benchmark suite.
 
 The prompt for this work was Google's
 [Scaling Memory Safety](https://bughunters.google.com/blog/scaling-memory-safety)
@@ -95,6 +96,23 @@ skipped. For the corpus it records which files have ever diverged, so a
 regression is distinguishable from a new finding.
 
 Schema: see `ledger.schema.json`.
+
+### Tier-1 parity suppressions
+
+Known `diagnostics[].error_code` divergences in `full_test.sh` use the corpus
+entries in `ledger.json`. An entry suppresses only the observable it names and
+only while its status is `open` or `expected`; agreement becomes a hard failure
+that requires marking the entry fixed, and a divergence on a fixed entry is a
+regression. This lets the per-fixture parity harness and the Tier-2 sweep share
+one registry.
+
+Known `counterexamples[].values` divergences instead use a fixture-local
+`// TEST: known-cex-divergence <issue> "<why>"` directive. The Tier-2 runner
+does not emit a counterexample-values observable, so adding those gaps to the
+ledger would make `reconcile()` incorrectly report them as fixed on every
+nightly run. The directive is scoped to values only, reports as a loud skip
+while the mismatch reproduces, and becomes a hard failure once the values
+agree so stale directives cannot accumulate.
 
 ## Running it
 
