@@ -526,6 +526,7 @@ KNOWN_CEX_FIXTURE = '// TEST: known-cex-divergence 1139 "variable names differ"\
 KNOWN_CEX_COUNT_FIXTURE = (
     '// TEST: known-cex-count-divergence 1155 "Rust stops after first failure"\n'
 )
+KNOWN_CEX_COMBINED_FIXTURE = KNOWN_CEX_FIXTURE + KNOWN_CEX_COUNT_FIXTURE
 
 
 class ParityCliCharacterizationTest(unittest.TestCase):
@@ -610,6 +611,73 @@ class ParityCliCharacterizationTest(unittest.TestCase):
             (completed.returncode, completed.stdout.strip()),
         )
 
+    def test_known_counterexample_directives_compose_by_observable(self):
+        rust = document(
+            "VerifyFailed",
+            counterexamples=[
+                {
+                    "function": "first",
+                    "blame": "caller",
+                    "values": {"x": "-1"},
+                },
+                {"function": "second", "blame": "callee"},
+            ],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            counterexamples=[
+                {
+                    "function": "first",
+                    "blame": "caller",
+                    "values": {"n": "-1"},
+                }
+            ],
+        )
+
+        completed = run_parity_cli(
+            "json",
+            rust,
+            self_hosted,
+            1,
+            1,
+            fixture_text=KNOWN_CEX_COMBINED_FIXTURE,
+        )
+
+        self.assertEqual(
+            (
+                0,
+                (
+                    "SKIP: known counterexample divergence "
+                    "(#1139: variable names differ); "
+                    "known counterexample-count divergence "
+                    "(#1155: Rust stops after first failure)"
+                ),
+            ),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_composed_directives_do_not_hide_a_stale_observable(self):
+        completed = run_parity_cli(
+            "json",
+            hard_failure(x="-1"),
+            hard_failure(n="-1"),
+            1,
+            1,
+            fixture_text=KNOWN_CEX_COMBINED_FIXTURE,
+        )
+
+        self.assertEqual(
+            (
+                1,
+                (
+                    "FAIL: known-cex-count-divergence "
+                    "(#1155: Rust stops after first failure) no longer reproduces — "
+                    "remove the directive"
+                ),
+            ),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
     def test_stale_counterexample_count_divergence_directive_fails(self):
         verified_failure = hard_failure(x="-1")
 
@@ -647,6 +715,24 @@ class ParityCliCharacterizationTest(unittest.TestCase):
         )
 
         self.assertEqual((0, "OK"), (completed.returncode, completed.stdout.strip()))
+
+    def test_count_directive_cannot_suppress_a_non_failure_count_mismatch(self):
+        rust = document(counterexamples=[{"function": "first"}, {"function": "second"}])
+        self_hosted = document(counterexamples=[{"function": "first"}])
+
+        completed = run_parity_cli(
+            "json",
+            rust,
+            self_hosted,
+            0,
+            0,
+            fixture_text=KNOWN_CEX_COUNT_FIXTURE,
+        )
+
+        self.assertEqual(
+            (1, "FAIL: counterexamples count: 2 vs 1"),
+            (completed.returncode, completed.stdout.strip()),
+        )
 
     def test_stale_counterexample_divergence_directive_fails(self):
         verified_failure = hard_failure(x="-1")

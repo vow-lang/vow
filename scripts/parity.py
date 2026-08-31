@@ -202,55 +202,79 @@ def _suppress(errors, covered, exercised, reason, stale_reason):
     return None
 
 
-def _known_cex_verdict(rust, self_hosted, errors, fixture_path):
-    """Verdict for a `// TEST: known-cex-divergence` directive on the fixture."""
-    if not fixture_path:
-        return None
-    match = KNOWN_CEX_DIVERGENCE.search(Path(fixture_path).read_text(errors="replace"))
-    if not match:
-        return None
-    known = f"#{match.group(1)}: {match.group(2)}"
-    return _suppress(
-        errors,
-        lambda error: (
-            error.startswith("counterexample[") and f"].{VALUES_LABEL}:" in error
-        ),
-        exercised=bool(
-            rust.get("counterexamples") and self_hosted.get("counterexamples")
-        ),
-        reason=f"known counterexample divergence ({known})",
-        stale_reason=(
-            f"known-cex-divergence ({known}) no longer reproduces — "
-            "remove the directive"
-        ),
-    )
+def _known_cex_policies(rust, self_hosted, fixture_text):
+    """Active-observable policies declared by one counterexample fixture."""
+    policies = []
+    match = KNOWN_CEX_DIVERGENCE.search(fixture_text)
+    if match:
+        known = f"#{match.group(1)}: {match.group(2)}"
+        policies.append(
+            (
+                lambda error: (
+                    error.startswith("counterexample[")
+                    and f"].{VALUES_LABEL}:" in error
+                ),
+                bool(
+                    rust.get("counterexamples") and self_hosted.get("counterexamples")
+                ),
+                f"known counterexample divergence ({known})",
+                (
+                    f"known-cex-divergence ({known}) no longer reproduces — "
+                    "remove the directive"
+                ),
+            )
+        )
 
-
-def _known_cex_count_verdict(rust, self_hosted, errors, fixture_path):
-    """Verdict for a fixture's issue-scoped counterexample-count divergence."""
-    if not fixture_path:
-        return None
-    match = KNOWN_CEX_COUNT_DIVERGENCE.search(
-        Path(fixture_path).read_text(errors="replace")
-    )
+    match = KNOWN_CEX_COUNT_DIVERGENCE.search(fixture_text)
     if not match:
-        return None
+        return policies
     known = f"#{match.group(1)}: {match.group(2)}"
     both_hard_failed = rust.get("status") == self_hosted.get(
         "status"
     ) == "VerifyFailed" and not (
         rust.get("verify_status") and self_hosted.get("verify_status")
     )
-    return _suppress(
-        errors,
-        lambda error: error.startswith(f"{COUNTEREXAMPLE_COUNT_LABEL}: "),
-        exercised=both_hard_failed,
-        reason=f"known counterexample-count divergence ({known})",
-        stale_reason=(
-            f"known-cex-count-divergence ({known}) no longer reproduces — "
-            "remove the directive"
-        ),
+    policies.append(
+        (
+            lambda error: error.startswith(f"{COUNTEREXAMPLE_COUNT_LABEL}: "),
+            both_hard_failed,
+            f"known counterexample-count divergence ({known})",
+            (
+                f"known-cex-count-divergence ({known}) no longer reproduces — "
+                "remove the directive"
+            ),
+        )
     )
+    return policies
+
+
+def _known_cex_verdict(rust, self_hosted, errors, fixture_path):
+    """Compose a fixture's counterexample suppressions by observable."""
+    if not fixture_path:
+        return None
+    fixture_text = Path(fixture_path).read_text(errors="replace")
+    policies = _known_cex_policies(rust, self_hosted, fixture_text)
+    active = [policy for policy in policies if policy[1]]
+
+    if any(not any(covered(error) for covered, _, _, _ in active) for error in errors):
+        return None
+
+    stale = [
+        stale_reason
+        for covered, _, _, stale_reason in active
+        if not any(covered(error) for error in errors)
+    ]
+    if stale:
+        return 1, "FAIL: " + "; ".join(stale)
+
+    reproduced = [
+        reason
+        for covered, _, reason, _ in active
+        if any(covered(error) for error in errors)
+    ]
+    if reproduced:
+        return 0, "SKIP: " + "; ".join(reproduced)
+    return None
 
 
 def _ledger_entry(fixture_path):
@@ -314,10 +338,6 @@ def main(argv=None):
         errors = compare_json(rust, self_hosted, int(rust_exit), int(self_exit))
         try:
             verdict = _known_cex_verdict(rust, self_hosted, errors, fixture_path)
-            if verdict is None:
-                verdict = _known_cex_count_verdict(
-                    rust, self_hosted, errors, fixture_path
-                )
         except OSError as error:
             print(f"FAIL: fixture read error: {error}")
             return 1
