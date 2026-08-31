@@ -50,6 +50,10 @@ proved, how it is proved, or the headroom it is proved within:
     `vow-runtime/src/` implementation whose semantics it mirrors. The harness
     is only meaningful while the two agree.
   * The runner and its test, which fix the memory cap and the ESBMC flags.
+  * This module and its tests. The gate decides whether the proof runs, so a
+    change that narrows it must run the job it narrows -- otherwise a mistake
+    here disables the proof and the same commit hides the evidence, leaving
+    only the nightly run to notice.
   * `.github/actions/install-esbmc/` and the workflow itself, which pin the
     ESBMC version. Solver and version drift move the proof's memory ceiling a
     long way -- 8.1.0 needs ~508 MiB against 8.3.0's ~290 MiB under the 2 GB
@@ -73,12 +77,21 @@ BUILD_INPUT_PREFIXES = ("docs/spec/", "skills/")
 PROSE_SUFFIX = ".md"
 
 # Paths that can change the arena proof's outcome or its memory headroom. See
-# the module docstring for why each one is in the list.
-ARENA_INPUT_PREFIXES = (
+# the module docstring for why each one is in the list. Split by kind so each
+# is matched the way it should be: a directory by prefix, a file exactly. A
+# bare `startswith` over both would let `verify_arena.sh.bak` read as an input.
+ARENA_INPUT_DIRS = (
     "vow-runtime/",
+    ".github/actions/install-esbmc/",
+)
+
+ARENA_INPUT_FILES = (
     "scripts/verify_arena.sh",
     "scripts/test_verify_arena.py",
-    ".github/actions/install-esbmc/",
+    # This module and its tests: they decide whether the proof runs at all, so
+    # a change that narrows the gate has to run the job it is narrowing.
+    "scripts/ci_docs_only.py",
+    "scripts/test_ci_docs_only.py",
     ".github/workflows/arena-verify.yml",
 )
 
@@ -108,9 +121,10 @@ def is_arena_input(path):
 
     Returns:
         bool: True when changing this path can change what the arena proof
-            proves, how it is proved, or the memory headroom it needs.
+            proves, how it is proved, whether it runs, or the memory headroom
+            it needs.
     """
-    return path.startswith(ARENA_INPUT_PREFIXES)
+    return path.startswith(ARENA_INPUT_DIRS) or path in ARENA_INPUT_FILES
 
 
 def touches_arena(paths):

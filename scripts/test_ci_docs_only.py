@@ -264,6 +264,12 @@ class IsArenaInputTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(ci_docs_only.is_arena_input(path))
 
+    def test_the_gate_itself_is_an_arena_input(self):
+        # A change that narrows the gate has to run the job it narrows.
+        for path in ("scripts/ci_docs_only.py", "scripts/test_ci_docs_only.py"):
+            with self.subTest(path=path):
+                self.assertTrue(ci_docs_only.is_arena_input(path))
+
     def test_esbmc_pin_and_workflow_are_arena_inputs(self):
         # An ESBMC version bump moves the proof's memory ceiling, so it has to
         # re-run the proof that guards the headroom (#546, #747).
@@ -286,8 +292,20 @@ class IsArenaInputTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(ci_docs_only.is_arena_input(path))
 
-    def test_sibling_prefix_is_not_a_match(self):
+    def test_sibling_directory_prefix_is_not_a_match(self):
         self.assertFalse(ci_docs_only.is_arena_input("vow-runtime-extra/src/lib.rs"))
+
+    def test_file_entries_match_exactly_not_by_prefix(self):
+        # Directory entries match by prefix, file entries do not: a sibling
+        # that merely starts with an input's name is not itself an input.
+        for path in (
+            "scripts/verify_arena.sh.bak",
+            "scripts/verify_arena.shim.py",
+            "scripts/ci_docs_only.py.orig",
+            ".github/workflows/arena-verify.yml.disabled",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(ci_docs_only.is_arena_input(path))
 
 
 class TouchesArenaTest(unittest.TestCase):
