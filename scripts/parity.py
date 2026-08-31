@@ -19,6 +19,7 @@ KNOWN_CEX_COUNT_DIVERGENCE = re.compile(
 VALUES_LABEL = "values"
 ERROR_CODES_LABEL = "error codes"
 COUNTEREXAMPLE_COUNT_LABEL = "counterexamples count"
+ESBMC_INTERNAL_VALUE_PREFIX = "$esbmc$"
 
 
 def _mismatch(label, rust_value, self_value):
@@ -50,7 +51,7 @@ def _counterexample_values(counterexample):
     return {
         name: value
         for name, value in counterexample.get("values", {}).items()
-        if not name.startswith("_esbmc")
+        if not name.startswith(ESBMC_INTERNAL_VALUE_PREFIX)
     }
 
 

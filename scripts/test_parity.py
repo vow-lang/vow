@@ -261,14 +261,25 @@ class CompareJsonCounterexampleValuesTest(unittest.TestCase):
         )
 
     def test_esbmc_internal_values_are_not_a_parity_contract(self):
-        # `_esbmc_*` names are ESBMC's own temporaries, not the agent-facing
+        # `$esbmc$*` names are ESBMC's own temporaries, not the agent-facing
         # CEGIS payload the two compilers owe each other. Their values track
         # internal encoding choices, so comparing them would bind parity to
         # something neither compiler promises.
-        rust = hard_failure(x="-1", _esbmc_v12="0")
-        self_hosted = hard_failure(x="-1", _esbmc_v99="1")
+        rust = hard_failure(**{"x": "-1", "$esbmc$v12": "0"})
+        self_hosted = hard_failure(**{"x": "-1", "$esbmc$v99": "1"})
 
         self.assertEqual([], parity.compare_json(rust, self_hosted, 1, 1))
+
+    def test_source_values_using_the_old_internal_prefix_must_match(self):
+        rust = hard_failure(_esbmc_x="1")
+        self_hosted = hard_failure(_esbmc_x="2")
+
+        errors = parity.compare_json(rust, self_hosted, 1, 1)
+
+        self.assertEqual(
+            ["counterexample[0].values: {'_esbmc_x': '1'} vs {'_esbmc_x': '2'}"],
+            errors,
+        )
 
     def test_values_are_compared_beyond_the_first_hard_failure_counterexample(self):
         # The CEGIS payload of a second violated contract is no less load-bearing

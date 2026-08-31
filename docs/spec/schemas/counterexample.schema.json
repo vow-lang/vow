@@ -13,7 +13,7 @@
     "values": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Map of source names or ESBMC variable names to counterexample values"
+      "description": "Map of source names or $esbmc$-prefixed internal variable names to counterexample values"
     },
     "violation": {
       "type": "string",

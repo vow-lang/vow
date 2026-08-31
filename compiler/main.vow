@@ -225,7 +225,7 @@ fn find_param_index(names: Vec<String>, name: String) -> i64 {
 }
 
 fn ce_value_for_param(names: Vec<String>, vals: Vec<String>, param: String, param_idx: i64) -> String {
-    let fallback_esbmc: String = str2(String::from("_esbmc_p"), i64_to_string(param_idx));
+    let fallback_esbmc: String = str2(String::from("$esbmc$p"), i64_to_string(param_idx));
     let fallback_raw: String = str2(String::from("p"), i64_to_string(param_idx));
     let mut i: i64 = 0;
     while i < names.len() {
@@ -5788,7 +5788,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("Vow could not statically recover the caller argument value; `arg_offset` and\n"));
     r.push_str(String::from("`arg_length` still identify the argument expression.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.\n"));
+    r.push_str(String::from("Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot\n"));
+    r.push_str(String::from("appear in a Vow identifier, so the prefix cannot collide with a source name.\n"));
+    r.push_str(String::from("Named inputs map directly to function parameters, including source names that\n"));
+    r.push_str(String::from("begin with `_esbmc`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Unsigned Integer Contracts\n"));
     r.push_str(String::from("\n"));
@@ -8149,7 +8152,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    \"values\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
     r.push_str(String::from("      \"additionalProperties\": { \"type\": \"string\" },\n"));
-    r.push_str(String::from("      \"description\": \"Map of source names or ESBMC variable names to counterexample values\"\n"));
+    r.push_str(String::from("      \"description\": \"Map of source names or $esbmc$-prefixed internal variable names to counterexample values\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"violation\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
@@ -10799,7 +10802,10 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("Vow could not statically recover the caller argument value; `arg_offset` and\n"));
     r.push_str(String::from("`arg_length` still identify the argument expression.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.\n"));
+    r.push_str(String::from("Variable names prefixed with `$esbmc$` are ESBMC internal variables; `$` cannot\n"));
+    r.push_str(String::from("appear in a Vow identifier, so the prefix cannot collide with a source name.\n"));
+    r.push_str(String::from("Named inputs map directly to function parameters, including source names that\n"));
+    r.push_str(String::from("begin with `_esbmc`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Unsigned Integer Contracts\n"));
     r.push_str(String::from("\n"));
@@ -13165,7 +13171,7 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("    \"values\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
     r.push_str(String::from("      \"additionalProperties\": { \"type\": \"string\" },\n"));
-    r.push_str(String::from("      \"description\": \"Map of source names or ESBMC variable names to counterexample values\"\n"));
+    r.push_str(String::from("      \"description\": \"Map of source names or $esbmc$-prefixed internal variable names to counterexample values\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"violation\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
