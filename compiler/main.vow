@@ -3968,7 +3968,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("let mut i: u64 = 0u64;\n"));
     r.push_str(String::from("while i < n vow {\n"));
     r.push_str(String::from("    invariant: i <= n,\n"));
-    r.push_str(String::from("    invariant: v.len() == i\n"));
+    r.push_str(String::from("    invariant: v.len() as u64 == i\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    v.push(i);\n"));
     r.push_str(String::from("    i = i + 1;\n"));
@@ -3977,7 +3977,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("State the bound the loop actually maintains. `invariant: i >= 0` looks like a\n"));
     r.push_str(String::from("lower bound but is always true once `i` is unsigned, and the type checker\n"));
-    r.push_str(String::from("rejects it as `TautologicalComparison`.\n"));
+    r.push_str(String::from("rejects it as `TautologicalComparison`. `.len()` is `i64`, so a length clause\n"));
+    r.push_str(String::from("compared against an unsigned counter needs the same `as u64` bridge as the\n"));
+    r.push_str(String::from("descending-loop idiom below.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Descending Loops\n"));
     r.push_str(String::from("\n"));
@@ -8855,7 +8857,7 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("let mut i: u64 = 0u64;\n"));
     r.push_str(String::from("while i < n vow {\n"));
     r.push_str(String::from("    invariant: i <= n,\n"));
-    r.push_str(String::from("    invariant: v.len() == i\n"));
+    r.push_str(String::from("    invariant: v.len() as u64 == i\n"));
     r.push_str(String::from("} {\n"));
     r.push_str(String::from("    v.push(i);\n"));
     r.push_str(String::from("    i = i + 1;\n"));
@@ -8864,7 +8866,9 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("State the bound the loop actually maintains. `invariant: i >= 0` looks like a\n"));
     r.push_str(String::from("lower bound but is always true once `i` is unsigned, and the type checker\n"));
-    r.push_str(String::from("rejects it as `TautologicalComparison`.\n"));
+    r.push_str(String::from("rejects it as `TautologicalComparison`. `.len()` is `i64`, so a length clause\n"));
+    r.push_str(String::from("compared against an unsigned counter needs the same `as u64` bridge as the\n"));
+    r.push_str(String::from("descending-loop idiom below.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Descending Loops\n"));
     r.push_str(String::from("\n"));

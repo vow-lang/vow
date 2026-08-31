@@ -1884,7 +1884,7 @@ while i > 0 {
 let mut i: u64 = 0u64;
 while i < n vow {
     invariant: i <= n,
-    invariant: v.len() == i
+    invariant: v.len() as u64 == i
 } {
     v.push(i);
     i = i + 1;
@@ -1893,7 +1893,9 @@ while i < n vow {
 
 State the bound the loop actually maintains. `invariant: i >= 0` looks like a
 lower bound but is always true once `i` is unsigned, and the type checker
-rejects it as `TautologicalComparison`.
+rejects it as `TautologicalComparison`. `.len()` is `i64`, so a length clause
+compared against an unsigned counter needs the same `as u64` bridge as the
+descending-loop idiom below.
 
 ### Descending Loops
 
@@ -6749,7 +6751,7 @@ while i > 0 {
 let mut i: u64 = 0u64;
 while i < n vow {
     invariant: i <= n,
-    invariant: v.len() == i
+    invariant: v.len() as u64 == i
 } {
     v.push(i);
     i = i + 1;
@@ -6758,7 +6760,9 @@ while i < n vow {
 
 State the bound the loop actually maintains. `invariant: i >= 0` looks like a
 lower bound but is always true once `i` is unsigned, and the type checker
-rejects it as `TautologicalComparison`.
+rejects it as `TautologicalComparison`. `.len()` is `i64`, so a length clause
+compared against an unsigned counter needs the same `as u64` bridge as the
+descending-loop idiom below.
 
 ### Descending Loops
 
