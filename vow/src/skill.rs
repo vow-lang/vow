@@ -2883,7 +2883,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
+| `CompileFailed` | Parse error, type error, module load error, unsupported code generation, backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -2962,7 +2962,7 @@ argument expression.
 | `status`           | string              | Always            | One of the four status values             |
 | `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
-| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", link error detail, or "failed to emit frontend diagnostics: {io_error}") |
+| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
@@ -3186,7 +3186,10 @@ Parse JSON from stdout
 ├── status == "Unverified"     → Compiled but unverified. ESBMC missing or --no-verify.
 ├── status == "CompileFailed"  → Read `diagnostics[]` for error details.
 │   ├── error_code is parse error  → Fix syntax (see grammar.md)
-│   └── error_code is type error   → Fix types (see errors.md)
+│   ├── error_code is type error   → Fix types (see errors.md)
+│   ├── error_code == "CodegenUnsupported" → Avoid the named backend limitation.
+│   ├── error_code == "CodegenFailed" → Inspect backend context; report a compiler bug if supported source triggered it.
+│   └── error_code == "LinkFailed" → Check the host linker and Vow runtime archive.
 └── status == "VerifyFailed"   → Read `counterexamples[]`.
     ├── Check `inputs` for the violating values
     ├── Check `violation` for which contract failed
@@ -4568,6 +4571,49 @@ The note is conservative — it fires for any qualifying allocation in a functio
 ```
 
 **Fix:** Often none — if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from("hi") }`). The exemption applies only to the *currently-installed* field initializers — a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).
+
+### CodegenUnsupported
+
+**Phase:** Code Generation
+**Meaning:** The program is valid Vow, but the selected native backend cannot
+yet lower one of its operations or representations. The build fails closed and
+does not leave an executable. The diagnostic currently has a file-level span
+because backend errors do not carry an instruction origin.
+
+```vow
+fn main() -> i32 {
+    let values: Vec<i128> = Vec::new();
+    values.push(1);
+    0
+}
+```
+
+**Fix:** Restructure the program to avoid the named backend limitation, or use
+a supported representation until the backend implements it. Agents may branch
+on `CodegenUnsupported` without parsing the human-readable `message` field.
+
+### CodegenFailed
+
+**Phase:** Code Generation
+**Meaning:** The native backend failed while declaring, defining, or emitting
+otherwise-lowered code. This distinguishes an internal backend failure from a
+source-level parse/type error and from a known unsupported operation.
+
+**Fix:** Inspect the diagnostic message for backend context. If the program
+uses only documented supported operations, report a compiler bug with the
+source and diagnostic; changing source syntax or types may not resolve an
+internal backend failure.
+
+### LinkFailed
+
+**Phase:** Linker
+**Meaning:** Code generation produced an object, but the native linker could
+not create the executable. A missing `libvow_runtime.a` is also reported with
+this code.
+
+**Fix:** Inspect the diagnostic message and verify that the host linker and Vow
+runtime archive are installed and accessible. When building Vow itself, run
+`cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.
 
 ### VerificationSkipped
 
@@ -6086,6 +6132,9 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "ContractTypeMismatch",
         "EsbmcNotFound",
         "IoError",
+        "CodegenUnsupported",
+        "CodegenFailed",
+        "LinkFailed",
         "RegionConflict",
         "RegionLinear",
         "RegionRootEscape"
@@ -7872,7 +7921,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
+| `CompileFailed` | Parse error, type error, module load error, unsupported code generation, backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -7951,7 +8000,7 @@ argument expression.
 | `status`           | string              | Always            | One of the four status values             |
 | `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
-| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", link error detail, or "failed to emit frontend diagnostics: {io_error}") |
+| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
@@ -8175,7 +8224,10 @@ Parse JSON from stdout
 ├── status == "Unverified"     → Compiled but unverified. ESBMC missing or --no-verify.
 ├── status == "CompileFailed"  → Read `diagnostics[]` for error details.
 │   ├── error_code is parse error  → Fix syntax (see grammar.md)
-│   └── error_code is type error   → Fix types (see errors.md)
+│   ├── error_code is type error   → Fix types (see errors.md)
+│   ├── error_code == "CodegenUnsupported" → Avoid the named backend limitation.
+│   ├── error_code == "CodegenFailed" → Inspect backend context; report a compiler bug if supported source triggered it.
+│   └── error_code == "LinkFailed" → Check the host linker and Vow runtime archive.
 └── status == "VerifyFailed"   → Read `counterexamples[]`.
     ├── Check `inputs` for the violating values
     ├── Check `violation` for which contract failed
@@ -9560,6 +9612,49 @@ The note is conservative — it fires for any qualifying allocation in a functio
 ```
 
 **Fix:** Often none — if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from("hi") }`). The exemption applies only to the *currently-installed* field initializers — a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).
+
+### CodegenUnsupported
+
+**Phase:** Code Generation
+**Meaning:** The program is valid Vow, but the selected native backend cannot
+yet lower one of its operations or representations. The build fails closed and
+does not leave an executable. The diagnostic currently has a file-level span
+because backend errors do not carry an instruction origin.
+
+```vow
+fn main() -> i32 {
+    let values: Vec<i128> = Vec::new();
+    values.push(1);
+    0
+}
+```
+
+**Fix:** Restructure the program to avoid the named backend limitation, or use
+a supported representation until the backend implements it. Agents may branch
+on `CodegenUnsupported` without parsing the human-readable `message` field.
+
+### CodegenFailed
+
+**Phase:** Code Generation
+**Meaning:** The native backend failed while declaring, defining, or emitting
+otherwise-lowered code. This distinguishes an internal backend failure from a
+source-level parse/type error and from a known unsupported operation.
+
+**Fix:** Inspect the diagnostic message for backend context. If the program
+uses only documented supported operations, report a compiler bug with the
+source and diagnostic; changing source syntax or types may not resolve an
+internal backend failure.
+
+### LinkFailed
+
+**Phase:** Linker
+**Meaning:** Code generation produced an object, but the native linker could
+not create the executable. A missing `libvow_runtime.a` is also reported with
+this code.
+
+**Fix:** Inspect the diagnostic message and verify that the host linker and Vow
+runtime archive are installed and accessible. When building Vow itself, run
+`cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.
 
 ### VerificationSkipped
 
@@ -11072,6 +11167,9 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "ContractTypeMismatch",
         "EsbmcNotFound",
         "IoError",
+        "CodegenUnsupported",
+        "CodegenFailed",
+        "LinkFailed",
         "RegionConflict",
         "RegionLinear",
         "RegionRootEscape"

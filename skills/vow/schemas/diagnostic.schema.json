@@ -32,6 +32,9 @@
         "ContractTypeMismatch",
         "EsbmcNotFound",
         "IoError",
+        "CodegenUnsupported",
+        "CodegenFailed",
+        "LinkFailed",
         "RegionConflict",
         "RegionLinear",
         "RegionRootEscape"
