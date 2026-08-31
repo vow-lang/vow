@@ -1,0 +1,34 @@
+// TEST: stdout "0101101"
+// The two cast shapes that must keep compiling, and must actually discriminate.
+// `(u64 as i64) >= 0` is a same-width bit reinterpretation, so `u64::MAX as i64`
+// is `-1` and the test is false — not a tautology. A signed source sign-extends,
+// so it discriminates too. Only a *strictly widening* unsigned cast is always
+// non-negative, and that shape is a TautologicalComparison error
+// (`tests/error/tautological_widened_unsigned_ge_zero.vow`).
+module WidenedUnsignedZeroComparisons
+
+fn bool_digit(b: bool) -> i64 {
+  if b { 1 } else { 0 }
+}
+
+fn main() -> i32 [io] {
+  let umax: u64 = 18446744073709551615u64;
+  let usmall: u64 = 7u64;
+  let neg: i32 = -1;
+  let pos: i32 = 4;
+  let w: u32 = 5u32;
+
+  // Same-width reinterpretation: the sign bit survives, so this is a real test.
+  print_i64(bool_digit((umax as i64) >= 0));
+  print_i64(bool_digit((usmall as i64) >= 0));
+
+  // Sign-extension: also a real test.
+  print_i64(bool_digit((neg as i64) >= 0));
+  print_i64(bool_digit((pos as i64) >= 0));
+
+  // Meaningful directions on a strictly-widened unsigned value stay legal.
+  print_i64(bool_digit((w as i64) > 0));
+  print_i64(bool_digit((w as i64) <= 0));
+  print_i64(bool_digit((w as i64) == 5));
+  0
+}

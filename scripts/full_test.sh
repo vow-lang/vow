@@ -1256,22 +1256,83 @@ section_begin "Section 8c: Contract Quality"
 # Capture the contracts JSON in its own step so a producer failure (parse error,
 # missing binary, compiler crash) is reported as itself — with its stderr visible —
 # instead of being masked as a baseline breach by the checker's empty-stdin exit.
-contract_quality_json="$TMPDIR/contract_quality.json"
-if ! run_self contracts compiler/main.vow >"$contract_quality_json"; then
-    fail "contract-quality/weak-gate" "vow contracts compiler/main.vow failed (see stderr above); could not evaluate contract quality"
-else
+# One run per entry point: `vow contracts` follows `use` edges, so an entry point
+# covers its own module graph and nothing else. `compiler/module_io.vow` is
+# deliberately not in main.vow's `use` graph (.vmod parity infrastructure), so it
+# had zero coverage until it was listed here. See the scope note in
+# scripts/check_contract_quality.py for why the corpus dirs stay ungated.
+for quality_entry in compiler/main.vow compiler/module_io.vow; do
+    quality_case="contract-quality/weak-gate:$(basename "$quality_entry" .vow)"
+    contract_quality_json="$TMPDIR/contract_quality_$(basename "$quality_entry" .vow).json"
+    if ! run_self contracts "$quality_entry" >"$contract_quality_json"; then
+        fail "$quality_case" "vow contracts $quality_entry failed (see stderr above); could not evaluate contract quality"
+        continue
+    fi
     # Distinguish the checker's exit codes: 0 = pass, 1 = baseline breach (a real
     # contract-quality regression), 2 = structural error (malformed JSON / missing
     # or non-integer counter — the checker's stderr above names the cause). A bare
     # else would mislabel a schema error as a baseline breach.
     quality_status=0
-    uv run python scripts/check_contract_quality.py <"$contract_quality_json" || quality_status=$?
+    uv run python scripts/check_contract_quality.py --label "$quality_entry" \
+        <"$contract_quality_json" || quality_status=$?
     if [ "$quality_status" -eq 0 ]; then
-        pass "contract-quality/weak-gate"
+        pass "$quality_case"
     elif [ "$quality_status" -eq 1 ]; then
-        fail "contract-quality/weak-gate" "weak/tautological contracts exceeded baseline; strengthen the new contract or adjust scripts/check_contract_quality.py with justification"
+        fail "$quality_case" "weak/tautological contracts exceeded baseline in $quality_entry; strengthen the new contract or adjust scripts/check_contract_quality.py with justification"
     else
-        fail "contract-quality/weak-gate" "contract quality check could not run (malformed 'vow contracts' output / schema mismatch; see stderr above)"
+        fail "$quality_case" "contract quality check could not run for $quality_entry (malformed 'vow contracts' output / schema mismatch; see stderr above)"
+    fi
+done
+
+# contract-quality/parity: the ratchet above only ever runs $SELF, so
+# vow/src/contract_quality.rs has no end-to-end coverage from it and the two
+# classifiers can drift silently. Compare the (function, kind, quality) triples
+# both compilers derive from one fixture.
+#
+# Scoped to those three fields on purpose — two pre-existing divergences in the
+# published contracts schema would otherwise mask a real quality regression:
+#   `description`   renders a cast as ` as <type>` in the self-hosted printer
+#                   (compiler/lower.vow) but ` as i64` in the Rust one — #1113.
+#   `source.offset` is always 0 in the self-hosted output — #1135.
+# Widen this case to a full compare_json once both are fixed.
+quality_fixture="tests/fixtures/contracts/quality_shapes.vow"
+rust_quality_json="$TMPDIR/quality_parity_rust.json"
+self_quality_json="$TMPDIR/quality_parity_self.json"
+if ! $RUST contracts "$quality_fixture" >"$rust_quality_json" 2>/dev/null \
+    || ! run_self contracts "$quality_fixture" >"$self_quality_json" 2>/dev/null; then
+    fail "contract-quality/parity" "vow contracts failed on $quality_fixture (rust or self-hosted)"
+else
+    parity_result=$(python3 -c "
+import json, sys
+
+def triples(path):
+    with open(path) as f:
+        d = json.load(f)
+    got = sorted(
+        (c['function'], c['kind'], c['quality']) for c in d['contracts']
+    )
+    return got, d['summary']['quality']
+
+r_triples, r_quality = triples(sys.argv[1])
+s_triples, s_quality = triples(sys.argv[2])
+errors = []
+if r_triples != s_triples:
+    only_rust = [t for t in r_triples if t not in s_triples]
+    only_self = [t for t in s_triples if t not in r_triples]
+    errors.append(f'clause quality differs: rust-only={only_rust} self-only={only_self}')
+if r_quality != s_quality:
+    errors.append(f'summary.quality differs: rust={r_quality} self={s_quality}')
+# Pin the absolute expectation too: parity alone would pass a regression that
+# makes BOTH compilers classify every clause 'substantive'.
+expected = {'weak': 6, 'tautological': 2, 'substantive': 7}
+if r_quality != expected:
+    errors.append(f'rust summary.quality {r_quality} != expected {expected}')
+print('; '.join(errors) if errors else 'OK')
+" "$rust_quality_json" "$self_quality_json" 2>&1) || parity_result="checker error: $parity_result"
+    if [ "$parity_result" = "OK" ]; then
+        pass "contract-quality/parity"
+    else
+        fail "contract-quality/parity" "$parity_result"
     fi
 fi
 echo ""

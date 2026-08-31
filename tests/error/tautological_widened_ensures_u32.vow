@@ -1,0 +1,13 @@
+// TEST: stderr "comparison with 0 is always true for `u32` zero-extended to `i64`"
+// TEST: error-code TautologicalComparison
+// The contract-clause form: `vow contracts` would have reported this
+// `substantive`, so the hard error is what actually stops it.
+module TautologicalWidenedEnsuresU32
+
+fn id(x: u32) -> u32 vow {
+  ensures: result as i64 >= 0
+} {
+  x
+}
+
+fn main() -> i32 { 0 }

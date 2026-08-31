@@ -1,0 +1,67 @@
+// Contract-quality classification fixture for the Rust-vs-self-hosted parity
+// case in scripts/full_test.sh (Section 8c). The weak-gate ratchet only ever
+// runs the self-hosted compiler, so without this case vow/src/contract_quality.rs
+// has no end-to-end coverage at all and the two classifiers can drift.
+//
+// Every clause here must classify identically in both compilers. The cast forms
+// are the ones #1104's `v.len() as u64` bridge produces, and they escaped the
+// classifier until the cast fold landed (#1114).
+module QualityShapes
+
+// weak: an ensures that only bounds result by a literal.
+fn weak_plain(x: i64) -> i64 vow {
+  ensures: result >= 0
+} { if x >= 0 { x } else { 0 } }
+
+// weak: a cast is transparent to the constant bound.
+fn weak_cast_literal(x: i64) -> i64 vow {
+  ensures: result >= 0 as i64
+} { if x >= 0 { x } else { 0 } }
+
+// weak: the cast on the result side folds too.
+fn weak_cast_result(x: i64) -> i64 vow {
+  ensures: result as i64 >= 0
+} { if x >= 0 { x } else { 0 } }
+
+// weak: upper bound by a cast literal.
+fn weak_cast_upper(x: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: x <= 10,
+  ensures: result <= 100 as i64
+} { x * 10 }
+
+// weak: the STRICT operators are the parity regression case — the `<` and `>`
+// inside the self-hosted printer's ` as <type>` placeholder must not be read as
+// the comparison operator itself.
+fn weak_cast_strict_gt(x: i64) -> i64 vow {
+  ensures: result > 0 as i64
+} { if x > 0 { x } else { 1 } }
+
+fn weak_cast_strict_lt(x: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: x <= 5,
+  ensures: result < 100 as i64
+} { x }
+
+// substantive: a cast does not turn a program value into a literal.
+fn substantive_cast_value(x: i32) -> i64 vow {
+  ensures: result >= x as i64
+} { x as i64 }
+
+// substantive: equality postcondition, and a real domain precondition.
+fn substantive_equality(x: i64) -> i64 vow {
+  requires: x >= 0,
+  ensures: result == x + 1
+} { x + 1 }
+
+// tautological: constant clause.
+fn tautological_true(x: i64) -> i64 vow {
+  ensures: true
+} { x }
+
+// tautological: cast syntax must not hide a constant comparison.
+fn tautological_cast_const(x: i64) -> i64 vow {
+  ensures: 0 as i64 >= 0
+} { x }
+
+fn main() -> i32 { 0 }

@@ -1,0 +1,11 @@
+// TEST: stderr "comparison with 0 is always true for `u16` zero-extended to `i64`"
+// TEST: error-code TautologicalComparison
+// Non-negativity is established by the first widening and carried through the
+// second, so the chain must not launder the tautology.
+module TautologicalWidenedUnsignedChain
+
+fn f(x: u16) -> bool {
+  (x as i32 as i64) >= 0
+}
+
+fn main() -> i32 { 0 }

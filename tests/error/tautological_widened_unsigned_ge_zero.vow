@@ -1,0 +1,12 @@
+// TEST: stderr "comparison with 0 is always true for `u32` zero-extended to `i64`"
+// TEST: error-code TautologicalComparison
+// A u32 zero-extends into i64, so the cast cannot make the value negative. This
+// shape bypassed the #1112 guarantee: the cast moves the compared type to a
+// signed one, so the plain unsigned rule never fired.
+module TautologicalWidenedUnsignedGeZero
+
+fn f(x: u32) -> bool {
+  (x as i64) >= 0
+}
+
+fn main() -> i32 { 0 }

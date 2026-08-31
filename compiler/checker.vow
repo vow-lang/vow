@@ -1119,14 +1119,52 @@ fn unsigned_comparison_tag(ts: TyStore, lhs_tid: i64, rhs_tid: i64) -> i64 {
     -1
 }
 
-// Verdict for a comparison against a constant 0 whose other operand is
-// unsigned: 1 = always true, 0 = always false, -1 = meaningful, keep compiling
-// (`x > 0`, `x <= 0`, `x == 0`, `x != 0`).
+// Verdict for a comparison against a constant 0: 1 = always true, 0 = always
+// false, -1 = meaningful, keep compiling (`x > 0`, `x <= 0`, `x == 0`, `x != 0`).
 fn unsigned_zero_comparison_verdict(a: AstArena, op: i64, lhs_eid: i64, rhs_eid: i64) -> i64 {
     if op == BINOP_GE() && expr_folds_to_zero(a, rhs_eid) { return 1; }
     if op == BINOP_LE() && expr_folds_to_zero(a, lhs_eid) { return 1; }
     if op == BINOP_LT() && expr_folds_to_zero(a, rhs_eid) { return 0; }
     if op == BINOP_GT() && expr_folds_to_zero(a, lhs_eid) { return 0; }
+    -1
+}
+
+// Which side of the comparison carries the value when the other side is a
+// constant 0, or -1. `0 <= x` and `x <= 0` share an operator but only the first
+// is the tautological shape, so the caller must test *that* side.
+fn zero_comparison_value_eid(a: AstArena, op: i64, lhs_eid: i64, rhs_eid: i64) -> i64 {
+    if op == BINOP_GE() && expr_folds_to_zero(a, rhs_eid) { return lhs_eid; }
+    if op == BINOP_LE() && expr_folds_to_zero(a, lhs_eid) { return rhs_eid; }
+    if op == BINOP_LT() && expr_folds_to_zero(a, rhs_eid) { return lhs_eid; }
+    if op == BINOP_GT() && expr_folds_to_zero(a, lhs_eid) { return rhs_eid; }
+    -1
+}
+
+// The unsigned source type tag whose zero-extension makes a cast
+// `inner_eid as tgt_tid` provably non-negative in the signed target, or -1.
+//
+// `as` is widening-only plus same-width signedness change
+// (docs/spec/grammar.md), which makes the rule exact: zero-extension happens
+// iff the source is unsigned and the target is strictly wider. The excluded
+// cases are meaningful comparisons and must keep compiling — a same-width
+// `u64 as i64` is a bit reinterpretation (`u64::MAX as i64` is -1) and a signed
+// source sign-extends. Casts to an unsigned target are left alone so
+// unsigned_comparison_tag reports them once instead of both paths firing.
+fn zero_extended_source_tag(e: CheckEnv, a: AstArena, inner_eid: i64, src_tid: i64, tgt_tid: i64) -> i64 {
+    if ty_is_unsigned(e.ts, tgt_tid) {
+        return -1;
+    }
+    let src_tag: i64 = ty_tag(e.ts, src_tid);
+    let tgt_tag: i64 = ty_tag(e.ts, tgt_tid);
+    if ty_is_unsigned(e.ts, src_tid) && integer_tag_width(tgt_tag) > integer_tag_width(src_tag) {
+        return src_tag;
+    }
+    // A chain (`v as u32 as i64`) stays non-negative: every further `as` is
+    // widening or a same-width reinterpretation of an already-non-negative
+    // value, so carry the original unsigned source through.
+    if expr_tag(a, inner_eid) == EXPR_CAST() {
+        return env_nonneg_cast_src_tag(e, inner_eid);
+    }
     -1
 }
 
@@ -2250,19 +2288,44 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             if ty_is_numeric_or_lit_int(e.ts, lhs_tid) && ty_is_numeric_or_lit_int(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, lhs_tid, rhs_tid) {
                 env_emit_error(e, String::from("comparison operands have different types"), expr_span(a, eid));
             } else {
-                let unsigned_tag: i64 = unsigned_comparison_tag(e.ts, lhs_tid, rhs_tid);
-                if unsigned_tag >= 0 {
-                    let verdict: i64 = unsigned_zero_comparison_verdict(a, op, lhs_eid, rhs_eid);
-                    if verdict >= 0 {
+                let verdict: i64 = unsigned_zero_comparison_verdict(a, op, lhs_eid, rhs_eid);
+                if verdict >= 0 {
+                    let unsigned_tag: i64 = unsigned_comparison_tag(e.ts, lhs_tid, rhs_tid);
+                    // The cast route: `(u32_value as i64) >= 0`. The compared
+                    // type is signed, so unsigned_comparison_tag returns -1,
+                    // but a zero-extended unsigned value is still never
+                    // negative.
+                    let mut widened_tag: i64 = -1;
+                    let mut widened_to_tag: i64 = -1;
+                    if unsigned_tag < 0 {
+                        let value_eid: i64 = zero_comparison_value_eid(a, op, lhs_eid, rhs_eid);
+                        if value_eid >= 0 && expr_tag(a, value_eid) == EXPR_CAST() {
+                            widened_tag = env_nonneg_cast_src_tag(e, value_eid);
+                            if value_eid == lhs_eid {
+                                widened_to_tag = ty_tag(e.ts, lhs_tid);
+                            } else {
+                                widened_to_tag = ty_tag(e.ts, rhs_tid);
+                            }
+                        }
+                    }
+                    if unsigned_tag >= 0 || widened_tag >= 0 {
                         let message: String = String::from("comparison with 0 is always ");
                         if verdict == 1 {
                             message.push_str(String::from("true"));
                         } else {
                             message.push_str(String::from("false"));
                         }
-                        message.push_str(String::from(" for unsigned type `"));
-                        message.push_str(ty_tag_name(unsigned_tag));
-                        message.push_str(String::from("`"));
+                        if widened_tag >= 0 {
+                            message.push_str(String::from(" for `"));
+                            message.push_str(ty_tag_name(widened_tag));
+                            message.push_str(String::from("` zero-extended to `"));
+                            message.push_str(ty_tag_name(widened_to_tag));
+                            message.push_str(String::from("`"));
+                        } else {
+                            message.push_str(String::from(" for unsigned type `"));
+                            message.push_str(ty_tag_name(unsigned_tag));
+                            message.push_str(String::from("`"));
+                        }
                         env_emit_error_code(e, EC_TAUTOLOGICAL_COMPARISON(), message, expr_span(a, eid));
                     }
                 }
@@ -3231,6 +3294,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 env_emit_error_code(e, EC_NARROWING_CAST_NOT_ALLOWED(),
                     message,
                     expr_span(a, inner_eid));
+            }
+            let root_src_tag: i64 = zero_extended_source_tag(e, a, inner_eid, src_tid, tgt_tid);
+            if root_src_tag >= 0 {
+                env_record_nonneg_cast(e, eid, root_src_tag);
             }
             return tgt_tid;
         }

@@ -136,6 +136,18 @@ fn sum(n: u64) -> u64 vow {
 
 **Output:** ``comparison with 0 is always true for unsigned type `u64` ``
 
+**Widening casts do not launder the tautology.** A cast can move the compared type to a signed one while leaving the value provably non-negative, so the rule follows the value, not the printed type. Because `as` is widening-only plus same-width signedness change (see [Type Cast](grammar.md#type-cast)), the condition is exact: the comparison is tautological iff the source is unsigned **and** the target is strictly wider, i.e. the cast zero-extends.
+
+```vow
+fn f(x: u32) -> bool { (x as i64) >= 0 }   // error — u32 zero-extends into i64
+fn g(x: u64) -> bool { (x as i64) >= 0 }   // ok — same width, `u64::MAX as i64` is -1
+fn h(x: i32) -> bool { (x as i64) >= 0 }   // ok — a signed source sign-extends
+```
+
+A chain does not hide it either: `(x as i32 as i64) >= 0` with `x: u32` is rejected, and the diagnostic names the original unsigned source.
+
+**Output:** ``comparison with 0 is always true for `u32` zero-extended to `i64` ``
+
 **Fix:** Drop the dead clause, or state the bound you actually meant. An index invariant becomes `invariant: i < v.len()`; a lower bound that matters on an unsigned counter is `i > 0`, not `i >= 0`. If the subject really can be negative, its type should be signed.
 
 ### StaticLiteralRequired
