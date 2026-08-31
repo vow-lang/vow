@@ -599,6 +599,44 @@ class ParityCliCharacterizationTest(unittest.TestCase):
             (completed.returncode, completed.stdout.strip()),
         )
 
+    def test_stale_counterexample_count_divergence_directive_fails(self):
+        verified_failure = hard_failure(x="-1")
+
+        completed = run_parity_cli(
+            "json",
+            verified_failure,
+            verified_failure,
+            1,
+            1,
+            fixture_text=KNOWN_CEX_COUNT_FIXTURE,
+        )
+
+        self.assertEqual(
+            (
+                1,
+                (
+                    "FAIL: known-cex-count-divergence "
+                    "(#1155: Rust stops after first failure) no longer reproduces — "
+                    "remove the directive"
+                ),
+            ),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_count_directive_is_dormant_without_a_hard_verification_failure(self):
+        no_counterexamples = document("Unverified")
+
+        completed = run_parity_cli(
+            "json",
+            no_counterexamples,
+            no_counterexamples,
+            0,
+            0,
+            fixture_text=KNOWN_CEX_COUNT_FIXTURE,
+        )
+
+        self.assertEqual((0, "OK"), (completed.returncode, completed.stdout.strip()))
+
     def test_stale_counterexample_divergence_directive_fails(self):
         verified_failure = hard_failure(x="-1")
 
