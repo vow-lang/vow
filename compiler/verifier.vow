@@ -1310,9 +1310,7 @@ fn verify_function_ir_fallback(esbmc_bin: String, f: IrFunction, m: IrModule, ma
 // the abort assumes remain — so this asks exactly the right question: do the
 // contracts hold on every execution that returns? Mirrors
 // `crate::verification::verify_contracts_only` in the Rust driver (#585).
-fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
-                                  vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
-    let c_source: String = contracts_only_source(emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false));
+fn run_contracts_only_once(esbmc_bin: String, f: IrFunction, c_source: String, max_k_step: String, solver: String, encoding: String, timeout_secs: String) -> VerifyResult [io] {
     let tmp_path: String = verify_tmp_path();
     let no_extra: Vec<String> = Vec::new();
     let eff_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
@@ -1325,6 +1323,39 @@ fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule,
         if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
     };
     build_verify_result(f, status, combined)
+}
+
+fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+                                  vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
+    let c_source: String = contracts_only_source(emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false));
+    let bv: VerifyResult = run_contracts_only_once(esbmc_bin, f, c_source, max_k_step, solver, encoding, timeout_secs);
+    let st: i64 = bv.status;
+    // Same safe-retry ladder as run_with_fallback: a resource-limited BV attempt
+    // may retry with Z3 + IR, and an IR proof is relabelled PROVEN_IR.
+    //
+    // The retry must use the *same suppressed source*. Letting the caller's
+    // generic BV->IR path handle this instead would re-emit the un-suppressed
+    // model, whose `arith:` assert IR can never violate — unbounded integers do
+    // not overflow — so a timeout would launder into a proof.
+    let resource_limited: bool = st == VERIFY_TIMEOUT() ||
+        (st == VERIFY_UNKNOWN() && output_has_memory_limit(bv.raw_output));
+    if !resource_limited {
+        return bv;
+    }
+    let bv_solver: String = resolve_auto_bv_solver(solver);
+    if !is_auto_encoding(encoding) || bv_solver == String::from("bitwuzla") {
+        return bv;
+    }
+    let ir_timeout: String = {
+        if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
+    };
+    let ir: VerifyResult = run_contracts_only_once(esbmc_bin, f, c_source, max_k_step, String::from("z3"), String::from("ir"), ir_timeout);
+    if ir.status == VERIFY_PROVEN() {
+        return build_verify_result(f, VERIFY_PROVEN_IR(), ir.raw_output);
+    }
+    // An IR-only counterexample can be infeasible under BV (no overflow
+    // modeling), so the original resource-limited result stands.
+    bv
 }
 
 fn verify_start(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,

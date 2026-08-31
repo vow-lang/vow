@@ -1261,13 +1261,43 @@ fn verify_collect_and_report(
         }
     };
     let st: i64 = vr.status;
-    // The abort is reported only when the contract itself is proved. If the
-    // contract also fails, that failure is the actionable finding; claiming the
-    // abort alongside would be guesswork, since ESBMC never told us whether the
-    // arith obligation held on this second run.
-    if has_arith && (st == VERIFY_PROVEN() || st == VERIFY_PROVEN_IR()) {
-        report_arith_overflow(f, path, arith_site, dctx);
-        return 1;
+    // The contracts-only run answers this function completely: it ran its own
+    // BV->IR ladder over the suppressed source, so its verdict is final and must
+    // not fall through to the generic fallback below, which would re-emit the
+    // un-suppressed model and retry an obligation IR cannot violate.
+    if has_arith {
+        // The abort is reported only when the contract itself is proved. If the
+        // contract also fails, that failure is the actionable finding; claiming
+        // the abort alongside would be guesswork, since ESBMC never told us
+        // whether the arith obligation held on this second run.
+        if st == VERIFY_PROVEN() || st == VERIFY_PROVEN_IR() {
+            report_arith_overflow(f, path, arith_site, dctx);
+            return 1;
+        }
+        if st == VERIFY_FAILED() {
+            eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+            emit_ce_vars(vr);
+            ces.push(build_ce_from_result(f, ir_mod, vr, path));
+            return 0;
+        }
+        if st == VERIFY_TIMEOUT() {
+            eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+            record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
+            return 0;
+        }
+        if st == VERIFY_UNKNOWN() {
+            eprintln_str(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
+            record_soft_fail(soft_meta, String::from("unknown"), parse_unknown_reason(vr.raw_output), f.name);
+            return 0;
+        }
+        if st == VERIFY_NOT_FOUND() {
+            eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+            record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
+            return 0;
+        }
+        eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+        record_soft_fail(soft_meta, String::from("error"), String::from("ESBMC error during contracts-only verification"), f.name);
+        return 0;
     }
     if st == VERIFY_PROVEN() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
