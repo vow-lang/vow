@@ -323,6 +323,23 @@ class CompareJsonCounterexampleCountTest(unittest.TestCase):
 
         self.assertEqual(["counterexamples count: 2 vs 1"], errors)
 
+    def test_hard_failure_count_mismatch_is_an_error(self):
+        rust = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "first", "blame": "caller"},
+                {"function": "second", "blame": "callee"},
+            ],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            counterexamples=[{"function": "first", "blame": "caller"}],
+        )
+
+        errors = parity.compare_json(rust, self_hosted, 1, 1)
+
+        self.assertEqual(["counterexamples count: 2 vs 1"], errors)
+
 
 class CompareErrorCharacterizationTest(unittest.TestCase):
     def test_both_compilers_must_reject(self):

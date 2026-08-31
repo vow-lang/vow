@@ -63,8 +63,12 @@ def _counterexample_fields(base, rust_cex, self_cex):
 
 
 def _compare_counterexamples(rust_counterexamples, self_counterexamples, fields):
-    """Per-index parity errors for the counterexamples the two compilers share."""
-    errors = []
+    """Count and per-index parity errors for the two counterexample lists."""
+    errors = _mismatch(
+        "counterexamples count",
+        len(rust_counterexamples),
+        len(self_counterexamples),
+    )
     for index, (rust_cex, self_cex) in enumerate(
         zip(rust_counterexamples, self_counterexamples)
     ):
@@ -136,11 +140,6 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
             errors.append("self has no counterexamples for VerifyFailed")
         errors += _compare_counterexamples(
             rust_counterexamples, self_counterexamples, ("function", "blame")
-        )
-    elif len(rust_counterexamples) != len(self_counterexamples):
-        errors.append(
-            "counterexamples count: "
-            f"{len(rust_counterexamples)} vs {len(self_counterexamples)}"
         )
     else:
         errors += _compare_counterexamples(
