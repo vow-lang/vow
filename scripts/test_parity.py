@@ -10,7 +10,6 @@ from pathlib import Path
 
 import parity
 
-
 SCRIPT = Path(__file__).with_name("parity.py")
 REPO_ROOT = SCRIPT.parent.parent
 
@@ -210,8 +209,10 @@ class CompareJsonDiagnosticParityTest(unittest.TestCase):
 
         self.assertEqual(
             [
-                "diagnostics: [('TautologicalComparison', None)] vs "
-                "[('TypeMismatch', None)]"
+                (
+                    "diagnostics: [('TautologicalComparison', None)] vs "
+                    "[('TypeMismatch', None)]"
+                )
             ],
             errors,
         )
@@ -228,8 +229,10 @@ class CompareJsonDiagnosticParityTest(unittest.TestCase):
 
         self.assertEqual(
             [
-                "diagnostics: [('VowRequiresViolated', 'caller')] vs "
-                "[('VowRequiresViolated', 'callee')]"
+                (
+                    "diagnostics: [('VowRequiresViolated', 'caller')] vs "
+                    "[('VowRequiresViolated', 'callee')]"
+                )
             ],
             errors,
         )
@@ -434,8 +437,10 @@ class CompareErrorCodeParityTest(unittest.TestCase):
         self.assertEqual(
             (
                 1,
-                "FAIL: error_code divergence tracked by #588 no longer diverges — "
-                "update docs/equivalence/ledger.json",
+                (
+                    "FAIL: error_code divergence tracked by #588 no longer diverges — "
+                    "update docs/equivalence/ledger.json"
+                ),
             ),
             (completed.returncode, completed.stdout.strip()),
         )
@@ -468,8 +473,10 @@ class CompareErrorCodeParityTest(unittest.TestCase):
                     self.assertEqual(
                         (
                             1,
-                            "FAIL: error codes: ['TypeMismatch'] vs "
-                            "['UnexpectedToken']",
+                            (
+                                "FAIL: error codes: ['TypeMismatch'] vs "
+                                "['UnexpectedToken']"
+                            ),
                         ),
                         (completed.returncode, completed.stdout.strip()),
                     )
@@ -495,8 +502,10 @@ class CompareErrorCodeParityTest(unittest.TestCase):
 
         self.assertEqual(
             [
-                "error codes: ['UnexpectedToken', 'UnexpectedToken'] vs "
-                "['UnexpectedToken', 'UnexpectedToken', 'UnexpectedToken']"
+                (
+                    "error codes: ['UnexpectedToken', 'UnexpectedToken'] vs "
+                    "['UnexpectedToken', 'UnexpectedToken', 'UnexpectedToken']"
+                )
             ],
             errors,
         )
@@ -569,8 +578,10 @@ class ParityCliCharacterizationTest(unittest.TestCase):
         self.assertEqual(
             (
                 1,
-                "FAIL: known-cex-divergence (#1139: variable names differ) "
-                "no longer reproduces — remove the directive",
+                (
+                    "FAIL: known-cex-divergence (#1139: variable names differ) "
+                    "no longer reproduces — remove the directive"
+                ),
             ),
             (completed.returncode, completed.stdout.strip()),
         )

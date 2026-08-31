@@ -6,7 +6,6 @@ import re
 import sys
 from pathlib import Path
 
-
 KNOWN_CEX_DIVERGENCE = re.compile(
     r'^// TEST: known-cex-divergence ([0-9]+) "(.*)"$', re.MULTILINE
 )
