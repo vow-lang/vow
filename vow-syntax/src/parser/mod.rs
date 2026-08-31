@@ -741,6 +741,35 @@ pub fn parse_module(source: &str, file: &str) -> (Module, Vec<Diagnostic>) {
 mod tests {
     use super::*;
 
+    // A lex error carries its own diagnostic code through to the emitted
+    // Diagnostic. Before `LexError` had a `code`, every lexer failure was
+    // relabelled `InvalidCharacter` on the way out, which is wrong for a
+    // literal whose characters are all valid.
+    #[test]
+    fn parse_module_preserves_the_lex_error_code() {
+        let (module, diags) = parse_module("module M fn f() -> u64 { 5usize }", "<test>");
+        assert_eq!(diags.len(), 1, "unexpected diagnostics: {:?}", diags);
+        assert_eq!(diags[0].code, ErrorCode::InvalidIntSuffix);
+        assert!(diags[0].message.contains("usize"));
+        assert!(module.items.is_empty());
+    }
+
+    #[test]
+    fn parse_module_still_reports_invalid_character() {
+        let (_, diags) = parse_module("module M fn f() -> i64 { x @ y }", "<test>");
+        assert_eq!(diags.len(), 1, "unexpected diagnostics: {:?}", diags);
+        assert_eq!(diags[0].code, ErrorCode::InvalidCharacter);
+    }
+
+    #[test]
+    fn parse_item_source_preserves_the_lex_error_code() {
+        let (item, diags) = parse_item_source("fn f() -> u64 { 5isize }", "<test>");
+        assert!(item.is_none());
+        assert_eq!(diags.len(), 1, "unexpected diagnostics: {:?}", diags);
+        assert_eq!(diags[0].code, ErrorCode::InvalidIntSuffix);
+        assert!(diags[0].message.contains("isize"));
+    }
+
     #[test]
     fn parse_module_no_items() {
         let src = "module Foo";

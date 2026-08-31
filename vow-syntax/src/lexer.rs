@@ -548,6 +548,16 @@ mod tests {
         assert!(matches!(&kinds[0], TokenKind::LitString(s) if s == "+ → -"));
     }
 
+    // A backslash as the final byte leaves the escape with nothing to consume.
+    #[test]
+    fn lex_unterminated_string_escape_is_error() {
+        let err = Lexer::new("\"abc\\")
+            .tokenize()
+            .expect_err("a trailing escape must be rejected");
+        assert_eq!(err.code, ErrorCode::InvalidCharacter);
+        assert_eq!(err.message, "unterminated string escape");
+    }
+
     #[test]
     fn lex_unterminated_string_is_error() {
         let result = Lexer::new("\"unterminated").tokenize();
