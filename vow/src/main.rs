@@ -22,7 +22,7 @@ use std::thread;
 use clap::Parser;
 use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
-use vow_codegen::{Backend, BuildMode, TraceMode};
+use vow_codegen::{Backend, BuildMode, CodegenError, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter};
 use vow_verify::{DEFAULT_MAX_K_STEP, SolverConfig, VerifyLimits, find_esbmc};
 
@@ -301,19 +301,33 @@ fn run_verify_only_inner(
 // Full build pipeline (vow build / legacy)
 // ---------------------------------------------------------------------------
 
-fn link_obj(obj_path: &Path, output_path: &Path) -> Result<PathBuf, String> {
+fn codegen_error_to_output(
+    error: CodegenError,
+    source: &Path,
+    diagnostics: Vec<Diagnostic>,
+) -> BuildOutput {
+    let output =
+        verify_outcome::codegen_failed(&error, source.to_string_lossy().as_ref(), diagnostics);
+    if let Some(diagnostic) = output.diagnostics.last() {
+        let _ = emit_frontend_diagnostics_to_stderr(std::slice::from_ref(diagnostic));
+    }
+    output
+}
+
+fn link_obj(obj_path: &Path, output_path: &Path) -> Result<PathBuf, CodegenError> {
     let runtime = find_runtime_lib().ok_or_else(|| {
-        "could not find libvow_runtime.a; build it with `cargo build --release --all` \
-         or set VOW_RUNTIME_PATH"
-            .to_string()
+        CodegenError::Link(
+            "could not find libvow_runtime.a; build it with `cargo build --release --all` \
+             or set VOW_RUNTIME_PATH"
+                .to_string(),
+        )
     })?;
     link(
         &[obj_path],
         &runtime,
         find_shim_lib().as_deref(),
         output_path,
-    )
-    .map_err(|e| format!("link failed: {e:?}"))?;
+    )?;
     let _ = std::fs::remove_file(obj_path);
     Ok(output_path.to_path_buf())
 }
@@ -512,9 +526,9 @@ pub(crate) fn run_pipeline_from_frontend(
         let link_start = prof.map(|p| p.now_us()).unwrap_or(0);
         let exe_path = match link_obj(&obj_path, &output_path) {
             Ok(p) => Some(p),
-            Err(message) => {
+            Err(error) => {
                 let _ = verify_handle.join();
-                return verify_outcome::compile_failed(message, all_diagnostics);
+                return codegen_error_to_output(error, source, all_diagnostics);
             }
         };
         if let Some(p) = prof {
@@ -544,9 +558,9 @@ pub(crate) fn run_pipeline_from_frontend(
     let backend = CraneliftBackend::new();
     let compiled = match backend.compile_module(&ir_module, mode, trace) {
         Ok(c) => c,
-        Err(e) => {
+        Err(error) => {
             let _ = verify_handle.join();
-            return verify_outcome::compile_failed(format!("{e:?}"), all_diagnostics);
+            return codegen_error_to_output(error, source, all_diagnostics);
         }
     };
 
@@ -556,7 +570,7 @@ pub(crate) fn run_pipeline_from_frontend(
 
     if let Err(e) = compiled.write_to_file(&obj_path) {
         let _ = verify_handle.join();
-        return verify_outcome::compile_failed(e.to_string(), all_diagnostics);
+        return codegen_error_to_output(CodegenError::Io(e.to_string()), source, all_diagnostics);
     }
 
     if let Some(p) = prof {
@@ -580,9 +594,9 @@ pub(crate) fn run_pipeline_from_frontend(
     let link_start = prof.map(|p| p.now_us()).unwrap_or(0);
     let exe_path = match link_obj(&obj_path, &output_path) {
         Ok(p) => Some(p),
-        Err(message) => {
+        Err(error) => {
             let _ = verify_handle.join();
-            return verify_outcome::compile_failed(message, all_diagnostics);
+            return codegen_error_to_output(error, source, all_diagnostics);
         }
     };
     if let Some(p) = prof {

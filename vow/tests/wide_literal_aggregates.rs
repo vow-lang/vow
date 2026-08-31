@@ -413,6 +413,8 @@ fn wide_values_in_aggregates_fail_closed() {
         "128-bit Vec elements must fail closed\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert_eq!(json["status"], "CompileFailed");
+    assert_eq!(json["diagnostics"].as_array().map(Vec::len), Some(1));
+    assert_eq!(json["diagnostics"][0]["error_code"], "CodegenUnsupported");
     assert!(
         json["message"]
             .as_str()
