@@ -37,7 +37,7 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
 
         errors = parity.compare_json(rust, self_hosted, 0, 0)
 
-        self.assertEqual(["diagnostics count: 1 vs 0"], errors)
+        self.assertEqual(["diagnostics: [('A', None)] vs []"], errors)
 
     def test_soft_verify_failures_must_agree_without_counterexamples(self):
         rust = document(
@@ -143,6 +143,144 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
         self.assertEqual([], parity.compare_json(rust, self_hosted, 0, 0))
 
 
+class CompareJsonDiagnosticParityTest(unittest.TestCase):
+    def test_error_codes_must_match_when_diagnostic_counts_match(self):
+        rust = document(diagnostics=[{"error_code": "TautologicalComparison"}])
+        self_hosted = document(diagnostics=[{"error_code": "TypeMismatch"}])
+
+        errors = parity.compare_json(rust, self_hosted, 0, 0)
+
+        self.assertEqual(
+            [
+                "diagnostics: [('TautologicalComparison', None)] vs "
+                "[('TypeMismatch', None)]"
+            ],
+            errors,
+        )
+
+    def test_verify_failed_diagnostics_remain_outside_the_comparison(self):
+        rust = document(
+            "VerifyFailed",
+            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "caller"}],
+            counterexamples=[{"function": "f", "blame": "caller"}],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            diagnostics=[],
+            counterexamples=[{"function": "f", "blame": "caller"}],
+        )
+
+        self.assertEqual([], parity.compare_json(rust, self_hosted, 1, 1))
+
+
+class CompareJsonCounterexampleValuesTest(unittest.TestCase):
+    def test_source_level_counterexample_values_must_match(self):
+        rust = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "bad", "blame": "caller", "values": {"x": "-1"}}
+            ],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "bad", "blame": "caller", "values": {"n": "-1"}}
+            ],
+        )
+
+        errors = parity.compare_json(rust, self_hosted, 1, 1)
+
+        self.assertEqual(
+            ["counterexample[0].values: {'x': '-1'} vs {'n': '-1'}"], errors
+        )
+
+    def test_esbmc_internal_values_are_not_a_parity_contract(self):
+        # The suffix is IR numbering chosen by independent lowerings. Comparing
+        # it would turn #1140's internal noise into false parity failures.
+        rust = document(
+            "VerifyFailed",
+            counterexamples=[
+                {
+                    "function": "bad",
+                    "blame": "caller",
+                    "values": {"x": "-1", "_esbmc_v12": "0"},
+                }
+            ],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            counterexamples=[
+                {
+                    "function": "bad",
+                    "blame": "caller",
+                    "values": {"x": "-1", "_esbmc_v99": "1"},
+                }
+            ],
+        )
+
+        self.assertEqual([], parity.compare_json(rust, self_hosted, 1, 1))
+
+    def test_value_key_order_does_not_affect_parity(self):
+        rust = document(
+            "VerifyFailed",
+            counterexamples=[
+                {
+                    "function": "bad",
+                    "blame": "caller",
+                    "values": {"x": "-1", "limit": "0"},
+                }
+            ],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            counterexamples=[
+                {
+                    "function": "bad",
+                    "blame": "caller",
+                    "values": {"limit": "0", "x": "-1"},
+                }
+            ],
+        )
+
+        self.assertEqual([], parity.compare_json(rust, self_hosted, 1, 1))
+
+    def test_values_are_compared_for_each_non_failure_counterexample(self):
+        rust = document(
+            counterexamples=[
+                {"function": "first", "vow_id": 3, "values": {"x": "1"}},
+                {"function": "second", "vow_id": 4, "values": {"y": "2"}},
+            ]
+        )
+        self_hosted = document(
+            counterexamples=[
+                {"function": "first", "vow_id": 3, "values": {"x": "1"}},
+                {"function": "second", "vow_id": 4, "values": {"y": "3"}},
+            ]
+        )
+
+        errors = parity.compare_json(rust, self_hosted, 0, 0)
+
+        self.assertEqual(["counterexample[1].values: {'y': '2'} vs {'y': '3'}"], errors)
+
+    def test_diagnostic_blame_must_match(self):
+        rust = document(
+            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "caller"}]
+        )
+        self_hosted = document(
+            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "callee"}]
+        )
+
+        errors = parity.compare_json(rust, self_hosted, 1, 1)
+
+        self.assertEqual(
+            [
+                "diagnostics: [('VowRequiresViolated', 'caller')] vs "
+                "[('VowRequiresViolated', 'callee')]"
+            ],
+            errors,
+        )
+
+
 class CompareErrorCharacterizationTest(unittest.TestCase):
     def test_both_compilers_must_reject(self):
         rust = document("CompileFailed", diagnostics=[{"error_code": "A"}])
@@ -205,6 +343,92 @@ class ParityCliCharacterizationTest(unittest.TestCase):
 
         self.assertEqual(1, completed.returncode)
         self.assertIn("FAIL: JSON parse error:", completed.stdout)
+
+    def test_known_counterexample_value_divergence_is_a_loud_skip(self):
+        rust = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "bad", "blame": "caller", "values": {"x": "-1"}}
+            ],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "bad", "blame": "caller", "values": {"n": "-1"}}
+            ],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            rust_path = Path(directory) / "rust.json"
+            self_path = Path(directory) / "self.json"
+            fixture_path = Path(directory) / "known.vow"
+            rust_path.write_text(json.dumps(rust))
+            self_path.write_text(json.dumps(self_hosted))
+            fixture_path.write_text(
+                '// TEST: known-cex-divergence 1139 "variable names differ"\n'
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "json",
+                    str(rust_path),
+                    str(self_path),
+                    "1",
+                    "1",
+                    str(fixture_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(
+            (0, "SKIP: known counterexample divergence (#1139: variable names differ)"),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_stale_counterexample_divergence_directive_fails(self):
+        verified_failure = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "bad", "blame": "caller", "values": {"x": "-1"}}
+            ],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            rust_path = Path(directory) / "rust.json"
+            self_path = Path(directory) / "self.json"
+            fixture_path = Path(directory) / "known.vow"
+            rust_path.write_text(json.dumps(verified_failure))
+            self_path.write_text(json.dumps(verified_failure))
+            fixture_path.write_text(
+                '// TEST: known-cex-divergence 1139 "variable names differ"\n'
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "json",
+                    str(rust_path),
+                    str(self_path),
+                    "1",
+                    "1",
+                    str(fixture_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(
+            (
+                1,
+                "FAIL: known-cex-divergence (#1139: variable names differ) "
+                "no longer reproduces — remove the directive",
+            ),
+            (completed.returncode, completed.stdout.strip()),
+        )
 
 
 if __name__ == "__main__":

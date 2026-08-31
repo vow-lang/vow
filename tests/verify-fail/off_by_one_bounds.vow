@@ -2,6 +2,7 @@
 // TEST: counterexample-vow-id 0
 // TEST: counterexample-fn "last_element"
 // TEST: counterexample-blame none
+// TEST: known-cex-divergence 1140 "Rust truncates aggregate values at the first comma"
 // Off-by-one: creates a vec of length n then accesses index n,
 // which is one past the end. The ensures claims result >= 0
 // but the access itself is out of bounds.

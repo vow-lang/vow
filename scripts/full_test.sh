@@ -83,7 +83,7 @@ skip() {
 }
 
 compare_json() {
-    local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5"
+    local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5" vow_file="${6:-}"
 
     # Counterexample JSON can blow past ARG_MAX (~128 KiB on Linux), so
     # write to temp files and pass paths instead of passing the JSON
@@ -94,8 +94,12 @@ compare_json() {
     printf '%s' "$self_json" > "$self_f"
 
     local result
-    if result=$(python3 scripts/parity.py json "$rust_f" "$self_f" "$rust_exit" "$self_exit" 2>&1); then
-        pass "$label"
+    if result=$(python3 scripts/parity.py json "$rust_f" "$self_f" "$rust_exit" "$self_exit" "$vow_file" 2>&1); then
+        if [[ "$result" == SKIP:* ]]; then
+            skip "$label" "${result#SKIP: }"
+        else
+            pass "$label"
+        fi
     else
         fail "$label" "$result"
     fi
@@ -419,7 +423,7 @@ for vow_file in examples/*.vow; do
         continue
     fi
 
-    compare_json "${name}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 
     # Save JSON for Section 3 (runtime execution)
     echo "$rust_json" > "$TMPDIR/rust_${name}.json"
@@ -445,7 +449,7 @@ for vow_file in examples/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 done
 echo ""
 
@@ -577,7 +581,7 @@ for vow_file in tests/run/*.vow; do
         if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
             skip "${name}/test-verify" "empty output (rust=$rust_exit, self=$self_exit)"
         else
-            compare_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+            compare_json "${name}/test-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
             # Parity alone would pass a regression that makes BOTH compilers
             # reject the fixture, so pin the absolute expectation too (as
             # Section 4b does for tests/verify/).
@@ -599,7 +603,7 @@ for vow_file in tests/run/*.vow; do
         continue
     fi
 
-    compare_json "${name}/test-build" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/test-build" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 
     # Extract executables
     rust_exe=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('executable') or '')" <<< "$rust_json" 2>/dev/null) || rust_exe=""
@@ -673,7 +677,7 @@ for vow_file in tests/verify/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "Verified" ]; then
         fail "${name}/verify-expected-pass" "expected Verified, got $actual_status"
@@ -696,7 +700,7 @@ for vow_file in tests/verify-fail/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "VerifyFailed" ]; then
         fail "${name}/verify-expected-fail" "expected VerifyFailed, got $actual_status"
@@ -863,7 +867,7 @@ for vow_file in tests/verify-skip/*.vow; do
         continue
     fi
 
-    compare_json "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/verify-skip-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
     actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
     if [ -n "$actual_status" ] && [ "$actual_status" != "Skipped" ]; then
         fail "${name}/verify-expected-skip" "expected Skipped, got $actual_status"
@@ -1045,7 +1049,7 @@ for multi in stack geometry bignum gc math heap; do
     if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
         skip "${multi}/build-no-verify" "empty output (rust=$rust_exit, self=$self_exit)"
     else
-        compare_json "${multi}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+        compare_json "${multi}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
     # verify
@@ -1056,7 +1060,7 @@ for multi in stack geometry bignum gc math heap; do
     if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
         skip "${multi}/verify" "empty output (rust=$rust_exit, self=$self_exit)"
     else
-        compare_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+        compare_json "${multi}/verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
     fi
 
     # runtime execution
@@ -1087,7 +1091,7 @@ for dir in tests/multi/*/; do
         skip "${name}/build" "empty output (rust=$rust_exit, self=$self_exit)"
         continue
     fi
-    compare_json "${name}/build" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/build" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$main_file"
 
     # rust/self runtime parity (exit code + stdout)
     compare_runtime "${name}/runtime" "$TMPDIR/rust_multi_${name}" "$TMPDIR/self_multi_${name}"
@@ -1388,7 +1392,7 @@ for name in clamp max callee_blame cegis_broken; do
         continue
     fi
 
-    compare_json "${name}/build-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_json "${name}/build-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$vow_file"
 done
 echo ""
 

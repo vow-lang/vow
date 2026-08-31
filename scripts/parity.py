@@ -2,7 +2,32 @@
 """Compare structured output from the Rust and self-hosted compilers."""
 
 import json
+import re
 import sys
+from pathlib import Path
+
+
+KNOWN_CEX_DIVERGENCE = re.compile(
+    r'^// TEST: known-cex-divergence ([0-9]+) "(.*)"$', re.MULTILINE
+)
+
+
+def _diagnostic_multiset(document):
+    return sorted(
+        (
+            (diagnostic.get("error_code"), diagnostic.get("blame"))
+            for diagnostic in document
+        ),
+        key=repr,
+    )
+
+
+def _counterexample_values(counterexample):
+    return {
+        name: value
+        for name, value in counterexample.get("values", {}).items()
+        if not name.startswith("_esbmc")
+    }
 
 
 def _counterexample_fields(base, rust_cex, self_cex):
@@ -29,12 +54,10 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
         errors.append(f"status: {rust_status} vs {self_status}")
 
     if rust_status != "VerifyFailed":
-        rust_diagnostics = len(rust.get("diagnostics", []))
-        self_diagnostics = len(self_hosted.get("diagnostics", []))
+        rust_diagnostics = _diagnostic_multiset(rust.get("diagnostics", []))
+        self_diagnostics = _diagnostic_multiset(self_hosted.get("diagnostics", []))
         if rust_diagnostics != self_diagnostics:
-            errors.append(
-                f"diagnostics count: {rust_diagnostics} vs {self_diagnostics}"
-            )
+            errors.append(f"diagnostics: {rust_diagnostics} vs {self_diagnostics}")
 
     rust_counterexamples = rust.get("counterexamples", [])
     self_counterexamples = self_hosted.get("counterexamples", [])
@@ -88,6 +111,12 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
                     errors.append(
                         f"counterexample[0].{field}: {rust_value} vs {self_value}"
                     )
+            rust_values = _counterexample_values(rust_counterexamples[0])
+            self_values = _counterexample_values(self_counterexamples[0])
+            if rust_values != self_values:
+                errors.append(
+                    f"counterexample[0].values: {rust_values} vs {self_values}"
+                )
     else:
         if len(rust_counterexamples) != len(self_counterexamples):
             errors.append(
@@ -112,6 +141,13 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
                             f"counterexample[{index}].{field}: "
                             f"{rust_value} vs {self_value}"
                         )
+                rust_values = _counterexample_values(rust_cex)
+                self_values = _counterexample_values(self_cex)
+                if rust_values != self_values:
+                    errors.append(
+                        f"counterexample[{index}].values: "
+                        f"{rust_values} vs {self_values}"
+                    )
 
     return errors
 
@@ -141,6 +177,17 @@ def _load_documents(rust_path, self_path):
     return rust, self_hosted
 
 
+def _known_cex_divergence(fixture_path):
+    if not fixture_path:
+        return None
+    match = KNOWN_CEX_DIVERGENCE.search(Path(fixture_path).read_text(errors="replace"))
+    return f"#{match.group(1)}: {match.group(2)}" if match else None
+
+
+def _is_values_error(error):
+    return error.startswith("counterexample[") and "].values:" in error
+
+
 def main(argv=None):
     """Run a comparator over two JSON files for scripts/full_test.sh."""
     args = sys.argv[1:] if argv is None else argv
@@ -161,6 +208,22 @@ def main(argv=None):
 
     comparator = compare_json if mode == "json" else compare_error
     errors = comparator(rust, self_hosted, int(rust_exit), int(self_exit))
+    fixture_path = args[5] if len(args) == 6 else None
+    if mode == "json":
+        try:
+            known_cex = _known_cex_divergence(fixture_path)
+        except OSError as error:
+            print(f"FAIL: fixture read error: {error}")
+            return 1
+        if known_cex and errors and all(_is_values_error(error) for error in errors):
+            print(f"SKIP: known counterexample divergence ({known_cex})")
+            return 0
+        if known_cex and not errors:
+            print(
+                f"FAIL: known-cex-divergence ({known_cex}) no longer "
+                "reproduces — remove the directive"
+            )
+            return 1
     if errors:
         print("FAIL: " + "; ".join(errors))
         return 1
