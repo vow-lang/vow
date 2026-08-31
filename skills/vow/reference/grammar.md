@@ -532,9 +532,10 @@ while i > 0 {
 ### While Loop with Invariant
 
 ```vow
+let mut i: u64 = 0u64;
 while i < n vow {
     invariant: i <= n,
-    invariant: v.len() == i
+    invariant: v.len() as u64 == i
 } {
     v.push(i);
     i = i + 1;
@@ -543,7 +544,84 @@ while i < n vow {
 
 State the bound the loop actually maintains. `invariant: i >= 0` looks like a
 lower bound but is always true once `i` is unsigned, and the type checker
-rejects it as `TautologicalComparison`.
+rejects it as `TautologicalComparison`. `.len()` is `i64`, so a length clause
+compared against an unsigned counter needs the same `as u64` bridge as the
+descending-loop idiom below.
+
+### Descending Loops
+
+A descending index loop guards on `> 0` and decrements as the first statement
+of the body:
+
+```vow
+let n: u64 = v.len() as u64;
+let mut i: u64 = n;
+let mut acc: u64 = 0u64;
+while i > 0 vow { invariant: i <= n } {
+    i = i - 1;
+    acc = acc + v[i];
+}
+```
+
+`i` starts at `n`, not at `n - 1`, and the decrement brings it into range
+before the first use. The guard is therefore also the bounds check: every
+`v[i]` in the body runs with `i < n`.
+
+Two constraints on the shape above are easy to miss. `.len()` is `i64`, so the
+`as u64` bridge is required — without it the `let` is a `TypeMismatch`. And the
+body must stay pure: a `print_*` call inside a contracted function gives that
+function an effect, and the verifier model is restricted to pure functions, so
+the contract is reported as `VerificationSkipped` rather than checked.
+
+This idiom does not by itself make a length-bounded loop provable. ESBMC's
+unwind bound sits below the modelled collection capacity, so this form and the
+signed `while i >= 0` form both return `unknown`. What the idiom buys is a
+*writable* invariant rather than a stronger proof: `i <= n` is expressible on
+an unsigned index, whereas the signed form's companion clause `i >= -1` is not
+— a negative literal does not fit `u64` at all.
+
+#### Never `while i >= 0`
+
+```vow
+let mut i: u64 = v.len() as u64 - 1;   // wraps on an empty collection
+while i >= 0 { ... }                   // never exits; rejected by the checker
+```
+
+Both lines are broken independently. `i >= 0` is universally true on an
+unsigned type, so the loop has no exit; the type checker rejects the
+comparison outright as `TautologicalComparison`, in a loop condition just as
+in a contract clause. The initializer is the half no diagnostic catches: on an
+empty collection `v.len() as u64 - 1` wraps to `18446744073709551615` and the
+first index read runs far out of bounds.
+
+#### `-` inside the guard, `-!` outside it
+
+Plain wrapping `-` is the correct decrement in the canonical form. The guard
+`i > 0` has already discharged the underflow obligation, so no check is
+needed, and plain `-` is exactly what ESBMC's bitvector encoding models — a
+*wrong* guard therefore stays observable through `invariant: i <= n`. Reserve
+`-!` for decrements whose non-negativity the guard does not establish.
+
+Note one asymmetry while reading that advice. `-!` does trap at runtime under
+`--mode debug`, reporting `{"error":"ArithmeticOverflow"}`, but the verifier
+does not model checked arithmetic at all: `n -! 1` and `n - 1` emit the same C
+and yield byte-identical counterexamples. Do not reach for `-!` expecting it
+to make an underflow statically visible.
+
+#### Why there is no reverse-range syntax
+
+Vow has no numeric range form, and adding one is rejected rather than pending:
+
+- `loop` is not an escape hatch. `break value` is restricted to `loop`, and
+  ESBMC cannot verify an unbounded `loop` at all.
+- A reverse for-each would cover very little. Most reverse scans need the
+  *index*, not the element — they read a parallel array at `i`, or write a
+  second collection at the same `i`.
+- A range desugar would have to thread through index-type decisions that are
+  hardcoded in both lowerers, where a miss is silent rather than loud: a
+  signed comparison applied to unsigned operands raises no type error.
+- A genuine range type would add a new type-system axis, which the language
+  design rule rejects outright.
 
 ### For-Each Loop
 
