@@ -177,24 +177,34 @@ fn report_narrowed_wide_argument() {
     );
 }
 
+const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate \
+     field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
+
+fn report_wide_aggregate_field() {
+    eprintln!("clif_shim: {WIDE_AGGREGATE_FIELD_MSG}");
+}
+
 fn extend_field_store_value(
     builder: &mut FunctionBuilder<'_>,
     value: Value,
     source_ty: i64,
-) -> Value {
+) -> Option<Value> {
     match source_ty {
-        ITY_I8 | ITY_I16 | ITY_I32 => builder.ins().sextend(types::I64, value),
-        ITY_U8 | ITY_U16 | ITY_U32 => builder.ins().uextend(types::I64, value),
+        ITY_I8 | ITY_I16 | ITY_I32 => Some(builder.ins().sextend(types::I64, value)),
+        ITY_U8 | ITY_U16 | ITY_U32 => Some(builder.ins().uextend(types::I64, value)),
+        ITY_I128 | ITY_U128 => None,
         ITY_F32 => {
             let bits = builder
                 .ins()
                 .bitcast(types::I32, MemFlagsData::new(), value);
-            builder.ins().uextend(types::I64, bits)
+            Some(builder.ins().uextend(types::I64, bits))
         }
-        ITY_F64 => builder
-            .ins()
-            .bitcast(types::I64, MemFlagsData::new(), value),
-        _ => value,
+        ITY_F64 => Some(
+            builder
+                .ins()
+                .bitcast(types::I64, MemFlagsData::new(), value),
+        ),
+        _ => Some(value),
     }
 }
 
@@ -2757,6 +2767,10 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
                 // Struct / enum field access
                 IOP_FIELD_GET => {
+                    if matches!(ity, ITY_I128 | ITY_U128) {
+                        report_wide_aggregate_field();
+                        return -1;
+                    }
                     if dk == IDATA_FIELD {
                         let idx = dv;
                         let base = arg!(0);
@@ -2791,7 +2805,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             .get(&all_args[aoff + 1])
                             .copied()
                             .unwrap_or(ITY_I64);
-                        let store_val = extend_field_store_value(&mut builder, new_val, source_ty);
+                        let Some(store_val) =
+                            extend_field_store_value(&mut builder, new_val, source_ty)
+                        else {
+                            report_wide_aggregate_field();
+                            return -1;
+                        };
                         builder
                             .ins()
                             .store(MemFlagsData::trusted(), store_val, base, offset);
@@ -3899,9 +3918,9 @@ mod tests {
         let unsigned_i8 = builder.ins().iconst(types::I8, -1);
         coerce_call_argument(&mut builder, unsigned_i8, ITY_U8, types::I64).unwrap();
         let signed_i16 = builder.ins().iconst(types::I16, -1);
-        extend_field_store_value(&mut builder, signed_i16, ITY_I16);
+        extend_field_store_value(&mut builder, signed_i16, ITY_I16).unwrap();
         let unsigned_i16 = builder.ins().iconst(types::I16, -1);
-        extend_field_store_value(&mut builder, unsigned_i16, ITY_U16);
+        extend_field_store_value(&mut builder, unsigned_i16, ITY_U16).unwrap();
 
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
@@ -4593,6 +4612,70 @@ mod tests {
         add_test_block(ctx);
         add_test_inst(ctx, 0, IOP_CONST_I128, ITY_I128, IDATA_CONST_I64, 7, 0, &[]);
         add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), -1);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn wide_field_load_is_rejected_through_the_streamed_ffi() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "wide_field_load", ITY_I128, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            16,
+            8,
+            &[],
+        );
+        add_test_inst(ctx, 1, IOP_FIELD_GET, ITY_I128, IDATA_FIELD, 0, 0, &[0]);
+        add_test_inst(ctx, 2, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[1]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), -1);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn wide_field_store_is_rejected_through_the_streamed_ffi() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "wide_field_store", ITY_UNIT, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            24,
+            8,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            1,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            0,
+            1 << 16,
+            &[],
+        );
+        add_test_inst(ctx, 2, IOP_FIELD_SET, ITY_UNIT, IDATA_FIELD, 0, 0, &[0, 1]);
+        add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
         unsafe {
             assert_eq!(__vow_clif_fn_end(ctx), -1);
             __vow_clif_destroy(ctx);
