@@ -152,6 +152,19 @@ requests (e.g., 16-byte-aligned SIMD backings) would exceed the
 chunk's usable range and trigger repeated fallback allocation or
 out-of-bounds arithmetic.
 
+Reads and writes of both header words go through accessors in
+`vow-runtime` (`next_chunk`, `set_next_chunk`, `chunk_total`,
+`chunk_is_oversized`, `set_chunk_total_word`), each of which obtains
+the base pointer from a single `chunk_header` gate. The gate converts
+the base to `NonNull<u8>` and rejects a null with
+`RuntimeInvariantViolation` and `reason = "null chunk"`, so every
+header access holds a pointer that cannot be null by construction.
+Every chain walk already tests the link before recursing, so the trap
+is unreachable while the chain is well formed; carrying the invariant
+in the type rather than in the walk's loop condition keeps the proof
+local to the access and makes a walk that loses the invariant fail
+closed instead of reading address 0.
+
 The total-size word carries an additional bit (CHUNK_OVERSIZED_FLAG)
 that records *which allocation path* produced the chunk — not just
 its size. The chain walker in §7.1 consults this flag, not a
@@ -201,6 +214,14 @@ Every boolean-valued runtime primitive in this spec MUST follow the
 same convention. In the C header the type is written `int64_t`
 (from `<stdint.h>`); in the Rust definition and in Vow FFI bindings
 the corresponding `i64` ABI-compatible type is used.
+
+All five arena primitives above are exported C entry points that
+generated code may call directly, so a null `a` is reachable without
+passing through any `*_in_arena` wrapper. Each obtains its
+`&mut VowArena` from a single `arena_mut` helper, which converts the
+handle with `NonNull::new` and traps on the `None` arm with
+`RuntimeInvariantViolation` and `reason = "null arena"` — the same
+diagnostic the explicit-arena Vec, String, and HashMap entries emit.
 
 **`__vow_arena_init_closed(a)`**: initializes `*a` to the closed
 all-zero state. The compiler emits this once when a block-arena stack
