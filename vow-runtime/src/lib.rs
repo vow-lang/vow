@@ -98,10 +98,10 @@ pub unsafe extern "C" fn __vow_violation(
     let file = decode(file_ptr);
     // Decode the C ABI records into owned data first so the pure renderer can
     // borrow plain `&str`s, keeping it free of `unsafe` and raw pointers.
-    let decoded: Vec<(String, u8, u64)> = (0..binding_count as usize)
+    let decoded: Vec<(String, u8, u128)> = (0..binding_count as usize)
         .map(|i| {
             let b = unsafe { &*bindings_ptr.add(i) };
-            (decode(b.name), b.tag, b.payload)
+            (decode(b.name), b.tag, u128::from(b.payload))
         })
         .collect();
     let bindings: Vec<ValueBinding<'_>> = decoded
