@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "argument has type"
+module VecPushArgTypeMismatch
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    v.push(String::from("boom"));
+    0
+}

@@ -298,25 +298,69 @@ fn default_literal_integer_types(ty: &Ty) -> Ty {
     }
 }
 
-fn method_argument_types(receiver: &Ty, method: &str) -> Vec<Ty> {
+/// What a builtin method demands of one argument position.
+///
+/// Index-shaped positions accept any integer type: during the unsigned-size
+/// migration `i64` and `u64` indices legitimately coexist, so width and
+/// signedness are deliberately unconstrained. `Exact` is the seam that a later
+/// phase tightens to `Ty::U64`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ArgExpect {
+    Exact(Ty),
+    AnyInteger,
+}
+
+impl ArgExpect {
+    /// The type used for the contextual integer-literal range check.
+    fn literal_range_target(&self) -> &Ty {
+        match self {
+            ArgExpect::Exact(ty) => ty,
+            ArgExpect::AnyInteger => &Ty::I64,
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            ArgExpect::Exact(ty) => format!("`{ty}`"),
+            ArgExpect::AnyInteger => "an integer type".to_string(),
+        }
+    }
+
+    fn accepts(&self, actual: &Ty) -> bool {
+        match self {
+            ArgExpect::Exact(ty) => can_assignment_coerce(actual, ty),
+            ArgExpect::AnyInteger => *actual == Ty::Never || is_integer_or_lit_int(actual),
+        }
+    }
+}
+
+fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<ArgExpect> {
     match receiver {
         Ty::Str => match method {
-            "push_str" | "eq" | "contains" => vec![Ty::Str],
-            "byte_at" | "push_byte" => vec![Ty::I64],
-            "substring" => vec![Ty::I64, Ty::I64],
+            "push_str" | "eq" | "contains" => vec![ArgExpect::Exact(Ty::Str)],
+            "byte_at" | "push_byte" => vec![ArgExpect::AnyInteger],
+            "substring" => vec![ArgExpect::AnyInteger, ArgExpect::AnyInteger],
             _ => vec![],
         },
         Ty::Applied(base, args) => match base.as_ref() {
             Ty::Struct(name) if name == "Vec" => match method {
-                "push" => args.first().cloned().into_iter().collect(),
-                "get" | "truncate" => vec![Ty::I64],
+                "push" => args
+                    .first()
+                    .cloned()
+                    .map(ArgExpect::Exact)
+                    .into_iter()
+                    .collect(),
+                "get" | "truncate" => vec![ArgExpect::AnyInteger],
                 _ => vec![],
             },
             Ty::Struct(name) if name == "HashMap" || name == "BTreeMap" => match method {
-                "insert" => args.iter().take(2).cloned().collect(),
-                "get" | "contains" | "contains_key" | "remove" => {
-                    args.first().cloned().into_iter().collect()
-                }
+                "insert" => args.iter().take(2).cloned().map(ArgExpect::Exact).collect(),
+                "get" | "contains" | "contains_key" | "remove" => args
+                    .first()
+                    .cloned()
+                    .map(ArgExpect::Exact)
+                    .into_iter()
+                    .collect(),
                 _ => vec![],
             },
             _ => vec![],
@@ -1768,7 +1812,10 @@ impl<'e> Checker<'e> {
                         for arg in args {
                             self.check_expr(arg);
                         }
-                        return Ty::Unit;
+                        // Match the self-hosted checker (`compiler/checker.vow`,
+                        // undefined-function arm), which returns bottom here so a
+                        // failed call does not cascade into its consumers.
+                        return Ty::Never;
                     }
                 };
                 if args.len() != param_tys.len() {
@@ -1810,14 +1857,26 @@ impl<'e> Checker<'e> {
                 args,
             } => {
                 let recv_ty = self.check_expr(receiver);
-                for arg in args {
-                    self.check_expr(arg);
-                }
-                for (arg, expected_ty) in args
+                let arg_tys: Vec<Ty> = args.iter().map(|arg| self.check_expr(arg)).collect();
+                for ((arg, arg_ty), expect) in args
                     .iter()
-                    .zip(method_argument_types(&recv_ty, method).iter())
+                    .zip(arg_tys.iter())
+                    .zip(method_argument_expectations(&recv_ty, method).iter())
                 {
-                    self.check_contextual_integer_literal_ranges(arg, expected_ty);
+                    self.check_contextual_integer_literal_ranges(
+                        arg,
+                        expect.literal_range_target(),
+                    );
+                    if !expect.accepts(arg_ty) {
+                        self.emit_error(
+                            ErrorCode::TypeMismatch,
+                            format!(
+                                "argument has type `{arg_ty}` but `{method}` expects {}",
+                                expect.describe()
+                            ),
+                            arg.span,
+                        );
+                    }
                 }
                 let is_str = matches!(recv_ty, Ty::Str);
                 let is_vec = matches!(&recv_ty,
@@ -2064,8 +2123,16 @@ impl<'e> Checker<'e> {
             }
             ExprKind::Index { base, index } => {
                 let base_ty = self.check_expr(base);
-                self.check_expr(index);
+                let index_ty = self.check_expr(index);
                 self.check_contextual_integer_literal_ranges(index, &Ty::I64);
+                if index_ty != Ty::Never && !is_integer_or_lit_int(&index_ty) {
+                    self.emit_error_with_hints(
+                        ErrorCode::TypeMismatch,
+                        format!("index has type `{index_ty}` but must be an integer type"),
+                        index.span,
+                        vec!["any integer width or signedness is accepted as an index".to_string()],
+                    );
+                }
                 match &base_ty {
                     Ty::Applied(_, args) => args.first().cloned().unwrap_or(Ty::Unit),
                     _ => {
@@ -6255,5 +6322,91 @@ mod tests {
             "forward-referenced transitive linear in a type alias must be caught; got {:?}",
             emitter.0.iter().map(|d| d.code).collect::<Vec<_>>()
         );
+    }
+
+    fn vec_of(elem: Ty) -> Ty {
+        Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![elem])
+    }
+
+    fn map_of(name: &str, key: Ty, value: Ty) -> Ty {
+        Ty::Applied(Box::new(Ty::Struct(name.to_string())), vec![key, value])
+    }
+
+    #[test]
+    fn index_shaped_method_arguments_accept_any_integer_width_or_signedness() {
+        for (receiver, method) in [
+            (Ty::Str, "byte_at"),
+            (Ty::Str, "push_byte"),
+            (Ty::Str, "substring"),
+            (vec_of(Ty::I64), "get"),
+            (vec_of(Ty::I64), "truncate"),
+        ] {
+            let expects = method_argument_expectations(&receiver, method);
+            assert!(!expects.is_empty(), "{method} must constrain its index");
+            assert!(
+                expects.iter().all(|e| *e == ArgExpect::AnyInteger),
+                "{method} must stay width- and signedness-agnostic, got {expects:?}"
+            );
+            for ty in [Ty::I64, Ty::U64, Ty::U32, Ty::I8, Ty::LitInt] {
+                assert!(
+                    expects[0].accepts(&ty),
+                    "{method} must accept `{ty}` as an index"
+                );
+            }
+            for ty in [Ty::Str, Ty::Bool, Ty::Unit] {
+                assert!(
+                    !expects[0].accepts(&ty),
+                    "{method} must reject `{ty}` as an index"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn value_shaped_method_arguments_require_the_declared_type() {
+        let expects = method_argument_expectations(&vec_of(Ty::I64), "push");
+        assert_eq!(expects, vec![ArgExpect::Exact(Ty::I64)]);
+        assert!(expects[0].accepts(&Ty::I64));
+        assert!(expects[0].accepts(&Ty::LitInt));
+        assert!(!expects[0].accepts(&Ty::Str));
+        assert!(!expects[0].accepts(&Ty::U64));
+
+        let expects = method_argument_expectations(&Ty::Str, "push_str");
+        assert_eq!(expects, vec![ArgExpect::Exact(Ty::Str)]);
+        assert!(!expects[0].accepts(&Ty::LitInt));
+
+        let expects = method_argument_expectations(&map_of("HashMap", Ty::I64, Ty::Bool), "insert");
+        assert_eq!(
+            expects,
+            vec![ArgExpect::Exact(Ty::I64), ArgExpect::Exact(Ty::Bool)]
+        );
+        assert!(!expects[0].accepts(&Ty::Str));
+        assert!(!expects[1].accepts(&Ty::I64));
+    }
+
+    #[test]
+    fn expectations_never_cascade_on_an_unresolved_type() {
+        // `Never` on either side means an earlier diagnostic already fired;
+        // a second one here would be noise.
+        assert!(ArgExpect::AnyInteger.accepts(&Ty::Never));
+        assert!(ArgExpect::Exact(Ty::Str).accepts(&Ty::Never));
+        assert!(ArgExpect::Exact(Ty::Never).accepts(&Ty::Str));
+    }
+
+    #[test]
+    fn a_malformed_generic_receiver_produces_no_expectation() {
+        let bare_vec = Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![]);
+        assert!(method_argument_expectations(&bare_vec, "push").is_empty());
+
+        let bare_map = Ty::Applied(Box::new(Ty::Struct("HashMap".to_string())), vec![]);
+        assert!(method_argument_expectations(&bare_map, "insert").is_empty());
+        assert!(method_argument_expectations(&bare_map, "get").is_empty());
+    }
+
+    #[test]
+    fn unknown_methods_and_non_generic_receivers_constrain_nothing() {
+        assert!(method_argument_expectations(&Ty::Str, "len").is_empty());
+        assert!(method_argument_expectations(&vec_of(Ty::I64), "pop").is_empty());
+        assert!(method_argument_expectations(&Ty::I64, "byte_at").is_empty());
     }
 }

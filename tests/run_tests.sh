@@ -189,6 +189,7 @@ parse_annotations() {
   TEST_CX_ARG_VALUE=""
   TEST_CX_ARG_OFFSET=""
   TEST_ERROR_CODE=""
+  TEST_ERROR_COUNT=""
   TEST_SKIP=""
   TEST_VERIFY_ONLY=""
   TEST_STDIN=""
@@ -232,6 +233,8 @@ parse_annotations() {
       TEST_CX_ARG_OFFSET="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ error-code\ (.+) ]]; then
       TEST_ERROR_CODE="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ error-count\ ([0-9]+) ]]; then
+      TEST_ERROR_COUNT="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ stdin\ \"(.*)\" ]]; then
       TEST_STDIN="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ stdin-file\ (.+) ]]; then
@@ -912,6 +915,24 @@ print('|'.join(codes))
     actual_codes="$(echo "$has_expected" | tail -1)"
     if [[ "$found" != "true" ]]; then
       fail "$name" "error_code=$actual_codes (expected $TEST_ERROR_CODE)"
+      continue
+    fi
+  fi
+
+  # Exact diagnostic count — guards against a single source violation
+  # cascading into several diagnostics.
+  if [[ -n "$TEST_ERROR_COUNT" ]]; then
+    actual_count="$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print(-1); sys.exit(0)
+xs = d.get('diagnostics', []) or []
+print(len([x for x in xs if x.get('severity', 'error') == 'error']))
+" <<< "$build_json")"
+    if [[ "$actual_count" != "$TEST_ERROR_COUNT" ]]; then
+      fail "$name" "error count=$actual_count (expected $TEST_ERROR_COUNT)"
       continue
     fi
   fi

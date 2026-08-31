@@ -1,0 +1,34 @@
+// TEST: stdout "i:1u:2u32:3lit:1byte:101bytelit:104sub:el"
+// Regression guard for #1111: the index rule is deliberately weak. Any integer
+// width or signedness is a valid index or index-shaped method argument.
+module index_integer_types
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    let s: String = String::from("hello");
+
+    let i: i64 = 0;
+    let u: u64 = 1;
+    let w: u32 = 2;
+
+    print_str("i:");
+    print_i64(v[i]);
+    print_str("u:");
+    print_i64(v[u]);
+    print_str("u32:");
+    print_i64(v[w]);
+    print_str("lit:");
+    print_i64(v[0]);
+    print_str("byte:");
+    print_i64(s.byte_at(u));
+    print_str("bytelit:");
+    print_i64(s.byte_at(0));
+    print_str("sub:");
+    print_str(s.substring(u, 3));
+
+    v[u] = 9;
+    0
+}

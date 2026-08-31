@@ -1,0 +1,18 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 8
+// Acceptance repro for #1111: eight argument/index type violations, each of
+// which must produce exactly one diagnostic and no cascade.
+module IndexMethodArgTypes
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    let s: String = String::from("hi");
+    let a: i64 = v[String::from("x")];
+    let b: i64 = v[true];
+    v[String::from("y")] = 1;
+    let c: i64 = s.byte_at(String::from("x"));
+    let d: String = s.substring(String::from("a"), true);
+    v.push(String::from("boom"));
+    s.push_str(42);
+    0
+}

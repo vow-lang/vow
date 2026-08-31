@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "must be an integer type"
+module IndexWriteTypeString
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v[String::from("y")] = 1;
+    0
+}

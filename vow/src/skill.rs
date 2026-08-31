@@ -2116,9 +2116,11 @@ m.contains_key(k)
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> i64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
-| `.truncate(n)` | `(i64) -> ()` — shrinks to n elements, frees excess memory |
+| `.truncate(n)` | `(<int>) -> ()` — shrinks to n elements, frees excess memory |
 | `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
 | `v[i] = val`   | Index write — copies value into slot |
+
+`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
 ### String Methods
 
@@ -2128,15 +2130,17 @@ m.contains_key(k)
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
 | `.len()`            | `() -> i64`                 |
-| `.byte_at(i)`       | `(i64) -> i64`              |
-| `.push_byte(b)`     | `(i64) -> ()`               |
+| `.byte_at(i)`       | `(<int>) -> i64`            |
+| `.push_byte(b)`     | `(<int>) -> ()`             |
 | `.push_str(s)`      | `(String) -> ()`            |
 | `.clear()`          | `() -> ()` — frees buffer, resets to empty |
 | `.contains(s)`      | `(String) -> bool`          |
 | `.eq(s)`            | `(String) -> bool`          |
-| `.substring(start, end)` | `(i64, i64) -> String` |
+| `.substring(start, end)` | `(<int>, <int>) -> String` |
 | `.parse_i64()`      | `() -> Option<i64>`         |
 | `.parse_u64()`      | `() -> Option<u64>`         |
+
+`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
 ### HashMap<K, V> Methods
 
@@ -2186,6 +2190,12 @@ The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the
 let val: i64 = v[0];
 v[i] = new_val;
 ```
+
+The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, `String::push_byte`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`.
+
+The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
+
+The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
 
@@ -6872,9 +6882,11 @@ m.contains_key(k)
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> i64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
-| `.truncate(n)` | `(i64) -> ()` — shrinks to n elements, frees excess memory |
+| `.truncate(n)` | `(<int>) -> ()` — shrinks to n elements, frees excess memory |
 | `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
 | `v[i] = val`   | Index write — copies value into slot |
+
+`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
 ### String Methods
 
@@ -6884,15 +6896,17 @@ m.contains_key(k)
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
 | `.len()`            | `() -> i64`                 |
-| `.byte_at(i)`       | `(i64) -> i64`              |
-| `.push_byte(b)`     | `(i64) -> ()`               |
+| `.byte_at(i)`       | `(<int>) -> i64`            |
+| `.push_byte(b)`     | `(<int>) -> ()`             |
 | `.push_str(s)`      | `(String) -> ()`            |
 | `.clear()`          | `() -> ()` — frees buffer, resets to empty |
 | `.contains(s)`      | `(String) -> bool`          |
 | `.eq(s)`            | `(String) -> bool`          |
-| `.substring(start, end)` | `(i64, i64) -> String` |
+| `.substring(start, end)` | `(<int>, <int>) -> String` |
 | `.parse_i64()`      | `() -> Option<i64>`         |
 | `.parse_u64()`      | `() -> Option<u64>`         |
+
+`<int>` marks an index-shaped parameter: any integer width and either signedness is accepted, per [Indexing](#indexing). The runtime ABI is i64-only, which is why 128-bit arguments fail codegen.
 
 ### HashMap<K, V> Methods
 
@@ -6942,6 +6956,12 @@ The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the
 let val: i64 = v[0];
 v[i] = new_val;
 ```
+
+The index expression must have an **integer type**. Any width and either signedness is accepted (`i8` … `i64`, `u8` … `u64`, and unsuffixed integer literals); a non-integer index is a `TypeMismatch` error. The same rule applies to index-shaped builtin-method arguments: `String::byte_at`, `String::push_byte`, both arguments of `String::substring`, and `Vec::get` / `Vec::truncate`.
+
+The type checker also accepts a 128-bit index, consistent with 128-bit limits being backend gaps rather than language rules (see [Operators](#operators)), but the `Vec` and `String` element helpers are i64-only, so such a program fails codegen instead. Use a 64-bit or narrower index until epic #526 lands 128-bit lowering.
+
+The same i64-only ABI means an **unsigned index above `i64::MAX`** is reinterpreted as negative by the runtime helpers and clamped, rather than treated as a large index — `s.substring(u64::MAX, 3)` returns the whole string instead of an empty one. The compiler does not diagnose this. Keep unsigned indices within `i64::MAX` until the helpers are widened (see issue #1131).
 
 Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
 
