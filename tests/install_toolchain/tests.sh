@@ -7,6 +7,12 @@ NOTE="Legacy in-place upgrade note: 'vow' is now the installed command; the lega
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
+# Kill signals re-raise so the EXIT handler above still does the removal:
+# EXIT alone does not fire on an untrapped SIGTERM, so a process-group kill
+# would strand this scratch tree. See scripts/full_test.sh.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 fail() {
     echo "FAIL: $1" >&2

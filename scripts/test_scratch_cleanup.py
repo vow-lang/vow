@@ -26,14 +26,26 @@ SCRIPTS = REPO_ROOT / "scripts"
 
 # Scripts that allocate a top-level scratch tree, and the variable holding it.
 SCRATCH_SCRIPTS = {
-    "full_test.sh": "TMPDIR",
-    "cli_compat_test.sh": "TMPDIR",
-    "measure_bootstrap_rss.sh": "scratch",
-    "package-toolchain.sh": "tmp",
+    "scripts/full_test.sh": "TMPDIR",
+    "scripts/cli_compat_test.sh": "TMPDIR",
+    "scripts/measure_bootstrap_rss.sh": "scratch",
+    "scripts/package-toolchain.sh": "tmp",
+    # The nested harnesses full_test.sh invokes, plus the two standalone
+    # benchmark/demo runners. Each allocates its own tree, so each needs its own
+    # proof -- the parent's trap never covered them.
+    "tests/bootstrap/tests.sh": "TMPDIR",
+    "tests/esbmc-path-cache/tests.sh": "TMP_ROOT",
+    "tests/full_test_bootstrap/tests.sh": "TEST_TMPDIR",
+    "tests/install_toolchain/tests.sh": "TMPDIR",
+    "tests/measure_bootstrap_rss/tests.sh": "TMPDIR",
+    "tests/run_tests.sh": "TMPDIR",
+    "bench/memory/run.sh": "BENCH_WORK_DIR",
+    "examples/streaming_file/run_memory_demo.sh": "WORK_DIR",
 }
 
-# bootstrap.sh allocates its scratch file inside a function's subshell, so there
-# is no top-level preamble to extract and signal; the lint below covers it.
+# scripts/bootstrap.sh and tests/mutants/tests.sh allocate inside a function or
+# indented block, so there is no top-level preamble to extract and signal; the
+# lint below is what covers them.
 
 KILL_SIGNALS = {"INT", "TERM", "HUP"}
 
@@ -213,7 +225,7 @@ class SignalCleanupTest(unittest.TestCase):
         self.fail(f"pid {pid} never forked a foreground child")
 
     def check(self, name, var, sig, expected_status):
-        text = (SCRIPTS / name).read_text()
+        text = (REPO_ROOT / name).read_text()
         script = extract_preamble(text, var) + f'\necho "${var}"\nsleep 30\n'
 
         path, status = self.run_until_killed(script, sig)
@@ -248,7 +260,7 @@ class SignalCleanupTest(unittest.TestCase):
                 self.check_no_resume(name, var)
 
     def check_no_resume(self, name, var):
-        text = (SCRIPTS / name).read_text()
+        text = (REPO_ROOT / name).read_text()
         script = extract_preamble(text, var) + (
             f'\necho "${var}"\nsleep 30\necho RESUMED\n'
         )
@@ -277,21 +289,51 @@ class TrapLintTest(unittest.TestCase):
     """Keeps the signal set from drifting back out of any script."""
 
     def shell_scripts(self):
-        return sorted(SCRIPTS.glob("*.sh"))
+        """Every tracked shell script in the repo, repo-relative.
+
+        Deliberately not `scripts/*.sh`: the harnesses `full_test.sh` itself
+        invokes (`tests/esbmc-path-cache/tests.sh`, `tests/bootstrap/tests.sh`,
+        `tests/install_toolchain/tests.sh`, `tests/measure_bootstrap_rss/tests.sh`,
+        `tests/full_test_bootstrap/tests.sh`) each allocate their own scratch
+        tree, so a process-group kill of the parent stranded them even after the
+        parent's own tree was fixed. Linting only the top-level directory made
+        the rules below silently narrower than the invariant they state.
+
+        Returns:
+            list[str]: Repo-relative paths of tracked `.sh` files.
+        """
+        out = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "*.sh"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+        return sorted(out)
+
+    def source_of(self, rel):
+        """Read a repo-relative script.
+
+        Args:
+            rel: Repo-relative path of the script.
+
+        Returns:
+            str: The file's contents.
+        """
+        return (REPO_ROOT / rel).read_text()
 
     def test_every_cleanup_trap_covers_the_kill_signals(self):
         # Per block, not per file: see trap_blocks() for why a file-wide union
         # lets one cleanup scope vouch for another that is actually broken.
         offenders = []
         for path in self.shell_scripts():
-            for block in trap_blocks(path.read_text()):
+            for block in trap_blocks(self.source_of(path)):
                 cleanup = {s for body, names in block if "rm " in body for s in names}
                 if "EXIT" not in cleanup:
                     continue
                 covered = {s for _, names in block for s in names}
                 missing = KILL_SIGNALS - covered
                 if missing:
-                    offenders.append(f"{path.name}: block missing {sorted(missing)}")
+                    offenders.append(f"{path}: block missing {sorted(missing)}")
 
         self.assertEqual([], offenders)
 
@@ -302,10 +344,10 @@ class TrapLintTest(unittest.TestCase):
         # the tree and resuming against it. Cleanup belongs on EXIT alone.
         offenders = []
         for path in self.shell_scripts():
-            for body, names in trap_entries(path.read_text()):
+            for body, names in trap_entries(self.source_of(path)):
                 overlap = names & KILL_SIGNALS
                 if "rm " in body and overlap:
-                    offenders.append(f"{path.name}: {sorted(overlap)} -> {body}")
+                    offenders.append(f"{path}: {sorted(overlap)} -> {body}")
 
         self.assertEqual([], offenders)
 
@@ -314,29 +356,29 @@ class TrapLintTest(unittest.TestCase):
         # whatever else it does.
         offenders = []
         for path in self.shell_scripts():
-            for body, names in trap_entries(path.read_text()):
+            for body, names in trap_entries(self.source_of(path)):
                 if names & KILL_SIGNALS and not EXITS.search(body):
-                    offenders.append(f"{path.name}: {sorted(names)} -> {body}")
+                    offenders.append(f"{path}: {sorted(names)} -> {body}")
 
         self.assertEqual([], offenders)
 
     def test_the_lint_has_something_to_check(self):
         # Guards against the rule passing because it matched no trap at all.
         with_cleanup = [
-            p.name
+            p
             for p in self.shell_scripts()
-            if "EXIT" in trap_signals(p.read_text())[1]
+            if "EXIT" in trap_signals(self.source_of(p))[1]
         ]
 
-        self.assertGreaterEqual(len(with_cleanup), 4, with_cleanup)
+        self.assertGreaterEqual(len(with_cleanup), 14, with_cleanup)
 
     def test_no_script_writes_scratch_straight_into_slash_tmp(self):
         # /tmp is a tmpfs on the development host, so an untrapped file there is
         # abandoned RAM. Scratch paths belong under a trapped scratch dir.
         offenders = []
         for path in self.shell_scripts():
-            for m in re.finditer(r'mktemp[^\n]*"(/tmp/[^"]*)"', path.read_text()):
-                offenders.append(f"{path.name}: {m.group(1)}")
+            for m in re.finditer(r'mktemp[^\n]*"(/tmp/[^"]*)"', self.source_of(path)):
+                offenders.append(f"{path}: {m.group(1)}")
 
         self.assertEqual([], offenders)
 
