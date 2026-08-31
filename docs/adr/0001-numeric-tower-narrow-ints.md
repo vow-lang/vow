@@ -137,3 +137,13 @@ BigInt subprojects.
   Resource-limited 128-bit proofs therefore use the ordinary fail-closed
   verifier outcomes; users may still skip static verification for an entire
   build with the existing `vow build --no-verify` option.
+
+- **2026-08-31 — Decision 1.** The decision's second sentence,
+  "`Vec::len() -> i64` stays", is reversed by
+  [ADR 0003](0003-unsigned-size-types.md): lengths, indices, and capacities
+  become `u64`. The first sentence, "No `isize`/`usize`", is unaffected and
+  still holds. Decision 1 conflated two separable claims — pointer-width types
+  break the binary fixed point, whereas fixed-width `u64` does not — and the
+  rejection rationale recorded under *Considered options* ("Breaks 64-bit-only
+  determinism; cross-compilation would produce different binaries") applies
+  only to the former. See epic #1104.
