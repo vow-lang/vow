@@ -15,13 +15,19 @@ KNOWN_CEX_DIVERGENCE = re.compile(
 )
 
 
-def _diagnostic_multiset(document):
+def _diagnostic_multiset(diagnostics):
     return sorted(
         (
             (diagnostic.get("error_code"), diagnostic.get("blame"))
-            for diagnostic in document
+            for diagnostic in diagnostics
         ),
         key=repr,
+    )
+
+
+def _error_codes(diagnostics):
+    return sorted(
+        (diagnostic.get("error_code") for diagnostic in diagnostics), key=repr
     )
 
 
@@ -42,6 +48,34 @@ def _counterexample_fields(base, rust_cex, self_cex):
     if rust_cex.get("blame") != "none" and self_cex.get("blame") != "none":
         fields.append("violation")
     return fields
+
+
+def _compare_counterexamples(rust_counterexamples, self_counterexamples, fields):
+    """Per-index parity errors for the counterexamples the two compilers share."""
+    errors = []
+    for index, (rust_cex, self_cex) in enumerate(
+        zip(rust_counterexamples, self_counterexamples)
+    ):
+        for field in _counterexample_fields(fields, rust_cex, self_cex):
+            rust_value = rust_cex.get(field)
+            self_value = self_cex.get(field)
+            # An unknown vow_id is spelled 0, -1, or absent depending on which
+            # emitter produced it; all three mean the same "no id".
+            if field == "vow_id" and (
+                rust_value in (0, -1, None) and self_value in (0, -1, None)
+            ):
+                continue
+            if rust_value != self_value:
+                errors.append(
+                    f"counterexample[{index}].{field}: {rust_value} vs {self_value}"
+                )
+        rust_values = _counterexample_values(rust_cex)
+        self_values = _counterexample_values(self_cex)
+        if rust_values != self_values:
+            errors.append(
+                f"counterexample[{index}].values: {rust_values} vs {self_values}"
+            )
+    return errors
 
 
 def compare_json(rust, self_hosted, rust_exit, self_exit):
@@ -102,24 +136,9 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
             errors.append("rust has no counterexamples for VerifyFailed")
         if len(self_counterexamples) == 0:
             errors.append("self has no counterexamples for VerifyFailed")
-        if rust_counterexamples and self_counterexamples:
-            for field in _counterexample_fields(
-                ("function", "blame"),
-                rust_counterexamples[0],
-                self_counterexamples[0],
-            ):
-                rust_value = rust_counterexamples[0].get(field)
-                self_value = self_counterexamples[0].get(field)
-                if rust_value != self_value:
-                    errors.append(
-                        f"counterexample[0].{field}: {rust_value} vs {self_value}"
-                    )
-            rust_values = _counterexample_values(rust_counterexamples[0])
-            self_values = _counterexample_values(self_counterexamples[0])
-            if rust_values != self_values:
-                errors.append(
-                    f"counterexample[0].values: {rust_values} vs {self_values}"
-                )
+        errors += _compare_counterexamples(
+            rust_counterexamples, self_counterexamples, ("function", "blame")
+        )
     else:
         if len(rust_counterexamples) != len(self_counterexamples):
             errors.append(
@@ -127,30 +146,11 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
                 f"{len(rust_counterexamples)} vs {len(self_counterexamples)}"
             )
         else:
-            for index, (rust_cex, self_cex) in enumerate(
-                zip(rust_counterexamples, self_counterexamples)
-            ):
-                for field in _counterexample_fields(
-                    ("function", "vow_id", "blame"), rust_cex, self_cex
-                ):
-                    rust_value = rust_cex.get(field)
-                    self_value = self_cex.get(field)
-                    if field == "vow_id" and (
-                        rust_value in (0, -1, None) and self_value in (0, -1, None)
-                    ):
-                        continue
-                    if rust_value != self_value:
-                        errors.append(
-                            f"counterexample[{index}].{field}: "
-                            f"{rust_value} vs {self_value}"
-                        )
-                rust_values = _counterexample_values(rust_cex)
-                self_values = _counterexample_values(self_cex)
-                if rust_values != self_values:
-                    errors.append(
-                        f"counterexample[{index}].values: "
-                        f"{rust_values} vs {self_values}"
-                    )
+            errors += _compare_counterexamples(
+                rust_counterexamples,
+                self_counterexamples,
+                ("function", "vow_id", "blame"),
+            )
 
     return errors
 
@@ -169,17 +169,8 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
             )
         if len(document.get("diagnostics", [])) < 1:
             errors.append(f"{name} has no diagnostics")
-    rust_codes = sorted(
-        (diagnostic.get("error_code") for diagnostic in rust.get("diagnostics", [])),
-        key=repr,
-    )
-    self_codes = sorted(
-        (
-            diagnostic.get("error_code")
-            for diagnostic in self_hosted.get("diagnostics", [])
-        ),
-        key=repr,
-    )
+    rust_codes = _error_codes(rust.get("diagnostics", []))
+    self_codes = _error_codes(self_hosted.get("diagnostics", []))
     if rust_codes != self_codes:
         errors.append(f"error codes: {rust_codes} vs {self_codes}")
     return errors
@@ -243,7 +234,14 @@ def main(argv=None):
         if known_cex and errors and all(_is_values_error(error) for error in errors):
             print(f"SKIP: known counterexample divergence ({known_cex})")
             return 0
-        if known_cex and not errors:
+        # Only a run that actually produced counterexamples on both sides can
+        # say the directive is stale. The same fixture is also reachable
+        # through invocations that emit none (a --no-verify build); calling the
+        # directive stale there would fail a run that never compared values.
+        compared_values = rust.get("counterexamples") and self_hosted.get(
+            "counterexamples"
+        )
+        if known_cex and not errors and compared_values:
             print(
                 f"FAIL: known-cex-divergence ({known_cex}) no longer "
                 "reproduces — remove the directive"

@@ -221,8 +221,10 @@ class CompareJsonCounterexampleValuesTest(unittest.TestCase):
         )
 
     def test_esbmc_internal_values_are_not_a_parity_contract(self):
-        # The suffix is IR numbering chosen by independent lowerings. Comparing
-        # it would turn #1140's internal noise into false parity failures.
+        # `_esbmc_*` names are ESBMC's own temporaries, not the agent-facing
+        # CEGIS payload the two compilers owe each other. Their values track
+        # internal encoding choices, so comparing them would bind parity to
+        # something neither compiler promises.
         rust = document(
             "VerifyFailed",
             counterexamples=[
@@ -245,6 +247,28 @@ class CompareJsonCounterexampleValuesTest(unittest.TestCase):
         )
 
         self.assertEqual([], parity.compare_json(rust, self_hosted, 1, 1))
+
+    def test_values_are_compared_beyond_the_first_hard_failure_counterexample(self):
+        # The CEGIS payload of a second violated contract is no less load-bearing
+        # than the first; comparing only [0] would hide it.
+        rust = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "first", "blame": "caller", "values": {"x": "1"}},
+                {"function": "second", "blame": "callee", "values": {"y": "2"}},
+            ],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "first", "blame": "caller", "values": {"x": "1"}},
+                {"function": "second", "blame": "callee", "values": {"y": "3"}},
+            ],
+        )
+
+        errors = parity.compare_json(rust, self_hosted, 1, 1)
+
+        self.assertEqual(["counterexample[1].values: {'y': '2'} vs {'y': '3'}"], errors)
 
     def test_value_key_order_does_not_affect_parity(self):
         rust = document(
@@ -600,6 +624,39 @@ class ParityCliCharacterizationTest(unittest.TestCase):
             ),
             (completed.returncode, completed.stdout.strip()),
         )
+
+    def test_directive_is_not_stale_when_no_counterexamples_were_compared(self):
+        # The same fixture is reachable through invocations that produce no
+        # counterexamples (a --no-verify build). Those runs never compared
+        # values, so they cannot testify that the directive is stale.
+        no_counterexamples = document("Unverified")
+        with tempfile.TemporaryDirectory() as directory:
+            rust_path = Path(directory) / "rust.json"
+            self_path = Path(directory) / "self.json"
+            fixture_path = Path(directory) / "known.vow"
+            rust_path.write_text(json.dumps(no_counterexamples))
+            self_path.write_text(json.dumps(no_counterexamples))
+            fixture_path.write_text(
+                '// TEST: known-cex-divergence 1139 "variable names differ"\n'
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "json",
+                    str(rust_path),
+                    str(self_path),
+                    "0",
+                    "0",
+                    str(fixture_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual((0, "OK"), (completed.returncode, completed.stdout.strip()))
 
 
 if __name__ == "__main__":
