@@ -204,6 +204,14 @@ let y: i8 = 200;   // error: LiteralOutOfRange — i8 range is -128..=127
 Suffixed forms are supported for all 10 integer widths. They override context
 coercion and are still subject to the same compile-time range check.
 
+There are no `usize`/`isize` suffixes, because there are no such types. A literal
+carrying one is an `InvalidIntSuffix` error at lex time rather than a silently
+dropped suffix:
+
+```vow
+let n: u64 = 5usize;   // error: InvalidIntSuffix — write 5u64
+```
+
 Integer tokens store their decimal digits as an unsigned magnitude. A leading
 `-` is a separate unary-negation expression and is not part of the literal.
 For `i128` and `u128`, compiler IR and serialized modules carry that value as

@@ -1,0 +1,12 @@
+// TEST: error-code InvalidIntSuffix
+// TEST: error-count 1
+// TEST: stderr "usize"
+// ADR 0001 gives Vow fixed-width integers only, so `usize` names no type this
+// suffix could denote. Dropping the suffix silently (the old behaviour) let a
+// literal claim a width the language cannot express.
+module IntSuffixUsize
+
+fn main() -> i32 {
+  let a: u64 = 5usize;
+  0
+}

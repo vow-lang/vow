@@ -1,6 +1,7 @@
 module Lexer
 
 use token
+use diag
 
 fn is_whitespace(b: i64) -> bool vow {
     requires: b >= 0,
@@ -92,48 +93,56 @@ fn keyword_bool_val(s: String) -> i64 vow {
     else { 0 }
 }
 
+// True when index `idx` ends the suffix: either the source stops there or the
+// next byte cannot continue an identifier. `byte_at` yields -1 past the end of
+// the source, which `is_ident_cont`'s `requires b >= 0` rejects under
+// --mode debug, so every suffix-tail probe must go through this.
+fn suffix_ends_at(src: String, idx: i64, src_len: i64) -> bool {
+    idx >= src_len || !is_ident_cont(src.byte_at(idx))
+}
+
 fn try_suffix(src: String, pos: i64, src_len: i64) -> i64 {
     if pos >= src_len { return -1; }
     let b0: i64 = src.byte_at(pos);
     if b0 == 105 {
-        if src.byte_at(pos + 1) == 56 && !is_ident_cont(src.byte_at(pos + 2)) {
+        if src.byte_at(pos + 1) == 56 && suffix_ends_at(src, pos + 2, src_len) {
             return tok_suffix_i8();
         }
         if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 50 && src.byte_at(pos + 3) == 56 &&
-           (pos + 4 >= src_len || !is_ident_cont(src.byte_at(pos + 4))) {
+           suffix_ends_at(src, pos + 4, src_len) {
             return tok_suffix_i128();
         }
-        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 54 && !is_ident_cont(src.byte_at(pos + 3)) {
+        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 54 && suffix_ends_at(src, pos + 3, src_len) {
             return tok_suffix_i16();
         }
-        if src.byte_at(pos + 1) == 51 && src.byte_at(pos + 2) == 50 && !is_ident_cont(src.byte_at(pos + 3)) {
+        if src.byte_at(pos + 1) == 51 && src.byte_at(pos + 2) == 50 && suffix_ends_at(src, pos + 3, src_len) {
             return tok_suffix_i32();
         }
-        if src.byte_at(pos + 1) == 54 && src.byte_at(pos + 2) == 52 && !is_ident_cont(src.byte_at(pos + 3)) {
+        if src.byte_at(pos + 1) == 54 && src.byte_at(pos + 2) == 52 && suffix_ends_at(src, pos + 3, src_len) {
             return tok_suffix_i64();
         }
-        if src.byte_at(pos + 1) == 115 && src.byte_at(pos + 2) == 105 && src.byte_at(pos + 3) == 122 && src.byte_at(pos + 4) == 101 && !is_ident_cont(src.byte_at(pos + 5)) {
+        if src.byte_at(pos + 1) == 115 && src.byte_at(pos + 2) == 105 && src.byte_at(pos + 3) == 122 && src.byte_at(pos + 4) == 101 && suffix_ends_at(src, pos + 5, src_len) {
             return tok_suffix_isize();
         }
         -1
     } else if b0 == 117 {
-        if src.byte_at(pos + 1) == 56 && !is_ident_cont(src.byte_at(pos + 2)) {
+        if src.byte_at(pos + 1) == 56 && suffix_ends_at(src, pos + 2, src_len) {
             return tok_suffix_u8();
         }
         if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 50 && src.byte_at(pos + 3) == 56 &&
-           (pos + 4 >= src_len || !is_ident_cont(src.byte_at(pos + 4))) {
+           suffix_ends_at(src, pos + 4, src_len) {
             return tok_suffix_u128();
         }
-        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 54 && !is_ident_cont(src.byte_at(pos + 3)) {
+        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 54 && suffix_ends_at(src, pos + 3, src_len) {
             return tok_suffix_u16();
         }
-        if src.byte_at(pos + 1) == 51 && src.byte_at(pos + 2) == 50 && !is_ident_cont(src.byte_at(pos + 3)) {
+        if src.byte_at(pos + 1) == 51 && src.byte_at(pos + 2) == 50 && suffix_ends_at(src, pos + 3, src_len) {
             return tok_suffix_u32();
         }
-        if src.byte_at(pos + 1) == 54 && src.byte_at(pos + 2) == 52 && !is_ident_cont(src.byte_at(pos + 3)) {
+        if src.byte_at(pos + 1) == 54 && src.byte_at(pos + 2) == 52 && suffix_ends_at(src, pos + 3, src_len) {
             return tok_suffix_u64();
         }
-        if src.byte_at(pos + 1) == 115 && src.byte_at(pos + 2) == 105 && src.byte_at(pos + 3) == 122 && src.byte_at(pos + 4) == 101 && !is_ident_cont(src.byte_at(pos + 5)) {
+        if src.byte_at(pos + 1) == 115 && src.byte_at(pos + 2) == 105 && src.byte_at(pos + 3) == 122 && src.byte_at(pos + 4) == 101 && suffix_ends_at(src, pos + 5, src_len) {
             return tok_suffix_usize();
         }
         -1
@@ -186,6 +195,21 @@ fn suffix_len(suffix: i64) -> i64 vow {
 
 fn empty_str() -> String {
     String::from("")
+}
+
+// Vow's integer widths are pointer-independent by design (ADR 0001), so
+// `usize`/`isize` name no type these suffixes could denote. The suffix is still
+// consumed as one unit so the error spans `5usize` rather than cascading into a
+// bare `usize` identifier.
+fn unrepresentable_suffix_msg(suffix: i64) -> String {
+    let msg: String = String::from("unknown integer suffix `");
+    if suffix == tok_suffix_usize() {
+        msg.push_str(String::from("usize"));
+    } else {
+        msg.push_str(String::from("isize"));
+    }
+    msg.push_str(String::from("`: Vow has no `usize`/`isize` type (fixed-width only)"));
+    msg
 }
 
 struct WideLiteral {
@@ -259,14 +283,16 @@ fn lex(src: String) -> Vec<Token> {
                 let slen: i64 = suffix_len(suffix);
                 pos = pos + slen;
                 let tok: Token = if wide_overflow {
-                    make_token(tok_invalid_int(), 0, 0, String::from("integer literal out of range"), start, pos - start)
+                    make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, pos - start)
+                } else if suffix == tok_suffix_usize() || suffix == tok_suffix_isize() {
+                    make_token(tok_invalid_int(), EC_INVALID_INT_SUFFIX(), 0, unrepresentable_suffix_msg(suffix), start, pos - start)
                 } else {
                     make_wide_int_token(tok_lit_int_suffixed(), wide_lo, wide_hi, suffix, start, pos - start)
                 };
                 tokens.push(tok);
             } else {
                 let tok: Token = if wide_overflow {
-                    make_token(tok_invalid_int(), 0, 0, String::from("integer literal out of range"), start, pos - start)
+                    make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, pos - start)
                 } else {
                     make_wide_int_token(tok_lit_int(), wide_lo, wide_hi, 0, start, pos - start)
                 };
@@ -443,16 +469,9 @@ fn lex(src: String) -> Vec<Token> {
                 tokens.push(tok);
             }
         } else if b == 46 {
-            let b1: i64 = src.byte_at(pos + 1);
-            if b1 == 46 {
-                pos = pos + 2;
-                let tok: Token = make_token(tok_dot_dot(), 0, 0, empty_str(), start, 2);
-                tokens.push(tok);
-            } else {
-                pos = pos + 1;
-                let tok: Token = make_token(tok_dot(), 0, 0, empty_str(), start, 1);
-                tokens.push(tok);
-            }
+            pos = pos + 1;
+            let tok: Token = make_token(tok_dot(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
         } else if b == 123 {
             pos = pos + 1;
             let tok: Token = make_token(tok_lbrace(), 0, 0, empty_str(), start, 1);

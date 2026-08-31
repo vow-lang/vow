@@ -117,7 +117,6 @@ pub enum TokenKind {
     Semicolon,  // ;
     Dot,        // .
     ColonColon, // ::
-    DotDot,     // ..
 
     // Special
     Underscore, // _

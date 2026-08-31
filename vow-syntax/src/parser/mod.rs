@@ -686,7 +686,7 @@ pub fn parse_item_source(source: &str, file: &str) -> (Option<Item>, Vec<Diagnos
         Err(lex_err) => {
             let diag = Diagnostic {
                 severity: Severity::Error,
-                code: ErrorCode::InvalidCharacter,
+                code: lex_err.code,
                 message: lex_err.message,
                 primary: SourceLocation {
                     file: file.to_string(),
@@ -711,7 +711,7 @@ pub fn parse_module(source: &str, file: &str) -> (Module, Vec<Diagnostic>) {
         Err(lex_err) => {
             let diag = Diagnostic {
                 severity: Severity::Error,
-                code: ErrorCode::InvalidCharacter,
+                code: lex_err.code,
                 message: lex_err.message,
                 primary: SourceLocation {
                     file: file.to_string(),

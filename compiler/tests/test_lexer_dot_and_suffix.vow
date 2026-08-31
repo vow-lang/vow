@@ -1,0 +1,87 @@
+module TestLexerDotAndSuffix
+
+use lexer
+use token
+use diag
+
+// Vow has no range syntax, so `..` is not a token: it lexes as two `tok_dot()`s.
+// A dedicated two-dot kind would name a token no grammar consumes.
+fn check_dot_never_pairs() -> i32 {
+    let tokens: Vec<Token> = lex(String::from(". .."));
+    if tokens.len() != 4 { return 1; }
+    let t0: Token = tokens[0];
+    let t1: Token = tokens[1];
+    let t2: Token = tokens[2];
+    let t3: Token = tokens[3];
+    if t0.tag != tok_dot() { return 2; }
+    if t1.tag != tok_dot() { return 3; }
+    if t2.tag != tok_dot() { return 4; }
+    if t3.tag != tok_eof() { return 5; }
+    // Each dot spans exactly one byte, so `..` cannot masquerade as one token.
+    if t1.span_len != 1 || t2.span_len != 1 { return 6; }
+    if t2.span_start != t1.span_start + 1 { return 7; }
+    0
+}
+
+// The trailing literal ends the source, so this also pins the suffix-tail
+// boundary probe: reading one byte past the end must not trip `is_ident_cont`.
+fn check_usize_isize_rejected() -> i32 {
+    let tokens: Vec<Token> = lex(String::from("5usize 7isize"));
+    if tokens.len() != 3 { return 10; }
+    let t0: Token = tokens[0];
+    let t1: Token = tokens[1];
+
+    if t0.tag != tok_invalid_int() { return 11; }
+    if t0.int_val != EC_INVALID_INT_SUFFIX() { return 12; }
+    if t0.str_val != unrepresentable_suffix_msg(tok_suffix_usize()) { return 13; }
+    // The whole literal is consumed, so the span covers `5usize` rather than
+    // leaving a bare `usize` identifier behind.
+    if t0.span_start != 0 || t0.span_len != 6 { return 14; }
+
+    if t1.tag != tok_invalid_int() { return 15; }
+    if t1.int_val != EC_INVALID_INT_SUFFIX() { return 16; }
+    if t1.str_val != unrepresentable_suffix_msg(tok_suffix_isize()) { return 17; }
+    if t1.span_start != 7 || t1.span_len != 6 { return 18; }
+    0
+}
+
+// The out-of-range literal shares `tok_invalid_int()`; it must keep reporting
+// under its original code rather than inheriting the new suffix code.
+fn check_out_of_range_keeps_its_code() -> i32 {
+    let tokens: Vec<Token> = lex(String::from(
+        "340282366920938463463374607431768211456u128"
+    ));
+    let t0: Token = tokens[0];
+    if t0.tag != tok_invalid_int() { return 20; }
+    if t0.int_val != EC_UNEXPECTED_TOKEN() { return 21; }
+    if t0.str_val != String::from("integer literal out of range") { return 22; }
+    0
+}
+
+fn check_fixed_width_suffixes_survive() -> i32 {
+    let tokens: Vec<Token> = lex(String::from("5u64 1i128 1u128 5i8 5u8"));
+    if tokens.len() != 6 { return 30; }
+    let t0: Token = tokens[0];
+    let t1: Token = tokens[1];
+    let t2: Token = tokens[2];
+    let t3: Token = tokens[3];
+    let t4: Token = tokens[4];
+    if t0.tag != tok_lit_int_suffixed() || t0.int_val2 != tok_suffix_u64() { return 31; }
+    if t1.tag != tok_lit_int_suffixed() || t1.int_val2 != tok_suffix_i128() { return 32; }
+    if t2.tag != tok_lit_int_suffixed() || t2.int_val2 != tok_suffix_u128() { return 33; }
+    if t3.tag != tok_lit_int_suffixed() || t3.int_val2 != tok_suffix_i8() { return 34; }
+    if t4.tag != tok_lit_int_suffixed() || t4.int_val2 != tok_suffix_u8() { return 35; }
+    0
+}
+
+fn main() -> i32 {
+    let dot: i32 = check_dot_never_pairs();
+    if dot != 0 { return dot; }
+    let rejected: i32 = check_usize_isize_rejected();
+    if rejected != 0 { return rejected; }
+    let range: i32 = check_out_of_range_keeps_its_code();
+    if range != 0 { return range; }
+    let fixed: i32 = check_fixed_width_suffixes_survive();
+    if fixed != 0 { return fixed; }
+    0
+}

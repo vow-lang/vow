@@ -127,8 +127,12 @@ fn span_pack_to_here(p: Parser, span_start: i64) -> i64 {
 }
 
 fn push_error(p: Parser, msg: String) {
+    push_error_code(p, EC_UNEXPECTED_TOKEN(), msg);
+}
+
+fn push_error_code(p: Parser, code: i64, msg: String) {
     let t: Token = peek(p);
-    let d: Diagnostic = diag_error(EC_UNEXPECTED_TOKEN(), msg, p.file, t.span_start, t.span_len);
+    let d: Diagnostic = diag_error(code, msg, p.file, t.span_start, t.span_len);
     let dctx: DiagCtx = p.dctx;
     diag_ctx_emit(dctx, d);
 }
@@ -802,7 +806,7 @@ fn parse_primary(p: Parser) -> i64 {
             lit_eid
         }
     } else if tag == tok_invalid_int() {
-        push_error(p, t.str_val);
+        push_error_code(p, t.int_val, t.str_val);
         let _adv: Token = advance(p);
         arena_add_int_expr(p.arena, 0u64, 0u64, 0)
     } else if tag == tok_lit_bool() {

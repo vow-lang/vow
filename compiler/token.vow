@@ -85,13 +85,16 @@ fn tok_colon() -> i64 { 70 }
 fn tok_semicolon() -> i64 { 71 }
 fn tok_dot() -> i64 { 72 }
 fn tok_colon_colon() -> i64 { 73 }
-fn tok_dot_dot() -> i64 { 74 }
+// Tag 74 is retired: Vow has no range syntax, so `..` lexes as two `tok_dot()`s.
+// Later tags keep their values so the numbering stays stable across compilers.
 fn tok_underscore() -> i64 { 75 }
 fn tok_eof() -> i64 { 76 }
 fn tok_kw_const() -> i64 { 77 }
 fn tok_caret() -> i64 { 78 }
 fn tok_kw_continue() -> i64 { 79 }
 fn tok_pipe() -> i64 { 80 }
+// A malformed integer literal. `int_val` carries the `EC_*` diagnostic code and
+// `str_val` the message, both set by the lexer and reported by the parser.
 fn tok_invalid_int() -> i64 { 81 }
 
 fn tok_suffix_i8() -> i64 { 0 }

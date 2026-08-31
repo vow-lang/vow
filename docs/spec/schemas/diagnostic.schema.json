@@ -11,6 +11,7 @@
       "enum": [
         "UnterminatedString",
         "InvalidCharacter",
+        "InvalidIntSuffix",
         "UnexpectedToken",
         "MissingDelimiter",
         "TypeMismatch",

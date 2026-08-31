@@ -1,0 +1,10 @@
+// TEST: error-code InvalidIntSuffix
+// TEST: error-count 1
+// TEST: stderr "isize"
+// Signed mirror of int_suffix_usize.vow.
+module IntSuffixIsize
+
+fn main() -> i32 {
+  let a: i64 = 7isize;
+  0
+}

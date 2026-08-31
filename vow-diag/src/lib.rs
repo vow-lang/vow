@@ -39,6 +39,7 @@ pub enum ErrorCode {
     // Lexer errors
     UnterminatedString,
     InvalidCharacter,
+    InvalidIntSuffix,
     // Parser errors
     UnexpectedToken,
     MissingDelimiter,
