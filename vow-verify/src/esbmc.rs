@@ -1704,6 +1704,25 @@ VERIFICATION FAILED";
     }
 
     #[test]
+    fn parse_multi_property_scans_past_a_vow_prefix_without_digits() {
+        // Exercises the forward scan: the first `vow:` on the line carries no
+        // digits, so it is not a claim id and the real one after it wins. No
+        // ESBMC release emits this shape today — the point is that a future one
+        // that does degrades to a wrong id or `unknown` without this loop, which
+        // is the failure mode 8.4's format change already caused once.
+        let output = "  PASSED       [vow_user_fn_0.assertion.1]  vow:x  line 43  vow:5";
+        let v = parse_multi_property_verdicts(output);
+        assert_eq!(v.get(&5), Some(&true));
+        assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn parse_multi_property_ignores_lines_without_a_claim_id() {
+        let output = "VERIFICATION FAILED\nProperties: 3 verified, 1 failed\n  PASSED  nothing here";
+        assert!(parse_multi_property_verdicts(output).is_empty());
+    }
+
+    #[test]
     fn parse_multi_property_all_proven() {
         let output = "\
 ✓ PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main
