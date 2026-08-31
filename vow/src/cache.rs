@@ -1,14 +1,15 @@
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use vow_verify::{ArithOverflowSite, CalleePrecondition, Counterexample, SolverConfig};
 
 use crate::frontend::DependencyManifest;
 
-// Counterexample values are serialized after source-name mapping. Version the
-// record header whenever that public name mapping changes so an old failure
-// cannot re-enter the compiler with stale agent-facing keys.
-const VERIFY_CACHE_FAILURE_HEADER: &str = "FAILED v2";
+// Counterexamples are serialized after source-name mapping. Version the record
+// header whenever that mapping or the disk schema changes, so an old failure
+// cannot re-enter the compiler with stale or ambiguously decoded payloads.
+const VERIFY_CACHE_FAILURE_HEADER: &str = "FAILED v3";
 
 // Bump this whenever generated object files are no longer ABI-compatible with
 // existing cached artifacts. Static string literals, full-width block arena
@@ -132,15 +133,87 @@ fn fnv1a_hash_reader<R: Read>(mut r: R) -> std::io::Result<u64> {
 struct CachedFailure {
     vow_id: Option<u32>,
     callee_precondition: Option<CalleePrecondition>,
-    /// The `arith:` site, persisted as its own fields rather than re-derived
-    /// from `raw_output` on replay: `raw=` is written as the ESBMC output
-    /// verbatim but read back a line at a time, so a cached `raw_output` keeps
-    /// only its first line and the `Violated property:` block is gone (#585).
+    /// The `arith:` site is persisted explicitly rather than re-derived from
+    /// tool output on replay, keeping cache semantics independent of ESBMC text.
     arith_overflow: Option<ArithOverflowSite>,
     description: String,
     values: Vec<(String, String)>,
     block_visits: Vec<u32>,
     raw_output: String,
+}
+
+// Keep the disk schema independent of verifier crate traits. JSON makes every
+// string boundary unambiguous: ESBMC aggregate values contain commas and raw
+// traces contain newlines, both of which corrupted the old delimiter format.
+#[derive(Deserialize, Serialize)]
+struct CachedFailureRecord {
+    vow_id: Option<u32>,
+    callee_precondition_func_id: Option<u32>,
+    callee_precondition_vow_id: Option<u32>,
+    arith_cause: Option<String>,
+    arith_func: Option<u32>,
+    arith_start: Option<u32>,
+    arith_len: Option<u32>,
+    description: String,
+    values: Vec<(String, String)>,
+    block_visits: Vec<u32>,
+    raw_output: String,
+}
+
+impl From<&CachedFailure> for CachedFailureRecord {
+    fn from(failure: &CachedFailure) -> Self {
+        Self {
+            vow_id: failure.vow_id,
+            callee_precondition_func_id: failure
+                .callee_precondition
+                .map(|precondition| precondition.func_id),
+            callee_precondition_vow_id: failure
+                .callee_precondition
+                .map(|precondition| precondition.vow_id),
+            arith_cause: failure
+                .arith_overflow
+                .map(|site| site.abort.label().to_string()),
+            arith_func: failure.arith_overflow.map(|site| site.func_id),
+            arith_start: failure.arith_overflow.map(|site| site.span_start),
+            arith_len: failure.arith_overflow.map(|site| site.span_len),
+            description: failure.description.clone(),
+            values: failure.values.clone(),
+            block_visits: failure.block_visits.clone(),
+            raw_output: failure.raw_output.clone(),
+        }
+    }
+}
+
+impl From<CachedFailureRecord> for CachedFailure {
+    fn from(record: CachedFailureRecord) -> Self {
+        let callee_precondition = record
+            .callee_precondition_func_id
+            .zip(record.callee_precondition_vow_id)
+            .map(|(func_id, vow_id)| CalleePrecondition { func_id, vow_id });
+        let arith_overflow = record
+            .arith_cause
+            .as_deref()
+            .and_then(vow_verify::ArithAbort::from_label)
+            .zip(record.arith_func)
+            .zip(record.arith_start.zip(record.arith_len))
+            .map(
+                |((abort, func_id), (span_start, span_len))| ArithOverflowSite {
+                    abort,
+                    func_id,
+                    span_start,
+                    span_len,
+                },
+            );
+        Self {
+            vow_id: record.vow_id,
+            callee_precondition,
+            arith_overflow,
+            description: record.description,
+            values: record.values,
+            block_visits: record.block_visits,
+            raw_output: record.raw_output,
+        }
+    }
 }
 
 impl CachedFailure {
@@ -264,7 +337,9 @@ impl VerifyCache {
 
     fn store(&self, key: &str, result: &CachedFailure) {
         let path = self.dir.join(format!("{key}.vr"));
-        let content = serialize_cached_result(result);
+        let Some(content) = serialize_cached_result(result) else {
+            return;
+        };
         let mut f = match std::fs::File::create(&path) {
             Ok(f) => f,
             Err(_) => return,
@@ -273,49 +348,9 @@ impl VerifyCache {
     }
 }
 
-fn serialize_cached_result(result: &CachedFailure) -> String {
-    let mut s = format!("{VERIFY_CACHE_FAILURE_HEADER}\n");
-    match result.vow_id {
-        Some(id) => s.push_str(&format!("vow_id={id}\n")),
-        None => s.push_str("vow_id=\n"),
-    }
-    match result.callee_precondition {
-        Some(pre) => {
-            s.push_str(&format!("callee_precondition_func_id={}\n", pre.func_id));
-            s.push_str(&format!("callee_precondition_vow_id={}\n", pre.vow_id));
-        }
-        None => {
-            s.push_str("callee_precondition_func_id=\n");
-            s.push_str("callee_precondition_vow_id=\n");
-        }
-    }
-    match result.arith_overflow {
-        Some(site) => {
-            s.push_str(&format!("arith_cause={}\n", site.abort.label()));
-            s.push_str(&format!("arith_func={}\n", site.func_id));
-            s.push_str(&format!("arith_start={}\n", site.span_start));
-            s.push_str(&format!("arith_len={}\n", site.span_len));
-        }
-        None => {
-            s.push_str("arith_cause=\n");
-            s.push_str("arith_func=\n");
-            s.push_str("arith_start=\n");
-            s.push_str("arith_len=\n");
-        }
-    }
-    s.push_str(&format!("description={}\n", result.description));
-    let vals: Vec<String> = result
-        .values
-        .iter()
-        .map(|(k, v)| format!("{k}:{v}"))
-        .collect();
-    s.push_str(&format!("values={}\n", vals.join(",")));
-    let blks: Vec<String> = result.block_visits.iter().map(|b| b.to_string()).collect();
-    s.push_str(&format!("blocks={}\n", blks.join(",")));
-    s.push_str("raw=");
-    s.push_str(&result.raw_output);
-    s.push('\n');
-    s
+fn serialize_cached_result(result: &CachedFailure) -> Option<String> {
+    let payload = serde_json::to_string(&CachedFailureRecord::from(result)).ok()?;
+    Some(format!("{VERIFY_CACHE_FAILURE_HEADER}\n{payload}\n"))
 }
 
 fn parse_cached_result(content: &str) -> Option<CachedFailure> {
@@ -326,82 +361,13 @@ fn parse_cached_result(content: &str) -> Option<CachedFailure> {
     if status != VERIFY_CACHE_FAILURE_HEADER {
         return None;
     }
-    let mut vow_id: Option<u32> = None;
-    let mut callee_precondition_func_id: Option<u32> = None;
-    let mut callee_precondition_vow_id: Option<u32> = None;
-    let mut description = String::new();
-    let mut values = Vec::new();
-    let mut block_visits = Vec::new();
-    let mut raw_output = String::new();
-    let mut arith_cause: Option<vow_verify::ArithAbort> = None;
-    let mut arith_func: Option<u32> = None;
-    let mut arith_start: Option<u32> = None;
-    let mut arith_len: Option<u32> = None;
-
-    for line in lines {
-        if let Some(rest) = line.strip_prefix("vow_id=") {
-            vow_id = rest.parse().ok();
-        } else if let Some(rest) = line.strip_prefix("callee_precondition_func_id=") {
-            callee_precondition_func_id = rest.parse().ok();
-        } else if let Some(rest) = line.strip_prefix("callee_precondition_vow_id=") {
-            callee_precondition_vow_id = rest.parse().ok();
-        } else if let Some(rest) = line.strip_prefix("arith_cause=") {
-            arith_cause = vow_verify::ArithAbort::from_label(rest);
-        } else if let Some(rest) = line.strip_prefix("arith_func=") {
-            arith_func = rest.parse().ok();
-        } else if let Some(rest) = line.strip_prefix("arith_start=") {
-            arith_start = rest.parse().ok();
-        } else if let Some(rest) = line.strip_prefix("arith_len=") {
-            arith_len = rest.parse().ok();
-        } else if let Some(rest) = line.strip_prefix("description=") {
-            description = rest.to_string();
-        } else if let Some(rest) = line.strip_prefix("values=") {
-            if !rest.is_empty() {
-                for pair in rest.split(',') {
-                    if let Some((k, v)) = pair.split_once(':') {
-                        values.push((k.to_string(), v.to_string()));
-                    }
-                }
-            }
-        } else if let Some(rest) = line.strip_prefix("blocks=") {
-            if !rest.is_empty() {
-                for b in rest.split(',') {
-                    if let Ok(n) = b.parse() {
-                        block_visits.push(n);
-                    }
-                }
-            }
-        } else if let Some(rest) = line.strip_prefix("raw=") {
-            raw_output = rest.to_string();
-        }
+    let payload = lines.next()?;
+    if lines.next().is_some() {
+        return None;
     }
-
-    let callee_precondition = callee_precondition_func_id
-        .zip(callee_precondition_vow_id)
-        .map(|(func_id, vow_id)| CalleePrecondition { func_id, vow_id });
-    // Every part or none: a half-written site would mislocate the diagnostic, so
-    // an incomplete entry reports no site at all.
-    let arith_overflow = arith_cause
-        .zip(arith_func)
-        .zip(arith_start.zip(arith_len))
-        .map(
-            |((abort, func_id), (span_start, span_len))| ArithOverflowSite {
-                abort,
-                func_id,
-                span_start,
-                span_len,
-            },
-        );
-
-    Some(CachedFailure {
-        vow_id,
-        callee_precondition,
-        arith_overflow,
-        description,
-        values,
-        block_visits,
-        raw_output,
-    })
+    serde_json::from_str::<CachedFailureRecord>(payload)
+        .ok()
+        .map(Into::into)
 }
 
 #[cfg(test)]
@@ -515,6 +481,25 @@ mod tests {
         assert_eq!(got.raw_output, ce.raw_output);
     }
 
+    #[test]
+    fn verify_cache_failure_preserves_aggregate_values_and_multiline_output() {
+        let dir = TempDir::new().unwrap();
+        let vc = cache_in(&dir);
+        let mut ce = sample_ce();
+        ce.values
+            .push(("v".to_string(), "{ .len=2, .data={ 1, 2, 0 } }".to_string()));
+        ce.raw_output = "Counterexample:\nv = { .len=2, .data={ 1, 2, 0 } }\nFAILED".to_string();
+        let config = cfg(Solver::Boolector, Encoding::Bv, None, Some(4096));
+
+        vc.store_failure(C_SRC, 10, &config, &ce);
+        let got = vc
+            .lookup_failure(C_SRC, 10, &config)
+            .expect("a stored aggregate counterexample must remain readable");
+
+        assert_eq!(got.values, ce.values);
+        assert_eq!(got.raw_output, ce.raw_output);
+    }
+
     // The verify driver looks up under the pre-fallback `func_config` (encoding
     // may be Auto) but stores under the post-fallback `resolved_config`
     // (encoding Bv). Because the key derives from `encoding_str()`, which
@@ -601,6 +586,7 @@ mod tests {
     #[test]
     fn verify_cache_legacy_failure_is_discarded() {
         assert!(parse_cached_result("FAILED\nvow_id=1\n").is_none());
+        assert!(parse_cached_result("FAILED v2\nvow_id=1\n").is_none());
     }
 
     #[test]
@@ -622,7 +608,7 @@ mod tests {
             block_visits: vec![0, 1, 3],
             raw_output: "raw".to_string(),
         };
-        let serialized = serialize_cached_result(&result);
+        let serialized = serialize_cached_result(&result).unwrap();
         let parsed = parse_cached_result(&serialized).unwrap();
         assert_eq!(parsed.vow_id, Some(3));
         assert_eq!(
