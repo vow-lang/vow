@@ -314,6 +314,16 @@ class CompareJsonCounterexampleValuesTest(unittest.TestCase):
         self.assertEqual(["counterexample[1].values: {'y': '2'} vs {'y': '3'}"], errors)
 
 
+class CompareJsonCounterexampleCountTest(unittest.TestCase):
+    def test_non_failure_count_mismatch_message_is_stable(self):
+        rust = document(counterexamples=[{"function": "first"}, {"function": "second"}])
+        self_hosted = document(counterexamples=[{"function": "first"}])
+
+        errors = parity.compare_json(rust, self_hosted, 0, 0)
+
+        self.assertEqual(["counterexamples count: 2 vs 1"], errors)
+
+
 class CompareErrorCharacterizationTest(unittest.TestCase):
     def test_both_compilers_must_reject(self):
         rust = document("CompileFailed", diagnostics=[{"error_code": "A"}])
