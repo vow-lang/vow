@@ -916,7 +916,7 @@ for compiler in rust self; do
     else
         j=$(run_self verify "$arith_dir/wrapping.vow" 2>/dev/null) || true
     fi
-    [ "$(arith_status "$j")" = "VerifyFailed" ] || errors+=("wrapping `-` should fail, got $(arith_status "$j")")
+    [ "$(arith_status "$j")" = "VerifyFailed" ] || errors+=("wrapping '-' should fail, got $(arith_status "$j")")
 
     # 2. Checked is distinguishable: the abort prunes the wrapped value, so the
     #    postcondition holds on every returning execution and the reachable
@@ -926,8 +926,8 @@ for compiler in rust self; do
     else
         j=$(run_self verify "$arith_dir/checked.vow" 2>/dev/null) || true
     fi
-    [ "$(arith_status "$j")" = "Verified" ] || errors+=("checked `-!` should verify, got $(arith_status "$j")")
-    [ "$(arith_warns "$j" last_index)" = "1" ] || errors+=("checked `-!` should warn once, got $(arith_warns "$j" last_index)")
+    [ "$(arith_status "$j")" = "Verified" ] || errors+=("checked '-!' should verify, got $(arith_status "$j")")
+    [ "$(arith_warns "$j" last_index)" = "1" ] || errors+=("checked '-!' should warn once, got $(arith_warns "$j" last_index)")
 
     # 3. The warning is precise, not blanket: in the committed fixture only the
     #    two functions whose abort is genuinely reachable are named, and a
