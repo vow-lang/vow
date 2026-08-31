@@ -10,13 +10,22 @@ ESBMC ?= esbmc
 # (arena_try_free_oversized_chunk can walk all 5 chunks); 4 fails its unwinding
 # assertion.
 #
-# Solver choice and ESBMC version matter a lot here: Bitwuzla (the ESBMC
-# default) balloons to ~4.5 GB on this bitvector/points-to-heavy formula at
-# --unwind 5, and Z3 does not finish. With Boolector, ESBMC 8.3.0 proves it in
-# ~86s at ~290 MB RSS, while the project-pinned ESBMC 8.1.0 needs ~6m04s at
-# 519,672 KB (~508 MiB) max RSS. Both fit inside the 2 GB ulimit enforced by
-# scripts/verify_arena.sh; the pinned-version CI run guards that headroom
-# against future drift (#546, #747).
+# Solver choice matters a lot here: Bitwuzla (the ESBMC default) balloons to
+# ~4.5 GB on this bitvector/points-to-heavy formula at --unwind 5, and Z3 does
+# not finish. Boolector is the only one that fits, hence --boolector below.
+#
+# ESBMC version matters too, and not monotonically -- peak RSS across the
+# versions this harness has been run under has gone both down and back up:
+#
+#   8.1.0   ~508 MiB
+#   8.3.0   ~290 MiB
+#   8.5.0   ~585 MiB
+#
+# All fit inside the 2 GB ulimit that scripts/verify_arena.sh enforces, but
+# the trend is not in one direction, so the headroom cannot be assumed. That
+# is what the CI run guards (#546, #747) -- and why the ESBMC pin is one of
+# the paths that forces the arena proof to re-run, per scripts/ci_docs_only.py.
+# The pin itself lives in .github/actions/install-esbmc/action.yml.
 UNWIND ?= 5
 
 .PHONY: verify

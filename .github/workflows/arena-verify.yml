@@ -24,13 +24,6 @@ on:
     - cron: "29 6 * * *"
   workflow_dispatch: {}
 
-env:
-  ESBMC_VERSION: "8.1"
-  # SHA-256 of the ESBMC release artifact. Must be updated in lockstep with
-  # ESBMC_VERSION; it is also part of the cache key so a rotation forces
-  # a fresh download + verify even if the version is unchanged.
-  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
-
 # Checkout, an ESBMC download, and a proof. Nothing here writes.
 permissions:
   contents: read
@@ -66,17 +59,15 @@ jobs:
     needs: changes
     if: needs.changes.outputs.arena == 'true'
     runs-on: ubuntu-latest
-    # The proof takes ~800s on a GitHub runner at the pinned ESBMC 8.1.0.
-    # The headroom is for solver drift, not for a hang -- a run that doubles
-    # is a regression worth failing on.
+    # The proof took ~845s on a GitHub runner at ESBMC 8.1. Solver version
+    # moves this a lot, so the ceiling is deliberately loose -- but it is a
+    # ceiling, not a hang budget: a run that doubles is worth failing on.
+    # Deliberately not restated per bump; the pin lives in install-esbmc.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
-        with:
-          version: ${{ env.ESBMC_VERSION }}
-          sha256: ${{ env.ESBMC_SHA256 }}
       - name: Arena verification runner tests
         run: python3 scripts/test_verify_arena.py
       - name: Arena primitive verification

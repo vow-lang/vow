@@ -54,11 +54,10 @@ proved, how it is proved, or the headroom it is proved within:
     change that narrows it must run the job it narrows -- otherwise a mistake
     here disables the proof and the same commit hides the evidence, leaving
     only the nightly run to notice.
-  * `.github/actions/install-esbmc/` and the workflow itself, which pin the
-    ESBMC version. Solver and version drift move the proof's memory ceiling a
-    long way -- 8.1.0 needs ~508 MiB against 8.3.0's ~290 MiB under the 2 GB
-    cap -- so a version bump has to re-run the proof that guards the headroom
-    (#546, #747).
+  * `.github/actions/install-esbmc/`, which holds the ESBMC pin for the whole
+    repository. Solver and version drift move the proof's memory ceiling by
+    hundreds of MiB under a 2 GB cap, so a version bump has to re-run the
+    proof that guards the headroom (#546, #747).
 
 An unresolvable commit range reports `arena=true`, which is also what a
 `schedule` or `workflow_dispatch` event produces: neither carries a range, so

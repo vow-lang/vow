@@ -1,13 +1,32 @@
 name: Install ESBMC
 description: Restore or install a checksum-verified ESBMC release
 
+# ─── The ESBMC pin ────────────────────────────────────────────────────
+#
+# Single source of truth. Every workflow calls this action without a
+# version, so bumping ESBMC is one edit here rather than five copies that
+# drift apart -- which is how the repo ended up pinned to 8.1 for four
+# releases.
+#
+# `version` and `sha256` move together: the checksum is of the release
+# archive for that exact version, and it is part of the cache key, so a
+# rotation forces a fresh download and re-verify even if the version is
+# unchanged. To bump:
+#
+#   curl -fsSLO https://github.com/esbmc/esbmc/releases/download/v<N>/esbmc-linux.zip
+#   sha256sum esbmc-linux.zip
+#
+# Both are still inputs, so a workflow that needs to pin a different
+# version (bisecting a solver regression, say) can override them.
 inputs:
   version:
     description: ESBMC release version without the leading v
-    required: true
+    required: false
+    default: "8.5"
   sha256:
-    description: SHA-256 checksum of the Ubuntu 24.04 release archive
-    required: true
+    description: SHA-256 checksum of the Linux release archive
+    required: false
+    default: d8da304dd0dfce6c9f488379f03a72e768bce8598c22478c980e1704247352f1
 
 runs:
   using: composite
@@ -40,7 +59,7 @@ runs:
       env:
         ESBMC_VERSION: ${{ inputs.version }}
         ESBMC_SHA256: ${{ inputs.sha256 }}
-        ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
+        ESBMC_ZIP: esbmc-linux.zip
       run: |
         ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
 
@@ -52,6 +71,25 @@ runs:
         unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
         rm "/tmp/$ESBMC_ZIP"
 
+    # Locate the binary rather than assuming where it sits. The archive
+    # layout is not stable across releases -- 8.1 unpacked `bin/esbmc`,
+    # 8.5 unpacks `release/bin/esbmc` -- and a hardcoded path silently
+    # puts nothing on PATH, so the failure surfaces much later as a
+    # missing command in whichever job happened to run first.
     - name: Add ESBMC to PATH
       shell: bash
-      run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+      run: |
+        esbmc_bin="$(find "$HOME/esbmc" -type f -name esbmc -perm -u+x -print -quit)"
+        if [[ -z "$esbmc_bin" ]]; then
+          echo "::error::no executable esbmc found under $HOME/esbmc" >&2
+          find "$HOME/esbmc" -maxdepth 3 >&2
+          exit 1
+        fi
+        dirname "$esbmc_bin" >> "$GITHUB_PATH"
+
+    # Fail here, at install time, rather than in the first job that needs
+    # a solver. A version bump that breaks the archive layout or ships an
+    # unrunnable binary should name itself.
+    - name: Verify ESBMC runs
+      shell: bash
+      run: esbmc --version

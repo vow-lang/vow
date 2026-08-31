@@ -6,13 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  ESBMC_VERSION: "8.1"
-  # SHA-256 of the ESBMC release artifact. Must be updated in lockstep with
-  # ESBMC_VERSION; it is also part of the cache key so a rotation forces
-  # a fresh download + verify even if the version is unchanged.
-  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
-
 # Every job here is read-only: checkout + build/test, plus a Codecov upload
 # that authenticates with its own CODECOV_TOKEN (not GITHUB_TOKEN). Default the
 # GITHUB_TOKEN to the minimum scope so no job gets more than it uses.
@@ -71,9 +64,6 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
-        with:
-          version: ${{ env.ESBMC_VERSION }}
-          sha256: ${{ env.ESBMC_SHA256 }}
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
@@ -153,9 +143,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
-        with:
-          version: ${{ env.ESBMC_VERSION }}
-          sha256: ${{ env.ESBMC_SHA256 }}
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify
       - name: Verifier-evaluation suite (self-hosted)
@@ -167,11 +154,16 @@ jobs:
 
   # ─── macOS jobs ───────────────────────────────────────────────────
   #
-  # ESBMC ships no macOS release artifact (only Ubuntu + Windows zips on
-  # https://github.com/esbmc/esbmc/releases), so verification is skipped
-  # on macOS. The fixed-point bootstrap is still meaningful: verification
+  # Verification is skipped on macOS, so these jobs bootstrap with
+  # --no-verify. The fixed-point check is still meaningful: verification
   # does not affect codegen, so identical Stage 2/Stage 3 SHA-256s prove
   # the self-hosted compiler reaches a fixed point on this platform.
+  #
+  # This used to be a hard constraint -- ESBMC shipped Ubuntu and Windows
+  # zips only. It no longer is: 8.4 onwards publishes `esbmc-macos.zip`.
+  # Turning macOS verification on means teaching install-esbmc to pick an
+  # archive per runner OS and pinning a second checksum, which is its own
+  # change; until then this is a choice, not a limitation.
   #
   # `bootstrap-macos` is required (the fixed-point check is reliable here).
   # `build-and-test-macos` remains advisory via continue-on-error while we
