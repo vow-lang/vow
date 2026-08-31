@@ -15,7 +15,16 @@ FAILURES=()
 RUST="./target/release/vow"
 SELF=""
 TMPDIR=$(mktemp -d)
+# EXIT alone does not fire on an untrapped SIGTERM/SIGINT/SIGHUP: bash dies
+# immediately and this whole scratch tree survives. It routinely reaches several
+# GB, and on hosts where /tmp is a tmpfs that is abandoned RAM. Re-raise rather
+# than cleaning up inline -- a bare `trap 'rm -rf "$TMPDIR"' TERM` would delete
+# the scratch dir and then let the script keep running against it, because a
+# bash signal handler resumes execution unless it exits.
 trap 'rm -rf "$TMPDIR"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # ─── Section timing ────────────────────────────────────────────────
 #
@@ -1462,7 +1471,7 @@ else
 fi
 # A non-ASCII (UTF-8) source path must stay byte-identical across compilers: the
 # JSON escaper must emit raw UTF-8 bytes, not mojibake (Rust byte-as-char bug).
-utf8dir=$(mktemp -d)
+utf8dir=$(mktemp -d "$TMPDIR/utf8.XXXXXX")
 cp tests/fixtures/complexity/params_basic.vow "$utf8dir/café.vow"
 if diff -q <("$RUST" complexity "$utf8dir/café.vow" 2>/dev/null) <(run_self complexity "$utf8dir/café.vow" 2>/dev/null) >/dev/null; then
     pass "complexity/utf8-path-parity (café.vow byte-identical)"
@@ -1473,7 +1482,7 @@ rm -rf "$utf8dir"
 # JSON named-control escapes in source paths must be byte-identical and must
 # round-trip through a parser. Backspace/form-feed are control bytes that remain
 # shell-log friendly but distinguish `\b`/`\f` from generic `?` escaping.
-escape_dir=$(mktemp -d)
+escape_dir=$(mktemp -d "$TMPDIR/escape.XXXXXX")
 escape_name=$'quote"backslash\\backspace\bformfeed\f.vow'
 escape_path="$escape_dir/$escape_name"
 cp tests/fixtures/complexity/params_basic.vow "$escape_path"
@@ -1537,7 +1546,7 @@ echo ""
 
 # ─── Section 6: Perfetto Trace (--perfetto, #784) ───────────────────
 section_begin "Section 6: Perfetto Trace"
-ptrace_dir=$(mktemp -d)
+ptrace_dir=$(mktemp -d "$TMPDIR/ptrace.XXXXXX")
 # (a) build --no-verify --perfetto: valid gz trace with frontend + codegen spans + counters.
 if run_self build --no-verify --perfetto "$ptrace_dir/build.json.gz" examples/hello.vow -o "$ptrace_dir/hello" >/dev/null 2>&1 \
    && python3 scripts/validate_trace_gz.py "$ptrace_dir/build.json.gz" --require parse,codegen >/dev/null 2>&1; then

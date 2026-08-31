@@ -20,6 +20,12 @@ FAILURES=()
 setup() {
     TMP="$(mktemp -d)"
     trap 'rm -rf "$TMP"' EXIT
+    # Kill signals re-raise so the EXIT handler above still does the removal:
+    # EXIT alone does not fire on an untrapped SIGTERM, so a process-group kill
+    # would strand this scratch tree. See scripts/full_test.sh.
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
     if [ ! -x "$VOWC" ]; then
         echo "vowc binary not found or not executable: $VOWC" >&2
         echo "Set VOWC_BIN or run scripts/bootstrap.sh first." >&2

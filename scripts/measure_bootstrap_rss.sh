@@ -28,8 +28,15 @@ fi
 
 # Capability probe: /usr/bin/time must support -v and produce a "Maximum
 # resident set size" line. Mirrors bench/memory/run.sh:225-233.
-probe=$(mktemp)
-trap 'rm -f "$probe"' EXIT
+scratch=$(mktemp -d)
+# See scripts/full_test.sh for why the kill signals get their own re-raising
+# traps: EXIT alone leaks every per-sample vowc build output in $scratch.
+trap 'rm -rf "$scratch"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+probe="$scratch/time-probe"
 if ! /usr/bin/time -v -o "$probe" true >/dev/null 2>&1; then
     echo "error: /usr/bin/time must support -v" >&2
     exit 1
@@ -67,8 +74,8 @@ measure_one() {
     local label="$1"; shift
     local samples=() i tmplog tmpout rss
     for ((i=1; i<=SAMPLES; i++)); do
-        tmplog=$(mktemp)
-        tmpout=$(mktemp "/tmp/vowc_rss_${label}_XXXX")
+        tmplog=$(mktemp "$scratch/time_${label}_XXXXXX.log")
+        tmpout=$(mktemp "$scratch/vowc_${label}_XXXXXX")
         if ! /usr/bin/time -v -o "$tmplog" "$@" -o "$tmpout" >/dev/null 2>&1; then
             echo "--- /usr/bin/time output ($label sample $i) ---" >&2
             cat "$tmplog" >&2

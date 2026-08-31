@@ -34,6 +34,12 @@ done
 
 BENCH_WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$BENCH_WORK_DIR"' EXIT
+# Kill signals re-raise so the EXIT handler above still does the removal:
+# EXIT alone does not fire on an untrapped SIGTERM, so a process-group kill
+# would strand this scratch tree. See scripts/full_test.sh.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 json_escape() {
   local s="$1"

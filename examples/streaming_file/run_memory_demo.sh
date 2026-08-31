@@ -6,6 +6,12 @@ VOWC="${VOWC:-$ROOT_DIR/build/vowc}"
 SIZE_MB="${SIZE_MB:-64}"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
+# Kill signals re-raise so the EXIT handler above still does the removal:
+# EXIT alone does not fire on an untrapped SIGTERM, so a process-group kill
+# would strand this scratch tree. See scripts/full_test.sh.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 if [[ ! -x "$VOWC" ]]; then
   echo "build/vowc not found; run scripts/bootstrap.sh first or set VOWC" >&2

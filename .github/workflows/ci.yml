@@ -90,6 +90,8 @@ jobs:
           python3 scripts/test_benchmark_contracts.py
           uv run --project bench --locked python -m unittest discover -s bench -p 'test_*.py'
           PYTHONPATH=euler python3 -m unittest discover -s euler -p 'test_*.py'
+      - name: Scratch-tree signal-cleanup tests
+        run: python3 scripts/test_scratch_cleanup.py
       - name: Verifier-evaluation suite (#334)
         # Asserts the labelled corpus in tests/verify* against ground-truth
         # blame/vow_id, with false-accepts (incl. vacuous proofs) failing the

@@ -51,7 +51,14 @@ run_logged() {
     local cmd="$1"
     (
         log=$(mktemp)
-        trap 'rm -f "$log"' EXIT INT TERM HUP
+        # Kill signals re-raise so the single EXIT handler does the removal. A
+        # handler registered directly on TERM would unlink $log and then resume,
+        # leaving `cat "$log"` below with nothing to report at the exact moment
+        # the failure output matters. See scripts/full_test.sh.
+        trap 'rm -f "$log"' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        trap 'exit 129' HUP
         if bash -c "$cmd" >"$log" 2>&1; then
             exit 0
         fi
@@ -70,7 +77,10 @@ run_verify_logged() {
     local cmd="$1"
     (
         log=$(mktemp)
-        trap 'rm -f "$log"' EXIT INT TERM HUP
+        trap 'rm -f "$log"' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        trap 'exit 129' HUP
         if bash -c "$cmd" >"$log" 2>&1; then
             exit 0
         fi

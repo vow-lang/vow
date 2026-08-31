@@ -9,6 +9,12 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VOWC="$ROOT_DIR/build/vowc"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
+# Kill signals re-raise so the EXIT handler above still does the removal:
+# EXIT alone does not fire on an untrapped SIGTERM, so a process-group kill
+# would strand this scratch tree. See scripts/full_test.sh.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # Colors
 RED='\033[0;31m'

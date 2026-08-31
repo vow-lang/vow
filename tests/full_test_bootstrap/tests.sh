@@ -5,6 +5,12 @@ cd "$(dirname "$0")/../.."
 
 TEST_TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TEST_TMPDIR"' EXIT
+# Kill signals re-raise so the EXIT handler above still does the removal:
+# EXIT alone does not fire on an untrapped SIGTERM, so a process-group kill
+# would strand this scratch tree. See scripts/full_test.sh.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 fail_test() {
     echo "FAIL: $1" >&2
