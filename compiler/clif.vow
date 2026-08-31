@@ -569,7 +569,7 @@ fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> 
             let msg: String = str2(String::from("clif: compile_function failed for "), f.name);
             eprintln_str(msg);
             __vow_clif_destroy(ctx);
-            return -1;
+            return result;
         }
         ci = ci + 1;
     }
