@@ -192,7 +192,7 @@ run_discard_with_optional_stdin() {
 }
 
 compare_error() {
-    local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5"
+    local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5" fixture_path="${6:-}"
 
     local rust_f="$TMPDIR/cmp_err_rust_$$.json"
     local self_f="$TMPDIR/cmp_err_self_$$.json"
@@ -200,8 +200,12 @@ compare_error() {
     printf '%s' "$self_json" > "$self_f"
 
     local result
-    if result=$(python3 scripts/parity.py error "$rust_f" "$self_f" "$rust_exit" "$self_exit" 2>&1); then
-        pass "$label"
+    if result=$(python3 scripts/parity.py error "$rust_f" "$self_f" "$rust_exit" "$self_exit" "$fixture_path" 2>&1); then
+        if [[ "$result" == SKIP:* ]]; then
+            skip "$label" "${result#SKIP: }"
+        else
+            pass "$label"
+        fi
     else
         fail "$label" "$result"
     fi
@@ -1166,7 +1170,7 @@ for fixture_path in \
         continue
     fi
 
-    compare_error "${fixture}/error" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    compare_error "${fixture}/error" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$fixture_path"
 done
 echo ""
 

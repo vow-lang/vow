@@ -12,10 +12,36 @@ import parity
 
 
 SCRIPT = Path(__file__).with_name("parity.py")
+REPO_ROOT = SCRIPT.parent.parent
 
 
 def document(status="Unverified", **fields):
     return {"status": status, "diagnostics": [], "counterexamples": [], **fields}
+
+
+def run_parity_cli(mode, rust, self_hosted, rust_exit, self_exit, fixture_path=None):
+    with tempfile.TemporaryDirectory() as directory:
+        rust_path = Path(directory) / "rust.json"
+        self_path = Path(directory) / "self.json"
+        rust_path.write_text(json.dumps(rust))
+        self_path.write_text(json.dumps(self_hosted))
+        args = [
+            sys.executable,
+            str(SCRIPT),
+            mode,
+            str(rust_path),
+            str(self_path),
+            str(rust_exit),
+            str(self_exit),
+        ]
+        if fixture_path is not None:
+            args.append(str(fixture_path))
+        return subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
 
 class CompareJsonCharacterizationTest(unittest.TestCase):
@@ -316,6 +342,151 @@ class CompareErrorCharacterizationTest(unittest.TestCase):
         )
 
         self.assertEqual(["rust has no diagnostics", "self has no diagnostics"], errors)
+
+
+class CompareErrorCodeParityTest(unittest.TestCase):
+    def test_rejections_with_different_error_codes_fail(self):
+        rust = document(
+            "CompileFailed",
+            diagnostics=[{"error_code": "TautologicalComparison"}],
+        )
+        self_hosted = document(
+            "CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}]
+        )
+
+        errors = parity.compare_error(rust, self_hosted, 1, 1)
+
+        self.assertEqual(
+            ["error codes: ['TautologicalComparison'] vs ['TypeMismatch']"],
+            errors,
+        )
+
+    def test_active_ledger_entry_is_a_loud_skip(self):
+        rust = document(
+            "CompileFailed", diagnostics=[{"error_code": "LinearTypeViolation"}]
+        )
+        self_hosted = document(
+            "CompileFailed", diagnostics=[{"error_code": "RegionLinear"}]
+        )
+
+        completed = run_parity_cli(
+            "error",
+            rust,
+            self_hosted,
+            1,
+            1,
+            REPO_ROOT / "tests/error/linear_region_unconsumed.vow",
+        )
+
+        self.assertEqual(
+            (0, "SKIP: known error-code divergence (#588)"),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_stale_active_ledger_entry_fails(self):
+        rejection = document(
+            "CompileFailed", diagnostics=[{"error_code": "LinearTypeViolation"}]
+        )
+
+        completed = run_parity_cli(
+            "error",
+            rejection,
+            rejection,
+            1,
+            1,
+            REPO_ROOT / "tests/error/linear_region_unconsumed.vow",
+        )
+
+        self.assertEqual(
+            (
+                1,
+                "FAIL: error_code divergence tracked by #588 no longer diverges — "
+                "update docs/equivalence/ledger.json",
+            ),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_fixed_ledger_entry_does_not_suppress_a_regression(self):
+        rust = document("CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}])
+        self_hosted = document(
+            "CompileFailed", diagnostics=[{"error_code": "UnexpectedToken"}]
+        )
+
+        completed = run_parity_cli(
+            "error",
+            rust,
+            self_hosted,
+            1,
+            1,
+            REPO_ROOT / "tests/error/undefined_function.vow",
+        )
+
+        self.assertEqual(
+            (1, "FAIL: error codes: ['TypeMismatch'] vs ['UnexpectedToken']"),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_ledger_entry_for_another_observable_does_not_suppress(self):
+        rust = document("CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}])
+        self_hosted = document(
+            "CompileFailed", diagnostics=[{"error_code": "UnexpectedToken"}]
+        )
+
+        completed = run_parity_cli(
+            "error",
+            rust,
+            self_hosted,
+            1,
+            1,
+            REPO_ROOT / "tests/run/euclid_gcd_swap_loop.vow",
+        )
+
+        self.assertEqual(
+            (1, "FAIL: error codes: ['TypeMismatch'] vs ['UnexpectedToken']"),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_fixture_outside_the_repo_is_compared_strictly(self):
+        rust = document("CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}])
+        self_hosted = document(
+            "CompileFailed", diagnostics=[{"error_code": "UnexpectedToken"}]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_path = Path(directory) / "synthetic.vow"
+            fixture_path.write_text("module Synthetic\n")
+            completed = run_parity_cli("error", rust, self_hosted, 1, 1, fixture_path)
+
+        self.assertEqual(
+            (1, "FAIL: error codes: ['TypeMismatch'] vs ['UnexpectedToken']"),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_duplicate_error_code_counts_must_match(self):
+        rust = document(
+            "CompileFailed",
+            diagnostics=[
+                {"error_code": "UnexpectedToken"},
+                {"error_code": "UnexpectedToken"},
+            ],
+        )
+        self_hosted = document(
+            "CompileFailed",
+            diagnostics=[
+                {"error_code": "UnexpectedToken"},
+                {"error_code": "UnexpectedToken"},
+                {"error_code": "UnexpectedToken"},
+            ],
+        )
+
+        errors = parity.compare_error(rust, self_hosted, 1, 1)
+
+        self.assertEqual(
+            [
+                "error codes: ['UnexpectedToken', 'UnexpectedToken'] vs "
+                "['UnexpectedToken', 'UnexpectedToken', 'UnexpectedToken']"
+            ],
+            errors,
+        )
 
 
 class ParityCliCharacterizationTest(unittest.TestCase):

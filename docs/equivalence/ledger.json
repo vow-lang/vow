@@ -139,7 +139,7 @@
     "tests/error/undefined_function.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
-      "status": "expected",
+      "status": "fixed",
       "note": "Same code (TypeMismatch), different cascade depth: Rust also reports the dependent let-binding error. Cosmetic.",
       "issue": 1088
     },

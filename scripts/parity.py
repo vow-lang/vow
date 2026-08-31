@@ -2,9 +2,12 @@
 """Compare structured output from the Rust and self-hosted compilers."""
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
+
+from equivalence import REPO_ROOT, load_ledger, tracked_observables
 
 
 KNOWN_CEX_DIVERGENCE = re.compile(
@@ -166,6 +169,19 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
             )
         if len(document.get("diagnostics", [])) < 1:
             errors.append(f"{name} has no diagnostics")
+    rust_codes = sorted(
+        (diagnostic.get("error_code") for diagnostic in rust.get("diagnostics", [])),
+        key=repr,
+    )
+    self_codes = sorted(
+        (
+            diagnostic.get("error_code")
+            for diagnostic in self_hosted.get("diagnostics", [])
+        ),
+        key=repr,
+    )
+    if rust_codes != self_codes:
+        errors.append(f"error codes: {rust_codes} vs {self_codes}")
     return errors
 
 
@@ -186,6 +202,15 @@ def _known_cex_divergence(fixture_path):
 
 def _is_values_error(error):
     return error.startswith("counterexample[") and "].values:" in error
+
+
+def _ledger_entry(fixture_path):
+    if not fixture_path:
+        return None
+    relative_path = os.path.relpath(os.path.abspath(fixture_path), REPO_ROOT)
+    if relative_path == ".." or relative_path.startswith(".." + os.sep):
+        return None
+    return load_ledger().get(relative_path)
 
 
 def main(argv=None):
@@ -222,6 +247,26 @@ def main(argv=None):
             print(
                 f"FAIL: known-cex-divergence ({known_cex}) no longer "
                 "reproduces — remove the directive"
+            )
+            return 1
+    else:
+        entry = _ledger_entry(fixture_path)
+        tracks_active_error_code = (
+            entry
+            and entry.get("status") in ("open", "expected")
+            and "error_code" in tracked_observables(entry)
+        )
+        code_errors = [error for error in errors if error.startswith("error codes:")]
+        if tracks_active_error_code and code_errors and len(code_errors) == len(errors):
+            print(
+                f"SKIP: known error-code divergence (#{entry.get('issue', 'unfiled')})"
+            )
+            return 0
+        if tracks_active_error_code and not errors:
+            print(
+                "FAIL: error_code divergence tracked by "
+                f"#{entry.get('issue', 'unfiled')} no longer diverges — "
+                "update docs/equivalence/ledger.json"
             )
             return 1
     if errors:
