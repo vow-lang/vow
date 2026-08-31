@@ -639,9 +639,22 @@ fn parse_digits_at(line: String, pos: i64) -> i64 {
 }
 
 // Parse ESBMC `--multi-property` output into per-claim verdicts. Each line that
-// reports a `'vow:N'` claim as PASSED/FAILED contributes to the parallel arrays;
+// reports a `vow:N` claim as PASSED/FAILED contributes to the parallel arrays;
 // duplicate ids are AND-combined so any FAILED line falsifies the claim. Mirrors
 // parse_multi_property_verdicts in vow-verify/src/esbmc.rs (#81 PR-A).
+//
+// Two line shapes are accepted, because ESBMC changed the format in 8.4:
+//
+//   <=8.3   * PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main
+//   >=8.4     PASSED       [main.assertion.1]  line 4  vow:0
+//
+// The old shape quotes the id and puts a colon after the verdict word; the new
+// one does neither and moves the id to end of line. Searching for bare `vow:`
+// covers both (the quote merely precedes it), and matching the verdict word
+// without its colon covers both too. A line carrying no `vow:N` contributes
+// nothing, so the looser verdict match cannot pick up `VERIFICATION FAILED`.
+// `vow_user_fn_0` in a new-format bracket is not a candidate: an identifier
+// cannot contain the colon.
 fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>) {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
@@ -651,17 +664,17 @@ fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>
         let line: String = str_trim(lines[i]);
         let mut has_verdict: bool = false;
         let mut is_proven: bool = false;
-        if str_find_str(line, String::from("PASSED:")) >= 0 {
+        if str_find_str(line, String::from("PASSED")) >= 0 {
             has_verdict = true;
             is_proven = true;
-        } else if str_find_str(line, String::from("FAILED:")) >= 0 {
+        } else if str_find_str(line, String::from("FAILED")) >= 0 {
             has_verdict = true;
             is_proven = false;
         }
         if has_verdict {
-            let pos: i64 = str_find_str(line, String::from("'vow:"));
+            let pos: i64 = str_find_str(line, String::from("vow:"));
             if pos >= 0 {
-                let id: i64 = parse_digits_at(line, pos + 5);
+                let id: i64 = parse_digits_at(line, pos + 4);
                 if id >= 0 {
                     let mut found: i64 = -1;
                     let mut k: i64 = 0;

@@ -219,37 +219,69 @@ fn extract_vow_label(output: &str) -> Option<VowLabel> {
 }
 
 /// Parse per-claim verdicts from ESBMC `--multi-property` output. Each vowed
-/// assertion is labelled `vow:N`; ESBMC reports one line per claim, e.g.
-/// `✓ PASSED: 'vow:0' at file ...` or `✗ FAILED: 'vow:2 at file ...'`. Returns
+/// assertion is labelled `vow:N`; ESBMC reports one line per claim. Returns
 /// `vow_id → proven` (true = PASSED). A claim is proven only if no line reports
 /// it FAILED (ESBMC prints PASSED claims twice — during solving and in the final
 /// summary — so verdicts are AND-combined). Claims ESBMC could not decide do not
 /// appear and are treated as `unknown` by the caller. This gives precise
 /// per-clause status from one run, instead of marking siblings of a failed
 /// clause `unknown` (#81 / per-obligation verification).
+///
+/// Two line shapes are accepted, because ESBMC changed the format in 8.4:
+///
+/// ```text
+/// ≤8.3   ✓ PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main
+/// ≥8.4     PASSED       [main.assertion.1]  line 4  vow:0
+/// ```
+///
+/// The old shape quotes the id, the new one leaves it bare at end of line, and
+/// only the old one puts a colon after the verdict word. Matching on either
+/// would be enough today; matching on both is what stops a solver upgrade from
+/// silently degrading every clause to `unknown`, which is how this was found
+/// (the parser returned nothing under 8.5 and the caller dutifully reported
+/// `unknown` for clauses ESBMC had in fact decided).
 fn parse_multi_property_verdicts(output: &str) -> std::collections::HashMap<u32, bool> {
     let mut verdicts = std::collections::HashMap::new();
     for line in output.lines() {
         let trimmed = line.trim();
-        let proven = if trimmed.contains("PASSED:") {
+        // Deliberately colon-insensitive: 8.3 writes `PASSED:`, 8.5 `PASSED`.
+        // A line without a `vow:N` id contributes nothing regardless, so the
+        // looser match cannot pick up `VERIFICATION FAILED` or a summary line.
+        let proven = if trimmed.contains("PASSED") {
             true
-        } else if trimmed.contains("FAILED:") {
+        } else if trimmed.contains("FAILED") {
             false
         } else {
             continue;
         };
-        if let Some(pos) = trimmed.find("'vow:") {
-            let rest = &trimmed[pos + "'vow:".len()..];
-            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if let Ok(id) = digits.parse::<u32>() {
-                verdicts
-                    .entry(id)
-                    .and_modify(|v| *v &= proven)
-                    .or_insert(proven);
-            }
-        }
+        let Some(id) = find_vow_claim_id(trimmed) else {
+            continue;
+        };
+        verdicts
+            .entry(id)
+            .and_modify(|v| *v &= proven)
+            .or_insert(proven);
     }
     verdicts
+}
+
+/// The `vow:N` claim id on a `--multi-property` verdict line, quoted (`'vow:0'`,
+/// ESBMC ≤8.3) or bare (`vow:0`, ESBMC ≥8.4).
+///
+/// Only `vow:` followed by at least one digit counts, so the `vow_user_fn_0` in
+/// a new-format `[vow_user_fn_0.assertion.1]` bracket is not a candidate — an
+/// identifier cannot contain the colon.
+fn find_vow_claim_id(line: &str) -> Option<u32> {
+    let mut rest = line;
+    while let Some(pos) = rest.find("vow:") {
+        let after = &rest[pos + "vow:".len()..];
+        let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(id) = digits.parse::<u32>() {
+            return Some(id);
+        }
+        rest = after;
+    }
+    None
 }
 
 fn extract_variable_assignments(output: &str) -> Vec<(String, String)> {
@@ -1641,6 +1673,34 @@ VERIFICATION FAILED
         assert_eq!(v.get(&1), Some(&false), "vow:1 failed");
         assert_eq!(v.get(&2), Some(&false), "vow:2 failed");
         assert_eq!(v.len(), 3);
+    }
+
+    #[test]
+    fn parse_multi_property_verdicts_esbmc_85_format() {
+        // Verbatim ESBMC 8.5 output for the same program as the test above.
+        // 8.4 dropped the colon after the verdict and the quotes around the id,
+        // and moved it to end of line; a parser keyed on `PASSED:` + `'vow:`
+        // silently returns nothing here, degrading every clause to `unknown`.
+        let output = "\
+  PASSED       [vow_user_fn_0.assertion.1]  line 43  vow:1
+  FAILED       [vow_user_fn_0.assertion.2]  line 47  vow:2
+VERIFICATION FAILED
+  PASSED       [vow_user_fn_0.assertion.1]  line 43  vow:1
+VERIFICATION FAILED";
+        let v = parse_multi_property_verdicts(output);
+        assert_eq!(v.get(&1), Some(&true), "vow:1 proven");
+        assert_eq!(v.get(&2), Some(&false), "vow:2 failed");
+        assert_eq!(v.len(), 2, "VERIFICATION FAILED lines carry no claim id");
+    }
+
+    #[test]
+    fn parse_multi_property_ignores_function_names_containing_vow() {
+        // `vow_user_fn_0` has no colon, so it is not a claim id; the bare
+        // trailing `vow:7` is.
+        let output = "  PASSED       [vow_user_fn_0.assertion.1]  line 43  vow:7";
+        let v = parse_multi_property_verdicts(output);
+        assert_eq!(v.get(&7), Some(&true));
+        assert_eq!(v.len(), 1);
     }
 
     #[test]
