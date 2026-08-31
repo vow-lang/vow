@@ -21,9 +21,9 @@ permissions:
 
 jobs:
   # Gate for every job below. A commit that touches nothing but prose cannot
-  # regress a compiled artifact, and the jobs below are a ~30-minute Linux
-  # build plus a three-stage bootstrap on two platforms. `ci_docs_only.py`
-  # decides what counts as prose. Note that Markdown under `docs/spec/**` and
+  # regress a compiled artifact, and the jobs below are a Linux build plus a
+  # three-stage bootstrap on two platforms. `ci_docs_only.py` decides what
+  # counts as prose. Note that Markdown under `docs/spec/**` and
   # `skills/**` counts as *code*: `generate_help.py` copies the spec into the
   # compiler sources, the JSON schemas beside it are `include_str!`-ed into the
   # binaries, and a `cargo test` in `vow/src/skill.rs` asserts the `skills/`
@@ -74,10 +74,6 @@ jobs:
         with:
           version: ${{ env.ESBMC_VERSION }}
           sha256: ${{ env.ESBMC_SHA256 }}
-      - name: Arena verification runner tests
-        run: python3 scripts/test_verify_arena.py
-      - name: Arena primitive verification
-        run: scripts/verify_arena.sh
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
@@ -135,7 +131,14 @@ jobs:
           fail_ci_if_error: ${{ secrets.CODECOV_TOKEN != '' }}
 
   bootstrap:
-    needs: [changes, build-and-test]
+    # Deliberately parallel with build-and-test, not downstream of it. The two
+    # share no artifact -- bootstrap.sh runs its own `cargo build --release` --
+    # so the old `needs: build-and-test` edge bought fail-fast economy at the
+    # cost of putting the whole ~570s bootstrap on the critical path after a
+    # ~1200s job. Running them together halves wall-clock; the price is runner
+    # minutes on pull requests that build-and-test would have failed early,
+    # which is the right trade on a public repo.
+    needs: changes
     if: needs.changes.outputs.code == 'true'
     # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression
     # (failing Stage 1/2 verification, or a broken SHA-256 fixed point)

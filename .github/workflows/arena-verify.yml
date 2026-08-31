@@ -1,0 +1,83 @@
+name: Arena verification
+
+# `vow-runtime/verify/arena.c` is a standalone C harness that ESBMC proves on
+# its own -- no compiler, no Rust build, no other job's artifacts. It is also
+# the single longest step in CI: ~800s of a ~1800s pull request, more than the
+# whole three-stage bootstrap. Running it on every pull request spent that on
+# changes that cannot reach it: `vow-runtime/` is touched by ~8% of commits
+# over the last year and ~22% over the last 40, and `vow-runtime/verify/` --
+# the harness itself -- by under 2%. Even at the recent, runtime-heavy rate
+# that is roughly four pull requests in five paying nothing for the proof.
+#
+# So it runs here instead, gated on the paths that feed it and repeated nightly
+# regardless of what changed. The nightly run is what keeps the gate honest:
+# even if the path list ever misses an input, the proof is never more than a
+# day stale on main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # 06:29 UTC -- offset from cargo-mutants (02:17) and equivalence (04:41)
+    # so the nightly jobs never contend for runners.
+    - cron: "29 6 * * *"
+  workflow_dispatch: {}
+
+env:
+  ESBMC_VERSION: "8.1"
+  # SHA-256 of the ESBMC release artifact. Must be updated in lockstep with
+  # ESBMC_VERSION; it is also part of the cache key so a rotation forces
+  # a fresh download + verify even if the version is unchanged.
+  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
+
+# Checkout, an ESBMC download, and a proof. Nothing here writes.
+permissions:
+  contents: read
+
+jobs:
+  # Job-level `if:` on a classifier output rather than a top-level `paths:`
+  # filter, matching ci.yml. A workflow that never starts leaves a required
+  # status check Pending forever, whereas a job skipped by a condition reports
+  # success -- so this stays correct if `verify` ever becomes required.
+  #
+  # `schedule` and `workflow_dispatch` carry no commit range, which the
+  # classifier reports as `arena=true`. The nightly run therefore needs no
+  # condition of its own.
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      arena: ${{ steps.classify.outputs.arena }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Both ends of the range have to be present for `git diff base...head`.
+          fetch-depth: 0
+      - id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Arena primitive verification
+    needs: changes
+    if: needs.changes.outputs.arena == 'true'
+    runs-on: ubuntu-latest
+    # The proof takes ~800s on a GitHub runner at the pinned ESBMC 8.1.0.
+    # The headroom is for solver drift, not for a hang -- a run that doubles
+    # is a regression worth failing on.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+        with:
+          version: ${{ env.ESBMC_VERSION }}
+          sha256: ${{ env.ESBMC_SHA256 }}
+      - name: Arena verification runner tests
+        run: python3 scripts/test_verify_arena.py
+      - name: Arena primitive verification
+        run: scripts/verify_arena.sh
