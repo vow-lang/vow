@@ -29,11 +29,31 @@ SCRATCH_SCRIPTS = {
     "full_test.sh": "TMPDIR",
     "cli_compat_test.sh": "TMPDIR",
     "measure_bootstrap_rss.sh": "scratch",
+    "package-toolchain.sh": "tmp",
 }
+
+# bootstrap.sh allocates its scratch file inside a function's subshell, so there
+# is no top-level preamble to extract and signal; the lint below covers it.
+
+KILL_SIGNALS = {"INT", "TERM", "HUP"}
 
 TRAP = re.compile(
     r"^\s*trap\s+(?P<body>'[^']*'|\"[^\"]*\")\s+(?P<signals>[A-Z0-9 ]+)$", re.M
 )
+
+
+def trap_entries(text):
+    """Each `trap` in a script, as a handler body and the signals it covers.
+
+    Args:
+        text: The full source of a shell script.
+
+    Returns:
+        list[tuple[str, set[str]]]: One entry per trap.
+    """
+    return [
+        (m.group("body"), set(m.group("signals").split())) for m in TRAP.finditer(text)
+    ]
 
 
 def trap_signals(text):
@@ -47,10 +67,9 @@ def trap_signals(text):
             trapped by a handler that removes something.
     """
     every, cleanup = set(), set()
-    for m in TRAP.finditer(text):
-        names = set(m.group("signals").split())
+    for body, names in trap_entries(text):
         every |= names
-        if "rm " in m.group("body"):
+        if "rm " in body:
             cleanup |= names
     return every, cleanup
 
@@ -71,10 +90,8 @@ def extract_preamble(text, var):
             after it -- either of which is the regression under test.
     """
     lines = text.splitlines()
-    start = next(
-        (i for i, ln in enumerate(lines) if ln.startswith(f"{var}=$(mktemp -d")),
-        None,
-    )
+    opener = re.compile(rf'^{re.escape(var)}="?\$\(mktemp -d')
+    start = next((i for i, ln in enumerate(lines) if opener.match(ln)), None)
     assert start is not None, f"no `{var}=$(mktemp -d` assignment"
     end = start
     for i in range(start + 1, len(lines)):
@@ -177,10 +194,18 @@ class SignalCleanupTest(unittest.TestCase):
     def test_the_handler_exits_rather_than_resuming(self):
         # A bash signal handler resumes the interrupted script unless it exits,
         # so a handler that only removed the tree would leave the run going
-        # against a deleted scratch dir -- worse than the leak it fixed.
-        text = (SCRIPTS / "full_test.sh").read_text()
-        script = extract_preamble(text, "TMPDIR") + (
-            '\necho "$TMPDIR"\nsleep 30\necho RESUMED\n'
+        # against a deleted scratch dir -- worse than the leak it fixed. This is
+        # the check that tells the two trap forms apart: a combined
+        # `trap 'rm -rf "$tmp"' EXIT INT TERM HUP` still removes the tree, and
+        # would pass every other test here.
+        for name, var in SCRATCH_SCRIPTS.items():
+            with self.subTest(script=name):
+                self.check_no_resume(name, var)
+
+    def check_no_resume(self, name, var):
+        text = (SCRIPTS / name).read_text()
+        script = extract_preamble(text, var) + (
+            f'\necho "${var}"\nsleep 30\necho RESUMED\n'
         )
         proc = subprocess.Popen(
             ["bash", "-c", script],
@@ -218,6 +243,31 @@ class TrapLintTest(unittest.TestCase):
             missing = {"INT", "TERM", "HUP"} - every
             if missing:
                 offenders.append(f"{path.name}: missing {sorted(missing)}")
+
+        self.assertEqual([], offenders)
+
+    def test_no_cleanup_handler_is_registered_on_a_kill_signal(self):
+        # The defect this suite exists to prevent, and the one the union rule
+        # above cannot see: a combined `trap 'rm -rf "$t"' EXIT INT TERM HUP`
+        # satisfies "INT/TERM/HUP are trapped somewhere" while still removing
+        # the tree and resuming against it. Cleanup belongs on EXIT alone.
+        offenders = []
+        for path in self.shell_scripts():
+            for body, names in trap_entries(path.read_text()):
+                overlap = names & KILL_SIGNALS
+                if "rm " in body and overlap:
+                    offenders.append(f"{path.name}: {sorted(overlap)} -> {body}")
+
+        self.assertEqual([], offenders)
+
+    def test_every_kill_signal_handler_exits(self):
+        # A handler that does not exit lets bash resume the interrupted command,
+        # whatever else it does.
+        offenders = []
+        for path in self.shell_scripts():
+            for body, names in trap_entries(path.read_text()):
+                if names & KILL_SIGNALS and "exit" not in body:
+                    offenders.append(f"{path.name}: {sorted(names)} -> {body}")
 
         self.assertEqual([], offenders)
 

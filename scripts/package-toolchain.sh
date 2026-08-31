@@ -95,7 +95,14 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/vow-toolchain.XXXXXX")"
-trap 'rm -rf "$tmp"' EXIT INT TERM HUP
+# Re-raise on the kill signals rather than cleaning up inline: a handler
+# registered directly on TERM would remove $tmp and then resume into the
+# install and tar below, both of which write into it. See scripts/full_test.sh
+# for the full rationale.
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 prefix="$tmp/vow-$VERSION"
 scripts/install-toolchain.sh --prefix "$prefix" --skip-bootstrap >/dev/null
