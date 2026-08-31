@@ -1506,11 +1506,13 @@ arithmetic, and ESBMC modelling remain unsupported; builds and verification
 fail closed when those deferred operations reach a backend. Later numeric-tower
 work will complete those paths. Never weaken contracts to fit the verifier.
 
-**Struct field layout:** every struct field up to 64 bits wide occupies one
-8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
-fields occupy two consecutive 8-byte slots (16 bytes). There is no packing or
-natural-alignment layout today; FFI structs that need a specific C layout must
-shim through `Vec<u8>` or extern wrappers.
+**Struct field layout:** the current aggregate representation assigns one
+8-byte slot to every field regardless of declared type (narrow ints are
+padded). The two-slot layout for `i128`/`u128` accepted by
+[ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) is not implemented yet,
+so the compiler refuses 128-bit fields instead of storing them in an undersized
+slot. There is no packing or natural-alignment layout today; FFI structs that
+need a specific C layout must shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -1658,14 +1660,21 @@ and temporaries carry both limbs correctly, but a 128-bit value placed inside
 an aggregate does not, and the compiler rejects every such program rather than
 producing one that computes on a truncated value: `Vec<i128>`/`Vec<u128>`
 elements are refused because the element helpers are i64-only, and a 128-bit
-struct field or enum payload (including `Option<i128>`) fails codegen. Do not
-store 128-bit values in aggregates yet.
+struct field or enum payload (including `Option<i128>` and 128-bit `Result`
+payloads) fails codegen with a named limitation rather than a raw backend
+verifier dump. Enum, `Option`, and `Result` payloads are refused at their
+construction site, before an 8-byte slot can truncate the value or a 16-byte
+store can overwrite its neighbour. Do not store 128-bit values in aggregates
+yet.
 
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted
 function whose body contains a 128-bit *constant* is reported as `Skipped`
 with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
-yet modelled in the verifier. Contracts over 128-bit parameters alone do
+yet modelled in the verifier. A contracted function that reads or writes a
+128-bit aggregate field is likewise reported `Skipped`, with `FieldGet at
+128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
+the verifier's 8-byte heap slot. Contracts over 128-bit parameters alone do
 verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
@@ -6575,11 +6584,13 @@ arithmetic, and ESBMC modelling remain unsupported; builds and verification
 fail closed when those deferred operations reach a backend. Later numeric-tower
 work will complete those paths. Never weaken contracts to fit the verifier.
 
-**Struct field layout:** every struct field up to 64 bits wide occupies one
-8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`
-fields occupy two consecutive 8-byte slots (16 bytes). There is no packing or
-natural-alignment layout today; FFI structs that need a specific C layout must
-shim through `Vec<u8>` or extern wrappers.
+**Struct field layout:** the current aggregate representation assigns one
+8-byte slot to every field regardless of declared type (narrow ints are
+padded). The two-slot layout for `i128`/`u128` accepted by
+[ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) is not implemented yet,
+so the compiler refuses 128-bit fields instead of storing them in an undersized
+slot. There is no packing or natural-alignment layout today; FFI structs that
+need a specific C layout must shim through `Vec<u8>` or extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -6727,14 +6738,21 @@ and temporaries carry both limbs correctly, but a 128-bit value placed inside
 an aggregate does not, and the compiler rejects every such program rather than
 producing one that computes on a truncated value: `Vec<i128>`/`Vec<u128>`
 elements are refused because the element helpers are i64-only, and a 128-bit
-struct field or enum payload (including `Option<i128>`) fails codegen. Do not
-store 128-bit values in aggregates yet.
+struct field or enum payload (including `Option<i128>` and 128-bit `Result`
+payloads) fails codegen with a named limitation rather than a raw backend
+verifier dump. Enum, `Option`, and `Result` payloads are refused at their
+construction site, before an 8-byte slot can truncate the value or a 16-byte
+store can overwrite its neighbour. Do not store 128-bit values in aggregates
+yet.
 
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted
 function whose body contains a 128-bit *constant* is reported as `Skipped`
 with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
-yet modelled in the verifier. Contracts over 128-bit parameters alone do
+yet modelled in the verifier. A contracted function that reads or writes a
+128-bit aggregate field is likewise reported `Skipped`, with `FieldGet at
+128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through
+the verifier's 8-byte heap slot. Contracts over 128-bit parameters alone do
 verify.
 
 Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
