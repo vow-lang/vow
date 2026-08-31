@@ -1,3 +1,4 @@
+// TEST: known-cex-count-divergence 1155 "Rust stops after first failed function"
 module Main
 use arithmetic
 use number_theory
