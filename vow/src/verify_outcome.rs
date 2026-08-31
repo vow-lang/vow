@@ -11,7 +11,8 @@
 
 use std::path::PathBuf;
 
-use vow_diag::{Diagnostic, Severity};
+use vow_codegen::CodegenError;
+use vow_diag::{Blame, Diagnostic, Severity, SourceLocation};
 
 use crate::{BuildOutput, BuildStatus, StructuredCounterexample};
 
@@ -390,10 +391,34 @@ pub(crate) fn compile_failed(message: String, diagnostics: Vec<Diagnostic>) -> B
     }
 }
 
+/// Fail a build for a backend error while preserving a stable, structured
+/// diagnostic alongside the compatibility `message` field.
+pub(crate) fn codegen_failed(
+    error: &CodegenError,
+    file: &str,
+    mut diagnostics: Vec<Diagnostic>,
+) -> BuildOutput {
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        code: error.error_code(),
+        message: error.to_string(),
+        primary: SourceLocation {
+            file: file.to_string(),
+            byte_offset: 0,
+            byte_len: 0,
+        },
+        secondary: vec![],
+        blame: Blame::None,
+        hints: vec![],
+    });
+    compile_failed(format!("{error:?}"), diagnostics)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{BuildStatus, CeCallSite, CeSource, CeViolatingArg, StructuredCounterexample};
+    use vow_codegen::CodegenError;
     use vow_diag::{Blame, ErrorCode, Severity, SourceLocation};
 
     fn ce(function: &str, blame: &str) -> StructuredCounterexample {
@@ -887,5 +912,30 @@ mod tests {
         assert!(out.counterexamples.is_empty());
         assert!(out.verify_status.is_none());
         assert!(out.verify_message.is_none());
+    }
+
+    #[test]
+    fn codegen_failed_attaches_one_structured_diagnostic() {
+        let error = CodegenError::UnsupportedOpcode("wide aggregate".to_string());
+        let out = codegen_failed(&error, "wide.vow", vec![diag("frontend note")]);
+
+        assert!(matches!(out.status, BuildStatus::CompileFailed { .. }));
+        assert!(out.executable.is_none());
+        assert_eq!(out.diagnostics.len(), 2);
+        assert_eq!(out.diagnostics[0].message, "frontend note");
+        assert_eq!(out.diagnostics[1].severity, Severity::Error);
+        assert_eq!(out.diagnostics[1].code, ErrorCode::CodegenUnsupported);
+        assert_eq!(out.diagnostics[1].message, error.to_string());
+        assert_eq!(
+            out.diagnostics[1].primary,
+            SourceLocation {
+                file: "wide.vow".to_string(),
+                byte_offset: 0,
+                byte_len: 0,
+            }
+        );
+        assert!(out.diagnostics[1].secondary.is_empty());
+        assert_eq!(out.diagnostics[1].blame, Blame::None);
+        assert!(out.counterexamples.is_empty());
     }
 }
