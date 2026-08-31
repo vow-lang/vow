@@ -134,6 +134,35 @@ fn ir_ty_to_c(ty: Ty) -> &'static str {
     }
 }
 
+fn ty_is_unsigned(ty: Ty) -> bool {
+    matches!(ty, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64 | Ty::U128)
+}
+
+/// Emit the bounds assert for an indexed container access (`Vec` or `String`).
+///
+/// The comparison is keyed off the index instruction's IR type so that the
+/// emitted C says what it means. For an unsigned index `v{idx} >= 0` is
+/// vacuous, and comparing it against the `int64_t` `.len` field would leave
+/// the conversion to C's usual arithmetic conversions; emit a single explicit
+/// comparison instead. Signed indices keep the two-sided form unchanged.
+fn emit_bounds_assert(idx: u32, container: u32, idx_ty: Ty, label: &str, out: &mut String) {
+    if ty_is_unsigned(idx_ty) {
+        out.push_str(&format!(
+            "  __ESBMC_assert(v{idx} < (uint64_t)v{container}.len, \"{label}\");\n"
+        ));
+    } else {
+        out.push_str(&format!(
+            "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{container}.len, \"{label}\");\n"
+        ));
+    }
+}
+
+/// IR type of the instruction producing `id`, defaulting to the signed form
+/// when the operand cannot be resolved.
+fn operand_ty(id: u32, inst_by_id: &HashMap<u32, &Inst>) -> Ty {
+    inst_by_id.get(&id).map_or(Ty::I64, |i| i.ty)
+}
+
 // ---------------------------------------------------------------------------
 // Typed variable analysis (Vec, String, HashMap)
 // ---------------------------------------------------------------------------
@@ -1286,10 +1315,14 @@ fn emit_inst(
                     "__vow_vec_get_val" => {
                         let vec = inst.args[0].0;
                         let idx = inst.args[1].0;
-                        out.push_str(&format!(
-                            "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{vec}.len, \"vec bounds\");\n\
-                             \x20 v{id} = v{vec}.data[v{idx}];\n"
-                        ));
+                        emit_bounds_assert(
+                            idx,
+                            vec,
+                            operand_ty(idx, inst_by_id),
+                            "vec bounds",
+                            out,
+                        );
+                        out.push_str(&format!("  v{id} = v{vec}.data[v{idx}];\n"));
                     }
                     "__vow_vec_len" => {
                         let vec = inst.args[0].0;
@@ -1303,10 +1336,14 @@ fn emit_inst(
                         let vec = inst.args[0].0;
                         let idx = inst.args[1].0;
                         let val = inst.args[2].0;
-                        out.push_str(&format!(
-                            "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{vec}.len, \"vec bounds\");\n\
-                             \x20 v{vec}.data[v{idx}] = v{val};\n"
-                        ));
+                        emit_bounds_assert(
+                            idx,
+                            vec,
+                            operand_ty(idx, inst_by_id),
+                            "vec bounds",
+                            out,
+                        );
+                        out.push_str(&format!("  v{vec}.data[v{idx}] = v{val};\n"));
                     }
                     _ => {
                         emit_unmodelled(inst, out);
@@ -1418,9 +1455,15 @@ fn emit_inst(
                     "__vow_string_byte_at" => {
                         let s = inst.args[0].0;
                         let idx = inst.args[1].0;
+                        emit_bounds_assert(
+                            idx,
+                            s,
+                            operand_ty(idx, inst_by_id),
+                            "string bounds",
+                            out,
+                        );
                         out.push_str(&format!(
-                            "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{s}.len, \"string bounds\");\n\
-                             \x20 v{id} = (int64_t)(unsigned char)v{s}.data[v{idx}];\n\
+                            "  v{id} = (int64_t)(unsigned char)v{s}.data[v{idx}];\n\
                              \x20 __ESBMC_assume(v{id} >= 0 && v{id} <= 255);\n"
                         ));
                     }
@@ -7270,5 +7313,108 @@ mod tests {
             out.contains("__VERIFIER_nondet_long()"),
             "nondet fallback: {out}"
         );
+    }
+
+    /// Build a one-block function that indexes a container parameter, marking
+    /// the container with `len_extern` so the emitter classifies it, and
+    /// indexing it with `idx_ty` via `index_extern`.
+    fn indexed_container_fn(len_extern: &str, index_extern: &str, idx_ty: Ty) -> Function {
+        use vow_ir::InstId;
+        let call = |id: u32, name: &str, args: Vec<u32>, ty: Ty| Inst {
+            id: InstId(id),
+            opcode: Opcode::Call,
+            ty,
+            args: args.into_iter().map(InstId).collect(),
+            data: InstData::CallExtern(name.to_string()),
+            origin: sp(),
+            region: RegionId::Root,
+        };
+        let mut insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            call(1, len_extern, vec![0], Ty::I64),
+            inst(2, Opcode::GetArg, idx_ty, vec![], InstData::ArgIndex(1)),
+        ];
+        if index_extern == "__vow_vec_set_val" {
+            insts.push(inst(
+                3,
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(7),
+            ));
+            insts.push(call(4, index_extern, vec![0, 2, 3], Ty::Unit));
+        } else {
+            insts.push(call(4, index_extern, vec![0, 2], Ty::I64));
+        }
+        insts.push(inst(5, Opcode::Return, Ty::Unit, vec![1], InstData::None));
+        Function {
+            id: FuncId(0),
+            name: "indexed".to_string(),
+            params: vec![Ty::Ptr, idx_ty],
+            param_names: vec!["c".to_string(), "i".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts,
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    /// An unsigned index drops the vacuous `>= 0` conjunct and converts the
+    /// signed `.len` field explicitly, so the emitted C carries no
+    /// mixed-signedness comparison (#1113).
+    #[test]
+    fn bounds_assert_unsigned_index_is_explicitly_converted() {
+        let cases = [
+            ("__vow_vec_len", "__vow_vec_get_val", "vec bounds"),
+            ("__vow_vec_len", "__vow_vec_set_val", "vec bounds"),
+            ("__vow_string_len", "__vow_string_byte_at", "string bounds"),
+        ];
+        for (len_extern, index_extern, label) in cases {
+            for idx_ty in [Ty::U8, Ty::U16, Ty::U32, Ty::U64] {
+                let func = indexed_container_fn(len_extern, index_extern, idx_ty);
+                let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+                let expected = format!("__ESBMC_assert(v2 < (uint64_t)v0.len, \"{label}\");");
+                assert!(
+                    c.contains(&expected),
+                    "{index_extern} with {idx_ty:?} index must emit `{expected}`: {c}"
+                );
+                assert!(
+                    !c.contains(&format!("v2 >= 0 && v2 < v0.len, \"{label}\"")),
+                    "{index_extern} with {idx_ty:?} index must not emit the vacuous \
+                     signed form: {c}"
+                );
+            }
+        }
+    }
+
+    /// A signed index keeps the two-sided form byte-for-byte (#1113).
+    #[test]
+    fn bounds_assert_signed_index_is_unchanged() {
+        let cases = [
+            ("__vow_vec_len", "__vow_vec_get_val", "vec bounds"),
+            ("__vow_vec_len", "__vow_vec_set_val", "vec bounds"),
+            ("__vow_string_len", "__vow_string_byte_at", "string bounds"),
+        ];
+        for (len_extern, index_extern, label) in cases {
+            for idx_ty in [Ty::I8, Ty::I16, Ty::I32, Ty::I64] {
+                let func = indexed_container_fn(len_extern, index_extern, idx_ty);
+                let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+                let expected = format!("__ESBMC_assert(v2 >= 0 && v2 < v0.len, \"{label}\");");
+                assert!(
+                    c.contains(&expected),
+                    "{index_extern} with {idx_ty:?} index must emit `{expected}`: {c}"
+                );
+                assert!(
+                    !c.contains("(uint64_t)v0.len"),
+                    "{index_extern} with {idx_ty:?} index must not cast .len: {c}"
+                );
+            }
+        }
     }
 }

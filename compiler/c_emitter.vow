@@ -563,6 +563,53 @@ fn collect_modelable_callees(f: IrFunction, m: IrModule, const_fn_indices: Vec<i
     order
 }
 
+fn ity_is_unsigned(ty: i64) -> bool {
+    ty == ITY_U8() || ty == ITY_U16() || ty == ITY_U32() || ty == ITY_U64() || ty == ITY_U128()
+}
+
+// IR type of the instruction producing `id`, defaulting to the signed form
+// when the operand cannot be resolved.
+fn lookup_inst_ty(f: IrFunction, id: i64) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let candidate: IrInst = insts[ii];
+            if candidate.id == id {
+                return candidate.ty;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    ITY_I64()
+}
+
+// Emit the bounds assert for an indexed container access (Vec or String).
+//
+// The comparison is keyed off the index instruction's IR type so that the
+// emitted C says what it means. For an unsigned index `v{idx} >= 0` is
+// vacuous, and comparing it against the int64_t `.len` field would leave the
+// conversion to C's usual arithmetic conversions; emit a single explicit
+// comparison instead. Signed indices keep the two-sided form unchanged.
+fn emit_bounds_assert(out: String, idx: i64, container: i64, idx_ty: i64, label: String) {
+    let is: String = i64_to_string(idx);
+    let cs: String = i64_to_string(container);
+    if ity_is_unsigned(idx_ty) {
+        out.push_str(str6(String::from("  __ESBMC_assert(v"), is,
+            String::from(" < (uint64_t)v"), cs, String::from(".len, \""),
+            cemit_str2(label, String::from("\");\n"))));
+        return;
+    }
+    out.push_str(str7(String::from("  __ESBMC_assert(v"), is,
+        String::from(" >= 0 && v"), is,
+        String::from(" < v"), cs,
+        cemit_str2(String::from(".len, \""), cemit_str2(label, String::from("\");\n")))));
+}
+
 fn ir_ty_to_c(ty: i64) -> String {
     if ty == ITY_I8() { return String::from("int8_t"); }
     if ty == ITY_U8() { return String::from("uint8_t"); }
@@ -1493,7 +1540,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
                 return;
             }
             if str_starts_with(ds, String::from("__vow_vec_")) {
-                emit_vec_op(out, inst, vec_max);
+                emit_vec_op(out, inst, f, vec_max);
                 return;
             }
             if str_starts_with(ds, String::from("__vow_string_")) {
@@ -1654,7 +1701,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
     emit_unsupported_for_verification(out, inst);
 }
 
-fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
+fn emit_vec_op(out: String, inst: IrInst, f: IrFunction, vec_max: i64) {
     let id: i64 = inst.id;
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
@@ -1716,9 +1763,7 @@ fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
         let idx: i64 = iargs[1];
         let vs: String = i64_to_string(vec);
         let is: String = i64_to_string(idx);
-        out.push_str(str7(String::from("  __ESBMC_assert(v"), is,
-            String::from(" >= 0 && v"), is,
-            String::from(" < v"), vs, String::from(".len, \"vec bounds\");\n")));
+        emit_bounds_assert(out, idx, vec, lookup_inst_ty(f, idx), String::from("vec bounds"));
         out.push_str(str5(String::from("  v"), i64_to_string(id),
             String::from(" = v"), vs, str3(String::from(".data[v"),
             is, String::from("];\n"))));
@@ -1745,9 +1790,7 @@ fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
         let vs: String = i64_to_string(vec);
         let is: String = i64_to_string(idx);
         let vas: String = i64_to_string(val);
-        out.push_str(str7(String::from("  __ESBMC_assert(v"), is,
-            String::from(" >= 0 && v"), is,
-            String::from(" < v"), vs, String::from(".len, \"vec bounds\");\n")));
+        emit_bounds_assert(out, idx, vec, lookup_inst_ty(f, idx), String::from("vec bounds"));
         out.push_str(str6(String::from("  v"), vs, String::from(".data[v"),
             is, String::from("] = v"), cemit_str2(vas, String::from(";\n"))));
         return;
@@ -1977,9 +2020,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
         let ss: String = i64_to_string(s);
         let is: String = i64_to_string(idx);
         let ids: String = i64_to_string(id);
-        out.push_str(str7(String::from("  __ESBMC_assert(v"), is,
-            String::from(" >= 0 && v"), is,
-            String::from(" < v"), ss, String::from(".len, \"string bounds\");\n")));
+        emit_bounds_assert(out, idx, s, lookup_inst_ty(f, idx), String::from("string bounds"));
         out.push_str(str5(String::from("  v"), ids,
             String::from(" = (int64_t)(unsigned char)v"), ss,
             str3(String::from(".data[v"), is, String::from("];\n"))));
