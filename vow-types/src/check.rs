@@ -369,6 +369,90 @@ fn method_argument_expectations(receiver: &Ty, method: &str) -> Vec<ArgExpect> {
     }
 }
 
+/// The result type of a builtin method call `receiver.method(..)`, or `None`
+/// when `receiver` exposes no builtin method by that name. Pure sibling of
+/// `method_argument_expectations`: it reads the receiver (including its type
+/// arguments) and the method name and performs no diagnostics — the caller
+/// owns error reporting, the `unwrap`-arity check, and pattern-aggregate
+/// recording. Keeping this policy here, beside the argument-expectation seam,
+/// is what makes builtin-method type resolution directly testable without a
+/// `Checker`.
+fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty> {
+    let option_of = |inner: Ty| Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![inner]);
+    match receiver {
+        Ty::Str => match method {
+            "len" | "byte_at" => Some(Ty::I64),
+            "push_str" | "clear" | "push_byte" => Some(Ty::Unit),
+            "eq" | "contains" => Some(Ty::Bool),
+            "substring" => Some(Ty::Str),
+            "parse_i64" => Some(option_of(Ty::I64)),
+            "parse_u64" => Some(option_of(Ty::U64)),
+            _ => None,
+        },
+        Ty::Applied(base, args) => match base.as_ref() {
+            Ty::Struct(name) if name == "Vec" => match method {
+                "len" => Some(Ty::I64),
+                "push" | "pop" | "clear" | "truncate" => Some(Ty::Unit),
+                "get" => Some(option_of(args.first().cloned().unwrap_or(Ty::I64))),
+                _ => None,
+            },
+            Ty::Struct(name) if name == "HashMap" => match method {
+                "len" => Some(Ty::I64),
+                "insert" | "remove" => Some(Ty::Unit),
+                "get" => Some(Ty::I64),
+                "contains_key" => Some(Ty::Bool),
+                _ => None,
+            },
+            Ty::Struct(name) if name == "BTreeMap" => {
+                let value_ty = args.get(1).cloned().unwrap_or(Ty::I64);
+                match method {
+                    "len" => Some(Ty::I64),
+                    "insert" | "get" => Some(option_of(value_ty)),
+                    "contains" => Some(Ty::Bool),
+                    _ => None,
+                }
+            }
+            Ty::Enum(name) if name == "Option" || name == "Result" => match method {
+                "unwrap" => Some(args.first().cloned().unwrap_or(Ty::Unit)),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The builtin method names a receiver exposes, used to build the
+/// "unknown method" hint. Pure sibling of `method_result_type`.
+fn builtin_method_names(receiver: &Ty) -> &'static [&'static str] {
+    match receiver {
+        Ty::Str => &[
+            "len",
+            "push_str",
+            "eq",
+            "contains",
+            "byte_at",
+            "push_byte",
+            "substring",
+            "parse_i64",
+            "parse_u64",
+            "clear",
+        ],
+        Ty::Applied(base, _) => match base.as_ref() {
+            Ty::Struct(name) if name == "Vec" => {
+                &["len", "push", "pop", "get", "clear", "truncate"]
+            }
+            Ty::Struct(name) if name == "HashMap" => {
+                &["len", "insert", "get", "contains_key", "remove"]
+            }
+            Ty::Struct(name) if name == "BTreeMap" => &["len", "insert", "get", "contains"],
+            Ty::Enum(name) if name == "Option" || name == "Result" => &["unwrap"],
+            _ => &[],
+        },
+        _ => &[],
+    }
+}
+
 fn can_assignment_coerce(from: &Ty, to: &Ty) -> bool {
     can_context_coerce(from, to) || *to == Ty::Never
 }
@@ -2038,141 +2122,48 @@ impl<'e> Checker<'e> {
                 let is_btreemap = matches!(&recv_ty,
                     Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "BTreeMap")
                 );
-                let (known_methods, result_ty): (&[&str], Option<Ty>) = if is_str {
-                    let methods: &[&str] = &[
-                        "len",
-                        "push_str",
-                        "eq",
-                        "contains",
-                        "byte_at",
-                        "push_byte",
-                        "substring",
-                        "parse_i64",
-                        "parse_u64",
-                        "clear",
-                    ];
-                    let ty = match method.as_str() {
-                        "len" => Some(Ty::I64),
-                        "push_str" => Some(Ty::Unit),
-                        "clear" => Some(Ty::Unit),
-                        "eq" => Some(Ty::Bool),
-                        "contains" => Some(Ty::Bool),
-                        "byte_at" => Some(Ty::I64),
-                        "push_byte" => Some(Ty::Unit),
-                        "substring" => Some(Ty::Str),
-                        "parse_i64" => Some(Ty::Applied(
-                            Box::new(Ty::Enum("Option".to_string())),
-                            vec![Ty::I64],
-                        )),
-                        "parse_u64" => Some(Ty::Applied(
-                            Box::new(Ty::Enum("Option".to_string())),
-                            vec![Ty::U64],
-                        )),
-                        _ => None,
-                    };
-                    (methods, ty)
-                } else if is_hashmap {
-                    let methods: &[&str] = &["len", "insert", "get", "contains_key", "remove"];
-                    let ty = match method.as_str() {
-                        "len" => Some(Ty::I64),
-                        "insert" => Some(Ty::Unit),
-                        "get" => Some(Ty::I64),
-                        "contains_key" => Some(Ty::Bool),
-                        "remove" => Some(Ty::Unit),
-                        _ => None,
-                    };
-                    (methods, ty)
-                } else if is_btreemap {
-                    let methods: &[&str] = &["len", "insert", "get", "contains"];
-                    if let Ty::Applied(_, args) = &recv_ty
-                        && let Some(key_ty) = args.first()
-                        && !matches!(key_ty, Ty::I64 | Ty::Never)
-                    {
+                let is_option_or_result = matches!(&recv_ty,
+                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option" || n == "Result")
+                );
+
+                // Result-type and known-method policy live in the pure
+                // `method_result_type` / `builtin_method_names` seams; the arm
+                // keeps only the diagnostics and side effects those cannot own.
+                if is_btreemap
+                    && let Ty::Applied(_, args) = &recv_ty
+                    && let Some(key_ty) = args.first()
+                    && !matches!(key_ty, Ty::I64 | Ty::Never)
+                {
+                    self.emit_error(
+                        ErrorCode::BTreeMapKeyTypeMustBeI64,
+                        format!("BTreeMap key type must be i64; found '{key_ty}'"),
+                        expr.span,
+                    );
+                }
+
+                let result_ty = method_result_type(&recv_ty, method);
+
+                if is_option_or_result {
+                    // `unwrap` takes no arguments. Without this the lowerer
+                    // accepts them and drops them unevaluated, silently
+                    // discarding their side effects (#1108 review).
+                    if method == "unwrap" && !args.is_empty() {
                         self.emit_error(
-                            ErrorCode::BTreeMapKeyTypeMustBeI64,
-                            format!("BTreeMap key type must be i64; found '{key_ty}'"),
+                            ErrorCode::TypeMismatch,
+                            format!("method `unwrap` expects 0 arguments but got {}", args.len()),
                             expr.span,
                         );
                     }
-                    let value_ty = if let Ty::Applied(_, args) = &recv_ty {
-                        args.get(1).cloned().unwrap_or(Ty::I64)
-                    } else {
-                        Ty::I64
-                    };
-                    let ty = match method.as_str() {
-                        "len" => Some(Ty::I64),
-                        "insert" => Some(Ty::Applied(
-                            Box::new(Ty::Enum("Option".to_string())),
-                            vec![value_ty.clone()],
-                        )),
-                        "get" => Some(Ty::Applied(
-                            Box::new(Ty::Enum("Option".to_string())),
-                            vec![value_ty],
-                        )),
-                        "contains" => Some(Ty::Bool),
-                        _ => None,
-                    };
-                    (methods, ty)
-                } else if is_vec {
-                    let methods: &[&str] = &["len", "push", "pop", "get", "clear", "truncate"];
-                    let ty = match method.as_str() {
-                        "len" => Some(Ty::I64),
-                        "push" => Some(Ty::Unit),
-                        "pop" => Some(Ty::Unit),
-                        "clear" => Some(Ty::Unit),
-                        "truncate" => Some(Ty::Unit),
-                        "get" => Some(Ty::Applied(
-                            Box::new(Ty::Enum("Option".to_string())),
-                            vec![if let Ty::Applied(_, args) = &recv_ty {
-                                args.first().cloned().unwrap_or(Ty::I64)
-                            } else {
-                                Ty::I64
-                            }],
-                        )),
-                        _ => None,
-                    };
-                    (methods, ty)
-                } else if let Ty::Applied(base, type_args) = &recv_ty {
-                    let is_option_or_result = matches!(
-                        base.as_ref(),
-                        Ty::Enum(n) if n == "Option" || n == "Result"
-                    );
-                    if is_option_or_result {
-                        let methods: &[&str] = &["unwrap"];
-                        let ty = match method.as_str() {
-                            "unwrap" => Some(type_args.first().cloned().unwrap_or(Ty::Unit)),
-                            _ => None,
-                        };
-                        // `unwrap` takes no arguments. Without this the lowerer
-                        // accepts them and drops them unevaluated, silently
-                        // discarding their side effects (#1108 review).
-                        if method == "unwrap" && !args.is_empty() {
-                            self.emit_error(
-                                ErrorCode::TypeMismatch,
-                                format!(
-                                    "method `unwrap` expects 0 arguments but got {}",
-                                    args.len()
-                                ),
-                                expr.span,
-                            );
+                    // The unwrap payload reaches IR through a FieldGet, so it
+                    // needs the same aggregate metadata `?` records.
+                    if let Some(payload_ty) = result_ty.as_ref() {
+                        let is_linear = crate::linear::is_linear_owner_ty(payload_ty, &self.env);
+                        if let Some(info) = pattern_aggregate_info(payload_ty, is_linear) {
+                            self.pattern_aggregates
+                                .insert(expr as *const Expr as usize, info);
                         }
-                        // The unwrap payload reaches IR through a FieldGet, so
-                        // it needs the same aggregate metadata `?` records.
-                        if let Some(payload_ty) = ty.as_ref() {
-                            let is_linear =
-                                crate::linear::is_linear_owner_ty(payload_ty, &self.env);
-                            if let Some(info) = pattern_aggregate_info(payload_ty, is_linear) {
-                                self.pattern_aggregates
-                                    .insert(expr as *const Expr as usize, info);
-                            }
-                        }
-                        (methods, ty)
-                    } else {
-                        (&[] as &[&str], None)
                     }
-                } else {
-                    (&[] as &[&str], None)
-                };
+                }
                 match result_ty {
                     Some(ty) => ty,
                     None => {
@@ -2193,8 +2184,10 @@ impl<'e> Checker<'e> {
                         } else {
                             format!("{recv_ty}")
                         };
-                        let candidates: Vec<String> =
-                            known_methods.iter().map(|s| s.to_string()).collect();
+                        let candidates: Vec<String> = builtin_method_names(&recv_ty)
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect();
                         let mut hints = Vec::new();
                         if let Some(s) = suggest_similar(method, &candidates, 3) {
                             hints.push(format!("did you mean `{s}`?"));
@@ -6860,5 +6853,98 @@ mod tests {
         assert!(method_argument_expectations(&Ty::Str, "len").is_empty());
         assert!(method_argument_expectations(&vec_of(Ty::I64), "pop").is_empty());
         assert!(method_argument_expectations(&Ty::I64, "byte_at").is_empty());
+    }
+
+    fn opt_of(inner: Ty) -> Ty {
+        Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![inner])
+    }
+
+    #[test]
+    fn builtin_method_result_types_are_resolved_per_receiver() {
+        // String
+        assert_eq!(method_result_type(&Ty::Str, "len"), Some(Ty::I64));
+        assert_eq!(method_result_type(&Ty::Str, "byte_at"), Some(Ty::I64));
+        assert_eq!(method_result_type(&Ty::Str, "push_str"), Some(Ty::Unit));
+        assert_eq!(method_result_type(&Ty::Str, "clear"), Some(Ty::Unit));
+        assert_eq!(method_result_type(&Ty::Str, "eq"), Some(Ty::Bool));
+        assert_eq!(method_result_type(&Ty::Str, "contains"), Some(Ty::Bool));
+        assert_eq!(method_result_type(&Ty::Str, "substring"), Some(Ty::Str));
+        assert_eq!(
+            method_result_type(&Ty::Str, "parse_i64"),
+            Some(opt_of(Ty::I64))
+        );
+        assert_eq!(
+            method_result_type(&Ty::Str, "parse_u64"),
+            Some(opt_of(Ty::U64))
+        );
+        assert_eq!(method_result_type(&Ty::Str, "nope"), None);
+
+        // Vec<i64>: element type flows into `get`'s Option payload.
+        let vec_i64 = vec_of(Ty::I64);
+        assert_eq!(method_result_type(&vec_i64, "len"), Some(Ty::I64));
+        assert_eq!(method_result_type(&vec_i64, "push"), Some(Ty::Unit));
+        assert_eq!(method_result_type(&vec_i64, "pop"), Some(Ty::Unit));
+        assert_eq!(method_result_type(&vec_i64, "clear"), Some(Ty::Unit));
+        assert_eq!(method_result_type(&vec_i64, "truncate"), Some(Ty::Unit));
+        assert_eq!(method_result_type(&vec_i64, "get"), Some(opt_of(Ty::I64)));
+        assert_eq!(
+            method_result_type(&vec_of(Ty::Bool), "get"),
+            Some(opt_of(Ty::Bool))
+        );
+        assert_eq!(method_result_type(&vec_i64, "nope"), None);
+
+        // HashMap: `get` returns the value type directly (pre-existing shape).
+        let map = map_of("HashMap", Ty::I64, Ty::Bool);
+        assert_eq!(method_result_type(&map, "len"), Some(Ty::I64));
+        assert_eq!(method_result_type(&map, "insert"), Some(Ty::Unit));
+        assert_eq!(method_result_type(&map, "remove"), Some(Ty::Unit));
+        assert_eq!(method_result_type(&map, "get"), Some(Ty::I64));
+        assert_eq!(method_result_type(&map, "contains_key"), Some(Ty::Bool));
+        assert_eq!(method_result_type(&map, "nope"), None);
+
+        // BTreeMap: value type flows into `insert`/`get` Option payloads.
+        let bmap = map_of("BTreeMap", Ty::I64, Ty::Bool);
+        assert_eq!(method_result_type(&bmap, "len"), Some(Ty::I64));
+        assert_eq!(method_result_type(&bmap, "insert"), Some(opt_of(Ty::Bool)));
+        assert_eq!(method_result_type(&bmap, "get"), Some(opt_of(Ty::Bool)));
+        assert_eq!(method_result_type(&bmap, "contains"), Some(Ty::Bool));
+        assert_eq!(method_result_type(&bmap, "nope"), None);
+
+        // Option/Result unwrap yields the payload; other methods are unknown.
+        assert_eq!(
+            method_result_type(&opt_of(Ty::I64), "unwrap"),
+            Some(Ty::I64)
+        );
+        let result_bool = Ty::Applied(Box::new(Ty::Enum("Result".to_string())), vec![Ty::Bool]);
+        assert_eq!(method_result_type(&result_bool, "unwrap"), Some(Ty::Bool));
+        assert_eq!(method_result_type(&opt_of(Ty::I64), "map"), None);
+
+        // Non-builtin receivers expose no builtin methods.
+        assert_eq!(method_result_type(&Ty::I64, "len"), None);
+        assert_eq!(
+            method_result_type(&Ty::Struct("Foo".to_string()), "bar"),
+            None
+        );
+    }
+
+    #[test]
+    fn builtin_method_names_list_the_known_methods() {
+        assert!(builtin_method_names(&Ty::Str).contains(&"substring"));
+        assert!(builtin_method_names(&Ty::Str).contains(&"parse_u64"));
+        assert_eq!(
+            builtin_method_names(&vec_of(Ty::I64)),
+            &["len", "push", "pop", "get", "clear", "truncate"]
+        );
+        assert_eq!(
+            builtin_method_names(&map_of("HashMap", Ty::I64, Ty::Bool)),
+            &["len", "insert", "get", "contains_key", "remove"]
+        );
+        assert_eq!(
+            builtin_method_names(&map_of("BTreeMap", Ty::I64, Ty::Bool)),
+            &["len", "insert", "get", "contains"]
+        );
+        assert_eq!(builtin_method_names(&opt_of(Ty::I64)), &["unwrap"]);
+        assert!(builtin_method_names(&Ty::I64).is_empty());
+        assert!(builtin_method_names(&Ty::Struct("Foo".to_string())).is_empty());
     }
 }
