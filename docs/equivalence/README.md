@@ -116,6 +116,10 @@ nightly run. The directive is scoped to values only, reports as a loud skip
 while the mismatch reproduces, and becomes a hard failure once the values
 agree so stale directives cannot accumulate.
 
+Every `compare_json` path enforces the expected counterexample count: zero for
+soft verification failures and equal between compilers otherwise. Because the
+fixture directive is scoped to values only, it cannot mask a count divergence.
+
 Two suppressions are unconditional rather than per-fixture, so they are the
 ones to revisit first when widening the comparison:
 
