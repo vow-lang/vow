@@ -527,6 +527,33 @@ class ParityCliCharacterizationTest(unittest.TestCase):
             (completed.returncode, completed.stdout.strip()),
         )
 
+    def test_known_value_divergence_does_not_suppress_a_count_mismatch(self):
+        rust = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "first", "blame": "caller"},
+                {"function": "second", "blame": "callee"},
+            ],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            counterexamples=[{"function": "first", "blame": "caller"}],
+        )
+
+        completed = run_parity_cli(
+            "json",
+            rust,
+            self_hosted,
+            1,
+            1,
+            fixture_text=KNOWN_CEX_FIXTURE,
+        )
+
+        self.assertEqual(
+            (1, "FAIL: counterexamples count: 2 vs 1"),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
     def test_stale_counterexample_divergence_directive_fails(self):
         verified_failure = hard_failure(x="-1")
 
