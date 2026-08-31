@@ -418,6 +418,124 @@ fn check_wide_constants_are_non_modelable() -> i64 {
     0
 }
 
+// Build a one-block function that indexes a container parameter, marking the
+// container with `len_extern` so the emitter classifies it, and indexing it
+// with `idx_ty` via `index_extern`. Mirrors `indexed_container_fn` in
+// vow-verify/src/c_emitter.rs's test module (#1113).
+fn indexed_container_function(len_extern: String, index_extern: String, idx_ty: i64) -> IrFunction {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+
+    let len_args: Vec<i64> = Vec::new();
+    len_args.push(0);
+    insts.push(mk_inst_call_extern(1, ITY_I64(), len_args, len_extern));
+
+    insts.push(mk_inst_arg(2, idx_ty, 1));
+
+    if index_extern == String::from("__vow_vec_set_val") {
+        insts.push(mk_inst_const_i64(3, 7));
+        let set_args: Vec<i64> = Vec::new();
+        set_args.push(0);
+        set_args.push(2);
+        set_args.push(3);
+        insts.push(mk_inst_call_extern(4, ITY_UNIT(), set_args, index_extern));
+    } else {
+        let get_args: Vec<i64> = Vec::new();
+        get_args.push(0);
+        get_args.push(2);
+        insts.push(mk_inst_call_extern(4, ITY_I64(), get_args, index_extern));
+    }
+    insts.push(mk_inst_return(5, 1));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    params.push(idx_ty);
+    mk_function(0, String::from("indexed"), params, ITY_I64(), blocks)
+}
+
+fn emit_indexed_container_c(len_extern: String, index_extern: String, idx_ty: i64) -> String {
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(indexed_container_function(len_extern, index_extern, idx_ty));
+    emit_c_module(mk_module(funcs), 16, 16, 16, 16)
+}
+
+// An unsigned index drops the vacuous `>= 0` conjunct and converts the signed
+// `.len` field explicitly, so the emitted C carries no mixed-signedness
+// comparison (#1113 Half A).
+fn check_bounds_assert_unsigned(len_extern: String, index_extern: String, label: String,
+                                idx_ty: i64, base_code: i64) -> i64 {
+    let c: String = emit_indexed_container_c(len_extern, index_extern, idx_ty);
+    let expected: String = str3(String::from("  __ESBMC_assert(v2 < (uint64_t)v0.len, \""),
+        label, String::from("\");\n"));
+    if !c.contains(expected) { return base_code; }
+    let vacuous: String = str3(String::from("v2 >= 0 && v2 < v0.len, \""), label,
+        String::from("\""));
+    if c.contains(vacuous) { return base_code + 1; }
+    0
+}
+
+// A signed index keeps the two-sided form byte-for-byte (#1113 Half A).
+fn check_bounds_assert_signed(len_extern: String, index_extern: String, label: String,
+                              idx_ty: i64, base_code: i64) -> i64 {
+    let c: String = emit_indexed_container_c(len_extern, index_extern, idx_ty);
+    let expected: String = str3(String::from("  __ESBMC_assert(v2 >= 0 && v2 < v0.len, \""),
+        label, String::from("\");\n"));
+    if !c.contains(expected) { return base_code; }
+    if c.contains(String::from("(uint64_t)v0.len")) { return base_code + 1; }
+    0
+}
+
+fn check_bounds_assert_signedness() -> i64 {
+    let vec_len: String = String::from("__vow_vec_len");
+    let str_len: String = String::from("__vow_string_len");
+    let get: String = String::from("__vow_vec_get_val");
+    let set: String = String::from("__vow_vec_set_val");
+    let byte_at: String = String::from("__vow_string_byte_at");
+    let vec_label: String = String::from("vec bounds");
+    let str_label: String = String::from("string bounds");
+
+    let unsigned_tys: Vec<i64> = Vec::new();
+    unsigned_tys.push(ITY_U8());
+    unsigned_tys.push(ITY_U16());
+    unsigned_tys.push(ITY_U32());
+    unsigned_tys.push(ITY_U64());
+
+    let signed_tys: Vec<i64> = Vec::new();
+    signed_tys.push(ITY_I8());
+    signed_tys.push(ITY_I16());
+    signed_tys.push(ITY_I32());
+    signed_tys.push(ITY_I64());
+
+    let mut i: i64 = 0;
+    while i < unsigned_tys.len() {
+        let ty: i64 = unsigned_tys[i];
+        let base: i64 = 70 + i * 10;
+        let a: i64 = check_bounds_assert_unsigned(vec_len, get, vec_label, ty, base);
+        if a != 0 { return a; }
+        let b: i64 = check_bounds_assert_unsigned(vec_len, set, vec_label, ty, base + 2);
+        if b != 0 { return b; }
+        let c: i64 = check_bounds_assert_unsigned(str_len, byte_at, str_label, ty, base + 4);
+        if c != 0 { return c; }
+        i = i + 1;
+    }
+
+    let mut j: i64 = 0;
+    while j < signed_tys.len() {
+        let ty: i64 = signed_tys[j];
+        let base: i64 = 110 + j * 10;
+        let a: i64 = check_bounds_assert_signed(vec_len, get, vec_label, ty, base);
+        if a != 0 { return a; }
+        let b: i64 = check_bounds_assert_signed(vec_len, set, vec_label, ty, base + 2);
+        if b != 0 { return b; }
+        let c: i64 = check_bounds_assert_signed(str_len, byte_at, str_label, ty, base + 4);
+        if c != 0 { return c; }
+        j = j + 1;
+    }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_name_modelable_and_mangled(String::from("abs"), 7, 1);
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -451,5 +569,7 @@ fn main() -> i32 {
     if r15 != 0 { return i64_to_i32_wrap(r15); }
     let r16: i64 = check_wide_constants_are_non_modelable();
     if r16 != 0 { return i64_to_i32_wrap(r16); }
+    let r17: i64 = check_bounds_assert_signedness();
+    if r17 != 0 { return i64_to_i32_wrap(r17); }
     0
 }
