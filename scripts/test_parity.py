@@ -431,6 +431,31 @@ class CompareErrorCodeParityTest(unittest.TestCase):
             (completed.returncode, completed.stdout.strip()),
         )
 
+    def test_active_ledger_entry_does_not_hide_a_different_code_gap(self):
+        rust = document(
+            "CompileFailed", diagnostics=[{"error_code": "LinearTypeViolation"}]
+        )
+        self_hosted = document(
+            "CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}]
+        )
+
+        completed = run_parity_cli(
+            "error",
+            rust,
+            self_hosted,
+            1,
+            1,
+            REPO_ROOT / "tests/error/linear_region_unconsumed.vow",
+        )
+
+        self.assertEqual(
+            (
+                1,
+                "FAIL: error codes: ['LinearTypeViolation'] vs ['TypeMismatch']",
+            ),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
     def test_stale_active_ledger_entry_fails(self):
         rejection = document(
             "CompileFailed", diagnostics=[{"error_code": "LinearTypeViolation"}]
@@ -522,7 +547,10 @@ class CompareErrorCodeParityTest(unittest.TestCase):
         )
 
 
-KNOWN_CEX_FIXTURE = '// TEST: known-cex-divergence 1139 "variable names differ"\n'
+KNOWN_CEX_FIXTURE = (
+    '// TEST: known-cex-divergence 1139 "variable names differ" '
+    "rust-name=x self-name=n\n"
+)
 KNOWN_CEX_COUNT_FIXTURE = (
     '// TEST: known-cex-count-divergence 1155 "Rust stops after first failure"\n'
 )
@@ -548,6 +576,24 @@ class ParityCliCharacterizationTest(unittest.TestCase):
 
         self.assertEqual(
             (0, "SKIP: known counterexample divergence (#1139: variable names differ)"),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_known_label_divergence_does_not_hide_a_corrupted_value(self):
+        completed = run_parity_cli(
+            "json",
+            hard_failure(x="-1"),
+            hard_failure(n="42"),
+            1,
+            1,
+            fixture_text=KNOWN_CEX_FIXTURE,
+        )
+
+        self.assertEqual(
+            (
+                1,
+                "FAIL: counterexample[0].values: {'x': '-1'} vs {'n': '42'}",
+            ),
             (completed.returncode, completed.stdout.strip()),
         )
 

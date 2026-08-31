@@ -5,6 +5,11 @@ use vow_verify::{ArithOverflowSite, CalleePrecondition, Counterexample, SolverCo
 
 use crate::frontend::DependencyManifest;
 
+// Counterexample values are serialized after source-name mapping. Version the
+// record header whenever that public name mapping changes so an old failure
+// cannot re-enter the compiler with stale agent-facing keys.
+const VERIFY_CACHE_FAILURE_HEADER: &str = "FAILED v2";
+
 // Bump this whenever generated object files are no longer ABI-compatible with
 // existing cached artifacts. Static string literals, full-width block arena
 // stack slots, UTF-8-preserving string lexing, contextual narrow-integer
@@ -269,7 +274,7 @@ impl VerifyCache {
 }
 
 fn serialize_cached_result(result: &CachedFailure) -> String {
-    let mut s = String::from("FAILED\n");
+    let mut s = format!("{VERIFY_CACHE_FAILURE_HEADER}\n");
     match result.vow_id {
         Some(id) => s.push_str(&format!("vow_id={id}\n")),
         None => s.push_str("vow_id=\n"),
@@ -318,7 +323,7 @@ fn parse_cached_result(content: &str) -> Option<CachedFailure> {
     let status = lines.next()?;
     // Security: only honor cached FAILED entries. A forged "PROVEN" file must
     // never bypass ESBMC, so PROVEN content is discarded here.
-    if status != "FAILED" {
+    if status != VERIFY_CACHE_FAILURE_HEADER {
         return None;
     }
     let mut vow_id: Option<u32> = None;
@@ -591,6 +596,11 @@ mod tests {
     fn verify_cache_unknown_status_is_discarded() {
         assert!(parse_cached_result("BOGUS\n").is_none());
         assert!(parse_cached_result("").is_none());
+    }
+
+    #[test]
+    fn verify_cache_legacy_failure_is_discarded() {
+        assert!(parse_cached_result("FAILED\nvow_id=1\n").is_none());
     }
 
     #[test]

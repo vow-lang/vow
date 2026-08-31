@@ -7,7 +7,12 @@ import sys
 from pathlib import Path
 
 KNOWN_CEX_DIVERGENCE = re.compile(
-    r'^// TEST: known-cex-divergence ([0-9]+) "(.*)"$', re.MULTILINE
+    (
+        r'^// TEST: known-cex-divergence ([0-9]+) "(.*)" '
+        r"rust-name=([A-Za-z_][A-Za-z0-9_]*) "
+        r"self-name=([A-Za-z_][A-Za-z0-9_]*)$"
+    ),
+    re.MULTILINE,
 )
 KNOWN_CEX_COUNT_DIVERGENCE = re.compile(
     r'^// TEST: known-cex-count-divergence ([0-9]+) "(.*)"$', re.MULTILINE
@@ -64,6 +69,26 @@ def _counterexample_fields(base, rust_cex, self_cex):
     if rust_cex.get("blame") != "none" and self_cex.get("blame") != "none":
         fields.append("violation")
     return fields
+
+
+def _values_match_after_rename(
+    rust_counterexamples, self_counterexamples, rust_name, self_name
+):
+    """Whether one declared source-label rename explains every value map."""
+    if not rust_counterexamples or not self_counterexamples:
+        return False
+    saw_rename = False
+    for rust_cex, self_cex in zip(rust_counterexamples, self_counterexamples):
+        renamed = {}
+        for name, value in _counterexample_values(rust_cex).items():
+            mapped_name = self_name if name == rust_name else name
+            if mapped_name in renamed:
+                return False
+            renamed[mapped_name] = value
+            saw_rename = saw_rename or name == rust_name
+        if renamed != _counterexample_values(self_cex):
+            return False
+    return saw_rename
 
 
 def _compare_counterexamples(rust_counterexamples, self_counterexamples, fields):
@@ -208,10 +233,17 @@ def _known_cex_policies(rust, self_hosted, fixture_text):
     match = KNOWN_CEX_DIVERGENCE.search(fixture_text)
     if match:
         known = f"#{match.group(1)}: {match.group(2)}"
+        expected_gap = _values_match_after_rename(
+            rust.get("counterexamples", []),
+            self_hosted.get("counterexamples", []),
+            match.group(3),
+            match.group(4),
+        )
         policies.append(
             (
                 lambda error: (
-                    error.startswith("counterexample[")
+                    expected_gap
+                    and error.startswith("counterexample[")
                     and f"].{VALUES_LABEL}:" in error
                 ),
                 bool(
@@ -293,7 +325,7 @@ def _ledger_entry(fixture_path):
     return entry, tracked_observables(entry)
 
 
-def _ledger_verdict(errors, fixture_path):
+def _ledger_verdict(rust, self_hosted, errors, fixture_path):
     """Verdict for an active `error_code` entry in the equivalence ledger."""
     entry, observables = _ledger_entry(fixture_path)
     if not entry or entry.get("status") not in ("open", "expected"):
@@ -301,9 +333,14 @@ def _ledger_verdict(errors, fixture_path):
     if "error_code" not in observables:
         return None
     issue = entry.get("issue", "unfiled")
+    expected_gap = _error_codes(rust.get("diagnostics", [])) == entry.get(
+        "rust_error_codes"
+    ) and _error_codes(self_hosted.get("diagnostics", [])) == entry.get(
+        "self_hosted_error_codes"
+    )
     return _suppress(
         errors,
-        lambda error: error.startswith(f"{ERROR_CODES_LABEL}: "),
+        lambda error: expected_gap and error.startswith(f"{ERROR_CODES_LABEL}: "),
         # compare_error already fails when either side emitted no diagnostics,
         # so an empty error list means the code multisets were really compared.
         exercised=True,
@@ -343,7 +380,7 @@ def main(argv=None):
             return 1
     else:
         errors = compare_error(rust, self_hosted, int(rust_exit), int(self_exit))
-        verdict = _ledger_verdict(errors, fixture_path)
+        verdict = _ledger_verdict(rust, self_hosted, errors, fixture_path)
 
     if verdict is not None:
         code, message = verdict

@@ -1,7 +1,7 @@
 // TEST: category caller-blame
 // TEST: counterexample-fn "bad"
 // TEST: counterexample-blame caller
-// TEST: known-cex-divergence 1139 "counterexample labels x vs n"
+// TEST: known-cex-divergence 1139 "counterexample labels x vs n" rust-name=x self-name=n
 //
 // Promoted from tests/verify/ (a #764 known-soundness-gap xfail) when the G7
 // call-boundary assert closed that gap (PR #736). `bad` calls `need_pos` with

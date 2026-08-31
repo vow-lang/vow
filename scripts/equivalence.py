@@ -104,11 +104,11 @@ def fingerprint(path):
 # Section 4); honouring them keeps this runner's view of a fixture identical to
 # the suite's, so a divergence here is never an artifact of feeding a fixture
 # the wrong stdin.
-DIRECTIVE_SKIP = re.compile(r'^// TEST: skip "(.*)"$', re.M)
-DIRECTIVE_STDIN = re.compile(r'^// TEST: stdin "(.*)"$', re.M)
-DIRECTIVE_STDIN_FILE = re.compile(r"^// TEST: stdin-file (.*)$", re.M)
-DIRECTIVE_VERIFY_ONLY = re.compile(r"^// TEST: verify-only$", re.M)
-DIRECTIVE_EXIT = re.compile(r"^// TEST: exit ([0-9]+)$", re.M)
+DIRECTIVE_SKIP = re.compile(r'^// TEST: skip "(.*)"$', re.MULTILINE)
+DIRECTIVE_STDIN = re.compile(r'^// TEST: stdin "(.*)"$', re.MULTILINE)
+DIRECTIVE_STDIN_FILE = re.compile(r"^// TEST: stdin-file (.*)$", re.MULTILINE)
+DIRECTIVE_VERIFY_ONLY = re.compile(r"^// TEST: verify-only$", re.MULTILINE)
+DIRECTIVE_EXIT = re.compile(r"^// TEST: exit ([0-9]+)$", re.MULTILINE)
 
 
 def read_directives(path):
@@ -202,6 +202,7 @@ def run_compiler(binary, args, timeout, limit_memory):
         proc = subprocess.run(
             [str(binary)] + args,
             capture_output=True,
+            check=False,
             cwd=REPO_ROOT,
             timeout=timeout,
             preexec_fn=_limit_memory if limit_memory else None,
@@ -231,6 +232,7 @@ def run_binary(path, stdin_data, timeout, limit_memory):
             [str(path)],
             input=stdin_data,
             capture_output=True,
+            check=False,
             cwd=REPO_ROOT,
             timeout=timeout,
             preexec_fn=_limit_memory if limit_memory else None,
@@ -328,6 +330,8 @@ def compare_build(rust, slf):
                 {
                     "observable": "error_code",
                     "detail": f"both rejected but codes differ: {rc} vs {sc}",
+                    "rust": rc,
+                    "self_hosted": sc,
                 }
             )
 
@@ -437,6 +441,8 @@ def compare_verify(rust, slf):
             {
                 "observable": "error_code",
                 "detail": f"verify diagnostics differ: {rc} vs {sc}",
+                "rust": rc,
+                "self_hosted": sc,
             }
         )
     if rust["exit"] != slf["exit"]:
@@ -754,6 +760,22 @@ def tracked_observables(entry):
     return frozenset([obs] if isinstance(obs, str) else obs)
 
 
+def divergence_matches_entry(divergence, entry, tracked):
+    """Whether a finding is the exact observable payload the ledger records."""
+    if divergence["observable"] not in tracked:
+        return False
+    if divergence["observable"] != "error_code":
+        return True
+    expected_rust = entry.get("rust_error_codes")
+    expected_self = entry.get("self_hosted_error_codes")
+    return (
+        expected_rust is not None
+        and expected_self is not None
+        and divergence.get("rust") == expected_rust
+        and divergence.get("self_hosted") == expected_self
+    )
+
+
 def reconcile(records, ledger):
     """Split findings into new, known, and disappeared.
 
@@ -790,8 +812,14 @@ def reconcile(records, ledger):
         # observables must NOT be folded into `known` — that would let the very
         # regression the entry was kept to catch exit the run successfully.
         suppresses = entry is not None and entry.get("status") in ("open", "expected")
-        matched = [d for d in rec["divergences"] if d["observable"] in tracked]
-        untracked = [d for d in rec["divergences"] if d["observable"] not in tracked]
+        matched = [
+            d for d in rec["divergences"] if divergence_matches_entry(d, entry, tracked)
+        ]
+        untracked = [
+            d
+            for d in rec["divergences"]
+            if not divergence_matches_entry(d, entry, tracked)
+        ]
 
         as_new = untracked if suppresses else rec["divergences"]
         if as_new:

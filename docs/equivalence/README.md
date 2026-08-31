@@ -104,17 +104,22 @@ Known `diagnostics[].error_code` divergences in the compile-error comparator
 `ledger.json`. An entry suppresses only the observable it names and only while
 its status is `open` or `expected`; agreement becomes a hard failure that
 requires marking the entry fixed, and a divergence on a fixed entry is a
-regression. This lets the per-fixture parity harness and the Tier-2 sweep share
-one registry. `compare_json` has no ledger path: a fixture that reaches it must
-agree outright.
+regression. Active error-code entries also pin the exact sorted Rust and
+self-hosted code multisets; a different mismatch on the same fixture is a new
+failure, not an inherited exception. This lets the per-fixture parity harness
+and the Tier-2 sweep share one registry. `compare_json` has no ledger path: a
+fixture that reaches it must agree outright.
 
 Known `counterexamples[].values` divergences instead use a fixture-local
-`// TEST: known-cex-divergence <issue> "<why>"` directive. The Tier-2 runner
-does not emit a counterexample-values observable, so adding those gaps to the
-ledger would make `reconcile()` incorrectly report them as fixed on every
-nightly run. The directive is scoped to values only, reports as a loud skip
-while the mismatch reproduces, and becomes a hard failure once the values
-agree so stale directives cannot accumulate.
+`// TEST: known-cex-divergence <issue> "<why>" rust-name=<name>
+self-name=<name>` directive. The Tier-2 runner does not emit a
+counterexample-values observable, so adding those gaps to the ledger would make
+`reconcile()` incorrectly report them as fixed on every nightly run. The
+directive is scoped to one declared source-label rename: after applying that
+rename, every source-level value map must agree exactly. A changed value or any
+additional mismatch remains a failure. The directive reports as a loud skip
+while that exact rename reproduces and becomes a hard failure once it agrees so
+stale directives cannot accumulate.
 
 Every `compare_json` path enforces the expected counterexample count: zero for
 soft verification failures and equal between compilers otherwise. Because the
@@ -135,7 +140,7 @@ ones to revisit first when widening the comparison:
   multiset is exercised only outside `VerifyFailed`. Dropping the guard is
   blocked on #1138, the same ordering constraint #1136 records for spans and
   `violation`.
-- **Counterexample value names prefixed `_esbmc` are dropped before
+- **Counterexample value names prefixed `$esbmc$` are dropped before
   comparison.** These are ESBMC's own temporaries, not the agent-facing CEGIS
   payload the two compilers owe each other; `vowc --help` documents the prefix
   as internal. Everything without the prefix is compared exactly.
