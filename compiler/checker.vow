@@ -1098,6 +1098,38 @@ fn expr_diverges(e: CheckEnv, m: Module, eid: i64) -> bool {
     false
 }
 
+// The unsigned type tag two comparison operands share, or -1. An unsuffixed
+// integer literal takes the other operand's type, so `u64` against a literal
+// counts.
+fn unsigned_comparison_tag(ts: TyStore, lhs_tid: i64, rhs_tid: i64) -> i64 {
+    let lhs_unsigned: bool = ty_is_unsigned(ts, lhs_tid);
+    let rhs_unsigned: bool = ty_is_unsigned(ts, rhs_tid);
+    if lhs_unsigned && rhs_unsigned {
+        if ty_tag(ts, lhs_tid) == ty_tag(ts, rhs_tid) {
+            return ty_tag(ts, lhs_tid);
+        }
+        return -1;
+    }
+    if lhs_unsigned && ty_is_lit_int(ts, rhs_tid) {
+        return ty_tag(ts, lhs_tid);
+    }
+    if rhs_unsigned && ty_is_lit_int(ts, lhs_tid) {
+        return ty_tag(ts, rhs_tid);
+    }
+    -1
+}
+
+// Verdict for a comparison against a constant 0 whose other operand is
+// unsigned: 1 = always true, 0 = always false, -1 = meaningful, keep compiling
+// (`x > 0`, `x <= 0`, `x == 0`, `x != 0`).
+fn unsigned_zero_comparison_verdict(a: AstArena, op: i64, lhs_eid: i64, rhs_eid: i64) -> i64 {
+    if op == BINOP_GE() && expr_folds_to_zero(a, rhs_eid) { return 1; }
+    if op == BINOP_LE() && expr_folds_to_zero(a, lhs_eid) { return 1; }
+    if op == BINOP_LT() && expr_folds_to_zero(a, rhs_eid) { return 0; }
+    if op == BINOP_GT() && expr_folds_to_zero(a, lhs_eid) { return 0; }
+    -1
+}
+
 fn integer_literal_out_of_range(a: AstArena, lit_eid: i64, target_tag: i64) -> bool {
     let mut magnitude_eid: i64 = lit_eid;
     let mut negative: bool = false;
@@ -2217,6 +2249,23 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             if ty_is_numeric_or_lit_int(e.ts, lhs_tid) && ty_is_numeric_or_lit_int(e.ts, rhs_tid) && !bin_operands_compatible(e.ts, lhs_tid, rhs_tid) {
                 env_emit_error(e, String::from("comparison operands have different types"), expr_span(a, eid));
+            } else {
+                let unsigned_tag: i64 = unsigned_comparison_tag(e.ts, lhs_tid, rhs_tid);
+                if unsigned_tag >= 0 {
+                    let verdict: i64 = unsigned_zero_comparison_verdict(a, op, lhs_eid, rhs_eid);
+                    if verdict >= 0 {
+                        let message: String = String::from("comparison with 0 is always ");
+                        if verdict == 1 {
+                            message.push_str(String::from("true"));
+                        } else {
+                            message.push_str(String::from("false"));
+                        }
+                        message.push_str(String::from(" for unsigned type `"));
+                        message.push_str(ty_tag_name(unsigned_tag));
+                        message.push_str(String::from("`"));
+                        env_emit_error_code(e, EC_TAUTOLOGICAL_COMPARISON(), message, expr_span(a, eid));
+                    }
+                }
             }
             return CTY_BOOL();
         }

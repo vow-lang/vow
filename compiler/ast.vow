@@ -195,6 +195,24 @@ fn expr_const_int_value(a: AstArena, eid: i64) -> i64 {
     0
 }
 
+// True when `eid` is the constant 0, seeing through `as` casts and a redundant
+// unary negation (`0 as u64`, `0u32 as u64`, `-0`). Kept separate from
+// expr_is_const_int / expr_const_int_value: those drive narrow-literal lowering
+// in lower.vow, where peeling a cast would change codegen.
+fn expr_folds_to_zero(a: AstArena, eid: i64) -> bool {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() {
+        return expr_int_lo(a, eid) == 0u64 && expr_int_hi(a, eid) == 0u64;
+    }
+    if tag == EXPR_CAST() {
+        return expr_folds_to_zero(a, expr_a(a, eid));
+    }
+    if tag == EXPR_UNOP() && expr_a(a, eid) == UNOP_NEG() {
+        return expr_folds_to_zero(a, expr_b(a, eid));
+    }
+    false
+}
+
 fn arena_add_type(a: AstArena, tag: i64, av: i64, bv: i64, span: i64) -> i64 {
     let tid: i64 = a.type_data.len() / 4;
     a.type_data.push(tag);

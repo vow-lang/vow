@@ -1,0 +1,8 @@
+// TEST: stderr "comparison with 0 is always true for unsigned type `u8`"
+module TautologicalU8GeZero
+
+fn f(x: u8) -> bool {
+  x >= 0
+}
+
+fn main() -> i32 { 0 }

@@ -52,6 +52,7 @@ pub enum ErrorCode {
     LiteralOutOfRange,
     NarrowingCastNotAllowed,
     ShiftCountOutOfRange,
+    TautologicalComparison,
     // Mutability errors (enforced by the type checker; `mut` is required only
     // for whole-binding reassignment `x = e`).
     ImmutableAssignment,

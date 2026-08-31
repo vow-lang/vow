@@ -1,0 +1,11 @@
+// TEST: stderr "comparison with 0 is always true for unsigned type `u64`"
+module TautologicalEnsuresU64
+
+fn dec(n: u64) -> u64 vow {
+  requires: n > 0,
+  ensures: result >= 0
+} {
+  n - 1
+}
+
+fn main() -> i32 { 0 }

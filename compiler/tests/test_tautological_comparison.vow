@@ -1,0 +1,71 @@
+module TestTautologicalComparison
+
+use ast
+use checker
+
+// Builds `<cast_target-typed> 0` shapes without going through the parser, so
+// the cast-peeling fold behind TautologicalComparison is tested directly.
+fn zero_expr(a: AstArena) -> i64 {
+    arena_add_int_expr(a, 0u64, 0u64, 0)
+}
+
+fn nonzero_expr(a: AstArena) -> i64 {
+    arena_add_int_expr(a, 7u64, 0u64, 0)
+}
+
+fn cast_expr(a: AstArena, inner: i64) -> i64 {
+    arena_add_expr(a, EXPR_CAST(), inner, 0, 0, 0)
+}
+
+fn neg_expr(a: AstArena, inner: i64) -> i64 {
+    arena_add_expr(a, EXPR_UNOP(), UNOP_NEG(), inner, 0, 0)
+}
+
+fn ident_expr(a: AstArena) -> i64 {
+    arena_add_expr(a, EXPR_IDENT(), 0, 0, 0, 0)
+}
+
+fn check_folds_to_zero() -> i32 {
+    let a: AstArena = arena_new();
+    if !expr_folds_to_zero(a, zero_expr(a)) { return 1; }
+    if !expr_folds_to_zero(a, cast_expr(a, zero_expr(a))) { return 2; }
+    if !expr_folds_to_zero(a, cast_expr(a, cast_expr(a, zero_expr(a)))) { return 3; }
+    if !expr_folds_to_zero(a, neg_expr(a, zero_expr(a))) { return 4; }
+    if expr_folds_to_zero(a, nonzero_expr(a)) { return 5; }
+    if expr_folds_to_zero(a, cast_expr(a, nonzero_expr(a))) { return 6; }
+    if expr_folds_to_zero(a, ident_expr(a)) { return 7; }
+    0
+}
+
+fn check_verdicts() -> i32 {
+    let a: AstArena = arena_new();
+    let z: i64 = zero_expr(a);
+    let zc: i64 = cast_expr(a, zero_expr(a));
+    let x: i64 = ident_expr(a);
+
+    // Always true: `x >= 0` and `0 <= x`.
+    if unsigned_zero_comparison_verdict(a, BINOP_GE(), x, z) != 1 { return 10; }
+    if unsigned_zero_comparison_verdict(a, BINOP_GE(), x, zc) != 1 { return 11; }
+    if unsigned_zero_comparison_verdict(a, BINOP_LE(), z, x) != 1 { return 12; }
+    if unsigned_zero_comparison_verdict(a, BINOP_LE(), zc, x) != 1 { return 13; }
+
+    // Always false: `x < 0` and `0 > x`.
+    if unsigned_zero_comparison_verdict(a, BINOP_LT(), x, z) != 0 { return 14; }
+    if unsigned_zero_comparison_verdict(a, BINOP_GT(), z, x) != 0 { return 15; }
+
+    // Meaningful, must keep compiling: `x > 0`, `x <= 0`, `0 <= 0`-free forms,
+    // `x == 0`, and any comparison against a non-zero constant.
+    if unsigned_zero_comparison_verdict(a, BINOP_GT(), x, z) != -1 { return 16; }
+    if unsigned_zero_comparison_verdict(a, BINOP_LE(), x, z) != -1 { return 17; }
+    if unsigned_zero_comparison_verdict(a, BINOP_GE(), z, x) != -1 { return 18; }
+    if unsigned_zero_comparison_verdict(a, BINOP_LT(), z, x) != -1 { return 19; }
+    if unsigned_zero_comparison_verdict(a, BINOP_EQ(), x, z) != -1 { return 20; }
+    if unsigned_zero_comparison_verdict(a, BINOP_GE(), x, nonzero_expr(a)) != -1 { return 21; }
+    0
+}
+
+fn main() -> i32 {
+    let fold_result: i32 = check_folds_to_zero();
+    if fold_result != 0 { return fold_result; }
+    check_verdicts()
+}
