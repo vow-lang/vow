@@ -454,6 +454,15 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
     vars
 }
 
+fn collect_wide_vars(func: &Function) -> HashSet<u32> {
+    func.blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| matches!(inst.ty, Ty::I128 | Ty::U128))
+        .map(|inst| inst.id.0)
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Modelable function detection (for cross-function spec verification)
 // ---------------------------------------------------------------------------
@@ -634,6 +643,7 @@ pub fn is_modelable(
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
     let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
     let option_vars = collect_option_vars(func);
+    let wide_vars = collect_wide_vars(func);
 
     for block in &func.blocks {
         for inst in &block.insts {
@@ -725,10 +735,14 @@ pub fn is_modelable(
 
                 // Collection/Option field reads have dedicated models; all other
                 // FieldGets are user-struct slot reads under the heap model.
-                Opcode::FieldGet => true,
+                Opcode::FieldGet => !wide_vars.contains(&inst.id.0),
 
                 // User-struct heap model: allocation and field writes are slot ops.
-                Opcode::RegionAlloc | Opcode::FieldSet => true,
+                Opcode::RegionAlloc => true,
+                Opcode::FieldSet => inst
+                    .args
+                    .get(1)
+                    .is_none_or(|value| !wide_vars.contains(&value.0)),
 
                 // #585: a checked operator aborts on overflow, and the model
                 // only reproduces that abort for the widths
@@ -805,6 +819,7 @@ fn first_unsupported_opcode(
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
     let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
     let option_vars = collect_option_vars(func);
+    let wide_vars = collect_wide_vars(func);
     for block in &func.blocks {
         for inst in &block.insts {
             match inst.opcode {
@@ -824,6 +839,17 @@ fn first_unsupported_opcode(
                     if checked_integer_type(inst).is_none() =>
                 {
                     return Some(format!("{:?} at 128-bit width", inst.opcode));
+                }
+                Opcode::FieldGet if wide_vars.contains(&inst.id.0) => {
+                    return Some("FieldGet at 128-bit width".to_string());
+                }
+                Opcode::FieldSet
+                    if inst
+                        .args
+                        .get(1)
+                        .is_some_and(|value| wide_vars.contains(&value.0)) =>
+                {
+                    return Some("FieldSet at 128-bit width".to_string());
                 }
                 Opcode::Call => match &inst.data {
                     InstData::CallExtern(name) => {
@@ -6068,6 +6094,69 @@ mod tests {
             warnings: vec![],
         };
         (func, module)
+    }
+
+    #[test]
+    fn wide_aggregate_field_access_is_not_modelable() {
+        for ty in [Ty::I128, Ty::U128] {
+            let (load, load_module) = one_block_func_module(
+                "wide_field_load",
+                ty,
+                vec![
+                    inst(
+                        0,
+                        Opcode::RegionAlloc,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::AllocSize { size: 16, align: 8 },
+                    ),
+                    inst(1, Opcode::FieldGet, ty, vec![0], InstData::FieldIndex(0)),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            );
+            let load_reason = non_modelable_reason(&load, &load_module, &HashMap::new());
+            assert!(
+                matches!(load_reason.as_deref(), Some(reason) if reason.contains("FieldGet at 128-bit width")),
+                "{ty:?} field load must name the unsupported model width: {load_reason:?}"
+            );
+
+            let store = make_func(
+                "wide_field_store",
+                vec![ty],
+                Ty::Unit,
+                vec![
+                    inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::RegionAlloc,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::AllocSize { size: 16, align: 8 },
+                    ),
+                    inst(
+                        2,
+                        Opcode::FieldSet,
+                        Ty::Unit,
+                        vec![1, 0],
+                        InstData::FieldIndex(0),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            );
+            let store_module = Module {
+                name: "test".to_string(),
+                functions: vec![store.clone()],
+                strings: vec![],
+                struct_layouts: vec![],
+                enum_layouts: vec![],
+                warnings: vec![],
+            };
+            let store_reason = non_modelable_reason(&store, &store_module, &HashMap::new());
+            assert!(
+                matches!(store_reason.as_deref(), Some(reason) if reason.contains("FieldSet at 128-bit width")),
+                "{ty:?} field store must name the unsupported model width: {store_reason:?}"
+            );
+        }
     }
 
     #[test]

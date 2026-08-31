@@ -312,6 +312,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
     let hashmap_vars: Vec<i64> = collect_hashmap_vars(f);
     let btreemap_vars: Vec<i64> = collect_btreemap_vars(f);
     let option_vars: Vec<i64> = collect_option_vars(f);
+    let wide_vars: Vec<i64> = collect_wide_vars(f);
 
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
@@ -379,9 +380,11 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                         false
                     }
                 } else if op == IOP_FIELD_GET() {
+                    !vec_contains_i64(wide_vars, inst.id)
+                } else if op == IOP_REGION_ALLOC() {
                     true
-                } else if op == IOP_REGION_ALLOC() || op == IOP_FIELD_SET() {
-                    true
+                } else if op == IOP_FIELD_SET() {
+                    !field_set_carries_wide(inst, wide_vars)
                 } else if op == IOP_REM_F32() || op == IOP_REM_F64()
                    || op == IOP_LOAD() || op == IOP_STORE()
                    || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() {
@@ -433,6 +436,7 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
     let hashmap_vars: Vec<i64> = collect_hashmap_vars(f);
     let btreemap_vars: Vec<i64> = collect_btreemap_vars(f);
     let option_vars: Vec<i64> = collect_option_vars(f);
+    let wide_vars: Vec<i64> = collect_wide_vars(f);
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
     while bi < blocks.len() {
@@ -450,6 +454,12 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
             // the real offender.
             if is_checked_arith_op(op) && checked_arith_ty(inst) == ITY_UNIT() {
                 return cemit_str2(opcode_name(op), String::from(" at 128-bit width"));
+            }
+            if op == IOP_FIELD_GET() && vec_contains_i64(wide_vars, inst.id) {
+                return String::from("FieldGet at 128-bit width");
+            }
+            if op == IOP_FIELD_SET() && field_set_carries_wide(inst, wide_vars) {
+                return String::from("FieldSet at 128-bit width");
             }
             if op == IOP_CALL() {
                 if inst.dk == IDATA_CALL_EXTERN() {
@@ -1000,6 +1010,31 @@ fn collect_option_vars(f: IrFunction) -> Vec<i64> {
         }
     }
     result
+}
+
+fn collect_wide_vars(f: IrFunction) -> Vec<i64> {
+    let result: Vec<i64> = Vec::new();
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.ty == ITY_I128() || inst.ty == ITY_U128() {
+                result.push(inst.id);
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    result
+}
+
+fn field_set_carries_wide(inst: IrInst, wide_vars: Vec<i64>) -> bool {
+    let iargs: Vec<i64> = inst.args;
+    iargs.len() > 1 && vec_contains_i64(wide_vars, iargs[1])
 }
 
 fn emit_unmodelled(out: String, inst: IrInst) {
