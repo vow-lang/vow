@@ -82,19 +82,22 @@ skip() {
     SKIP=$((SKIP + 1))
 }
 
-compare_json() {
-    local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5" vow_file="${6:-}"
+# Run one scripts/parity.py comparator. The optional fixture path lets the
+# comparator find a fixture's known-divergence suppression (a `// TEST:`
+# directive, or docs/equivalence/ledger.json), which it reports as `SKIP:`.
+run_parity() {
+    local mode="$1" label="$2" rust_json="$3" self_json="$4" rust_exit="$5" self_exit="$6" fixture_path="${7:-}"
 
     # Counterexample JSON can blow past ARG_MAX (~128 KiB on Linux), so
     # write to temp files and pass paths instead of passing the JSON
     # itself as command-line arguments.
-    local rust_f="$TMPDIR/cmp_rust_$$.json"
-    local self_f="$TMPDIR/cmp_self_$$.json"
+    local rust_f="$TMPDIR/cmp_${mode}_rust_$$.json"
+    local self_f="$TMPDIR/cmp_${mode}_self_$$.json"
     printf '%s' "$rust_json" > "$rust_f"
     printf '%s' "$self_json" > "$self_f"
 
     local result
-    if result=$(python3 scripts/parity.py json "$rust_f" "$self_f" "$rust_exit" "$self_exit" "$vow_file" 2>&1); then
+    if result=$(python3 scripts/parity.py "$mode" "$rust_f" "$self_f" "$rust_exit" "$self_exit" "$fixture_path" 2>&1); then
         if [[ "$result" == SKIP:* ]]; then
             skip "$label" "${result#SKIP: }"
         else
@@ -104,6 +107,10 @@ compare_json() {
         fail "$label" "$result"
     fi
     rm -f "$rust_f" "$self_f"
+}
+
+compare_json() {
+    run_parity json "$@"
 }
 
 # A fixture may carry `// TEST: known-divergence <issue> "<why>"` to document a
@@ -192,24 +199,7 @@ run_discard_with_optional_stdin() {
 }
 
 compare_error() {
-    local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5" fixture_path="${6:-}"
-
-    local rust_f="$TMPDIR/cmp_err_rust_$$.json"
-    local self_f="$TMPDIR/cmp_err_self_$$.json"
-    printf '%s' "$rust_json" > "$rust_f"
-    printf '%s' "$self_json" > "$self_f"
-
-    local result
-    if result=$(python3 scripts/parity.py error "$rust_f" "$self_f" "$rust_exit" "$self_exit" "$fixture_path" 2>&1); then
-        if [[ "$result" == SKIP:* ]]; then
-            skip "$label" "${result#SKIP: }"
-        else
-            pass "$label"
-        fi
-    else
-        fail "$label" "$result"
-    fi
-    rm -f "$rust_f" "$self_f"
+    run_parity error "$@"
 }
 
 bootstrap_stage_failure() {

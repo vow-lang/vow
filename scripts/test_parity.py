@@ -19,12 +19,36 @@ def document(status="Unverified", **fields):
     return {"status": status, "diagnostics": [], "counterexamples": [], **fields}
 
 
-def run_parity_cli(mode, rust, self_hosted, rust_exit, self_exit, fixture_path=None):
+def hard_failure(**values):
+    """A VerifyFailed document whose single counterexample carries `values`."""
+    return document(
+        "VerifyFailed",
+        counterexamples=[{"function": "bad", "blame": "caller", "values": values}],
+    )
+
+
+def run_parity_cli(
+    mode,
+    rust,
+    self_hosted,
+    rust_exit,
+    self_exit,
+    fixture_path=None,
+    fixture_text=None,
+):
+    """Invoke parity.py as full_test.sh does, over freshly written JSON files.
+
+    `fixture_text` writes a throwaway fixture carrying a `// TEST:` directive
+    and passes it as the fixture argument; `fixture_path` names an existing one.
+    """
     with tempfile.TemporaryDirectory() as directory:
         rust_path = Path(directory) / "rust.json"
         self_path = Path(directory) / "self.json"
-        rust_path.write_text(json.dumps(rust))
-        self_path.write_text(json.dumps(self_hosted))
+        rust_path.write_text(_as_json(rust))
+        self_path.write_text(_as_json(self_hosted))
+        if fixture_text is not None:
+            fixture_path = Path(directory) / "known.vow"
+            fixture_path.write_text(fixture_text)
         args = [
             sys.executable,
             str(SCRIPT),
@@ -44,6 +68,14 @@ def run_parity_cli(mode, rust, self_hosted, rust_exit, self_exit, fixture_path=N
         )
 
 
+def _as_json(document_or_text):
+    """Serialize a document, or pass a raw string through so a test can send
+    JSON the parser must reject."""
+    if isinstance(document_or_text, str):
+        return document_or_text
+    return json.dumps(document_or_text)
+
+
 class CompareJsonCharacterizationTest(unittest.TestCase):
     def test_process_exit_codes_must_match(self):
         errors = parity.compare_json(document(), document(), 0, 1)
@@ -57,7 +89,7 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
 
         self.assertEqual(["status: CompileFailed vs Unverified"], errors)
 
-    def test_non_verify_failure_diagnostic_counts_must_match(self):
+    def test_non_verify_failure_diagnostics_must_match(self):
         rust = document(diagnostics=[{"error_code": "A"}])
         self_hosted = document(diagnostics=[])
 
@@ -184,6 +216,24 @@ class CompareJsonDiagnosticParityTest(unittest.TestCase):
             errors,
         )
 
+    def test_diagnostic_blame_must_match(self):
+        rust = document(
+            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "caller"}]
+        )
+        self_hosted = document(
+            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "callee"}]
+        )
+
+        errors = parity.compare_json(rust, self_hosted, 1, 1)
+
+        self.assertEqual(
+            [
+                "diagnostics: [('VowRequiresViolated', 'caller')] vs "
+                "[('VowRequiresViolated', 'callee')]"
+            ],
+            errors,
+        )
+
     def test_verify_failed_diagnostics_remain_outside_the_comparison(self):
         rust = document(
             "VerifyFailed",
@@ -201,20 +251,7 @@ class CompareJsonDiagnosticParityTest(unittest.TestCase):
 
 class CompareJsonCounterexampleValuesTest(unittest.TestCase):
     def test_source_level_counterexample_values_must_match(self):
-        rust = document(
-            "VerifyFailed",
-            counterexamples=[
-                {"function": "bad", "blame": "caller", "values": {"x": "-1"}}
-            ],
-        )
-        self_hosted = document(
-            "VerifyFailed",
-            counterexamples=[
-                {"function": "bad", "blame": "caller", "values": {"n": "-1"}}
-            ],
-        )
-
-        errors = parity.compare_json(rust, self_hosted, 1, 1)
+        errors = parity.compare_json(hard_failure(x="-1"), hard_failure(n="-1"), 1, 1)
 
         self.assertEqual(
             ["counterexample[0].values: {'x': '-1'} vs {'n': '-1'}"], errors
@@ -225,26 +262,8 @@ class CompareJsonCounterexampleValuesTest(unittest.TestCase):
         # CEGIS payload the two compilers owe each other. Their values track
         # internal encoding choices, so comparing them would bind parity to
         # something neither compiler promises.
-        rust = document(
-            "VerifyFailed",
-            counterexamples=[
-                {
-                    "function": "bad",
-                    "blame": "caller",
-                    "values": {"x": "-1", "_esbmc_v12": "0"},
-                }
-            ],
-        )
-        self_hosted = document(
-            "VerifyFailed",
-            counterexamples=[
-                {
-                    "function": "bad",
-                    "blame": "caller",
-                    "values": {"x": "-1", "_esbmc_v99": "1"},
-                }
-            ],
-        )
+        rust = hard_failure(x="-1", _esbmc_v12="0")
+        self_hosted = hard_failure(x="-1", _esbmc_v99="1")
 
         self.assertEqual([], parity.compare_json(rust, self_hosted, 1, 1))
 
@@ -271,26 +290,8 @@ class CompareJsonCounterexampleValuesTest(unittest.TestCase):
         self.assertEqual(["counterexample[1].values: {'y': '2'} vs {'y': '3'}"], errors)
 
     def test_value_key_order_does_not_affect_parity(self):
-        rust = document(
-            "VerifyFailed",
-            counterexamples=[
-                {
-                    "function": "bad",
-                    "blame": "caller",
-                    "values": {"x": "-1", "limit": "0"},
-                }
-            ],
-        )
-        self_hosted = document(
-            "VerifyFailed",
-            counterexamples=[
-                {
-                    "function": "bad",
-                    "blame": "caller",
-                    "values": {"limit": "0", "x": "-1"},
-                }
-            ],
-        )
+        rust = hard_failure(x="-1", limit="0")
+        self_hosted = hard_failure(limit="0", x="-1")
 
         self.assertEqual([], parity.compare_json(rust, self_hosted, 1, 1))
 
@@ -311,24 +312,6 @@ class CompareJsonCounterexampleValuesTest(unittest.TestCase):
         errors = parity.compare_json(rust, self_hosted, 0, 0)
 
         self.assertEqual(["counterexample[1].values: {'y': '2'} vs {'y': '3'}"], errors)
-
-    def test_diagnostic_blame_must_match(self):
-        rust = document(
-            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "caller"}]
-        )
-        self_hosted = document(
-            diagnostics=[{"error_code": "VowRequiresViolated", "blame": "callee"}]
-        )
-
-        errors = parity.compare_json(rust, self_hosted, 1, 1)
-
-        self.assertEqual(
-            [
-                "diagnostics: [('VowRequiresViolated', 'caller')] vs "
-                "[('VowRequiresViolated', 'callee')]"
-            ],
-            errors,
-        )
 
 
 class CompareErrorCharacterizationTest(unittest.TestCase):
@@ -430,60 +413,39 @@ class CompareErrorCodeParityTest(unittest.TestCase):
             (completed.returncode, completed.stdout.strip()),
         )
 
-    def test_fixed_ledger_entry_does_not_suppress_a_regression(self):
-        rust = document("CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}])
-        self_hosted = document(
-            "CompileFailed", diagnostics=[{"error_code": "UnexpectedToken"}]
-        )
-
-        completed = run_parity_cli(
-            "error",
-            rust,
-            self_hosted,
-            1,
-            1,
-            REPO_ROOT / "tests/error/undefined_function.vow",
-        )
-
-        self.assertEqual(
-            (1, "FAIL: error codes: ['TypeMismatch'] vs ['UnexpectedToken']"),
-            (completed.returncode, completed.stdout.strip()),
-        )
-
-    def test_ledger_entry_for_another_observable_does_not_suppress(self):
-        rust = document("CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}])
-        self_hosted = document(
-            "CompileFailed", diagnostics=[{"error_code": "UnexpectedToken"}]
-        )
-
-        completed = run_parity_cli(
-            "error",
-            rust,
-            self_hosted,
-            1,
-            1,
-            REPO_ROOT / "tests/run/euclid_gcd_swap_loop.vow",
-        )
-
-        self.assertEqual(
-            (1, "FAIL: error codes: ['TypeMismatch'] vs ['UnexpectedToken']"),
-            (completed.returncode, completed.stdout.strip()),
-        )
-
-    def test_fixture_outside_the_repo_is_compared_strictly(self):
+    def test_only_an_active_error_code_entry_suppresses(self):
+        # Every other shape of fixture — an entry marked fixed, one tracking a
+        # different observable, or a file the ledger cannot key at all — must
+        # leave the same divergence reported.
         rust = document("CompileFailed", diagnostics=[{"error_code": "TypeMismatch"}])
         self_hosted = document(
             "CompileFailed", diagnostics=[{"error_code": "UnexpectedToken"}]
         )
         with tempfile.TemporaryDirectory() as directory:
-            fixture_path = Path(directory) / "synthetic.vow"
-            fixture_path.write_text("module Synthetic\n")
-            completed = run_parity_cli("error", rust, self_hosted, 1, 1, fixture_path)
+            outside_repo = Path(directory) / "synthetic.vow"
+            outside_repo.write_text("module Synthetic\n")
+            unsuppressed = {
+                "fixed ledger entry": REPO_ROOT / "tests/error/undefined_function.vow",
+                "entry for another observable": (
+                    REPO_ROOT / "tests/run/euclid_gcd_swap_loop.vow"
+                ),
+                "fixture outside the repo": outside_repo,
+                "no fixture at all": None,
+            }
+            for reason, fixture_path in unsuppressed.items():
+                with self.subTest(reason=reason):
+                    completed = run_parity_cli(
+                        "error", rust, self_hosted, 1, 1, fixture_path
+                    )
 
-        self.assertEqual(
-            (1, "FAIL: error codes: ['TypeMismatch'] vs ['UnexpectedToken']"),
-            (completed.returncode, completed.stdout.strip()),
-        )
+                    self.assertEqual(
+                        (
+                            1,
+                            "FAIL: error codes: ['TypeMismatch'] vs "
+                            "['UnexpectedToken']",
+                        ),
+                        (completed.returncode, completed.stdout.strip()),
+                    )
 
     def test_duplicate_error_code_counts_must_match(self):
         rust = document(
@@ -513,70 +475,25 @@ class CompareErrorCodeParityTest(unittest.TestCase):
         )
 
 
+KNOWN_CEX_FIXTURE = '// TEST: known-cex-divergence 1139 "variable names differ"\n'
+
+
 class ParityCliCharacterizationTest(unittest.TestCase):
     def test_malformed_json_fails_closed(self):
-        with tempfile.TemporaryDirectory() as directory:
-            rust_path = Path(directory) / "rust.json"
-            self_path = Path(directory) / "self.json"
-            rust_path.write_text("{")
-            self_path.write_text(json.dumps(document()))
-
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "json",
-                    str(rust_path),
-                    str(self_path),
-                    "0",
-                    "0",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+        completed = run_parity_cli("json", "{", document(), 0, 0)
 
         self.assertEqual(1, completed.returncode)
         self.assertIn("FAIL: JSON parse error:", completed.stdout)
 
     def test_known_counterexample_value_divergence_is_a_loud_skip(self):
-        rust = document(
-            "VerifyFailed",
-            counterexamples=[
-                {"function": "bad", "blame": "caller", "values": {"x": "-1"}}
-            ],
+        completed = run_parity_cli(
+            "json",
+            hard_failure(x="-1"),
+            hard_failure(n="-1"),
+            1,
+            1,
+            fixture_text=KNOWN_CEX_FIXTURE,
         )
-        self_hosted = document(
-            "VerifyFailed",
-            counterexamples=[
-                {"function": "bad", "blame": "caller", "values": {"n": "-1"}}
-            ],
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            rust_path = Path(directory) / "rust.json"
-            self_path = Path(directory) / "self.json"
-            fixture_path = Path(directory) / "known.vow"
-            rust_path.write_text(json.dumps(rust))
-            self_path.write_text(json.dumps(self_hosted))
-            fixture_path.write_text(
-                '// TEST: known-cex-divergence 1139 "variable names differ"\n'
-            )
-
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "json",
-                    str(rust_path),
-                    str(self_path),
-                    "1",
-                    "1",
-                    str(fixture_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
 
         self.assertEqual(
             (0, "SKIP: known counterexample divergence (#1139: variable names differ)"),
@@ -584,37 +501,16 @@ class ParityCliCharacterizationTest(unittest.TestCase):
         )
 
     def test_stale_counterexample_divergence_directive_fails(self):
-        verified_failure = document(
-            "VerifyFailed",
-            counterexamples=[
-                {"function": "bad", "blame": "caller", "values": {"x": "-1"}}
-            ],
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            rust_path = Path(directory) / "rust.json"
-            self_path = Path(directory) / "self.json"
-            fixture_path = Path(directory) / "known.vow"
-            rust_path.write_text(json.dumps(verified_failure))
-            self_path.write_text(json.dumps(verified_failure))
-            fixture_path.write_text(
-                '// TEST: known-cex-divergence 1139 "variable names differ"\n'
-            )
+        verified_failure = hard_failure(x="-1")
 
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "json",
-                    str(rust_path),
-                    str(self_path),
-                    "1",
-                    "1",
-                    str(fixture_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+        completed = run_parity_cli(
+            "json",
+            verified_failure,
+            verified_failure,
+            1,
+            1,
+            fixture_text=KNOWN_CEX_FIXTURE,
+        )
 
         self.assertEqual(
             (
@@ -630,31 +526,15 @@ class ParityCliCharacterizationTest(unittest.TestCase):
         # counterexamples (a --no-verify build). Those runs never compared
         # values, so they cannot testify that the directive is stale.
         no_counterexamples = document("Unverified")
-        with tempfile.TemporaryDirectory() as directory:
-            rust_path = Path(directory) / "rust.json"
-            self_path = Path(directory) / "self.json"
-            fixture_path = Path(directory) / "known.vow"
-            rust_path.write_text(json.dumps(no_counterexamples))
-            self_path.write_text(json.dumps(no_counterexamples))
-            fixture_path.write_text(
-                '// TEST: known-cex-divergence 1139 "variable names differ"\n'
-            )
 
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "json",
-                    str(rust_path),
-                    str(self_path),
-                    "0",
-                    "0",
-                    str(fixture_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+        completed = run_parity_cli(
+            "json",
+            no_counterexamples,
+            no_counterexamples,
+            0,
+            0,
+            fixture_text=KNOWN_CEX_FIXTURE,
+        )
 
         self.assertEqual((0, "OK"), (completed.returncode, completed.stdout.strip()))
 

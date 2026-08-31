@@ -2,20 +2,32 @@
 """Compare structured output from the Rust and self-hosted compilers."""
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
-
-from equivalence import REPO_ROOT, load_ledger, tracked_observables
 
 
 KNOWN_CEX_DIVERGENCE = re.compile(
     r'^// TEST: known-cex-divergence ([0-9]+) "(.*)"$', re.MULTILINE
 )
 
+# Labels that a suppression policy keys off. Both the comparator that emits the
+# message and the predicate that matches it read them from here, so a reworded
+# message can never silently disable a suppression.
+VALUES_LABEL = "values"
+ERROR_CODES_LABEL = "error codes"
+
+
+def _mismatch(label, rust_value, self_value):
+    """The one parity error for a single observable, or none if it agrees."""
+    if rust_value == self_value:
+        return []
+    return [f"{label}: {rust_value} vs {self_value}"]
+
 
 def _diagnostic_multiset(diagnostics):
+    # `blame` is absent on non-vow diagnostics, so the tuples mix None with str
+    # and need an order that tolerates both.
     return sorted(
         (
             (diagnostic.get("error_code"), diagnostic.get("blame"))
@@ -26,9 +38,9 @@ def _diagnostic_multiset(diagnostics):
 
 
 def _error_codes(diagnostics):
-    return sorted(
-        (diagnostic.get("error_code") for diagnostic in diagnostics), key=repr
-    )
+    # Normalised exactly as equivalence.error_codes does it: both harnesses key
+    # off the ledger's `error_code` observable and must agree on what diverged.
+    return sorted(diagnostic.get("error_code", "") for diagnostic in diagnostics)
 
 
 def _counterexample_values(counterexample):
@@ -65,55 +77,42 @@ def _compare_counterexamples(rust_counterexamples, self_counterexamples, fields)
                 rust_value in (0, -1, None) and self_value in (0, -1, None)
             ):
                 continue
-            if rust_value != self_value:
-                errors.append(
-                    f"counterexample[{index}].{field}: {rust_value} vs {self_value}"
-                )
-        rust_values = _counterexample_values(rust_cex)
-        self_values = _counterexample_values(self_cex)
-        if rust_values != self_values:
-            errors.append(
-                f"counterexample[{index}].values: {rust_values} vs {self_values}"
+            errors += _mismatch(
+                f"counterexample[{index}].{field}", rust_value, self_value
             )
+        errors += _mismatch(
+            f"counterexample[{index}].{VALUES_LABEL}",
+            _counterexample_values(rust_cex),
+            _counterexample_values(self_cex),
+        )
     return errors
 
 
 def compare_json(rust, self_hosted, rust_exit, self_exit):
     """Return parity errors for a general compiler invocation."""
-    errors = []
-
-    if rust_exit != self_exit:
-        errors.append(f"exit code: {rust_exit} vs {self_exit}")
+    errors = _mismatch("exit code", rust_exit, self_exit)
 
     rust_status = rust.get("status", "")
     self_status = self_hosted.get("status", "")
-    if rust_status != self_status:
-        errors.append(f"status: {rust_status} vs {self_status}")
+    errors += _mismatch("status", rust_status, self_status)
 
     if rust_status != "VerifyFailed":
-        rust_diagnostics = _diagnostic_multiset(rust.get("diagnostics", []))
-        self_diagnostics = _diagnostic_multiset(self_hosted.get("diagnostics", []))
-        if rust_diagnostics != self_diagnostics:
-            errors.append(f"diagnostics: {rust_diagnostics} vs {self_diagnostics}")
+        errors += _mismatch(
+            "diagnostics",
+            _diagnostic_multiset(rust.get("diagnostics", [])),
+            _diagnostic_multiset(self_hosted.get("diagnostics", [])),
+        )
 
     rust_counterexamples = rust.get("counterexamples", [])
     self_counterexamples = self_hosted.get("counterexamples", [])
+    both_verify_failed = rust_status == self_status == "VerifyFailed"
     # A VerifyFailed with a non-empty verify_status is a 'soft' ESBMC outcome
     # (timeout / unknown / error / tool_not_found) — ESBMC produced no
     # counterexample by design, so the parity check must not require one.
     rust_verify_status = rust.get("verify_status") or ""
     self_verify_status = self_hosted.get("verify_status") or ""
-    soft_fail = (
-        rust_status == "VerifyFailed"
-        and self_status == "VerifyFailed"
-        and rust_verify_status
-        and self_verify_status
-    )
-    if soft_fail:
-        if rust_verify_status != self_verify_status:
-            errors.append(
-                f"verify_status: {rust_verify_status} vs {self_verify_status}"
-            )
+    if both_verify_failed and rust_verify_status and self_verify_status:
+        errors += _mismatch("verify_status", rust_verify_status, self_verify_status)
         if len(rust_counterexamples) != 0:
             errors.append(
                 "rust soft VerifyFailed has "
@@ -127,11 +126,10 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
         # For deterministic inputs the same function should trigger the soft
         # fail on both compilers. ESBMC's verify_message remains intentionally
         # unexamined because its text is nondeterministic.
-        rust_function = rust.get("function") or ""
-        self_function = self_hosted.get("function") or ""
-        if rust_function != self_function:
-            errors.append(f"function: {rust_function} vs {self_function}")
-    elif rust_status == "VerifyFailed" and self_status == "VerifyFailed":
+        errors += _mismatch(
+            "function", rust.get("function") or "", self_hosted.get("function") or ""
+        )
+    elif both_verify_failed:
         if len(rust_counterexamples) == 0:
             errors.append("rust has no counterexamples for VerifyFailed")
         if len(self_counterexamples) == 0:
@@ -139,18 +137,17 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
         errors += _compare_counterexamples(
             rust_counterexamples, self_counterexamples, ("function", "blame")
         )
+    elif len(rust_counterexamples) != len(self_counterexamples):
+        errors.append(
+            "counterexamples count: "
+            f"{len(rust_counterexamples)} vs {len(self_counterexamples)}"
+        )
     else:
-        if len(rust_counterexamples) != len(self_counterexamples):
-            errors.append(
-                "counterexamples count: "
-                f"{len(rust_counterexamples)} vs {len(self_counterexamples)}"
-            )
-        else:
-            errors += _compare_counterexamples(
-                rust_counterexamples,
-                self_counterexamples,
-                ("function", "vow_id", "blame"),
-            )
+        errors += _compare_counterexamples(
+            rust_counterexamples,
+            self_counterexamples,
+            ("function", "vow_id", "blame"),
+        )
 
     return errors
 
@@ -169,10 +166,11 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
             )
         if len(document.get("diagnostics", [])) < 1:
             errors.append(f"{name} has no diagnostics")
-    rust_codes = _error_codes(rust.get("diagnostics", []))
-    self_codes = _error_codes(self_hosted.get("diagnostics", []))
-    if rust_codes != self_codes:
-        errors.append(f"error codes: {rust_codes} vs {self_codes}")
+    errors += _mismatch(
+        ERROR_CODES_LABEL,
+        _error_codes(rust.get("diagnostics", [])),
+        _error_codes(self_hosted.get("diagnostics", [])),
+    )
     return errors
 
 
@@ -184,24 +182,83 @@ def _load_documents(rust_path, self_path):
     return rust, self_hosted
 
 
-def _known_cex_divergence(fixture_path):
+def _suppress(errors, covered, exercised, reason, stale_reason):
+    """Verdict for a divergence some registry already tracks, or None.
+
+    A tracked divergence is a loud SKIP while it still reproduces and a hard
+    FAIL once it stops, so a suppression cannot outlive the gap it documents.
+    Only a run that `exercised` the observable may call the suppression stale:
+    the same fixture is reachable through invocations that never compare it (a
+    --no-verify build emits no counterexamples), and failing there would fail a
+    run that measured nothing.
+    """
+    if errors and all(covered(error) for error in errors):
+        return 0, f"SKIP: {reason}"
+    if not errors and exercised:
+        return 1, f"FAIL: {stale_reason}"
+    return None
+
+
+def _known_cex_verdict(rust, self_hosted, errors, fixture_path):
+    """Verdict for a `// TEST: known-cex-divergence` directive on the fixture."""
     if not fixture_path:
         return None
     match = KNOWN_CEX_DIVERGENCE.search(Path(fixture_path).read_text(errors="replace"))
-    return f"#{match.group(1)}: {match.group(2)}" if match else None
-
-
-def _is_values_error(error):
-    return error.startswith("counterexample[") and "].values:" in error
+    if not match:
+        return None
+    known = f"#{match.group(1)}: {match.group(2)}"
+    return _suppress(
+        errors,
+        lambda error: (
+            error.startswith("counterexample[") and f"].{VALUES_LABEL}:" in error
+        ),
+        exercised=bool(
+            rust.get("counterexamples") and self_hosted.get("counterexamples")
+        ),
+        reason=f"known counterexample divergence ({known})",
+        stale_reason=(
+            f"known-cex-divergence ({known}) no longer reproduces — "
+            "remove the directive"
+        ),
+    )
 
 
 def _ledger_entry(fixture_path):
+    """The equivalence-ledger entry for a fixture, with its tracked observables."""
     if not fixture_path:
+        return None, frozenset()
+    # Deferred import: `equivalence` drags in argparse/subprocess/hashlib, ~12ms
+    # of interpreter startup that the far more numerous json-mode invocations
+    # would otherwise pay for a ledger they never read.
+    from equivalence import REPO_ROOT, load_ledger, tracked_observables
+
+    path = Path(fixture_path).resolve()
+    if not path.is_relative_to(REPO_ROOT):
+        return None, frozenset()
+    entry = load_ledger().get(str(path.relative_to(REPO_ROOT)))
+    return entry, tracked_observables(entry)
+
+
+def _ledger_verdict(errors, fixture_path):
+    """Verdict for an active `error_code` entry in the equivalence ledger."""
+    entry, observables = _ledger_entry(fixture_path)
+    if not entry or entry.get("status") not in ("open", "expected"):
         return None
-    relative_path = os.path.relpath(os.path.abspath(fixture_path), REPO_ROOT)
-    if relative_path == ".." or relative_path.startswith(".." + os.sep):
+    if "error_code" not in observables:
         return None
-    return load_ledger().get(relative_path)
+    issue = entry.get("issue", "unfiled")
+    return _suppress(
+        errors,
+        lambda error: error.startswith(f"{ERROR_CODES_LABEL}: "),
+        # compare_error already fails when either side emitted no diagnostics,
+        # so an empty error list means the code multisets were really compared.
+        exercised=True,
+        reason=f"known error-code divergence (#{issue})",
+        stale_reason=(
+            f"error_code divergence tracked by #{issue} no longer diverges — "
+            "update docs/equivalence/ledger.json"
+        ),
+    )
 
 
 def main(argv=None):
@@ -216,57 +273,28 @@ def main(argv=None):
         return 2
 
     mode, rust_path, self_path, rust_exit, self_exit = args[:5]
+    fixture_path = args[5] if len(args) == 6 else None
     try:
         rust, self_hosted = _load_documents(rust_path, self_path)
     except (json.JSONDecodeError, OSError) as error:
         print(f"FAIL: JSON parse error: {error}")
         return 1
 
-    comparator = compare_json if mode == "json" else compare_error
-    errors = comparator(rust, self_hosted, int(rust_exit), int(self_exit))
-    fixture_path = args[5] if len(args) == 6 else None
     if mode == "json":
+        errors = compare_json(rust, self_hosted, int(rust_exit), int(self_exit))
         try:
-            known_cex = _known_cex_divergence(fixture_path)
+            verdict = _known_cex_verdict(rust, self_hosted, errors, fixture_path)
         except OSError as error:
             print(f"FAIL: fixture read error: {error}")
             return 1
-        if known_cex and errors and all(_is_values_error(error) for error in errors):
-            print(f"SKIP: known counterexample divergence ({known_cex})")
-            return 0
-        # Only a run that actually produced counterexamples on both sides can
-        # say the directive is stale. The same fixture is also reachable
-        # through invocations that emit none (a --no-verify build); calling the
-        # directive stale there would fail a run that never compared values.
-        compared_values = rust.get("counterexamples") and self_hosted.get(
-            "counterexamples"
-        )
-        if known_cex and not errors and compared_values:
-            print(
-                f"FAIL: known-cex-divergence ({known_cex}) no longer "
-                "reproduces — remove the directive"
-            )
-            return 1
     else:
-        entry = _ledger_entry(fixture_path)
-        tracks_active_error_code = (
-            entry
-            and entry.get("status") in ("open", "expected")
-            and "error_code" in tracked_observables(entry)
-        )
-        code_errors = [error for error in errors if error.startswith("error codes:")]
-        if tracks_active_error_code and code_errors and len(code_errors) == len(errors):
-            print(
-                f"SKIP: known error-code divergence (#{entry.get('issue', 'unfiled')})"
-            )
-            return 0
-        if tracks_active_error_code and not errors:
-            print(
-                "FAIL: error_code divergence tracked by "
-                f"#{entry.get('issue', 'unfiled')} no longer diverges — "
-                "update docs/equivalence/ledger.json"
-            )
-            return 1
+        errors = compare_error(rust, self_hosted, int(rust_exit), int(self_exit))
+        verdict = _ledger_verdict(errors, fixture_path)
+
+    if verdict is not None:
+        code, message = verdict
+        print(message)
+        return code
     if errors:
         print("FAIL: " + "; ".join(errors))
         return 1
