@@ -55,11 +55,18 @@ this ADR separates them rather than silently overriding the record.
    readers should treat Decision 1 of ADR 0001 as two decisions that were
    written as one.
 
-4. **`LiteralOutOfRange` is the migration's completeness oracle.** `i64 + u64`
-   and `u64 < i64` are already `TypeMismatch`, and a `-1` comparison against a
-   migrated value is already a hard `LiteralOutOfRange` error. The type checker
-   therefore finds the migration's remaining sites itself; the work does not
-   depend on an exhaustive manual audit.
+4. **`LiteralOutOfRange` is a partial completeness oracle.** `i64 + u64` and
+   `u64 < i64` are already `TypeMismatch`, and a `-1` comparison against a
+   migrated value is already a hard `LiteralOutOfRange` error, so every site
+   *type-connected* to a migrated signature is found by the type checker rather
+   than by inspection. The oracle stops there, and the boundary matters: an
+   index expression accepts any width and either signedness, so an index-shaped
+   parameter that never touches a migrated signature stays silently signed and
+   emits no diagnostic. `examples/vec_bounds.vow`'s `get_element(i: i64)` —
+   guarded only by literal comparisons and used as `v[i]` — is the shape that
+   survives the whole migration untouched. Indices, capacities, and other
+   semantically length-shaped parameters therefore still need an explicit
+   inventory. The checker narrows that audit; it does not replace it.
 
 5. **Sentinel returns are not swept into this decision.** `String.byte_at`
    returns a byte *value*, not a position, and stays `i64` under any lengths
