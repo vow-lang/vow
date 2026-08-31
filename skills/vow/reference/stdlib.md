@@ -248,7 +248,7 @@ proof of the whole API, since `point_distance_sq` carries no contract (see Known
 | `circle_area` | `(r: i64) -> i64` | `requires 0 <= r <= 1753413056`; `ensures result >= 0` |
 | `rect_area` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, h == 0 \|\| w <= I64_MAX / h`; `ensures result >= 0` |
 | `circle_perimeter` | `(r: i64) -> i64` | `requires 0 <= r <= 1537228672809129301`; `ensures result >= 0` |
-| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, w <= 4611686018427387903 - h`; `ensures result >= 0` |
+| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0`; `ensures result >= 0` (uses `+!`/`*!`, so overflow aborts rather than needing an operand bound) |
 
 Each magic bound is the exact threshold below which the arithmetic cannot overflow —
 e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:
