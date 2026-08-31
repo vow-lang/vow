@@ -638,10 +638,51 @@ fn parse_digits_at(line: String, pos: i64) -> i64 {
     str_to_i64(str_substring(line, pos, end))
 }
 
+// The `vow:N` claim id on a `--multi-property` verdict line, quoted (`'vow:0'`,
+// ESBMC <=8.3) or bare (`vow:0`, ESBMC >=8.4); -1 when the line carries none.
+//
+// Scans forward past any `vow:` not followed by a digit rather than giving up
+// on the first one, mirroring find_vow_claim_id in vow-verify/src/esbmc.rs.
+// No documented ESBMC shape needs the second iteration today -- an identifier
+// cannot contain the colon, so the first match is the id -- but the two
+// compilers have to drift together or not at all, and a first-match-only
+// version would fail silently (every clause `unknown`) on exactly the kind of
+// format change this function was just repaired for.
+fn find_vow_claim_id(line: String) -> i64 {
+    let n: i64 = line.len();
+    let mut base: i64 = 0;
+    while base < n {
+        let rest: String = str_substring(line, base, n);
+        let pos: i64 = str_find_str(rest, String::from("vow:"));
+        if pos < 0 {
+            return -1;
+        }
+        let id: i64 = parse_digits_at(rest, pos + 4);
+        if id >= 0 {
+            return id;
+        }
+        base = base + pos + 4;
+    }
+    -1
+}
+
 // Parse ESBMC `--multi-property` output into per-claim verdicts. Each line that
-// reports a `'vow:N'` claim as PASSED/FAILED contributes to the parallel arrays;
+// reports a `vow:N` claim as PASSED/FAILED contributes to the parallel arrays;
 // duplicate ids are AND-combined so any FAILED line falsifies the claim. Mirrors
 // parse_multi_property_verdicts in vow-verify/src/esbmc.rs (#81 PR-A).
+//
+// Two line shapes are accepted, because ESBMC changed the format in 8.4:
+//
+//   <=8.3   * PASSED: 'vow:0' at file /tmp/m.c line 4 column 5 function main
+//   >=8.4     PASSED       [main.assertion.1]  line 4  vow:0
+//
+// The old shape quotes the id and puts a colon after the verdict word; the new
+// one does neither and moves the id to end of line. Searching for bare `vow:`
+// covers both (the quote merely precedes it), and matching the verdict word
+// without its colon covers both too. A line carrying no `vow:N` contributes
+// nothing, so the looser verdict match cannot pick up `VERIFICATION FAILED`.
+// `vow_user_fn_0` in a new-format bracket is not a candidate: an identifier
+// cannot contain the colon.
 fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>) {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
@@ -651,39 +692,36 @@ fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>
         let line: String = str_trim(lines[i]);
         let mut has_verdict: bool = false;
         let mut is_proven: bool = false;
-        if str_find_str(line, String::from("PASSED:")) >= 0 {
+        if str_find_str(line, String::from("PASSED")) >= 0 {
             has_verdict = true;
             is_proven = true;
-        } else if str_find_str(line, String::from("FAILED:")) >= 0 {
+        } else if str_find_str(line, String::from("FAILED")) >= 0 {
             has_verdict = true;
             is_proven = false;
         }
         if has_verdict {
-            let pos: i64 = str_find_str(line, String::from("'vow:"));
-            if pos >= 0 {
-                let id: i64 = parse_digits_at(line, pos + 5);
-                if id >= 0 {
-                    let mut found: i64 = -1;
-                    let mut k: i64 = 0;
-                    while k < ids.len() {
-                        if ids[k] == id {
-                            found = k;
-                            k = ids.len();
-                        } else {
-                            k = k + 1;
-                        }
-                    }
-                    if found >= 0 {
-                        if !is_proven {
-                            proven[found] = 0;
-                        }
+            let id: i64 = find_vow_claim_id(line);
+            if id >= 0 {
+                let mut found: i64 = -1;
+                let mut k: i64 = 0;
+                while k < ids.len() {
+                    if ids[k] == id {
+                        found = k;
+                        k = ids.len();
                     } else {
-                        ids.push(id);
-                        if is_proven {
-                            proven.push(1);
-                        } else {
-                            proven.push(0);
-                        }
+                        k = k + 1;
+                    }
+                }
+                if found >= 0 {
+                    if !is_proven {
+                        proven[found] = 0;
+                    }
+                } else {
+                    ids.push(id);
+                    if is_proven {
+                        proven.push(1);
+                    } else {
+                        proven.push(0);
                     }
                 }
             }

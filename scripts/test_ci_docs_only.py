@@ -104,8 +104,12 @@ def git(repo, *args):
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
-class ChangedPathsTest(unittest.TestCase):
-    """Exercises the git plumbing: the three-dot range and rename handling."""
+class GitRepoFixture(unittest.TestCase):
+    """A throwaway repo with one prose file and one code file at `main`.
+
+    Holds no tests of its own; `ChangedPathsTest` and `MainTest` each add
+    their own on top of the same fixture.
+    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -135,6 +139,10 @@ class ChangedPathsTest(unittest.TestCase):
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-qm", message)
         return self.head()
+
+
+class ChangedPathsTest(GitRepoFixture):
+    """Exercises the git plumbing: the three-dot range and rename handling."""
 
     def test_prose_only_range_is_docs_only(self):
         base = self.head()
@@ -239,16 +247,132 @@ class RepositoryTreeTest(unittest.TestCase):
                 self.assertTrue(ci_docs_only.is_prose(path))
 
 
-class MainTest(unittest.TestCase):
-    def test_unresolvable_range_reports_code_true_and_exits_zero(self):
+class IsArenaInputTest(unittest.TestCase):
+    def test_runtime_sources_and_harness_are_arena_inputs(self):
+        for path in (
+            "vow-runtime/verify/arena.c",
+            "vow-runtime/verify/Makefile",
+            "vow-runtime/src/lib.rs",
+            "vow-runtime/Cargo.toml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(ci_docs_only.is_arena_input(path))
+
+    def test_runner_and_its_test_are_arena_inputs(self):
+        # Both fix the proof's memory cap and ESBMC flags.
+        for path in ("scripts/verify_arena.sh", "scripts/test_verify_arena.py"):
+            with self.subTest(path=path):
+                self.assertTrue(ci_docs_only.is_arena_input(path))
+
+    def test_the_gate_itself_is_an_arena_input(self):
+        # A change that narrows the gate has to run the job it narrows.
+        for path in ("scripts/ci_docs_only.py", "scripts/test_ci_docs_only.py"):
+            with self.subTest(path=path):
+                self.assertTrue(ci_docs_only.is_arena_input(path))
+
+    def test_esbmc_pin_and_workflow_are_arena_inputs(self):
+        # An ESBMC version bump moves the proof's memory ceiling, so it has to
+        # re-run the proof that guards the headroom (#546, #747).
+        for path in (
+            ".github/actions/install-esbmc/action.yml",
+            ".github/workflows/arena-verify.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(ci_docs_only.is_arena_input(path))
+
+    def test_compiler_and_prose_are_not_arena_inputs(self):
+        # arena.c is standalone C: no compiler change can alter what it proves.
+        for path in (
+            "vow/src/main.rs",
+            "compiler/lexer.vow",
+            "docs/spec/grammar.md",
+            "README.md",
+            ".github/workflows/ci.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(ci_docs_only.is_arena_input(path))
+
+    def test_sibling_directory_prefix_is_not_a_match(self):
+        self.assertFalse(ci_docs_only.is_arena_input("vow-runtime-extra/src/lib.rs"))
+
+    def test_file_entries_match_exactly_not_by_prefix(self):
+        # Directory entries match by prefix, file entries do not: a sibling
+        # that merely starts with an input's name is not itself an input.
+        for path in (
+            "scripts/verify_arena.sh.bak",
+            "scripts/verify_arena.shim.py",
+            "scripts/ci_docs_only.py.orig",
+            ".github/workflows/arena-verify.yml.disabled",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(ci_docs_only.is_arena_input(path))
+
+
+class TouchesArenaTest(unittest.TestCase):
+    def test_any_arena_input_in_the_changeset_wins(self):
+        self.assertTrue(
+            ci_docs_only.touches_arena(["README.md", "vow-runtime/src/lib.rs"])
+        )
+
+    def test_changeset_that_misses_every_input(self):
+        self.assertFalse(ci_docs_only.touches_arena(["vow/src/main.rs", "README.md"]))
+
+    def test_empty_changeset_does_not_reach_the_proof(self):
+        self.assertFalse(ci_docs_only.touches_arena([]))
+        self.assertFalse(ci_docs_only.touches_arena(["", ""]))
+
+
+class MainTest(GitRepoFixture):
+    """End-to-end: a real commit range in, GitHub Actions job outputs out."""
+
+    def classify(self, *args):
         proc = subprocess.run(
-            ["python3", str(Path(__file__).with_name("ci_docs_only.py"))],
+            ["python3", str(Path(__file__).with_name("ci_docs_only.py")), *args],
             capture_output=True,
             text=True,
         )
-
         self.assertEqual(0, proc.returncode)
-        self.assertEqual("code=true", proc.stdout.strip())
+        return dict(line.split("=", 1) for line in proc.stdout.split())
+
+    def test_unresolvable_range_reports_both_gates_true_and_exits_zero(self):
+        # Both gates fail open: refusing to classify must not skip a job. This
+        # is also the shape of a `schedule` event, which carries no range and
+        # so opts the nightly arena run in without a condition of its own.
+        self.assertEqual({"code": "true", "arena": "true"}, self.classify())
+
+    def test_arena_input_in_the_range_opens_the_arena_gate(self):
+        base = self.head()
+        (self.repo / "vow-runtime").mkdir()
+        (self.repo / "vow-runtime" / "src").mkdir()
+        (self.repo / "vow-runtime" / "src" / "lib.rs").write_text("// arena\n")
+        head = self.commit("fix(vow-runtime): touch the arena implementation")
+
+        self.assertEqual(
+            {"code": "true", "arena": "true"},
+            self.classify("--base", base, "--head", head),
+        )
+
+    def test_compiler_change_runs_the_build_but_not_the_arena_proof(self):
+        # The common case the gate exists for: real code, unreachable by a
+        # standalone C harness.
+        base = self.head()
+        (self.repo / "lib.rs").write_text("fn main() { /* changed */ }\n")
+        head = self.commit("feat: change the compiler")
+
+        self.assertEqual(
+            {"code": "true", "arena": "false"},
+            self.classify("--base", base, "--head", head),
+        )
+
+    def test_prose_change_closes_both_gates(self):
+        base = self.head()
+        (self.repo / "README.md").write_text("changed\n")
+        head = self.commit("docs: tweak")
+
+        self.assertEqual(
+            {"code": "false", "arena": "false"},
+            self.classify("--base", base, "--head", head),
+        )
 
 
 if __name__ == "__main__":

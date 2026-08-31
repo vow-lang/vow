@@ -19,10 +19,6 @@ on:
     - cron: "41 4 * * *"
   workflow_dispatch:
 
-env:
-  ESBMC_VERSION: "8.1"
-  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
-
 # Read-only: checkout + build + sweep, plus upload-artifact (which uses the
 # Actions runtime token, not GITHUB_TOKEN).
 permissions:
@@ -45,9 +41,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
-        with:
-          version: ${{ env.ESBMC_VERSION }}
-          sha256: ${{ env.ESBMC_SHA256 }}
       - run: cargo build --all --release
       - name: Bootstrap self-hosted compiler
         # The sweep must compare the VERIFIED FIXED POINT, not a stage-1

@@ -21,12 +21,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  ESBMC_VERSION: "8.1"
-  # SHA-256 of release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip from
-  # https://github.com/esbmc/esbmc/releases/tag/v8.1.
-  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
-
 jobs:
   plan:
     name: Decide release version
@@ -91,30 +85,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Set workspace version
         run: bash .github/semantic-release/set-version.sh "${{ needs.plan.outputs.version }}"
-      - name: Cache ESBMC
-        id: cache-esbmc
-        if: matrix.verify
-        uses: actions/cache@v6
-        with:
-          path: ~/esbmc
-          key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
+      # Linux x86_64 only -- `matrix.verify` is false everywhere the action
+      # cannot serve a binary (macOS, aarch64), and those legs bootstrap
+      # with --no-verify.
       - name: Install ESBMC
-        if: matrix.verify && steps.cache-esbmc.outputs.cache-hit != 'true'
-        env:
-          ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
-        run: |
-          ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
-
-          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-            -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
-
-          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
-
-          unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
-          rm "/tmp/$ESBMC_ZIP"
-      - name: Add ESBMC to PATH
         if: matrix.verify
-        run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/install-esbmc
       - name: Build Rust artifacts
         run: cargo build --all --release
       - name: Bootstrap compiler

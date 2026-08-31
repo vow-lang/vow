@@ -13,21 +13,48 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER = REPO_ROOT / "scripts" / "verify_arena.sh"
+ARENA_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "arena-verify.yml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 
-class VerifyArenaTest(unittest.TestCase):
-    def test_pull_request_ci_runs_the_arena_proof(self) -> None:
-        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+class WorkflowTest(unittest.TestCase):
+    """The arena proof is path-gated, so these guard the gate itself.
 
+    The proof no longer runs on every pull request: it runs when the changeset
+    touches an arena input, and nightly regardless. Both halves have to hold.
+    Gating alone would let the proof rot on a pull request that misses the path
+    list; the nightly run alone would let a regression land and be attributed
+    to a day of commits instead of the one that caused it.
+    """
+
+    def setUp(self) -> None:
+        self.workflow = ARENA_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_workflow_runs_the_arena_proof(self) -> None:
         self.assertRegex(
-            workflow,
+            self.workflow,
             re.compile(
                 r"^[ \t]*(?:-[ \t]+)?run:[ \t]*scripts/verify_arena\.sh[ \t]*$",
                 re.MULTILINE,
             ),
         )
 
+    def test_workflow_runs_nightly(self) -> None:
+        self.assertRegex(
+            self.workflow,
+            re.compile(r"^\s*-\s*cron:\s*[\"']\S+ \S+ \* \* \*[\"']", re.MULTILINE),
+        )
+
+    def test_workflow_is_gated_on_the_classifier(self) -> None:
+        self.assertIn("needs.changes.outputs.arena == 'true'", self.workflow)
+
+    def test_ci_workflow_no_longer_duplicates_the_proof(self) -> None:
+        ci = CI_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertNotIn("verify_arena.sh", ci)
+
+
+class VerifyArenaTest(unittest.TestCase):
     def test_runner_caps_memory_and_invokes_the_arena_proof(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

@@ -7,8 +7,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  ESBMC_VERSION: "8.1"
-  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
 
 # The job is read-only: checkout + build/test, plus upload-artifact (which uses
 # the Actions runtime token, not GITHUB_TOKEN). Default GITHUB_TOKEN to the
@@ -31,27 +29,8 @@ jobs:
       - uses: taiki-e/install-action@v2.86.6
         with:
           tool: cargo-mutants
-      - name: Cache ESBMC
-        id: cache-esbmc
-        uses: actions/cache@v6
-        with:
-          path: ~/esbmc
-          key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
       - name: Install ESBMC
-        if: steps.cache-esbmc.outputs.cache-hit != 'true'
-        env:
-          ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
-        run: |
-          ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
-
-          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-            -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
-
-          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
-
-          unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
-          rm "/tmp/$ESBMC_ZIP"
-      - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/install-esbmc
       - name: Baseline build and tests
         run: |
           cargo build --all
