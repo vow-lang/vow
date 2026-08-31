@@ -167,6 +167,8 @@ fn report_narrowed_wide_argument() {
     );
 }
 
+const CLIF_ERR_UNSUPPORTED: i64 = -3;
+
 fn extend_field_store_value(
     builder: &mut FunctionBuilder<'_>,
     value: Value,
@@ -2565,7 +2567,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 Some(coerced) => coerced,
                                 None => {
                                     report_narrowed_wide_argument();
-                                    return -1;
+                                    return CLIF_ERR_UNSUPPORTED;
                                 }
                             }
                         } else {
@@ -2673,7 +2675,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 .collect();
                             let Some(call_args) = call_args else {
                                 report_narrowed_wide_argument();
-                                return -1;
+                                return CLIF_ERR_UNSUPPORTED;
                             };
                             builder.ins().call(fr, &call_args);
                         }
@@ -4578,6 +4580,7 @@ mod tests {
     /// which coerce arguments through separate code.
     #[test]
     fn wide_arguments_to_narrow_externs_are_rejected() {
+        assert_ne!(CLIF_ERR_UNSUPPORTED, -1);
         for (name, op, sym_name, ret_ty, mode) in [
             ("call", IOP_CALL, "__vow_print_i64", ITY_UNIT, 0),
             ("debug_call", IOP_DEBUG_CALL, "__vow_debug_i64", ITY_UNIT, 1),
@@ -4608,7 +4611,7 @@ mod tests {
             unsafe {
                 assert_eq!(
                     __vow_clif_fn_end(ctx),
-                    -1,
+                    CLIF_ERR_UNSUPPORTED,
                     "{name}: 128-bit argument must be refused, not truncated"
                 );
                 __vow_clif_destroy(ctx);
