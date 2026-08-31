@@ -29,11 +29,9 @@ fn clamp_nonneg(x: i64, hi: i64) -> i64 vow {
 fn add_nonneg(a: i64, b: i64) -> i64 vow {
   requires: a >= 0,
   requires: b >= 0,
-  requires: a <= 4611686018427387903,
-  requires: b <= 4611686018427387903,
   ensures: result == a + b
 } {
-  a + b
+  a +! b
 }
 
 fn main() -> i32 [io] {

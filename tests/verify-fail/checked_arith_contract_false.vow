@@ -1,0 +1,23 @@
+// TEST: category overflow
+// TEST: counterexample-fn "bump"
+// TEST: counterexample-blame callee
+// TEST: counterexample-violation "ensures result > 100"
+// Guards the #585 assume against going vacuous. The abort-on-overflow assume
+// prunes the overflowing execution, so a contract that is false *only* under
+// wrapping now verifies — but this contract is false under abort semantics too
+// (x == 1 returns 2, which is not > 100), and must still be reported. If the
+// assume ever pruned more than the aborting execution, this would flip to
+// Verified and the whole model would be laundering false proofs.
+module CheckedArithContractFalse
+
+fn bump(x: i64) -> i64 vow {
+  requires: x > 0,
+  ensures: result > 100
+} {
+  x +! 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(bump(1));
+  0
+}

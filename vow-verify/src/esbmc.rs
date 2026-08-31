@@ -846,7 +846,9 @@ fn run_esbmc_capture(
                 let _ = child.wait();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
-                return Err(Box::new(VerificationResult::ToolError(format!("wait error: {e}"))));
+                return Err(Box::new(VerificationResult::ToolError(format!(
+                    "wait error: {e}"
+                ))));
             }
         }
     };
