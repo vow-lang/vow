@@ -125,4 +125,101 @@ is a few lines of arithmetic). The runner-up is the natural next firing.
 
 ## Design
 
-Filled in step 4 (design-it-twice + adjudication), after this report was first committed.
+Design-it-twice was run **inline** (exploration sub-agents were rate-limited). Each proposal was
+written here before the next was started, and a separate adjudication (against fixed criteria, not
+against memory) picks the winner below.
+
+### Design A — twin pure free functions (mirror the existing seam)
+
+```rust
+fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty>;
+fn builtin_method_names(receiver: &Ty) -> &'static [&'static str];
+```
+
+- **Interface**: two free functions taking `(&Ty, &str)` / `(&Ty)`, exactly the shape of the
+  existing `method_argument_expectations`. `method_result_type` returns the result type of a known
+  `(receiver, method)` pair (reading type args out of `receiver`), `None` when unknown;
+  `builtin_method_names` returns the known-method list for the receiver kind, for the error hint.
+- **Usage**: the `MethodCall` arm becomes a thin driver — it calls `method_result_type` for the
+  value and `builtin_method_names` for the hint, and keeps every diagnostic and the
+  `pattern_aggregates` insertion exactly where they are.
+- **Hides**: the per-receiver method tables and result-type derivation.
+- **Dependency strategy**: none — pure functions of `&Ty`/`&str`, no `self`, no `&mut`.
+- **Trade-offs**: each function re-classifies the receiver kind independently (a few `matches!`),
+  the same minor duplication `method_argument_expectations` already accepts. The error's
+  `type_name` display mapping stays inline. Smallest possible diff; perfect symmetry with the
+  established sibling.
+
+### Design B — a receiver-classifier struct plus a result-type function
+
+```rust
+struct BuiltinMethodSet { display_name: &'static str, known: &'static [&'static str] }
+fn classify_builtin_receiver(receiver: &Ty) -> Option<BuiltinMethodSet>;
+fn method_result_type(receiver: &Ty, method: &str) -> Option<Ty>;
+```
+
+- **Interface**: one classifier returns the receiver's display name and known-method list together;
+  result-type stays a separate pure function.
+- **Usage**: the arm classifies once, uses `display_name` for the unknown-method error (replacing
+  the sprawling `if is_str {...} else if is_hashmap {...}` at ~L2089-2105) and `known` for the hint.
+- **Hides**: receiver-kind classification + the known list + the `type_name` mapping — i.e. it
+  folds a *second* inline blob (the display-name if/else) into the seam.
+- **Dependency strategy**: none; still pure.
+- **Trade-offs**: better locality than A (kills the display-name blob too), at the cost of a new
+  struct and a slightly larger diff. Its shape no longer matches `method_argument_expectations`.
+
+### Design C — an enum receiver model with methods
+
+```rust
+enum BuiltinReceiver { Str, Vec(Ty), HashMap(Ty), BTreeMap(Ty, Ty), Option(Ty), Result(Ty) }
+impl BuiltinReceiver {
+    fn classify(receiver: &Ty) -> Option<Self>;
+    fn known_methods(&self) -> &'static [&'static str];
+    fn result_type(&self, method: &str) -> Option<Ty>;
+    fn display_name(&self) -> &'static str;
+}
+```
+
+- **Interface**: a full domain model of the builtin receiver, carrying its extracted type args,
+  with methods for known/result/name.
+- **Usage**: `let recv = BuiltinReceiver::classify(&recv_ty)?; recv.result_type(method); ...`.
+- **Hides**: the entire policy behind one type; the richest test surface (build
+  `BuiltinReceiver::Vec(Ty::I64)` directly).
+- **Dependency strategy**: ports-and-adapters flavour — the enum *is* the port.
+- **Trade-offs**: deepest and most flexible, but introduces a new modelling axis where the
+  established idiom is free functions, breaks symmetry with `method_argument_expectations` (which
+  stays a free function — a *new* asymmetry), and is the largest diff, forcing the arm to be
+  restructured around the enum with more room for behaviour drift.
+
+### Adjudication — winner: **Design A**
+
+Judged in the fixed order depth → locality → seam placement → test surface → blast radius, by a
+perspective that authored none of the three:
+
+1. **Depth**: C > B > A. C hides the most behind one type; A hides adequately.
+2. **Locality**: C ≈ B > A. B and C also absorb the `display_name` blob; A leaves it inline.
+3. **Seam placement** — *decisive*. The codebase already resolves builtin-method **argument** policy
+   through a free function `method_argument_expectations(&Ty, &str)`. The seam where this behaviour
+   actually varies is "per (receiver, method)", and the highest-locality placement is *beside its
+   existing sibling, in the same shape*, so args / result / known-names read as three peers. A does
+   exactly this. C breaks it by introducing an enum-with-methods — a second, competing idiom for the
+   same policy family, which the repo's own crisp rule ("reject anything that introduces a new
+   type-system axis") counsels against. B half-breaks it with a struct.
+4. **Test surface**: all three are directly unit-testable with no `TypeChecker`; C is marginally
+   nicer but A is already a decisive improvement over the status quo (a full checker + parsed
+   expression).
+5. **Blast radius**: A < B < C. A is a two-function extraction with a minimal arm rewrite, staying
+   at the estimate-of-1 the candidate was scored on; C would restructure the arm and add a type.
+
+A wins because the two criteria that separate the field — **seam placement** and **blast radius** —
+both favour it decisively, and the depth edge C holds is not worth introducing a competing idiom for
+a policy family the repo already expresses as free functions. **Runner-up design: C** (the enum
+model); it loses on seam placement (new asymmetry with the arg seam) and blast radius, not on
+capability. B is a coherent middle but is dominated: it takes on a struct without matching the
+established seam shape.
+
+**Implementation note**: `method_result_type` and `builtin_method_names` each classify the receiver
+independently, matching how `method_argument_expectations` already re-matches it; the arm's
+`type_name` display mapping is left inline to keep the diff focused on the result-type policy that
+was scored. Absorbing `display_name` (Design B's extra) is deliberately deferred — it is a separate,
+smaller candidate, not scope for this PR.
