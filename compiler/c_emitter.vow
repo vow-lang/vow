@@ -3076,23 +3076,28 @@ fn append_arith_helpers_for_function(out: String, f: IrFunction) {
     if emitted { out.push_byte(10); }
 }
 
+// `target_fi` is the target's function *id*, not its index in `fns` — the two
+// differ, and `emit_c_module_with_callees` is called with `f.id`. Matched by id
+// exactly like `scan_shift_op_in_module_fns`; indexing `fns[target_fi]` instead
+// reads the wrong function, or trips IndexOutOfBounds once an id exceeds the
+// function count.
 fn scan_arith_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis: Vec<i64>, target_op: i64, target_ty: i64) -> i64 {
-    let target: IrFunction = fns[target_fi];
-    if func_has_checked_arith_op(target, target_op, target_ty) == 1 {
-        return 1;
-    }
-    let mut ci: i64 = 0;
-    while ci < callee_fis.len() {
-        let cfid: i64 = callee_fis[ci];
-        let mut fi: i64 = 0;
-        while fi < fns.len() {
-            let callee: IrFunction = fns[fi];
-            if callee.id == cfid && func_has_checked_arith_op(callee, target_op, target_ty) == 1 {
-                return 1;
+    let mut fi: i64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        let mut check: i64 = 0;
+        if f.id == target_fi { check = 1; }
+        if check == 0 {
+            let mut ci: i64 = 0;
+            while ci < callee_fis.len() {
+                if callee_fis[ci] == f.id { check = 1; ci = callee_fis.len(); }
+                ci = ci + 1;
             }
-            fi = fi + 1;
         }
-        ci = ci + 1;
+        if check == 1 {
+            if func_has_checked_arith_op(f, target_op, target_ty) == 1 { return 1; }
+        }
+        fi = fi + 1;
     }
     0
 }
