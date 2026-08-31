@@ -14,9 +14,10 @@ permissions:
 
 jobs:
   # Gate for every job below. A commit that touches nothing but prose cannot
-  # regress a compiled artifact, and the jobs below are a Linux build plus a
-  # three-stage bootstrap on two platforms. `ci_docs_only.py` decides what
-  # counts as prose. Note that Markdown under `docs/spec/**` and
+  # regress a compiled artifact, and the jobs below are a Linux and a macOS
+  # build. `ci_docs_only.py` decides what counts as prose -- the same
+  # classifier gates bootstrap.yml and arena-verify.yml. Note that Markdown
+  # under `docs/spec/**` and
   # `skills/**` counts as *code*: `generate_help.py` copies the spec into the
   # compiler sources, the JSON schemas beside it are `include_str!`-ed into the
   # binaries, and a `cargo test` in `vow/src/skill.rs` asserts the `skills/`
@@ -71,6 +72,8 @@ jobs:
         run: python3 scripts/test_equivalence.py
       - name: CI path-classifier unit tests
         run: python3 scripts/test_ci_docs_only.py
+      - name: CI workflow-shape unit tests
+        run: python3 scripts/test_bootstrap_workflow.py
       - name: Benchmark skeleton fidelity unit tests
         run: |
           python3 scripts/test_benchmark_contracts.py
@@ -122,54 +125,11 @@ jobs:
           # an upload they can never authenticate.
           fail_ci_if_error: ${{ secrets.CODECOV_TOKEN != '' }}
 
-  bootstrap:
-    # Deliberately parallel with build-and-test, not downstream of it. The two
-    # share no artifact -- bootstrap.sh runs its own `cargo build --release` --
-    # so the old `needs: build-and-test` edge bought fail-fast economy at the
-    # cost of putting the whole ~570s bootstrap on the critical path after a
-    # ~1200s job. Running them together halves wall-clock; the price is runner
-    # minutes on pull requests that build-and-test would have failed early,
-    # which is the right trade on a public repo.
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression
-    # (failing Stage 1/2 verification, or a broken SHA-256 fixed point)
-    # blocks PRs. Stage 3 skips ESBMC to roughly halve wall time;
-    # verification does not affect codegen, so the fixed-point check
-    # remains meaningful.
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install ESBMC
-        uses: ./.github/actions/install-esbmc
-      - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
-        run: scripts/bootstrap.sh --stage3-no-verify
-      - name: Verifier-evaluation suite (self-hosted)
-        # Holds the fixed-point self-hosted compiler to the same exact
-        # ground-truth blame/vow_id corpus as the Rust verifier.
-        run: |
-          ulimit -v 2000000
-          python3 scripts/verify_eval.py --verifier build/vowc --output-dir /tmp/verify-eval-self
-
-  # ─── macOS jobs ───────────────────────────────────────────────────
+  # ─── macOS ────────────────────────────────────────────────────────
   #
-  # Verification is skipped on macOS, so these jobs bootstrap with
-  # --no-verify. The fixed-point check is still meaningful: verification
-  # does not affect codegen, so identical Stage 2/Stage 3 SHA-256s prove
-  # the self-hosted compiler reaches a fixed point on this platform.
-  #
-  # This used to be a hard constraint -- ESBMC shipped Ubuntu and Windows
-  # zips only. It no longer is: 8.4 onwards publishes `esbmc-macos.zip`.
-  # Turning macOS verification on means teaching install-esbmc to pick an
-  # archive per runner OS and pinning a second checksum, which is its own
-  # change; until then this is a choice, not a limitation.
-  #
-  # `bootstrap-macos` is required (the fixed-point check is reliable here).
-  # `build-and-test-macos` remains advisory via continue-on-error while we
-  # shake out platform-specific test issues (tracked in #501).
+  # Advisory via continue-on-error while platform-specific test issues are
+  # shaken out (#501). The macOS bootstrap lives in bootstrap.yml with its
+  # Linux counterpart.
 
   build-and-test-macos:
     needs: changes
@@ -190,19 +150,3 @@ jobs:
       - run: cargo test --all
       - run: cargo clippy --all -- -D warnings
       - run: cargo fmt --all -- --check
-
-  bootstrap-macos:
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    # Mirrors `bootstrap` but with --no-verify (no ESBMC on macOS).
-    # The SHA-256 fixed-point check is preserved: verification does not
-    # change codegen, so a successful match here still proves the
-    # self-hosted compiler is a fixed point on macOS.
-    runs-on: macos-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Bootstrap (no verification — ESBMC unavailable on macOS)
-        run: scripts/bootstrap.sh --no-verify
