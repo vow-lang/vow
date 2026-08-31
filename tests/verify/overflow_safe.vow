@@ -3,10 +3,9 @@ module OverflowSafe
 
 fn twice(x: i64) -> i64 vow {
   requires: x > 0,
-  requires: x <= 4611686018427387903,
   ensures: result > x
 } {
-  x + x
+  x +! x
 }
 
 fn main() -> i32 [io] {

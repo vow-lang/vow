@@ -15,19 +15,21 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 
 use vow_verify::{
-    ConstantValue, Encoding, Solver, SolverConfig, VerificationResult, VerifyLimits, VerifyRequest,
-    detect_constant_functions, emit_verify_c_source, find_esbmc, non_modelable_reason,
-    run_with_fallback, verify,
+    ArithOverflowSite, ConstantValue, Encoding, Solver, SolverConfig, VerificationResult,
+    VerifyLimits, VerifyRequest, contracts_only_source, detect_constant_functions,
+    emit_verify_c_source, find_esbmc, non_modelable_reason, run_with_fallback, verify,
 };
 
 use crate::cache::VerifyCache;
-use crate::verify_outcome::{SkippedFunction, VerifyOutcome};
+use crate::verify_outcome::{ArithOverflowWarning, SkippedFunction, VerifyOutcome, VerifyWarning};
 use crate::{counterexample, perfetto};
 
-/// Per-function verdict: continue, skip-with-warning, or halt.
+/// Per-function verdict: continue, continue-with-warning, or halt.
 enum PerFuncResult {
     Ok,
-    Skipped(SkippedFunction),
+    /// The function verified (or was skipped) but produced a non-fatal finding.
+    /// Aggregated by the pool and surfaced as Warnings in the build JSON.
+    Warn(VerifyWarning),
     Halt(VerifyOutcome),
 }
 
@@ -64,12 +66,12 @@ fn classify_verification_result(
         VerificationResult::ToolNotFound => {
             complete(PerFuncResult::Halt(VerifyOutcome::ToolNotFound))
         }
-        VerificationResult::Skipped { reason } => {
-            complete(PerFuncResult::Skipped(SkippedFunction {
+        VerificationResult::Skipped { reason } => complete(PerFuncResult::Warn(
+            VerifyWarning::Skipped(SkippedFunction {
                 function: function.to_string(),
                 reason,
-            }))
-        }
+            }),
+        )),
     }
 }
 
@@ -90,10 +92,10 @@ fn verify_one_function(
 ) -> PerFuncResult {
     // Non-modelable vowed functions must be skipped here; the C emitter would emit __ESBMC_assert(0) traps for them.
     if let Some(reason) = non_modelable_reason(func, ir_module, const_fns) {
-        return PerFuncResult::Skipped(SkippedFunction {
+        return PerFuncResult::Warn(VerifyWarning::Skipped(SkippedFunction {
             function: func.name.clone(),
             reason,
-        });
+        }));
     }
 
     // Resolve Auto solver via heuristic (Phase B).
@@ -142,6 +144,38 @@ fn verify_one_function(
         })
     };
 
+    // #585: an `arith:` counterexample reports a checked operator whose
+    // ArithmeticOverflow abort is reachable. That is the operator's specified
+    // behaviour, not a contract violation, so it must not halt the run — but it
+    // does hide the contract verdict, because ESBMC reports one violated
+    // property per run and this one fired first. Ask again with the arith
+    // obligations suppressed to get the verdict on returning executions.
+    let (result, arith_warning) = match result {
+        VerificationResult::Failed(ce) if ce.arith_overflow.is_some() => {
+            let site = ce.arith_overflow.expect("matched Some above");
+            let warning = arith_overflow_warning(ir_module, func, file, site);
+            let contract_result = verify_contracts_only(
+                func,
+                ir_module,
+                const_fns,
+                verify_cache,
+                limits,
+                &func_config,
+            );
+            (contract_result, Some(warning))
+        }
+        other => (Some(other), None),
+    };
+
+    let result = match fold_arith_rerun(result, arith_warning) {
+        Ok(pair) => pair,
+        Err(verdict) => return verdict,
+    };
+    let (result, arith_warning) = result;
+    if let Some(warning) = arith_warning {
+        return PerFuncResult::Warn(VerifyWarning::ArithOverflow(warning));
+    }
+
     match classify_verification_result(&func.name, result) {
         VerificationDisposition::Counterexample(ce) => {
             let sce = counterexample::build_structured_counterexample_with_module(
@@ -159,6 +193,107 @@ fn verify_one_function(
         }
         VerificationDisposition::Complete(result) => result,
     }
+}
+
+/// Decide what a contracts-only re-run means, given the pending abort warning.
+///
+/// `Err(verdict)` is a terminal per-function result; `Ok((result, warning))`
+/// carries the verdict to classify, with `warning` set only when it should be
+/// reported. Pure, so the policy is testable without a solver — the same reason
+/// [`run_pool`] takes its verdict as an injected closure.
+///
+/// Two rules live here. A missing ESBMC is a halt, not a silent pass. And the
+/// abort is reported **only** when the contract itself is proved: if the
+/// contract also fails, that failure is the actionable finding, and ESBMC never
+/// told us whether the arith obligation held on this second run, so claiming the
+/// abort alongside would be guesswork.
+#[allow(clippy::type_complexity)]
+fn fold_arith_rerun(
+    result: Option<VerificationResult>,
+    warning: Option<ArithOverflowWarning>,
+) -> Result<(VerificationResult, Option<ArithOverflowWarning>), PerFuncResult> {
+    let Some(result) = result else {
+        return Err(PerFuncResult::Halt(VerifyOutcome::ToolNotFound));
+    };
+    let proved = matches!(
+        result,
+        VerificationResult::Proven | VerificationResult::ProvenIr
+    );
+    Ok((result, warning.filter(|_| proved)))
+}
+
+/// Build the Warning for a checked-arithmetic site whose abort ESBMC proved
+/// reachable, attributing it to the function the operator actually lives in.
+///
+/// That is **not** always the verify target: a model co-emits its modelable
+/// callees, so verifying `caller` can surface a site inside `helper`. The label
+/// carries the owning function's id for exactly this reason. Naming the target
+/// instead would report checked arithmetic in a function that contains none, and
+/// — because spans are file-relative — resolve the offset against the wrong
+/// file entirely once the callee comes from another module.
+///
+/// Falls back to the verify target when the id resolves to nothing, which can
+/// only happen if a label outlives the module that produced it (a stale cache
+/// entry); the span is then the target's best available anchor.
+fn arith_overflow_warning(
+    module: &vow_ir::Module,
+    target: &vow_ir::Function,
+    file: &str,
+    site: ArithOverflowSite,
+) -> ArithOverflowWarning {
+    let owner = module
+        .functions
+        .iter()
+        .find(|f| f.id.0 == site.func_id)
+        .unwrap_or(target);
+    // A function's own `source_file` is authoritative under multi-module
+    // compilation; `file` is only the entry path the CLI was given.
+    let owner_file = if owner.source_file.is_empty() {
+        file
+    } else {
+        owner.source_file.as_str()
+    };
+    ArithOverflowWarning {
+        function: owner.name.clone(),
+        cause: site.abort.description(),
+        file: owner_file.to_string(),
+        offset: site.span_start,
+        length: site.span_len,
+    }
+}
+
+/// Re-verify `func` with the checked-arithmetic obligations suppressed, so the
+/// contract verdict is not masked by an `arith:` property that fired first.
+///
+/// Only the asserts are suppressed — the abort *assumes* remain, so this asks
+/// exactly the right question: do the contracts hold on every execution that
+/// returns? Returns `None` when ESBMC cannot be located.
+fn verify_contracts_only(
+    func: &vow_ir::Function,
+    ir_module: &vow_ir::Module,
+    const_fns: &std::collections::HashMap<vow_ir::FuncId, ConstantValue>,
+    verify_cache: Option<&VerifyCache>,
+    limits: &VerifyLimits,
+    func_config: &SolverConfig,
+) -> Option<VerificationResult> {
+    let c_src = contracts_only_source(&emit_verify_c_source(func, ir_module, const_fns, limits));
+
+    // The suppressed source hashes to its own cache key, so replaying it can
+    // never be confused with the full obligation set.
+    if let Some(vc) = verify_cache
+        && let Some(ce) = vc.lookup_failure(&c_src, limits.max_k_step, func_config)
+    {
+        return Some(VerificationResult::Failed(ce));
+    }
+    let esbmc = find_esbmc()?;
+    let (res, resolved_config) =
+        run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, func_config);
+    if let Some(vc) = verify_cache
+        && let VerificationResult::Failed(ce) = &res
+    {
+        vc.store_failure(&c_src, limits.max_k_step, &resolved_config, ce);
+    }
+    Some(res)
 }
 
 /// Record one per-function ESBMC proof as a span on its worker thread track,
@@ -213,7 +348,7 @@ pub(crate) fn run_verification_sync(
     jobs: usize,
     config: &SolverConfig,
     prof: Option<&perfetto::Profiler>,
-) -> (VerifyOutcome, Vec<SkippedFunction>) {
+) -> (VerifyOutcome, Vec<VerifyWarning>) {
     let const_fns = detect_constant_functions(ir_module);
 
     let vowed: Vec<&vow_ir::Function> = ir_module
@@ -252,22 +387,24 @@ pub(crate) fn run_verification_sync(
 ///
 /// Returns the lowest-indexed halt-class outcome (deterministic regardless of
 /// which worker finishes first), or `Proven`/`SkippedNonModelable` when nothing
-/// halts. Skipped functions never halt — they are aggregated and reported as
-/// warnings.
+/// halts. Warnings never halt — they are aggregated and reported alongside the
+/// verdict. Only a *skipped* warning lifts the outcome to
+/// `SkippedNonModelable`: a reachable checked-arithmetic abort leaves nothing
+/// unproved, so it must not turn a proof into a fail-closed status (#585).
 fn run_pool(
     jobs: usize,
     prof: Option<&perfetto::Profiler>,
     verify_start: u64,
     names: &[&str],
     verdict: impl Fn(usize) -> PerFuncResult + Sync,
-) -> (VerifyOutcome, Vec<SkippedFunction>) {
+) -> (VerifyOutcome, Vec<VerifyWarning>) {
     let count = names.len();
     let jobs = jobs.max(1).min(count.max(1));
     if jobs == 1 {
         // Serial path records proof spans on TID_VERIFY_DRIVER; the worker path
         // below uses TID_WORKER_BASE + w. This track divergence is deliberate —
         // do not unify the two paths.
-        let mut skipped = Vec::new();
+        let mut warnings = Vec::new();
         for (idx, &name) in names.iter().enumerate() {
             let proof_start = prof.map(|p| p.now_us()).unwrap_or(0);
             let result = verdict(idx);
@@ -281,14 +418,16 @@ fn run_pool(
             );
             match result {
                 PerFuncResult::Ok => {}
-                PerFuncResult::Skipped(s) => skipped.push(s),
-                PerFuncResult::Halt(out) => return (out, skipped),
+                PerFuncResult::Warn(w) => warnings.push(w),
+                PerFuncResult::Halt(out) => return (out, warnings),
             }
         }
-        if skipped.is_empty() {
-            return (VerifyOutcome::Proven, skipped);
-        }
-        return (VerifyOutcome::SkippedNonModelable, skipped);
+        let outcome = if warnings.iter().any(VerifyWarning::is_skip) {
+            VerifyOutcome::SkippedNonModelable
+        } else {
+            VerifyOutcome::Proven
+        };
+        return (outcome, warnings);
     }
 
     // Stop after first halt-class outcome (Failed/Error/Timeout/ToolNotFound);
@@ -298,7 +437,7 @@ fn run_pool(
     let stop = AtomicBool::new(false);
     let halts: StdMutex<Vec<Option<VerifyOutcome>>> =
         StdMutex::new((0..count).map(|_| None).collect());
-    let skipped_acc: StdMutex<Vec<Option<SkippedFunction>>> =
+    let warn_acc: StdMutex<Vec<Option<VerifyWarning>>> =
         StdMutex::new((0..count).map(|_| None).collect());
 
     thread::scope(|scope| {
@@ -306,7 +445,7 @@ fn run_pool(
             let next = &next;
             let stop = &stop;
             let halts = &halts;
-            let skipped_acc = &skipped_acc;
+            let warn_acc = &warn_acc;
             let verdict = &verdict;
             let worker_tid = perfetto::TID_WORKER_BASE + w as u64;
             scope.spawn(move || {
@@ -327,10 +466,10 @@ fn run_pool(
                     record_proof_span(prof, verify_start, idx, names[idx], worker_tid, proof_start);
                     match result {
                         PerFuncResult::Ok => {}
-                        PerFuncResult::Skipped(s) => {
+                        PerFuncResult::Warn(w) => {
                             let mut guard =
-                                skipped_acc.lock().expect("verify skipped mutex poisoned");
-                            guard[idx] = Some(s);
+                                warn_acc.lock().expect("verify warnings mutex poisoned");
+                            guard[idx] = Some(w);
                         }
                         PerFuncResult::Halt(out) => {
                             let mut guard = halts.lock().expect("verify halts mutex poisoned");
@@ -347,24 +486,25 @@ fn run_pool(
 
     let halts = halts.into_inner().expect("verify halts mutex poisoned");
     let outcome = halts.into_iter().flatten().next().unwrap_or_else(|| {
-        if skipped_acc
+        if warn_acc
             .lock()
-            .expect("verify skipped mutex poisoned")
+            .expect("verify warnings mutex poisoned")
             .iter()
-            .any(Option::is_some)
+            .flatten()
+            .any(VerifyWarning::is_skip)
         {
             VerifyOutcome::SkippedNonModelable
         } else {
             VerifyOutcome::Proven
         }
     });
-    let skipped: Vec<SkippedFunction> = skipped_acc
+    let warnings: Vec<VerifyWarning> = warn_acc
         .into_inner()
-        .expect("verify skipped mutex poisoned")
+        .expect("verify warnings mutex poisoned")
         .into_iter()
         .flatten()
         .collect();
-    (outcome, skipped)
+    (outcome, warnings)
 }
 
 #[cfg(test)]
@@ -381,10 +521,32 @@ mod tests {
     }
 
     fn skip(function: &str) -> PerFuncResult {
-        PerFuncResult::Skipped(SkippedFunction {
+        PerFuncResult::Warn(VerifyWarning::Skipped(SkippedFunction {
             function: function.to_string(),
             reason: "non-modelable".to_string(),
-        })
+        }))
+    }
+
+    /// A reachable checked-arithmetic abort: a warning that must NOT lift the
+    /// build status, unlike a skip.
+    fn arith_warn(function: &str) -> PerFuncResult {
+        PerFuncResult::Warn(VerifyWarning::ArithOverflow(ArithOverflowWarning {
+            function: function.to_string(),
+            cause: "addition overflows",
+            file: "t.vow".to_string(),
+            offset: 0,
+            length: 0,
+        }))
+    }
+
+    fn warned_functions(warnings: &[VerifyWarning]) -> Vec<&str> {
+        warnings
+            .iter()
+            .map(|w| match w {
+                VerifyWarning::Skipped(s) => s.function.as_str(),
+                VerifyWarning::ArithOverflow(a) => a.function.as_str(),
+            })
+            .collect()
     }
 
     // Every function verifies: outcome is Proven, nothing skipped. jobs=4
@@ -447,8 +609,7 @@ mod tests {
             }
         });
         assert!(matches!(outcome, VerifyOutcome::SkippedNonModelable));
-        let got: Vec<&str> = skipped.iter().map(|s| s.function.as_str()).collect();
-        assert_eq!(got, ["f1", "f3"]);
+        assert_eq!(warned_functions(&skipped), ["f1", "f3"]);
     }
 
     // Serial path (jobs=1) returns on the first halt: later functions are never
@@ -484,8 +645,236 @@ mod tests {
             if idx == 0 { skip("f0") } else { halt("f1") }
         });
         assert!(matches!(outcome, VerifyOutcome::Failed { .. }));
-        let got: Vec<&str> = skipped.iter().map(|s| s.function.as_str()).collect();
-        assert_eq!(got, ["f0"]);
+        assert_eq!(warned_functions(&skipped), ["f0"]);
+    }
+
+    fn arith_fn(id: u32, name: &str, source_file: &str) -> vow_ir::Function {
+        vow_ir::Function {
+            id: vow_ir::FuncId(id),
+            name: name.to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: vow_ir::Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![],
+            local_names: std::collections::HashMap::new(),
+            summary: vow_ir::RegionSummary::default(),
+            source_file: source_file.to_string(),
+        }
+    }
+
+    fn arith_module(fns: Vec<vow_ir::Function>) -> vow_ir::Module {
+        vow_ir::Module {
+            name: String::new(),
+            functions: fns,
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        }
+    }
+
+    fn site(func_id: u32) -> ArithOverflowSite {
+        ArithOverflowSite {
+            abort: vow_verify::ArithAbort::Add,
+            func_id,
+            span_start: 99,
+            span_len: 6,
+        }
+    }
+
+    fn warn() -> ArithOverflowWarning {
+        ArithOverflowWarning {
+            function: "f".to_string(),
+            cause: "addition overflows",
+            file: "f.vow".to_string(),
+            offset: 1,
+            length: 2,
+        }
+    }
+
+    // A missing ESBMC on the contracts-only re-run halts; it must never be a
+    // silent pass just because the first run produced an arith label.
+    #[test]
+    fn fold_arith_rerun_halts_when_the_tool_is_missing() {
+        let out = fold_arith_rerun(None, Some(warn()));
+        assert!(matches!(
+            out,
+            Err(PerFuncResult::Halt(VerifyOutcome::ToolNotFound))
+        ));
+    }
+
+    // The abort is reported only alongside a proof.
+    #[test]
+    fn fold_arith_rerun_reports_the_abort_only_on_a_proof() {
+        for (result, expect_warning) in [
+            (VerificationResult::Proven, true),
+            (VerificationResult::ProvenIr, true),
+            (VerificationResult::Timeout, false),
+            (
+                VerificationResult::Unknown {
+                    reason: "x".to_string(),
+                },
+                false,
+            ),
+            (
+                VerificationResult::Skipped {
+                    reason: "x".to_string(),
+                },
+                false,
+            ),
+            (VerificationResult::ToolNotFound, false),
+            (VerificationResult::ToolError("boom".to_string()), false),
+        ] {
+            let label = format!("{result:?}");
+            let Ok((_, w)) = fold_arith_rerun(Some(result), Some(warn())) else {
+                panic!("{label} must not be terminal");
+            };
+            assert_eq!(
+                w.is_some(),
+                expect_warning,
+                "{label}: warning reported = {expect_warning}"
+            );
+        }
+    }
+
+    // A contract counterexample on the re-run keeps the failure and drops the
+    // abort claim — the failure is the actionable finding, and ESBMC never said
+    // whether the arith obligation held on that run.
+    #[test]
+    fn fold_arith_rerun_drops_the_abort_claim_on_a_counterexample() {
+        let ce = vow_verify::Counterexample {
+            arith_overflow: None,
+            description: String::new(),
+            vow_id: Some(0),
+            callee_precondition: None,
+            values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::new(),
+        };
+        let Ok((result, w)) = fold_arith_rerun(Some(VerificationResult::Failed(ce)), Some(warn()))
+        else {
+            panic!("a counterexample is not a terminal per-function verdict here");
+        };
+        assert!(matches!(result, VerificationResult::Failed(_)));
+        assert!(w.is_none(), "no abort claim alongside a contract failure");
+    }
+
+    // No pending warning is the ordinary path and passes the verdict straight
+    // through.
+    #[test]
+    fn fold_arith_rerun_passes_through_without_a_warning() {
+        let Ok((result, w)) = fold_arith_rerun(Some(VerificationResult::Proven), None) else {
+            panic!("a proof is not terminal here");
+        };
+        assert!(matches!(result, VerificationResult::Proven));
+        assert!(w.is_none());
+    }
+
+    // #585: a model co-emits its modelable callees, so verifying `caller` can
+    // surface a site that lives in `helper`. The warning must name `helper` and
+    // resolve the span against `helper`'s own file — naming the target would
+    // report checked arithmetic in a function that contains none, and point the
+    // offset into unrelated source.
+    #[test]
+    fn arith_warning_is_attributed_to_the_owning_function() {
+        let caller = arith_fn(0, "caller", "caller.vow");
+        let helper = arith_fn(1, "helper", "helper.vow");
+        let module = arith_module(vec![caller.clone(), helper]);
+
+        let w = arith_overflow_warning(&module, &caller, "entry.vow", site(1));
+        assert_eq!(w.function, "helper", "must name the owner, not the target");
+        assert_eq!(w.file, "helper.vow", "span is relative to the owner's file");
+        assert_eq!((w.offset, w.length), (99, 6));
+    }
+
+    // The ordinary case: the site belongs to the target itself.
+    #[test]
+    fn arith_warning_names_the_target_when_it_owns_the_site() {
+        let caller = arith_fn(0, "caller", "caller.vow");
+        let module = arith_module(vec![caller.clone()]);
+        let w = arith_overflow_warning(&module, &caller, "entry.vow", site(0));
+        assert_eq!(w.function, "caller");
+        assert_eq!(w.file, "caller.vow");
+    }
+
+    // An unresolvable owner (a label outliving its module, e.g. a stale cache
+    // entry) falls back to the target rather than dropping the warning.
+    #[test]
+    fn arith_warning_falls_back_to_target_for_unknown_owner() {
+        let caller = arith_fn(0, "caller", String::new().as_str());
+        let module = arith_module(vec![caller.clone()]);
+        let w = arith_overflow_warning(&module, &caller, "entry.vow", site(77));
+        assert_eq!(w.function, "caller");
+        // Empty source_file falls back to the CLI entry path.
+        assert_eq!(w.file, "entry.vow");
+    }
+
+    #[test]
+    fn arith_warning_carries_the_cause_text() {
+        let f = arith_fn(0, "f", "f.vow");
+        let module = arith_module(vec![f.clone()]);
+        for (abort, text) in [
+            (vow_verify::ArithAbort::Add, "addition overflows"),
+            (vow_verify::ArithAbort::DivZero, "divisor is zero"),
+        ] {
+            let w = arith_overflow_warning(
+                &module,
+                &f,
+                "entry.vow",
+                ArithOverflowSite {
+                    abort,
+                    func_id: 0,
+                    span_start: 1,
+                    span_len: 2,
+                },
+            );
+            assert_eq!(w.cause, text);
+        }
+    }
+
+    // #585: a reachable checked-arithmetic abort is aggregated as a warning but
+    // leaves the verdict a proof — unlike a skip, nothing went unproved, so the
+    // run must not be lifted to the fail-closed `SkippedNonModelable`.
+    #[test]
+    fn run_pool_arith_warning_does_not_lift_status() {
+        let names = ["f0", "f1", "f2"];
+        for jobs in [1, 3] {
+            let (outcome, warnings) = run_pool(jobs, None, 0, &names, |idx| {
+                if idx == 1 {
+                    arith_warn("f1")
+                } else {
+                    PerFuncResult::Ok
+                }
+            });
+            assert!(
+                matches!(outcome, VerifyOutcome::Proven),
+                "jobs={jobs}: an arith warning must leave the outcome Proven"
+            );
+            assert_eq!(warned_functions(&warnings), ["f1"], "jobs={jobs}");
+        }
+    }
+
+    // A skip alongside an arith warning still fails closed: the skip is the kind
+    // that means something went unproved.
+    #[test]
+    fn run_pool_skip_still_lifts_status_alongside_arith_warning() {
+        let names = ["f0", "f1"];
+        for jobs in [1, 2] {
+            let (outcome, warnings) = run_pool(jobs, None, 0, &names, |idx| {
+                if idx == 0 {
+                    arith_warn("f0")
+                } else {
+                    skip("f1")
+                }
+            });
+            assert!(
+                matches!(outcome, VerifyOutcome::SkippedNonModelable),
+                "jobs={jobs}: a skip must still fail closed"
+            );
+            assert_eq!(warned_functions(&warnings), ["f0", "f1"], "jobs={jobs}");
+        }
     }
 
     #[test]
@@ -493,6 +882,7 @@ mod tests {
         let failed = classify_verification_result(
             "f",
             VerificationResult::Failed(vow_verify::Counterexample {
+                arith_overflow: None,
                 description: "bad result".to_string(),
                 vow_id: None,
                 callee_precondition: None,
@@ -561,10 +951,9 @@ mod tests {
         );
         assert!(matches!(
             skipped,
-            VerificationDisposition::Complete(PerFuncResult::Skipped(SkippedFunction {
-                function,
-                reason,
-            })) if function == "f" && reason == "unsupported opcode"
+            VerificationDisposition::Complete(PerFuncResult::Warn(VerifyWarning::Skipped(
+                SkippedFunction { function, reason }
+            ))) if function == "f" && reason == "unsupported opcode"
         ));
     }
 
@@ -665,7 +1054,10 @@ mod tests {
         );
         assert!(matches!(outcome, VerifyOutcome::SkippedNonModelable));
         assert_eq!(skipped.len(), 1);
-        assert_eq!(skipped[0].function, "effectful");
-        assert!(skipped[0].reason.contains("has effects"));
+        let VerifyWarning::Skipped(s) = &skipped[0] else {
+            panic!("expected a skip warning, got {:?}", skipped[0]);
+        };
+        assert_eq!(s.function, "effectful");
+        assert!(s.reason.contains("has effects"));
     }
 }

@@ -1633,6 +1633,18 @@ Wrapping operators silently wrap on overflow. For unsigned operands, including
 
 Checked operators abort with `ArithmeticOverflow` on overflow.
 
+**In verification.** The abort is modelled, not ignored: a checked operator is a
+strictly different proof obligation from its wrapping sibling. An execution that
+overflows aborts and therefore never returns, so it cannot witness a violated
+`ensures` or `invariant` — which is why replacing `+` with `+!` can turn a
+counterexample into a proof. Whether such an aborting execution is *reachable* is
+reported separately, as an
+[`ArithOverflowReachable`](errors.md#arithoverflowreachable) warning, so a proof
+never hides a program that can die at the operator. Widths `i8`/`u8` through
+`i64`/`u64` are modelled; 128-bit checked arithmetic is reported `Skipped`
+(fail-closed) rather than modelled as wrapping. See
+[`verifier-discipline.md`](../verifier-discipline.md).
+
 **128-bit arithmetic.** All operators work on `i128`/`u128` operands. `/`, `%`,
 `/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler
 routes them through runtime helpers; this is invisible in the language, and
@@ -2868,7 +2880,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
@@ -3288,22 +3300,22 @@ fn divide(x: i64, y: i64) -> i64 vow {
 
 ### Range Bounds
 
-Use range bounds only when they reflect genuine semantic constraints (e.g., overflow prevention), not to appease the verifier:
+Use range bounds only when they reflect genuine semantic constraints, not to appease the verifier. An operand bound whose only job is to stop wrapping is **not** such a constraint — the checked operator already says that, and says it without narrowing the function's domain:
 
 ```vow
 fn safe_add(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b >= 0,
-    requires: a <= 4611686018427387903,
-    requires: b <= 4611686018427387903,
     ensures: result >= a,
     ensures: result >= b
 } {
-    a + b
+    a +! b
 }
 ```
 
-The bounds here prevent `a + b` from overflowing `i64` — a legitimate semantic concern, not a verifier limitation.
+`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
+
+A range bound earns its place when it excludes inputs the function genuinely has no answer for — `requires: x > -9223372036854775807` on `abs`, whose result is not representable at `i64::MIN` under any operator.
 
 ### Equality Postcondition
 
@@ -3411,12 +3423,10 @@ Where clauses on parameters become refinement types (additional `requires` for v
 
 ```vow
 fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
-    requires: a <= 4611686018427387903,
-    requires: b <= 4611686018427387903,
     ensures: result >= a,
     ensures: result >= b
 } {
-    a + b
+    a +! b
 }
 ```
 
@@ -3467,7 +3477,19 @@ fn double(x: i64) -> i64 vow {
 
 ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
 
-**Fix:** Bound the input or use checked arithmetic (`+!`).
+**Fix:** use checked arithmetic (`+!`), or bound the input.
+
+```vow
+fn double(x: i64) -> i64 vow {
+    ensures: result > x
+} {
+    x +! x
+}
+```
+
+This verifies. `+!` aborts on overflow instead of wrapping, and the verifier models that: an aborting execution never returns, so it cannot witness a violated `ensures`, and the wrapped value the counterexample was built from is no longer reachable. The two operators have genuinely different models — switching one character changes the verdict.
+
+What you get in exchange is a warning, not silence: because the abort is still *reachable* here (`x` near `i64::MAX`), the verifier reports [`ArithOverflowReachable`](errors.md#arithoverflowreachable) alongside the proof. Read it as "the postcondition holds whenever this returns, and it can fail to return." To rule the abort out as well, constrain the operands — and then the bound is a real precondition of the *caller*, not a bound invented for the verifier.
 
 ### Non-Inductive Loop Invariant
 
@@ -3523,6 +3545,8 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 ```
 
 Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+
+**The overflow-guard bound is this anti-pattern's most common disguise.** A clause like `requires: a <= 4611686018427387903` on an adding function looks semantic — it does describe a real property of `i64` — but its only purpose is to keep wrapping unreachable, and it pays for that by excluding inputs the function handles perfectly well. Use the checked operator instead: `a +! b` aborts rather than wraps, the verifier models the abort, and the contract keeps its true domain. See [Range Bounds](#range-bounds) and [Wrapping Arithmetic Overflow](#wrapping-arithmetic-overflow).
 
 ## Interpreting Counterexamples
 
@@ -4562,6 +4586,31 @@ The note is conservative — it fires for any qualifying allocation in a functio
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
+### ArithOverflowReachable
+
+**Phase:** Verification (Warning; the build status stays `Verified`)
+**Meaning:** The verifier proved that a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its `ArithmeticOverflow` abort for some input the function's `requires` admits. The operand span in `primary` points at the operator itself.
+
+```json
+{
+  "error_code": "ArithOverflowReachable",
+  "severity": "warning",
+  "message": "checked arithmetic in `twice` can abort: addition overflows",
+  "hints": [
+    "the contract is proved for every execution that returns; this abort is a separate runtime outcome",
+    "constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended"
+  ]
+}
+```
+
+The `message` names the cause: `addition overflows`, `subtraction overflows`, `multiplication overflows`, `divisor is zero`, or `quotient is not representable (MIN / -1)`.
+
+**Why this is a Warning and not a failure.** Aborting *is* the checked operator's specified behaviour ([`grammar.md`](grammar.md#checked-arithmetic)), so a reachable abort is not an unproved obligation — unlike [`VerificationSkipped`](#verificationskipped), nothing went unchecked, and the status does not fail closed. The contract is genuinely proved: the verifier models the abort by pruning the overflowing execution, which never returns and so can never witness an `ensures` or a loop `invariant`. The warning exists because an abort is rarely what the author intended and is invisible in the contract verdict — `Verified` alone would not tell you the program can die at that operator.
+
+**Fix:** If the abort is unreachable in practice, say so in the contract — a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.
+
+**Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -4933,7 +4982,7 @@ proof of the whole API, since `point_distance_sq` carries no contract (see Known
 | `circle_area` | `(r: i64) -> i64` | `requires 0 <= r <= 1753413056`; `ensures result >= 0` |
 | `rect_area` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, h == 0 \|\| w <= I64_MAX / h`; `ensures result >= 0` |
 | `circle_perimeter` | `(r: i64) -> i64` | `requires 0 <= r <= 1537228672809129301`; `ensures result >= 0` |
-| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, w <= 4611686018427387903 - h`; `ensures result >= 0` |
+| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0`; `ensures result >= 0` (uses `+!`/`*!`, so overflow aborts rather than needing an operand bound) |
 
 Each magic bound is the exact threshold below which the arithmetic cannot overflow —
 e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:
@@ -6569,6 +6618,18 @@ Wrapping operators silently wrap on overflow. For unsigned operands, including
 
 Checked operators abort with `ArithmeticOverflow` on overflow.
 
+**In verification.** The abort is modelled, not ignored: a checked operator is a
+strictly different proof obligation from its wrapping sibling. An execution that
+overflows aborts and therefore never returns, so it cannot witness a violated
+`ensures` or `invariant` — which is why replacing `+` with `+!` can turn a
+counterexample into a proof. Whether such an aborting execution is *reachable* is
+reported separately, as an
+[`ArithOverflowReachable`](errors.md#arithoverflowreachable) warning, so a proof
+never hides a program that can die at the operator. Widths `i8`/`u8` through
+`i64`/`u64` are modelled; 128-bit checked arithmetic is reported `Skipped`
+(fail-closed) rather than modelled as wrapping. See
+[`verifier-discipline.md`](../verifier-discipline.md).
+
 **128-bit arithmetic.** All operators work on `i128`/`u128` operands. `/`, `%`,
 `/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler
 routes them through runtime helpers; this is invisible in the language, and
@@ -7805,7 +7866,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
@@ -8226,22 +8287,22 @@ fn divide(x: i64, y: i64) -> i64 vow {
 
 ### Range Bounds
 
-Use range bounds only when they reflect genuine semantic constraints (e.g., overflow prevention), not to appease the verifier:
+Use range bounds only when they reflect genuine semantic constraints, not to appease the verifier. An operand bound whose only job is to stop wrapping is **not** such a constraint — the checked operator already says that, and says it without narrowing the function's domain:
 
 ```vow
 fn safe_add(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b >= 0,
-    requires: a <= 4611686018427387903,
-    requires: b <= 4611686018427387903,
     ensures: result >= a,
     ensures: result >= b
 } {
-    a + b
+    a +! b
 }
 ```
 
-The bounds here prevent `a + b` from overflowing `i64` — a legitimate semantic concern, not a verifier limitation.
+`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
+
+A range bound earns its place when it excludes inputs the function genuinely has no answer for — `requires: x > -9223372036854775807` on `abs`, whose result is not representable at `i64::MIN` under any operator.
 
 ### Equality Postcondition
 
@@ -8349,12 +8410,10 @@ Where clauses on parameters become refinement types (additional `requires` for v
 
 ```vow
 fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
-    requires: a <= 4611686018427387903,
-    requires: b <= 4611686018427387903,
     ensures: result >= a,
     ensures: result >= b
 } {
-    a + b
+    a +! b
 }
 ```
 
@@ -8405,7 +8464,19 @@ fn double(x: i64) -> i64 vow {
 
 ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
 
-**Fix:** Bound the input or use checked arithmetic (`+!`).
+**Fix:** use checked arithmetic (`+!`), or bound the input.
+
+```vow
+fn double(x: i64) -> i64 vow {
+    ensures: result > x
+} {
+    x +! x
+}
+```
+
+This verifies. `+!` aborts on overflow instead of wrapping, and the verifier models that: an aborting execution never returns, so it cannot witness a violated `ensures`, and the wrapped value the counterexample was built from is no longer reachable. The two operators have genuinely different models — switching one character changes the verdict.
+
+What you get in exchange is a warning, not silence: because the abort is still *reachable* here (`x` near `i64::MAX`), the verifier reports [`ArithOverflowReachable`](errors.md#arithoverflowreachable) alongside the proof. Read it as "the postcondition holds whenever this returns, and it can fail to return." To rule the abort out as well, constrain the operands — and then the bound is a real precondition of the *caller*, not a bound invented for the verifier.
 
 ### Non-Inductive Loop Invariant
 
@@ -8461,6 +8532,8 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 ```
 
 Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+
+**The overflow-guard bound is this anti-pattern's most common disguise.** A clause like `requires: a <= 4611686018427387903` on an adding function looks semantic — it does describe a real property of `i64` — but its only purpose is to keep wrapping unreachable, and it pays for that by excluding inputs the function handles perfectly well. Use the checked operator instead: `a +! b` aborts rather than wraps, the verifier models the abort, and the contract keeps its true domain. See [Range Bounds](#range-bounds) and [Wrapping Arithmetic Overflow](#wrapping-arithmetic-overflow).
 
 ## Interpreting Counterexamples
 
@@ -9502,6 +9575,31 @@ The note is conservative — it fires for any qualifying allocation in a functio
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
+### ArithOverflowReachable
+
+**Phase:** Verification (Warning; the build status stays `Verified`)
+**Meaning:** The verifier proved that a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its `ArithmeticOverflow` abort for some input the function's `requires` admits. The operand span in `primary` points at the operator itself.
+
+```json
+{
+  "error_code": "ArithOverflowReachable",
+  "severity": "warning",
+  "message": "checked arithmetic in `twice` can abort: addition overflows",
+  "hints": [
+    "the contract is proved for every execution that returns; this abort is a separate runtime outcome",
+    "constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended"
+  ]
+}
+```
+
+The `message` names the cause: `addition overflows`, `subtraction overflows`, `multiplication overflows`, `divisor is zero`, or `quotient is not representable (MIN / -1)`.
+
+**Why this is a Warning and not a failure.** Aborting *is* the checked operator's specified behaviour ([`grammar.md`](grammar.md#checked-arithmetic)), so a reachable abort is not an unproved obligation — unlike [`VerificationSkipped`](#verificationskipped), nothing went unchecked, and the status does not fail closed. The contract is genuinely proved: the verifier models the abort by pruning the overflowing execution, which never returns and so can never witness an `ensures` or a loop `invariant`. The warning exists because an abort is rarely what the author intended and is invisible in the contract verdict — `Verified` alone would not tell you the program can die at that operator.
+
+**Fix:** If the abort is unreachable in practice, say so in the contract — a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.
+
+**Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -9874,7 +9972,7 @@ proof of the whole API, since `point_distance_sq` carries no contract (see Known
 | `circle_area` | `(r: i64) -> i64` | `requires 0 <= r <= 1753413056`; `ensures result >= 0` |
 | `rect_area` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, h == 0 \|\| w <= I64_MAX / h`; `ensures result >= 0` |
 | `circle_perimeter` | `(r: i64) -> i64` | `requires 0 <= r <= 1537228672809129301`; `ensures result >= 0` |
-| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, w <= 4611686018427387903 - h`; `ensures result >= 0` |
+| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0`; `ensures result >= 0` (uses `+!`/`*!`, so overflow aborts rather than needing an operand bound) |
 
 Each magic bound is the exact threshold below which the arithmetic cannot overflow —
 e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:

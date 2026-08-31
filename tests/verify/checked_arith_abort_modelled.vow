@@ -1,0 +1,73 @@
+// TEST: category overflow
+// Regression guard for #585: the checked operators must be modelled as
+// abort-on-overflow, not as their wrapping siblings. Every function here is
+// Verified *because* the overflowing execution aborts and so never returns —
+// under the old wrapping model each one produced a counterexample.
+module CheckedArithAbortModelled
+
+// `n - 1` wraps to u64::MAX at n == 0 and violates the postcondition; `n -! 1`
+// aborts there instead, so every returning execution satisfies it. This pair is
+// the exact case from the issue: the two operators must not share a verdict.
+fn last_index(n: u64) -> u64 vow {
+  requires: n >= 1,
+  ensures: result <= n
+} {
+  n -! 1
+}
+
+// No `requires` bound on the operands: the abort is what rules out the
+// overflowing execution, which is why no verification-driven bound is needed.
+fn twice(x: i64) -> i64 vow {
+  requires: x > 0,
+  ensures: result > x
+} {
+  x +! x
+}
+
+fn scale(x: i64) -> i64 vow {
+  requires: x > 0,
+  ensures: result >= x
+} {
+  x *! 3
+}
+
+// `/!` aborts on a zero divisor and on MIN / -1, so the quotient of every
+// returning execution is representable.
+fn halve(x: i64, d: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: d > 0,
+  ensures: result <= x
+} {
+  x /! d
+}
+
+// `%!` aborts only on a zero divisor: MIN % -1 is 0 and does not abort.
+fn rem_pos(x: i64, d: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: d > 0,
+  ensures: result < d
+} {
+  x %! d
+}
+
+// The vacuity boundary, and the strongest guard on the abort model. Here the
+// overflow is *unavoidable*: every input the `requires` admits overflows, so the
+// function never returns and `ensures` is vacuously satisfied. `Verified` is the
+// honest verdict under abort semantics — but on its own it would be a silent
+// pass for a function that always dies. The `ArithOverflowReachable` warning is
+// what makes it honest, which is exactly why the abort model asserts the guard
+// as well as assuming it (see docs/verifier-discipline.md).
+fn doomed(x: i64) -> i64 vow {
+  requires: x >= 9223372036854775807,
+  ensures: result == 42
+} {
+  x +! 1
+}
+
+fn main() -> i32 [io] {
+  print_i64(twice(5));
+  print_i64(scale(5));
+  print_i64(halve(10, 2));
+  print_i64(rem_pos(10, 3));
+  0
+}

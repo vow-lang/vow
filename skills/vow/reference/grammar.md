@@ -276,6 +276,18 @@ Wrapping operators silently wrap on overflow. For unsigned operands, including
 
 Checked operators abort with `ArithmeticOverflow` on overflow.
 
+**In verification.** The abort is modelled, not ignored: a checked operator is a
+strictly different proof obligation from its wrapping sibling. An execution that
+overflows aborts and therefore never returns, so it cannot witness a violated
+`ensures` or `invariant` — which is why replacing `+` with `+!` can turn a
+counterexample into a proof. Whether such an aborting execution is *reachable* is
+reported separately, as an
+[`ArithOverflowReachable`](errors.md#arithoverflowreachable) warning, so a proof
+never hides a program that can die at the operator. Widths `i8`/`u8` through
+`i64`/`u64` are modelled; 128-bit checked arithmetic is reported `Skipped`
+(fail-closed) rather than modelled as wrapping. See
+[`verifier-discipline.md`](../verifier-discipline.md).
+
 **128-bit arithmetic.** All operators work on `i128`/`u128` operands. `/`, `%`,
 `/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler
 routes them through runtime helpers; this is invisible in the language, and

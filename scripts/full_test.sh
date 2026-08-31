@@ -864,6 +864,107 @@ else
 fi
 echo ""
 
+# ─── Checked-arithmetic abort model (#585) ────────────────────────
+#
+# Sections 4b/4c already hold Rust/self parity and the Verified/VerifyFailed
+# verdicts for the two committed fixtures. What they cannot express is the
+# property the issue is actually about: that `+!` and `+` are *distinguishable*,
+# and that the reachable-abort warning appears exactly where the abort is
+# reachable. Both compilers are checked, so a self-hosted regression cannot hide
+# behind the Rust verdict.
+
+section_begin "Checked-arithmetic abort model (#585)"
+
+arith_dir="$TMPDIR/arith585"
+mkdir -p "$arith_dir"
+
+# Same contract, same body, one operator apart. Under the old model these two
+# produced byte-identical counterexamples.
+cat > "$arith_dir/wrapping.vow" <<'VOW'
+module ArithWrapping
+fn last_index(n: u64) -> u64 vow { ensures: result <= n } { n - 1 }
+fn main() -> i32 [io] { print_i64(0); 0 }
+VOW
+cat > "$arith_dir/checked.vow" <<'VOW'
+module ArithChecked
+fn last_index(n: u64) -> u64 vow { ensures: result <= n } { n -! 1 }
+fn main() -> i32 [io] { print_i64(0); 0 }
+VOW
+
+arith_status() {
+    python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$1" 2>/dev/null || echo ""
+}
+# Count ArithOverflowReachable warnings naming a given function.
+arith_warns() {
+    python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+fn = sys.argv[2]
+n = sum(1 for g in d.get('diagnostics', [])
+        if g.get('error_code') == 'ArithOverflowReachable'
+        and ('\`' + fn + '\`') in g.get('message', ''))
+print(n)
+" "$1" "$2" 2>/dev/null || echo "-1"
+}
+
+for compiler in rust self; do
+    errors=()
+
+    # 1. Wrapping still wraps: the counterexample is real and must be reported.
+    if [ "$compiler" = rust ]; then
+        j=$($RUST verify "$arith_dir/wrapping.vow" 2>/dev/null) || true
+    else
+        j=$(run_self verify "$arith_dir/wrapping.vow" 2>/dev/null) || true
+    fi
+    [ "$(arith_status "$j")" = "VerifyFailed" ] || errors+=("wrapping '-' should fail, got $(arith_status "$j")")
+
+    # 2. Checked is distinguishable: the abort prunes the wrapped value, so the
+    #    postcondition holds on every returning execution and the reachable
+    #    abort is reported as a warning instead.
+    if [ "$compiler" = rust ]; then
+        j=$($RUST verify "$arith_dir/checked.vow" 2>/dev/null) || true
+    else
+        j=$(run_self verify "$arith_dir/checked.vow" 2>/dev/null) || true
+    fi
+    [ "$(arith_status "$j")" = "Verified" ] || errors+=("checked '-!' should verify, got $(arith_status "$j")")
+    [ "$(arith_warns "$j" last_index)" = "1" ] || errors+=("checked '-!' should warn once, got $(arith_warns "$j" last_index)")
+
+    # 3. The warning is precise, not blanket: in the committed fixture only the
+    #    two functions whose abort is genuinely reachable are named, and a
+    #    `requires` that rules the abort out silences it.
+    if [ "$compiler" = rust ]; then
+        j=$($RUST verify tests/verify/checked_arith_abort_modelled.vow 2>/dev/null) || true
+    else
+        j=$(run_self verify tests/verify/checked_arith_abort_modelled.vow 2>/dev/null) || true
+    fi
+    [ "$(arith_status "$j")" = "Verified" ] || errors+=("fixture should verify, got $(arith_status "$j")")
+    for fn in twice scale doomed; do
+        [ "$(arith_warns "$j" "$fn")" = "1" ] || errors+=("$fn should warn, got $(arith_warns "$j" "$fn")")
+    done
+    for fn in last_index halve rem_pos; do
+        [ "$(arith_warns "$j" "$fn")" = "0" ] || errors+=("$fn abort is ruled out by requires; must not warn")
+    done
+
+    # 4. A site inside a co-emitted callee is attributed to the callee, not to
+    #    the verify target that pulled it in, and the two targets that both
+    #    reach it report it once.
+    if [ "$compiler" = rust ]; then
+        j=$($RUST verify tests/verify/checked_arith_callee_attribution.vow 2>/dev/null) || true
+    else
+        j=$(run_self verify tests/verify/checked_arith_callee_attribution.vow 2>/dev/null) || true
+    fi
+    [ "$(arith_status "$j")" = "Verified" ] || errors+=("attribution fixture status $(arith_status "$j")")
+    [ "$(arith_warns "$j" helper)" = "1" ] || errors+=("site must be attributed to helper exactly once, got $(arith_warns "$j" helper)")
+    [ "$(arith_warns "$j" caller)" = "0" ] || errors+=("caller has no checked arithmetic and must not be named")
+
+    if [ ${#errors[@]} -eq 0 ]; then
+        pass "checked_arith_abort_model/$compiler"
+    else
+        fail "checked_arith_abort_model/$compiler" "$(IFS='; '; echo "${errors[*]}")"
+    fi
+done
+echo ""
+
 # ─── Section 4d: Verify-Skip Tests (tests/verify-skip/) ───────────
 #
 # Functions that exercise a non-modelable construct (e.g. nested-collection

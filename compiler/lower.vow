@@ -1955,8 +1955,16 @@ fn lower_integer_marker_as(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) -> i64
         let bin_args: Vec<i64> = Vec::new();
         bin_args.push(lhs);
         bin_args.push(rhs);
-        return lctx_emit(ctx, binop_opcode(op, ty), binop_result_ty(op, ty), bin_args,
+        let bin_iop: i64 = binop_opcode(op, ty);
+        let bin_id: i64 = lctx_emit(ctx, bin_iop, binop_result_ty(op, ty), bin_args,
             IDATA_INTEGER(), ty, 0, String::from(""));
+        // #585: the ArithOverflowReachable diagnostic points at the operator
+        // itself, so a checked site needs an anchored span. The Rust lowerer
+        // spans every instruction; here only the sites that need one do.
+        if is_checked_arith_op(bin_iop) {
+            lctx_set_inst_span(ctx, bin_id, expr_span(a, eid));
+        }
+        return bin_id;
     }
     if tag == EXPR_BLOCK() {
         let bid: i64 = expr_a(a, eid);
@@ -2261,7 +2269,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let bin_args: Vec<i64> = Vec::new();
         bin_args.push(lhs_id);
         bin_args.push(rhs_id);
-        return lctx_emit(ctx, iop, rty, bin_args, IDATA_INTEGER(), operand_ty, 0, String::from(""));
+        let bin_id: i64 = lctx_emit(ctx, iop, rty, bin_args, IDATA_INTEGER(), operand_ty, 0, String::from(""));
+        // #585: anchor a checked operator's span for its abort diagnostic.
+        if is_checked_arith_op(iop) {
+            lctx_set_inst_span(ctx, bin_id, expr_span(a, eid));
+        }
+        return bin_id;
     }
 
     if tag == EXPR_UNOP() {

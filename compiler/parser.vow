@@ -691,6 +691,10 @@ fn is_block_expr(a: AstArena, eid: i64) -> bool {
 }
 
 fn parse_expr_prec(p: Parser, min_prec: i64) -> i64 {
+    // #585: a binary expression needs a real span, not 0. The checked operators
+    // abort on overflow, and the ArithOverflowReachable diagnostic points at the
+    // operator's own source range; the Rust parser has always recorded it.
+    let expr_start: i64 = peek(p).span_start;
     let mut lhs: i64 = parse_unary(p);
     if is_block_expr(p.arena, lhs) { return lhs; }
     let mut prec: i64 = current_binop_prec(p);
@@ -698,7 +702,7 @@ fn parse_expr_prec(p: Parser, min_prec: i64) -> i64 {
         let op: i64 = current_binop(p);
         advance_binop(p);
         let rhs: i64 = parse_expr_prec(p, prec + 1);
-        lhs = arena_add_expr(p.arena, EXPR_BINOP(), op, lhs, rhs, 0);
+        lhs = arena_add_expr(p.arena, EXPR_BINOP(), op, lhs, rhs, span_pack_to_here(p, expr_start));
         prec = current_binop_prec(p);
     }
     lhs

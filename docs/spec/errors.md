@@ -520,6 +520,31 @@ The note is conservative — it fires for any qualifying allocation in a functio
 
 **Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
+### ArithOverflowReachable
+
+**Phase:** Verification (Warning; the build status stays `Verified`)
+**Meaning:** The verifier proved that a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its `ArithmeticOverflow` abort for some input the function's `requires` admits. The operand span in `primary` points at the operator itself.
+
+```json
+{
+  "error_code": "ArithOverflowReachable",
+  "severity": "warning",
+  "message": "checked arithmetic in `twice` can abort: addition overflows",
+  "hints": [
+    "the contract is proved for every execution that returns; this abort is a separate runtime outcome",
+    "constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended"
+  ]
+}
+```
+
+The `message` names the cause: `addition overflows`, `subtraction overflows`, `multiplication overflows`, `divisor is zero`, or `quotient is not representable (MIN / -1)`.
+
+**Why this is a Warning and not a failure.** Aborting *is* the checked operator's specified behaviour ([`grammar.md`](grammar.md#checked-arithmetic)), so a reachable abort is not an unproved obligation — unlike [`VerificationSkipped`](#verificationskipped), nothing went unchecked, and the status does not fail closed. The contract is genuinely proved: the verifier models the abort by pruning the overflowing execution, which never returns and so can never witness an `ensures` or a loop `invariant`. The warning exists because an abort is rarely what the author intended and is invisible in the contract verdict — `Verified` alone would not tell you the program can die at that operator.
+
+**Fix:** If the abort is unreachable in practice, say so in the contract — a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.
+
+**Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).

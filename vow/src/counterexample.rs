@@ -854,6 +854,7 @@ mod tests {
         };
 
         let ce = vow_verify::Counterexample {
+            arith_overflow: None,
             description: "y != 0".to_string(),
             vow_id: Some(0),
             callee_precondition: None,
@@ -923,6 +924,7 @@ mod tests {
         };
 
         let ce = vow_verify::Counterexample {
+            arith_overflow: None,
             description: "[Counterexample]".to_string(),
             vow_id: Some(UNSUPPORTED_OP_VOW_ID),
             callee_precondition: None,
@@ -986,6 +988,7 @@ mod tests {
         };
 
         let ce = vow_verify::Counterexample {
+            arith_overflow: None,
             description: "result == x + x".to_string(),
             vow_id: Some(0),
             callee_precondition: None,
@@ -1179,6 +1182,7 @@ mod tests {
             source_file: String::new(),
         };
         let ce = vow_verify::Counterexample {
+            arith_overflow: None,
             description: "test".to_string(),
             vow_id: Some(0),
             callee_precondition: None,
@@ -1404,6 +1408,7 @@ mod tests {
         };
         let call_site_index = build_call_site_index(&module, "test.vow");
         let ce = vow_verify::Counterexample {
+            arith_overflow: None,
             description: "raw".to_string(),
             vow_id: Some(1),
             callee_precondition: Some(vow_verify::CalleePrecondition {
@@ -1608,6 +1613,7 @@ mod tests {
         };
         let call_site_index = build_call_site_index(&module, "test.vow");
         let ce = vow_verify::Counterexample {
+            arith_overflow: None,
             description: "raw".to_string(),
             vow_id: Some(0),
             callee_precondition: Some(vow_verify::CalleePrecondition {
@@ -1713,6 +1719,7 @@ mod tests {
             source_file: String::new(),
         };
         let ce = vow_verify::Counterexample {
+            arith_overflow: None,
             description: "test".to_string(),
             vow_id: Some(0),
             callee_precondition: None,

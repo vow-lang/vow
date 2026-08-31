@@ -1,7 +1,7 @@
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
-use vow_verify::{CalleePrecondition, Counterexample, SolverConfig};
+use vow_verify::{ArithOverflowSite, CalleePrecondition, Counterexample, SolverConfig};
 
 use crate::frontend::DependencyManifest;
 
@@ -127,6 +127,11 @@ fn fnv1a_hash_reader<R: Read>(mut r: R) -> std::io::Result<u64> {
 struct CachedFailure {
     vow_id: Option<u32>,
     callee_precondition: Option<CalleePrecondition>,
+    /// The `arith:` site, persisted as its own fields rather than re-derived
+    /// from `raw_output` on replay: `raw=` is written as the ESBMC output
+    /// verbatim but read back a line at a time, so a cached `raw_output` keeps
+    /// only its first line and the `Violated property:` block is gone (#585).
+    arith_overflow: Option<ArithOverflowSite>,
     description: String,
     values: Vec<(String, String)>,
     block_visits: Vec<u32>,
@@ -139,6 +144,7 @@ impl CachedFailure {
             description: self.description.clone(),
             vow_id: self.vow_id,
             callee_precondition: self.callee_precondition,
+            arith_overflow: self.arith_overflow,
             values: self.values.clone(),
             block_visits: self.block_visits.clone(),
             raw_output: self.raw_output.clone(),
@@ -149,6 +155,7 @@ impl CachedFailure {
         CachedFailure {
             vow_id: ce.vow_id,
             callee_precondition: ce.callee_precondition,
+            arith_overflow: ce.arith_overflow,
             description: ce.description.clone(),
             values: ce.values.clone(),
             block_visits: ce.block_visits.clone(),
@@ -277,6 +284,20 @@ fn serialize_cached_result(result: &CachedFailure) -> String {
             s.push_str("callee_precondition_vow_id=\n");
         }
     }
+    match result.arith_overflow {
+        Some(site) => {
+            s.push_str(&format!("arith_cause={}\n", site.abort.label()));
+            s.push_str(&format!("arith_func={}\n", site.func_id));
+            s.push_str(&format!("arith_start={}\n", site.span_start));
+            s.push_str(&format!("arith_len={}\n", site.span_len));
+        }
+        None => {
+            s.push_str("arith_cause=\n");
+            s.push_str("arith_func=\n");
+            s.push_str("arith_start=\n");
+            s.push_str("arith_len=\n");
+        }
+    }
     s.push_str(&format!("description={}\n", result.description));
     let vals: Vec<String> = result
         .values
@@ -307,6 +328,10 @@ fn parse_cached_result(content: &str) -> Option<CachedFailure> {
     let mut values = Vec::new();
     let mut block_visits = Vec::new();
     let mut raw_output = String::new();
+    let mut arith_cause: Option<vow_verify::ArithAbort> = None;
+    let mut arith_func: Option<u32> = None;
+    let mut arith_start: Option<u32> = None;
+    let mut arith_len: Option<u32> = None;
 
     for line in lines {
         if let Some(rest) = line.strip_prefix("vow_id=") {
@@ -315,6 +340,14 @@ fn parse_cached_result(content: &str) -> Option<CachedFailure> {
             callee_precondition_func_id = rest.parse().ok();
         } else if let Some(rest) = line.strip_prefix("callee_precondition_vow_id=") {
             callee_precondition_vow_id = rest.parse().ok();
+        } else if let Some(rest) = line.strip_prefix("arith_cause=") {
+            arith_cause = vow_verify::ArithAbort::from_label(rest);
+        } else if let Some(rest) = line.strip_prefix("arith_func=") {
+            arith_func = rest.parse().ok();
+        } else if let Some(rest) = line.strip_prefix("arith_start=") {
+            arith_start = rest.parse().ok();
+        } else if let Some(rest) = line.strip_prefix("arith_len=") {
+            arith_len = rest.parse().ok();
         } else if let Some(rest) = line.strip_prefix("description=") {
             description = rest.to_string();
         } else if let Some(rest) = line.strip_prefix("values=") {
@@ -341,10 +374,24 @@ fn parse_cached_result(content: &str) -> Option<CachedFailure> {
     let callee_precondition = callee_precondition_func_id
         .zip(callee_precondition_vow_id)
         .map(|(func_id, vow_id)| CalleePrecondition { func_id, vow_id });
+    // Every part or none: a half-written site would mislocate the diagnostic, so
+    // an incomplete entry reports no site at all.
+    let arith_overflow = arith_cause
+        .zip(arith_func)
+        .zip(arith_start.zip(arith_len))
+        .map(
+            |((abort, func_id), (span_start, span_len))| ArithOverflowSite {
+                abort,
+                func_id,
+                span_start,
+                span_len,
+            },
+        );
 
     Some(CachedFailure {
         vow_id,
         callee_precondition,
+        arith_overflow,
         description,
         values,
         block_visits,
@@ -366,6 +413,12 @@ mod tests {
 
     fn sample_ce() -> Counterexample {
         Counterexample {
+            arith_overflow: Some(ArithOverflowSite {
+                abort: vow_verify::ArithAbort::Mul,
+                func_id: 4,
+                span_start: 92,
+                span_len: 6,
+            }),
             description: "x overflows".to_string(),
             vow_id: Some(5),
             callee_precondition: Some(CalleePrecondition {
@@ -379,6 +432,46 @@ mod tests {
             block_visits: vec![0, 2, 5],
             raw_output: "ESBMC raw trace".to_string(),
         }
+    }
+
+    // #585: the `arith:` site must survive the cache round-trip. It used to be
+    // re-derived from the cached `raw_output`, which silently does not work:
+    // `raw=` is serialized as the whole ESBMC output but parsed one line at a
+    // time, so a replayed counterexample keeps only its first line and the
+    // `Violated property:` block is gone. The symptom was a fixture that
+    // verified under `--no-cache` and reported VerifyFailed on a cache hit.
+    #[test]
+    fn arith_site_survives_the_cache_round_trip() {
+        let dir = TempDir::new().expect("temp dir");
+        let cache = cache_in(&dir);
+        let ce = sample_ce();
+        let cfg = cfg(Solver::Boolector, Encoding::Bv, None, None);
+        cache.store_failure("int main(){}", 10, &cfg, &ce);
+
+        let back = cache
+            .lookup_failure("int main(){}", 10, &cfg)
+            .expect("cached failure");
+        assert_eq!(
+            back.arith_overflow, ce.arith_overflow,
+            "the arith site must round-trip exactly"
+        );
+    }
+
+    // A counterexample with no arith site round-trips as None, not as a
+    // half-parsed site pointing at offset 0.
+    #[test]
+    fn absent_arith_site_round_trips_as_none() {
+        let dir = TempDir::new().expect("temp dir");
+        let cache = cache_in(&dir);
+        let mut ce = sample_ce();
+        ce.arith_overflow = None;
+        let cfg = cfg(Solver::Boolector, Encoding::Bv, None, None);
+        cache.store_failure("int main(){}", 10, &cfg, &ce);
+
+        let back = cache
+            .lookup_failure("int main(){}", 10, &cfg)
+            .expect("cached failure");
+        assert_eq!(back.arith_overflow, None);
     }
 
     fn cfg(
@@ -507,6 +600,12 @@ mod tests {
             callee_precondition: Some(vow_verify::CalleePrecondition {
                 func_id: 7,
                 vow_id: 3,
+            }),
+            arith_overflow: Some(ArithOverflowSite {
+                abort: vow_verify::ArithAbort::DivOverflow,
+                func_id: 2,
+                span_start: 7,
+                span_len: 3,
             }),
             description: "test failure".to_string(),
             values: vec![("x".to_string(), "42".to_string())],

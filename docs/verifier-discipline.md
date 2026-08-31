@@ -45,6 +45,8 @@ These preserve or strengthen the obligation, or fail honestly. They are allowed:
   every reachable program state; they never prune a real program behaviour.
   User-supplied bounds are **not** representation invariants and must never be
   assumed.
+- **Assume the no-overflow guard of a checked arithmetic operator** — see
+  "Modelling an abort is not pruning" below.
 
 ## Unsafe retry strategies
 
@@ -56,10 +58,61 @@ even on timeout:
   is unsound.
 - **Disable Vow-emitted `__ESBMC_assert` properties** to get a run to pass.
 - **Add `__ESBMC_assume` constraints that prune real program behaviour** (any
-  assumption that is not a representation invariant — especially user-derived
-  numeric bounds).
+  assumption that is not a representation invariant, or a program abort — see
+  the carve-out below — especially user-derived numeric bounds).
 - **Simplify source loops** (or any part of the program) and treat the result as
   a proof of the original.
+
+## Modelling an abort is not pruning
+
+The rule above bans a pruning `__ESBMC_assume` because pruning normally *hides*
+executions the real program can take. Modelling a **program abort** is the one
+case where an assume adds no such hiding, and Vow's checked arithmetic operators
+require it (#585).
+
+`x +! y` does not wrap on overflow; it aborts with `ArithmeticOverflow`. An
+execution that overflows therefore **never returns**. `ensures` and `invariant`
+constrain returning executions, so an aborting execution cannot witness a
+violation of either — it is not a behaviour being hidden, it is a behaviour that
+does not reach the obligation. Emitting
+
+```c
+__ESBMC_assume(<no-overflow guard>);
+```
+
+before the operation makes the model agree with that. Without it the model lets
+the wrapped value flow into downstream reasoning, which is *stronger* than Vow
+semantics: it rejects correct programs with false counterexamples, and it makes
+[`contracts.md`](spec/contracts.md)'s standing repair advice ("use `+!`") a
+no-op, because `+!` and `+` then have identical models.
+
+**The assume never stands alone.** The same guard is emitted first as an
+assertion in its own property class:
+
+```c
+__ESBMC_assert(<no-overflow guard>, "arith:<cause>:<span>");
+```
+
+That assertion is what keeps this a carve-out rather than a loophole. Pruning an
+aborting execution would otherwise let a *reachable* abort be silently proven
+away — the assume alone would report `Verified` for a program that dies at
+runtime, and in the limit a function that always aborts would vacuously satisfy
+any postcondition. The assert makes the abort's reachability its own reported
+obligation ([`ArithOverflowReachable`](spec/errors.md#arithoverflowreachable)),
+so the two together say exactly: *the contract holds on every returning
+execution, and here is whether an aborting one exists.* Neither half is sound
+without the other.
+
+**Scope.** The carve-out extends to program aborts and nothing else. It does not
+license assuming a `requires` the caller might violate, a user-supplied numeric
+bound, or any collection or capacity limit. A new assume qualifies only if the
+real program provably terminates on the pruned path *and* that termination is
+itself asserted as a distinct property.
+
+The widths the guard covers are `i8`/`u8` through `i64`/`u64`. 128-bit checked
+arithmetic has no guard, so it fails closed as non-modelable (`Skipped`) rather
+than reverting to the wrapping model — the same fail-closed precedent as
+`ConstI128`.
 
 ## Status taxonomy
 

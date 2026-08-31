@@ -34,10 +34,9 @@ fn circle_perimeter(r: i64) -> i64 vow {
 fn rect_perimeter(w: i64, h: i64) -> i64 vow {
     requires: w >= 0
     requires: h >= 0
-    requires: w <= 4611686018427387903 - h
     ensures: result >= 0
 } {
-    2 * (w + h)
+    2 *! (w +! h)
 }
 
 fn shape_at(p: Point) -> Point {

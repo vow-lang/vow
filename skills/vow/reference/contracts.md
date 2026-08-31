@@ -100,22 +100,22 @@ fn divide(x: i64, y: i64) -> i64 vow {
 
 ### Range Bounds
 
-Use range bounds only when they reflect genuine semantic constraints (e.g., overflow prevention), not to appease the verifier:
+Use range bounds only when they reflect genuine semantic constraints, not to appease the verifier. An operand bound whose only job is to stop wrapping is **not** such a constraint — the checked operator already says that, and says it without narrowing the function's domain:
 
 ```vow
 fn safe_add(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b >= 0,
-    requires: a <= 4611686018427387903,
-    requires: b <= 4611686018427387903,
     ensures: result >= a,
     ensures: result >= b
 } {
-    a + b
+    a +! b
 }
 ```
 
-The bounds here prevent `a + b` from overflowing `i64` — a legitimate semantic concern, not a verifier limitation.
+`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.
+
+A range bound earns its place when it excludes inputs the function genuinely has no answer for — `requires: x > -9223372036854775807` on `abs`, whose result is not representable at `i64::MIN` under any operator.
 
 ### Equality Postcondition
 
@@ -223,12 +223,10 @@ Where clauses on parameters become refinement types (additional `requires` for v
 
 ```vow
 fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
-    requires: a <= 4611686018427387903,
-    requires: b <= 4611686018427387903,
     ensures: result >= a,
     ensures: result >= b
 } {
-    a + b
+    a +! b
 }
 ```
 
@@ -279,7 +277,19 @@ fn double(x: i64) -> i64 vow {
 
 ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
 
-**Fix:** Bound the input or use checked arithmetic (`+!`).
+**Fix:** use checked arithmetic (`+!`), or bound the input.
+
+```vow
+fn double(x: i64) -> i64 vow {
+    ensures: result > x
+} {
+    x +! x
+}
+```
+
+This verifies. `+!` aborts on overflow instead of wrapping, and the verifier models that: an aborting execution never returns, so it cannot witness a violated `ensures`, and the wrapped value the counterexample was built from is no longer reachable. The two operators have genuinely different models — switching one character changes the verdict.
+
+What you get in exchange is a warning, not silence: because the abort is still *reachable* here (`x` near `i64::MAX`), the verifier reports [`ArithOverflowReachable`](errors.md#arithoverflowreachable) alongside the proof. Read it as "the postcondition holds whenever this returns, and it can fail to return." To rule the abort out as well, constrain the operands — and then the bound is a real precondition of the *caller*, not a bound invented for the verifier.
 
 ### Non-Inductive Loop Invariant
 
@@ -335,6 +345,8 @@ fn gcd(a: i64, b: i64) -> i64 vow {
 ```
 
 Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) — if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see "Collection Models for Verification") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.
+
+**The overflow-guard bound is this anti-pattern's most common disguise.** A clause like `requires: a <= 4611686018427387903` on an adding function looks semantic — it does describe a real property of `i64` — but its only purpose is to keep wrapping unreachable, and it pays for that by excluding inputs the function handles perfectly well. Use the checked operator instead: `a +! b` aborts rather than wraps, the verifier models the abort, and the contract keeps its true domain. See [Range Bounds](#range-bounds) and [Wrapping Arithmetic Overflow](#wrapping-arithmetic-overflow).
 
 ## Interpreting Counterexamples
 

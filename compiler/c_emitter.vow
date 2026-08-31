@@ -323,11 +323,16 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
             let inst: IrInst = insts[ii];
             let op: i64 = inst.op;
             let ok: bool = {
-                if op == IOP_CONST_I32() || op == IOP_CONST_I64() || op == IOP_CONST_F32()
+                // #585: a checked operator aborts on overflow, and the model
+                // only reproduces that abort for the widths
+                // `emit_checked_arith` has a guard for. 128-bit sites fail
+                // closed here (reported `Skipped`) rather than silently
+                // reverting to the wrapping model.
+                if is_checked_arith_op(op) { checked_arith_ty(inst) != ITY_UNIT() }
+                else if op == IOP_CONST_I32() || op == IOP_CONST_I64() || op == IOP_CONST_F32()
                    || op == IOP_CONST_F64() || op == IOP_CONST_BOOL() || op == IOP_CONST_UNIT()
                    || op == IOP_CONST_STR() || op == IOP_CONST_U8() || op == IOP_GET_ARG()
                    || op == IOP_WADD() || op == IOP_WSUB() || op == IOP_WMUL() || op == IOP_WDIV() || op == IOP_WREM()
-                   || op == IOP_CADD() || op == IOP_CSUB() || op == IOP_CMUL() || op == IOP_CDIV() || op == IOP_CREM()
                    || op == IOP_EQ() || op == IOP_NE() || op == IOP_LT() || op == IOP_LE() || op == IOP_GT() || op == IOP_GE()
                    || op == IOP_BITAND() || op == IOP_BITOR() || op == IOP_BITXOR() || op == IOP_SHL() || op == IOP_SHR()
                    || op == IOP_INT_CAST()
@@ -440,6 +445,11 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
             let name: String = iop_unsupported_name(op);
             if name.len() > 0 {
                 return name;
+            }
+            // #585: mirror the `is_modelable` gate so the Skipped reason names
+            // the real offender.
+            if is_checked_arith_op(op) && checked_arith_ty(inst) == ITY_UNIT() {
+                return cemit_str2(opcode_name(op), String::from(" at 128-bit width"));
             }
             if op == IOP_CALL() {
                 if inst.dk == IDATA_CALL_EXTERN() {
@@ -1302,24 +1312,31 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
 
     if op == IOP_GET_ARG() { return; }
 
-    if op == IOP_WADD() || op == IOP_CADD() {
+    // Wrapping operators are *specified* to wrap, so a plain C operator under
+    // the bit-vector encoding is already their exact model. The checked
+    // operators abort instead, which `emit_checked_arith` models (#585).
+    if op == IOP_WADD() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("+"));
         return;
     }
-    if op == IOP_WSUB() || op == IOP_CSUB() {
+    if op == IOP_WSUB() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("-"));
         return;
     }
-    if op == IOP_WMUL() || op == IOP_CMUL() {
+    if op == IOP_WMUL() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("*"));
         return;
     }
-    if op == IOP_WDIV() || op == IOP_CDIV() {
+    if op == IOP_WDIV() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("/"));
         return;
     }
-    if op == IOP_WREM() || op == IOP_CREM() {
+    if op == IOP_WREM() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("%"));
+        return;
+    }
+    if is_checked_arith_op(op) {
+        emit_checked_arith(out, inst, iargs, f.id);
         return;
     }
 
@@ -2823,6 +2840,393 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
     out.push_str(String::from("}\n"));
 }
 
+// ---------------------------------------------------------------------------
+// Checked-arithmetic abort model (#585)
+// ---------------------------------------------------------------------------
+// Mirror of `vow_verify::c_emitter`'s checked-arithmetic model. Vow's checked
+// operators abort with `ArithmeticOverflow` rather than wrapping, so each site
+// carries a no-overflow guard emitted twice: as an `__ESBMC_assert` (a reachable
+// abort is a real behaviour and must not be silently proven away) and as an
+// `__ESBMC_assume` (an overflowing execution aborts, so it never returns and
+// cannot witness an `ensures`). The two emitters must stay byte-identical —
+// `full_test.sh` Sections 4b/4c run every `tests/verify*` through both with
+// `compare_json`.
+
+// Preprocessor macro that compiles the `arith:` asserts out, leaving the
+// contract properties as the only checkable ones. Mirrors
+// `ARITH_ASSERT_SUPPRESS_MACRO`; it is a wire format shared by both compilers.
+fn arith_assert_suppress_macro() -> String {
+    String::from("VOW_NO_ARITH_ASSERT")
+}
+
+// The three checked opcodes that need a generated guard helper. `/!` and `%!`
+// guards are single comparisons, emitted inline.
+fn arith_helper_op_at(index: i64) -> i64 {
+    if index == 0 { return IOP_CADD(); }
+    if index == 1 { return IOP_CSUB(); }
+    IOP_CMUL()
+}
+
+// The integer widths the model covers. 128-bit is deliberately absent: it has no
+// guard, so `is_modelable` rejects it and the function is reported `Skipped`
+// rather than reverting to the wrapping model.
+fn arith_helper_ty_at(index: i64) -> i64 {
+    if index == 0 { return ITY_I8(); }
+    if index == 1 { return ITY_U8(); }
+    if index == 2 { return ITY_I16(); }
+    if index == 3 { return ITY_U16(); }
+    if index == 4 { return ITY_I32(); }
+    if index == 5 { return ITY_U32(); }
+    if index == 6 { return ITY_I64(); }
+    ITY_U64()
+}
+
+fn arith_ty_is_modelled(ty: i64) -> bool {
+    ty == ITY_I8() || ty == ITY_U8() || ty == ITY_I16() || ty == ITY_U16() ||
+    ty == ITY_I32() || ty == ITY_U32() || ty == ITY_I64() || ty == ITY_U64()
+}
+
+fn arith_ty_is_signed(ty: i64) -> bool {
+    ty == ITY_I8() || ty == ITY_I16() || ty == ITY_I32() || ty == ITY_I64()
+}
+
+fn arith_ty_bits(ty: i64) -> i64 {
+    if ty == ITY_I8() || ty == ITY_U8() { return 8; }
+    if ty == ITY_I16() || ty == ITY_U16() { return 16; }
+    if ty == ITY_I32() || ty == ITY_U32() { return 32; }
+    64
+}
+
+// The abort cause names carried in the `arith:<cause>:<start>:<len>` label.
+// Parsed back by `parse_arith_label`; renaming one breaks the diagnostic.
+fn arith_cause_add() -> String { String::from("add") }
+fn arith_cause_sub() -> String { String::from("sub") }
+fn arith_cause_mul() -> String { String::from("mul") }
+fn arith_cause_div_zero() -> String { String::from("div-zero") }
+fn arith_cause_div_overflow() -> String { String::from("div-overflow") }
+
+fn arith_cause_is_known(cause: String) -> bool {
+    cause == arith_cause_add() || cause == arith_cause_sub() || cause == arith_cause_mul() ||
+    cause == arith_cause_div_zero() || cause == arith_cause_div_overflow()
+}
+
+fn arith_op_cause(target_op: i64) -> String {
+    if target_op == IOP_CADD() { return arith_cause_add(); }
+    if target_op == IOP_CSUB() { return arith_cause_sub(); }
+    arith_cause_mul()
+}
+
+// Largest value of `ty` as a C expression. Written as literals rather than
+// <limits.h> macros so the emitted model stays self-contained. `u64`'s maximum
+// does not fit in `i64`, so the digits are spelled out per type.
+fn arith_max_digits(ty: i64) -> String {
+    if ty == ITY_I8() { return String::from("127"); }
+    if ty == ITY_U8() { return String::from("255"); }
+    if ty == ITY_I16() { return String::from("32767"); }
+    if ty == ITY_U16() { return String::from("65535"); }
+    if ty == ITY_I32() { return String::from("2147483647"); }
+    if ty == ITY_U32() { return String::from("4294967295"); }
+    if ty == ITY_I64() { return String::from("9223372036854775807"); }
+    String::from("18446744073709551615")
+}
+
+fn arith_max_literal(ty: i64) -> String {
+    let out: String = String::from("((");
+    out.push_str(ir_ty_to_c(ty));
+    out.push_str(String::from(")"));
+    out.push_str(arith_max_digits(ty));
+    if arith_ty_is_signed(ty) { out.push_str(String::from("LL")); }
+    else { out.push_str(String::from("ULL")); }
+    out.push_str(String::from(")"));
+    out
+}
+
+// `MIN` is spelled `(-MAX - 1)` because the most negative literal is not a valid
+// C integer literal (it parses as a negated unsigned long long).
+fn arith_min_literal(ty: i64) -> String {
+    if arith_ty_is_signed(ty) {
+        let out: String = String::from("(-");
+        out.push_str(arith_max_literal(ty));
+        out.push_str(String::from(" - 1)"));
+        return out;
+    }
+    let out: String = String::from("((");
+    out.push_str(ir_ty_to_c(ty));
+    out.push_str(String::from(")0)"));
+    out
+}
+
+fn arith_helper_name(target_op: i64, target_ty: i64) -> String {
+    let prefix: String = if arith_ty_is_signed(target_ty) { String::from("i") } else { String::from("u") };
+    let out: String = String::from("__vow_ovf_");
+    out.push_str(arith_op_cause(target_op));
+    out.push_str(String::from("_"));
+    out.push_str(prefix);
+    out.push_str(i64_to_string(arith_ty_bits(target_ty)));
+    out
+}
+
+// Emits one `__vow_ovf_{add,sub,mul}_{i,u}<bits>` predicate: `true` when the
+// operation would overflow, i.e. when the real program would abort.
+//
+// Every guard is itself overflow-free in C, so the model never trips a nested
+// obligation on its own arithmetic: the `MAX - b` / `MIN - b` forms are only
+// evaluated for the sign of `b` that keeps them in range, and the multiply form
+// special-cases 0 and -1 before dividing so it never evaluates `MIN / -1`.
+fn cemit_arith_overflow_helper(target_op: i64, target_ty: i64) -> String {
+    let c_ty: String = ir_ty_to_c(target_ty);
+    let max: String = arith_max_literal(target_ty);
+    let min: String = arith_min_literal(target_ty);
+    let out: String = String::from("static inline _Bool ");
+    out.push_str(arith_helper_name(target_op, target_ty));
+    out.push_str(String::from("("));
+    out.push_str(c_ty);
+    out.push_str(String::from(" a, "));
+    out.push_str(c_ty);
+    out.push_str(String::from(" b) {\n"));
+    if arith_ty_is_signed(target_ty) {
+        if target_op == IOP_CADD() {
+            out.push_str(str5(String::from("  if (b > 0) return a > "), max, String::from(" - b;\n  if (b < 0) return a < "), min, String::from(" - b;\n  return 0;\n")));
+        } else if target_op == IOP_CSUB() {
+            out.push_str(str5(String::from("  if (b > 0) return a < "), min, String::from(" + b;\n  if (b < 0) return a > "), max, String::from(" + b;\n  return 0;\n")));
+        } else {
+            out.push_str(String::from("  if (a == 0 || b == 0) return 0;\n"));
+            out.push_str(str3(String::from("  if (a == -1) return b == "), min, String::from(";\n")));
+            out.push_str(str3(String::from("  if (b == -1) return a == "), min, String::from(";\n")));
+            out.push_str(str5(String::from("  if (a > 0) return b > 0 ? a > "), max, String::from(" / b : b < "), min, String::from(" / a;\n")));
+            out.push_str(str5(String::from("  return b > 0 ? a < "), min, String::from(" / b : a < "), max, String::from(" / b;\n")));
+        }
+    } else if target_op == IOP_CADD() {
+        out.push_str(str3(String::from("  return a > "), max, String::from(" - b;\n")));
+    } else if target_op == IOP_CSUB() {
+        out.push_str(String::from("  return a < b;\n"));
+    } else {
+        out.push_str(str3(String::from("  return b != 0 && a > "), max, String::from(" / b;\n")));
+    }
+    out.push_str(String::from("}\n"));
+    out
+}
+
+fn func_has_checked_arith_op(f: IrFunction, target_op: i64, target_ty: i64) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == target_op && checked_arith_ty(inst) == target_ty {
+                return 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    0
+}
+
+fn scan_arith_needs_in_fns(fns: Vec<IrFunction>, start: i64, end: i64, target_op: i64, target_ty: i64) -> i64 {
+    let mut fi: i64 = start;
+    while fi < end {
+        let f: IrFunction = fns[fi];
+        if func_has_checked_arith_op(f, target_op, target_ty) == 1 {
+            return 1;
+        }
+        fi = fi + 1;
+    }
+    0
+}
+
+fn append_arith_helpers_for_fns(out: String, fns: Vec<IrFunction>, start: i64, end: i64) {
+    let mut emitted: bool = false;
+    let mut ti: i64 = 0;
+    while ti < 8 {
+        let ty: i64 = arith_helper_ty_at(ti);
+        let mut oi: i64 = 0;
+        while oi < 3 {
+            let op: i64 = arith_helper_op_at(oi);
+            if scan_arith_needs_in_fns(fns, start, end, op, ty) == 1 {
+                out.push_str(cemit_arith_overflow_helper(op, ty));
+                emitted = true;
+            }
+            oi = oi + 1;
+        }
+        ti = ti + 1;
+    }
+    if emitted { out.push_byte(10); }
+}
+
+fn append_arith_helpers_for_function(out: String, f: IrFunction) {
+    let mut emitted: bool = false;
+    let mut ti: i64 = 0;
+    while ti < 8 {
+        let ty: i64 = arith_helper_ty_at(ti);
+        let mut oi: i64 = 0;
+        while oi < 3 {
+            let op: i64 = arith_helper_op_at(oi);
+            if func_has_checked_arith_op(f, op, ty) == 1 {
+                out.push_str(cemit_arith_overflow_helper(op, ty));
+                emitted = true;
+            }
+            oi = oi + 1;
+        }
+        ti = ti + 1;
+    }
+    if emitted { out.push_byte(10); }
+}
+
+// `target_fi` is the target's function *id*, not its index in `fns` — the two
+// differ, and `emit_c_module_with_callees` is called with `f.id`. Matched by id
+// exactly like `scan_shift_op_in_module_fns`; indexing `fns[target_fi]` instead
+// reads the wrong function, or trips IndexOutOfBounds once an id exceeds the
+// function count.
+fn scan_arith_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis: Vec<i64>, target_op: i64, target_ty: i64) -> i64 {
+    let mut fi: i64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        let mut check: i64 = 0;
+        if f.id == target_fi { check = 1; }
+        if check == 0 {
+            let mut ci: i64 = 0;
+            while ci < callee_fis.len() {
+                if callee_fis[ci] == f.id { check = 1; ci = callee_fis.len(); }
+                ci = ci + 1;
+            }
+        }
+        if check == 1 {
+            if func_has_checked_arith_op(f, target_op, target_ty) == 1 { return 1; }
+        }
+        fi = fi + 1;
+    }
+    0
+}
+
+fn append_arith_helpers_for_module_fns(out: String, fns: Vec<IrFunction>, target_fi: i64, callee_fis: Vec<i64>) {
+    let mut emitted: bool = false;
+    let mut ti: i64 = 0;
+    while ti < 8 {
+        let ty: i64 = arith_helper_ty_at(ti);
+        let mut oi: i64 = 0;
+        while oi < 3 {
+            let op: i64 = arith_helper_op_at(oi);
+            if scan_arith_op_in_module_fns(fns, target_fi, callee_fis, op, ty) == 1 {
+                out.push_str(cemit_arith_overflow_helper(op, ty));
+                emitted = true;
+            }
+            oi = oi + 1;
+        }
+        ti = ti + 1;
+    }
+    if emitted { out.push_byte(10); }
+}
+
+// The integer type of a checked-arithmetic site. `IDATA_INTEGER` is what the
+// lowerer attaches; the `inst.ty` fallback keeps a hand-built or deserialized IR
+// working. Returns `ITY_UNIT()` when the site is not a modelled integer op —
+// 128-bit widths included, which the `is_modelable` gate rejects so the function
+// is reported `Skipped` rather than modelled with the wrong guard.
+fn checked_arith_ty(inst: IrInst) -> i64 {
+    let from_data: i64 = if inst.dk == IDATA_INTEGER() { inst.dv } else { inst.ty };
+    if arith_ty_is_modelled(from_data) { return from_data; }
+    ITY_UNIT()
+}
+
+// One `arith:<cause>:<start>:<len>` assert line.
+// `owner` is the id of the function this instruction belongs to — not always
+// the verify target, since a model co-emits its modelable callees. Spans are
+// file-relative, so without it the diagnostic would name the target and resolve
+// the span against the target's file.
+fn cemit_arith_assert(out: String, guard: String, cause: String, owner: i64, ostart: i64, olen: i64) {
+    let tail: String = str5(
+        i64_to_string(owner), String::from(":"), i64_to_string(ostart),
+        String::from(":"), i64_to_string(olen)
+    );
+    out.push_str(str7(
+        String::from("  __ESBMC_assert("), guard, String::from(", \"arith:"),
+        cause, String::from(":"), tail,
+        String::from("\");\n")
+    ));
+}
+
+fn cemit_arith_assume(out: String, guard: String) {
+    out.push_str(str3(String::from("  __ESBMC_assume("), guard, String::from(");\n")));
+}
+
+// Emits the abort-on-overflow model for one checked-arithmetic instruction.
+//
+// The assert precedes the assume so ESBMC checks the property on the unpruned
+// state. The asserts are compiled out under `arith_assert_suppress_macro()`,
+// which is how the contract-only projection is produced from the same emitted
+// text; the assumes are never suppressed, because they *are* the abort
+// semantics.
+fn emit_checked_arith(out: String, inst: IrInst, iargs: Vec<i64>, owner: i64) {
+    let ty: i64 = checked_arith_ty(inst);
+    if ty == ITY_UNIT() {
+        // 128-bit and non-integer checked arithmetic is rejected by the
+        // `is_modelable` gate, so the function never reaches the emitter. Fail
+        // closed rather than emit a guard for the wrong width.
+        emit_unsupported_for_verification(out, inst);
+        return;
+    }
+    let op: i64 = inst.op;
+    let a: i64 = iargs[0];
+    let b: i64 = iargs[1];
+    let va: String = cemit_str2(String::from("v"), i64_to_string(a));
+    let vb: String = cemit_str2(String::from("v"), i64_to_string(b));
+
+    // Guard expressions and their causes, in emission order.
+    let is_div_form: bool = op == IOP_CDIV() || op == IOP_CREM();
+    let signed_div: bool = op == IOP_CDIV() && arith_ty_is_signed(ty);
+    let guard0: String = if is_div_form {
+        cemit_str2(vb, String::from(" != 0"))
+    } else {
+        str5(String::from("!"), arith_helper_name(op, ty), String::from("("), va, cemit_str2(String::from(", "), cemit_str2(vb, String::from(")"))))
+    };
+    let cause0: String = if is_div_form { arith_cause_div_zero() } else { arith_op_cause(op) };
+    // Cranelift's `sdiv` traps on MIN / -1 at every width, and the routed
+    // 128-bit path reproduces it, so `/!` aborts there too. `%!` does not:
+    // `MIN % -1` is 0 (docs/spec/grammar.md).
+    let guard1: String = if signed_div {
+        str5(String::from("!("), va, cemit_str2(String::from(" == "), arith_min_literal(ty)), cemit_str2(String::from(" && "), vb), String::from(" == -1)"))
+    } else {
+        String::from("")
+    };
+
+    out.push_str(str3(String::from("#ifndef "), arith_assert_suppress_macro(), String::from("\n")));
+    cemit_arith_assert(out, guard0, cause0, owner, inst.ostart, inst.olen);
+    if signed_div {
+        cemit_arith_assert(out, guard1, arith_cause_div_overflow(), owner, inst.ostart, inst.olen);
+    }
+    out.push_str(String::from("#endif\n"));
+    cemit_arith_assume(out, guard0);
+    if signed_div {
+        cemit_arith_assume(out, guard1);
+    }
+
+    let c_op: String = if op == IOP_CADD() { String::from("+") }
+        else if op == IOP_CSUB() { String::from("-") }
+        else if op == IOP_CMUL() { String::from("*") }
+        else if op == IOP_CDIV() { String::from("/") }
+        else { String::from("%") };
+    emit_binop(out, inst.ty, inst.id, a, b, c_op);
+}
+
+// Project an emitted model onto its contract obligations alone, by defining the
+// suppression macro. Mirrors `vow_verify::c_emitter::contracts_only_source`.
+//
+// ESBMC reports one violated property per run, so a function whose checked
+// arithmetic can abort would otherwise mask its own contract verdict. Only the
+// asserts are suppressed, never the assumes, so the verdict this yields is the
+// verdict on returning executions — exactly what a contract constrains.
+fn contracts_only_source(c_src: String) -> String {
+    let out: String = String::from("#define ");
+    out.push_str(arith_assert_suppress_macro());
+    out.push_str(String::from(" 1\n"));
+    out.push_str(c_src);
+    out
+}
+
 fn func_has_integer_shift_op(f: IrFunction, target_op: i64, target_ty: i64) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
@@ -3131,6 +3535,7 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
     let need_shr_i32: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR(), ITY_I32());
     let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, need_shl_i32, need_shr_i32, vec_max, model_string_max, hashmap_max, btreemap_max);
     append_narrow_shift_helpers_for_fns(out, fns, 0, n);
+    append_arith_helpers_for_fns(out, fns, 0, n);
 
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let empty_modelable: Vec<i64> = Vec::new();
@@ -3197,6 +3602,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     let need_shr_i32: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR(), ITY_I32());
     let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, need_shl_i32, need_shr_i32, vec_max, model_string_max, hashmap_max, btreemap_max);
     append_narrow_shift_helpers_for_module_fns(out, fns, target_fi, callee_fis);
+    append_arith_helpers_for_module_fns(out, fns, target_fi, callee_fis);
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
 
     let mut ci: i64 = 0;

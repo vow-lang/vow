@@ -651,11 +651,6 @@ pub fn is_modelable(
                 | Opcode::WrappingMul
                 | Opcode::WrappingDiv
                 | Opcode::WrappingRem
-                | Opcode::CheckedAdd
-                | Opcode::CheckedSub
-                | Opcode::CheckedMul
-                | Opcode::CheckedDiv
-                | Opcode::CheckedRem
                 | Opcode::Eq
                 | Opcode::Ne
                 | Opcode::Lt
@@ -735,6 +730,17 @@ pub fn is_modelable(
                 // User-struct heap model: allocation and field writes are slot ops.
                 Opcode::RegionAlloc | Opcode::FieldSet => true,
 
+                // #585: a checked operator aborts on overflow, and the model
+                // only reproduces that abort for the widths
+                // `emit_checked_arith` has a guard for. 128-bit sites fail
+                // closed here (reported `Skipped`) rather than silently
+                // reverting to the wrapping model.
+                Opcode::CheckedAdd
+                | Opcode::CheckedSub
+                | Opcode::CheckedMul
+                | Opcode::CheckedDiv
+                | Opcode::CheckedRem => checked_integer_type(inst).is_some(),
+
                 Opcode::RemF32
                 | Opcode::RemF64
                 | Opcode::ConstI128
@@ -810,6 +816,15 @@ fn first_unsupported_opcode(
                 | Opcode::Store
                 | Opcode::LinearConsume
                 | Opcode::LinearBorrow => return Some(format!("{:?}", inst.opcode)),
+                Opcode::CheckedAdd
+                | Opcode::CheckedSub
+                | Opcode::CheckedMul
+                | Opcode::CheckedDiv
+                | Opcode::CheckedRem
+                    if checked_integer_type(inst).is_none() =>
+                {
+                    return Some(format!("{:?} at 128-bit width", inst.opcode));
+                }
                 Opcode::Call => match &inst.data {
                     InstData::CallExtern(name) => {
                         if !is_known_builtin(name) {
@@ -970,27 +985,34 @@ fn emit_inst(
             ));
         }
 
-        // Arithmetic
-        Opcode::WrappingAdd | Opcode::CheckedAdd => {
+        // Arithmetic. Wrapping operators are *specified* to wrap, so a plain C
+        // operator under the bit-vector encoding is already their exact model.
+        // The checked operators abort instead, which `emit_checked_arith` models.
+        Opcode::WrappingAdd => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} + v{};\n", id, a, b));
         }
-        Opcode::WrappingSub | Opcode::CheckedSub => {
+        Opcode::WrappingSub => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} - v{};\n", id, a, b));
         }
-        Opcode::WrappingMul | Opcode::CheckedMul => {
+        Opcode::WrappingMul => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} * v{};\n", id, a, b));
         }
-        Opcode::WrappingDiv | Opcode::CheckedDiv => {
+        Opcode::WrappingDiv => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} / v{};\n", id, a, b));
         }
-        Opcode::WrappingRem | Opcode::CheckedRem => {
+        Opcode::WrappingRem => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} % v{};\n", id, a, b));
         }
+        Opcode::CheckedAdd
+        | Opcode::CheckedSub
+        | Opcode::CheckedMul
+        | Opcode::CheckedDiv
+        | Opcode::CheckedRem => emit_checked_arith(inst, out, current_func_id),
 
         // Float arithmetic
         Opcode::AddF32 | Opcode::AddF64 => {
@@ -2475,6 +2497,23 @@ fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
     needs
 }
 
+/// The width/signedness-specialized C helpers a module's model needs in its
+/// preamble. Both sets are derived from one IR walk per emitted module, so the
+/// preamble emits exactly the flavors used and nothing more.
+struct ModelHelpers {
+    shifts: ShiftNeeds,
+    arith: ArithNeeds,
+}
+
+impl ModelHelpers {
+    fn scan(funcs: &[&Function]) -> Self {
+        Self {
+            shifts: scan_shift_needs(funcs),
+            arith: scan_arith_needs(funcs),
+        }
+    }
+}
+
 fn c_uint_type(width: IntegerWidth) -> &'static str {
     match width {
         IntegerWidth::W8 => "uint8_t",
@@ -2544,7 +2583,335 @@ fn emit_shift_helper(
     }
 }
 
-fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits) {
+// ---------------------------------------------------------------------------
+// Checked-arithmetic abort model (#585)
+// ---------------------------------------------------------------------------
+
+/// Which abort a checked-arithmetic site can take. Vow's checked operators
+/// abort with `ArithmeticOverflow` instead of wrapping (`docs/spec/grammar.md`,
+/// "Checked Arithmetic"), and the cause is worth distinguishing in the
+/// diagnostic: a divisor of zero is a different authoring mistake from a product
+/// that does not fit.
+///
+/// The `label` strings are the second field of the `arith:` property label and
+/// are parsed back by `vow-verify::esbmc::parse_arith_label`; they are a wire
+/// format shared with `compiler/c_emitter.vow` and must not be renamed casually.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ArithAbort {
+    Add,
+    Sub,
+    Mul,
+    /// `/!` or `%!` with a zero divisor.
+    DivZero,
+    /// Signed `/!` on `MIN / -1`, whose quotient is not representable.
+    DivOverflow,
+}
+
+impl ArithAbort {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Mul => "mul",
+            Self::DivZero => "div-zero",
+            Self::DivOverflow => "div-overflow",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "add" => Some(Self::Add),
+            "sub" => Some(Self::Sub),
+            "mul" => Some(Self::Mul),
+            "div-zero" => Some(Self::DivZero),
+            "div-overflow" => Some(Self::DivOverflow),
+            _ => None,
+        }
+    }
+
+    /// Human-readable cause, used verbatim in the `ArithOverflowReachable`
+    /// diagnostic message.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Add => "addition overflows",
+            Self::Sub => "subtraction overflows",
+            Self::Mul => "multiplication overflows",
+            Self::DivZero => "divisor is zero",
+            Self::DivOverflow => "quotient is not representable (MIN / -1)",
+        }
+    }
+}
+
+/// Preprocessor macro that compiles the `arith:` obligations out of an emitted
+/// model, leaving the contract properties as the only checkable ones. Defined by
+/// [`contracts_only_source`]; the same name is emitted by
+/// `compiler/c_emitter.vow`, so it is a wire format shared by both compilers.
+pub const ARITH_ASSERT_SUPPRESS_MACRO: &str = "VOW_NO_ARITH_ASSERT";
+
+/// Project an emitted model onto its *contract* obligations alone, by defining
+/// [`ARITH_ASSERT_SUPPRESS_MACRO`].
+///
+/// ESBMC reports one violated property per run, so a function whose checked
+/// arithmetic can abort would otherwise mask its own contract verdict: the
+/// `arith:` property fails first and the run never says whether the `ensures`
+/// holds. Re-running this projection answers that second question. The abort
+/// semantics are unchanged — only the asserts are suppressed, never the assumes
+/// — so the verdict it yields is the verdict on returning executions, which is
+/// exactly what a contract constrains.
+///
+/// Returning a distinct source (rather than passing `-D` on the command line)
+/// keeps the verify cache honest: the two runs ask different questions and hash
+/// to different keys.
+pub fn contracts_only_source(c_src: &str) -> String {
+    format!("#define {ARITH_ASSERT_SUPPRESS_MACRO} 1\n{c_src}")
+}
+
+/// Set of `(op, signedness, width)` overflow-guard helper flavors the module
+/// actually uses. Mirrors [`ShiftNeeds`]; only `+!`/`-!`/`*!` need a helper,
+/// since the `/!`/`%!` guards are single comparisons emitted inline.
+type ArithNeeds = std::collections::BTreeSet<(ArithAbort, IntegerSignedness, IntegerWidth)>;
+
+/// The helper flavor a checked opcode needs, or `None` for the div/rem forms
+/// whose guards are emitted inline.
+fn checked_helper_abort(opcode: Opcode) -> Option<ArithAbort> {
+    match opcode {
+        Opcode::CheckedAdd => Some(ArithAbort::Add),
+        Opcode::CheckedSub => Some(ArithAbort::Sub),
+        Opcode::CheckedMul => Some(ArithAbort::Mul),
+        _ => None,
+    }
+}
+
+fn scan_arith_needs(funcs: &[&Function]) -> ArithNeeds {
+    let mut needs = ArithNeeds::new();
+    for func in funcs {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Some(abort) = checked_helper_abort(inst.opcode)
+                    && let Some(int_ty) = checked_integer_type(inst)
+                {
+                    needs.insert((abort, int_ty.signedness, int_ty.width));
+                }
+            }
+        }
+    }
+    needs
+}
+
+/// The integer type of a checked-arithmetic site. `InstData::Integer` is what
+/// the lowerer attaches (`vow-ir/src/lower/mod.rs::binop_opcode`); the `inst.ty`
+/// fallback keeps a hand-built or deserialized IR working. `None` means the site
+/// is not a modelable integer op — 128-bit widths included, which the
+/// `is_modelable` gate rejects so the function is reported `Skipped` rather than
+/// modelled with the wrong guard.
+fn checked_integer_type(inst: &Inst) -> Option<IntegerType> {
+    let int_ty = match inst.data {
+        InstData::Integer(int_ty) => int_ty,
+        _ => ir_ty_to_integer_type(inst.ty)?,
+    };
+    match int_ty.width {
+        IntegerWidth::W128 => None,
+        _ => Some(int_ty),
+    }
+}
+
+fn ir_ty_to_integer_type(ty: Ty) -> Option<IntegerType> {
+    let parts = match ty {
+        Ty::I8 => (IntegerWidth::W8, IntegerSignedness::Signed),
+        Ty::U8 => (IntegerWidth::W8, IntegerSignedness::Unsigned),
+        Ty::I16 => (IntegerWidth::W16, IntegerSignedness::Signed),
+        Ty::U16 => (IntegerWidth::W16, IntegerSignedness::Unsigned),
+        Ty::I32 => (IntegerWidth::W32, IntegerSignedness::Signed),
+        Ty::U32 => (IntegerWidth::W32, IntegerSignedness::Unsigned),
+        Ty::I64 => (IntegerWidth::W64, IntegerSignedness::Signed),
+        Ty::U64 => (IntegerWidth::W64, IntegerSignedness::Unsigned),
+        Ty::I128 => (IntegerWidth::W128, IntegerSignedness::Signed),
+        Ty::U128 => (IntegerWidth::W128, IntegerSignedness::Unsigned),
+        _ => return None,
+    };
+    Some(IntegerType::new(parts.0, parts.1))
+}
+
+/// Largest / smallest value of an integer type, as a C expression. Written as
+/// literals rather than `<limits.h>` macros so the emitted model stays
+/// self-contained, and `MIN` is spelled `(-MAX - 1)` because `-9223372036854775808`
+/// is not a valid C integer literal (it parses as a negated `unsigned long long`).
+fn c_int_max_literal(int_ty: IntegerType) -> String {
+    let bits = int_ty.width.bits();
+    match int_ty.signedness {
+        IntegerSignedness::Unsigned => format!(
+            "(({}){}ULL)",
+            c_uint_type(int_ty.width),
+            (u128::MAX >> (128 - bits))
+        ),
+        IntegerSignedness::Signed => format!(
+            "(({}){}LL)",
+            c_int_type(int_ty.width),
+            (u128::MAX >> (128 - bits + 1))
+        ),
+    }
+}
+
+fn c_int_min_literal(int_ty: IntegerType) -> String {
+    match int_ty.signedness {
+        IntegerSignedness::Unsigned => format!("(({})0)", c_uint_type(int_ty.width)),
+        IntegerSignedness::Signed => format!("(-{} - 1)", c_int_max_literal(int_ty)),
+    }
+}
+
+fn arith_helper_name(abort: ArithAbort, int_ty: IntegerType) -> String {
+    let prefix = match int_ty.signedness {
+        IntegerSignedness::Signed => "i",
+        IntegerSignedness::Unsigned => "u",
+    };
+    format!(
+        "__vow_ovf_{}_{}{}",
+        abort.label(),
+        prefix,
+        int_ty.width.bits()
+    )
+}
+
+/// Emits one `__vow_ovf_{add,sub,mul}_{i,u}<bits>` predicate: `true` when the
+/// operation would overflow, i.e. when the real program would abort.
+///
+/// Every guard is itself overflow-free in C, so the model never trips a nested
+/// obligation on its own arithmetic: the `MAX - b` / `MIN - b` forms are only
+/// evaluated for the sign of `b` that keeps them in range, and the multiply form
+/// special-cases `0` and `-1` before dividing so it never evaluates `MIN / -1`.
+/// The guards were validated against exhaustive ground truth over the whole
+/// `i8`/`u8` domain; the formulas are width-generic.
+fn emit_arith_helper(
+    out: &mut String,
+    abort: ArithAbort,
+    signedness: IntegerSignedness,
+    width: IntegerWidth,
+) {
+    let int_ty = IntegerType::new(width, signedness);
+    let name = arith_helper_name(abort, int_ty);
+    let c_ty = match signedness {
+        IntegerSignedness::Signed => c_int_type(width),
+        IntegerSignedness::Unsigned => c_uint_type(width),
+    };
+    let max = c_int_max_literal(int_ty);
+    let min = c_int_min_literal(int_ty);
+    let body = match (abort, signedness) {
+        (ArithAbort::Add, IntegerSignedness::Unsigned) => format!("  return a > {max} - b;\n"),
+        (ArithAbort::Sub, IntegerSignedness::Unsigned) => "  return a < b;\n".to_string(),
+        (ArithAbort::Mul, IntegerSignedness::Unsigned) => {
+            format!("  return b != 0 && a > {max} / b;\n")
+        }
+        (ArithAbort::Add, IntegerSignedness::Signed) => format!(
+            "  if (b > 0) return a > {max} - b;\n  if (b < 0) return a < {min} - b;\n  return 0;\n"
+        ),
+        (ArithAbort::Sub, IntegerSignedness::Signed) => format!(
+            "  if (b > 0) return a < {min} + b;\n  if (b < 0) return a > {max} + b;\n  return 0;\n"
+        ),
+        (ArithAbort::Mul, IntegerSignedness::Signed) => format!(
+            "  if (a == 0 || b == 0) return 0;\n\
+             \x20 if (a == -1) return b == {min};\n\
+             \x20 if (b == -1) return a == {min};\n\
+             \x20 if (a > 0) return b > 0 ? a > {max} / b : b < {min} / a;\n\
+             \x20 return b > 0 ? a < {min} / b : a < {max} / b;\n"
+        ),
+        (ArithAbort::DivZero | ArithAbort::DivOverflow, _) => {
+            unreachable!("div guards are emitted inline, not as helpers")
+        }
+    };
+    out.push_str(&format!(
+        "static inline _Bool {name}({c_ty} a, {c_ty} b) {{\n{body}}}\n"
+    ));
+}
+
+/// Emits the abort-on-overflow model for one checked-arithmetic instruction.
+///
+/// Vow's `+!`/`-!`/`*!`/`/!`/`%!` abort rather than wrap, so each site carries
+/// two obligations, and both are emitted here:
+///
+/// * `__ESBMC_assert` on the no-overflow guard, labelled `arith:<cause>:<span>`.
+///   A *reachable* abort is a real program behaviour; without this assert the
+///   assume below would silently prove it away. The `arith:` prefix keeps it a
+///   distinct property class from `vow:N`, so a reachable abort is reported as a
+///   diagnostic rather than mislabelled as a contract violation.
+/// * `__ESBMC_assume` on the same guard. An overflowing execution aborts, so it
+///   never returns and can never witness an `ensures` or a loop `invariant`.
+///   Pruning it models *termination*, not a real behaviour — the carve-out
+///   `docs/verifier-discipline.md` grants this obligation. This is what makes
+///   `docs/spec/contracts.md`'s standing advice ("use `+!`") actually change the
+///   verdict.
+///
+/// The assert precedes the assume so ESBMC checks the property on the
+/// unpruned state. Earlier sites' assumes do constrain later sites, so the probe
+/// reports the *first* reachable abort in a function rather than all of them.
+fn emit_checked_arith(inst: &Inst, out: &mut String, owner: FuncId) {
+    let id = inst.id.0;
+    let Some(int_ty) = checked_integer_type(inst) else {
+        // 128-bit and non-integer checked arithmetic is rejected by the
+        // `is_modelable` gate, so the function never reaches the emitter. Fail
+        // closed rather than emit a guard for the wrong width.
+        emit_unsupported_for_verification(inst, out);
+        return;
+    };
+    let (a, b) = (inst.args[0].0, inst.args[1].0);
+    let span = inst.origin;
+
+    let mut guards: Vec<(ArithAbort, String)> = Vec::new();
+    if let Some(abort) = checked_helper_abort(inst.opcode) {
+        let helper = arith_helper_name(abort, int_ty);
+        guards.push((abort, format!("!{helper}(v{a}, v{b})")));
+    } else {
+        guards.push((ArithAbort::DivZero, format!("v{b} != 0")));
+        // Cranelift's `sdiv` traps on `MIN / -1` at every width, and the
+        // 128-bit routed path reproduces it (`cranelift_backend.rs`), so `/!`
+        // aborts there too. `%!` does not: `MIN % -1` is `0` (grammar.md).
+        if inst.opcode == Opcode::CheckedDiv && int_ty.signedness == IntegerSignedness::Signed {
+            let min = c_int_min_literal(int_ty);
+            guards.push((
+                ArithAbort::DivOverflow,
+                format!("!(v{a} == {min} && v{b} == -1)"),
+            ));
+        }
+    }
+
+    // The asserts are compiled out under `ARITH_ASSERT_SUPPRESS_MACRO`, which is
+    // how `contracts_only_source` produces the contract-only variant of this
+    // model from the very same emitted text. The assumes are never suppressed:
+    // they *are* the abort semantics, and dropping them would resurrect the
+    // wrapping model this whole path exists to replace.
+    //
+    // The label carries `owner` — the id of the function this instruction
+    // belongs to, which is *not* always the verify target: a model co-emits its
+    // modelable callees, so a callee's site can be the one that fires. Spans are
+    // file-relative, so without the owner the diagnostic would name the target
+    // and resolve the span against the target's file, pointing into unrelated
+    // source. Mirrors how `vow:pre:<func_id>:<vow_id>` already carries a
+    // callee's identity.
+    out.push_str(&format!("#ifndef {ARITH_ASSERT_SUPPRESS_MACRO}\n"));
+    for (abort, guard) in &guards {
+        out.push_str(&format!(
+            "  __ESBMC_assert({guard}, \"arith:{}:{}:{}:{}\");\n",
+            abort.label(),
+            owner.0,
+            span.start,
+            span.len
+        ));
+    }
+    out.push_str("#endif\n");
+    for (_, guard) in &guards {
+        out.push_str(&format!("  __ESBMC_assume({guard});\n"));
+    }
+    let op = match inst.opcode {
+        Opcode::CheckedAdd => "+",
+        Opcode::CheckedSub => "-",
+        Opcode::CheckedMul => "*",
+        Opcode::CheckedDiv => "/",
+        Opcode::CheckedRem => "%",
+        _ => unreachable!("emit_checked_arith called on {:?}", inst.opcode),
+    };
+    out.push_str(&format!("  v{id} = v{a} {op} v{b};\n"));
+}
+
+fn emit_c_preamble(out: &mut String, helpers: &ModelHelpers, limits: &VerifyLimits) {
     out.push_str("#include <stdint.h>\n");
     out.push_str("#include <stdlib.h>\n");
     out.push_str("#include <stdbool.h>\n");
@@ -2583,10 +2950,13 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
         "typedef struct {{ int64_t len; int64_t keys[{btreemap_max}]; int64_t vals[{btreemap_max}]; }} __vow_btreemap_t;\n",
     ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
-    for &(is_shl, signedness, width) in shifts {
+    for &(is_shl, signedness, width) in &helpers.shifts {
         emit_shift_helper(out, is_shl, signedness, width);
     }
-    if !shifts.is_empty() {
+    for &(abort, signedness, width) in &helpers.arith {
+        emit_arith_helper(out, abort, signedness, width);
+    }
+    if !helpers.shifts.is_empty() || !helpers.arith.is_empty() {
         out.push('\n');
     }
 }
@@ -2637,8 +3007,8 @@ pub fn emit_c_module(
     limits: &VerifyLimits,
 ) -> String {
     let mut out = String::new();
-    let shifts = scan_shift_needs(funcs);
-    emit_c_preamble(&mut out, &shifts, limits);
+    let helpers = ModelHelpers::scan(funcs);
+    emit_c_preamble(&mut out, &helpers, limits);
     for func in funcs {
         out.push_str(&emit_c_function(func, const_fns, limits));
         out.push('\n');
@@ -2669,8 +3039,8 @@ pub fn emit_c_module_with_callees(
             all_funcs.push(callee);
         }
     }
-    let shifts = scan_shift_needs(&all_funcs);
-    emit_c_preamble(&mut out, &shifts, &effective_limits);
+    let helpers = ModelHelpers::scan(&all_funcs);
+    emit_c_preamble(&mut out, &helpers, &effective_limits);
 
     // Forward declarations for all callees
     for fid in callee_ids {
@@ -2780,6 +3150,501 @@ mod tests {
             Ty::U8 => IntegerType::U8,
             _ => IntegerType::I64,
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Checked-arithmetic abort model (#585)
+    // -----------------------------------------------------------------------
+
+    /// A one-block function computing `p0 <op> p1` at `ty`, so a test can read
+    /// the emitted model for a single arithmetic site.
+    fn arith_func(op: Opcode, ty: Ty, origin: Span) -> Function {
+        // Attach the true integer type; `integer_test_data`'s fallback would
+        // claim I64 for the widths it does not enumerate, which is exactly the
+        // lie the 128-bit gate must not be tested against.
+        let int_ty = ir_ty_to_integer_type(ty).expect("arith_func needs an integer type");
+        let mut binop = inst(2, op, ty, vec![0, 1], InstData::Integer(int_ty));
+        binop.origin = origin;
+        Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![ty, ty],
+            param_names: vec!["a".to_string(), "b".to_string()],
+            return_ty: ty,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, ty, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, ty, vec![], InstData::ArgIndex(1)),
+                    binop,
+                    inst(3, Opcode::Return, ty, vec![2], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    /// A module holding just `f`, for the non-modelable gate.
+    fn arith_module(f: &Function) -> Module {
+        Module {
+            name: String::new(),
+            functions: vec![f.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        }
+    }
+
+    fn arith_c(op: Opcode, ty: Ty) -> String {
+        let f = arith_func(op, ty, Span::new(92, 6));
+        emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default())
+    }
+
+    // The whole point of #585: a checked operator must not emit the same model
+    // as its wrapping sibling. Wrapping is specified to wrap, so a bare C
+    // operator is exact; checked aborts, so it carries an obligation.
+    #[test]
+    fn checked_arithmetic_is_modelled_differently_from_wrapping() {
+        for (wrapping, checked) in [
+            (Opcode::WrappingAdd, Opcode::CheckedAdd),
+            (Opcode::WrappingSub, Opcode::CheckedSub),
+            (Opcode::WrappingMul, Opcode::CheckedMul),
+            (Opcode::WrappingDiv, Opcode::CheckedDiv),
+            (Opcode::WrappingRem, Opcode::CheckedRem),
+        ] {
+            let w = arith_c(wrapping, Ty::I64);
+            let c = arith_c(checked, Ty::I64);
+            assert!(
+                !w.contains("arith:") && !w.contains("__vow_ovf_"),
+                "{wrapping:?} must emit no overflow obligation:\n{w}"
+            );
+            assert!(
+                c.contains("arith:"),
+                "{checked:?} must emit an arith obligation:\n{c}"
+            );
+            assert_ne!(w, c, "{wrapping:?} and {checked:?} must not share a model");
+        }
+    }
+
+    // Each site emits the assert *before* the assume, so the property is checked
+    // on the unpruned state. Both name the same guard.
+    #[test]
+    fn checked_site_asserts_then_assumes_the_same_guard() {
+        let c = arith_c(Opcode::CheckedAdd, Ty::I64);
+        let assert_at = c
+            .find(r#"__ESBMC_assert(!__vow_ovf_add_i64(v0, v1), "arith:add:0:92:6");"#)
+            .unwrap_or_else(|| panic!("missing labelled assert:\n{c}"));
+        let assume_at = c
+            .find("__ESBMC_assume(!__vow_ovf_add_i64(v0, v1));")
+            .unwrap_or_else(|| panic!("missing assume:\n{c}"));
+        assert!(
+            assert_at < assume_at,
+            "the assert must precede the pruning assume:\n{c}"
+        );
+        assert!(c.contains("v2 = v0 + v1;"), "operation still emitted:\n{c}");
+    }
+
+    // The label carries the cause, the *owning function's id*, and the
+    // operator's own span. The owner is what lets the driver attribute the
+    // warning to the function the operator lives in (not always the verify
+    // target); the span is what points the diagnostic at the source.
+    #[test]
+    fn arith_label_carries_cause_owner_and_span() {
+        for (op, ty, expected) in [
+            (Opcode::CheckedAdd, Ty::I64, "arith:add:0:7:3"),
+            (Opcode::CheckedSub, Ty::U64, "arith:sub:0:7:3"),
+            (Opcode::CheckedMul, Ty::I32, "arith:mul:0:7:3"),
+            (Opcode::CheckedRem, Ty::I64, "arith:div-zero:0:7:3"),
+        ] {
+            let f = arith_func(op, ty, Span::new(7, 3));
+            let c = emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default());
+            assert!(c.contains(expected), "expected {expected} in:\n{c}");
+        }
+    }
+
+    // `/!` aborts on MIN / -1 (Cranelift's sdiv traps there, and the routed
+    // 128-bit path reproduces it); `%!` does not — grammar.md fixes MIN % -1 at
+    // 0. The model must not invent an obligation the runtime does not have.
+    #[test]
+    fn signed_div_guards_min_over_minus_one_but_rem_does_not() {
+        let div = arith_c(Opcode::CheckedDiv, Ty::I64);
+        assert!(
+            div.contains("arith:div-zero:0:92:6") && div.contains("arith:div-overflow:0:92:6"),
+            "signed /! needs both a zero-divisor and a MIN/-1 guard:\n{div}"
+        );
+        let rem = arith_c(Opcode::CheckedRem, Ty::I64);
+        assert!(
+            rem.contains("arith:div-zero:0:92:6"),
+            "%! needs the zero-divisor guard:\n{rem}"
+        );
+        assert!(
+            !rem.contains("div-overflow"),
+            "MIN % -1 is 0 and does not abort; %! must carry no overflow guard:\n{rem}"
+        );
+        // Unsigned division has no MIN/-1 case at all.
+        let udiv = arith_c(Opcode::CheckedDiv, Ty::U64);
+        assert!(
+            !udiv.contains("div-overflow"),
+            "unsigned /! has no MIN/-1 case:\n{udiv}"
+        );
+    }
+
+    // `contracts_only_source` must suppress the asserts and keep the assumes:
+    // dropping the assumes would resurrect the wrapping model this path
+    // replaces, and keeping the asserts would leave the contract verdict masked.
+    #[test]
+    fn contracts_only_source_drops_asserts_and_keeps_assumes() {
+        let c = arith_c(Opcode::CheckedAdd, Ty::I64);
+        assert!(
+            c.contains(&format!("#ifndef {ARITH_ASSERT_SUPPRESS_MACRO}")) && c.contains("#endif"),
+            "the arith asserts must be conditionally compiled:\n{c}"
+        );
+        let only = contracts_only_source(&c);
+        assert!(
+            only.starts_with(&format!("#define {ARITH_ASSERT_SUPPRESS_MACRO} 1\n")),
+            "projection must define the suppression macro:\n{only}"
+        );
+        assert!(
+            only.contains("__ESBMC_assume(!__vow_ovf_add_i64(v0, v1));"),
+            "the abort assume must survive the projection:\n{only}"
+        );
+    }
+
+    // Only the flavors actually used are emitted, and each is emitted once.
+    #[test]
+    fn preamble_emits_exactly_the_overflow_helpers_used() {
+        let c = arith_c(Opcode::CheckedAdd, Ty::U64);
+        assert_eq!(
+            c.matches("__vow_ovf_add_u64(uint64_t a, uint64_t b)")
+                .count(),
+            1,
+            "the used helper is defined exactly once:\n{c}"
+        );
+        for unused in [
+            "__vow_ovf_add_i64(",
+            "__vow_ovf_sub_u64(",
+            "__vow_ovf_mul_u64(",
+        ] {
+            assert!(
+                !c.contains(unused),
+                "unused helper {unused} must not be emitted:\n{c}"
+            );
+        }
+        // Div/rem guards are inline comparisons, so they pull in no helper.
+        let d = arith_c(Opcode::CheckedDiv, Ty::I64);
+        assert!(!d.contains("__vow_ovf_"), "div guards need no helper:\n{d}");
+    }
+
+    // 128-bit checked arithmetic has no guard, so it must fail closed as
+    // non-modelable (reported `Skipped`) rather than silently fall back to the
+    // wrapping model. `ConstI128` already set this precedent.
+    #[test]
+    fn checked_arithmetic_at_128_bits_is_not_modelable() {
+        for ty in [Ty::I128, Ty::U128] {
+            for op in [
+                Opcode::CheckedAdd,
+                Opcode::CheckedSub,
+                Opcode::CheckedMul,
+                Opcode::CheckedDiv,
+                Opcode::CheckedRem,
+            ] {
+                let f = arith_func(op, ty, sp());
+                let module = arith_module(&f);
+                let reason = non_modelable_reason(&f, &module, &HashMap::new())
+                    .unwrap_or_else(|| panic!("{op:?} at {ty:?} must be non-modelable"));
+                assert!(
+                    reason.contains("128-bit width"),
+                    "{op:?} at {ty:?}: unexpected reason {reason}"
+                );
+            }
+        }
+        // The narrower widths stay modelable.
+        for ty in [Ty::I32, Ty::I64, Ty::U64] {
+            let f = arith_func(Opcode::CheckedAdd, ty, sp());
+            let module = arith_module(&f);
+            assert!(
+                non_modelable_reason(&f, &module, &HashMap::new()).is_none(),
+                "CheckedAdd at {ty:?} must be modelable"
+            );
+        }
+    }
+
+    /// Compiles the *emitted* overflow guards and checks them against
+    /// `__builtin_*_overflow` ground truth: exhaustively over the whole 8-bit
+    /// domain, and over boundary plus deterministic pseudo-random values at 16,
+    /// 32 and 64 bits.
+    ///
+    /// This is the test that matters most for #585. A guard that is merely
+    /// *close* to right is a silent unsoundness in both directions — too strict
+    /// and the assume prunes real returning executions (false proofs); too loose
+    /// and a reachable abort goes unreported. Asserting on the emitted C text
+    /// cannot catch an off-by-one in the formula, so the C is actually run.
+    ///
+    /// Skipped (not failed) when no C compiler is on PATH.
+    #[test]
+    #[cfg(unix)]
+    fn emitted_overflow_guards_match_builtin_ground_truth() {
+        let Some(cc) = ["cc", "gcc", "clang"].into_iter().find(|c| {
+            std::process::Command::new(c)
+                .arg("--version")
+                .output()
+                .is_ok()
+        }) else {
+            eprintln!("no C compiler on PATH; skipping guard brute-force");
+            return;
+        };
+
+        let mut src =
+            String::from("#include <stdint.h>\n#include <stdio.h>\n#include <stdbool.h>\n");
+        // Emit every guard flavor the emitter can produce for the modelled widths.
+        let widths = [
+            IntegerWidth::W8,
+            IntegerWidth::W16,
+            IntegerWidth::W32,
+            IntegerWidth::W64,
+        ];
+        for &width in &widths {
+            for signedness in [IntegerSignedness::Signed, IntegerSignedness::Unsigned] {
+                for abort in [ArithAbort::Add, ArithAbort::Sub, ArithAbort::Mul] {
+                    emit_arith_helper(&mut src, abort, signedness, width);
+                }
+            }
+        }
+
+        src.push_str(
+            "static long bad = 0;\n\
+             static uint64_t rng_state = 0x243f6a8885a308d3ULL;\n\
+             static uint64_t rng(void) {\n\
+             \x20 rng_state ^= rng_state << 13; rng_state ^= rng_state >> 7;\n\
+             \x20 rng_state ^= rng_state << 17; return rng_state;\n\
+             }\n",
+        );
+
+        // One checker per (width, signedness): compares each emitted guard
+        // against the corresponding __builtin_*_overflow on the same types.
+        for &width in &widths {
+            for signedness in [IntegerSignedness::Signed, IntegerSignedness::Unsigned] {
+                let int_ty = IntegerType::new(width, signedness);
+                let bits = width.bits();
+                let c_ty = match signedness {
+                    IntegerSignedness::Signed => c_int_type(width),
+                    IntegerSignedness::Unsigned => c_uint_type(width),
+                };
+                let tag = match signedness {
+                    IntegerSignedness::Signed => "i",
+                    IntegerSignedness::Unsigned => "u",
+                };
+                let add = arith_helper_name(ArithAbort::Add, int_ty);
+                let sub = arith_helper_name(ArithAbort::Sub, int_ty);
+                let mul = arith_helper_name(ArithAbort::Mul, int_ty);
+                src.push_str(&format!(
+                    "static void check_{tag}{bits}({c_ty} a, {c_ty} b) {{\n\
+                     \x20 {c_ty} r;\n\
+                     \x20 if ({add}(a, b) != __builtin_add_overflow(a, b, &r)) {{ printf(\"ADD {tag}{bits}\\n\"); bad++; }}\n\
+                     \x20 if ({sub}(a, b) != __builtin_sub_overflow(a, b, &r)) {{ printf(\"SUB {tag}{bits}\\n\"); bad++; }}\n\
+                     \x20 if ({mul}(a, b) != __builtin_mul_overflow(a, b, &r)) {{ printf(\"MUL {tag}{bits}\\n\"); bad++; }}\n\
+                     }}\n"
+                ));
+            }
+        }
+
+        src.push_str(
+            "int main(void) {\n\
+             \x20 /* Exhaustive over the whole 8-bit domain. */\n\
+             \x20 for (int a = -128; a <= 127; a++) for (int b = -128; b <= 127; b++)\n\
+             \x20   check_i8((int8_t)a, (int8_t)b);\n\
+             \x20 for (int a = 0; a <= 255; a++) for (int b = 0; b <= 255; b++)\n\
+             \x20   check_u8((uint8_t)a, (uint8_t)b);\n",
+        );
+        // Boundary values plus random draws at the wider widths.
+        for (bits, signed_bounds, unsigned_bounds) in [
+            (
+                16u16,
+                "INT16_MIN, INT16_MIN+1, -256, -255, -2, -1, 0, 1, 2, 181, 182, 255, 256, INT16_MAX-1, INT16_MAX",
+                "0, 1, 2, 255, 256, 257, 65534, UINT16_MAX",
+            ),
+            (
+                32,
+                "INT32_MIN, INT32_MIN+1, -65536, -46341, -46340, -2, -1, 0, 1, 2, 46340, 46341, 65536, INT32_MAX-1, INT32_MAX",
+                "0, 1, 2, 65535, 65536, 65537, 4294967294u, UINT32_MAX",
+            ),
+            (
+                64,
+                "INT64_MIN, INT64_MIN+1, -4294967296LL, -3037000500LL, -3037000499LL, -2, -1, 0, 1, 2, 3037000499LL, 3037000500LL, 4294967296LL, INT64_MAX-1, INT64_MAX",
+                "0, 1, 2, 4294967295ULL, 4294967296ULL, 6074000999ULL, 18446744073709551614ULL, UINT64_MAX",
+            ),
+        ] {
+            src.push_str(&format!(
+                "  {{\n\
+                 \x20   int{bits}_t sv[] = {{{signed_bounds}}};\n\
+                 \x20   uint{bits}_t uv[] = {{{unsigned_bounds}}};\n\
+                 \x20   size_t sn = sizeof(sv)/sizeof(sv[0]), un = sizeof(uv)/sizeof(uv[0]);\n\
+                 \x20   for (size_t i = 0; i < sn; i++) for (size_t j = 0; j < sn; j++) check_i{bits}(sv[i], sv[j]);\n\
+                 \x20   for (size_t i = 0; i < un; i++) for (size_t j = 0; j < un; j++) check_u{bits}(uv[i], uv[j]);\n\
+                 \x20   for (int k = 0; k < 20000; k++) {{\n\
+                 \x20     check_i{bits}((int{bits}_t)rng(), (int{bits}_t)rng());\n\
+                 \x20     check_u{bits}((uint{bits}_t)rng(), (uint{bits}_t)rng());\n\
+                 \x20     /* mix a boundary against a random value, both ways */\n\
+                 \x20     check_i{bits}(sv[k %% sn], (int{bits}_t)rng());\n\
+                 \x20     check_i{bits}((int{bits}_t)rng(), sv[k %% sn]);\n\
+                 \x20     check_u{bits}(uv[k %% un], (uint{bits}_t)rng());\n\
+                 \x20     check_u{bits}((uint{bits}_t)rng(), uv[k %% un]);\n\
+                 \x20   }}\n\
+                 \x20 }}\n"
+            ).replace("%%", "%"));
+        }
+        src.push_str("  printf(\"mismatches=%ld\\n\", bad);\n  return bad != 0;\n}\n");
+
+        let dir = std::env::temp_dir().join(format!("vow-arith-guards-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let c_path = dir.join("guards.c");
+        let bin_path = dir.join("guards");
+        std::fs::write(&c_path, &src).expect("write guard harness");
+
+        let build = std::process::Command::new(cc)
+            .arg("-O1")
+            .arg("-Werror")
+            .arg("-o")
+            .arg(&bin_path)
+            .arg(&c_path)
+            .output()
+            .expect("invoke C compiler");
+        assert!(
+            build.status.success(),
+            "the emitted guards must compile cleanly:\n{}\n--- source ---\n{src}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let run = std::process::Command::new(&bin_path)
+            .output()
+            .expect("run guard harness");
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            run.status.success() && stdout.contains("mismatches=0"),
+            "emitted overflow guards disagree with __builtin_*_overflow:\n{stdout}"
+        );
+    }
+
+    // The width/signedness mapping the guards are selected by. Exercised
+    // directly because the `InstData::Integer` fast path means the `inst.ty`
+    // fallback is otherwise only reached by hand-built or deserialized IR.
+    #[test]
+    fn ir_ty_to_integer_type_covers_every_modelled_width() {
+        for (ty, width, signedness) in [
+            (Ty::I8, IntegerWidth::W8, IntegerSignedness::Signed),
+            (Ty::U8, IntegerWidth::W8, IntegerSignedness::Unsigned),
+            (Ty::I16, IntegerWidth::W16, IntegerSignedness::Signed),
+            (Ty::U16, IntegerWidth::W16, IntegerSignedness::Unsigned),
+            (Ty::I32, IntegerWidth::W32, IntegerSignedness::Signed),
+            (Ty::U32, IntegerWidth::W32, IntegerSignedness::Unsigned),
+            (Ty::I64, IntegerWidth::W64, IntegerSignedness::Signed),
+            (Ty::U64, IntegerWidth::W64, IntegerSignedness::Unsigned),
+            (Ty::I128, IntegerWidth::W128, IntegerSignedness::Signed),
+            (Ty::U128, IntegerWidth::W128, IntegerSignedness::Unsigned),
+        ] {
+            assert_eq!(
+                ir_ty_to_integer_type(ty),
+                Some(IntegerType::new(width, signedness)),
+                "{ty:?}"
+            );
+        }
+        for ty in [Ty::Bool, Ty::F64, Ty::Unit, Ty::Ptr] {
+            assert_eq!(ir_ty_to_integer_type(ty), None, "{ty:?} is not an integer");
+        }
+    }
+
+    // The `inst.ty` fallback: an instruction whose `InstData` does not carry the
+    // integer type still resolves its width, and still rejects 128-bit.
+    #[test]
+    fn checked_integer_type_falls_back_to_inst_ty() {
+        let mut i = inst(0, Opcode::CheckedAdd, Ty::U64, vec![], InstData::None);
+        i.data = InstData::None;
+        assert_eq!(checked_integer_type(&i), Some(IntegerType::U64));
+
+        let mut wide = inst(0, Opcode::CheckedAdd, Ty::I128, vec![], InstData::None);
+        wide.data = InstData::None;
+        assert_eq!(
+            checked_integer_type(&wide),
+            None,
+            "128-bit has no guard and must fail closed"
+        );
+    }
+
+    // The emitter's own fail-closed arm. The `is_modelable` gate normally stops
+    // a 128-bit checked op before emission, so this asserts the second line of
+    // defence actually traps rather than emitting a wrong-width guard.
+    #[test]
+    fn emit_checked_arith_fails_closed_at_128_bits() {
+        let mut i = inst(2, Opcode::CheckedAdd, Ty::I128, vec![0, 1], InstData::None);
+        i.data = InstData::Integer(IntegerType::I128);
+        let mut out = String::new();
+        emit_checked_arith(&i, &mut out, FuncId(0));
+        assert!(
+            out.contains(&format!(
+                "__ESBMC_assert(0, \"vow:{UNSUPPORTED_OP_VOW_ID}\")"
+            )),
+            "must trap, not emit a guard:\n{out}"
+        );
+        assert!(
+            !out.contains("__vow_ovf_"),
+            "no guard may be emitted at an unmodelled width:\n{out}"
+        );
+    }
+
+    #[test]
+    fn arith_abort_labels_round_trip() {
+        for abort in [
+            ArithAbort::Add,
+            ArithAbort::Sub,
+            ArithAbort::Mul,
+            ArithAbort::DivZero,
+            ArithAbort::DivOverflow,
+        ] {
+            assert_eq!(ArithAbort::from_label(abort.label()), Some(abort));
+            assert!(!abort.description().is_empty());
+        }
+        assert_eq!(ArithAbort::from_label("nope"), None);
+    }
+
+    // The MIN/MAX literals the guards are built from, per width. `MIN` is spelled
+    // `(-MAX - 1)` because `-9223372036854775808` is not a valid C literal.
+    #[test]
+    fn integer_bound_literals_are_width_exact() {
+        for (width, signed_max, unsigned_max) in [
+            (IntegerWidth::W8, "127", "255"),
+            (IntegerWidth::W16, "32767", "65535"),
+            (IntegerWidth::W32, "2147483647", "4294967295"),
+            (
+                IntegerWidth::W64,
+                "9223372036854775807",
+                "18446744073709551615",
+            ),
+        ] {
+            let signed = IntegerType::new(width, IntegerSignedness::Signed);
+            let unsigned = IntegerType::new(width, IntegerSignedness::Unsigned);
+            assert!(
+                c_int_max_literal(signed).contains(signed_max),
+                "{width:?} signed max"
+            );
+            assert!(
+                c_int_max_literal(unsigned).contains(unsigned_max),
+                "{width:?} unsigned max"
+            );
+            assert_eq!(
+                c_int_min_literal(signed),
+                format!("(-{} - 1)", c_int_max_literal(signed))
+            );
+            assert_eq!(
+                c_int_min_literal(unsigned),
+                format!("(({})0)", c_uint_type(width))
+            );
+        }
     }
 
     #[test]

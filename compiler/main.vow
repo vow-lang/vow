@@ -1017,11 +1017,11 @@ fn run_verify_loop(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, co
 // `fi` is the function index used as the flow id. A no-op for tracing when `t`
 // is disabled. Returns the proven flag from verify_collect_and_report.
 fn verify_collect_traced(esbmc_bin: String, t: TraceCtx, verify_origin: i64, h: i64, tmp: String, f: IrFunction, fi: i64, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, dctx: DiagCtx) -> i64 [io] {
     let proof_start: i64 = trace_now(t);
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, fi, TRACE_FLOW_START());
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, fi, TRACE_FLOW_END());
-    let proven: i64 = verify_collect_and_report(esbmc_bin, h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t);
+    let proven: i64 = verify_collect_and_report(esbmc_bin, h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t, dctx);
     trace_span(t, str2(String::from("esbmc:"), f.name), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, trace_now(t) - proof_start, f.name);
     proven
 }
@@ -1050,7 +1050,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -1078,7 +1078,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
         if proven == 0 {
             all_proven = 0;
         }
@@ -1218,14 +1218,139 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
     result
 }
 
+// Report a checked operator whose ArithmeticOverflow abort ESBMC proved
+// reachable (#585). A Warning, not a failure: aborting is the operator's
+// specified behaviour, and the contract is still proved for every returning
+// execution. Mirrors `VerifyWarning::ArithOverflow`'s diagnostic in the Rust
+// driver, which `compare_json` holds byte-identical.
+// Attribute the warning to the function the operator actually lives in, which is
+// not always the verify target: a model co-emits its modelable callees, so
+// verifying `caller` can surface a site inside `helper`. Naming the target would
+// report checked arithmetic in a function that contains none, and — because
+// spans are file-relative — point the offset into the wrong file once the callee
+// comes from another module. Falls back to the target when the id resolves to
+// nothing. Mirrors `arith_overflow_warning` in the Rust driver.
+fn arith_owner_index(m: IrModule, owner_id: i64) -> i64 {
+    let fns: Vec<IrFunction> = m.functions;
+    let mut i: i64 = 0;
+    while i < fns.len() {
+        let f: IrFunction = fns[i];
+        if f.id == owner_id { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+// True when an identical ArithOverflowReachable diagnostic is already recorded.
+// Compared on rendered identity — same place, same owning function via the
+// message — so the several verify targets that share one site collapse to one.
+fn arith_already_reported(dctx: DiagCtx, owner_name: String, file: String, ostart: i64, olen: i64) -> bool {
+    let ds: Vec<Diagnostic> = dctx.diags;
+    let needle: String = str3(String::from("checked arithmetic in `"), owner_name, String::from("` can abort"));
+    let mut i: i64 = 0;
+    while i < ds.len() {
+        let d: Diagnostic = ds[i];
+        if d.code == EC_ARITH_OVERFLOW_REACHABLE() && d.span_start == ostart &&
+           d.span_len == olen && d.file == file && str_starts_with(d.message, needle) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn report_arith_overflow(f: IrFunction, ir_mod: IrModule, path: String, site: ParsedArithSite, dctx: DiagCtx) [io] {
+    let idx: i64 = arith_owner_index(ir_mod, site.owner);
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let owner_name: String = if idx >= 0 { let o: IrFunction = fns[idx]; o.name } else { f.name };
+    let owner_src: String = if idx >= 0 { let o2: IrFunction = fns[idx]; o2.source_file } else { String::from("") };
+    // A function's own source_file is authoritative under multi-module
+    // compilation; `path` is only the entry path the CLI was given.
+    let owner_file: String = if owner_src.len() > 0 { owner_src } else { path };
+    eprintln_str(str3(String::from("  "), owner_name, String::from(": PROVEN (checked arithmetic can abort)")));
+    let msg: String = str3(
+        String::from("checked arithmetic in `"),
+        owner_name,
+        str2(String::from("` can abort: "), arith_cause_description(site.cause)),
+    );
+    // One site can be reported by several verify targets — a model co-emits its
+    // modelable callees, so a site in `helper` surfaces both when verifying
+    // `helper` and when verifying every contracted caller of it. Attributed to
+    // the same owner they are the same diagnostic, so report it once. Mirrors
+    // `dedup_warnings` in the Rust driver, which `compare_json` holds to the
+    // same diagnostic count.
+    if arith_already_reported(dctx, owner_name, owner_file, site.ostart, site.olen) {
+        return;
+    }
+    let d: Diagnostic = diag_new(SEV_WARNING(), EC_ARITH_OVERFLOW_REACHABLE(), msg, owner_file, site.ostart, site.olen, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the contract is proved for every execution that returns; this abort is a separate runtime outcome"));
+    diag_add_hint(d, String::from("constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended"));
+    diag_ctx_emit(dctx, d);
+}
+
 fn verify_collect_and_report(
     esbmc_bin: String, h: i64, tmp_path: String, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, t: TraceCtx,
+    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, t: TraceCtx, dctx: DiagCtx,
 ) -> i64 [io] {
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
-    let vr: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path, t);
+    let vr0: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path, t);
+    // #585: an `arith:` counterexample reports a checked operator whose abort is
+    // reachable. It is not a contract violation, so it must not fail the run —
+    // but it does hide the contract verdict, because ESBMC reports one violated
+    // property per run and this one fired first. Ask again with the arith
+    // obligations suppressed to get the verdict on returning executions.
+    let arith_site: ParsedArithSite = {
+        if vr0.status == VERIFY_FAILED() { parse_arith_site(vr0.raw_output) }
+        else { parsed_arith_site_none() }
+    };
+    let has_arith: bool = arith_site.cause.len() > 0;
+    let vr: VerifyResult = {
+        if has_arith {
+            verify_function_contracts_only(esbmc_bin, f, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max)
+        } else {
+            vr0
+        }
+    };
     let st: i64 = vr.status;
+    // The contracts-only run answers this function completely: it ran its own
+    // BV->IR ladder over the suppressed source, so its verdict is final and must
+    // not fall through to the generic fallback below, which would re-emit the
+    // un-suppressed model and retry an obligation IR cannot violate.
+    if has_arith {
+        // The abort is reported only when the contract itself is proved. If the
+        // contract also fails, that failure is the actionable finding; claiming
+        // the abort alongside would be guesswork, since ESBMC never told us
+        // whether the arith obligation held on this second run.
+        if st == VERIFY_PROVEN() || st == VERIFY_PROVEN_IR() {
+            report_arith_overflow(f, ir_mod, path, arith_site, dctx);
+            return 1;
+        }
+        if st == VERIFY_FAILED() {
+            eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+            emit_ce_vars(vr);
+            ces.push(build_ce_from_result(f, ir_mod, vr, path));
+            return 0;
+        }
+        if st == VERIFY_TIMEOUT() {
+            eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+            record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
+            return 0;
+        }
+        if st == VERIFY_UNKNOWN() {
+            eprintln_str(str3(String::from("  "), f.name, String::from(": UNKNOWN")));
+            record_soft_fail(soft_meta, String::from("unknown"), parse_unknown_reason(vr.raw_output), f.name);
+            return 0;
+        }
+        if st == VERIFY_NOT_FOUND() {
+            eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+            record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
+            return 0;
+        }
+        eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+        record_soft_fail(soft_meta, String::from("error"), String::from("ESBMC error during contracts-only verification"), f.name);
+        return 0;
+    }
     if st == VERIFY_PROVEN() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
         // No on-disk cache on self-hosted; see the note above
@@ -1434,7 +1559,7 @@ fn build_verify_phase(
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -1468,7 +1593,7 @@ fn build_verify_phase(
 //
 // A no-op when `in_flight_h` is empty; callers may invoke it unconditionally
 // without a do_verify guard if desired.
-fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx) -> i64 [io] {
+fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx, dctx: DiagCtx) -> i64 [io] {
     let mut all_proven: i64 = all_proven_in;
     while in_flight_h.len() > 0 {
         let oldest_h: i64 = in_flight_h[0];
@@ -1478,7 +1603,7 @@ fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
         if proven == 0 {
             all_proven = 0;
         }
@@ -1612,7 +1737,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
-    all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx);
+    all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx, dctx);
     trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, trace_now(tctx) - verify_origin, String::from(""));
     let status_str: String = {
         if all_proven == 0 { String::from("VerifyFailed") }
@@ -3717,6 +3842,18 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Checked operators abort with `ArithmeticOverflow` on overflow.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("**In verification.** The abort is modelled, not ignored: a checked operator is a\n"));
+    r.push_str(String::from("strictly different proof obligation from its wrapping sibling. An execution that\n"));
+    r.push_str(String::from("overflows aborts and therefore never returns, so it cannot witness a violated\n"));
+    r.push_str(String::from("`ensures` or `invariant` -- which is why replacing `+` with `+!` can turn a\n"));
+    r.push_str(String::from("counterexample into a proof. Whether such an aborting execution is *reachable* is\n"));
+    r.push_str(String::from("reported separately, as an\n"));
+    r.push_str(String::from("[`ArithOverflowReachable`](errors.md#arithoverflowreachable) warning, so a proof\n"));
+    r.push_str(String::from("never hides a program that can die at the operator. Widths `i8`/`u8` through\n"));
+    r.push_str(String::from("`i64`/`u64` are modelled; 128-bit checked arithmetic is reported `Skipped`\n"));
+    r.push_str(String::from("(fail-closed) rather than modelled as wrapping. See\n"));
+    r.push_str(String::from("[`verifier-discipline.md`](../verifier-discipline.md).\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("**128-bit arithmetic.** All operators work on `i128`/`u128` operands. `/`, `%`,\n"));
     r.push_str(String::from("`/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler\n"));
     r.push_str(String::from("routes them through runtime helpers; this is invisible in the language, and\n"));
@@ -4952,7 +5089,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Status          | Meaning                                     |\n"));
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
-    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |\n"));
+    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |\n"));
@@ -5372,22 +5509,22 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Range Bounds\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Use range bounds only when they reflect genuine semantic constraints (e.g., overflow prevention), not to appease the verifier:\n"));
+    r.push_str(String::from("Use range bounds only when they reflect genuine semantic constraints, not to appease the verifier. An operand bound whose only job is to stop wrapping is **not** such a constraint -- the checked operator already says that, and says it without narrowing the function's domain:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn safe_add(a: i64, b: i64) -> i64 vow {\n"));
     r.push_str(String::from("    requires: a >= 0,\n"));
     r.push_str(String::from("    requires: b >= 0,\n"));
-    r.push_str(String::from("    requires: a <= 4611686018427387903,\n"));
-    r.push_str(String::from("    requires: b <= 4611686018427387903,\n"));
     r.push_str(String::from("    ensures: result >= a,\n"));
     r.push_str(String::from("    ensures: result >= b\n"));
     r.push_str(String::from("} {\n"));
-    r.push_str(String::from("    a + b\n"));
+    r.push_str(String::from("    a +! b\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The bounds here prevent `a + b` from overflowing `i64` -- a legitimate semantic concern, not a verifier limitation.\n"));
+    r.push_str(String::from("`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A range bound earns its place when it excludes inputs the function genuinely has no answer for -- `requires: x > -9223372036854775807` on `abs`, whose result is not representable at `i64::MIN` under any operator.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Equality Postcondition\n"));
     r.push_str(String::from("\n"));
@@ -5495,12 +5632,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {\n"));
-    r.push_str(String::from("    requires: a <= 4611686018427387903,\n"));
-    r.push_str(String::from("    requires: b <= 4611686018427387903,\n"));
     r.push_str(String::from("    ensures: result >= a,\n"));
     r.push_str(String::from("    ensures: result >= b\n"));
     r.push_str(String::from("} {\n"));
-    r.push_str(String::from("    a + b\n"));
+    r.push_str(String::from("    a +! b\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -5551,7 +5686,19 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Bound the input or use checked arithmetic (`+!`).\n"));
+    r.push_str(String::from("**Fix:** use checked arithmetic (`+!`), or bound the input.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn double(x: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    ensures: result > x\n"));
+    r.push_str(String::from("} {\n"));
+    r.push_str(String::from("    x +! x\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("This verifies. `+!` aborts on overflow instead of wrapping, and the verifier models that: an aborting execution never returns, so it cannot witness a violated `ensures`, and the wrapped value the counterexample was built from is no longer reachable. The two operators have genuinely different models -- switching one character changes the verdict.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("What you get in exchange is a warning, not silence: because the abort is still *reachable* here (`x` near `i64::MAX`), the verifier reports [`ArithOverflowReachable`](errors.md#arithoverflowreachable) alongside the proof. Read it as \"the postcondition holds whenever this returns, and it can fail to return.\" To rule the abort out as well, constrain the operands -- and then the bound is a real precondition of the *caller*, not a bound invented for the verifier.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Non-Inductive Loop Invariant\n"));
     r.push_str(String::from("\n"));
@@ -5607,6 +5754,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) -- if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see \"Collection Models for Verification\") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**The overflow-guard bound is this anti-pattern's most common disguise.** A clause like `requires: a <= 4611686018427387903` on an adding function looks semantic -- it does describe a real property of `i64` -- but its only purpose is to keep wrapping unreachable, and it pays for that by excluding inputs the function handles perfectly well. Use the checked operator instead: `a +! b` aborts rather than wraps, the verifier models the abort, and the contract keeps its true domain. See [Range Bounds](#range-bounds) and [Wrapping Arithmetic Overflow](#wrapping-arithmetic-overflow).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Interpreting Counterexamples\n"));
     r.push_str(String::from("\n"));
@@ -6646,6 +6795,31 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Refactor the function so its body uses only modelable opcodes -- typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### ArithOverflowReachable\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Verification (Warning; the build status stays `Verified`)\n"));
+    r.push_str(String::from("**Meaning:** The verifier proved that a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its `ArithmeticOverflow` abort for some input the function's `requires` admits. The operand span in `primary` points at the operator itself.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"ArithOverflowReachable\",\n"));
+    r.push_str(String::from("  \"severity\": \"warning\",\n"));
+    r.push_str(String::from("  \"message\": \"checked arithmetic in `twice` can abort: addition overflows\",\n"));
+    r.push_str(String::from("  \"hints\": [\n"));
+    r.push_str(String::from("    \"the contract is proved for every execution that returns; this abort is a separate runtime outcome\",\n"));
+    r.push_str(String::from("    \"constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended\"\n"));
+    r.push_str(String::from("  ]\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The `message` names the cause: `addition overflows`, `subtraction overflows`, `multiplication overflows`, `divisor is zero`, or `quotient is not representable (MIN / -1)`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Why this is a Warning and not a failure.** Aborting *is* the checked operator's specified behaviour ([`grammar.md`](grammar.md#checked-arithmetic)), so a reachable abort is not an unproved obligation -- unlike [`VerificationSkipped`](#verificationskipped), nothing went unchecked, and the status does not fail closed. The contract is genuinely proved: the verifier models the abort by pruning the overflowing execution, which never returns and so can never witness an `ensures` or a loop `invariant`. The warning exists because an abort is rarely what the author intended and is invisible in the contract verdict -- `Verified` alone would not tell you the program can die at that operator.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** If the abort is unreachable in practice, say so in the contract -- a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made -- the counterexample is the actionable finding.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Runtime Errors\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).\n"));
@@ -7017,7 +7191,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `circle_area` | `(r: i64) -> i64` | `requires 0 <= r <= 1753413056`; `ensures result >= 0` |\n"));
     r.push_str(String::from("| `rect_area` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, h == 0 \\|\\| w <= I64_MAX / h`; `ensures result >= 0` |\n"));
     r.push_str(String::from("| `circle_perimeter` | `(r: i64) -> i64` | `requires 0 <= r <= 1537228672809129301`; `ensures result >= 0` |\n"));
-    r.push_str(String::from("| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, w <= 4611686018427387903 - h`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0`; `ensures result >= 0` (uses `+!`/`*!`, so overflow aborts rather than needing an operand bound) |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Each magic bound is the exact threshold below which the arithmetic cannot overflow --\n"));
     r.push_str(String::from("e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:\n"));
@@ -8675,6 +8849,18 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Checked operators abort with `ArithmeticOverflow` on overflow.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("**In verification.** The abort is modelled, not ignored: a checked operator is a\n"));
+    r.push_str(String::from("strictly different proof obligation from its wrapping sibling. An execution that\n"));
+    r.push_str(String::from("overflows aborts and therefore never returns, so it cannot witness a violated\n"));
+    r.push_str(String::from("`ensures` or `invariant` -- which is why replacing `+` with `+!` can turn a\n"));
+    r.push_str(String::from("counterexample into a proof. Whether such an aborting execution is *reachable* is\n"));
+    r.push_str(String::from("reported separately, as an\n"));
+    r.push_str(String::from("[`ArithOverflowReachable`](errors.md#arithoverflowreachable) warning, so a proof\n"));
+    r.push_str(String::from("never hides a program that can die at the operator. Widths `i8`/`u8` through\n"));
+    r.push_str(String::from("`i64`/`u64` are modelled; 128-bit checked arithmetic is reported `Skipped`\n"));
+    r.push_str(String::from("(fail-closed) rather than modelled as wrapping. See\n"));
+    r.push_str(String::from("[`verifier-discipline.md`](../verifier-discipline.md).\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("**128-bit arithmetic.** All operators work on `i128`/`u128` operands. `/`, `%`,\n"));
     r.push_str(String::from("`/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler\n"));
     r.push_str(String::from("routes them through runtime helpers; this is invisible in the language, and\n"));
@@ -9912,7 +10098,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Status          | Meaning                                     |\n"));
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
-    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |\n"));
+    r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |\n"));
@@ -10334,22 +10520,22 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Range Bounds\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Use range bounds only when they reflect genuine semantic constraints (e.g., overflow prevention), not to appease the verifier:\n"));
+    r.push_str(String::from("Use range bounds only when they reflect genuine semantic constraints, not to appease the verifier. An operand bound whose only job is to stop wrapping is **not** such a constraint -- the checked operator already says that, and says it without narrowing the function's domain:\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn safe_add(a: i64, b: i64) -> i64 vow {\n"));
     r.push_str(String::from("    requires: a >= 0,\n"));
     r.push_str(String::from("    requires: b >= 0,\n"));
-    r.push_str(String::from("    requires: a <= 4611686018427387903,\n"));
-    r.push_str(String::from("    requires: b <= 4611686018427387903,\n"));
     r.push_str(String::from("    ensures: result >= a,\n"));
     r.push_str(String::from("    ensures: result >= b\n"));
     r.push_str(String::from("} {\n"));
-    r.push_str(String::from("    a + b\n"));
+    r.push_str(String::from("    a +! b\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("The bounds here prevent `a + b` from overflowing `i64` -- a legitimate semantic concern, not a verifier limitation.\n"));
+    r.push_str(String::from("`a +! b` aborts rather than wraps, so every execution that *returns* satisfies both postconditions, for every non-negative `a` and `b`. The verifier models that abort, so no bound is needed. Writing `requires: a <= 4611686018427387903` instead would be the [verification-driven bound](#verification-driven-bounds-anti-pattern) anti-pattern wearing a semantic disguise: it excludes inputs the function handles correctly (it aborts, which is a defined outcome) purely to make wrapping unreachable.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("A range bound earns its place when it excludes inputs the function genuinely has no answer for -- `requires: x > -9223372036854775807` on `abs`, whose result is not representable at `i64::MIN` under any operator.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Equality Postcondition\n"));
     r.push_str(String::from("\n"));
@@ -10457,12 +10643,10 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {\n"));
-    r.push_str(String::from("    requires: a <= 4611686018427387903,\n"));
-    r.push_str(String::from("    requires: b <= 4611686018427387903,\n"));
     r.push_str(String::from("    ensures: result >= a,\n"));
     r.push_str(String::from("    ensures: result >= b\n"));
     r.push_str(String::from("} {\n"));
-    r.push_str(String::from("    a + b\n"));
+    r.push_str(String::from("    a +! b\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -10513,7 +10697,19 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Bound the input or use checked arithmetic (`+!`).\n"));
+    r.push_str(String::from("**Fix:** use checked arithmetic (`+!`), or bound the input.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn double(x: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    ensures: result > x\n"));
+    r.push_str(String::from("} {\n"));
+    r.push_str(String::from("    x +! x\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("This verifies. `+!` aborts on overflow instead of wrapping, and the verifier models that: an aborting execution never returns, so it cannot witness a violated `ensures`, and the wrapped value the counterexample was built from is no longer reachable. The two operators have genuinely different models -- switching one character changes the verdict.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("What you get in exchange is a warning, not silence: because the abort is still *reachable* here (`x` near `i64::MAX`), the verifier reports [`ArithOverflowReachable`](errors.md#arithoverflowreachable) alongside the proof. Read it as \"the postcondition holds whenever this returns, and it can fail to return.\" To rule the abort out as well, constrain the operands -- and then the bound is a real precondition of the *caller*, not a bound invented for the verifier.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Non-Inductive Loop Invariant\n"));
     r.push_str(String::from("\n"));
@@ -10569,6 +10765,8 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Contracts express what is mathematically required for correctness. ESBMC verifies within its configured model (bounded loops, bounded arithmetic, bounded collection models) -- if it cannot establish a correct contract, that is acceptable. An honest inconclusive result is better than a distorted specification. This includes collection lengths, capacities, indices, and struct fields: keep real domain and representation constraints, but never cap them merely to fit the model. The same rule is why the verifier's collection model capacities (see \"Collection Models for Verification\") are internal defaults rather than CLI flags or contract clauses: a bound that belongs to the prover must never leak into the language.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**The overflow-guard bound is this anti-pattern's most common disguise.** A clause like `requires: a <= 4611686018427387903` on an adding function looks semantic -- it does describe a real property of `i64` -- but its only purpose is to keep wrapping unreachable, and it pays for that by excluding inputs the function handles perfectly well. Use the checked operator instead: `a +! b` aborts rather than wraps, the verifier models the abort, and the contract keeps its true domain. See [Range Bounds](#range-bounds) and [Wrapping Arithmetic Overflow](#wrapping-arithmetic-overflow).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Interpreting Counterexamples\n"));
     r.push_str(String::from("\n"));
@@ -11612,6 +11810,31 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Refactor the function so its body uses only modelable opcodes -- typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### ArithOverflowReachable\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Verification (Warning; the build status stays `Verified`)\n"));
+    r.push_str(String::from("**Meaning:** The verifier proved that a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its `ArithmeticOverflow` abort for some input the function's `requires` admits. The operand span in `primary` points at the operator itself.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"ArithOverflowReachable\",\n"));
+    r.push_str(String::from("  \"severity\": \"warning\",\n"));
+    r.push_str(String::from("  \"message\": \"checked arithmetic in `twice` can abort: addition overflows\",\n"));
+    r.push_str(String::from("  \"hints\": [\n"));
+    r.push_str(String::from("    \"the contract is proved for every execution that returns; this abort is a separate runtime outcome\",\n"));
+    r.push_str(String::from("    \"constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended\"\n"));
+    r.push_str(String::from("  ]\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The `message` names the cause: `addition overflows`, `subtraction overflows`, `multiplication overflows`, `divisor is zero`, or `quotient is not representable (MIN / -1)`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Why this is a Warning and not a failure.** Aborting *is* the checked operator's specified behaviour ([`grammar.md`](grammar.md#checked-arithmetic)), so a reachable abort is not an unproved obligation -- unlike [`VerificationSkipped`](#verificationskipped), nothing went unchecked, and the status does not fail closed. The contract is genuinely proved: the verifier models the abort by pruning the overflowing execution, which never returns and so can never witness an `ensures` or a loop `invariant`. The warning exists because an abort is rarely what the author intended and is invisible in the contract verdict -- `Verified` alone would not tell you the program can die at that operator.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** If the abort is unreachable in practice, say so in the contract -- a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made -- the counterexample is the actionable finding.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Runtime Errors\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).\n"));
@@ -11985,7 +12208,7 @@ fn skill_support_content_reference_stdlib_md_347c6c47() -> String {
     r.push_str(String::from("| `circle_area` | `(r: i64) -> i64` | `requires 0 <= r <= 1753413056`; `ensures result >= 0` |\n"));
     r.push_str(String::from("| `rect_area` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, h == 0 \\|\\| w <= I64_MAX / h`; `ensures result >= 0` |\n"));
     r.push_str(String::from("| `circle_perimeter` | `(r: i64) -> i64` | `requires 0 <= r <= 1537228672809129301`; `ensures result >= 0` |\n"));
-    r.push_str(String::from("| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0, w <= 4611686018427387903 - h`; `ensures result >= 0` |\n"));
+    r.push_str(String::from("| `rect_perimeter` | `(w, h: i64) -> i64` | `requires w >= 0, h >= 0`; `ensures result >= 0` (uses `+!`/`*!`, so overflow aborts rather than needing an operand bound) |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Each magic bound is the exact threshold below which the arithmetic cannot overflow --\n"));
     r.push_str(String::from("e.g. `circle_area` caps `r` at `floor(sqrt(I64_MAX/3))` because it computes `r*r*3`:\n"));
