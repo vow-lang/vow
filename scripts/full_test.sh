@@ -124,6 +124,21 @@ if rs != 'VerifyFailed':
 
 rc = r.get('counterexamples', [])
 sc = s.get('counterexamples', [])
+def violation_aware_fields(base, rce, sce):
+    # `violation` carries the rendered contract-clause text, so it is the field
+    # that catches Rust-vs-self-hosted printer drift (#1113 Half B). Compare it
+    # only when the counterexample is actually attributable to a contract
+    # clause: with blame 'none' no vow matched, and each compiler falls back to
+    # its own placeholder (Rust leaks the raw ESBMC '[Counterexample]' marker,
+    # self-hosted an empty string). That fallback divergence is a separate
+    # pre-existing defect tracked in #1144, not contract-text drift, so it must
+    # not be conflated with this gate; closing #1144 removes this helper and
+    # compares `violation` unconditionally.
+    fields = list(base)
+    if rce.get('blame') != 'none' and sce.get('blame') != 'none':
+        fields.append('violation')
+    return fields
+
 # A VerifyFailed with a non-empty verify_status is a 'soft' ESBMC outcome
 # (timeout / unknown / error / tool_not_found) — ESBMC produced no
 # counterexample by design, so the parity check must not require one.
@@ -150,7 +165,7 @@ elif rs == 'VerifyFailed' and ss == 'VerifyFailed':
     if len(sc) == 0:
         errors.append('self has no counterexamples for VerifyFailed')
     if rc and sc:
-        for field in ('function', 'blame'):
+        for field in violation_aware_fields(('function', 'blame'), rc[0], sc[0]):
             rv = rc[0].get(field)
             sv = sc[0].get(field)
             if rv != sv:
@@ -160,7 +175,7 @@ else:
         errors.append(f'counterexamples count: {len(rc)} vs {len(sc)}')
     else:
         for i, (rce, sce) in enumerate(zip(rc, sc)):
-            for field in ('function', 'vow_id', 'blame'):
+            for field in violation_aware_fields(('function', 'vow_id', 'blame'), rce, sce):
                 rv = rce.get(field)
                 sv = sce.get(field)
                 if field == 'vow_id' and (rv in (0, -1, None) and sv in (0, -1, None)):
@@ -948,6 +963,35 @@ if [ ${#errors[@]} -eq 0 ]; then
     pass "u8_requires_violation/debug-violation"
 else
     fail "u8_requires_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
+fi
+
+# cast_in_contract_violation.vow: the contract text carried into the
+# VowViolation payload must render the cast's real target type on both
+# compilers, not a placeholder (#1113 Half B).
+$RUST build --mode debug --no-verify tests/debug/cast_in_contract_violation.vow -o "$TMPDIR/rust_cast_violation_debug" >/dev/null 2>/dev/null
+run_self build --mode debug --no-verify tests/debug/cast_in_contract_violation.vow -o "$TMPDIR/self_cast_violation_debug" >/dev/null 2>/dev/null
+
+rust_exit=0 self_exit=0
+"$TMPDIR/rust_cast_violation_debug" </dev/null >"$TMPDIR/rust_cast_dbg_out" 2>"$TMPDIR/rust_cast_dbg_err" || rust_exit=$?
+run_self_bin "$TMPDIR/self_cast_violation_debug" </dev/null >"$TMPDIR/self_cast_dbg_out" 2>"$TMPDIR/self_cast_dbg_err" || self_exit=$?
+rust_err=$(cat "$TMPDIR/rust_cast_dbg_err")
+self_err=$(cat "$TMPDIR/self_cast_dbg_err")
+
+errors=()
+if [ "$rust_exit" -ne 134 ]; then errors+=("rust exit=$rust_exit, expected 134"); fi
+if [ "$self_exit" -ne 134 ]; then errors+=("self exit=$self_exit, expected 134"); fi
+for pattern in VowViolation Caller "as u64"; do
+    if ! echo "$rust_err" | grep -qF "$pattern"; then errors+=("rust stderr missing '$pattern'"); fi
+    if ! echo "$self_err" | grep -qF "$pattern"; then errors+=("self stderr missing '$pattern'"); fi
+done
+for pattern in "as <type>"; do
+    if echo "$rust_err" | grep -qF "$pattern"; then errors+=("rust stderr has placeholder '$pattern'"); fi
+    if echo "$self_err" | grep -qF "$pattern"; then errors+=("self stderr has placeholder '$pattern'"); fi
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "cast_in_contract_violation/debug-violation"
+else
+    fail "cast_in_contract_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
 fi
 
 # callee_blame, clamp, hello: contracts pass (or none), compare runtime
