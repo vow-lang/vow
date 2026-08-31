@@ -304,10 +304,11 @@ elements are refused because the element helpers are i64-only, and a 128-bit
 struct field or enum payload (including `Option<i128>`) fails codegen. Do not
 store 128-bit values in aggregates yet.
 
-One 128-bit gap is not yet fail-closed: a 128-bit binding captured by a `vow`
-block reports `0` instead of its real value in the runtime `VowViolation`
-`values` map. The check itself is evaluated at full width, so the violation
-fires correctly — only the reported value is wrong.
+Scalar `i128`/`u128` bindings captured by a `vow` block retain both limbs and
+report their full signed or unsigned decimal magnitude in the runtime
+`VowViolation` `values` map. Like `u64` values, they are emitted as bare JSON
+integer tokens; consumers that require exact 128-bit values must use an
+arbitrary-precision JSON number parser.
 
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted

@@ -940,6 +940,30 @@ else
     fail "u8_requires_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
 fi
 
+# i128_requires_violation.vow: both compilers must preserve both limbs of a
+# captured i128 value in the runtime VowViolation payload (#1077).
+$RUST build --mode debug --no-verify tests/debug/i128_requires_violation.vow -o "$TMPDIR/rust_i128_violation_debug" >/dev/null 2>/dev/null
+run_self build --mode debug --no-verify tests/debug/i128_requires_violation.vow -o "$TMPDIR/self_i128_violation_debug" >/dev/null 2>/dev/null
+
+rust_exit=0 self_exit=0
+"$TMPDIR/rust_i128_violation_debug" </dev/null >"$TMPDIR/rust_i128_dbg_out" 2>"$TMPDIR/rust_i128_dbg_err" || rust_exit=$?
+run_self_bin "$TMPDIR/self_i128_violation_debug" </dev/null >"$TMPDIR/self_i128_dbg_out" 2>"$TMPDIR/self_i128_dbg_err" || self_exit=$?
+rust_err=$(cat "$TMPDIR/rust_i128_dbg_err")
+self_err=$(cat "$TMPDIR/self_i128_dbg_err")
+
+errors=()
+if [ "$rust_exit" -ne 134 ]; then errors+=("rust exit=$rust_exit, expected 134"); fi
+if [ "$self_exit" -ne 134 ]; then errors+=("self exit=$self_exit, expected 134"); fi
+for pattern in VowViolation Caller '"x":3154393236604333326336'; do
+    if ! echo "$rust_err" | grep -qF "$pattern"; then errors+=("rust stderr missing '$pattern'"); fi
+    if ! echo "$self_err" | grep -qF "$pattern"; then errors+=("self stderr missing '$pattern'"); fi
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "i128_requires_violation/debug-violation"
+else
+    fail "i128_requires_violation/debug-violation" "$(IFS='; '; echo "${errors[*]}")"
+fi
+
 # cast_in_contract_violation.vow: the contract text carried into the
 # VowViolation payload must render the cast's real target type on both
 # compilers, not a placeholder (#1113 Half B).
