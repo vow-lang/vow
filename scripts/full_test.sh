@@ -938,7 +938,7 @@ for compiler in rust self; do
         j=$(run_self verify tests/verify/checked_arith_abort_modelled.vow 2>/dev/null) || true
     fi
     [ "$(arith_status "$j")" = "Verified" ] || errors+=("fixture should verify, got $(arith_status "$j")")
-    for fn in twice scale; do
+    for fn in twice scale doomed; do
         [ "$(arith_warns "$j" "$fn")" = "1" ] || errors+=("$fn should warn, got $(arith_warns "$j" "$fn")")
     done
     for fn in last_index halve rem_pos; do

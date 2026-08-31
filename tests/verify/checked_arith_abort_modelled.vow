@@ -50,6 +50,20 @@ fn rem_pos(x: i64, d: i64) -> i64 vow {
   x %! d
 }
 
+// The vacuity boundary, and the strongest guard on the abort model. Here the
+// overflow is *unavoidable*: every input the `requires` admits overflows, so the
+// function never returns and `ensures` is vacuously satisfied. `Verified` is the
+// honest verdict under abort semantics — but on its own it would be a silent
+// pass for a function that always dies. The `ArithOverflowReachable` warning is
+// what makes it honest, which is exactly why the abort model asserts the guard
+// as well as assuming it (see docs/verifier-discipline.md).
+fn doomed(x: i64) -> i64 vow {
+  requires: x >= 9223372036854775807,
+  ensures: result == 42
+} {
+  x +! 1
+}
+
 fn main() -> i32 [io] {
   print_i64(twice(5));
   print_i64(scale(5));
