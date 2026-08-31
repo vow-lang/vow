@@ -1,4 +1,5 @@
-// TEST: exit 132
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
 module I128CheckedMulOverflow
 
 // `*!` on I128 computes the product with a native `imul` and gets its overflow

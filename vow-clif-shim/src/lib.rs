@@ -1484,15 +1484,14 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     } else {
         None
     };
-    let overflow_id = if ctx.mode == 1 || ctx.mode == 3 {
+    // Declared in every build mode: an overflow abort is the checked
+    // operator's specified behaviour, not a debug-mode check. Mirrors
+    // `vow-codegen`; `__vow_violation` above stays mode-gated.
+    let overflow_id = {
         let sig = ctx.obj_module.make_signature();
-        Some(
-            ctx.obj_module
-                .declare_function("__vow_arithmetic_overflow", Linkage::Import, &sig)
-                .expect("declare overflow"),
-        )
-    } else {
-        None
+        ctx.obj_module
+            .declare_function("__vow_arithmetic_overflow", Linkage::Import, &sig)
+            .expect("declare overflow")
     };
 
     // Trace runtime functions
@@ -1650,7 +1649,9 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         std::collections::BTreeMap::new();
     let vow_violation_ref =
         vow_violation_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
-    let overflow_ref = overflow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
+    let overflow_ref = ctx
+        .obj_module
+        .declare_func_in_func(overflow_id, builder.func);
     let trace_enter_ref =
         trace_enter_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
     let trace_exit_ref =
@@ -2883,11 +2884,7 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn emit_overflow_check(
-    builder: &mut FunctionBuilder,
-    overflow: Value,
-    overflow_ref: Option<FuncRef>,
-) {
+fn emit_overflow_check(builder: &mut FunctionBuilder, overflow: Value, overflow_ref: FuncRef) {
     let trap_block = builder.create_block();
     let cont_block = builder.create_block();
     builder
@@ -2896,9 +2893,7 @@ fn emit_overflow_check(
 
     builder.switch_to_block(trap_block);
     builder.seal_block(trap_block);
-    if let Some(ov_ref) = overflow_ref {
-        builder.ins().call(ov_ref, &[]);
-    }
+    builder.ins().call(overflow_ref, &[]);
     builder.ins().trap(TrapCode::INTEGER_OVERFLOW);
 
     builder.switch_to_block(cont_block);

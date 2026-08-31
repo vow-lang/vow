@@ -1,0 +1,18 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module U64CheckedSubUnderflow
+
+// The operand comes through a call so the checked op is lowered to a real
+// overflow check rather than folded at compile time.
+fn seed() -> u64 {
+    0
+}
+
+fn overflow() -> u64 {
+    seed() -! 1
+}
+
+fn main() -> i32 {
+    overflow();
+    0
+}

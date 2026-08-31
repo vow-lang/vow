@@ -1,4 +1,5 @@
-// TEST: exit 132
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
 module I128CheckedOverflow
 
 fn overflow() -> i128 {
