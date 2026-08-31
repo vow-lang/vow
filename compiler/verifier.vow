@@ -32,6 +32,15 @@ struct ParsedVowLabel {
     callee_precondition_vow_id: i64,
 }
 
+// A checked-arithmetic site whose ArithmeticOverflow abort ESBMC proved
+// reachable (#585). `cause` is empty when the violated property was not an
+// `arith:` one. Mirrors `vow_verify::esbmc::ArithOverflowSite`.
+struct ParsedArithSite {
+    cause: String,
+    ostart: i64,
+    olen: i64,
+}
+
 // exit_code sentinels: -3 ESBMC not found, -1 spawn failure, -2 kernel watchdog kill, else child exit code.
 struct EsbmcRun {
     exit_code: i64,
@@ -216,6 +225,7 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 vec_max, model_string_max, hashmap_max, btreemap_max
             );
             append_narrow_shift_helpers_for_function(preamble, f);
+            append_arith_helpers_for_function(preamble, f);
             let empty_modelable: Vec<i64> = Vec::new();
             emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, reach_label, body_replace, 0);
             preamble.push_byte(10);
@@ -612,6 +622,77 @@ fn parse_vow_label(output: String) -> ParsedVowLabel {
         i = i + 1;
     }
     parsed_vow_label_none()
+}
+
+// Parse the `arith:<cause>:<span_start>:<span_len>` property label the C emitter
+// attaches to a checked-arithmetic obligation (`emit_checked_arith`).
+//
+// This is a property class of its own, deliberately outside the `vow:`
+// namespace: a reachable `+!` abort is specified behaviour, not a contract
+// violation, and must not be reported as one. `parse_vow_label` therefore never
+// matches it. Mirrors `vow_verify::esbmc::extract_arith_site`.
+fn parsed_arith_site_none() -> ParsedArithSite {
+    ParsedArithSite { cause: String::from(""), ostart: 0, olen: 0 }
+}
+
+fn parse_arith_label_text(rest: String) -> ParsedArithSite {
+    let sep1: i64 = str_find_str(rest, String::from(":"));
+    if sep1 < 0 {
+        return parsed_arith_site_none();
+    }
+    let cause: String = str_substring(rest, 0, sep1);
+    if !arith_cause_is_known(cause) {
+        return parsed_arith_site_none();
+    }
+    let payload: String = str_substring(rest, sep1 + 1, rest.len());
+    let sep2: i64 = str_find_str(payload, String::from(":"));
+    if sep2 < 0 {
+        return parsed_arith_site_none();
+    }
+    let tail: String = str_substring(payload, sep2 + 1, payload.len());
+    if str_find_str(tail, String::from(":")) >= 0 {
+        return parsed_arith_site_none();
+    }
+    let ostart: i64 = str_to_i64(str_substring(payload, 0, sep2));
+    let olen: i64 = str_to_i64(tail);
+    if ostart < 0 || olen < 0 {
+        return parsed_arith_site_none();
+    }
+    ParsedArithSite { cause: cause, ostart: ostart, olen: olen }
+}
+
+fn parse_arith_site(output: String) -> ParsedArithSite {
+    let lines: Vec<String> = Vec::new();
+    split_lines(output, lines);
+    let n: i64 = lines.len();
+    let mut in_violated: bool = false;
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("Violated property:") {
+            in_violated = true;
+        } else if in_violated {
+            if str_starts_with(line, String::from("arith:")) {
+                let rest: String = str_substring(line, 6, line.len());
+                let site: ParsedArithSite = parse_arith_label_text(rest);
+                if site.cause.len() > 0 {
+                    return site;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    parsed_arith_site_none()
+}
+
+// Human-readable cause, used verbatim in the ArithOverflowReachable message.
+// Mirrors `ArithAbort::description`.
+fn arith_cause_description(cause: String) -> String {
+    if cause == arith_cause_add() { return String::from("addition overflows"); }
+    if cause == arith_cause_sub() { return String::from("subtraction overflows"); }
+    if cause == arith_cause_mul() { return String::from("multiplication overflows"); }
+    if cause == arith_cause_div_zero() { return String::from("divisor is zero"); }
+    String::from("quotient is not representable (MIN / -1)")
 }
 
 fn parse_vow_id(output: String) -> i64 {
@@ -1219,6 +1300,30 @@ fn verify_function_ir_fallback(esbmc_bin: String, f: IrFunction, m: IrModule, ma
         else { raw_status }
     };
     // No on-disk caching on self-hosted: see the note above resolve_auto_bv_solver.
+    build_verify_result(f, status, combined)
+}
+
+// Re-verify `f` with the checked-arithmetic obligations suppressed, so the
+// contract verdict is not masked by an `arith:` property that fired first.
+//
+// ESBMC reports one violated property per run. Only the asserts are suppressed —
+// the abort assumes remain — so this asks exactly the right question: do the
+// contracts hold on every execution that returns? Mirrors
+// `crate::verification::verify_contracts_only` in the Rust driver (#585).
+fn verify_function_contracts_only(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_step: String, solver: String, encoding: String, timeout_secs: String,
+                                  vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
+    let c_source: String = contracts_only_source(emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max, false, false));
+    let tmp_path: String = verify_tmp_path();
+    let no_extra: Vec<String> = Vec::new();
+    let eff_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let r: EsbmcRun = run_esbmc(esbmc_bin, c_source, max_k_step, tmp_path, f.name, solver, encoding, eff_timeout, no_extra);
+    if r.exit_code == -3 {
+        return build_verify_result(f, VERIFY_NOT_FOUND(), String::from("esbmc not found"));
+    }
+    let combined: String = r.combined;
+    let status: i64 = {
+        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
+    };
     build_verify_result(f, status, combined)
 }
 

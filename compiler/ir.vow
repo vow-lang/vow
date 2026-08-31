@@ -196,6 +196,14 @@ fn IDATA_CONST_U128() -> i64 { 22 }
 fn BLAME_CALLER() -> i64 { 0 }
 fn BLAME_CALLEE() -> i64 { 1 }
 
+// The five checked arithmetic opcodes. They abort with ArithmeticOverflow rather
+// than wrapping, so both the verifier model (`emit_checked_arith`) and the
+// lowerer (which anchors their span for the abort diagnostic) need to recognise
+// them (#585). Lives here so both modules can reach it through `use ir`.
+fn is_checked_arith_op(op: i64) -> bool {
+    op == IOP_CADD() || op == IOP_CSUB() || op == IOP_CMUL() || op == IOP_CDIV() || op == IOP_CREM()
+}
+
 struct IrInst {
     id: i64,
     op: i64,

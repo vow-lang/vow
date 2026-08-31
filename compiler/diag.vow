@@ -45,6 +45,12 @@ fn EC_NARROWING_CAST_NOT_ALLOWED() -> i64 { 30 }
 fn EC_SHIFT_COUNT_OUT_OF_RANGE() -> i64 { 31 }
 fn EC_TAUTOLOGICAL_COMPARISON() -> i64 { 32 }
 fn EC_INVALID_INT_SUFFIX() -> i64 { 33 }
+// Emitted as a Warning when the verifier proves that a checked operator
+// (`+!`, `-!`, `*!`, `/!`, `%!`) can reach its ArithmeticOverflow abort. Not a
+// verification gap: aborting is the operator's specified behaviour and the
+// contract is still proved for every returning execution. Mirrors
+// `vow_diag::ErrorCode::ArithOverflowReachable` (#585).
+fn EC_ARITH_OVERFLOW_REACHABLE() -> i64 { 34 }
 
 struct Diagnostic {
     severity: i64,
@@ -275,8 +281,11 @@ fn ec_name(code: i64) -> String {
     if code == EC_TAUTOLOGICAL_COMPARISON() {
         String::from("TautologicalComparison")
     } else {
+    if code == EC_ARITH_OVERFLOW_REACHABLE() {
+        String::from("ArithOverflowReachable")
+    } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {

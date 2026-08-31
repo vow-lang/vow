@@ -1017,11 +1017,11 @@ fn run_verify_loop(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrModule, co
 // `fi` is the function index used as the flow id. A no-op for tracing when `t`
 // is disabled. Returns the proven flag from verify_collect_and_report.
 fn verify_collect_traced(esbmc_bin: String, t: TraceCtx, verify_origin: i64, h: i64, tmp: String, f: IrFunction, fi: i64, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+                         vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, dctx: DiagCtx) -> i64 [io] {
     let proof_start: i64 = trace_now(t);
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, fi, TRACE_FLOW_START());
     trace_flow(t, String::from("verify->esbmc"), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, fi, TRACE_FLOW_END());
-    let proven: i64 = verify_collect_and_report(esbmc_bin, h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t);
+    let proven: i64 = verify_collect_and_report(esbmc_bin, h, tmp, f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, t, dctx);
     trace_span(t, str2(String::from("esbmc:"), f.name), PID_COMPILER(), TID_VERIFY_DRIVER(), proof_start, trace_now(t) - proof_start, f.name);
     proven
 }
@@ -1050,7 +1050,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -1078,7 +1078,7 @@ fn run_verify_loop_traced(esbmc_bin: String, fns: Vec<IrFunction>, ir_mod: IrMod
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
         if proven == 0 {
             all_proven = 0;
         }
@@ -1218,14 +1218,57 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
     result
 }
 
+// Report a checked operator whose ArithmeticOverflow abort ESBMC proved
+// reachable (#585). A Warning, not a failure: aborting is the operator's
+// specified behaviour, and the contract is still proved for every returning
+// execution. Mirrors `VerifyWarning::ArithOverflow`'s diagnostic in the Rust
+// driver, which `compare_json` holds byte-identical.
+fn report_arith_overflow(f: IrFunction, path: String, site: ParsedArithSite, dctx: DiagCtx) [io] {
+    eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (checked arithmetic can abort)")));
+    let msg: String = str3(
+        String::from("checked arithmetic in `"),
+        f.name,
+        str2(String::from("` can abort: "), arith_cause_description(site.cause)),
+    );
+    let d: Diagnostic = diag_new(SEV_WARNING(), EC_ARITH_OVERFLOW_REACHABLE(), msg, path, site.ostart, site.olen, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the contract is proved for every execution that returns; this abort is a separate runtime outcome"));
+    diag_add_hint(d, String::from("constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended"));
+    diag_ctx_emit(dctx, d);
+}
+
 fn verify_collect_and_report(
     esbmc_bin: String, h: i64, tmp_path: String, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, t: TraceCtx,
+    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, t: TraceCtx, dctx: DiagCtx,
 ) -> i64 [io] {
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
-    let vr: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path, t);
+    let vr0: VerifyResult = verify_collect(h, f, effective_timeout, tmp_path, t);
+    // #585: an `arith:` counterexample reports a checked operator whose abort is
+    // reachable. It is not a contract violation, so it must not fail the run —
+    // but it does hide the contract verdict, because ESBMC reports one violated
+    // property per run and this one fired first. Ask again with the arith
+    // obligations suppressed to get the verdict on returning executions.
+    let arith_site: ParsedArithSite = {
+        if vr0.status == VERIFY_FAILED() { parse_arith_site(vr0.raw_output) }
+        else { parsed_arith_site_none() }
+    };
+    let has_arith: bool = arith_site.cause.len() > 0;
+    let vr: VerifyResult = {
+        if has_arith {
+            verify_function_contracts_only(esbmc_bin, f, ir_mod, max_k_step, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max)
+        } else {
+            vr0
+        }
+    };
     let st: i64 = vr.status;
+    // The abort is reported only when the contract itself is proved. If the
+    // contract also fails, that failure is the actionable finding; claiming the
+    // abort alongside would be guesswork, since ESBMC never told us whether the
+    // arith obligation held on this second run.
+    if has_arith && (st == VERIFY_PROVEN() || st == VERIFY_PROVEN_IR()) {
+        report_arith_overflow(f, path, arith_site, dctx);
+        return 1;
+    }
     if st == VERIFY_PROVEN() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
         // No on-disk cache on self-hosted; see the note above
@@ -1434,7 +1477,7 @@ fn build_verify_phase(
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
                 vec_string_remove_front(in_flight_tmp);
-                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -1468,7 +1511,7 @@ fn build_verify_phase(
 //
 // A no-op when `in_flight_h` is empty; callers may invoke it unconditionally
 // without a do_verify guard if desired.
-fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx) -> i64 [io] {
+fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, in_flight_tmp: Vec<String>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64, verify_origin: i64, t: TraceCtx, dctx: DiagCtx) -> i64 [io] {
     let mut all_proven: i64 = all_proven_in;
     while in_flight_h.len() > 0 {
         let oldest_h: i64 = in_flight_h[0];
@@ -1478,7 +1521,7 @@ fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
         vec_string_remove_front(in_flight_tmp);
-        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_traced(esbmc_bin, t, verify_origin, oldest_h, oldest_tmp, oldest_f, oldest_fi, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, dctx);
         if proven == 0 {
             all_proven = 0;
         }
@@ -1612,7 +1655,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
-    all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx);
+    all_proven = build_drain_verify_phase(esbmc_bin, in_flight_h, in_flight_fi, in_flight_tmp, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven, verify_origin, tctx, dctx);
     trace_span(tctx, String::from("verification"), PID_COMPILER(), TID_VERIFY_DRIVER(), verify_origin, trace_now(tctx) - verify_origin, String::from(""));
     let status_str: String = {
         if all_proven == 0 { String::from("VerifyFailed") }
