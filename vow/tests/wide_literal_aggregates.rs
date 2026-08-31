@@ -427,6 +427,111 @@ fn wide_values_in_aggregates_fail_closed() {
     );
 }
 
+#[test]
+fn wide_struct_fields_fail_closed_with_a_named_limitation() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source_path = dir.path().join("wide_struct.vow");
+    let output_path = dir.path().join("wide_struct");
+    fs::write(
+        &source_path,
+        r#"module WideStruct
+struct Box { v: i128 }
+fn main() -> () [io] {
+    let b: Box = Box { v: 3154393236604333326336 };
+    let got: i128 = b.v;
+    print_i64(u128_to_u8_wrap((got as u128) >> 64) as i64);
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            source_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("invalid JSON from build: {error}\nstdout: {stdout}"));
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "128-bit struct fields must fail closed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(json["status"], "CompileFailed");
+    assert!(
+        json["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("128-bit struct fields and enum payloads")),
+        "build must name the aggregate-field limitation: {json}"
+    );
+    assert!(
+        !output_path.exists(),
+        "refused 128-bit struct field must not leave an executable"
+    );
+}
+
+#[test]
+fn wide_enum_payloads_fail_closed_instead_of_truncating() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source_path = dir.path().join("wide_enum.vow");
+    let output_path = dir.path().join("wide_enum");
+    fs::write(
+        &source_path,
+        r#"module WideEnum
+enum E { V(i128) }
+fn main() -> i32 {
+    let value: E = E::V(3154393236604333326336);
+    match value {
+        E::V(_) => { 0 },
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            source_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("invalid JSON from build: {error}\nstdout: {stdout}"));
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "128-bit enum payloads must fail closed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(json["status"], "CompileFailed");
+    assert!(
+        json["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("128-bit struct fields and enum payloads")),
+        "build must name the aggregate-field limitation: {json}"
+    );
+    assert!(
+        !output_path.exists(),
+        "refused 128-bit enum payload must not leave an executable"
+    );
+}
+
 /// Division, remainder, and checked multiply on 128-bit operands have no
 /// native Cranelift lowering, so they route through `vow-runtime` helpers
 /// (epic #526 seam 3b). End to end they must build and produce the same
