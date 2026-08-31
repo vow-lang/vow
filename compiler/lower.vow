@@ -4871,6 +4871,54 @@ fn collect_free_vars_in_expr(ctx: LowerCtx, eid: i64, out_names: Vec<String>, ou
     }
 }
 
+// Render an AST type node as source text, mirroring `print_type` in
+// vow-syntax/src/printer.rs. Only the shapes a cast can target are covered;
+// anything else falls back to the placeholder rather than inventing syntax.
+fn print_type_text(a: AstArena, tid: i64) -> String {
+    let tag: i64 = type_tag(a, tid);
+    if tag == TY_NAMED() {
+        return arena_str(a, type_a(a, tid));
+    }
+    if tag == TY_GENERIC() {
+        let name: String = arena_str(a, type_a(a, tid));
+        let args_lid: i64 = type_b(a, tid);
+        let n: i64 = list_len(a, args_lid);
+        let result: String = String::from("");
+        result.push_str(name);
+        result.push_str(String::from("<"));
+        let mut i: i64 = 0;
+        while i < n {
+            if i > 0 { result.push_str(String::from(", ")); }
+            result.push_str(print_type_text(a, list_get(a, args_lid, i)));
+            i = i + 1;
+        }
+        result.push_str(String::from(">"));
+        return result;
+    }
+    String::from("<type>")
+}
+
+// Escape a string literal for contract text, mirroring `print_lit`'s
+// Lit::String arm in vow-syntax/src/printer.rs.
+fn print_str_lit_text(raw: String) -> String {
+    let result: String = String::from("\"");
+    let n: i64 = raw.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let b: i64 = raw.byte_at(i);
+        if b == 10 { result.push_str(String::from("\\n")); }
+        else if b == 9 { result.push_str(String::from("\\t")); }
+        else if b == 13 { result.push_str(String::from("\\r")); }
+        else if b == 92 { result.push_str(String::from("\\\\")); }
+        else if b == 34 { result.push_str(String::from("\\\"")); }
+        else if b == 0 { result.push_str(String::from("\\0")); }
+        else { result.push_byte(b); }
+        i = i + 1;
+    }
+    result.push_str(String::from("\""));
+    result
+}
+
 fn print_expr_text(a: AstArena, eid: i64) -> String {
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_INT() {
@@ -4921,8 +4969,69 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         let inner_eid: i64 = expr_a(a, eid);
         let inner_s: String = print_expr_text(a, inner_eid);
         let result: String = String::from("");
-        result.push_str(inner_s);
-        result.push_str(String::from(" as <type>"));
+        // Mirror printer.rs: a non-atomic operand is parenthesized so the cast
+        // binds where the source said it did.
+        let inner_tag: i64 = expr_tag(a, inner_eid);
+        let atomic: bool = inner_tag == EXPR_LIT_INT() || inner_tag == EXPR_LIT_BOOL()
+            || inner_tag == EXPR_LIT_STR() || inner_tag == EXPR_IDENT()
+            || inner_tag == EXPR_RESULT() || inner_tag == EXPR_CALL()
+            || inner_tag == EXPR_METHOD() || inner_tag == EXPR_FIELD()
+            || inner_tag == EXPR_INDEX() || inner_tag == EXPR_QUESTION()
+            || inner_tag == EXPR_CAST();
+        if atomic {
+            result.push_str(inner_s);
+        } else {
+            result.push_str(String::from("("));
+            result.push_str(inner_s);
+            result.push_str(String::from(")"));
+        }
+        result.push_str(String::from(" as "));
+        result.push_str(print_type_text(a, expr_b(a, eid)));
+        return result;
+    }
+    if tag == EXPR_LIT_STR() {
+        return print_str_lit_text(arena_str(a, expr_a(a, eid)));
+    }
+    if tag == EXPR_QUESTION() {
+        let result: String = String::from("");
+        result.push_str(print_expr_text(a, expr_a(a, eid)));
+        result.push_str(String::from("?"));
+        return result;
+    }
+    if tag == EXPR_FIELD() {
+        let base_s: String = print_expr_text(a, expr_a(a, eid));
+        let result: String = String::from("");
+        result.push_str(base_s);
+        result.push_str(String::from("."));
+        result.push_str(arena_str(a, expr_b(a, eid)));
+        return result;
+    }
+    if tag == EXPR_INDEX() {
+        let base_s: String = print_expr_text(a, expr_a(a, eid));
+        let idx_s: String = print_expr_text(a, expr_b(a, eid));
+        let result: String = String::from("");
+        result.push_str(base_s);
+        result.push_str(String::from("["));
+        result.push_str(idx_s);
+        result.push_str(String::from("]"));
+        return result;
+    }
+    if tag == EXPR_METHOD() {
+        let recv_s: String = print_expr_text(a, expr_a(a, eid));
+        let args_lid: i64 = expr_c(a, eid);
+        let result: String = String::from("");
+        result.push_str(recv_s);
+        result.push_str(String::from("."));
+        result.push_str(arena_str(a, expr_b(a, eid)));
+        result.push_str(String::from("("));
+        let nargs: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < nargs {
+            if i > 0 { result.push_str(String::from(", ")); }
+            result.push_str(print_expr_text(a, list_get(a, args_lid, i)));
+            i = i + 1;
+        }
+        result.push_str(String::from(")"));
         return result;
     }
     if tag == EXPR_CALL() {
