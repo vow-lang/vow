@@ -1561,6 +1561,14 @@ let y: i8 = 200;   // error: LiteralOutOfRange — i8 range is -128..=127
 Suffixed forms are supported for all 10 integer widths. They override context
 coercion and are still subject to the same compile-time range check.
 
+There are no `usize`/`isize` suffixes, because there are no such types. A literal
+carrying one is an `InvalidIntSuffix` error at lex time rather than a silently
+dropped suffix:
+
+```vow
+let n: u64 = 5usize;   // error: InvalidIntSuffix — write 5u64
+```
+
 Integer tokens store their decimal digits as an unsigned magnitude. A leading
 `-` is a separate unary-negation expression and is not part of the literal.
 For `i128` and `u128`, compiler IR and serialized modules carry that value as
@@ -3988,6 +3996,24 @@ fn f() -> i64 {
 
 **Fix:** Remove the invalid character. Vow has no `@` operator.
 
+### InvalidIntSuffix
+
+**Phase:** Lexer
+**Meaning:** An integer literal carries a type suffix that names a type Vow does not have.
+
+```vow
+fn f() -> u64 {
+    5usize
+}
+```
+
+**Output:** ``unknown integer suffix `usize`: Vow has no `usize`/`isize` type (fixed-width only)``
+
+**Fix:** Use a fixed-width suffix. Vow's integer widths are pointer-independent by
+design (see `docs/adr/0001-numeric-tower-narrow-ints.md`), so there is no `usize`
+or `isize`; write `5u64` for a machine-word-sized unsigned value and `5i64` for a
+signed one.
+
 ### UnexpectedToken
 
 **Phase:** Parser
@@ -5909,6 +5935,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "enum": [
         "UnterminatedString",
         "InvalidCharacter",
+        "InvalidIntSuffix",
         "UnexpectedToken",
         "MissingDelimiter",
         "TypeMismatch",
@@ -6391,6 +6418,14 @@ let y: i8 = 200;   // error: LiteralOutOfRange — i8 range is -128..=127
 
 Suffixed forms are supported for all 10 integer widths. They override context
 coercion and are still subject to the same compile-time range check.
+
+There are no `usize`/`isize` suffixes, because there are no such types. A literal
+carrying one is an `InvalidIntSuffix` error at lex time rather than a silently
+dropped suffix:
+
+```vow
+let n: u64 = 5usize;   // error: InvalidIntSuffix — write 5u64
+```
 
 Integer tokens store their decimal digits as an unsigned magnitude. A leading
 `-` is a separate unary-negation expression and is not part of the literal.
@@ -8823,6 +8858,24 @@ fn f() -> i64 {
 
 **Fix:** Remove the invalid character. Vow has no `@` operator.
 
+### InvalidIntSuffix
+
+**Phase:** Lexer
+**Meaning:** An integer literal carries a type suffix that names a type Vow does not have.
+
+```vow
+fn f() -> u64 {
+    5usize
+}
+```
+
+**Output:** ``unknown integer suffix `usize`: Vow has no `usize`/`isize` type (fixed-width only)``
+
+**Fix:** Use a fixed-width suffix. Vow's integer widths are pointer-independent by
+design (see `docs/adr/0001-numeric-tower-narrow-ints.md`), so there is no `usize`
+or `isize`; write `5u64` for a machine-word-sized unsigned value and `5i64` for a
+signed one.
+
 ### UnexpectedToken
 
 **Phase:** Parser
@@ -10738,6 +10791,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "enum": [
         "UnterminatedString",
         "InvalidCharacter",
+        "InvalidIntSuffix",
         "UnexpectedToken",
         "MissingDelimiter",
         "TypeMismatch",

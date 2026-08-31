@@ -1,0 +1,9 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "unknown type: usize"
+// Rejecting the `usize` literal suffix must not disturb the type-name path:
+// `usize` in type position still fails in the checker, not the lexer.
+module UsizeTypeName
+
+fn f(x: usize) -> i64 { 0 }
+
+fn main() -> i32 { 0 }

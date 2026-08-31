@@ -1,10 +1,22 @@
 use crate::span::Span;
 use crate::token::{IntSuffix, Token, TokenKind};
+use vow_diag::ErrorCode;
 
 #[derive(Debug)]
 pub struct LexError {
     pub message: String,
     pub span: Span,
+    pub code: ErrorCode,
+}
+
+/// The spelled type for an integer suffix Vow's type system cannot represent,
+/// or `None` when the suffix names a real fixed-width type.
+fn unrepresentable_suffix_name(suffix: IntSuffix) -> Option<&'static str> {
+    match suffix {
+        IntSuffix::Usize => Some("usize"),
+        IntSuffix::Isize => Some("isize"),
+        _ => None,
+    }
 }
 
 pub struct Lexer<'src> {
@@ -195,13 +207,8 @@ impl<'src> Lexer<'src> {
                 }
             }
             b'.' => {
-                if self.peek_byte(1) == Some(b'.') {
-                    self.pos += 2;
-                    Ok(Token::new(TokenKind::DotDot, Span::new(start as u32, 2)))
-                } else {
-                    self.pos += 1;
-                    Ok(Token::new(TokenKind::Dot, Span::new(start as u32, 1)))
-                }
+                self.pos += 1;
+                Ok(Token::new(TokenKind::Dot, Span::new(start as u32, 1)))
             }
             b'{' => {
                 self.pos += 1;
@@ -248,6 +255,7 @@ impl<'src> Lexer<'src> {
                 Err(LexError {
                     message: format!("unexpected character '{}'", b as char),
                     span: Span::new(start as u32, 1),
+                    code: ErrorCode::InvalidCharacter,
                 })
             }
         }
@@ -293,6 +301,7 @@ impl<'src> Lexer<'src> {
             let value: f64 = text.parse().map_err(|_| LexError {
                 message: format!("invalid float literal '{}'", text),
                 span,
+                code: ErrorCode::InvalidCharacter,
             })?;
             return Ok(Token::new(TokenKind::LitFloat(value), span));
         }
@@ -301,6 +310,7 @@ impl<'src> Lexer<'src> {
         let int_value: u128 = digits.parse().map_err(|_| LexError {
             message: format!("integer literal '{}' out of range", digits),
             span: Span::new(start as u32, (self.pos - start) as u32),
+            code: ErrorCode::InvalidCharacter,
         })?;
 
         // Check for type suffix
@@ -310,6 +320,19 @@ impl<'src> Lexer<'src> {
             if let Some(suffix) = suffix {
                 let len = (self.pos - start) as u32;
                 let span = Span::new(start as u32, len);
+                // Vow's integer widths are pointer-independent by design (ADR
+                // 0001), so `usize`/`isize` name no type these suffixes could
+                // denote. The suffix is still consumed as one unit so the error
+                // spans `5usize` rather than cascading into a bare `usize` ident.
+                if let Some(name) = unrepresentable_suffix_name(suffix) {
+                    return Err(LexError {
+                        message: format!(
+                            "unknown integer suffix `{name}`: Vow has no `usize`/`isize` type (fixed-width only)"
+                        ),
+                        span,
+                        code: ErrorCode::InvalidIntSuffix,
+                    });
+                }
                 return Ok(Token::new(
                     TokenKind::LitIntSuffixed {
                         value: int_value,
@@ -367,6 +390,7 @@ impl<'src> Lexer<'src> {
                 return Err(LexError {
                     message: "unterminated string literal".to_string(),
                     span: Span::new(start as u32, (self.pos - start) as u32),
+                    code: ErrorCode::InvalidCharacter,
                 });
             }
             let b = self.current_byte();
@@ -377,6 +401,7 @@ impl<'src> Lexer<'src> {
                     TokenKind::LitString(String::from_utf8(value).map_err(|_| LexError {
                         message: "invalid UTF-8 in string literal".to_string(),
                         span: Span::new(start as u32, len),
+                        code: ErrorCode::InvalidCharacter,
                     })?),
                     Span::new(start as u32, len),
                 ));
@@ -387,6 +412,7 @@ impl<'src> Lexer<'src> {
                     return Err(LexError {
                         message: "unterminated string escape".to_string(),
                         span: Span::new(start as u32, (self.pos - start) as u32),
+                        code: ErrorCode::InvalidCharacter,
                     });
                 }
                 let esc = self.current_byte();
@@ -522,6 +548,16 @@ mod tests {
         assert!(matches!(&kinds[0], TokenKind::LitString(s) if s == "+ → -"));
     }
 
+    // A backslash as the final byte leaves the escape with nothing to consume.
+    #[test]
+    fn lex_unterminated_string_escape_is_error() {
+        let err = Lexer::new("\"abc\\")
+            .tokenize()
+            .expect_err("a trailing escape must be rejected");
+        assert_eq!(err.code, ErrorCode::InvalidCharacter);
+        assert_eq!(err.message, "unterminated string escape");
+    }
+
     #[test]
     fn lex_unterminated_string_is_error() {
         let result = Lexer::new("\"unterminated").tokenize();
@@ -584,11 +620,16 @@ mod tests {
         assert_eq!(kinds[1], TokenKind::ColonColon);
     }
 
+    // Vow has no range syntax, so `..` is not a token: it lexes as two `Dot`s.
+    // A dedicated two-dot kind would name a token no grammar consumes, sending
+    // an agent after a range form the language does not have.
     #[test]
-    fn lex_dot_variants() {
+    fn lex_dot_never_pairs() {
         let kinds = lex(". ..");
         assert_eq!(kinds[0], TokenKind::Dot);
-        assert_eq!(kinds[1], TokenKind::DotDot);
+        assert_eq!(kinds[1], TokenKind::Dot);
+        assert_eq!(kinds[2], TokenKind::Dot);
+        assert_eq!(kinds[3], TokenKind::Eof);
     }
 
     #[test]
@@ -722,20 +763,45 @@ mod tests {
     }
 
     #[test]
-    fn lex_usize_isize_suffix() {
-        let kinds = lex("10usize 20isize");
+    fn lex_usize_isize_suffix_rejected() {
+        for (src, name) in [("10usize", "usize"), ("20isize", "isize")] {
+            let err = Lexer::new(src)
+                .tokenize()
+                .expect_err("usize/isize suffixes name no Vow type");
+            assert_eq!(err.code, ErrorCode::InvalidIntSuffix);
+            assert!(
+                err.message.contains(name),
+                "message must name the offending suffix: {}",
+                err.message
+            );
+            // Span covers the whole literal including the suffix.
+            assert_eq!(err.span.start, 0);
+            assert_eq!(err.span.len as usize, src.len());
+        }
+    }
+
+    #[test]
+    fn lex_fixed_width_suffixes_still_accepted() {
+        let kinds = lex("10u64 20i128 30u8");
         assert_eq!(
             kinds[0],
             TokenKind::LitIntSuffixed {
                 value: 10,
-                suffix: IntSuffix::Usize
+                suffix: IntSuffix::U64
             }
         );
         assert_eq!(
             kinds[1],
             TokenKind::LitIntSuffixed {
                 value: 20,
-                suffix: IntSuffix::Isize
+                suffix: IntSuffix::I128
+            }
+        );
+        assert_eq!(
+            kinds[2],
+            TokenKind::LitIntSuffixed {
+                value: 30,
+                suffix: IntSuffix::U8
             }
         );
     }

@@ -32,6 +32,24 @@ fn f() -> i64 {
 
 **Fix:** Remove the invalid character. Vow has no `@` operator.
 
+### InvalidIntSuffix
+
+**Phase:** Lexer
+**Meaning:** An integer literal carries a type suffix that names a type Vow does not have.
+
+```vow
+fn f() -> u64 {
+    5usize
+}
+```
+
+**Output:** ``unknown integer suffix `usize`: Vow has no `usize`/`isize` type (fixed-width only)``
+
+**Fix:** Use a fixed-width suffix. Vow's integer widths are pointer-independent by
+design (see `docs/adr/0001-numeric-tower-narrow-ints.md`), so there is no `usize`
+or `isize`; write `5u64` for a machine-word-sized unsigned value and `5i64` for a
+signed one.
+
 ### UnexpectedToken
 
 **Phase:** Parser
