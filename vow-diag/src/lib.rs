@@ -76,6 +76,13 @@ pub enum ErrorCode {
     EsbmcNotFound,
     // IO errors
     IoError,
+    // Code generation errors
+    // Emitted when the native backend cannot lower a valid Vow operation.
+    CodegenUnsupported,
+    // Emitted when the native backend fails for another reason.
+    CodegenFailed,
+    // Emitted when the native linker cannot produce the requested executable.
+    LinkFailed,
     // Region inference (arena-per-scope, Phase 3)
     RegionConflict,
     RegionLiteralMutation,

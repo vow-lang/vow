@@ -2,6 +2,7 @@ pub mod cranelift_backend;
 pub mod linker;
 mod return_materialization;
 
+use vow_diag::ErrorCode;
 use vow_ir::Module;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +48,20 @@ pub enum CodegenError {
     Io(String),
 }
 
+impl CodegenError {
+    pub fn error_code(&self) -> ErrorCode {
+        match self {
+            Self::UnsupportedOpcode(_) => ErrorCode::CodegenUnsupported,
+            Self::IsaBuild(_)
+            | Self::FunctionDeclare(_)
+            | Self::FunctionDefine(_)
+            | Self::Emit(_) => ErrorCode::CodegenFailed,
+            Self::Link(_) => ErrorCode::LinkFailed,
+            Self::Io(_) => ErrorCode::IoError,
+        }
+    }
+}
+
 impl std::fmt::Display for CodegenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -73,6 +88,33 @@ pub trait Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vow_diag::ErrorCode;
+
+    #[test]
+    fn codegen_error_maps_every_variant_to_an_error_code() {
+        let cases = [
+            (CodegenError::IsaBuild("e".into()), ErrorCode::CodegenFailed),
+            (
+                CodegenError::FunctionDeclare("e".into()),
+                ErrorCode::CodegenFailed,
+            ),
+            (
+                CodegenError::FunctionDefine("e".into()),
+                ErrorCode::CodegenFailed,
+            ),
+            (CodegenError::Emit("e".into()), ErrorCode::CodegenFailed),
+            (
+                CodegenError::UnsupportedOpcode("e".into()),
+                ErrorCode::CodegenUnsupported,
+            ),
+            (CodegenError::Link("e".into()), ErrorCode::LinkFailed),
+            (CodegenError::Io("e".into()), ErrorCode::IoError),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.error_code(), expected);
+        }
+    }
 
     #[test]
     fn codegen_error_display_all_variants() {
