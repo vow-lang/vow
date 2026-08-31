@@ -1718,7 +1718,8 @@ VERIFICATION FAILED";
 
     #[test]
     fn parse_multi_property_ignores_lines_without_a_claim_id() {
-        let output = "VERIFICATION FAILED\nProperties: 3 verified, 1 failed\n  PASSED  nothing here";
+        let output =
+            "VERIFICATION FAILED\nProperties: 3 verified, 1 failed\n  PASSED  nothing here";
         assert!(parse_multi_property_verdicts(output).is_empty());
     }
 
