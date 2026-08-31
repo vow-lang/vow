@@ -162,24 +162,17 @@ fn verify_one_function(
                 limits,
                 &func_config,
             );
-            match contract_result {
-                Some(res) => (res, Some(warning)),
-                None => return PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
-            }
+            (contract_result, Some(warning))
         }
-        other => (other, None),
+        other => (Some(other), None),
     };
 
-    // A reachable abort is reported only when the contract itself is proved. If
-    // the contract also fails, that failure is the actionable finding and the
-    // run halts on it; claiming the abort alongside would be guesswork, since
-    // ESBMC never told us whether the arith obligation held on this second run.
-    if let Some(warning) = arith_warning
-        && matches!(
-            result,
-            VerificationResult::Proven | VerificationResult::ProvenIr
-        )
-    {
+    let result = match fold_arith_rerun(result, arith_warning) {
+        Ok(pair) => pair,
+        Err(verdict) => return verdict,
+    };
+    let (result, arith_warning) = result;
+    if let Some(warning) = arith_warning {
         return PerFuncResult::Warn(VerifyWarning::ArithOverflow(warning));
     }
 
@@ -200,6 +193,33 @@ fn verify_one_function(
         }
         VerificationDisposition::Complete(result) => result,
     }
+}
+
+/// Decide what a contracts-only re-run means, given the pending abort warning.
+///
+/// `Err(verdict)` is a terminal per-function result; `Ok((result, warning))`
+/// carries the verdict to classify, with `warning` set only when it should be
+/// reported. Pure, so the policy is testable without a solver — the same reason
+/// [`run_pool`] takes its verdict as an injected closure.
+///
+/// Two rules live here. A missing ESBMC is a halt, not a silent pass. And the
+/// abort is reported **only** when the contract itself is proved: if the
+/// contract also fails, that failure is the actionable finding, and ESBMC never
+/// told us whether the arith obligation held on this second run, so claiming the
+/// abort alongside would be guesswork.
+#[allow(clippy::type_complexity)]
+fn fold_arith_rerun(
+    result: Option<VerificationResult>,
+    warning: Option<ArithOverflowWarning>,
+) -> Result<(VerificationResult, Option<ArithOverflowWarning>), PerFuncResult> {
+    let Some(result) = result else {
+        return Err(PerFuncResult::Halt(VerifyOutcome::ToolNotFound));
+    };
+    let proved = matches!(
+        result,
+        VerificationResult::Proven | VerificationResult::ProvenIr
+    );
+    Ok((result, warning.filter(|_| proved)))
 }
 
 /// Build the Warning for a checked-arithmetic site whose abort ESBMC proved
@@ -662,6 +682,94 @@ mod tests {
             span_start: 99,
             span_len: 6,
         }
+    }
+
+    fn warn() -> ArithOverflowWarning {
+        ArithOverflowWarning {
+            function: "f".to_string(),
+            cause: "addition overflows",
+            file: "f.vow".to_string(),
+            offset: 1,
+            length: 2,
+        }
+    }
+
+    // A missing ESBMC on the contracts-only re-run halts; it must never be a
+    // silent pass just because the first run produced an arith label.
+    #[test]
+    fn fold_arith_rerun_halts_when_the_tool_is_missing() {
+        let out = fold_arith_rerun(None, Some(warn()));
+        assert!(matches!(
+            out,
+            Err(PerFuncResult::Halt(VerifyOutcome::ToolNotFound))
+        ));
+    }
+
+    // The abort is reported only alongside a proof.
+    #[test]
+    fn fold_arith_rerun_reports_the_abort_only_on_a_proof() {
+        for (result, expect_warning) in [
+            (VerificationResult::Proven, true),
+            (VerificationResult::ProvenIr, true),
+            (VerificationResult::Timeout, false),
+            (
+                VerificationResult::Unknown {
+                    reason: "x".to_string(),
+                },
+                false,
+            ),
+            (
+                VerificationResult::Skipped {
+                    reason: "x".to_string(),
+                },
+                false,
+            ),
+            (VerificationResult::ToolNotFound, false),
+            (VerificationResult::ToolError("boom".to_string()), false),
+        ] {
+            let label = format!("{result:?}");
+            let Ok((_, w)) = fold_arith_rerun(Some(result), Some(warn())) else {
+                panic!("{label} must not be terminal");
+            };
+            assert_eq!(
+                w.is_some(),
+                expect_warning,
+                "{label}: warning reported = {expect_warning}"
+            );
+        }
+    }
+
+    // A contract counterexample on the re-run keeps the failure and drops the
+    // abort claim — the failure is the actionable finding, and ESBMC never said
+    // whether the arith obligation held on that run.
+    #[test]
+    fn fold_arith_rerun_drops_the_abort_claim_on_a_counterexample() {
+        let ce = vow_verify::Counterexample {
+            arith_overflow: None,
+            description: String::new(),
+            vow_id: Some(0),
+            callee_precondition: None,
+            values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::new(),
+        };
+        let Ok((result, w)) = fold_arith_rerun(Some(VerificationResult::Failed(ce)), Some(warn()))
+        else {
+            panic!("a counterexample is not a terminal per-function verdict here");
+        };
+        assert!(matches!(result, VerificationResult::Failed(_)));
+        assert!(w.is_none(), "no abort claim alongside a contract failure");
+    }
+
+    // No pending warning is the ordinary path and passes the verdict straight
+    // through.
+    #[test]
+    fn fold_arith_rerun_passes_through_without_a_warning() {
+        let Ok((result, w)) = fold_arith_rerun(Some(VerificationResult::Proven), None) else {
+            panic!("a proof is not terminal here");
+        };
+        assert!(matches!(result, VerificationResult::Proven));
+        assert!(w.is_none());
     }
 
     // #585: a model co-emits its modelable callees, so verifying `caller` can
