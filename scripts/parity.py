@@ -9,12 +9,16 @@ from pathlib import Path
 KNOWN_CEX_DIVERGENCE = re.compile(
     r'^// TEST: known-cex-divergence ([0-9]+) "(.*)"$', re.MULTILINE
 )
+KNOWN_CEX_COUNT_DIVERGENCE = re.compile(
+    r'^// TEST: known-cex-count-divergence ([0-9]+) "(.*)"$', re.MULTILINE
+)
 
 # Labels that a suppression policy keys off. Both the comparator that emits the
 # message and the predicate that matches it read them from here, so a reworded
 # message can never silently disable a suppression.
 VALUES_LABEL = "values"
 ERROR_CODES_LABEL = "error codes"
+COUNTEREXAMPLE_COUNT_LABEL = "counterexamples count"
 
 
 def _mismatch(label, rust_value, self_value):
@@ -64,7 +68,7 @@ def _counterexample_fields(base, rust_cex, self_cex):
 def _compare_counterexamples(rust_counterexamples, self_counterexamples, fields):
     """Count and per-index parity errors for the two counterexample lists."""
     errors = _mismatch(
-        "counterexamples count",
+        COUNTEREXAMPLE_COUNT_LABEL,
         len(rust_counterexamples),
         len(self_counterexamples),
     )
@@ -221,6 +225,33 @@ def _known_cex_verdict(rust, self_hosted, errors, fixture_path):
     )
 
 
+def _known_cex_count_verdict(rust, self_hosted, errors, fixture_path):
+    """Verdict for a fixture's issue-scoped counterexample-count divergence."""
+    if not fixture_path:
+        return None
+    match = KNOWN_CEX_COUNT_DIVERGENCE.search(
+        Path(fixture_path).read_text(errors="replace")
+    )
+    if not match:
+        return None
+    known = f"#{match.group(1)}: {match.group(2)}"
+    both_hard_failed = rust.get("status") == self_hosted.get(
+        "status"
+    ) == "VerifyFailed" and not (
+        rust.get("verify_status") and self_hosted.get("verify_status")
+    )
+    return _suppress(
+        errors,
+        lambda error: error.startswith(f"{COUNTEREXAMPLE_COUNT_LABEL}: "),
+        exercised=both_hard_failed,
+        reason=f"known counterexample-count divergence ({known})",
+        stale_reason=(
+            f"known-cex-count-divergence ({known}) no longer reproduces — "
+            "remove the directive"
+        ),
+    )
+
+
 def _ledger_entry(fixture_path):
     """The equivalence-ledger entry for a fixture, with its tracked observables."""
     if not fixture_path:
@@ -282,6 +313,10 @@ def main(argv=None):
         errors = compare_json(rust, self_hosted, int(rust_exit), int(self_exit))
         try:
             verdict = _known_cex_verdict(rust, self_hosted, errors, fixture_path)
+            if verdict is None:
+                verdict = _known_cex_count_verdict(
+                    rust, self_hosted, errors, fixture_path
+                )
         except OSError as error:
             print(f"FAIL: fixture read error: {error}")
             return 1

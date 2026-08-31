@@ -512,6 +512,9 @@ class CompareErrorCodeParityTest(unittest.TestCase):
 
 
 KNOWN_CEX_FIXTURE = '// TEST: known-cex-divergence 1139 "variable names differ"\n'
+KNOWN_CEX_COUNT_FIXTURE = (
+    '// TEST: known-cex-count-divergence 1155 "Rust stops after first failure"\n'
+)
 
 
 class ParityCliCharacterizationTest(unittest.TestCase):
@@ -560,6 +563,39 @@ class ParityCliCharacterizationTest(unittest.TestCase):
 
         self.assertEqual(
             (1, "FAIL: counterexamples count: 2 vs 1"),
+            (completed.returncode, completed.stdout.strip()),
+        )
+
+    def test_known_counterexample_count_divergence_is_a_loud_skip(self):
+        rust = document(
+            "VerifyFailed",
+            counterexamples=[{"function": "first", "blame": "caller"}],
+        )
+        self_hosted = document(
+            "VerifyFailed",
+            counterexamples=[
+                {"function": "first", "blame": "caller"},
+                {"function": "second", "blame": "callee"},
+            ],
+        )
+
+        completed = run_parity_cli(
+            "json",
+            rust,
+            self_hosted,
+            1,
+            1,
+            fixture_text=KNOWN_CEX_COUNT_FIXTURE,
+        )
+
+        self.assertEqual(
+            (
+                0,
+                (
+                    "SKIP: known counterexample-count divergence "
+                    "(#1155: Rust stops after first failure)"
+                ),
+            ),
             (completed.returncode, completed.stdout.strip()),
         )
 
