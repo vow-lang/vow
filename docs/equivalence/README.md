@@ -138,8 +138,9 @@ ones to revisit first when widening the comparison:
   `VerifyFailed` while Rust emits one entry per counterexample. Because that
   gap covers the whole `tests/verify-fail/` suite, the `error_code`/`blame`
   multiset is exercised only outside `VerifyFailed`. Dropping the guard is
-  blocked on #1138, the same ordering constraint #1136 records for spans and
-  `violation`.
+  blocked on #1138, the same ordering constraint #1136 records for spans.
+  Contract-backed counterexample `violation` text is already compared; only
+  blame-`none` fallback text remains excluded pending #1144.
 - **Counterexample value names prefixed `$esbmc$` are dropped before
   comparison.** These are ESBMC's own temporaries, not the agent-facing CEGIS
   payload the two compilers owe each other; `vowc --help` documents the prefix
