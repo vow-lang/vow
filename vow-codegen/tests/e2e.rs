@@ -617,3 +617,122 @@ fn vow_violation_reports_u8_variable_value() {
         r#"expected "x":5 (real u8 value, not 0) in stderr, got: {stderr}"#
     );
 }
+
+#[test]
+fn vow_violation_reports_i128_variable_value() {
+    use vow_diag::Blame;
+
+    let bad = Function {
+        id: FuncId(0),
+        name: "bad".to_string(),
+        params: vec![Ty::I128],
+        param_names: vec![],
+        return_ty: Ty::I128,
+        effects: vec![],
+        vows: vec![VowEntry {
+            id: VowId(0),
+            description: "requires x < 0".to_string(),
+            blame: Blame::Caller,
+            bindings: vec![("x".to_string(), InstId(0))],
+            file: String::new(),
+            offset: 0,
+        }],
+        blocks: vec![BasicBlock {
+            id: BlockId(0),
+            insts: vec![
+                inst(0, Opcode::GetArg, Ty::I128, vec![], InstData::ArgIndex(0)),
+                inst(
+                    1,
+                    Opcode::ConstI128,
+                    Ty::I128,
+                    vec![],
+                    InstData::ConstI128(0),
+                ),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Lt,
+                    ty: Ty::Bool,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::Integer(IntegerType::I128),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::VowRequires,
+                    ty: Ty::Unit,
+                    args: vec![InstId(2)],
+                    data: InstData::VowId(VowId(0)),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        }],
+        local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
+        source_file: String::new(),
+    };
+
+    let main_fn = Function {
+        id: FuncId(1),
+        name: "main".to_string(),
+        params: vec![],
+        param_names: vec![],
+        return_ty: Ty::I32,
+        effects: vec![],
+        vows: vec![],
+        blocks: vec![BasicBlock {
+            id: BlockId(0),
+            insts: vec![
+                inst(
+                    10,
+                    Opcode::ConstI128,
+                    Ty::I128,
+                    vec![],
+                    InstData::ConstI128(3154393236604333326336),
+                ),
+                Inst {
+                    id: InstId(11),
+                    opcode: Opcode::Call,
+                    ty: Ty::I128,
+                    args: vec![InstId(10)],
+                    data: InstData::CallTarget(FuncId(0)),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(12, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(0)),
+                inst(13, Opcode::Return, Ty::Unit, vec![12], InstData::None),
+            ],
+        }],
+        local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
+        source_file: String::new(),
+    };
+
+    let module = Module {
+        name: "i128_vow_test".to_string(),
+        strings: vec![],
+        struct_layouts: vec![],
+        enum_layouts: vec![],
+        warnings: vec![],
+        functions: vec![bad, main_fn],
+    };
+
+    let dir = TempDir::new().unwrap();
+    let Some(exe) = compile_and_link(&module, BuildMode::Debug, &dir) else {
+        eprintln!("SKIP: vow-runtime not found");
+        return;
+    };
+    let out = run_exe(&exe);
+    assert_eq!(out.status.code(), Some(134));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Caller"),
+        "expected blame=Caller in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(r#""x":3154393236604333326336"#),
+        "expected the full i128 magnitude in stderr, got: {stderr}"
+    );
+}

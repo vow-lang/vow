@@ -3053,6 +3053,8 @@ fn tag_for_ir_ty(ty: i64) -> i64 {
         ITY_I16 => 8,
         ITY_U16 => 9,
         ITY_U32 => 10,
+        ITY_I128 => 11,
+        ITY_U128 => 12,
         _ => 0,
     }
 }
@@ -3112,30 +3114,34 @@ fn emit_vow_check(
                 builder
                     .ins()
                     .stack_store(types::I64, tag_val, slot, (i * 32 + 8) as i32);
-                let payload: Value = match *ir_ty {
-                    ITY_I8 => builder.ins().sextend(types::I64, *cl_val),
-                    ITY_U8 => builder.ins().uextend(types::I64, *cl_val),
-                    ITY_I16 => builder.ins().sextend(types::I64, *cl_val),
-                    ITY_U16 => builder.ins().uextend(types::I64, *cl_val),
-                    ITY_I32 => builder.ins().sextend(types::I64, *cl_val),
-                    ITY_U32 => builder.ins().uextend(types::I64, *cl_val),
-                    ITY_I64 | ITY_U64 => *cl_val,
+                let zero_hi = builder.ins().iconst(types::I64, 0);
+                let (payload, payload_hi): (Value, Value) = match *ir_ty {
+                    ITY_I8 => (builder.ins().sextend(types::I64, *cl_val), zero_hi),
+                    ITY_U8 => (builder.ins().uextend(types::I64, *cl_val), zero_hi),
+                    ITY_I16 => (builder.ins().sextend(types::I64, *cl_val), zero_hi),
+                    ITY_U16 => (builder.ins().uextend(types::I64, *cl_val), zero_hi),
+                    ITY_I32 => (builder.ins().sextend(types::I64, *cl_val), zero_hi),
+                    ITY_U32 => (builder.ins().uextend(types::I64, *cl_val), zero_hi),
+                    ITY_I64 | ITY_U64 => (*cl_val, zero_hi),
+                    ITY_I128 | ITY_U128 => builder.ins().isplit(*cl_val),
                     ITY_F32 => {
                         let bits = builder
                             .ins()
                             .bitcast(types::I32, MemFlagsData::new(), *cl_val);
-                        builder.ins().uextend(types::I64, bits)
+                        (builder.ins().uextend(types::I64, bits), zero_hi)
                     }
-                    ITY_F64 => builder
-                        .ins()
-                        .bitcast(types::I64, MemFlagsData::new(), *cl_val),
-                    ITY_BOOL => *cl_val,
-                    _ => builder.ins().iconst(types::I64, 0),
+                    ITY_F64 => (
+                        builder
+                            .ins()
+                            .bitcast(types::I64, MemFlagsData::new(), *cl_val),
+                        zero_hi,
+                    ),
+                    ITY_BOOL => (*cl_val, zero_hi),
+                    _ => (builder.ins().iconst(types::I64, 0), zero_hi),
                 };
                 builder
                     .ins()
                     .stack_store(types::I64, payload, slot, (i * 32 + 16) as i32);
-                let payload_hi = builder.ins().iconst(types::I64, 0);
                 builder
                     .ins()
                     .stack_store(types::I64, payload_hi, slot, (i * 32 + 24) as i32);
@@ -4898,6 +4904,69 @@ mod tests {
                 __vow_clif_fn_vow(
                     ctx,
                     7,
+                    &description as *const VowVec as i64,
+                    &binding_ids_vec as *const VowVec as i64,
+                    &binding_names_vec as *const VowVec as i64,
+                ),
+                0
+            );
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn wide_vow_captures_compile_through_streamed_ffi() {
+        let param_tys = [ITY_I128, ITY_U128];
+        let ctx = __vow_clif_create(1, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function_with_params(ctx, "capture_wide", &param_tys, ITY_UNIT);
+        let param_tys_vec = vow_i64_vec(&param_tys);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_begin(ctx, 0, ITY_UNIT, &param_tys_vec as *const VowVec as i64,),
+                0
+            );
+        }
+        add_test_block(ctx);
+        for (id, ty) in param_tys.into_iter().enumerate() {
+            add_test_inst(
+                ctx,
+                id as i64,
+                IOP_GET_ARG,
+                ty,
+                IDATA_ARG_INDEX,
+                id as i64,
+                0,
+                &[],
+            );
+        }
+        add_test_inst(
+            ctx,
+            2,
+            IOP_CONST_BOOL,
+            ITY_BOOL,
+            IDATA_CONST_BOOL,
+            1,
+            0,
+            &[],
+        );
+        add_test_inst(ctx, 3, IOP_VOW_REQ, ITY_UNIT, IDATA_VOW_ID, 9, 0, &[2]);
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+
+        let description = vow_string("wide captures");
+        let binding_ids_vec = vow_i64_vec(&[0, 1]);
+        let binding_names = [vow_string("i128v"), vow_string("u128v")];
+        let binding_name_ptrs: Vec<i64> = binding_names
+            .iter()
+            .map(|name| name as *const VowVec as i64)
+            .collect();
+        let binding_names_vec = vow_i64_vec(&binding_name_ptrs);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_vow(
+                    ctx,
+                    9,
                     &description as *const VowVec as i64,
                     &binding_ids_vec as *const VowVec as i64,
                     &binding_names_vec as *const VowVec as i64,

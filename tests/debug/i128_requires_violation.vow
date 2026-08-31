@@ -1,0 +1,15 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr ""x":3154393236604333326336"
+module I128RequiresViolation
+
+fn bad(x: i128) -> i128 vow {
+    requires: x < 0
+} {
+    x
+}
+
+fn main() -> i32 [io] {
+    bad(3154393236604333326336);
+    0
+}
