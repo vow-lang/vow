@@ -1012,7 +1012,7 @@ fn emit_inst(
         | Opcode::CheckedSub
         | Opcode::CheckedMul
         | Opcode::CheckedDiv
-        | Opcode::CheckedRem => emit_checked_arith(inst, out),
+        | Opcode::CheckedRem => emit_checked_arith(inst, out, current_func_id),
 
         // Float arithmetic
         Opcode::AddF32 | Opcode::AddF64 => {
@@ -2843,7 +2843,7 @@ fn emit_arith_helper(
 /// The assert precedes the assume so ESBMC checks the property on the
 /// unpruned state. Earlier sites' assumes do constrain later sites, so the probe
 /// reports the *first* reachable abort in a function rather than all of them.
-fn emit_checked_arith(inst: &Inst, out: &mut String) {
+fn emit_checked_arith(inst: &Inst, out: &mut String, owner: FuncId) {
     let id = inst.id.0;
     let Some(int_ty) = checked_integer_type(inst) else {
         // 128-bit and non-integer checked arithmetic is rejected by the
@@ -2878,11 +2878,20 @@ fn emit_checked_arith(inst: &Inst, out: &mut String) {
     // model from the very same emitted text. The assumes are never suppressed:
     // they *are* the abort semantics, and dropping them would resurrect the
     // wrapping model this whole path exists to replace.
+    //
+    // The label carries `owner` — the id of the function this instruction
+    // belongs to, which is *not* always the verify target: a model co-emits its
+    // modelable callees, so a callee's site can be the one that fires. Spans are
+    // file-relative, so without the owner the diagnostic would name the target
+    // and resolve the span against the target's file, pointing into unrelated
+    // source. Mirrors how `vow:pre:<func_id>:<vow_id>` already carries a
+    // callee's identity.
     out.push_str(&format!("#ifndef {ARITH_ASSERT_SUPPRESS_MACRO}\n"));
     for (abort, guard) in &guards {
         out.push_str(&format!(
-            "  __ESBMC_assert({guard}, \"arith:{}:{}:{}\");\n",
+            "  __ESBMC_assert({guard}, \"arith:{}:{}:{}:{}\");\n",
             abort.label(),
+            owner.0,
             span.start,
             span.len
         ));
@@ -3228,7 +3237,7 @@ mod tests {
     fn checked_site_asserts_then_assumes_the_same_guard() {
         let c = arith_c(Opcode::CheckedAdd, Ty::I64);
         let assert_at = c
-            .find(r#"__ESBMC_assert(!__vow_ovf_add_i64(v0, v1), "arith:add:92:6");"#)
+            .find(r#"__ESBMC_assert(!__vow_ovf_add_i64(v0, v1), "arith:add:0:92:6");"#)
             .unwrap_or_else(|| panic!("missing labelled assert:\n{c}"));
         let assume_at = c
             .find("__ESBMC_assume(!__vow_ovf_add_i64(v0, v1));")
@@ -3240,15 +3249,17 @@ mod tests {
         assert!(c.contains("v2 = v0 + v1;"), "operation still emitted:\n{c}");
     }
 
-    // The label carries the operator's own span, which is what points the
-    // ArithOverflowReachable diagnostic at the source.
+    // The label carries the cause, the *owning function's id*, and the
+    // operator's own span. The owner is what lets the driver attribute the
+    // warning to the function the operator lives in (not always the verify
+    // target); the span is what points the diagnostic at the source.
     #[test]
-    fn arith_label_carries_cause_and_span() {
+    fn arith_label_carries_cause_owner_and_span() {
         for (op, ty, expected) in [
-            (Opcode::CheckedAdd, Ty::I64, "arith:add:7:3"),
-            (Opcode::CheckedSub, Ty::U64, "arith:sub:7:3"),
-            (Opcode::CheckedMul, Ty::I32, "arith:mul:7:3"),
-            (Opcode::CheckedRem, Ty::I64, "arith:div-zero:7:3"),
+            (Opcode::CheckedAdd, Ty::I64, "arith:add:0:7:3"),
+            (Opcode::CheckedSub, Ty::U64, "arith:sub:0:7:3"),
+            (Opcode::CheckedMul, Ty::I32, "arith:mul:0:7:3"),
+            (Opcode::CheckedRem, Ty::I64, "arith:div-zero:0:7:3"),
         ] {
             let f = arith_func(op, ty, Span::new(7, 3));
             let c = emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default());
@@ -3263,12 +3274,12 @@ mod tests {
     fn signed_div_guards_min_over_minus_one_but_rem_does_not() {
         let div = arith_c(Opcode::CheckedDiv, Ty::I64);
         assert!(
-            div.contains("arith:div-zero:92:6") && div.contains("arith:div-overflow:92:6"),
+            div.contains("arith:div-zero:0:92:6") && div.contains("arith:div-overflow:0:92:6"),
             "signed /! needs both a zero-divisor and a MIN/-1 guard:\n{div}"
         );
         let rem = arith_c(Opcode::CheckedRem, Ty::I64);
         assert!(
-            rem.contains("arith:div-zero:92:6"),
+            rem.contains("arith:div-zero:0:92:6"),
             "%! needs the zero-divisor guard:\n{rem}"
         );
         assert!(
@@ -3517,6 +3528,72 @@ mod tests {
         assert!(
             run.status.success() && stdout.contains("mismatches=0"),
             "emitted overflow guards disagree with __builtin_*_overflow:\n{stdout}"
+        );
+    }
+
+    // The width/signedness mapping the guards are selected by. Exercised
+    // directly because the `InstData::Integer` fast path means the `inst.ty`
+    // fallback is otherwise only reached by hand-built or deserialized IR.
+    #[test]
+    fn ir_ty_to_integer_type_covers_every_modelled_width() {
+        for (ty, width, signedness) in [
+            (Ty::I8, IntegerWidth::W8, IntegerSignedness::Signed),
+            (Ty::U8, IntegerWidth::W8, IntegerSignedness::Unsigned),
+            (Ty::I16, IntegerWidth::W16, IntegerSignedness::Signed),
+            (Ty::U16, IntegerWidth::W16, IntegerSignedness::Unsigned),
+            (Ty::I32, IntegerWidth::W32, IntegerSignedness::Signed),
+            (Ty::U32, IntegerWidth::W32, IntegerSignedness::Unsigned),
+            (Ty::I64, IntegerWidth::W64, IntegerSignedness::Signed),
+            (Ty::U64, IntegerWidth::W64, IntegerSignedness::Unsigned),
+            (Ty::I128, IntegerWidth::W128, IntegerSignedness::Signed),
+            (Ty::U128, IntegerWidth::W128, IntegerSignedness::Unsigned),
+        ] {
+            assert_eq!(
+                ir_ty_to_integer_type(ty),
+                Some(IntegerType::new(width, signedness)),
+                "{ty:?}"
+            );
+        }
+        for ty in [Ty::Bool, Ty::F64, Ty::Unit, Ty::Ptr] {
+            assert_eq!(ir_ty_to_integer_type(ty), None, "{ty:?} is not an integer");
+        }
+    }
+
+    // The `inst.ty` fallback: an instruction whose `InstData` does not carry the
+    // integer type still resolves its width, and still rejects 128-bit.
+    #[test]
+    fn checked_integer_type_falls_back_to_inst_ty() {
+        let mut i = inst(0, Opcode::CheckedAdd, Ty::U64, vec![], InstData::None);
+        i.data = InstData::None;
+        assert_eq!(checked_integer_type(&i), Some(IntegerType::U64));
+
+        let mut wide = inst(0, Opcode::CheckedAdd, Ty::I128, vec![], InstData::None);
+        wide.data = InstData::None;
+        assert_eq!(
+            checked_integer_type(&wide),
+            None,
+            "128-bit has no guard and must fail closed"
+        );
+    }
+
+    // The emitter's own fail-closed arm. The `is_modelable` gate normally stops
+    // a 128-bit checked op before emission, so this asserts the second line of
+    // defence actually traps rather than emitting a wrong-width guard.
+    #[test]
+    fn emit_checked_arith_fails_closed_at_128_bits() {
+        let mut i = inst(2, Opcode::CheckedAdd, Ty::I128, vec![0, 1], InstData::None);
+        i.data = InstData::Integer(IntegerType::I128);
+        let mut out = String::new();
+        emit_checked_arith(&i, &mut out, FuncId(0));
+        assert!(
+            out.contains(&format!(
+                "__ESBMC_assert(0, \"vow:{UNSUPPORTED_OP_VOW_ID}\")"
+            )),
+            "must trap, not emit a guard:\n{out}"
+        );
+        assert!(
+            !out.contains("__vow_ovf_"),
+            "no guard may be emitted at an unmodelled width:\n{out}"
         );
     }
 

@@ -1336,7 +1336,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
         return;
     }
     if is_checked_arith_op(op) {
-        emit_checked_arith(out, inst, iargs);
+        emit_checked_arith(out, inst, iargs, f.id);
         return;
     }
 
@@ -3133,11 +3133,18 @@ fn checked_arith_ty(inst: IrInst) -> i64 {
 }
 
 // One `arith:<cause>:<start>:<len>` assert line.
-fn cemit_arith_assert(out: String, guard: String, cause: String, ostart: i64, olen: i64) {
+// `owner` is the id of the function this instruction belongs to — not always
+// the verify target, since a model co-emits its modelable callees. Spans are
+// file-relative, so without it the diagnostic would name the target and resolve
+// the span against the target's file.
+fn cemit_arith_assert(out: String, guard: String, cause: String, owner: i64, ostart: i64, olen: i64) {
+    let tail: String = str5(
+        i64_to_string(owner), String::from(":"), i64_to_string(ostart),
+        String::from(":"), i64_to_string(olen)
+    );
     out.push_str(str7(
         String::from("  __ESBMC_assert("), guard, String::from(", \"arith:"),
-        cause, String::from(":"),
-        cemit_str2(i64_to_string(ostart), cemit_str2(String::from(":"), i64_to_string(olen))),
+        cause, String::from(":"), tail,
         String::from("\");\n")
     ));
 }
@@ -3153,7 +3160,7 @@ fn cemit_arith_assume(out: String, guard: String) {
 // which is how the contract-only projection is produced from the same emitted
 // text; the assumes are never suppressed, because they *are* the abort
 // semantics.
-fn emit_checked_arith(out: String, inst: IrInst, iargs: Vec<i64>) {
+fn emit_checked_arith(out: String, inst: IrInst, iargs: Vec<i64>, owner: i64) {
     let ty: i64 = checked_arith_ty(inst);
     if ty == ITY_UNIT() {
         // 128-bit and non-integer checked arithmetic is rejected by the
@@ -3187,9 +3194,9 @@ fn emit_checked_arith(out: String, inst: IrInst, iargs: Vec<i64>) {
     };
 
     out.push_str(str3(String::from("#ifndef "), arith_assert_suppress_macro(), String::from("\n")));
-    cemit_arith_assert(out, guard0, cause0, inst.ostart, inst.olen);
+    cemit_arith_assert(out, guard0, cause0, owner, inst.ostart, inst.olen);
     if signed_div {
-        cemit_arith_assert(out, guard1, arith_cause_div_overflow(), inst.ostart, inst.olen);
+        cemit_arith_assert(out, guard1, arith_cause_div_overflow(), owner, inst.ostart, inst.olen);
     }
     out.push_str(String::from("#endif\n"));
     cemit_arith_assume(out, guard0);

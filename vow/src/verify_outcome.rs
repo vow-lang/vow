@@ -85,6 +85,24 @@ impl VerifyWarning {
         matches!(self, Self::Skipped(_))
     }
 
+    /// Identity of the diagnostic this warning renders to, for deduplication.
+    /// Deliberately the *rendered* identity — same function, same place, same
+    /// cause — not the warning's provenance, since the point is to collapse the
+    /// several verify targets that can report one shared site.
+    fn dedup_key(&self) -> (u8, &str, &str, u32, u32, &str) {
+        match self {
+            Self::Skipped(s) => (0, s.function.as_str(), "", 0, 0, s.reason.as_str()),
+            Self::ArithOverflow(a) => (
+                1,
+                a.function.as_str(),
+                a.file.as_str(),
+                a.offset,
+                a.length,
+                a.cause,
+            ),
+        }
+    }
+
     fn to_diagnostic(&self) -> Diagnostic {
         match self {
             Self::Skipped(s) => Diagnostic {
@@ -130,6 +148,25 @@ impl VerifyWarning {
     }
 }
 
+/// Drop warnings that would render as an identical diagnostic, preserving order.
+///
+/// One checked-arithmetic site can be reported by more than one verify target:
+/// a model co-emits its modelable callees, so a site inside `helper` surfaces
+/// both when verifying `helper` and when verifying every contracted caller of
+/// it. Once each is attributed to its true owner (see `arith_overflow_warning`)
+/// those reports become the same diagnostic, and emitting one per caller would
+/// bury the reader in duplicates of a single source location.
+///
+/// Skips are compared the same way, though in practice a function is only
+/// skipped once.
+fn dedup_warnings(warnings: &[VerifyWarning]) -> Vec<&VerifyWarning> {
+    let mut seen = std::collections::HashSet::new();
+    warnings
+        .iter()
+        .filter(|w| seen.insert(w.dedup_key()))
+        .collect()
+}
+
 /// Map a counterexample `blame` string to the diagnostic error code.
 ///
 /// Note the fallback asymmetry with [`blame_to_diag_blame`]: an unrecognised
@@ -169,7 +206,7 @@ pub(crate) fn to_output_with_warnings(
     warnings: &[VerifyWarning],
     executable: Option<PathBuf>,
 ) -> BuildOutput {
-    for w in warnings {
+    for w in dedup_warnings(warnings) {
         diagnostics.push(w.to_diagnostic());
     }
     let (status, counterexamples, verify_status, verify_message) = match outcome {
@@ -649,6 +686,75 @@ mod tests {
         assert_eq!(d.primary.file, "t.vow");
         assert_eq!(d.primary.byte_offset, 92);
         assert_eq!(d.primary.byte_len, 6);
+    }
+
+    fn arith_warn(function: &str, file: &str, offset: u32) -> VerifyWarning {
+        VerifyWarning::ArithOverflow(ArithOverflowWarning {
+            function: function.to_string(),
+            cause: "addition overflows",
+            file: file.to_string(),
+            offset,
+            length: 6,
+        })
+    }
+
+    // #585: one checked-arithmetic site can be reported by several verify
+    // targets, because a model co-emits its modelable callees. Once each is
+    // attributed to its true owner they are the same diagnostic, and the reader
+    // should see it once.
+    #[test]
+    fn identical_arith_warnings_are_reported_once() {
+        let out = to_output_with_warnings(
+            VerifyOutcome::Proven,
+            vec![],
+            &[
+                arith_warn("helper", "helper.vow", 99),
+                arith_warn("helper", "helper.vow", 99),
+                arith_warn("helper", "helper.vow", 99),
+            ],
+            None,
+        );
+        assert_eq!(out.diagnostics.len(), 1);
+        assert_eq!(out.diagnostics[0].code, ErrorCode::ArithOverflowReachable);
+    }
+
+    // Distinct sites must all survive — dedup keys on the rendered identity, so
+    // a different function, file, or offset is a different diagnostic.
+    #[test]
+    fn distinct_arith_warnings_are_all_reported() {
+        let out = to_output_with_warnings(
+            VerifyOutcome::Proven,
+            vec![],
+            &[
+                arith_warn("helper", "helper.vow", 99),
+                arith_warn("other", "helper.vow", 99),
+                arith_warn("helper", "other.vow", 99),
+                arith_warn("helper", "helper.vow", 120),
+            ],
+            None,
+        );
+        assert_eq!(out.diagnostics.len(), 4);
+    }
+
+    // Dedup preserves first-seen order, so reporting stays deterministic.
+    #[test]
+    fn dedup_preserves_first_seen_order() {
+        let out = to_output_with_warnings(
+            VerifyOutcome::Proven,
+            vec![],
+            &[
+                arith_warn("b", "b.vow", 2),
+                arith_warn("a", "a.vow", 1),
+                arith_warn("b", "b.vow", 2),
+            ],
+            None,
+        );
+        let names: Vec<&str> = out
+            .diagnostics
+            .iter()
+            .map(|d| d.primary.file.as_str())
+            .collect();
+        assert_eq!(names, ["b.vow", "a.vow"]);
     }
 
     #[test]

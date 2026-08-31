@@ -1,0 +1,29 @@
+// TEST: category overflow
+// Regression guard for the attribution half of #585. A model co-emits its
+// modelable callees, so verifying `caller` reaches the checked operator inside
+// `helper`. The `arith:` label carries the *owning* function's id for exactly
+// this reason: without it the warning names `caller` — which contains no checked
+// arithmetic at all — and resolves `helper`'s span against `caller`'s file,
+// pointing the diagnostic into unrelated source once the two live in different
+// modules. `helper` is also its own verify target, so the same site is reported
+// twice and must collapse to one diagnostic.
+module CheckedArithCalleeAttribution
+
+fn helper(x: i64) -> i64 vow {
+  requires: x > 0,
+  ensures: result >= x
+} {
+  x +! x
+}
+
+fn caller(y: i64) -> i64 vow {
+  requires: y > 0,
+  ensures: result >= y
+} {
+  helper(y)
+}
+
+fn main() -> i32 [io] {
+  print_i64(caller(3));
+  0
+}

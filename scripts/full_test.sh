@@ -945,6 +945,18 @@ for compiler in rust self; do
         [ "$(arith_warns "$j" "$fn")" = "0" ] || errors+=("$fn abort is ruled out by requires; must not warn")
     done
 
+    # 4. A site inside a co-emitted callee is attributed to the callee, not to
+    #    the verify target that pulled it in, and the two targets that both
+    #    reach it report it once.
+    if [ "$compiler" = rust ]; then
+        j=$($RUST verify tests/verify/checked_arith_callee_attribution.vow 2>/dev/null) || true
+    else
+        j=$(run_self verify tests/verify/checked_arith_callee_attribution.vow 2>/dev/null) || true
+    fi
+    [ "$(arith_status "$j")" = "Verified" ] || errors+=("attribution fixture status $(arith_status "$j")")
+    [ "$(arith_warns "$j" helper)" = "1" ] || errors+=("site must be attributed to helper exactly once, got $(arith_warns "$j" helper)")
+    [ "$(arith_warns "$j" caller)" = "0" ] || errors+=("caller has no checked arithmetic and must not be named")
+
     if [ ${#errors[@]} -eq 0 ]; then
         pass "checked_arith_abort_model/$compiler"
     else

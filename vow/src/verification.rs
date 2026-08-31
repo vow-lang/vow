@@ -153,7 +153,7 @@ fn verify_one_function(
     let (result, arith_warning) = match result {
         VerificationResult::Failed(ce) if ce.arith_overflow.is_some() => {
             let site = ce.arith_overflow.expect("matched Some above");
-            let warning = arith_overflow_warning(func, file, site);
+            let warning = arith_overflow_warning(ir_module, func, file, site);
             let contract_result = verify_contracts_only(
                 func,
                 ir_module,
@@ -203,17 +203,40 @@ fn verify_one_function(
 }
 
 /// Build the Warning for a checked-arithmetic site whose abort ESBMC proved
-/// reachable. The span comes back from the `arith:` property label, so the
-/// diagnostic points at the operator itself.
+/// reachable, attributing it to the function the operator actually lives in.
+///
+/// That is **not** always the verify target: a model co-emits its modelable
+/// callees, so verifying `caller` can surface a site inside `helper`. The label
+/// carries the owning function's id for exactly this reason. Naming the target
+/// instead would report checked arithmetic in a function that contains none, and
+/// — because spans are file-relative — resolve the offset against the wrong
+/// file entirely once the callee comes from another module.
+///
+/// Falls back to the verify target when the id resolves to nothing, which can
+/// only happen if a label outlives the module that produced it (a stale cache
+/// entry); the span is then the target's best available anchor.
 fn arith_overflow_warning(
-    func: &vow_ir::Function,
+    module: &vow_ir::Module,
+    target: &vow_ir::Function,
     file: &str,
     site: ArithOverflowSite,
 ) -> ArithOverflowWarning {
+    let owner = module
+        .functions
+        .iter()
+        .find(|f| f.id.0 == site.func_id)
+        .unwrap_or(target);
+    // A function's own `source_file` is authoritative under multi-module
+    // compilation; `file` is only the entry path the CLI was given.
+    let owner_file = if owner.source_file.is_empty() {
+        file
+    } else {
+        owner.source_file.as_str()
+    };
     ArithOverflowWarning {
-        function: func.name.clone(),
+        function: owner.name.clone(),
         cause: site.abort.description(),
-        file: file.to_string(),
+        file: owner_file.to_string(),
         offset: site.span_start,
         length: site.span_len,
     }
@@ -603,6 +626,104 @@ mod tests {
         });
         assert!(matches!(outcome, VerifyOutcome::Failed { .. }));
         assert_eq!(warned_functions(&skipped), ["f0"]);
+    }
+
+    fn arith_fn(id: u32, name: &str, source_file: &str) -> vow_ir::Function {
+        vow_ir::Function {
+            id: vow_ir::FuncId(id),
+            name: name.to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: vow_ir::Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![],
+            local_names: std::collections::HashMap::new(),
+            summary: vow_ir::RegionSummary::default(),
+            source_file: source_file.to_string(),
+        }
+    }
+
+    fn arith_module(fns: Vec<vow_ir::Function>) -> vow_ir::Module {
+        vow_ir::Module {
+            name: String::new(),
+            functions: fns,
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        }
+    }
+
+    fn site(func_id: u32) -> ArithOverflowSite {
+        ArithOverflowSite {
+            abort: vow_verify::ArithAbort::Add,
+            func_id,
+            span_start: 99,
+            span_len: 6,
+        }
+    }
+
+    // #585: a model co-emits its modelable callees, so verifying `caller` can
+    // surface a site that lives in `helper`. The warning must name `helper` and
+    // resolve the span against `helper`'s own file — naming the target would
+    // report checked arithmetic in a function that contains none, and point the
+    // offset into unrelated source.
+    #[test]
+    fn arith_warning_is_attributed_to_the_owning_function() {
+        let caller = arith_fn(0, "caller", "caller.vow");
+        let helper = arith_fn(1, "helper", "helper.vow");
+        let module = arith_module(vec![caller.clone(), helper]);
+
+        let w = arith_overflow_warning(&module, &caller, "entry.vow", site(1));
+        assert_eq!(w.function, "helper", "must name the owner, not the target");
+        assert_eq!(w.file, "helper.vow", "span is relative to the owner's file");
+        assert_eq!((w.offset, w.length), (99, 6));
+    }
+
+    // The ordinary case: the site belongs to the target itself.
+    #[test]
+    fn arith_warning_names_the_target_when_it_owns_the_site() {
+        let caller = arith_fn(0, "caller", "caller.vow");
+        let module = arith_module(vec![caller.clone()]);
+        let w = arith_overflow_warning(&module, &caller, "entry.vow", site(0));
+        assert_eq!(w.function, "caller");
+        assert_eq!(w.file, "caller.vow");
+    }
+
+    // An unresolvable owner (a label outliving its module, e.g. a stale cache
+    // entry) falls back to the target rather than dropping the warning.
+    #[test]
+    fn arith_warning_falls_back_to_target_for_unknown_owner() {
+        let caller = arith_fn(0, "caller", String::new().as_str());
+        let module = arith_module(vec![caller.clone()]);
+        let w = arith_overflow_warning(&module, &caller, "entry.vow", site(77));
+        assert_eq!(w.function, "caller");
+        // Empty source_file falls back to the CLI entry path.
+        assert_eq!(w.file, "entry.vow");
+    }
+
+    #[test]
+    fn arith_warning_carries_the_cause_text() {
+        let f = arith_fn(0, "f", "f.vow");
+        let module = arith_module(vec![f.clone()]);
+        for (abort, text) in [
+            (vow_verify::ArithAbort::Add, "addition overflows"),
+            (vow_verify::ArithAbort::DivZero, "divisor is zero"),
+        ] {
+            let w = arith_overflow_warning(
+                &module,
+                &f,
+                "entry.vow",
+                ArithOverflowSite {
+                    abort,
+                    func_id: 0,
+                    span_start: 1,
+                    span_len: 2,
+                },
+            );
+            assert_eq!(w.cause, text);
+        }
     }
 
     // #585: a reachable checked-arithmetic abort is aggregated as a warning but

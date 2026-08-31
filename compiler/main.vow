@@ -1223,14 +1223,66 @@ fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>, fns: Vec<IrFunct
 // specified behaviour, and the contract is still proved for every returning
 // execution. Mirrors `VerifyWarning::ArithOverflow`'s diagnostic in the Rust
 // driver, which `compare_json` holds byte-identical.
-fn report_arith_overflow(f: IrFunction, path: String, site: ParsedArithSite, dctx: DiagCtx) [io] {
-    eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (checked arithmetic can abort)")));
+// Attribute the warning to the function the operator actually lives in, which is
+// not always the verify target: a model co-emits its modelable callees, so
+// verifying `caller` can surface a site inside `helper`. Naming the target would
+// report checked arithmetic in a function that contains none, and — because
+// spans are file-relative — point the offset into the wrong file once the callee
+// comes from another module. Falls back to the target when the id resolves to
+// nothing. Mirrors `arith_overflow_warning` in the Rust driver.
+fn arith_owner_index(m: IrModule, owner_id: i64) -> i64 {
+    let fns: Vec<IrFunction> = m.functions;
+    let mut i: i64 = 0;
+    while i < fns.len() {
+        let f: IrFunction = fns[i];
+        if f.id == owner_id { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+// True when an identical ArithOverflowReachable diagnostic is already recorded.
+// Compared on rendered identity — same place, same owning function via the
+// message — so the several verify targets that share one site collapse to one.
+fn arith_already_reported(dctx: DiagCtx, owner_name: String, file: String, ostart: i64, olen: i64) -> bool {
+    let ds: Vec<Diagnostic> = dctx.diags;
+    let needle: String = str3(String::from("checked arithmetic in `"), owner_name, String::from("` can abort"));
+    let mut i: i64 = 0;
+    while i < ds.len() {
+        let d: Diagnostic = ds[i];
+        if d.code == EC_ARITH_OVERFLOW_REACHABLE() && d.span_start == ostart &&
+           d.span_len == olen && d.file == file && str_starts_with(d.message, needle) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn report_arith_overflow(f: IrFunction, ir_mod: IrModule, path: String, site: ParsedArithSite, dctx: DiagCtx) [io] {
+    let idx: i64 = arith_owner_index(ir_mod, site.owner);
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let owner_name: String = if idx >= 0 { let o: IrFunction = fns[idx]; o.name } else { f.name };
+    let owner_src: String = if idx >= 0 { let o2: IrFunction = fns[idx]; o2.source_file } else { String::from("") };
+    // A function's own source_file is authoritative under multi-module
+    // compilation; `path` is only the entry path the CLI was given.
+    let owner_file: String = if owner_src.len() > 0 { owner_src } else { path };
+    eprintln_str(str3(String::from("  "), owner_name, String::from(": PROVEN (checked arithmetic can abort)")));
     let msg: String = str3(
         String::from("checked arithmetic in `"),
-        f.name,
+        owner_name,
         str2(String::from("` can abort: "), arith_cause_description(site.cause)),
     );
-    let d: Diagnostic = diag_new(SEV_WARNING(), EC_ARITH_OVERFLOW_REACHABLE(), msg, path, site.ostart, site.olen, DIAG_BLAME_NONE());
+    // One site can be reported by several verify targets — a model co-emits its
+    // modelable callees, so a site in `helper` surfaces both when verifying
+    // `helper` and when verifying every contracted caller of it. Attributed to
+    // the same owner they are the same diagnostic, so report it once. Mirrors
+    // `dedup_warnings` in the Rust driver, which `compare_json` holds to the
+    // same diagnostic count.
+    if arith_already_reported(dctx, owner_name, owner_file, site.ostart, site.olen) {
+        return;
+    }
+    let d: Diagnostic = diag_new(SEV_WARNING(), EC_ARITH_OVERFLOW_REACHABLE(), msg, owner_file, site.ostart, site.olen, DIAG_BLAME_NONE());
     diag_add_hint(d, String::from("the contract is proved for every execution that returns; this abort is a separate runtime outcome"));
     diag_add_hint(d, String::from("constrain the operands in `requires` to rule the abort out, or use the wrapping operator if wrapping is intended"));
     diag_ctx_emit(dctx, d);
@@ -1271,7 +1323,7 @@ fn verify_collect_and_report(
         // the abort alongside would be guesswork, since ESBMC never told us
         // whether the arith obligation held on this second run.
         if st == VERIFY_PROVEN() || st == VERIFY_PROVEN_IR() {
-            report_arith_overflow(f, path, arith_site, dctx);
+            report_arith_overflow(f, ir_mod, path, arith_site, dctx);
             return 1;
         }
         if st == VERIFY_FAILED() {

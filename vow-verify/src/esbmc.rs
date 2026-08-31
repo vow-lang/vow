@@ -49,6 +49,10 @@ pub struct Counterexample {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArithOverflowSite {
     pub abort: ArithAbort,
+    /// Id of the function the operator belongs to — not necessarily the verify
+    /// target, since a model co-emits its modelable callees. The span is
+    /// relative to *this* function's source file.
+    pub func_id: u32,
     pub span_start: u32,
     pub span_len: u32,
 }
@@ -210,6 +214,7 @@ pub fn extract_arith_site(output: &str) -> Option<ArithOverflowSite> {
 fn parse_arith_label(rest: &str) -> Option<ArithOverflowSite> {
     let mut parts = rest.split(':');
     let abort = ArithAbort::from_label(parts.next()?)?;
+    let func_id = parts.next()?.parse::<u32>().ok()?;
     let start = parts.next()?.parse::<u32>().ok()?;
     let len = parts.next()?.parse::<u32>().ok()?;
     if parts.next().is_some() {
@@ -217,6 +222,7 @@ fn parse_arith_label(rest: &str) -> Option<ArithOverflowSite> {
     }
     Some(ArithOverflowSite {
         abort,
+        func_id,
         span_start: start,
         span_len: len,
     })
@@ -1738,7 +1744,7 @@ State 3 file /tmp/m.c line 5 column 3 function f thread 0
 ----------------------------------------------------
 Violated property:
   file /tmp/m.c line 5 column 3 function f
-  arith:add:92:6
+  arith:add:3:92:6
   !return_value$___vow_ovf_add_i64$1
 
 
@@ -1749,6 +1755,7 @@ VERIFICATION FAILED";
             ce.arith_overflow,
             Some(ArithOverflowSite {
                 abort: ArithAbort::Add,
+                func_id: 3,
                 span_start: 92,
                 span_len: 6,
             })
@@ -1780,19 +1787,24 @@ VERIFICATION FAILED";
     #[test]
     fn parse_arith_label_rejects_malformed_labels() {
         for (label, why) in [
-            ("add:92", "missing length"),
-            ("add:92:6:1", "trailing field"),
-            ("bogus:92:6", "unknown cause"),
-            ("add:x:6", "non-numeric offset"),
-            ("add:92:y", "non-numeric length"),
+            ("add:0:92", "missing length"),
+            ("add:0:92:6:1", "trailing field"),
+            ("bogus:0:92:6", "unknown cause"),
+            ("add:x:92:6", "non-numeric func id"),
+            ("add:0:x:6", "non-numeric offset"),
+            ("add:0:92:y", "non-numeric length"),
+            ("add:92:6", "pre-owner three-field form"),
         ] {
             assert_eq!(parse_arith_label(label), None, "should reject: {why}");
         }
         for cause in ["add", "sub", "mul", "div-zero", "div-overflow"] {
-            let parsed = parse_arith_label(&format!("{cause}:1:2"))
+            let parsed = parse_arith_label(&format!("{cause}:7:1:2"))
                 .unwrap_or_else(|| panic!("{cause} must parse"));
             assert_eq!(parsed.abort.label(), cause);
-            assert_eq!((parsed.span_start, parsed.span_len), (1, 2));
+            assert_eq!(
+                (parsed.func_id, parsed.span_start, parsed.span_len),
+                (7, 1, 2)
+            );
         }
     }
 

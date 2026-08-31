@@ -287,11 +287,13 @@ fn serialize_cached_result(result: &CachedFailure) -> String {
     match result.arith_overflow {
         Some(site) => {
             s.push_str(&format!("arith_cause={}\n", site.abort.label()));
+            s.push_str(&format!("arith_func={}\n", site.func_id));
             s.push_str(&format!("arith_start={}\n", site.span_start));
             s.push_str(&format!("arith_len={}\n", site.span_len));
         }
         None => {
             s.push_str("arith_cause=\n");
+            s.push_str("arith_func=\n");
             s.push_str("arith_start=\n");
             s.push_str("arith_len=\n");
         }
@@ -327,6 +329,7 @@ fn parse_cached_result(content: &str) -> Option<CachedFailure> {
     let mut block_visits = Vec::new();
     let mut raw_output = String::new();
     let mut arith_cause: Option<vow_verify::ArithAbort> = None;
+    let mut arith_func: Option<u32> = None;
     let mut arith_start: Option<u32> = None;
     let mut arith_len: Option<u32> = None;
 
@@ -339,6 +342,8 @@ fn parse_cached_result(content: &str) -> Option<CachedFailure> {
             callee_precondition_vow_id = rest.parse().ok();
         } else if let Some(rest) = line.strip_prefix("arith_cause=") {
             arith_cause = vow_verify::ArithAbort::from_label(rest);
+        } else if let Some(rest) = line.strip_prefix("arith_func=") {
+            arith_func = rest.parse().ok();
         } else if let Some(rest) = line.strip_prefix("arith_start=") {
             arith_start = rest.parse().ok();
         } else if let Some(rest) = line.strip_prefix("arith_len=") {
@@ -369,16 +374,19 @@ fn parse_cached_result(content: &str) -> Option<CachedFailure> {
     let callee_precondition = callee_precondition_func_id
         .zip(callee_precondition_vow_id)
         .map(|(func_id, vow_id)| CalleePrecondition { func_id, vow_id });
-    // All three parts or none: a half-written site would mislocate the
-    // diagnostic, so an incomplete entry reports no site at all.
-    let arith_overflow =
-        arith_cause
-            .zip(arith_start.zip(arith_len))
-            .map(|(abort, (span_start, span_len))| ArithOverflowSite {
+    // Every part or none: a half-written site would mislocate the diagnostic, so
+    // an incomplete entry reports no site at all.
+    let arith_overflow = arith_cause
+        .zip(arith_func)
+        .zip(arith_start.zip(arith_len))
+        .map(
+            |((abort, func_id), (span_start, span_len))| ArithOverflowSite {
                 abort,
+                func_id,
                 span_start,
                 span_len,
-            });
+            },
+        );
 
     Some(CachedFailure {
         vow_id,
@@ -407,6 +415,7 @@ mod tests {
         Counterexample {
             arith_overflow: Some(ArithOverflowSite {
                 abort: vow_verify::ArithAbort::Mul,
+                func_id: 4,
                 span_start: 92,
                 span_len: 6,
             }),
@@ -594,6 +603,7 @@ mod tests {
             }),
             arith_overflow: Some(ArithOverflowSite {
                 abort: vow_verify::ArithAbort::DivOverflow,
+                func_id: 2,
                 span_start: 7,
                 span_len: 3,
             }),

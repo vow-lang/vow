@@ -37,6 +37,9 @@ struct ParsedVowLabel {
 // `arith:` one. Mirrors `vow_verify::esbmc::ArithOverflowSite`.
 struct ParsedArithSite {
     cause: String,
+    // Id of the function the operator belongs to; the span is relative to *that*
+    // function's source file, not the verify target's.
+    owner: i64,
     ostart: i64,
     olen: i64,
 }
@@ -632,7 +635,7 @@ fn parse_vow_label(output: String) -> ParsedVowLabel {
 // violation, and must not be reported as one. `parse_vow_label` therefore never
 // matches it. Mirrors `vow_verify::esbmc::extract_arith_site`.
 fn parsed_arith_site_none() -> ParsedArithSite {
-    ParsedArithSite { cause: String::from(""), ostart: 0, olen: 0 }
+    ParsedArithSite { cause: String::from(""), owner: -1, ostart: 0, olen: 0 }
 }
 
 fn parse_arith_label_text(rest: String) -> ParsedArithSite {
@@ -649,16 +652,22 @@ fn parse_arith_label_text(rest: String) -> ParsedArithSite {
     if sep2 < 0 {
         return parsed_arith_site_none();
     }
-    let tail: String = str_substring(payload, sep2 + 1, payload.len());
+    let owner: i64 = str_to_i64(str_substring(payload, 0, sep2));
+    let rest2: String = str_substring(payload, sep2 + 1, payload.len());
+    let sep3: i64 = str_find_str(rest2, String::from(":"));
+    if sep3 < 0 {
+        return parsed_arith_site_none();
+    }
+    let tail: String = str_substring(rest2, sep3 + 1, rest2.len());
     if str_find_str(tail, String::from(":")) >= 0 {
         return parsed_arith_site_none();
     }
-    let ostart: i64 = str_to_i64(str_substring(payload, 0, sep2));
+    let ostart: i64 = str_to_i64(str_substring(rest2, 0, sep3));
     let olen: i64 = str_to_i64(tail);
-    if ostart < 0 || olen < 0 {
+    if owner < 0 || ostart < 0 || olen < 0 {
         return parsed_arith_site_none();
     }
-    ParsedArithSite { cause: cause, ostart: ostart, olen: olen }
+    ParsedArithSite { cause: cause, owner: owner, ostart: ostart, olen: olen }
 }
 
 fn parse_arith_site(output: String) -> ParsedArithSite {
