@@ -15,7 +15,16 @@ FAILURES=()
 RUST="./target/release/vow"
 SELF=""
 TMPDIR=$(mktemp -d)
+# EXIT alone does not fire on an untrapped SIGTERM/SIGINT/SIGHUP: bash dies
+# immediately and this whole scratch tree survives. It routinely reaches several
+# GB, and on hosts where /tmp is a tmpfs that is abandoned RAM. Re-raise rather
+# than cleaning up inline -- a bare `trap 'rm -rf "$TMPDIR"' TERM` would delete
+# the scratch dir and then let the script keep running against it, because a
+# bash signal handler resumes execution unless it exits.
 trap 'rm -rf "$TMPDIR"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 compare_json() {
     local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5"
