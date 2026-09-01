@@ -38,6 +38,7 @@ total miscompile of a benchmark reference that had been invisible to the fixed p
 
 ```bash
 python3 scripts/equivalence.py --rust target/release/vow --self build/vowc \
+  --emit-ledger-update \
   --output-dir /tmp/equivalence-<YYYY-MM>
 ```
 
@@ -134,8 +135,10 @@ For each one, in this order:
    under the current `build/vowc`, add `// TEST: known-divergence <issue> "<why>"` so `full_test.sh`
    reports a loud SKIP instead of turning the tree red — and so it becomes a hard FAIL the moment the
    bug is fixed, forcing the directive's removal.
-5. **Complete the ledger metadata.** The harness writes complete pair-review hashes, dates and outcomes.
-   You write confirmed issue numbers, plus corpus rows and fixture paths created during triage.
+5. **Complete the ledger metadata.** Apply `ledger.proposed.json`, then add the issue number and, once
+   one exists, the fixture path. The proposal updates corpus history only. Pair-review hashes, dates and
+   outcomes are written separately by the pair-review harness, and only for pairs it reviewed completely;
+   what you add there is confirmed issue numbers.
 
 ## Step 4 — Publish
 

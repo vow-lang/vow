@@ -37,6 +37,7 @@ re-running against the fixed point.
 """
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -45,6 +46,7 @@ import resource
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -738,6 +740,18 @@ def check_file(vow_file, rust, slf, outdir, timeout, honour_directives=True):
 LEDGER_PATH = REPO_ROOT / "docs" / "equivalence" / "ledger.json"
 
 
+def load_ledger_document(path=None):
+    """Load the complete ledger document, or ``None`` when it is unusable."""
+    ledger_path = Path(path) if path else LEDGER_PATH
+    if not ledger_path.exists():
+        return None
+    try:
+        document = json.loads(ledger_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
 def load_ledger(path=None):
     """Known divergences, keyed by repo-relative path.
 
@@ -745,13 +759,8 @@ def load_ledger(path=None):
     13 known-gap fixtures every run, and a genuinely new finding is lost in the
     noise — the failure mode that makes recurring jobs get ignored.
     """
-    p = Path(path) if path else LEDGER_PATH
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text()).get("corpus", {})
-    except (json.JSONDecodeError, OSError):
-        return {}
+    document = load_ledger_document(path)
+    return document.get("corpus", {}) if document is not None else {}
 
 
 def tracked_observables(entry):
@@ -855,6 +864,85 @@ def reconcile(records, ledger):
     return new, known, fixed
 
 
+def _observable_field(observables):
+    """Collapse a set of observables to the schema's string-or-array form."""
+    ordered = sorted(observables)
+    return ordered[0] if len(ordered) == 1 else ordered
+
+
+def propose_ledger(document, new, fixed, today):
+    """Return a deterministic corpus-ledger update proposed by a sweep.
+
+    The corpus runner has no module-pair hashes, so this deliberately preserves
+    ``pairs`` byte-for-byte at the value level. Tier 3 owns pair review state.
+    ``today`` is injected by the caller to keep this transformation pure and
+    reproducible in tests.
+    """
+    proposed = copy.deepcopy(document)
+    proposed["updated"] = today
+    corpus = proposed.setdefault("corpus", {})
+
+    # Apply disappearances first. A changed payload can make reconcile report
+    # the old observable fixed and the replacement new in the same run; the
+    # later new-finding pass must win and leave that entry open.
+    for finding in fixed:
+        entry = corpus.get(finding["file"])
+        if entry is None:
+            continue
+        remaining = tracked_observables(entry) - set(finding["observables"])
+        if remaining:
+            entry["observable"] = _observable_field(remaining)
+            if "error_code" not in remaining:
+                entry.pop("rust_error_codes", None)
+                entry.pop("self_hosted_error_codes", None)
+        else:
+            # Retain the observable and its metadata so a reappearance remains
+            # recognizable as a regression rather than a first-time finding.
+            entry["status"] = "fixed"
+
+    for record in new:
+        path = record["file"]
+        entry = corpus.setdefault(path, {"first_seen": today})
+        # A `fixed` entry retains its observable so a reappearance reads as a
+        # regression, but nothing observed that observable this run. Carrying
+        # it into a reopen driven by an unrelated new finding would mark it
+        # live again — suppressing its next real recurrence as `known`, then
+        # reporting it `fixed` all over again. The full-fix branch above sets
+        # this status for an observable fixed by *this* sweep; one fixed by an
+        # *earlier* sweep never reaches `fixed` at all (reconcile only reports
+        # `open`/`expected` entries), so the status is what distinguishes both.
+        carried = (
+            frozenset()
+            if entry.get("status") == "fixed"
+            else tracked_observables(entry)
+        )
+        observables = carried | {
+            divergence["observable"] for divergence in record["divergences"]
+        }
+        entry["observable"] = _observable_field(observables)
+        entry["status"] = "open"
+
+        error_code = next(
+            (
+                divergence
+                for divergence in record["divergences"]
+                if divergence["observable"] == "error_code"
+            ),
+            None,
+        )
+        if error_code is not None:
+            entry["rust_error_codes"] = sorted(error_code.get("rust", []))
+            entry["self_hosted_error_codes"] = sorted(error_code.get("self_hosted", []))
+        elif "error_code" not in observables:
+            # Mirrors the partial-fix branch: a multiset that no longer pins an
+            # active error_code divergence must not linger on a reopened entry.
+            entry.pop("rust_error_codes", None)
+            entry.pop("self_hosted_error_codes", None)
+
+    proposed["corpus"] = dict(sorted(corpus.items()))
+    return proposed
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -899,11 +987,26 @@ def main():
         default=None,
         help="path to ledger.json (default: docs/equivalence/ledger.json)",
     )
-    ap.add_argument(
+    # A proposal is an edit to the ledger this run deliberately ignored, so the
+    # two flags are exclusive; argparse both enforces that and shows it in --help.
+    ledger_use = ap.add_mutually_exclusive_group()
+    ledger_use.add_argument(
         "--no-ledger",
         action="store_true",
         help="report every divergence as new, ignoring tracked ones",
     )
+    ledger_use.add_argument(
+        "--emit-ledger-update",
+        action="store_true",
+        help="write a proposed corpus-ledger update into the output directory",
+    )
+    ap.add_argument(
+        "--today",
+        default=datetime.now(timezone.utc).date().isoformat(),
+        help="ISO date stamped into the proposal's `updated` field (default: UTC today)",
+    )
+    # Not a ledger flag: this is about whose input steers the run, so it is
+    # outside the mutually exclusive group above.
     ap.add_argument(
         "--no-directives",
         action="store_true",
@@ -933,13 +1036,30 @@ def main():
 
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
+    # Neither artifact may outlive the sweep that produced it. In a reused
+    # --output-dir both are read as claims about THIS run: equivalence.yml
+    # treats results.json's presence as proof the sweep completed (so a stale
+    # one turns a crash into a divergence verdict), and an operator applies
+    # ledger.proposed.json wholesale. Cleared up front rather than before each
+    # write, because a sweep that dies inside check_file never reaches either.
+    proposal_path = outdir / "ledger.proposed.json"
+    results_path = outdir / "results.json"
+    for sentinel in (proposal_path, results_path):
+        sentinel.unlink(missing_ok=True)
 
     print(f"=== Differential equivalence sweep: {len(corpus)} files ===")
     print(f"  rust: {rust}")
     print(f"  self: {slf}")
     print()
 
-    ledger = {} if args.no_ledger else load_ledger(args.ledger)
+    ledger_document = None if args.no_ledger else load_ledger_document(args.ledger)
+    if args.emit_ledger_update and ledger_document is None:
+        print(
+            "error: cannot propose an update from a missing or invalid ledger",
+            file=sys.stderr,
+        )
+        return 2
+    ledger = {} if ledger_document is None else ledger_document.get("corpus", {})
     started = time.time()
     records, diverged, skipped, compared = [], [], [], 0
     for i, f in enumerate(corpus, 1):
@@ -979,7 +1099,16 @@ def main():
         "elapsed_secs": elapsed,
         "records": records,
     }
-    (outdir / "results.json").write_text(json.dumps(results, indent=2))
+    # Written before results.json, and only for a run that met its coverage
+    # floor. results.json must stay the last artifact produced, because
+    # equivalence.yml keys off its presence to tell a divergence verdict from a
+    # crash; and a shard that measured too little to be meaningful must not ship
+    # a proposal that looks applicable.
+    proposed = args.emit_ledger_update and compared >= args.min_compared
+    if proposed:
+        proposal = propose_ledger(ledger_document, new, fixed, args.today)
+        proposal_path.write_text(json.dumps(proposal, indent=2) + "\n")
+    results_path.write_text(json.dumps(results, indent=2))
 
     # Report what was NOT covered. A sweep that silently skipped most of the
     # corpus reads as "all clear" when it measured almost nothing.
@@ -997,7 +1126,11 @@ def main():
         print("  skip reasons:")
         for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
             print(f"    {count:5d}  {reason}")
-    print(f"  results  : {outdir / 'results.json'}")
+    print(f"  results  : {results_path}")
+    if proposed:
+        print(f"  ledger proposal: {proposal_path}")
+    elif args.emit_ledger_update:
+        print("  ledger proposal: none — coverage floor not met")
 
     if fixed:
         print()
@@ -1009,6 +1142,8 @@ def main():
             print(
                 f"    {f['file']}  [{obs}]" + (f"  (issue #{issue})" if issue else "")
             )
+        if proposed:
+            print(f"    proposed update: {proposal_path}")
 
     if compared < args.min_compared:
         print(
