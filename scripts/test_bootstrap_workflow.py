@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 BOOTSTRAP_WORKFLOW = WORKFLOWS / "bootstrap.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
+EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
@@ -149,6 +150,24 @@ class CiWorkflowTest(unittest.TestCase):
         for name in ("build-and-test", "build-and-test-macos"):
             with self.subTest(job=name):
                 self.assertIn("concat_vow.sh", jobs[name])
+
+
+class EquivalenceWorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = EQUIVALENCE_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_sweep_emits_a_ledger_update_proposal(self) -> None:
+        self.assertIn("--emit-ledger-update", self.text)
+
+    def test_uploaded_artifact_contains_the_proposal_directory(self) -> None:
+        self.assertIn("--output-dir equivalence.out", self.text)
+        self.assertIn("path: equivalence.out", self.text)
+
+    def test_workflow_keeps_read_only_repository_permissions(self) -> None:
+        header = self.text[: self.text.index("\njobs:\n")]
+
+        self.assertRegex(header, r"permissions:\s*\n\s*contents:\s*read")
+        self.assertNotRegex(header, r"contents:\s*write")
 
 
 class ParserTest(unittest.TestCase):
