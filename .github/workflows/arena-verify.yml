@@ -44,7 +44,7 @@ jobs:
     outputs:
       arena: ${{ steps.classify.outputs.arena }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Both ends of the range have to be present for `git diff base...head`.
           fetch-depth: 0
@@ -65,7 +65,7 @@ jobs:
     # Deliberately not restated per bump; the pin lives in install-esbmc.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
       - name: Arena verification runner tests
