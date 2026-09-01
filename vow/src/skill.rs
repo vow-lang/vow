@@ -1024,7 +1024,7 @@ fn skill_json() -> String {
       "visibility": "pub fn \u2014 public functions visible to importers"
     },
     "type_aliases": "type Name = Type",
-    "extern_blocks": "extern \"C\" vow { requires: ... } { fn name(x: i64) -> i64 [unsafe] }",
+    "extern_blocks": "extern \"C\" { vow { requires: ... } fn name(x: i64) -> i64 [unsafe]; }",
     "methods": {
       "Vec<T>": [
         "Vec::new()",
@@ -2331,12 +2331,12 @@ This aliasing is the intended behavior for arena and hash-table patterns where b
 Declare external C functions (a `vow` contract block is required):
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
@@ -3630,12 +3630,12 @@ ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 Every `extern "C"` block **must** include a `vow { ... }` contract specifying the expected behavior of foreign functions. Omitting the contract is a `MissingContract` error.
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
@@ -7414,12 +7414,12 @@ This aliasing is the intended behavior for arena and hash-table patterns where b
 Declare external C functions (a `vow` contract block is required):
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
@@ -8715,12 +8715,12 @@ ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 Every `extern "C"` block **must** include a `vow { ... }` contract specifying the expected behavior of foreign functions. Omitting the contract is a `MissingContract` error.
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 

@@ -408,12 +408,12 @@ ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 Every `extern "C"` block **must** include a `vow { ... }` contract specifying the expected behavior of foreign functions. Omitting the contract is a `MissingContract` error.
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 

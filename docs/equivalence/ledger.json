@@ -170,11 +170,9 @@
     "tests/fixtures/mutants/sample_extern.vow": {
       "first_seen": "2026-08-25",
       "observable": "error_code",
-      "status": "open",
-      "note": "Self-hosted parser does not support `extern \"C\"` blocks: 3x UnexpectedToken vs Rust's MissingContract.",
-      "issue": 1088,
-      "rust_error_codes": ["MissingContract"],
-      "self_hosted_error_codes": ["UnexpectedToken", "UnexpectedToken", "UnexpectedToken"]
+      "status": "fixed",
+      "note": "The self-hosted parser now supports `extern \"C\"` blocks and matches Rust's MissingContract diagnostic; retained so a reappearance reads as a regression.",
+      "issue": 1088
     },
     "tests/run/euclid_gcd_swap_loop.vow": {
       "first_seen": "2026-08-25",
