@@ -26,6 +26,7 @@ content hash so an unchanged pair is skipped rather than re-reviewed.
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -466,6 +467,73 @@ def review_pair(
     return result
 
 
+def _validate_pair_entry(entry):
+    schema = json.loads(
+        (REPO_ROOT / "docs" / "equivalence" / "ledger.schema.json").read_text()
+    )
+    pair_schema = schema["properties"]["pairs"]["additionalProperties"]
+    keys = set(entry)
+    missing = set(pair_schema["required"]) - keys
+    unknown = keys - set(pair_schema["properties"])
+    if missing or unknown:
+        raise ValueError(
+            f"invalid ledger pair entry: missing={sorted(missing)}, "
+            f"unknown={sorted(unknown)}"
+        )
+
+
+def _ledger_outcome(findings):
+    verdicts = {finding.get("verdict") for finding in findings}
+    if "confirmed" in verdicts:
+        return "confirmed"
+    if "inconclusive" in verdicts:
+        return "hypotheses"
+    return "clean"
+
+
+def write_ledger(ledger, results, date, path=LEDGER):
+    """Atomically stamp only fully reviewed pair rows in the shared ledger."""
+    updated = []
+    for result in results:
+        complete = (
+            result.get("coverage") == 1.0
+            and not result.get("chunks_deferred")
+            and not result.get("errors")
+        )
+        if not complete:
+            continue
+        name = result["pair"]
+        if name not in ledger.get("pairs", {}):
+            raise ValueError(f"ledger has no pair entry for {name}")
+        entry = dict(ledger["pairs"][name])
+        entry.update(
+            {
+                "content_hash": result["content_hash"],
+                "last_reviewed": date,
+                "outcome": _ledger_outcome(result.get("findings", [])),
+            }
+        )
+        _validate_pair_entry(entry)
+        ledger["pairs"][name] = entry
+        updated.append(name)
+
+    if not updated:
+        return updated
+    ledger["updated"] = date
+    path = Path(path)
+    descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    os.close(descriptor)
+    temp_path = Path(temp_name)
+    try:
+        temp_path.write_text(json.dumps(ledger, indent=2) + "\n")
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return updated
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Adversarial pair review (#1083)")
     ap.add_argument("--model", default="claude-sonnet-4-20250514")
@@ -495,6 +563,15 @@ def main(argv=None):
         action="store_true",
         help="write the chunk plan without model or compiler calls",
     )
+    ap.add_argument(
+        "--update-ledger",
+        action="store_true",
+        help="stamp complete reviewed pairs in the equivalence ledger",
+    )
+    ap.add_argument(
+        "--date",
+        help="deterministic YYYY-MM-DD ledger date (required with --update-ledger)",
+    )
     ap.add_argument("--timeout", type=int, default=120)
     ap.add_argument(
         "--all",
@@ -510,6 +587,12 @@ def main(argv=None):
         ap.error("--chunk-bytes must be positive")
     if args.max_chunks_per_pair < 0:
         ap.error("--max-chunks-per-pair cannot be negative")
+    if args.update_ledger and not args.date:
+        ap.error("--date is required with --update-ledger")
+    if args.update_ledger and args.dry_run:
+        ap.error("--update-ledger cannot be used with --dry-run")
+    if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
+        ap.error("--date must use YYYY-MM-DD")
 
     if not args.dry_run:
         for path in (Path(args.rust), Path(args.self_bin)):
@@ -567,6 +650,9 @@ def main(argv=None):
     refuted = sum(
         1 for r in results for f in r["findings"] if f.get("verdict") == "refuted"
     )
+    ledger_updated = []
+    if args.update_ledger:
+        ledger_updated = write_ledger(ledger, results, args.date, LEDGER)
 
     (outdir / "results.json").write_text(
         json.dumps(
@@ -577,6 +663,7 @@ def main(argv=None):
                 "planned": planned,
                 "reviewed": reviewed,
                 "skipped_unchanged": [n for n, _ in skipped],
+                "ledger_updated": ledger_updated,
                 "confirmed": len(confirmed),
                 "hypotheses": len(hypotheses),
                 "refuted": refuted,

@@ -8,6 +8,7 @@ a pair must never be reported as reviewed when it was skipped or truncated.
 
 import io
 import json
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -296,6 +297,124 @@ class ReviewReportTest(unittest.TestCase):
 
         self.assertEqual(1, len(result["errors"]))
         self.assertEqual("kept", result["findings"][0]["claim"])
+
+
+class LedgerWritebackTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.ledger_path = Path(self.directory.name) / "ledger.json"
+        shutil.copyfile(pair_review.LEDGER, self.ledger_path)
+        self.original = json.loads(self.ledger_path.read_text())
+
+    @staticmethod
+    def result(findings=None, **overrides):
+        result = {
+            "pair": "lexer",
+            "content_hash": "f" * 64,
+            "coverage": 1.0,
+            "chunks_deferred": [],
+            "errors": [],
+            "findings": findings or [],
+        }
+        result.update(overrides)
+        return result
+
+    def write(self, result):
+        ledger = json.loads(self.ledger_path.read_text())
+        return pair_review.write_ledger(
+            ledger, [result], "2026-09-01", self.ledger_path
+        )
+
+    def test_writeback_stamps_hash_date_and_clean_outcome(self):
+        self.write(self.result())
+
+        written = json.loads(self.ledger_path.read_text())
+        entry = written["pairs"]["lexer"]
+        self.assertEqual("f" * 64, entry["content_hash"])
+        self.assertEqual("2026-09-01", entry["last_reviewed"])
+        self.assertEqual("clean", entry["outcome"])
+        self.assertEqual("2026-09-01", written["updated"])
+
+    def test_outcome_reflects_strongest_verdict(self):
+        cases = [
+            ([{"verdict": "confirmed"}], "confirmed"),
+            ([{"verdict": "inconclusive"}], "hypotheses"),
+            ([{"verdict": "refuted"}], "clean"),
+        ]
+        for findings, expected in cases:
+            with self.subTest(expected=expected):
+                shutil.copyfile(pair_review.LEDGER, self.ledger_path)
+                self.write(self.result(findings))
+                written = json.loads(self.ledger_path.read_text())
+                self.assertEqual(expected, written["pairs"]["lexer"]["outcome"])
+
+    def test_partially_reviewed_pair_is_not_stamped(self):
+        cases = [
+            self.result(chunks_deferred=[2]),
+            self.result(errors=[{"chunk_index": 1, "error": "bad JSON"}]),
+            self.result(coverage=0.5),
+        ]
+        for result in cases:
+            with self.subTest(result=result):
+                shutil.copyfile(pair_review.LEDGER, self.ledger_path)
+                self.write(result)
+                written = json.loads(self.ledger_path.read_text())
+                self.assertEqual(
+                    self.original["pairs"]["lexer"], written["pairs"]["lexer"]
+                )
+
+    def test_corpus_and_untouched_pairs_survive(self):
+        self.write(self.result())
+
+        written = json.loads(self.ledger_path.read_text())
+        self.assertEqual(self.original["corpus"], written["corpus"])
+        self.assertEqual(self.original["pairs"]["parser"], written["pairs"]["parser"])
+
+    def test_written_entry_matches_schema_key_set(self):
+        self.write(self.result())
+
+        schema = json.loads(
+            (pair_review.REPO_ROOT / "docs/equivalence/ledger.schema.json").read_text()
+        )
+        pair_schema = schema["properties"]["pairs"]["additionalProperties"]
+        entry = json.loads(self.ledger_path.read_text())["pairs"]["lexer"]
+        self.assertLessEqual(set(pair_schema["required"]), set(entry))
+        self.assertLessEqual(set(entry), set(pair_schema["properties"]))
+
+    def test_writeback_is_off_by_default(self):
+        before = self.ledger_path.read_bytes()
+        fake_result = self.result(
+            truncated=False,
+            plan={"chunk_bytes": 100, "chunks": []},
+            chunks_reviewed=[],
+            input_tokens=0,
+            output_tokens=0,
+        )
+        compiler = Path(self.directory.name) / "compiler"
+        compiler.touch()
+        output = Path(self.directory.name) / "output"
+        with (
+            mock.patch.object(pair_review, "LEDGER", self.ledger_path),
+            mock.patch.object(pair_review, "review_pair", return_value=fake_result),
+            redirect_stdout(io.StringIO()),
+        ):
+            status = pair_review.main(
+                [
+                    "--all",
+                    "--pair",
+                    "lexer",
+                    "--rust",
+                    str(compiler),
+                    "--self",
+                    str(compiler),
+                    "--output-dir",
+                    str(output),
+                ]
+            )
+
+        self.assertEqual(0, status)
+        self.assertEqual(before, self.ledger_path.read_bytes())
 
 
 class SystemPromptTest(unittest.TestCase):
