@@ -379,12 +379,10 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                     } else {
                         false
                     }
-                } else if op == IOP_FIELD_GET() {
-                    inst.ty != ITY_I128() && inst.ty != ITY_U128()
+                } else if op == IOP_FIELD_GET() || op == IOP_FIELD_SET() {
+                    !field_access_is_wide(inst, wide_vars)
                 } else if op == IOP_REGION_ALLOC() {
                     true
-                } else if op == IOP_FIELD_SET() {
-                    !field_set_carries_wide(inst, wide_vars)
                 } else if op == IOP_REM_F32() || op == IOP_REM_F64()
                    || op == IOP_LOAD() || op == IOP_STORE()
                    || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() {
@@ -455,10 +453,7 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
             if is_checked_arith_op(op) && checked_arith_ty(inst) == ITY_UNIT() {
                 return cemit_str2(opcode_name(op), String::from(" at 128-bit width"));
             }
-            if op == IOP_FIELD_GET() && (inst.ty == ITY_I128() || inst.ty == ITY_U128()) {
-                return cemit_str2(opcode_name(op), String::from(" at 128-bit width"));
-            }
-            if op == IOP_FIELD_SET() && field_set_carries_wide(inst, wide_vars) {
+            if field_access_is_wide(inst, wide_vars) {
                 return cemit_str2(opcode_name(op), String::from(" at 128-bit width"));
             }
             if op == IOP_CALL() {
@@ -585,6 +580,10 @@ fn collect_modelable_callees(f: IrFunction, m: IrModule, const_fn_indices: Vec<i
 
 fn ity_is_unsigned(ty: i64) -> bool {
     ty == ITY_U8() || ty == ITY_U16() || ty == ITY_U32() || ty == ITY_U64() || ty == ITY_U128()
+}
+
+fn ity_is_wide(ty: i64) -> bool {
+    ty == ITY_I128() || ty == ITY_U128()
 }
 
 // IR type of the instruction producing `id`, defaulting to the signed form
@@ -1024,7 +1023,7 @@ fn collect_wide_vars(f: IrFunction) -> Vec<i64> {
         let mut ii: i64 = 0;
         while ii < insts.len() {
             let inst: IrInst = insts[ii];
-            if inst.ty == ITY_I128() || inst.ty == ITY_U128() {
+            if ity_is_wide(inst.ty) {
                 result.push(inst.id);
             }
             ii = ii + 1;
@@ -1034,9 +1033,17 @@ fn collect_wide_vars(f: IrFunction) -> Vec<i64> {
     result
 }
 
-fn field_set_carries_wide(inst: IrInst, wide_vars: Vec<i64>) -> bool {
+// A field access that moves a 128-bit value through an 8-byte slot. The gate
+// and its diagnostic both read this, so is_modelable and
+// first_unsupported_opcode_name cannot drift apart on which accesses are
+// refused.
+fn field_access_is_wide(inst: IrInst, wide_vars: Vec<i64>) -> bool {
+    let op: i64 = inst.op;
+    if op == IOP_FIELD_GET() {
+        return ity_is_wide(inst.ty);
+    }
     let iargs: Vec<i64> = inst.args;
-    iargs.len() > 1 && vec_contains_i64(wide_vars, iargs[1])
+    op == IOP_FIELD_SET() && iargs.len() > 1 && vec_contains_i64(wide_vars, iargs[1])
 }
 
 fn emit_unmodelled(out: String, inst: IrInst) {

@@ -372,78 +372,14 @@ fn wide_codegen_produces_an_executable() {
     );
 }
 
-/// A 128-bit value handed to an i64-only builtin (the `Vec` element helpers)
-/// must fail closed. Before the guard it compiled and silently returned the
-/// low limb — worse than the hard Cranelift panic it replaced.
-#[test]
-fn wide_values_in_aggregates_fail_closed() {
+/// Drives `vow build` over a source that must be refused, and asserts the
+/// refusal is structured: exit 1, `CompileFailed`, a `message` naming the
+/// limitation, and no executable left behind.
+fn assert_build_fails_closed(stem: &str, source: &str, expected_message: &str, why: &str) {
     let dir = tempfile::TempDir::new().unwrap();
-    let source_path = dir.path().join("wide_vec.vow");
-    let output_path = dir.path().join("wide_vec");
-    fs::write(
-        &source_path,
-        "module WideVec\n\
-         fn main() -> i32 {\n\
-         let v: Vec<i128> = Vec::new();\n\
-         v.push(3154393236604333326345);\n\
-         v[0];\n\
-         0\n\
-         }\n",
-    )
-    .unwrap();
-
-    let output = Command::new(vow_bin())
-        .args([
-            "build",
-            "--no-verify",
-            source_path.to_str().unwrap(),
-            "-o",
-            output_path.to_str().unwrap(),
-        ])
-        .output()
-        .expect("failed to run vow");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|error| panic!("invalid JSON from build: {error}\nstdout: {stdout}"));
-
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "128-bit Vec elements must fail closed\nstdout: {stdout}\nstderr: {stderr}"
-    );
-    assert_eq!(json["status"], "CompileFailed");
-    assert_eq!(json["diagnostics"].as_array().map(Vec::len), Some(1));
-    assert_eq!(json["diagnostics"][0]["error_code"], "CodegenUnsupported");
-    assert!(
-        json["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("silently drop the high 64 bits")),
-        "build must explain why it refused: {json}"
-    );
-    assert!(
-        !output_path.exists(),
-        "refused wide aggregate must not leave an executable"
-    );
-}
-
-#[test]
-fn wide_struct_fields_fail_closed_with_a_named_limitation() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let source_path = dir.path().join("wide_struct.vow");
-    let output_path = dir.path().join("wide_struct");
-    fs::write(
-        &source_path,
-        r#"module WideStruct
-struct Box { v: i128 }
-fn main() -> () [io] {
-    let b: Box = Box { v: 3154393236604333326336 };
-    let got: i128 = b.v;
-    print_i64(u128_to_u8_wrap((got as u128) >> 64) as i64);
-}
-"#,
-    )
-    .unwrap();
+    let source_path = dir.path().join(format!("{stem}.vow"));
+    let output_path = dir.path().join(stem);
+    fs::write(&source_path, source).unwrap();
 
     let output = Command::new(vow_bin())
         .args([
@@ -464,28 +400,63 @@ fn main() -> () [io] {
     assert_eq!(
         output.status.code(),
         Some(1),
-        "128-bit struct fields must fail closed\nstdout: {stdout}\nstderr: {stderr}"
+        "{why} must fail closed\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert_eq!(json["status"], "CompileFailed");
+    assert_eq!(json["diagnostics"].as_array().map(Vec::len), Some(1));
+    assert_eq!(json["diagnostics"][0]["error_code"], "CodegenUnsupported");
     assert!(
         json["message"]
             .as_str()
-            .is_some_and(|message| message.contains("128-bit struct fields and enum payloads")),
-        "build must name the aggregate-field limitation: {json}"
+            .is_some_and(|message| message.contains(expected_message)),
+        "build must explain why it refused {why}: {json}"
     );
     assert!(
         !output_path.exists(),
-        "refused 128-bit struct field must not leave an executable"
+        "refused {why} must not leave an executable"
+    );
+}
+
+/// A 128-bit value handed to an i64-only builtin (the `Vec` element helpers)
+/// must fail closed. Before the guard it compiled and silently returned the
+/// low limb — worse than the hard Cranelift panic it replaced.
+#[test]
+fn wide_values_in_aggregates_fail_closed() {
+    assert_build_fails_closed(
+        "wide_vec",
+        "module WideVec\n\
+         fn main() -> i32 {\n\
+         let v: Vec<i128> = Vec::new();\n\
+         v.push(3154393236604333326345);\n\
+         v[0];\n\
+         0\n\
+         }\n",
+        "silently drop the high 64 bits",
+        "128-bit Vec elements",
+    );
+}
+
+#[test]
+fn wide_struct_fields_fail_closed_with_a_named_limitation() {
+    assert_build_fails_closed(
+        "wide_struct",
+        r#"module WideStruct
+struct Box { v: i128 }
+fn main() -> () [io] {
+    let b: Box = Box { v: 3154393236604333326336 };
+    let got: i128 = b.v;
+    print_i64(u128_to_u8_wrap((got as u128) >> 64) as i64);
+}
+"#,
+        "128-bit struct fields and enum payloads",
+        "128-bit struct fields",
     );
 }
 
 #[test]
 fn wide_enum_payloads_fail_closed_instead_of_truncating() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let source_path = dir.path().join("wide_enum.vow");
-    let output_path = dir.path().join("wide_enum");
-    fs::write(
-        &source_path,
+    assert_build_fails_closed(
+        "wide_enum",
         r#"module WideEnum
 enum E { V(i128) }
 fn main() -> i32 {
@@ -495,40 +466,8 @@ fn main() -> i32 {
     }
 }
 "#,
-    )
-    .unwrap();
-
-    let output = Command::new(vow_bin())
-        .args([
-            "build",
-            "--no-verify",
-            "--no-cache",
-            source_path.to_str().unwrap(),
-            "-o",
-            output_path.to_str().unwrap(),
-        ])
-        .output()
-        .expect("failed to run vow");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|error| panic!("invalid JSON from build: {error}\nstdout: {stdout}"));
-
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "128-bit enum payloads must fail closed\nstdout: {stdout}\nstderr: {stderr}"
-    );
-    assert_eq!(json["status"], "CompileFailed");
-    assert!(
-        json["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("128-bit struct fields and enum payloads")),
-        "build must name the aggregate-field limitation: {json}"
-    );
-    assert!(
-        !output_path.exists(),
-        "refused 128-bit enum payload must not leave an executable"
+        "128-bit struct fields and enum payloads",
+        "128-bit enum payloads",
     );
 }
 

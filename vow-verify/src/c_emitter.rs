@@ -465,6 +465,20 @@ fn collect_wide_vars(func: &Function) -> HashSet<u32> {
         .collect()
 }
 
+// A field access that moves a 128-bit value through an 8-byte slot. The gate
+// and its diagnostic both read this, so `is_modelable` and
+// `first_unsupported_opcode` cannot drift apart on which accesses are refused.
+fn field_access_is_wide(inst: &Inst, wide_vars: &HashSet<u32>) -> bool {
+    match inst.opcode {
+        Opcode::FieldGet => matches!(inst.ty, Ty::I128 | Ty::U128),
+        Opcode::FieldSet => inst
+            .args
+            .get(1)
+            .is_some_and(|value| wide_vars.contains(&value.0)),
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Modelable function detection (for cross-function spec verification)
 // ---------------------------------------------------------------------------
@@ -736,15 +750,12 @@ pub fn is_modelable(
                 },
 
                 // Collection/Option field reads have dedicated models; all other
-                // FieldGets are user-struct slot reads under the heap model.
-                Opcode::FieldGet => !matches!(inst.ty, Ty::I128 | Ty::U128),
+                // FieldGets are user-struct slot reads under the heap model,
+                // as are field writes. Only 128-bit accesses fall outside it.
+                Opcode::FieldGet | Opcode::FieldSet => !field_access_is_wide(inst, &wide_vars),
 
-                // User-struct heap model: allocation and field writes are slot ops.
+                // User-struct heap model: allocation is a slot op.
                 Opcode::RegionAlloc => true,
-                Opcode::FieldSet => inst
-                    .args
-                    .get(1)
-                    .is_none_or(|value| !wide_vars.contains(&value.0)),
 
                 // #585: a checked operator aborts on overflow, and the model
                 // only reproduces that abort for the widths
@@ -842,15 +853,7 @@ fn first_unsupported_opcode(
                 {
                     return Some(format!("{:?} at 128-bit width", inst.opcode));
                 }
-                Opcode::FieldGet if matches!(inst.ty, Ty::I128 | Ty::U128) => {
-                    return Some(format!("{:?} at 128-bit width", inst.opcode));
-                }
-                Opcode::FieldSet
-                    if inst
-                        .args
-                        .get(1)
-                        .is_some_and(|value| wide_vars.contains(&value.0)) =>
-                {
+                Opcode::FieldGet | Opcode::FieldSet if field_access_is_wide(inst, &wide_vars) => {
                     return Some(format!("{:?} at 128-bit width", inst.opcode));
                 }
                 Opcode::Call => match &inst.data {
@@ -6145,14 +6148,7 @@ mod tests {
                     inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
                 ],
             );
-            let store_module = Module {
-                name: "test".to_string(),
-                functions: vec![store.clone()],
-                strings: vec![],
-                struct_layouts: vec![],
-                enum_layouts: vec![],
-                warnings: vec![],
-            };
+            let store_module = arith_module(&store);
             let store_reason = non_modelable_reason(&store, &store_module, &HashMap::new());
             assert!(
                 matches!(store_reason.as_deref(), Some(reason) if reason.contains("FieldSet at 128-bit width")),
