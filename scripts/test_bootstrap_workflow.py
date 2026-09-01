@@ -216,6 +216,16 @@ class FullTestWorkflowTest(unittest.TestCase):
         self.assertIn("needs: changes", full_test)
         self.assertIn("if: needs.changes.outputs.code == 'true'", full_test)
 
+    def test_runs_full_test_sh_with_required_toolchain(self) -> None:
+        full_test = self.jobs["full-test"]
+
+        self.assertIn("actions/checkout", full_test)
+        self.assertIn("dtolnay/rust-toolchain", full_test)
+        self.assertIn("Swatinem/rust-cache", full_test)
+        self.assertIn("install-esbmc", full_test)
+        self.assertIn("astral-sh/setup-uv", full_test)
+        self.assertIn("scripts/full_test.sh", full_test)
+
 
 class EquivalenceWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:

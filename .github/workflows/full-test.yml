@@ -38,5 +38,18 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
-      - run: "true"
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: bench/uv.lock
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Rust and self-hosted differential suite
+        run: scripts/full_test.sh
