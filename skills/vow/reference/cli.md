@@ -278,7 +278,7 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |
+| `CompileFailed` | Parse error, type error, module load error, unsupported code generation, backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -357,7 +357,7 @@ argument expression.
 | `status`           | string              | Always            | One of the four status values             |
 | `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
-| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", link error detail, or "failed to emit frontend diagnostics: {io_error}") |
+| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
@@ -586,7 +586,10 @@ Parse JSON from stdout
 ├── status == "Unverified"     → Compiled but unverified. ESBMC missing or --no-verify.
 ├── status == "CompileFailed"  → Read `diagnostics[]` for error details.
 │   ├── error_code is parse error  → Fix syntax (see grammar.md)
-│   └── error_code is type error   → Fix types (see errors.md)
+│   ├── error_code is type error   → Fix types (see errors.md)
+│   ├── error_code == "CodegenUnsupported" → Avoid the named backend limitation.
+│   ├── error_code == "CodegenFailed" → Inspect backend context; report a compiler bug if supported source triggered it.
+│   └── error_code == "LinkFailed" → Check the host linker and Vow runtime archive.
 └── status == "VerifyFailed"   → Read `counterexamples[]`.
     ├── Check `inputs` for the violating values
     ├── Check `violation` for which contract failed

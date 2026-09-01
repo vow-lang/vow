@@ -500,6 +500,69 @@ The note is conservative — it fires for any qualifying allocation in a functio
 
 **Fix:** Often none — if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from("hi") }`). The exemption applies only to the *currently-installed* field initializers — a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).
 
+### CodegenUnsupported
+
+**Phase:** Code Generation
+**Meaning:** The program is valid Vow, but the selected native backend cannot
+yet lower one of its operations or representations. The build fails closed:
+`status` is `CompileFailed` and `executable` is `null`. No new executable is
+produced — but a file already at the `-o` path from an earlier successful
+build is left untouched, so branch on `status`/`executable` rather than on the
+output path existing. The diagnostic currently has a file-level span because
+backend errors do not carry an instruction origin.
+
+```vow
+fn main() -> i32 {
+    let values: Vec<i128> = Vec::new();
+    values.push(1);
+    0
+}
+```
+
+**Fix:** Restructure the program to avoid the named backend limitation, or use
+a supported representation until the backend implements it. Agents may branch
+on `CodegenUnsupported` without parsing the human-readable `message` field.
+
+### CodegenFailed
+
+**Phase:** Code Generation
+**Meaning:** The native backend failed while declaring, defining, or emitting
+otherwise-lowered code. This distinguishes an internal backend failure from a
+source-level parse/type error and from a known unsupported operation.
+
+**Fix:** Inspect the diagnostic message for backend context. If the program
+uses only documented supported operations, report a compiler bug with the
+source and diagnostic; changing source syntax or types may not resolve an
+internal backend failure.
+
+### LinkFailed
+
+**Phase:** Linker
+**Meaning:** Code generation produced an object, but the native linker could
+not create the executable. A missing `libvow_runtime.a` is also reported with
+this code.
+
+**Fix:** Inspect the diagnostic message and verify that the host linker and Vow
+runtime archive are installed and accessible. When building Vow itself, run
+`cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.
+
+### IoError
+
+**Phase:** Module loading, Code Generation
+
+**Meaning:** The compiler could not read or write a file. Two build-pipeline
+sites produce this code: a `use` declaration naming a module the driver cannot
+read, and a generated object file the backend cannot write (unwritable output
+directory, full disk, read-only filesystem). The object bytes are already
+built by the time the write is attempted, so this is the filesystem's answer
+rather than a backend defect — which is why it is not `CodegenFailed`.
+
+**Fix:** Check the path in the diagnostic message. For a module load, verify
+the `use` path resolves relative to the importing file. For an object write,
+verify the `-o` destination's parent directory exists and is writable, and
+that the filesystem has free space. Re-running the same build after fixing the
+filesystem succeeds; changing the source will not help.
+
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)

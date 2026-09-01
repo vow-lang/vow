@@ -1611,20 +1611,38 @@ fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_
     all_proven
 }
 
-// Codegen phase: emits the native object via Cranelift FFI and links it.
-// Returns 0 on success. On failure (`clif_emit_module` returns -1 = compile,
-// -2 = link), the helper emits the `CompileFailed` JSON itself and returns 1;
-// the orchestrator propagates that as the process exit code. Behavior matches
-// the inline branches the original `run_build` carried.
-fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, dctx: DiagCtx) -> i64 [io] {
-    let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
-    if result == -1 {
-        eprintln_str(String::from("compilation failed"));
-        diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
-        return 1;
+fn codegen_failure_diagnostic(result: i64, path: String, obj_path: String) -> Diagnostic {
+    if result == CLIF_ERR_UNSUPPORTED() {
+        diag_error(
+            EC_CODEGEN_UNSUPPORTED(),
+            String::from("native backend does not support an operation used by this program"),
+            path,
+            0,
+            0
+        )
+    } else if result == CLIF_ERR_LINK() {
+        diag_error(EC_LINK_FAILED(), String::from("native linker failed"), path, 0, 0)
+    } else if result == CLIF_ERR_IO() {
+        diag_error(EC_IO_ERROR(), str2(String::from("cannot write the generated object file: "), obj_path), path, 0, 0)
+    } else {
+        diag_error(EC_CODEGEN_FAILED(), String::from("native code generation failed"), path, 0, 0)
     }
-    if result == -2 {
-        eprintln_str(String::from("link failed"));
+}
+
+fn emit_codegen_failure(result: i64, path: String, obj_path: String, dctx: DiagCtx) [io] {
+    let d: Diagnostic = codegen_failure_diagnostic(result, path, obj_path);
+    diag_ctx_emit(dctx, d);
+    eprintln_str(diag_to_human(d, dctx));
+}
+
+// Codegen phase: emits the native object via Cranelift FFI and links it.
+// Returns 0 on success. On any non-zero `clif_emit_module` status the helper
+// emits the classified diagnostic and the `CompileFailed` JSON, and returns 1;
+// the orchestrator propagates that as the process exit code.
+fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, path: String, dctx: DiagCtx) -> i64 [io] {
+    let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
+    if result != 0 {
+        emit_codegen_failure(result, path, str2(out, String::from(".o")), dctx);
         diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
         return 1;
     }
@@ -1728,7 +1746,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         if phase_result[1] == 1 { any_skipped = 1; }
     }
     let t_codegen: i64 = trace_now(tctx);
-    let codegen_status: i64 = build_codegen_phase(ir_mod, out, mode, trace, dctx);
+    let codegen_status: i64 = build_codegen_phase(ir_mod, out, mode, trace, path, dctx);
     trace_span(tctx, String::from("codegen"), PID_COMPILER(), TID_MAIN(), t_codegen, trace_now(tctx) - t_codegen, String::from(""));
     trace_sample(tctx, trace_now(tctx));
     if codegen_status != 0 { return 1; }
@@ -2161,9 +2179,11 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 // Compile to binary
                 let tmp_out: String = str2(str3(String::from("build/vow_test_"), short_name, String::from("_")), i64_to_string(time_unix_ms()));
                 let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
-                if result == -1 {
+                if result != 0 {
                     let duration: i64 = time_unix_ms() - start_time;
-                    let diag_json2: String = String::from("[{\"error_code\":\"CompileError\",\"message\":\"codegen failed\",\"severity\":\"error\"}]");
+                    let codegen_diag: Diagnostic = codegen_failure_diagnostic(result, test_path, str2(tmp_out, String::from(".o")));
+                    eprintln_str(diag_to_human(codegen_diag, checked.dctx));
+                    let diag_json2: String = str3(String::from("["), diag_to_json(codegen_diag, checked.dctx), String::from("]"));
                     let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json2);
                     entries_json.push(entry);
                     failed = failed + 1;
@@ -2355,13 +2375,8 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             };
             emit_ir_warnings(ir_mod, dctx);
             let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
-            if result == -1 {
-                eprintln_str(String::from("compilation failed"));
-                diag_emit_build_json(String::from("CompileFailed"), String::from(""), dctx);
-                return 1;
-            }
-            if result == -2 {
-                eprintln_str(String::from("link failed"));
+            if result != 0 {
+                emit_codegen_failure(result, path, str2(out, String::from(".o")), dctx);
                 diag_emit_build_json(String::from("CompileFailed"), String::from(""), dctx);
                 return 1;
             }
@@ -5092,7 +5107,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
-    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |\n"));
+    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation, backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
@@ -5171,7 +5186,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `status`           | string              | Always            | One of the four status values             |\n"));
     r.push_str(String::from("| `executable`       | string \\| null      | Always            | Path to binary, null on compile failure or library module (no main) |\n"));
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
-    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", link error detail, or \"failed to emit frontend diagnostics: {io_error}\") |\n"));
+    r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
@@ -5400,7 +5415,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("├── status == \"Unverified\"     → Compiled but unverified. ESBMC missing or --no-verify.\n"));
     r.push_str(String::from("├── status == \"CompileFailed\"  → Read `diagnostics[]` for error details.\n"));
     r.push_str(String::from("│   ├── error_code is parse error  → Fix syntax (see grammar.md)\n"));
-    r.push_str(String::from("│   └── error_code is type error   → Fix types (see errors.md)\n"));
+    r.push_str(String::from("│   ├── error_code is type error   → Fix types (see errors.md)\n"));
+    r.push_str(String::from("│   ├── error_code == \"CodegenUnsupported\" → Avoid the named backend limitation.\n"));
+    r.push_str(String::from("│   ├── error_code == \"CodegenFailed\" → Inspect backend context; report a compiler bug if supported source triggered it.\n"));
+    r.push_str(String::from("│   └── error_code == \"LinkFailed\" → Check the host linker and Vow runtime archive.\n"));
     r.push_str(String::from("└── status == \"VerifyFailed\"   → Read `counterexamples[]`.\n"));
     r.push_str(String::from("    ├── Check `inputs` for the violating values\n"));
     r.push_str(String::from("    ├── Check `violation` for which contract failed\n"));
@@ -6782,6 +6800,69 @@ fn skill_bundle() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Often none -- if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from(\"hi\") }`). The exemption applies only to the *currently-installed* field initializers -- a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### CodegenUnsupported\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Code Generation\n"));
+    r.push_str(String::from("**Meaning:** The program is valid Vow, but the selected native backend cannot\n"));
+    r.push_str(String::from("yet lower one of its operations or representations. The build fails closed:\n"));
+    r.push_str(String::from("`status` is `CompileFailed` and `executable` is `null`. No new executable is\n"));
+    r.push_str(String::from("produced -- but a file already at the `-o` path from an earlier successful\n"));
+    r.push_str(String::from("build is left untouched, so branch on `status`/`executable` rather than on the\n"));
+    r.push_str(String::from("output path existing. The diagnostic currently has a file-level span because\n"));
+    r.push_str(String::from("backend errors do not carry an instruction origin.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn main() -> i32 {\n"));
+    r.push_str(String::from("    let values: Vec<i128> = Vec::new();\n"));
+    r.push_str(String::from("    values.push(1);\n"));
+    r.push_str(String::from("    0\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Restructure the program to avoid the named backend limitation, or use\n"));
+    r.push_str(String::from("a supported representation until the backend implements it. Agents may branch\n"));
+    r.push_str(String::from("on `CodegenUnsupported` without parsing the human-readable `message` field.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### CodegenFailed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Code Generation\n"));
+    r.push_str(String::from("**Meaning:** The native backend failed while declaring, defining, or emitting\n"));
+    r.push_str(String::from("otherwise-lowered code. This distinguishes an internal backend failure from a\n"));
+    r.push_str(String::from("source-level parse/type error and from a known unsupported operation.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Inspect the diagnostic message for backend context. If the program\n"));
+    r.push_str(String::from("uses only documented supported operations, report a compiler bug with the\n"));
+    r.push_str(String::from("source and diagnostic; changing source syntax or types may not resolve an\n"));
+    r.push_str(String::from("internal backend failure.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### LinkFailed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Linker\n"));
+    r.push_str(String::from("**Meaning:** Code generation produced an object, but the native linker could\n"));
+    r.push_str(String::from("not create the executable. A missing `libvow_runtime.a` is also reported with\n"));
+    r.push_str(String::from("this code.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Inspect the diagnostic message and verify that the host linker and Vow\n"));
+    r.push_str(String::from("runtime archive are installed and accessible. When building Vow itself, run\n"));
+    r.push_str(String::from("`cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### IoError\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Module loading, Code Generation\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Two build-pipeline\n"));
+    r.push_str(String::from("sites produce this code: a `use` declaration naming a module the driver cannot\n"));
+    r.push_str(String::from("read, and a generated object file the backend cannot write (unwritable output\n"));
+    r.push_str(String::from("directory, full disk, read-only filesystem). The object bytes are already\n"));
+    r.push_str(String::from("built by the time the write is attempted, so this is the filesystem's answer\n"));
+    r.push_str(String::from("rather than a backend defect -- which is why it is not `CodegenFailed`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
+    r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
+    r.push_str(String::from("verify the `-o` destination's parent directory exists and is writable, and\n"));
+    r.push_str(String::from("that the filesystem has free space. Re-running the same build after fixing the\n"));
+    r.push_str(String::from("filesystem succeeds; changing the source will not help.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));
@@ -8307,6 +8388,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"ContractTypeMismatch\",\n"));
     r.push_str(String::from("        \"EsbmcNotFound\",\n"));
     r.push_str(String::from("        \"IoError\",\n"));
+    r.push_str(String::from("        \"CodegenUnsupported\",\n"));
+    r.push_str(String::from("        \"CodegenFailed\",\n"));
+    r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
     r.push_str(String::from("        \"RegionRootEscape\"\n"));
@@ -10116,7 +10200,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
     r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
-    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk) |\n"));
+    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation, backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
@@ -10195,7 +10279,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `status`           | string              | Always            | One of the four status values             |\n"));
     r.push_str(String::from("| `executable`       | string \\| null      | Always            | Path to binary, null on compile failure or library module (no main) |\n"));
     r.push_str(String::from("| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |\n"));
-    r.push_str(String::from("| `message`          | string              | CompileFailed     | Error category (\"parse error\", \"type error\", \"module load error\", link error detail, or \"failed to emit frontend diagnostics: {io_error}\") |\n"));
+    r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
@@ -10424,7 +10508,10 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("├── status == \"Unverified\"     → Compiled but unverified. ESBMC missing or --no-verify.\n"));
     r.push_str(String::from("├── status == \"CompileFailed\"  → Read `diagnostics[]` for error details.\n"));
     r.push_str(String::from("│   ├── error_code is parse error  → Fix syntax (see grammar.md)\n"));
-    r.push_str(String::from("│   └── error_code is type error   → Fix types (see errors.md)\n"));
+    r.push_str(String::from("│   ├── error_code is type error   → Fix types (see errors.md)\n"));
+    r.push_str(String::from("│   ├── error_code == \"CodegenUnsupported\" → Avoid the named backend limitation.\n"));
+    r.push_str(String::from("│   ├── error_code == \"CodegenFailed\" → Inspect backend context; report a compiler bug if supported source triggered it.\n"));
+    r.push_str(String::from("│   └── error_code == \"LinkFailed\" → Check the host linker and Vow runtime archive.\n"));
     r.push_str(String::from("└── status == \"VerifyFailed\"   → Read `counterexamples[]`.\n"));
     r.push_str(String::from("    ├── Check `inputs` for the violating values\n"));
     r.push_str(String::from("    ├── Check `violation` for which contract failed\n"));
@@ -11812,6 +11899,69 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Often none -- if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from(\"hi\") }`). The exemption applies only to the *currently-installed* field initializers -- a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### CodegenUnsupported\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Code Generation\n"));
+    r.push_str(String::from("**Meaning:** The program is valid Vow, but the selected native backend cannot\n"));
+    r.push_str(String::from("yet lower one of its operations or representations. The build fails closed:\n"));
+    r.push_str(String::from("`status` is `CompileFailed` and `executable` is `null`. No new executable is\n"));
+    r.push_str(String::from("produced -- but a file already at the `-o` path from an earlier successful\n"));
+    r.push_str(String::from("build is left untouched, so branch on `status`/`executable` rather than on the\n"));
+    r.push_str(String::from("output path existing. The diagnostic currently has a file-level span because\n"));
+    r.push_str(String::from("backend errors do not carry an instruction origin.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn main() -> i32 {\n"));
+    r.push_str(String::from("    let values: Vec<i128> = Vec::new();\n"));
+    r.push_str(String::from("    values.push(1);\n"));
+    r.push_str(String::from("    0\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Restructure the program to avoid the named backend limitation, or use\n"));
+    r.push_str(String::from("a supported representation until the backend implements it. Agents may branch\n"));
+    r.push_str(String::from("on `CodegenUnsupported` without parsing the human-readable `message` field.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### CodegenFailed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Code Generation\n"));
+    r.push_str(String::from("**Meaning:** The native backend failed while declaring, defining, or emitting\n"));
+    r.push_str(String::from("otherwise-lowered code. This distinguishes an internal backend failure from a\n"));
+    r.push_str(String::from("source-level parse/type error and from a known unsupported operation.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Inspect the diagnostic message for backend context. If the program\n"));
+    r.push_str(String::from("uses only documented supported operations, report a compiler bug with the\n"));
+    r.push_str(String::from("source and diagnostic; changing source syntax or types may not resolve an\n"));
+    r.push_str(String::from("internal backend failure.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### LinkFailed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Linker\n"));
+    r.push_str(String::from("**Meaning:** Code generation produced an object, but the native linker could\n"));
+    r.push_str(String::from("not create the executable. A missing `libvow_runtime.a` is also reported with\n"));
+    r.push_str(String::from("this code.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Inspect the diagnostic message and verify that the host linker and Vow\n"));
+    r.push_str(String::from("runtime archive are installed and accessible. When building Vow itself, run\n"));
+    r.push_str(String::from("`cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### IoError\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Module loading, Code Generation\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Two build-pipeline\n"));
+    r.push_str(String::from("sites produce this code: a `use` declaration naming a module the driver cannot\n"));
+    r.push_str(String::from("read, and a generated object file the backend cannot write (unwritable output\n"));
+    r.push_str(String::from("directory, full disk, read-only filesystem). The object bytes are already\n"));
+    r.push_str(String::from("built by the time the write is attempted, so this is the filesystem's answer\n"));
+    r.push_str(String::from("rather than a backend defect -- which is why it is not `CodegenFailed`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
+    r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
+    r.push_str(String::from("verify the `-o` destination's parent directory exists and is writable, and\n"));
+    r.push_str(String::from("that the filesystem has free space. Re-running the same build after fixing the\n"));
+    r.push_str(String::from("filesystem succeeds; changing the source will not help.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));
@@ -13338,6 +13488,9 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"ContractTypeMismatch\",\n"));
     r.push_str(String::from("        \"EsbmcNotFound\",\n"));
     r.push_str(String::from("        \"IoError\",\n"));
+    r.push_str(String::from("        \"CodegenUnsupported\",\n"));
+    r.push_str(String::from("        \"CodegenFailed\",\n"));
+    r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
     r.push_str(String::from("        \"RegionRootEscape\"\n"));

@@ -394,7 +394,8 @@ pub(crate) fn compile_failed(message: String, diagnostics: Vec<Diagnostic>) -> B
 mod tests {
     use super::*;
     use crate::{BuildStatus, CeCallSite, CeSource, CeViolatingArg, StructuredCounterexample};
-    use vow_diag::{Blame, ErrorCode, Severity, SourceLocation};
+    use vow_codegen::CodegenError;
+    use vow_diag::{Blame, ErrorCode, SourceLocation};
 
     fn ce(function: &str, blame: &str) -> StructuredCounterexample {
         StructuredCounterexample {
@@ -887,5 +888,24 @@ mod tests {
         assert!(out.counterexamples.is_empty());
         assert!(out.verify_status.is_none());
         assert!(out.verify_message.is_none());
+    }
+
+    #[test]
+    fn codegen_failed_attaches_one_structured_diagnostic() {
+        // Mirrors what `codegen_error_to_output` composes in main.rs. The
+        // diagnostic's own shape is covered by `vow-codegen`'s tests.
+        let error = CodegenError::UnsupportedOpcode("wide aggregate".to_string());
+        let mut diagnostics = vec![diag("frontend note")];
+        diagnostics.push(error.to_diagnostic("wide.vow"));
+        let out = compile_failed(error.failure_message(), diagnostics);
+
+        assert!(matches!(out.status, BuildStatus::CompileFailed { .. }));
+        assert!(out.executable.is_none());
+        assert_eq!(out.diagnostics.len(), 2);
+        assert_eq!(out.diagnostics[0].message, "frontend note");
+        assert_eq!(out.diagnostics[1].severity, Severity::Error);
+        assert_eq!(out.diagnostics[1].code, ErrorCode::CodegenUnsupported);
+        assert_eq!(out.diagnostics[1].primary.file, "wide.vow");
+        assert!(out.counterexamples.is_empty());
     }
 }

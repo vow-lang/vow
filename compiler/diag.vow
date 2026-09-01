@@ -51,6 +51,10 @@ fn EC_INVALID_INT_SUFFIX() -> i64 { 33 }
 // contract is still proved for every returning execution. Mirrors
 // `vow_diag::ErrorCode::ArithOverflowReachable` (#585).
 fn EC_ARITH_OVERFLOW_REACHABLE() -> i64 { 34 }
+// Native backend and linker failures. Mirrors `vow_diag::ErrorCode`.
+fn EC_CODEGEN_UNSUPPORTED() -> i64 { 35 }
+fn EC_CODEGEN_FAILED() -> i64 { 36 }
+fn EC_LINK_FAILED() -> i64 { 37 }
 
 struct Diagnostic {
     severity: i64,
@@ -284,8 +288,17 @@ fn ec_name(code: i64) -> String {
     if code == EC_ARITH_OVERFLOW_REACHABLE() {
         String::from("ArithOverflowReachable")
     } else {
+    if code == EC_CODEGEN_UNSUPPORTED() {
+        String::from("CodegenUnsupported")
+    } else {
+    if code == EC_CODEGEN_FAILED() {
+        String::from("CodegenFailed")
+    } else {
+    if code == EC_LINK_FAILED() {
+        String::from("LinkFailed")
+    } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {
