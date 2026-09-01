@@ -114,6 +114,12 @@ a reviewable proposal rather than an unattended commit. Each shard proposal
 contains that shard's corpus findings while preserving all untouched corpus
 entries and the entire module-pair block.
 
+A shard that misses its `--min-compared` floor emits no proposal at all, and
+says so in its summary. A run that measured almost nothing must not hand back a
+file that looks applicable. The `updated` stamp comes from `--today` (default:
+UTC today) rather than local time, so re-running a sweep reproduces its
+proposal byte-for-byte.
+
 Tier 3 runs an unsharded sweep, applies its `ledger.proposed.json`, adds the
 issue/fixture context that requires judgement, and commits the result together
 with the module-pair hashes only the adversarial review can compute. Applying a

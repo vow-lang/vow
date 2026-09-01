@@ -456,6 +456,51 @@ class CompareTestTest(unittest.TestCase):
         self.assertIn("rust exited 3, expected 0", errors)
         self.assertIn("self exited 4, expected 0", errors)
 
+    def test_an_empty_suite_is_never_parity(self):
+        # Two compilers that discovered nothing agree on every observable, so
+        # equality alone would let a silently broken `vow test` pass the
+        # blocking gate. Discovering zero tests is itself the failure.
+        empty = self.suite(total=0, tests=[])
+
+        errors = parity.compare_test(empty, empty, 0, 0)
+
+        self.assertIn("rust total=0, expected a non-empty suite", errors)
+
+    def test_a_malformed_test_entry_is_a_parity_error_not_a_crash(self):
+        # A suite result missing `name` mixes None with str; sorting without an
+        # order that tolerates both aborts the CI step with a traceback rather
+        # than reporting the divergence.
+        malformed = self.suite(
+            tests=[{"status": "passed"}, {"name": "test_parser", "status": "passed"}]
+        )
+
+        errors = parity.compare_test(self.suite(), malformed, 0, 0)
+
+        self.assertTrue(errors)
+        self.assertIn("tests:", " ".join(errors))
+
+    def test_only_the_differing_tests_are_reported(self):
+        # The full lists would be kilobytes of log for `compiler/`.
+        errors = parity.compare_test(
+            self.suite(),
+            self.suite(
+                tests=[
+                    {"name": "test_arith", "status": "passed"},
+                    {"name": "test_parser", "status": "failed"},
+                ]
+            ),
+            0,
+            0,
+        )
+
+        self.assertEqual(
+            [
+                "tests: rust-only [('test_parser', 'passed')] "
+                "vs self-only [('test_parser', 'failed')]"
+            ],
+            errors,
+        )
+
     def test_cli_exposes_test_mode_without_a_fixture(self):
         completed = run_parity_cli("test", self.suite(), self.suite(), 0, 0)
 

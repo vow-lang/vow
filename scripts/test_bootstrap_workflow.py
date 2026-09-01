@@ -17,6 +17,11 @@ not by declaration, so importing it would make every code pull request depend on
 an image detail. The workflows are uniformly formatted (top-level job keys at
 exactly two spaces, bodies deeper), which is all the structure these assertions
 need.
+
+Also guards `equivalence.yml`'s read-only permissions and ledger-proposal
+wiring. That belongs here rather than in its own module because it is the same
+question -- which workflow carries which equivalence tier -- under the same
+stdlib-only constraint.
 """
 
 from __future__ import annotations
@@ -89,23 +94,45 @@ class BootstrapWorkflowTest(unittest.TestCase):
         self.assertNotIn("bootstrap.sh --no-verify", linux)
         self.assertIn("install-esbmc", linux)
 
+    def compiler_test_step(self) -> str:
+        """Just the tier-1 comparison step.
+
+        Job-wide assertions are worthless here: `ulimit` and `timeout-minutes`
+        both already appear elsewhere in this job, so a job-scoped `assertIn`
+        stays green even if the step is deleted outright.
+        """
+        linux = self.jobs["bootstrap"]
+        start = linux.index("equivalence tier 1")
+        return linux[start : linux.index("- name:", start)]
+
     def test_linux_compares_the_compiler_test_suite_after_bootstrap(self) -> None:
         linux = self.jobs["bootstrap"]
+        step = self.compiler_test_step()
 
         rust_test = "target/release/vow test compiler/"
         self_test = "build/vowc test compiler/"
         comparator = "scripts/parity.py test"
         for command in (rust_test, self_test, comparator):
             with self.subTest(command=command):
-                self.assertIn(command, linux)
+                self.assertIn(command, step)
         self.assertLess(linux.index("scripts/bootstrap.sh"), linux.index(self_test))
-        self.assertIn("ulimit -v 2000000", linux)
+
+    def test_the_address_space_cap_covers_only_the_self_hosted_binary(self) -> None:
+        # Capping the Rust compiler or python3 as well would turn a memory
+        # limit into a spurious parity failure. full_test.sh's run_self scopes
+        # it the same way.
+        step = self.compiler_test_step()
+
+        self.assertIn("( ulimit -v 2000000; build/vowc test compiler/ )", step)
+        self.assertNotRegex(step, r"^\s+ulimit -v \d+$")
 
     def test_linux_compiler_test_comparison_is_blocking(self) -> None:
-        linux = self.jobs["bootstrap"]
+        # No `continue-on-error`, and a step-level bound so a #1171 overrun
+        # fails this step rather than starving the steps after it.
+        step = self.compiler_test_step()
 
-        self.assertNotIn("continue-on-error", linux)
-        self.assertIn("timeout-minutes: 90", linux)
+        self.assertNotIn("continue-on-error", step)
+        self.assertIn("timeout-minutes:", step)
 
     def test_runs_on_every_push_to_main(self) -> None:
         # The nightly cron alone would attribute a self-hosting break to a day

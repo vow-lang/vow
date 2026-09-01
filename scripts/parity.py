@@ -202,6 +202,16 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
     return errors
 
 
+def _test_multiset(document):
+    # `name` and `status` are absent on a malformed suite result, so the tuples
+    # mix None with str and need the same order-by-repr as _diagnostic_multiset.
+    # A missing field must read as a parity error, never as a TypeError.
+    return sorted(
+        ((test.get("name"), test.get("status")) for test in document.get("tests", [])),
+        key=repr,
+    )
+
+
 def compare_test(rust, self_hosted, rust_exit, self_exit):
     """Return parity errors for two ``vow test`` suite results."""
     errors = []
@@ -216,17 +226,21 @@ def compare_test(rust, self_hosted, rust_exit, self_exit):
                 f"{name} status={document.get('status')}, expected TestsPassed"
             )
 
+    # Equality alone is satisfied by two suites that discovered nothing, which
+    # is how a blocking gate goes vacuous exactly when it matters most.
+    if not rust.get("total"):
+        errors.append(f"rust total={rust.get('total')}, expected a non-empty suite")
+
     errors += _mismatch("total", rust.get("total"), self_hosted.get("total"))
-    errors += _mismatch(
-        "tests",
-        sorted(
-            (test.get("name"), test.get("status")) for test in rust.get("tests", [])
-        ),
-        sorted(
-            (test.get("name"), test.get("status"))
-            for test in self_hosted.get("tests", [])
-        ),
-    )
+
+    # Report only the delta: `compiler/` has hundreds of tests, and dumping both
+    # full lists would bury a one-test disagreement in kilobytes of CI log.
+    rust_tests = _test_multiset(rust)
+    self_tests = _test_multiset(self_hosted)
+    if rust_tests != self_tests:
+        only_rust = [test for test in rust_tests if test not in self_tests]
+        only_self = [test for test in self_tests if test not in rust_tests]
+        errors.append(f"tests: rust-only {only_rust} vs self-only {only_self}")
     return errors
 
 

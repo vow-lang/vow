@@ -46,7 +46,7 @@ import resource
 import subprocess
 import sys
 import time
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -852,8 +852,8 @@ def reconcile(records, ledger):
     return new, known, fixed
 
 
-def _ledger_observable_value(observables):
-    """Use the schema's compact string form for one observable."""
+def _observable_field(observables):
+    """Collapse a set of observables to the schema's string-or-array form."""
     ordered = sorted(observables)
     return ordered[0] if len(ordered) == 1 else ordered
 
@@ -879,7 +879,7 @@ def propose_ledger(document, new, fixed, today):
             continue
         remaining = tracked_observables(entry) - set(finding["observables"])
         if remaining:
-            entry["observable"] = _ledger_observable_value(remaining)
+            entry["observable"] = _observable_field(remaining)
             if "error_code" not in remaining:
                 entry.pop("rust_error_codes", None)
                 entry.pop("self_hosted_error_codes", None)
@@ -887,6 +887,13 @@ def propose_ledger(document, new, fixed, today):
             # Retain the observable and its metadata so a reappearance remains
             # recognizable as a regression rather than a first-time finding.
             entry["status"] = "fixed"
+
+    # An observable this run proved gone must not be resurrected by an
+    # unrelated new finding on the same file. The partial-fix branch above
+    # already drops it from `observable`; the full-fix branch deliberately
+    # retains it, so without this the union below would put it straight back
+    # and the next reconcile would suppress its recurrence as `known`.
+    just_fixed = {finding["file"]: set(finding["observables"]) for finding in fixed}
 
     for record in new:
         path = record["file"]
@@ -898,10 +905,10 @@ def propose_ledger(document, new, fixed, today):
                 "status": "open",
             },
         )
-        observables = tracked_observables(entry) | {
+        observables = (tracked_observables(entry) - just_fixed.get(path, set())) | {
             divergence["observable"] for divergence in record["divergences"]
         }
-        entry["observable"] = _ledger_observable_value(observables)
+        entry["observable"] = _observable_field(observables)
         entry["status"] = "open"
 
         error_code = next(
@@ -973,6 +980,11 @@ def main():
         "--emit-ledger-update",
         action="store_true",
         help="write a proposed corpus-ledger update into the output directory",
+    )
+    ap.add_argument(
+        "--today",
+        default=datetime.now(timezone.utc).date().isoformat(),
+        help="ISO date stamped into the proposal's `updated` field (default: UTC today)",
     )
     args = ap.parse_args()
     if args.emit_ledger_update and args.no_ledger:
@@ -1051,12 +1063,18 @@ def main():
         "elapsed_secs": elapsed,
         "records": records,
     }
-    (outdir / "results.json").write_text(json.dumps(results, indent=2))
+    # Written before results.json, and only for a run that met its coverage
+    # floor. results.json must stay the last artifact produced, because
+    # equivalence.yml keys off its presence to tell a divergence verdict from a
+    # crash; and a shard that measured too little to be meaningful must not ship
+    # a proposal that looks applicable.
     proposal_path = None
-    if args.emit_ledger_update:
+    covered = compared >= args.min_compared
+    if args.emit_ledger_update and covered:
         proposal_path = outdir / "ledger.proposed.json"
-        proposal = propose_ledger(ledger_document, new, fixed, date.today().isoformat())
+        proposal = propose_ledger(ledger_document, new, fixed, args.today)
         proposal_path.write_text(json.dumps(proposal, indent=2) + "\n")
+    (outdir / "results.json").write_text(json.dumps(results, indent=2))
 
     # Report what was NOT covered. A sweep that silently skipped most of the
     # corpus reads as "all clear" when it measured almost nothing.
@@ -1077,6 +1095,8 @@ def main():
     print(f"  results  : {outdir / 'results.json'}")
     if proposal_path is not None:
         print(f"  ledger proposal: {proposal_path}")
+    elif args.emit_ledger_update:
+        print("  ledger proposal: none — coverage floor not met")
 
     if fixed:
         print()

@@ -77,12 +77,18 @@ jobs:
         # self-hosted suite outside the pull-request latency budget. Running it
         # here also compares the verified fixed point, not the weaker stage-1
         # concatenated compiler available in ci.yml.
+        #
+        # Bounded separately from the job so a #1171 overrun is attributable to
+        # this step rather than silently eating the later steps' budget.
+        timeout-minutes: 40
         run: |
-          ulimit -v 2000000
           set +e
           target/release/vow test compiler/ > /tmp/rust_test.json
           rust_exit=$?
-          build/vowc test compiler/ > /tmp/self_test.json
+          # The address-space cap applies to the self-hosted binary only, as in
+          # full_test.sh's run_self: capping the Rust compiler or python3 turns
+          # a memory limit into a spurious parity failure.
+          ( ulimit -v 2000000; build/vowc test compiler/ ) > /tmp/self_test.json
           self_exit=$?
           set -e
           python3 scripts/parity.py test /tmp/rust_test.json /tmp/self_test.json \

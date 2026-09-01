@@ -54,7 +54,14 @@ def ledger_document(corpus=None):
 
 
 def assert_valid_ledger_document(test_case, document):
-    """Assert the schema rules relied on by stdlib-only workflow tests."""
+    """Assert the schema rules relied on by stdlib-only workflow tests.
+
+    A deliberate subset of `ledger.schema.json`, not a replacement for it: no
+    jsonschema dependency is available here. The enum, property names, and key
+    set are read back out of the schema rather than restated, so the parts most
+    likely to drift stay derived; anything asserted literally below must be
+    updated alongside the schema.
+    """
     test_case.assertEqual(1, document.get("schema_version"))
     test_case.assertIsInstance(document.get("pairs"), dict)
     corpus = document.get("corpus")
@@ -66,8 +73,13 @@ def assert_valid_ledger_document(test_case, document):
         ).read_text()
     )
     allowed = set(schema["$defs"]["observableName"]["enum"])
+    entry_schema = schema["properties"]["corpus"]["additionalProperties"]
+    allowed_keys = set(entry_schema["properties"])
     for path, entry in corpus.items():
         with test_case.subTest(path=path):
+            # The schema sets `additionalProperties: false`, so a proposal that
+            # invented a field would be rejected on commit rather than here.
+            test_case.assertLessEqual(set(entry), allowed_keys)
             test_case.assertTrue(entry.get("first_seen"), "missing first_seen")
             test_case.assertIn(entry.get("status"), ("open", "fixed", "expected"))
             declared = equivalence.tracked_observables(entry)
@@ -1114,42 +1126,106 @@ class ProposeLedgerTest(unittest.TestCase):
         self.assertEqual(expected, proposed)
         assert_valid_ledger_document(self, proposed)
 
+    def test_a_fixed_observable_is_not_reopened_by_an_unrelated_new_one(self):
+        # Applying a proposal that re-listed `runtime` would make the next run
+        # suppress a genuine runtime regression as `known` — precisely what
+        # reconcile's per-observable bookkeeping exists to prevent.
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "runtime",
+                    "status": "open",
+                }
+            }
+        )
+
+        proposed = equivalence.propose_ledger(
+            document,
+            [{"file": "a.vow", "divergences": [{"observable": "exit_code"}]}],
+            [{"file": "a.vow", "observables": ["runtime"]}],
+            "2026-09-01",
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual("exit_code", entry["observable"])
+        self.assertEqual("open", entry["status"])
+        assert_valid_ledger_document(self, proposed)
+
 
 class EmitLedgerUpdateCliTest(unittest.TestCase):
+    def run_sweep(self, root, min_compared="0", extra=()):
+        """Run main() over an empty corpus, returning (exit_code, output dir)."""
+        rust = root / "rust"
+        self_hosted = root / "self"
+        rust.write_bytes(b"rust")
+        self_hosted.write_bytes(b"self")
+        ledger = root / "ledger.json"
+        ledger.write_text(json.dumps(ledger_document()))
+        output = root / "out"
+        argv = [
+            "equivalence.py",
+            "--rust",
+            str(rust),
+            "--self",
+            str(self_hosted),
+            "--ledger",
+            str(ledger),
+            "--output-dir",
+            str(output),
+            "--min-compared",
+            min_compared,
+            "--emit-ledger-update",
+            *extra,
+        ]
+
+        with (
+            mock.patch("sys.argv", argv),
+            mock.patch.object(equivalence, "collect_corpus", return_value=[]),
+        ):
+            return equivalence.main(), output
+
     def test_flag_writes_a_schema_valid_proposal_in_the_output_directory(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rust = root / "rust"
-            self_hosted = root / "self"
-            rust.write_bytes(b"rust")
-            self_hosted.write_bytes(b"self")
-            ledger = root / "ledger.json"
-            ledger.write_text(json.dumps(ledger_document()))
-            output = root / "out"
-            argv = [
-                "equivalence.py",
-                "--rust",
-                str(rust),
-                "--self",
-                str(self_hosted),
-                "--ledger",
-                str(ledger),
-                "--output-dir",
-                str(output),
-                "--min-compared",
-                "0",
-                "--emit-ledger-update",
-            ]
-
-            with (
-                mock.patch("sys.argv", argv),
-                mock.patch.object(equivalence, "collect_corpus", return_value=[]),
-            ):
-                exit_code = equivalence.main()
+            exit_code, output = self.run_sweep(Path(directory))
 
             proposal = json.loads((output / "ledger.proposed.json").read_text())
             self.assertEqual(0, exit_code)
             assert_valid_ledger_document(self, proposal)
+
+    def test_a_run_below_the_coverage_floor_proposes_nothing(self):
+        # A shard that measured too little to be meaningful must not ship a
+        # proposal that reads as applicable; its `updated` stamp would claim a
+        # sweep that never happened.
+        with tempfile.TemporaryDirectory() as directory:
+            exit_code, output = self.run_sweep(Path(directory), min_compared="20")
+
+            self.assertEqual(2, exit_code)
+            self.assertFalse((output / "ledger.proposed.json").exists())
+
+    def test_results_json_is_written_last(self):
+        # equivalence.yml treats results.json's presence as proof the sweep
+        # completed, so a crash while proposing must not leave it behind.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(
+                equivalence, "propose_ledger", side_effect=RuntimeError("boom")
+            ):
+                with self.assertRaises(RuntimeError):
+                    self.run_sweep(root)
+
+            self.assertFalse((root / "out" / "results.json").exists())
+
+    def test_the_update_stamp_is_caller_supplied(self):
+        # ledger.schema.json requires `updated` to be stamped by the caller so
+        # a re-run of the same sweep reproduces the same proposal.
+        with tempfile.TemporaryDirectory() as directory:
+            _exit, output = self.run_sweep(
+                Path(directory), extra=("--today", "2026-01-02")
+            )
+
+            proposal = json.loads((output / "ledger.proposed.json").read_text())
+            self.assertEqual("2026-01-02", proposal["updated"])
 
 
 class LedgerLoadTest(unittest.TestCase):
