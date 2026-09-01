@@ -18,6 +18,19 @@ def document(status="Unverified", **fields):
     return {"status": status, "diagnostics": [], "counterexamples": [], **fields}
 
 
+def counterexample(**fields):
+    """One schema-complete counterexample, as `counterexample.schema.json` asks."""
+    return {
+        "function": "f",
+        "values": {"x": "1"},
+        "violation": "x > 0",
+        "vow_id": 0,
+        "source": "a.vow",
+        "blame": "callee",
+        **fields,
+    }
+
+
 def hard_failure(**values):
     """A VerifyFailed document whose single counterexample carries `values`."""
     return document(
@@ -482,7 +495,7 @@ class CompareTestTest(unittest.TestCase):
 
         errors = parity.compare_test(self.suite(), malformed, 0, 0)
 
-        self.assertIn("self tests: 1 entries missing name", errors)
+        self.assertIn("self tests[].name is missing", errors)
         self.assertIn("tests:", " ".join(errors))
 
     def test_only_the_differing_tests_are_reported(self):
@@ -597,16 +610,107 @@ class CompareTestTest(unittest.TestCase):
 
         errors = parity.compare_test(without_density, without_density, 0, 0)
 
-        self.assertIn("rust is missing contract_density", errors)
-        self.assertIn("self is missing contract_density", errors)
+        self.assertIn("rust contract_density is missing", errors)
+        self.assertIn("self contract_density is missing", errors)
 
     def test_a_dropped_contract_density_member_is_reported(self):
         partial = self.suite(contract_density={"functions_total": 3})
 
         errors = parity.compare_test(partial, partial, 0, 0)
 
-        self.assertIn("rust contract_density is missing density_pct", errors)
-        self.assertIn("rust contract_density is missing functions_with_vows", errors)
+        self.assertIn("rust contract_density.density_pct is missing", errors)
+        self.assertIn("rust contract_density.functions_with_vows is missing", errors)
+
+    def test_a_schema_invalid_value_both_compilers_agree_on_is_reported(self):
+        # Key presence alone leaves a same-shaped type error invisible: parity
+        # holds, so only an absolute check against the schema catches it.
+        corrupt = self.suite(passed="2")
+
+        errors = parity.compare_test(corrupt, corrupt, 0, 0)
+
+        self.assertIn("rust passed is string, expected integer", errors)
+        self.assertIn("self passed is string, expected integer", errors)
+
+    def test_a_schema_invalid_per_test_value_is_counted_not_enumerated(self):
+        # One broken emitter must not print a line per test for `compiler/`.
+        corrupt = self.suite(
+            tests=[
+                self.entry("test_arith", exit_code="0"),
+                self.entry("test_parser", exit_code="0"),
+            ]
+        )
+
+        errors = parity.compare_test(corrupt, corrupt, 0, 0)
+
+        self.assertIn(
+            "rust tests[].exit_code is string, expected ['integer', 'null'] (2 entries)",
+            errors,
+        )
+
+    def test_an_out_of_enum_per_test_status_is_reported(self):
+        corrupt = self.suite(tests=[self.entry("test_arith", status="ok")])
+
+        errors = parity.compare_test(corrupt, corrupt, 0, 0)
+
+        self.assertTrue(
+            any("tests[].status is 'ok', not one of" in error for error in errors),
+            errors,
+        )
+
+    def test_diagnostics_are_excluded_pending_the_tracked_divergence(self):
+        # Rust attaches each entry's compile diagnostics under `vow test` while
+        # the self-hosted runner emits none (#1183). Until that closes, no
+        # comparison of this field can leave the blocking gate green.
+        errors = parity.compare_test(
+            self.suite(
+                tests=[
+                    self.entry(
+                        "test_arith",
+                        diagnostics=[
+                            {"error_code": "RegionRootEscape", "blame": "callee"}
+                        ],
+                    ),
+                    self.entry("test_parser"),
+                ]
+            ),
+            self.suite(),
+            0,
+            0,
+        )
+
+        self.assertEqual([], errors)
+
+    def test_counterexamples_use_the_format_tolerant_comparison(self):
+        # `source` differs in shape between the emitters by design and
+        # `$esbmc$` names are internal, so raw equality would be a false
+        # positive; a real field divergence must still be reported.
+        def suite_with(**overrides):
+            return self.suite(
+                tests=[
+                    self.entry(
+                        "test_arith", counterexamples=[counterexample(**overrides)]
+                    ),
+                    self.entry("test_parser"),
+                ]
+            )
+
+        tolerated = parity.compare_test(
+            suite_with(
+                source={"file": "a.vow", "offset": 1, "length": 2},
+                values={"$esbmc$tmp": "3", "x": "1"},
+            ),
+            suite_with(source="a.vow", values={"x": "1"}),
+            0,
+            0,
+        )
+
+        self.assertEqual([], tolerated)
+
+        real = parity.compare_test(suite_with(), self.suite(), 0, 0)
+
+        self.assertIn(
+            "test compiler/test_arith.vow.counterexamples count: 1 vs 0", real
+        )
 
     def test_the_compared_contract_is_read_out_of_the_schema(self):
         # Restating the field lists here would let a schema addition silently
@@ -615,10 +719,17 @@ class CompareTestTest(unittest.TestCase):
             (REPO_ROOT / "docs/spec/schemas/test-result.schema.json").read_text()
         )
         entry_properties = set(schema["$defs"]["TestEntry"]["properties"])
+        excluded = {"duration_ms", "diagnostics"}
 
         self.assertEqual(
-            entry_properties - {"duration_ms"},
-            set(parity.TEST_IDENTITY_FIELDS) | set(parity.TEST_PAYLOAD_FIELDS),
+            entry_properties - excluded,
+            set(parity.TEST_IDENTITY_FIELDS)
+            | set(parity.TEST_PAYLOAD_FIELDS)
+            | {parity.TEST_COUNTEREXAMPLE_FIELD},
+        )
+        self.assertEqual(
+            excluded,
+            parity.TEST_NONDETERMINISTIC_FIELDS | parity.TEST_TRACKED_DIVERGENT_FIELDS,
         )
         self.assertEqual(
             ("total", "passed", "failed", "skipped"), parity.TEST_COUNT_FIELDS

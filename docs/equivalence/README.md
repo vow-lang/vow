@@ -47,10 +47,15 @@ parity harness runs in `scripts/full_test.sh`, which is not on the PR path, and
 the two-compiler `vow test compiler/` comparison is a blocking step in the Linux
 `bootstrap.yml` job (pushes to `main` plus nightly). That comparison covers the
 whole documented `vow test` contract — every field in
-`docs/spec/schemas/test-result.schema.json` except the wall-clock `duration_ms`,
-read back out of the schema so a field added there is gated automatically — and
-asserts the required shape absolutely, since parity alone cannot see a field
-both compilers stopped emitting.
+`docs/spec/schemas/test-result.schema.json` except the wall-clock `duration_ms`
+and `tests[].diagnostics`, read back out of the schema so a field added there is
+gated automatically. It also validates each document against that schema in
+absolute terms, since parity alone cannot see a field both compilers dropped or
+corrupted the same way. `diagnostics` is excluded because it is a live
+divergence, not a tolerated one: the Rust runner attaches each entry's compile
+diagnostics while the self-hosted runner emits none (#1183), and the schema for
+them has drifted from both emitters (#1184). Both must close before the field
+can be gated.
 
 The self-hosted suite produced no JSON before a 45-minute bound in one fresh
 concatenated run; the full Section 10b later completed both compilers plus its

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Compare structured output from the Rust and self-hosted compilers."""
 
+import copy
 import json
 import re
 import sys
 from collections import Counter
 from pathlib import Path
+
+import schema_check
 
 KNOWN_CEX_DIVERGENCE = re.compile(
     (
@@ -30,23 +33,39 @@ ESBMC_INTERNAL_VALUE_PREFIX = "$esbmc$"
 # `vow test`'s authoritative output contract. Read back out of the schema
 # rather than restated so a field added there is compared by this blocking
 # gate automatically, instead of drifting out of coverage unnoticed.
-TEST_RESULT_SCHEMA = json.loads(
-    (
-        Path(__file__).resolve().parent.parent
-        / "docs/spec/schemas/test-result.schema.json"
-    ).read_text()
+TEST_RESULT_SCHEMA, TEST_SCHEMA_DIR = schema_check.load(
+    Path(__file__).resolve().parent.parent / "docs/spec/schemas/test-result.schema.json"
 )
 _TEST_ENTRY_SCHEMA = TEST_RESULT_SCHEMA["$defs"]["TestEntry"]
 # Wall-clock only. Every other field the schema declares is a function of the
 # sources, so the two compilers must agree on it.
 TEST_NONDETERMINISTIC_FIELDS = frozenset({"duration_ms"})
+# A LIVE divergence, not a tolerated one: under `vow test` the Rust runner
+# attaches each entry's compile diagnostics (up to 999 RegionRootEscape notes
+# on `compiler/`) while the self-hosted runner emits `[]` for every entry
+# (#1183). No comparison absorbs a 999-vs-0 count — not raw equality, not the
+# (error_code, blame) multiset `compare_json` uses — so comparing it in any
+# form would leave this blocking gate permanently red. Excluded by name, with
+# the issue attached, so re-including it is a deliberate act once #1183 closes.
+TEST_TRACKED_DIVERGENT_FIELDS = frozenset({"diagnostics"})
+# Compared, but not by raw equality: `counterexample.schema.json` documents
+# `source` as differing in SHAPE between the two emitters (Rust a span object,
+# self-hosted a path string), and ESBMC's `$esbmc$` internals are noise. Routed
+# through the same format-tolerant comparison `compare_json` already applies.
+TEST_COUNTEREXAMPLE_FIELD = "counterexamples"
 # Which entry fields name a test rather than describe its outcome. The membership
 # delta keys off these; the rest are compared per shared entry.
 TEST_IDENTITY_FIELDS = ("file", "name", "status")
 TEST_PAYLOAD_FIELDS = tuple(
     field
     for field in _TEST_ENTRY_SCHEMA["properties"]
-    if field not in TEST_IDENTITY_FIELDS and field not in TEST_NONDETERMINISTIC_FIELDS
+    if field
+    not in {
+        *TEST_IDENTITY_FIELDS,
+        *TEST_NONDETERMINISTIC_FIELDS,
+        *TEST_TRACKED_DIVERGENT_FIELDS,
+        TEST_COUNTEREXAMPLE_FIELD,
+    }
 )
 # Top-level counters: everything but the fields with their own comparison below.
 TEST_COUNT_FIELDS = tuple(
@@ -54,6 +73,35 @@ TEST_COUNT_FIELDS = tuple(
     for field in TEST_RESULT_SCHEMA["properties"]
     if field not in ("status", "tests", "contract_density")
 )
+# Collapses `tests[7].stdout` and `tests[8].stdout` onto one counted line: a
+# broken emitter must not print a violation per test for a suite the size of
+# `compiler/`.
+TEST_ENTRY_INDEX = re.compile(r"\[[0-9]+\]")
+
+
+def _gated_schema(schema):
+    """The contract this gate governs: the schema minus its excluded fields.
+
+    A field the gate has stopped comparing is also a field it must stop
+    validating, or an excluded subtree could still fail the run. That matters
+    concretely: `diagnostic.schema.json` sets `additionalProperties: false` and
+    declares neither `blame` nor `hints`, yet both emitters send them (#1184),
+    so validating `tests[].diagnostics` would report 6276 violations on today's
+    `compiler/` corpus for a field #1183 already excludes.
+    """
+    gated = copy.deepcopy(schema)
+    entry = gated["$defs"]["TestEntry"]
+    for field in TEST_TRACKED_DIVERGENT_FIELDS:
+        entry["properties"].pop(field, None)
+    entry["required"] = [
+        field
+        for field in entry["required"]
+        if field not in TEST_TRACKED_DIVERGENT_FIELDS
+    ]
+    return gated
+
+
+GATED_TEST_RESULT_SCHEMA = _gated_schema(TEST_RESULT_SCHEMA)
 
 
 def _mismatch(label, rust_value, self_value):
@@ -234,37 +282,24 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
     return errors
 
 
-def _missing_test_fields(name, document):
-    """Required `vow test` keys one document omits, counted not enumerated.
+def _contract_errors(name, document):
+    """How one document violates the `vow test` schema, counted not enumerated.
 
-    Parity alone cannot see a field both compilers dropped, so the shape is
-    asserted against the schema in absolute terms. Per-entry omissions are
-    tallied rather than listed: one broken emitter would otherwise print a line
-    per test for a suite the size of `compiler/`.
+    Absolute, not comparative: parity alone cannot see a field that both
+    compilers dropped, or corrupted the same way. Violations are collapsed onto
+    one counted line per distinct shape, because one broken emitter would
+    otherwise print a line per test for a suite the size of `compiler/`.
     """
-    errors = [
-        f"{name} is missing {field}"
-        for field in TEST_RESULT_SCHEMA["required"]
-        if field not in document
-    ]
-    entry_gaps = Counter(
-        field
-        for entry in document.get("tests", [])
-        for field in _TEST_ENTRY_SCHEMA["required"]
-        if field not in entry
+    counted = Counter(
+        TEST_ENTRY_INDEX.sub("[]", error)
+        for error in schema_check.validate(
+            document, GATED_TEST_RESULT_SCHEMA, TEST_SCHEMA_DIR
+        )
     )
-    errors += [
-        f"{name} tests: {count} entries missing {field}"
-        for field, count in sorted(entry_gaps.items())
+    return [
+        f"{name} {error}" if count == 1 else f"{name} {error} ({count} entries)"
+        for error, count in sorted(counted.items())
     ]
-    density = document.get("contract_density")
-    if isinstance(density, dict):
-        errors += [
-            f"{name} contract_density is missing {field}"
-            for field in TEST_RESULT_SCHEMA["$defs"]["ContractDensity"]["required"]
-            if field not in density
-        ]
-    return errors
 
 
 def _by_test_identity(entries):
@@ -299,6 +334,14 @@ def _compare_test_entries(rust_tests, self_tests):
                     rust_entry.get(field),
                     self_entry.get(field),
                 )
+            errors += [
+                f"test {key[0]}.{error}"
+                for error in _compare_counterexamples(
+                    rust_entry.get(TEST_COUNTEREXAMPLE_FIELD, []),
+                    self_entry.get(TEST_COUNTEREXAMPLE_FIELD, []),
+                    ("function", "vow_id", "blame"),
+                )
+            ]
     return errors
 
 
@@ -315,7 +358,7 @@ def compare_test(rust, self_hosted, rust_exit, self_exit):
             errors.append(
                 f"{name} status={document.get('status')}, expected TestsPassed"
             )
-        errors += _missing_test_fields(name, document)
+        errors += _contract_errors(name, document)
 
     # Equality alone is satisfied by two suites that discovered nothing, which
     # is how a blocking gate goes vacuous exactly when it matters most.
