@@ -1,0 +1,16 @@
+// TEST: category unverifiable
+module WideFieldSkipped
+
+struct Wide { value: i128 }
+
+fn roundtrip(x: i128) -> i128 vow {
+  ensures: result == x
+} {
+  let w: Wide = Wide { value: x };
+  w.value
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

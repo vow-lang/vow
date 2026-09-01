@@ -1612,7 +1612,15 @@ fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_
 }
 
 fn codegen_failure_diagnostic(result: i64, path: String, obj_path: String) -> Diagnostic {
-    if result == CLIF_ERR_UNSUPPORTED() {
+    if result == CLIF_ERR_WIDE_AGGREGATE_FIELD() {
+        diag_error(
+            EC_CODEGEN_UNSUPPORTED(),
+            CLIF_WIDE_AGGREGATE_FIELD_MSG(),
+            path,
+            0,
+            0
+        )
+    } else if result == CLIF_ERR_UNSUPPORTED() {
         diag_error(
             EC_CODEGEN_UNSUPPORTED(),
             String::from("native backend does not support an operation used by this program"),
@@ -3730,11 +3738,14 @@ fn skill_bundle() -> String {
     r.push_str(String::from("fail closed when those deferred operations reach a backend. Later numeric-tower\n"));
     r.push_str(String::from("work will complete those paths. Never weaken contracts to fit the verifier.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Struct field layout:** every struct field up to 64 bits wide occupies one\n"));
-    r.push_str(String::from("8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`\n"));
-    r.push_str(String::from("fields occupy two consecutive 8-byte slots (16 bytes). There is no packing or\n"));
-    r.push_str(String::from("natural-alignment layout today; FFI structs that need a specific C layout must\n"));
-    r.push_str(String::from("shim through `Vec<u8>` or extern wrappers.\n"));
+    r.push_str(String::from("**Struct field layout:** the current aggregate representation assigns one\n"));
+    r.push_str(String::from("8-byte slot to every field regardless of declared type (narrow ints are\n"));
+    r.push_str(String::from("padded). The two-slot layout for `i128`/`u128` accepted by\n"));
+    r.push_str(String::from("[ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) is not implemented yet,\n"));
+    r.push_str(String::from("so the compiler refuses reads and writes of 128-bit fields instead of storing\n"));
+    r.push_str(String::from("them in an undersized slot. There is no packing or natural-alignment layout\n"));
+    r.push_str(String::from("today; FFI structs that need a specific C layout must shim through `Vec<u8>` or\n"));
+    r.push_str(String::from("extern wrappers.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Built-in Parameterized Types\n"));
     r.push_str(String::from("\n"));
@@ -3879,17 +3890,28 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("128-bit values are also **scalar-only** for now. Locals, parameters, returns,\n"));
     r.push_str(String::from("and temporaries carry both limbs correctly, but a 128-bit value placed inside\n"));
-    r.push_str(String::from("an aggregate does not, and the compiler rejects every such program rather than\n"));
-    r.push_str(String::from("producing one that computes on a truncated value: `Vec<i128>`/`Vec<u128>`\n"));
-    r.push_str(String::from("elements are refused because the element helpers are i64-only, and a 128-bit\n"));
-    r.push_str(String::from("struct field or enum payload (including `Option<i128>`) fails codegen. Do not\n"));
-    r.push_str(String::from("store 128-bit values in aggregates yet.\n"));
+    r.push_str(String::from("an aggregate does not: `Vec<i128>`/`Vec<u128>` elements are refused because the\n"));
+    r.push_str(String::from("element helpers are i64-only, and reading or writing a 128-bit struct field --\n"));
+    r.push_str(String::from("or constructing a 128-bit enum, `Option`, or `Result` payload -- fails codegen\n"));
+    r.push_str(String::from("with a named limitation rather than a raw backend verifier dump, before an\n"));
+    r.push_str(String::from("8-byte slot can truncate the value or a 16-byte store can overwrite its\n"));
+    r.push_str(String::from("neighbour. The refusal is at the access, not the declaration: a struct or enum\n"));
+    r.push_str(String::from("may declare a 128-bit member and still compile as long as nothing touches it.\n"));
+    r.push_str(String::from("The refusal does not depend on where the value came from: a 128-bit payload\n"));
+    r.push_str(String::from("read out of an `enum`, `Option`, or `Result` value the function never built --\n"));
+    r.push_str(String::from("a parameter, or a value handed back by a call -- is refused on the declared\n"));
+    r.push_str(String::from("payload width, at every payload position rather than just the first, and\n"));
+    r.push_str(String::from("whether the read goes through a `match` arm or `.unwrap()`. Do not store\n"));
+    r.push_str(String::from("128-bit values in aggregates yet.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are backend gaps, not language rules; the type checker accepts all of\n"));
     r.push_str(String::from("these at 128-bit width. Verification is a separate matter: a contracted\n"));
     r.push_str(String::from("function whose body contains a 128-bit *constant* is reported as `Skipped`\n"));
     r.push_str(String::from("with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not\n"));
-    r.push_str(String::from("yet modelled in the verifier. Contracts over 128-bit parameters alone do\n"));
+    r.push_str(String::from("yet modelled in the verifier. A contracted function that reads or writes a\n"));
+    r.push_str(String::from("128-bit aggregate field is likewise reported `Skipped`, with `FieldGet at\n"));
+    r.push_str(String::from("128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through\n"));
+    r.push_str(String::from("the verifier's 8-byte heap slot. Contracts over 128-bit parameters alone do\n"));
     r.push_str(String::from("verify.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`\n"));
@@ -5106,8 +5128,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
-    r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
-    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation, backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
+    r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
+    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
@@ -8821,11 +8843,14 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("fail closed when those deferred operations reach a backend. Later numeric-tower\n"));
     r.push_str(String::from("work will complete those paths. Never weaken contracts to fit the verifier.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Struct field layout:** every struct field up to 64 bits wide occupies one\n"));
-    r.push_str(String::from("8-byte slot regardless of declared type (narrow ints are padded); `i128`/`u128`\n"));
-    r.push_str(String::from("fields occupy two consecutive 8-byte slots (16 bytes). There is no packing or\n"));
-    r.push_str(String::from("natural-alignment layout today; FFI structs that need a specific C layout must\n"));
-    r.push_str(String::from("shim through `Vec<u8>` or extern wrappers.\n"));
+    r.push_str(String::from("**Struct field layout:** the current aggregate representation assigns one\n"));
+    r.push_str(String::from("8-byte slot to every field regardless of declared type (narrow ints are\n"));
+    r.push_str(String::from("padded). The two-slot layout for `i128`/`u128` accepted by\n"));
+    r.push_str(String::from("[ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) is not implemented yet,\n"));
+    r.push_str(String::from("so the compiler refuses reads and writes of 128-bit fields instead of storing\n"));
+    r.push_str(String::from("them in an undersized slot. There is no packing or natural-alignment layout\n"));
+    r.push_str(String::from("today; FFI structs that need a specific C layout must shim through `Vec<u8>` or\n"));
+    r.push_str(String::from("extern wrappers.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Built-in Parameterized Types\n"));
     r.push_str(String::from("\n"));
@@ -8970,17 +8995,28 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("128-bit values are also **scalar-only** for now. Locals, parameters, returns,\n"));
     r.push_str(String::from("and temporaries carry both limbs correctly, but a 128-bit value placed inside\n"));
-    r.push_str(String::from("an aggregate does not, and the compiler rejects every such program rather than\n"));
-    r.push_str(String::from("producing one that computes on a truncated value: `Vec<i128>`/`Vec<u128>`\n"));
-    r.push_str(String::from("elements are refused because the element helpers are i64-only, and a 128-bit\n"));
-    r.push_str(String::from("struct field or enum payload (including `Option<i128>`) fails codegen. Do not\n"));
-    r.push_str(String::from("store 128-bit values in aggregates yet.\n"));
+    r.push_str(String::from("an aggregate does not: `Vec<i128>`/`Vec<u128>` elements are refused because the\n"));
+    r.push_str(String::from("element helpers are i64-only, and reading or writing a 128-bit struct field --\n"));
+    r.push_str(String::from("or constructing a 128-bit enum, `Option`, or `Result` payload -- fails codegen\n"));
+    r.push_str(String::from("with a named limitation rather than a raw backend verifier dump, before an\n"));
+    r.push_str(String::from("8-byte slot can truncate the value or a 16-byte store can overwrite its\n"));
+    r.push_str(String::from("neighbour. The refusal is at the access, not the declaration: a struct or enum\n"));
+    r.push_str(String::from("may declare a 128-bit member and still compile as long as nothing touches it.\n"));
+    r.push_str(String::from("The refusal does not depend on where the value came from: a 128-bit payload\n"));
+    r.push_str(String::from("read out of an `enum`, `Option`, or `Result` value the function never built --\n"));
+    r.push_str(String::from("a parameter, or a value handed back by a call -- is refused on the declared\n"));
+    r.push_str(String::from("payload width, at every payload position rather than just the first, and\n"));
+    r.push_str(String::from("whether the read goes through a `match` arm or `.unwrap()`. Do not store\n"));
+    r.push_str(String::from("128-bit values in aggregates yet.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are backend gaps, not language rules; the type checker accepts all of\n"));
     r.push_str(String::from("these at 128-bit width. Verification is a separate matter: a contracted\n"));
     r.push_str(String::from("function whose body contains a 128-bit *constant* is reported as `Skipped`\n"));
     r.push_str(String::from("with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not\n"));
-    r.push_str(String::from("yet modelled in the verifier. Contracts over 128-bit parameters alone do\n"));
+    r.push_str(String::from("yet modelled in the verifier. A contracted function that reads or writes a\n"));
+    r.push_str(String::from("128-bit aggregate field is likewise reported `Skipped`, with `FieldGet at\n"));
+    r.push_str(String::from("128-bit width` or `FieldSet at 128-bit width`, rather than being modelled through\n"));
+    r.push_str(String::from("the verifier's 8-byte heap slot. Contracts over 128-bit parameters alone do\n"));
     r.push_str(String::from("verify.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`\n"));
@@ -10199,8 +10235,8 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
     r.push_str(String::from("| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |\n"));
-    r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
-    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation, backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
+    r.push_str(String::from("| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |\n"));
+    r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));

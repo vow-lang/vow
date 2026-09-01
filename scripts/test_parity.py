@@ -18,6 +18,19 @@ def document(status="Unverified", **fields):
     return {"status": status, "diagnostics": [], "counterexamples": [], **fields}
 
 
+def counterexample(**fields):
+    """One schema-complete counterexample, as `counterexample.schema.json` asks."""
+    return {
+        "function": "f",
+        "values": {"x": "1"},
+        "violation": "x > 0",
+        "vow_id": 0,
+        "source": "a.vow",
+        "blame": "callee",
+        **fields,
+    }
+
+
 def hard_failure(**values):
     """A VerifyFailed document whose single counterexample carries `values`."""
     return document(
@@ -172,10 +185,7 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
         errors = parity.compare_json(rust, self_hosted, 1, 1)
 
         self.assertEqual(
-            [
-                "counterexample[0].violation: "
-                "x as u64 > 0 vs x as i64 > 0"
-            ],
+            ["counterexample[0].violation: x as u64 > 0 vs x as i64 > 0"],
             errors,
         )
 
@@ -390,6 +400,467 @@ class CompareErrorCharacterizationTest(unittest.TestCase):
         )
 
         self.assertEqual(["rust has no diagnostics", "self has no diagnostics"], errors)
+
+
+class CompareTestTest(unittest.TestCase):
+    @staticmethod
+    def entry(name, **fields):
+        """One schema-complete `vow test` entry, as both compilers emit it."""
+        return {
+            "file": f"compiler/{name}.vow",
+            "name": name,
+            "status": "passed",
+            "exit_code": 0,
+            "stdout": "",
+            "stderr": "",
+            "duration_ms": 7,
+            "diagnostics": [],
+            "counterexamples": [],
+            **fields,
+        }
+
+    @classmethod
+    def suite(cls, status="TestsPassed", total=2, tests=None, **fields):
+        """A schema-complete suite result; `fields` overrides any default."""
+        defaults = {
+            "total": total,
+            "passed": total,
+            "failed": 0,
+            "skipped": 0,
+            "tests": (
+                [cls.entry("test_arith"), cls.entry("test_parser")]
+                if tests is None
+                else tests
+            ),
+            "contract_density": {
+                "functions_total": 3,
+                "functions_with_vows": 0,
+                "density_pct": 0.0,
+            },
+        }
+        return document(status, **{**defaults, **fields})
+
+    def test_passing_suites_with_the_same_test_results_agree(self):
+        rust = self.suite()
+        self_hosted = self.suite(
+            tests=list(reversed(rust["tests"])),
+        )
+
+        self.assertEqual([], parity.compare_test(rust, self_hosted, 0, 0))
+
+    def test_discovered_test_counts_must_match(self):
+        errors = parity.compare_test(
+            self.suite(total=2),
+            self.suite(total=1, tests=[self.entry("test_arith")]),
+            0,
+            0,
+        )
+
+        self.assertIn("total: 2 vs 1", errors)
+
+    def test_both_suites_must_report_tests_passed(self):
+        errors = parity.compare_test(
+            self.suite("TestsFailed"), self.suite("TestsFailed"), 1, 1
+        )
+
+        self.assertIn("rust status=TestsFailed, expected TestsPassed", errors)
+        self.assertIn("self status=TestsFailed, expected TestsPassed", errors)
+
+    def test_each_process_must_exit_zero(self):
+        errors = parity.compare_test(self.suite(), self.suite(), 3, 4)
+
+        self.assertIn("rust exited 3, expected 0", errors)
+        self.assertIn("self exited 4, expected 0", errors)
+
+    def test_an_empty_suite_is_never_parity(self):
+        # Two compilers that discovered nothing agree on every observable, so
+        # equality alone would let a silently broken `vow test` pass the
+        # blocking gate. Discovering zero tests is itself the failure.
+        empty = self.suite(total=0, tests=[])
+
+        errors = parity.compare_test(empty, empty, 0, 0)
+
+        self.assertIn("rust total=0, expected a non-empty suite", errors)
+
+    def test_a_malformed_test_entry_is_a_parity_error_not_a_crash(self):
+        # A suite result missing `name` mixes None with str; sorting without an
+        # order that tolerates both aborts the CI step with a traceback rather
+        # than reporting the divergence.
+        nameless = {
+            field: value
+            for field, value in self.entry("test_arith").items()
+            if field != "name"
+        }
+        malformed = self.suite(tests=[nameless, self.entry("test_parser")])
+
+        errors = parity.compare_test(self.suite(), malformed, 0, 0)
+
+        self.assertIn("self tests[].name is missing", errors)
+        self.assertIn("tests:", " ".join(errors))
+
+    def test_only_the_differing_tests_are_reported(self):
+        # The full lists would be kilobytes of log for `compiler/`.
+        errors = parity.compare_test(
+            self.suite(),
+            self.suite(tests=[self.entry("test_arith"), self.entry("test_lexer")]),
+            0,
+            0,
+        )
+
+        self.assertEqual(
+            [
+                "tests: rust-only "
+                "[('compiler/test_parser.vow', 'test_parser', 'passed')] "
+                "vs self-only "
+                "[('compiler/test_lexer.vow', 'test_lexer', 'passed')]"
+            ],
+            errors,
+        )
+
+    def test_aggregate_counters_must_match(self):
+        # `total` alone leaves passed/failed/skipped uncompared, so a compiler
+        # that files the same discovered tests under different outcomes goes
+        # green. Both documents stay internally consistent, so the only
+        # findings are the cross-compiler ones.
+        errors = parity.compare_test(
+            self.suite(),
+            self.suite(
+                passed=1,
+                skipped=1,
+                tests=[
+                    self.entry("test_arith"),
+                    self.entry("test_parser", status="skipped"),
+                ],
+            ),
+            0,
+            0,
+        )
+
+        self.assertIn("passed: 2 vs 1", errors)
+        self.assertIn("skipped: 0 vs 1", errors)
+
+    def test_contract_density_must_match(self):
+        # Each compiler's own frontend counts this, so a divergence is a
+        # frontend parity bug that the per-test list cannot expose.
+        errors = parity.compare_test(
+            self.suite(),
+            self.suite(
+                contract_density={
+                    "functions_total": 4,
+                    "functions_with_vows": 0,
+                    "density_pct": 0.0,
+                }
+            ),
+            0,
+            0,
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertIn("contract_density:", errors[0])
+
+    def test_a_diverging_test_file_path_is_reported(self):
+        # `name` is the file stem, so two tests in different directories share
+        # it; without `file` the gate cannot tell them apart.
+        errors = parity.compare_test(
+            self.suite(),
+            self.suite(
+                tests=[
+                    self.entry("test_arith", file="compiler/tests/test_arith.vow"),
+                    self.entry("test_parser"),
+                ]
+            ),
+            0,
+            0,
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertIn("compiler/tests/test_arith.vow", errors[0])
+
+    def test_stable_payload_fields_of_a_shared_test_are_compared(self):
+        errors = parity.compare_test(
+            self.suite(),
+            self.suite(
+                tests=[
+                    self.entry("test_arith", stdout="7", exit_code=2),
+                    self.entry("test_parser"),
+                ]
+            ),
+            0,
+            0,
+        )
+
+        self.assertEqual(
+            [
+                "test compiler/test_arith.vow.exit_code: 0 vs 2",
+                "test compiler/test_arith.vow.stdout:  vs 7",
+            ],
+            errors,
+        )
+
+    def test_wall_clock_duration_is_not_a_parity_signal(self):
+        errors = parity.compare_test(
+            self.suite(),
+            self.suite(
+                tests=[
+                    self.entry("test_arith", duration_ms=904),
+                    self.entry("test_parser", duration_ms=11),
+                ]
+            ),
+            0,
+            0,
+        )
+
+        self.assertEqual([], errors)
+
+    def test_a_required_top_level_field_dropped_by_both_is_reported(self):
+        # Parity alone cannot see a field BOTH compilers stopped emitting, so
+        # the shape is asserted in absolute terms against the schema.
+        without_density = self.suite()
+        del without_density["contract_density"]
+
+        errors = parity.compare_test(without_density, without_density, 0, 0)
+
+        self.assertIn("rust contract_density is missing", errors)
+        self.assertIn("self contract_density is missing", errors)
+
+    def test_a_dropped_contract_density_member_is_reported(self):
+        partial = self.suite(contract_density={"functions_total": 3})
+
+        errors = parity.compare_test(partial, partial, 0, 0)
+
+        self.assertIn("rust contract_density.density_pct is missing", errors)
+        self.assertIn("rust contract_density.functions_with_vows is missing", errors)
+
+    def test_a_schema_invalid_value_both_compilers_agree_on_is_reported(self):
+        # Key presence alone leaves a same-shaped type error invisible: parity
+        # holds, so only an absolute check against the schema catches it.
+        corrupt = self.suite(passed="2")
+
+        errors = parity.compare_test(corrupt, corrupt, 0, 0)
+
+        self.assertIn("rust passed is string, expected integer", errors)
+        self.assertIn("self passed is string, expected integer", errors)
+
+    def test_a_schema_invalid_per_test_value_is_counted_not_enumerated(self):
+        # One broken emitter must not print a line per test for `compiler/`.
+        corrupt = self.suite(
+            tests=[
+                self.entry("test_arith", exit_code="0"),
+                self.entry("test_parser", exit_code="0"),
+            ]
+        )
+
+        errors = parity.compare_test(corrupt, corrupt, 0, 0)
+
+        self.assertIn(
+            "rust tests[].exit_code is string, expected ['integer', 'null'] (2 entries)",
+            errors,
+        )
+
+    def test_an_out_of_enum_per_test_status_is_reported(self):
+        corrupt = self.suite(tests=[self.entry("test_arith", status="ok")])
+
+        errors = parity.compare_test(corrupt, corrupt, 0, 0)
+
+        self.assertTrue(
+            any("tests[].status is 'ok', not one of" in error for error in errors),
+            errors,
+        )
+
+    def test_diagnostics_are_excluded_pending_the_tracked_divergence(self):
+        # Rust attaches each entry's compile diagnostics under `vow test` while
+        # the self-hosted runner emits none (#1183). Until that closes, no
+        # comparison of this field can leave the blocking gate green.
+        errors = parity.compare_test(
+            self.suite(
+                tests=[
+                    self.entry(
+                        "test_arith",
+                        diagnostics=[
+                            {"error_code": "RegionRootEscape", "blame": "callee"}
+                        ],
+                    ),
+                    self.entry("test_parser"),
+                ]
+            ),
+            self.suite(),
+            0,
+            0,
+        )
+
+        self.assertEqual([], errors)
+
+    def test_counterexamples_use_the_format_tolerant_comparison(self):
+        # `source` differs in shape between the emitters by design and
+        # `$esbmc$` names are internal, so raw equality would be a false
+        # positive; a real field divergence must still be reported.
+        def suite_with(**overrides):
+            return self.suite(
+                tests=[
+                    self.entry(
+                        "test_arith", counterexamples=[counterexample(**overrides)]
+                    ),
+                    self.entry("test_parser"),
+                ]
+            )
+
+        tolerated = parity.compare_test(
+            suite_with(
+                source={"file": "a.vow", "offset": 1, "length": 2},
+                values={"$esbmc$tmp": "3", "x": "1"},
+            ),
+            suite_with(source="a.vow", values={"x": "1"}),
+            0,
+            0,
+        )
+
+        self.assertEqual([], tolerated)
+
+        real = parity.compare_test(suite_with(), self.suite(), 0, 0)
+
+        self.assertIn(
+            "test compiler/test_arith.vow.counterexamples count: 1 vs 0", real
+        )
+
+    def test_a_nonzero_total_with_no_entries_is_rejected(self):
+        # The non-empty check only asserts `total` is truthy, and parity is
+        # blind to a miscount both emitters share, so a suite that ran nothing
+        # while claiming otherwise reaches the blocking gate green.
+        hollow = self.suite(total=1, tests=[])
+
+        errors = parity.compare_test(hollow, hollow, 0, 0)
+
+        self.assertIn("rust total=1 but tests has 0 entries", errors)
+        self.assertIn("rust passed=1 but 0 entries are passed", errors)
+        self.assertIn("rust total=1 but passed+failed+skipped=0", errors)
+
+    def test_counters_are_reconciled_against_the_entry_statuses(self):
+        inconsistent = self.suite(
+            total=2,
+            passed=2,
+            tests=[
+                self.entry("test_arith"),
+                self.entry("test_parser", status="verify_failed"),
+            ],
+        )
+
+        errors = parity.compare_test(inconsistent, inconsistent, 0, 0)
+
+        # `verify_failed` counts toward `failed`, per docs/spec/cli.md.
+        self.assertIn("rust passed=2 but 1 entries are passed", errors)
+        self.assertIn("rust failed=0 but 1 entries are failed", errors)
+        self.assertIn("rust status=TestsPassed with 1 failed entries", errors)
+
+    def test_a_skipped_entry_is_counted_as_skipped_not_failed(self):
+        consistent = self.suite(
+            total=2,
+            passed=1,
+            skipped=1,
+            tests=[
+                self.entry("test_arith"),
+                self.entry("test_parser", status="skipped"),
+            ],
+        )
+
+        self.assertEqual([], parity.compare_test(consistent, consistent, 0, 0))
+
+    def test_every_per_test_status_is_bucketed_into_a_counter(self):
+        # A status added to the schema must land in a counter rather than
+        # escaping the reconciliation and making it vacuous for that entry.
+        schema = json.loads(
+            (REPO_ROOT / "docs/spec/schemas/test-result.schema.json").read_text()
+        )
+        declared = set(schema["$defs"]["TestEntry"]["properties"]["status"]["enum"])
+        bucketed = {
+            status
+            for statuses in parity.TEST_COUNTER_STATUSES.values()
+            for status in statuses
+        }
+
+        self.assertEqual(declared, bucketed)
+
+    def test_a_schema_violation_suppresses_the_consistency_report(self):
+        # A missing counter is already reported as a schema violation; saying
+        # it again as an inconsistency is the same finding twice.
+        without_total = self.suite()
+        del without_total["total"]
+
+        errors = parity.compare_test(without_total, without_total, 0, 0)
+
+        self.assertIn("rust total is missing", errors)
+        self.assertFalse([e for e in errors if "but tests has" in e])
+
+    def test_optional_counterexample_fields_are_compared(self):
+        # `function`/`vow_id`/`blame` alone leave the rest of the documented
+        # counterexample contract — the fields that say WHERE and HOW the
+        # violation was reached — outside the gate.
+        def suite_with(**overrides):
+            return self.suite(
+                tests=[
+                    self.entry(
+                        "test_arith", counterexamples=[counterexample(**overrides)]
+                    ),
+                    self.entry("test_parser"),
+                ]
+            )
+
+        def call_site(caller_function):
+            return {
+                "caller_function": caller_function,
+                "file": "a.vow",
+                "offset": 0,
+                "length": 1,
+            }
+
+        errors = parity.compare_test(
+            suite_with(call_sites=[call_site("f")]),
+            suite_with(call_sites=[call_site("g")]),
+            0,
+            0,
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertIn("counterexample[0].call_sites:", errors[0])
+        self.assertIn("'caller_function': 'f'", errors[0])
+        self.assertIn("'caller_function': 'g'", errors[0])
+
+    def test_the_compared_counterexample_fields_are_read_out_of_the_schema(self):
+        schema = json.loads(
+            (REPO_ROOT / "docs/spec/schemas/counterexample.schema.json").read_text()
+        )
+
+        self.assertEqual(
+            set(schema["properties"]) - {"source", "values", "violation"},
+            set(parity.COUNTEREXAMPLE_COMPARED_FIELDS),
+        )
+
+    def test_the_compared_contract_is_read_out_of_the_schema(self):
+        # Restating the field lists here would let a schema addition silently
+        # stop being gated; these are derived, so this pins the derivation.
+        schema = json.loads(
+            (REPO_ROOT / "docs/spec/schemas/test-result.schema.json").read_text()
+        )
+        entry_properties = set(schema["$defs"]["TestEntry"]["properties"])
+        excluded = {"duration_ms", "diagnostics"}
+
+        self.assertEqual(
+            entry_properties - excluded,
+            set(parity.TEST_IDENTITY_FIELDS)
+            | set(parity.TEST_PAYLOAD_FIELDS)
+            | {parity.TEST_COUNTEREXAMPLE_FIELD},
+        )
+        self.assertEqual(
+            excluded,
+            parity.TEST_NONDETERMINISTIC_FIELDS | parity.TEST_TRACKED_DIVERGENT_FIELDS,
+        )
+        self.assertEqual(
+            ("total", "passed", "failed", "skipped"), parity.TEST_COUNT_FIELDS
+        )
+
+    def test_cli_exposes_test_mode_without_a_fixture(self):
+        completed = run_parity_cli("test", self.suite(), self.suite(), 0, 0)
+
+        self.assertEqual((0, "OK"), (completed.returncode, completed.stdout.strip()))
 
 
 class CompareErrorCodeParityTest(unittest.TestCase):

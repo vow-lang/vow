@@ -7,6 +7,7 @@ divergence that is not reported, a skip that is counted as coverage, or a
 nondeterministic program mistaken for a miscompile.
 """
 
+import io
 import json
 import tempfile
 import unittest
@@ -33,6 +34,69 @@ def result(
         "stderr": stderr,
         "json": j,
     }
+
+
+def ledger_document(corpus=None):
+    return {
+        "schema_version": 1,
+        "updated": "2026-08-31",
+        "pairs": {
+            "lexer": {
+                "rust": "vow-syntax/src/lexer.rs",
+                "self_hosted": "compiler/lexer.vow",
+                "content_hash": "abc",
+                "last_reviewed": "never",
+                "outcome": "clean",
+                "confirmed_issues": [],
+            }
+        },
+        "corpus": {} if corpus is None else corpus,
+    }
+
+
+LEDGER_SCHEMA = json.loads(
+    (equivalence.REPO_ROOT / "docs" / "equivalence" / "ledger.schema.json").read_text()
+)
+CORPUS_ENTRY_SCHEMA = LEDGER_SCHEMA["properties"]["corpus"]["additionalProperties"]
+
+
+def assert_valid_ledger_document(test_case, document):
+    """Assert the schema rules relied on by stdlib-only workflow tests.
+
+    A deliberate subset of `ledger.schema.json`, not a replacement for it: no
+    jsonschema dependency is available here. The enums, property names, and
+    required keys are read back out of the schema rather than restated, so the
+    parts most likely to drift stay derived; anything asserted literally below
+    must be updated alongside the schema.
+    """
+    test_case.assertEqual(1, document.get("schema_version"))
+    test_case.assertIsInstance(document.get("pairs"), dict)
+    corpus = document.get("corpus")
+    test_case.assertIsInstance(corpus, dict)
+
+    allowed = set(LEDGER_SCHEMA["$defs"]["observableName"]["enum"])
+    allowed_keys = set(CORPUS_ENTRY_SCHEMA["properties"])
+    statuses = CORPUS_ENTRY_SCHEMA["properties"]["status"]["enum"]
+    for path, entry in corpus.items():
+        with test_case.subTest(path=path):
+            # The schema sets `additionalProperties: false`, so a proposal that
+            # invented a field would be rejected on commit rather than here.
+            test_case.assertLessEqual(set(entry), allowed_keys)
+            for key in CORPUS_ENTRY_SCHEMA["required"]:
+                test_case.assertTrue(entry.get(key), f"missing {key}")
+            test_case.assertIn(entry.get("status"), statuses)
+            declared = equivalence.tracked_observables(entry)
+            test_case.assertLessEqual(declared, allowed)
+            if entry.get("status") == "expected":
+                test_case.assertTrue(entry.get("note"), "missing note")
+                test_case.assertIsInstance(entry.get("issue"), int)
+            if entry.get("status") in ("open", "expected") and "error_code" in declared:
+                rust_codes = entry.get("rust_error_codes")
+                self_codes = entry.get("self_hosted_error_codes")
+                test_case.assertIsInstance(rust_codes, list)
+                test_case.assertIsInstance(self_codes, list)
+                test_case.assertEqual(sorted(rust_codes), rust_codes)
+                test_case.assertEqual(sorted(self_codes), self_codes)
 
 
 class CompareBuildTest(unittest.TestCase):
@@ -186,6 +250,72 @@ class DirectiveTest(unittest.TestCase):
             self.assertEqual(
                 b"", equivalence.stdin_bytes(equivalence.read_directives(p))
             )
+
+    def test_no_directives_never_reads_the_candidate_for_directives(self):
+        # A candidate a model wrote is not a fixture: it must not be able to
+        # excuse itself from the comparison that judges it.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "candidate.vow"
+            p.write_text('// TEST: skip "nothing to see"\nmodule T\n')
+            out = Path(d) / "out"
+
+            honoured = equivalence.check_file(p, "rust", "self", out, 1)
+            with mock.patch.object(
+                equivalence, "read_directives", side_effect=AssertionError("consulted")
+            ):
+                # Compilation fails on the fake binaries; reaching that at all
+                # proves the skip was not taken and directives were not read.
+                with self.assertRaises(FileNotFoundError):
+                    equivalence.check_file(
+                        p, "rust", "self", out, 1, honour_directives=False
+                    )
+
+        self.assertEqual("directive: nothing to see", honoured["skipped"])
+
+    def test_verify_only_survives_no_directives(self):
+        # Which comparison runs is the harness's choice; suppressing the
+        # candidate's directives must not also suppress that choice.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "candidate.vow"
+            p.write_text("module T\n")
+            out = Path(d) / "out"
+            seen = {}
+
+            def fake_compare_verify(r, s):
+                seen["ran"] = True
+                return []
+
+            compiled = {
+                "timeout": False,
+                "exit": 0,
+                "stdout": "",
+                "stderr": "",
+                "json": {"status": "Verified", "diagnostics": []},
+            }
+            with (
+                mock.patch.object(equivalence, "run_compiler", return_value=compiled),
+                mock.patch.object(
+                    equivalence, "compare_verify", side_effect=fake_compare_verify
+                ),
+            ):
+                equivalence.check_file(
+                    p,
+                    "rust",
+                    "self",
+                    out,
+                    1,
+                    honour_directives=False,
+                    verify_only=True,
+                )
+
+        self.assertTrue(seen.get("ran"), "the verify comparison never ran")
+
+    def test_the_neutral_record_matches_a_file_declaring_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.vow"
+            p.write_text("module T\n")
+
+            self.assertEqual(equivalence.read_directives(p), equivalence.NO_DIRECTIVES)
 
 
 class ExpectedSignalTest(unittest.TestCase):
@@ -906,6 +1036,410 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual([], fixed)
 
 
+class ProposeLedgerTest(unittest.TestCase):
+    def test_new_divergence_adds_an_open_entry(self):
+        document = ledger_document()
+        new = [
+            {
+                "file": "z.vow",
+                "divergences": [
+                    {"observable": "runtime"},
+                    {"observable": "runtime_exit"},
+                ],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(document, new, [], "2026-09-01")
+
+        self.assertEqual(
+            {
+                "first_seen": "2026-09-01",
+                "observable": ["runtime", "runtime_exit"],
+                "status": "open",
+            },
+            proposed["corpus"]["z.vow"],
+        )
+        assert_valid_ledger_document(self, proposed)
+
+    def test_new_error_code_divergence_pins_sorted_multisets(self):
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [
+                    {
+                        "observable": "error_code",
+                        "rust": ["Z", "A"],
+                        "self_hosted": ["Y", "B"],
+                    }
+                ],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(ledger_document(), new, [], "2026-09-01")
+        entry = proposed["corpus"]["a.vow"]
+
+        self.assertEqual(["A", "Z"], entry["rust_error_codes"])
+        self.assertEqual(["B", "Y"], entry["self_hosted_error_codes"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_fully_fixed_entry_keeps_its_history(self):
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": "runtime",
+            "status": "open",
+            "note": "wrong output",
+            "issue": 1087,
+            "fixture": "tests/run/reproducer.vow",
+        }
+        fixed = [{"file": "a.vow", "observables": ["runtime"]}]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), [], fixed, "2026-09-01"
+        )
+
+        self.assertEqual({**original, "status": "fixed"}, proposed["corpus"]["a.vow"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_partially_fixed_entry_keeps_only_the_live_observable(self):
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": ["error_code", "runtime"],
+            "status": "open",
+            "rust_error_codes": ["A"],
+            "self_hosted_error_codes": ["B"],
+        }
+        fixed = [{"file": "a.vow", "observables": ["error_code"]}]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), [], fixed, "2026-09-01"
+        )
+
+        self.assertEqual(
+            {
+                "first_seen": "2026-08-25",
+                "observable": "runtime",
+                "status": "open",
+            },
+            proposed["corpus"]["a.vow"],
+        )
+        assert_valid_ledger_document(self, proposed)
+
+    def test_new_observable_extends_an_existing_entry(self):
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": "runtime",
+            "status": "open",
+            "note": "wrong output",
+            "issue": 1087,
+        }
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [{"observable": "runtime_exit"}],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), new, [], "2026-09-01"
+        )
+
+        self.assertEqual(
+            {
+                **original,
+                "observable": ["runtime", "runtime_exit"],
+            },
+            proposed["corpus"]["a.vow"],
+        )
+        assert_valid_ledger_document(self, proposed)
+
+    def test_untouched_data_round_trips_and_corpus_keys_are_sorted(self):
+        untouched = {
+            "first_seen": "2026-08-25",
+            "observable": "runtime",
+            "status": "fixed",
+            "note": "history",
+            "issue": 1,
+        }
+        document = ledger_document({"z.vow": untouched})
+        pairs = json.loads(json.dumps(document["pairs"]))
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [{"observable": "runtime_exit"}],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(document, new, [], "2026-09-01")
+
+        self.assertEqual(pairs, proposed["pairs"])
+        self.assertEqual(untouched, proposed["corpus"]["z.vow"])
+        self.assertEqual(["a.vow", "z.vow"], list(proposed["corpus"]))
+        assert_valid_ledger_document(self, proposed)
+
+    def test_clean_run_changes_only_the_update_date(self):
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "runtime",
+                    "status": "fixed",
+                }
+            }
+        )
+        expected = json.loads(json.dumps(document))
+        expected["updated"] = "2026-09-01"
+
+        proposed = equivalence.propose_ledger(document, [], [], "2026-09-01")
+
+        self.assertEqual(expected, proposed)
+        assert_valid_ledger_document(self, proposed)
+
+    def test_a_fixed_observable_is_not_reopened_by_an_unrelated_new_one(self):
+        # Applying a proposal that re-listed `runtime` would make the next run
+        # suppress a genuine runtime regression as `known` — precisely what
+        # reconcile's per-observable bookkeeping exists to prevent.
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "runtime",
+                    "status": "open",
+                }
+            }
+        )
+
+        proposed = equivalence.propose_ledger(
+            document,
+            [{"file": "a.vow", "divergences": [{"observable": "exit_code"}]}],
+            [{"file": "a.vow", "observables": ["runtime"]}],
+            "2026-09-01",
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual("exit_code", entry["observable"])
+        self.assertEqual("open", entry["status"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_an_already_fixed_observable_is_not_reopened_by_a_new_one(self):
+        # An entry fixed by an EARLIER sweep never appears in `fixed`, so the
+        # disappearance pass cannot drop its observable. Carrying it into this
+        # reopen would claim a runtime gap nothing measured this run.
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "runtime",
+                    "status": "fixed",
+                }
+            }
+        )
+
+        proposed = equivalence.propose_ledger(
+            document,
+            [{"file": "a.vow", "divergences": [{"observable": "exit_code"}]}],
+            [],
+            "2026-09-01",
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual("exit_code", entry["observable"])
+        self.assertEqual("open", entry["status"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_reopening_a_fixed_entry_drops_its_stale_error_code_multisets(self):
+        # The pinned multisets exist to stop a DIFFERENT diagnostic regression
+        # inheriting the exception. Retained past a reopen on another
+        # observable they would do exactly that.
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "error_code",
+                    "status": "fixed",
+                    "rust_error_codes": ["TypeMismatch"],
+                    "self_hosted_error_codes": ["UnknownName"],
+                }
+            }
+        )
+
+        proposed = equivalence.propose_ledger(
+            document,
+            [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}],
+            [],
+            "2026-09-01",
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual("runtime", entry["observable"])
+        self.assertNotIn("rust_error_codes", entry)
+        self.assertNotIn("self_hosted_error_codes", entry)
+        assert_valid_ledger_document(self, proposed)
+
+    def test_an_open_error_code_entry_keeps_its_multisets_when_a_gap_is_added(self):
+        # The error_code divergence is still live and still suppressing, so the
+        # schema still requires both pinned multisets on the reopened entry.
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "error_code",
+                    "status": "open",
+                    "rust_error_codes": ["TypeMismatch"],
+                    "self_hosted_error_codes": ["UnknownName"],
+                }
+            }
+        )
+
+        proposed = equivalence.propose_ledger(
+            document,
+            [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}],
+            [],
+            "2026-09-01",
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual(["error_code", "runtime"], entry["observable"])
+        self.assertEqual(["TypeMismatch"], entry["rust_error_codes"])
+        self.assertEqual(["UnknownName"], entry["self_hosted_error_codes"])
+        assert_valid_ledger_document(self, proposed)
+
+
+class EmitLedgerUpdateCliTest(unittest.TestCase):
+    def run_sweep(self, root, min_compared="0", extra=(), emit=True):
+        """Run main() over an empty corpus, returning (exit_code, output dir)."""
+        rust = root / "rust"
+        self_hosted = root / "self"
+        rust.write_bytes(b"rust")
+        self_hosted.write_bytes(b"self")
+        ledger = root / "ledger.json"
+        ledger.write_text(json.dumps(ledger_document()))
+        output = root / "out"
+        argv = [
+            "equivalence.py",
+            "--rust",
+            str(rust),
+            "--self",
+            str(self_hosted),
+            "--ledger",
+            str(ledger),
+            "--output-dir",
+            str(output),
+            "--min-compared",
+            min_compared,
+            *(["--emit-ledger-update"] if emit else []),
+            *extra,
+        ]
+
+        with (
+            mock.patch("sys.argv", argv),
+            mock.patch.object(equivalence, "collect_corpus", return_value=[]),
+        ):
+            return equivalence.main(), output
+
+    def test_flag_writes_a_schema_valid_proposal_in_the_output_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            exit_code, output = self.run_sweep(Path(directory))
+
+            proposal = json.loads((output / "ledger.proposed.json").read_text())
+            self.assertEqual(0, exit_code)
+            assert_valid_ledger_document(self, proposal)
+
+    def test_a_run_below_the_coverage_floor_proposes_nothing(self):
+        # A shard that measured too little to be meaningful must not ship a
+        # proposal that reads as applicable; its `updated` stamp would claim a
+        # sweep that never happened.
+        with tempfile.TemporaryDirectory() as directory:
+            exit_code, output = self.run_sweep(Path(directory), min_compared="20")
+
+            self.assertEqual(2, exit_code)
+            self.assertFalse((output / "ledger.proposed.json").exists())
+
+    def test_a_below_floor_run_clears_an_earlier_proposal(self):
+        # A reused --output-dir must not keep a proposal from a different
+        # sweep: the summary says "none" while the directory an operator
+        # applies, or the workflow uploads, still holds the stale file.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _exit, output = self.run_sweep(root)
+            self.assertTrue((output / "ledger.proposed.json").exists())
+
+            exit_code, output = self.run_sweep(root, min_compared="20")
+
+            self.assertEqual(2, exit_code)
+            self.assertFalse((output / "ledger.proposed.json").exists())
+
+    def test_a_run_without_the_flag_clears_an_earlier_proposal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _exit, output = self.run_sweep(root)
+            stale = output / "ledger.proposed.json"
+            self.assertTrue(stale.exists())
+
+            self.run_sweep(root, emit=False)
+
+            self.assertFalse(stale.exists())
+
+    def test_a_below_floor_run_does_not_advertise_a_proposal_path(self):
+        # The "NO LONGER DIVERGING" block prints where the proposal landed.
+        # Pointing an operator at a path nothing wrote — and that this run just
+        # deleted — contradicts the "none" line printed just above it.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(
+                equivalence,
+                "reconcile",
+                return_value=([], [], [{"file": "a.vow", "observables": ["runtime"]}]),
+            ):
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                    self.run_sweep(root, min_compared="20")
+
+        printed = out.getvalue()
+        self.assertIn("NO LONGER DIVERGING", printed)
+        self.assertNotIn("proposed update:", printed)
+
+    def test_a_crashing_sweep_leaves_no_stale_completion_sentinel(self):
+        # equivalence.yml reads results.json's presence as proof the sweep
+        # completed, so a previous run's copy turns a crash into a divergence
+        # verdict. Clearing it up front is the only placement that survives a
+        # crash inside the sweep itself.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _exit, output = self.run_sweep(root)
+            self.assertTrue((output / "results.json").exists())
+
+            with mock.patch.object(
+                equivalence, "reconcile", side_effect=RuntimeError("boom")
+            ):
+                with self.assertRaises(RuntimeError):
+                    self.run_sweep(root)
+
+            self.assertFalse((output / "results.json").exists())
+
+    def test_results_json_is_written_last(self):
+        # equivalence.yml treats results.json's presence as proof the sweep
+        # completed, so a crash while proposing must not leave it behind.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(
+                equivalence, "propose_ledger", side_effect=RuntimeError("boom")
+            ):
+                with self.assertRaises(RuntimeError):
+                    self.run_sweep(root)
+
+            self.assertFalse((root / "out" / "results.json").exists())
+
+    def test_the_update_stamp_is_caller_supplied(self):
+        # ledger.schema.json requires `updated` to be stamped by the caller so
+        # a re-run of the same sweep reproduces the same proposal.
+        with tempfile.TemporaryDirectory() as directory:
+            _exit, output = self.run_sweep(
+                Path(directory), extra=("--today", "2026-01-02")
+            )
+
+            proposal = json.loads((output / "ledger.proposed.json").read_text())
+            self.assertEqual("2026-01-02", proposal["updated"])
+
+
 class LedgerLoadTest(unittest.TestCase):
     def test_missing_ledger_is_empty_not_fatal(self):
         self.assertEqual({}, equivalence.load_ledger("/nonexistent/ledger.json"))
@@ -919,56 +1453,15 @@ class LedgerLoadTest(unittest.TestCase):
 
             self.assertEqual({}, equivalence.load_ledger(p))
 
-    def test_expected_entries_document_themselves(self):
-        # The schema conditionally requires note+issue on an 'expected' entry:
-        # a standing decision to suppress a finding must carry the rationale
-        # and the tracking issue that justify it. Enforced here too, so the
-        # rule holds without adding a jsonschema dependency.
-        for path, entry in equivalence.load_ledger().items():
-            if entry.get("status") != "expected":
-                continue
-            with self.subTest(path=path):
-                self.assertTrue(entry.get("note"), "missing note")
-                self.assertIsInstance(entry.get("issue"), int)
-
-    def test_active_error_code_entries_pin_exact_sorted_multisets(self):
-        for path, entry in equivalence.load_ledger().items():
-            if entry.get("status") not in ("open", "expected"):
-                continue
-            if "error_code" not in equivalence.tracked_observables(entry):
-                continue
-            with self.subTest(path=path):
-                rust_codes = entry.get("rust_error_codes")
-                self_codes = entry.get("self_hosted_error_codes")
-                self.assertIsInstance(rust_codes, list)
-                self.assertIsInstance(self_codes, list)
-                self.assertEqual(sorted(rust_codes), rust_codes)
-                self.assertEqual(sorted(self_codes), self_codes)
-
-    def test_every_entry_declares_a_known_observable(self):
-        # reconcile() matches on (file, observable); an entry without a valid
-        # observable would suppress nothing and silently read as untracked.
-        schema = json.loads(
-            (
-                Path(equivalence.REPO_ROOT)
-                / "docs"
-                / "equivalence"
-                / "ledger.schema.json"
-            ).read_text()
-        )
-        allowed = set(schema["$defs"]["observableName"]["enum"])
-
-        for path, entry in equivalence.load_ledger().items():
-            with self.subTest(path=path):
-                # Both schema forms: a bare name, or a list of them.
-                declared = equivalence.tracked_observables(entry)
-                self.assertTrue(declared, "no observable declared")
-                self.assertLessEqual(declared, allowed)
-
     def test_real_repo_ledger_loads(self):
         ledger = equivalence.load_ledger()
 
         self.assertIn("benchmarks/medium/M13_gcd/reference.vow", ledger)
+
+    def test_real_repo_ledger_satisfies_schema_constraints(self):
+        document = json.loads(Path(equivalence.LEDGER_PATH).read_text())
+
+        assert_valid_ledger_document(self, document)
 
 
 if __name__ == "__main__":

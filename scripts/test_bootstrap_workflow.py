@@ -17,6 +17,11 @@ not by declaration, so importing it would make every code pull request depend on
 an image detail. The workflows are uniformly formatted (top-level job keys at
 exactly two spaces, bodies deeper), which is all the structure these assertions
 need.
+
+Also guards `equivalence.yml`'s read-only permissions and ledger-proposal
+wiring. That belongs here rather than in its own module because it is the same
+question -- which workflow carries which equivalence tier -- under the same
+stdlib-only constraint.
 """
 
 from __future__ import annotations
@@ -29,9 +34,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 BOOTSTRAP_WORKFLOW = WORKFLOWS / "bootstrap.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
+EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
+
+
+def header(text):
+    """Everything above `jobs:` — triggers, permissions, and top-level keys."""
+    return text[: text.index("\njobs:\n")]
 
 
 def job_blocks(text):
@@ -88,12 +99,52 @@ class BootstrapWorkflowTest(unittest.TestCase):
         self.assertNotIn("bootstrap.sh --no-verify", linux)
         self.assertIn("install-esbmc", linux)
 
+    def compiler_test_step(self) -> str:
+        """Just the tier-1 comparison step.
+
+        Job-wide assertions are worthless here: `ulimit` and `timeout-minutes`
+        both already appear elsewhere in this job, so a job-scoped `assertIn`
+        stays green even if the step is deleted outright.
+        """
+        linux = self.jobs["bootstrap"]
+        start = linux.index("equivalence tier 1")
+        return linux[start : linux.index("- name:", start)]
+
+    def test_linux_compares_the_compiler_test_suite_after_bootstrap(self) -> None:
+        linux = self.jobs["bootstrap"]
+        step = self.compiler_test_step()
+
+        rust_test = "target/release/vow test compiler/"
+        self_test = "build/vowc test compiler/"
+        comparator = "scripts/parity.py test"
+        for command in (rust_test, self_test, comparator):
+            with self.subTest(command=command):
+                self.assertIn(command, step)
+        self.assertLess(linux.index("scripts/bootstrap.sh"), linux.index(self_test))
+
+    def test_the_address_space_cap_covers_only_the_self_hosted_binary(self) -> None:
+        # Capping the Rust compiler or python3 as well would turn a memory
+        # limit into a spurious parity failure. full_test.sh's run_self scopes
+        # it the same way.
+        step = self.compiler_test_step()
+
+        self.assertIn("( ulimit -v 2000000; build/vowc test compiler/ )", step)
+        self.assertNotRegex(step, r"^\s+ulimit -v \d+$")
+
+    def test_linux_compiler_test_comparison_is_blocking(self) -> None:
+        # No `continue-on-error`, and a step-level bound so a #1171 overrun
+        # fails this step rather than starving the steps after it.
+        step = self.compiler_test_step()
+
+        self.assertNotIn("continue-on-error", step)
+        self.assertIn("timeout-minutes:", step)
+
     def test_runs_on_every_push_to_main(self) -> None:
         # The nightly cron alone would attribute a self-hosting break to a day
         # of commits rather than to the merge that caused it.
-        header = self.text[: self.text.index("\njobs:\n")]
+        workflow_header = header(self.text)
 
-        self.assertRegex(header, r"push:\s*\n\s*branches:\s*\[main\]")
+        self.assertRegex(workflow_header, r"push:\s*\n\s*branches:\s*\[main\]")
 
     def test_runs_nightly_as_a_backstop(self) -> None:
         found = crons(self.text)
@@ -131,6 +182,24 @@ class CiWorkflowTest(unittest.TestCase):
         for name in ("build-and-test", "build-and-test-macos"):
             with self.subTest(job=name):
                 self.assertIn("concat_vow.sh", jobs[name])
+
+
+class EquivalenceWorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = EQUIVALENCE_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_sweep_emits_a_ledger_update_proposal(self) -> None:
+        self.assertIn("--emit-ledger-update", self.text)
+
+    def test_uploaded_artifact_contains_the_proposal_directory(self) -> None:
+        self.assertIn("--output-dir equivalence.out", self.text)
+        self.assertIn("path: equivalence.out", self.text)
+
+    def test_workflow_keeps_read_only_repository_permissions(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
+        self.assertNotRegex(workflow_header, r"contents:\s*write")
 
 
 class ParserTest(unittest.TestCase):

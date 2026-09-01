@@ -38,6 +38,7 @@ total miscompile of a benchmark reference that had been invisible to the fixed p
 
 ```bash
 python3 scripts/equivalence.py --rust target/release/vow --self build/vowc \
+  --emit-ledger-update \
   --output-dir /tmp/equivalence-<YYYY-MM>
 ```
 
@@ -50,14 +51,34 @@ bug got fixed and the ledger (plus any `// TEST: known-divergence` directive) is
 
 ## Step 2 — Adversarial pair review
 
+Plan the credentialed calls first and include the per-pair chunk counts, byte totals, oversize units and
+coverage from `results.json` in the report:
+
+```bash
+python3 scripts/pair_review.py --dry-run \
+  --rust target/release/vow --self build/vowc \
+  --chunk-bytes 120000 \
+  --output-dir /tmp/pair-review-plan-<YYYY-MM>
+```
+
+Then run the review. `--max-chunks-per-pair N` is an explicit spend cap; omitted (or 0) means all
+chunks. A capped pair is reported with deferred chunks and is not stamped in the ledger.
+
 ```bash
 python3 scripts/pair_review.py --model <MODEL> \
   --rust target/release/vow --self build/vowc \
-  --output-dir /tmp/pair-review-<YYYY-MM>
+  --chunk-bytes 120000 \
+  --output-dir /tmp/pair-review-<YYYY-MM> \
+  --update-ledger --date <YYYY-MM-DD>
 ```
 
 Unchanged pairs are skipped via the ledger's content hash; pass `--all` only if you deliberately want a
 full re-review. Needs `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`).
+
+Exit codes match `scripts/equivalence.py`: `0` complete with nothing confirmed, `1` confirmed findings,
+`2` the run is not a verdict — a missing compiler, or any chunk that errored or left a claim unjudged.
+`2` takes precedence over `1`. A pair capped by `--max-chunks-per-pair` is *not* an error: the cap is a
+deliberate spend choice, so it is reported as deferred and left unstamped, and the run still exits 0.
 
 **The rule, and it is not negotiable:** a claim is a hypothesis until `scripts/equivalence.py` confirms
 the two compilers disagree on a concrete program. The harness enforces this — `confirmed` / `refuted` /
@@ -65,8 +86,39 @@ the two compilers disagree on a concrete program. The harness enforces this — 
 finding because it sounds plausible or because a model was confident. This repo has been burned: the
 2026-06-12 verification-honesty pass found half of the preceding audit's severities overstated.
 
-Findings the harness marks `truncated` were reviewed on partial source (`lower.vow` is ~248KB,
-`c_emitter.vow` ~148KB). Say so in the report rather than implying full coverage.
+Every function unit is retained whole, and a matched Rust/self-hosted pair always shares one chunk —
+splitting it would hand the model one implementation with no counterpart, which is not a pair review.
+If a group exceeds `--chunk-bytes`, the plan marks it `oversize` instead of splitting or truncating it.
+Rust `#[cfg(test)]` items are excluded: two thirds of the Rust units in the declared pairs are test
+functions with no self-hosted counterpart, and paying for them buys nothing.
+
+Report three coverage figures, weakest first. `coverage` is the share of unit bytes shipped to a model.
+`paired_coverage` is the share it saw in a chunk carrying both implementations, and the run prints an
+`unpaired` line whenever that is below 100%. `matched_coverage` is the share it saw beside that function's
+own counterpart — the only one of the three that answers "was this function compared?", since a chunk of
+80 Rust units next to 3 self-hosted ones is fully `paired` and almost entirely unmatched. The run prints
+an `unmatched` line naming every such function. If a chunk cap or model error prevents full review, report
+the pair's exact coverage and deferred/error chunk indexes rather than implying full coverage; the harness
+deliberately leaves that pair's prior ledger hash untouched.
+
+### Step 2b — C-model soundness variant
+
+Run this as a separate question. It covers the `c_emitter` pair only and asks whether either emitter's
+`__ESBMC_assume` statements narrow the verifier model below language semantics. The gate runs each
+candidate through both compilers independently and confirms only `Verified` plus a debug-runtime
+`VowViolation`. Soundness results do not update the equivalence ledger — and because they do not write
+it, they do not read it either: a soundness run never skips on an equivalence run's content hash.
+
+```bash
+python3 scripts/pair_review.py --mode soundness --dry-run \
+  --chunk-bytes 120000 \
+  --output-dir /tmp/pair-review-soundness-plan-<YYYY-MM>
+
+python3 scripts/pair_review.py --mode soundness --model <MODEL> \
+  --rust target/release/vow --self build/vowc \
+  --chunk-bytes 120000 \
+  --output-dir /tmp/pair-review-soundness-<YYYY-MM>
+```
 
 ## Step 3 — Triage each confirmed divergence
 
@@ -83,7 +135,10 @@ For each one, in this order:
    under the current `build/vowc`, add `// TEST: known-divergence <issue> "<why>"` so `full_test.sh`
    reports a loud SKIP instead of turning the tree red — and so it becomes a hard FAIL the moment the
    bug is fixed, forcing the directive's removal.
-5. **Record it in the ledger** with an issue number and, once one exists, the fixture path.
+5. **Complete the ledger metadata.** Apply `ledger.proposed.json`, then add the issue number and, once
+   one exists, the fixture path. The proposal updates corpus history only. Pair-review hashes, dates and
+   outcomes are written separately by the pair-review harness, and only for pairs it reviewed completely;
+   what you add there is confirmed issue numbers.
 
 ## Step 4 — Publish
 
@@ -98,7 +153,10 @@ every confirmed one.
 - **Still tracked** — one line, pointing at the ledger rather than re-litigating each entry.
 
 Append a row to a running metrics table: files compared, new divergences, tracked divergences, pairs
-reviewed, pairs skipped-unchanged, confirmed findings, hypotheses, refuted. Trend lines matter more than
+reviewed, pairs skipped-unchanged, confirmed findings, hypotheses, refuted. `reviewed` counts only pairs
+that completed every chunk with no errors — the same predicate that gates a ledger stamp — so a pair
+capped by `--max-chunks-per-pair` or carrying a model/confirmation error stays in `planned` and out of
+`reviewed`, rather than reading as covered. Trend lines matter more than
 any single run — a month where `compared` drops sharply is a coverage regression even if divergences are
 flat.
 
@@ -106,10 +164,11 @@ Update `docs/equivalence/README.md` with an index row per month.
 
 ## Step 5 — Report what you did not cover
 
-Every run states its gaps explicitly: pairs skipped as unchanged, pairs reviewed on truncated source,
-corpus files skipped and why, and any shard or budget that ran out. A run that silently examined a
-fraction of the surface must never read as a clean bill of health. `vowc mutants`' `missed.txt`
-convention is the model here.
+Every run states its gaps explicitly: pairs skipped as unchanged, oversize function groups, bytes shown
+without a counterpart (`paired_coverage` below 100%), functions reviewed with no counterpart of their own
+beside them (`matched_coverage` and the `unmatched` list), chunks deferred by a spend cap, model-error chunks,
+corpus files skipped and why, and any shard or budget that ran out. A run that silently examined a fraction of the surface must never read as a clean bill of
+health. `vowc mutants`' `missed.txt` convention is the model here.
 
 ## Step 6 — Propose, don't act
 

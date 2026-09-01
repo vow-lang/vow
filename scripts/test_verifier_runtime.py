@@ -9,6 +9,8 @@ that keeps a sweep from looking like it measured more than it did.
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import verifier_runtime
 
@@ -52,6 +54,40 @@ class ViolationParsingTest(unittest.TestCase):
         # `ulimit -v 2000000` is the repo-wide rule for self-compiled binaries;
         # expressed in bytes here because setrlimit takes bytes.
         self.assertEqual(2_000_000 * 1024, verifier_runtime.SELF_MEM_LIMIT)
+
+
+class DebugRunTest(unittest.TestCase):
+    """A hung binary is not evidence that the verifier was right."""
+
+    def run_with(self, exc_or_proc):
+        def fake_run(argv, **kwargs):
+            if isinstance(exc_or_proc, Exception):
+                raise exc_or_proc
+            return exc_or_proc
+
+        with mock.patch.object(verifier_runtime.subprocess, "run", fake_run):
+            return verifier_runtime.run_debug_binary(Path("/nonexistent"), 3)
+
+    def test_a_timeout_is_reported_as_an_error(self):
+        violation, err = self.run_with(
+            verifier_runtime.subprocess.TimeoutExpired(cmd="x", timeout=3)
+        )
+
+        self.assertIsNone(violation)
+        self.assertIn("timed out", err)
+
+    def test_a_clean_run_is_not_an_error(self):
+        violation, err = self.run_with(SimpleNamespace(stderr="", returncode=0))
+
+        self.assertIsNone(violation)
+        self.assertIsNone(err)
+
+    def test_a_violation_is_parsed(self):
+        line = '{"error":"VowViolation","vow_id":1,"blame":"Callee"}'
+        violation, err = self.run_with(SimpleNamespace(stderr=line, returncode=1))
+
+        self.assertEqual("VowViolation", violation["error"])
+        self.assertIsNone(err)
 
 
 if __name__ == "__main__":
