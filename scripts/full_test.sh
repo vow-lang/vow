@@ -1623,8 +1623,8 @@ else
 fi
 # `--help --human` must document the complexity command in BOTH compilers. The JSON
 # --help always listed it; the legacy human help previously omitted it.
-if "$RUST" --help --human 2>/dev/null | grep -q "vow complexity \[OPTIONS\]" \
-   && run_self --help --human 2>/dev/null | grep -q "vow complexity \[OPTIONS\]"; then
+if grep -q "vow complexity \[OPTIONS\]" <<< "$rust_human" \
+   && grep -q "vow complexity \[OPTIONS\]" <<< "$self_human"; then
     pass "complexity/human-help-documented (both compilers)"
 else
     fail "complexity/human-help-documented" "vow complexity missing from --help --human"
