@@ -37,6 +37,7 @@ re-running against the fixed point.
 """
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -45,6 +46,7 @@ import resource
 import subprocess
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -726,6 +728,18 @@ def check_file(vow_file, rust, slf, outdir, timeout):
 LEDGER_PATH = REPO_ROOT / "docs" / "equivalence" / "ledger.json"
 
 
+def load_ledger_document(path=None):
+    """Load the complete ledger document, or ``None`` when it is unusable."""
+    ledger_path = Path(path) if path else LEDGER_PATH
+    if not ledger_path.exists():
+        return None
+    try:
+        document = json.loads(ledger_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
 def load_ledger(path=None):
     """Known divergences, keyed by repo-relative path.
 
@@ -733,13 +747,8 @@ def load_ledger(path=None):
     13 known-gap fixtures every run, and a genuinely new finding is lost in the
     noise — the failure mode that makes recurring jobs get ignored.
     """
-    p = Path(path) if path else LEDGER_PATH
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text()).get("corpus", {})
-    except (json.JSONDecodeError, OSError):
-        return {}
+    document = load_ledger_document(path)
+    return document.get("corpus", {}) if document is not None else {}
 
 
 def tracked_observables(entry):
@@ -843,6 +852,74 @@ def reconcile(records, ledger):
     return new, known, fixed
 
 
+def _ledger_observable_value(observables):
+    """Use the schema's compact string form for one observable."""
+    ordered = sorted(observables)
+    return ordered[0] if len(ordered) == 1 else ordered
+
+
+def propose_ledger(document, new, fixed, today):
+    """Return a deterministic corpus-ledger update proposed by a sweep.
+
+    The corpus runner has no module-pair hashes, so this deliberately preserves
+    ``pairs`` byte-for-byte at the value level. Tier 3 owns pair review state.
+    ``today`` is injected by the caller to keep this transformation pure and
+    reproducible in tests.
+    """
+    proposed = copy.deepcopy(document)
+    proposed["updated"] = today
+    corpus = proposed.setdefault("corpus", {})
+
+    # Apply disappearances first. A changed payload can make reconcile report
+    # the old observable fixed and the replacement new in the same run; the
+    # later new-finding pass must win and leave that entry open.
+    for finding in fixed:
+        entry = corpus.get(finding["file"])
+        if entry is None:
+            continue
+        remaining = tracked_observables(entry) - set(finding["observables"])
+        if remaining:
+            entry["observable"] = _ledger_observable_value(remaining)
+            if "error_code" not in remaining:
+                entry.pop("rust_error_codes", None)
+                entry.pop("self_hosted_error_codes", None)
+        else:
+            # Retain the observable and its metadata so a reappearance remains
+            # recognizable as a regression rather than a first-time finding.
+            entry["status"] = "fixed"
+
+    for record in new:
+        path = record["file"]
+        entry = corpus.setdefault(
+            path,
+            {
+                "first_seen": today,
+                "observable": [],
+                "status": "open",
+            },
+        )
+        observables = tracked_observables(entry) | {
+            divergence["observable"] for divergence in record["divergences"]
+        }
+        entry["observable"] = _ledger_observable_value(observables)
+        entry["status"] = "open"
+
+        error_code = next(
+            (
+                divergence
+                for divergence in record["divergences"]
+                if divergence["observable"] == "error_code"
+            ),
+            None,
+        )
+        if error_code is not None:
+            entry["rust_error_codes"] = sorted(error_code.get("rust", []))
+            entry["self_hosted_error_codes"] = sorted(error_code.get("self_hosted", []))
+
+    proposed["corpus"] = dict(sorted(corpus.items()))
+    return proposed
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -892,7 +969,14 @@ def main():
         action="store_true",
         help="report every divergence as new, ignoring tracked ones",
     )
+    ap.add_argument(
+        "--emit-ledger-update",
+        action="store_true",
+        help="write a proposed corpus-ledger update into the output directory",
+    )
     args = ap.parse_args()
+    if args.emit_ledger_update and args.no_ledger:
+        ap.error("--emit-ledger-update cannot be combined with --no-ledger")
 
     roots = args.roots or [
         REPO_ROOT / "tests",
@@ -922,7 +1006,14 @@ def main():
     print(f"  self: {slf}")
     print()
 
-    ledger = {} if args.no_ledger else load_ledger(args.ledger)
+    ledger_document = None if args.no_ledger else load_ledger_document(args.ledger)
+    if args.emit_ledger_update and ledger_document is None:
+        print(
+            "error: cannot propose an update from a missing or invalid ledger",
+            file=sys.stderr,
+        )
+        return 2
+    ledger = {} if ledger_document is None else ledger_document.get("corpus", {})
     started = time.time()
     records, diverged, skipped, compared = [], [], [], 0
     for i, f in enumerate(corpus, 1):
@@ -961,6 +1052,11 @@ def main():
         "records": records,
     }
     (outdir / "results.json").write_text(json.dumps(results, indent=2))
+    proposal_path = None
+    if args.emit_ledger_update:
+        proposal_path = outdir / "ledger.proposed.json"
+        proposal = propose_ledger(ledger_document, new, fixed, date.today().isoformat())
+        proposal_path.write_text(json.dumps(proposal, indent=2) + "\n")
 
     # Report what was NOT covered. A sweep that silently skipped most of the
     # corpus reads as "all clear" when it measured almost nothing.
@@ -979,6 +1075,8 @@ def main():
         for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
             print(f"    {count:5d}  {reason}")
     print(f"  results  : {outdir / 'results.json'}")
+    if proposal_path is not None:
+        print(f"  ledger proposal: {proposal_path}")
 
     if fixed:
         print()
@@ -990,6 +1088,8 @@ def main():
             print(
                 f"    {f['file']}  [{obs}]" + (f"  (issue #{issue})" if issue else "")
             )
+        if proposal_path is not None:
+            print(f"    proposed update: {proposal_path}")
 
     if compared < args.min_compared:
         print(

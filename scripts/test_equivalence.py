@@ -35,6 +35,56 @@ def result(
     }
 
 
+def ledger_document(corpus=None):
+    return {
+        "schema_version": 1,
+        "updated": "2026-08-31",
+        "pairs": {
+            "lexer": {
+                "rust": "vow-syntax/src/lexer.rs",
+                "self_hosted": "compiler/lexer.vow",
+                "content_hash": "abc",
+                "last_reviewed": "never",
+                "outcome": "clean",
+                "confirmed_issues": [],
+            }
+        },
+        "corpus": {} if corpus is None else corpus,
+    }
+
+
+def assert_valid_ledger_document(test_case, document):
+    """Assert the schema rules relied on by stdlib-only workflow tests."""
+    test_case.assertEqual(1, document.get("schema_version"))
+    test_case.assertIsInstance(document.get("pairs"), dict)
+    corpus = document.get("corpus")
+    test_case.assertIsInstance(corpus, dict)
+
+    schema = json.loads(
+        (
+            Path(equivalence.REPO_ROOT) / "docs" / "equivalence" / "ledger.schema.json"
+        ).read_text()
+    )
+    allowed = set(schema["$defs"]["observableName"]["enum"])
+    for path, entry in corpus.items():
+        with test_case.subTest(path=path):
+            test_case.assertTrue(entry.get("first_seen"), "missing first_seen")
+            test_case.assertIn(entry.get("status"), ("open", "fixed", "expected"))
+            declared = equivalence.tracked_observables(entry)
+            test_case.assertTrue(declared, "no observable declared")
+            test_case.assertLessEqual(declared, allowed)
+            if entry.get("status") == "expected":
+                test_case.assertTrue(entry.get("note"), "missing note")
+                test_case.assertIsInstance(entry.get("issue"), int)
+            if entry.get("status") in ("open", "expected") and "error_code" in declared:
+                rust_codes = entry.get("rust_error_codes")
+                self_codes = entry.get("self_hosted_error_codes")
+                test_case.assertIsInstance(rust_codes, list)
+                test_case.assertIsInstance(self_codes, list)
+                test_case.assertEqual(sorted(rust_codes), rust_codes)
+                test_case.assertEqual(sorted(self_codes), self_codes)
+
+
 class CompareBuildTest(unittest.TestCase):
     def test_accept_reject_divergence_is_reported(self):
         rust = result(status="CompileFailed")
@@ -906,6 +956,202 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual([], fixed)
 
 
+class ProposeLedgerTest(unittest.TestCase):
+    def test_new_divergence_adds_an_open_entry(self):
+        document = ledger_document()
+        new = [
+            {
+                "file": "z.vow",
+                "divergences": [
+                    {"observable": "runtime"},
+                    {"observable": "runtime_exit"},
+                ],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(document, new, [], "2026-09-01")
+
+        self.assertEqual(
+            {
+                "first_seen": "2026-09-01",
+                "observable": ["runtime", "runtime_exit"],
+                "status": "open",
+            },
+            proposed["corpus"]["z.vow"],
+        )
+        assert_valid_ledger_document(self, proposed)
+
+    def test_new_error_code_divergence_pins_sorted_multisets(self):
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [
+                    {
+                        "observable": "error_code",
+                        "rust": ["Z", "A"],
+                        "self_hosted": ["Y", "B"],
+                    }
+                ],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(ledger_document(), new, [], "2026-09-01")
+        entry = proposed["corpus"]["a.vow"]
+
+        self.assertEqual(["A", "Z"], entry["rust_error_codes"])
+        self.assertEqual(["B", "Y"], entry["self_hosted_error_codes"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_fully_fixed_entry_keeps_its_history(self):
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": "runtime",
+            "status": "open",
+            "note": "wrong output",
+            "issue": 1087,
+            "fixture": "tests/run/reproducer.vow",
+        }
+        fixed = [{"file": "a.vow", "observables": ["runtime"]}]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), [], fixed, "2026-09-01"
+        )
+
+        self.assertEqual({**original, "status": "fixed"}, proposed["corpus"]["a.vow"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_partially_fixed_entry_keeps_only_the_live_observable(self):
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": ["error_code", "runtime"],
+            "status": "open",
+            "rust_error_codes": ["A"],
+            "self_hosted_error_codes": ["B"],
+        }
+        fixed = [{"file": "a.vow", "observables": ["error_code"]}]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), [], fixed, "2026-09-01"
+        )
+
+        self.assertEqual(
+            {
+                "first_seen": "2026-08-25",
+                "observable": "runtime",
+                "status": "open",
+            },
+            proposed["corpus"]["a.vow"],
+        )
+        assert_valid_ledger_document(self, proposed)
+
+    def test_new_observable_extends_an_existing_entry(self):
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": "runtime",
+            "status": "open",
+            "note": "wrong output",
+            "issue": 1087,
+        }
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [{"observable": "runtime_exit"}],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), new, [], "2026-09-01"
+        )
+
+        self.assertEqual(
+            {
+                **original,
+                "observable": ["runtime", "runtime_exit"],
+            },
+            proposed["corpus"]["a.vow"],
+        )
+        assert_valid_ledger_document(self, proposed)
+
+    def test_untouched_data_round_trips_and_corpus_keys_are_sorted(self):
+        untouched = {
+            "first_seen": "2026-08-25",
+            "observable": "runtime",
+            "status": "fixed",
+            "note": "history",
+            "issue": 1,
+        }
+        document = ledger_document({"z.vow": untouched})
+        pairs = json.loads(json.dumps(document["pairs"]))
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [{"observable": "runtime_exit"}],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(document, new, [], "2026-09-01")
+
+        self.assertEqual(pairs, proposed["pairs"])
+        self.assertEqual(untouched, proposed["corpus"]["z.vow"])
+        self.assertEqual(["a.vow", "z.vow"], list(proposed["corpus"]))
+        assert_valid_ledger_document(self, proposed)
+
+    def test_clean_run_changes_only_the_update_date(self):
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "runtime",
+                    "status": "fixed",
+                }
+            }
+        )
+        expected = json.loads(json.dumps(document))
+        expected["updated"] = "2026-09-01"
+
+        proposed = equivalence.propose_ledger(document, [], [], "2026-09-01")
+
+        self.assertEqual(expected, proposed)
+        assert_valid_ledger_document(self, proposed)
+
+
+class EmitLedgerUpdateCliTest(unittest.TestCase):
+    def test_flag_writes_a_schema_valid_proposal_in_the_output_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rust = root / "rust"
+            self_hosted = root / "self"
+            rust.write_bytes(b"rust")
+            self_hosted.write_bytes(b"self")
+            ledger = root / "ledger.json"
+            ledger.write_text(json.dumps(ledger_document()))
+            output = root / "out"
+            argv = [
+                "equivalence.py",
+                "--rust",
+                str(rust),
+                "--self",
+                str(self_hosted),
+                "--ledger",
+                str(ledger),
+                "--output-dir",
+                str(output),
+                "--min-compared",
+                "0",
+                "--emit-ledger-update",
+            ]
+
+            with (
+                mock.patch("sys.argv", argv),
+                mock.patch.object(equivalence, "collect_corpus", return_value=[]),
+            ):
+                exit_code = equivalence.main()
+
+            proposal = json.loads((output / "ledger.proposed.json").read_text())
+            self.assertEqual(0, exit_code)
+            assert_valid_ledger_document(self, proposal)
+
+
 class LedgerLoadTest(unittest.TestCase):
     def test_missing_ledger_is_empty_not_fatal(self):
         self.assertEqual({}, equivalence.load_ledger("/nonexistent/ledger.json"))
@@ -969,6 +1215,11 @@ class LedgerLoadTest(unittest.TestCase):
         ledger = equivalence.load_ledger()
 
         self.assertIn("benchmarks/medium/M13_gcd/reference.vow", ledger)
+
+    def test_real_repo_ledger_satisfies_schema_constraints(self):
+        document = json.loads(Path(equivalence.LEDGER_PATH).read_text())
+
+        assert_valid_ledger_document(self, document)
 
 
 if __name__ == "__main__":
