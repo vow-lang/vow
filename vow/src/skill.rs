@@ -4576,9 +4576,12 @@ The note is conservative — it fires for any qualifying allocation in a functio
 
 **Phase:** Code Generation
 **Meaning:** The program is valid Vow, but the selected native backend cannot
-yet lower one of its operations or representations. The build fails closed and
-does not leave an executable. The diagnostic currently has a file-level span
-because backend errors do not carry an instruction origin.
+yet lower one of its operations or representations. The build fails closed:
+`status` is `CompileFailed` and `executable` is `null`. No new executable is
+produced — but a file already at the `-o` path from an earlier successful
+build is left untouched, so branch on `status`/`executable` rather than on the
+output path existing. The diagnostic currently has a file-level span because
+backend errors do not carry an instruction origin.
 
 ```vow
 fn main() -> i32 {
@@ -9634,9 +9637,12 @@ The note is conservative — it fires for any qualifying allocation in a functio
 
 **Phase:** Code Generation
 **Meaning:** The program is valid Vow, but the selected native backend cannot
-yet lower one of its operations or representations. The build fails closed and
-does not leave an executable. The diagnostic currently has a file-level span
-because backend errors do not carry an instruction origin.
+yet lower one of its operations or representations. The build fails closed:
+`status` is `CompileFailed` and `executable` is `null`. No new executable is
+produced — but a file already at the `-o` path from an earlier successful
+build is left untouched, so branch on `status`/`executable` rather than on the
+output path existing. The diagnostic currently has a file-level span because
+backend errors do not carry an instruction origin.
 
 ```vow
 fn main() -> i32 {
