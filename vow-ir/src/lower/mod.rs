@@ -609,6 +609,10 @@ pub(crate) struct FuncSigInfo {
     ret_tag: Option<String>,
     ret_vec_elem: Option<String>,
     ret_option_elem: Option<Ty>,
+    // Wide `Result` payload widths, which `ret_option_elem` cannot carry.
+    // `Result` is built in, so a value returned from a call has no declaration
+    // for the match arm to consult; without this the read lowers as a limb.
+    ret_variant_payload_tys: Option<Vec<Option<Ty>>>,
     param_tys: Vec<Ty>,
     param_ast_tys: Vec<AstType>,
 }
@@ -642,6 +646,18 @@ fn non_scalar_type_tag(
         AstType::Generic { name, .. } => Some(name.clone()),
         _ => None,
     }
+}
+
+/// Payload width recorded for `inst`'s variant `tag`, when the value's
+/// provenance told lowering what it holds. Built-in `Option`/`Result` have no
+/// declaration to consult, so this map is the only width they carry.
+fn variant_payload_ty(ctx: &LowerCtx, inst: InstId, tag: i64) -> Option<Ty> {
+    let tag = usize::try_from(tag).ok()?;
+    ctx.inst_variant_payload_tys
+        .get(&inst)
+        .and_then(|variants| variants.get(tag))
+        .copied()
+        .flatten()
 }
 
 /// Declared 128-bit width of an enum variant's payload slot, by enum name.
@@ -1752,6 +1768,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 if let Some(ret_option_elem) = call_info.ret_option_elem {
                     ctx.inst_option_elem_ty.insert(result, ret_option_elem);
+                }
+                if let Some(variant_tys) = call_info.ret_variant_payload_tys {
+                    ctx.inst_variant_payload_tys.insert(result, variant_tys);
                 }
                 result
             } else if let Some((sym, ret_ty)) = vow_debug_builtin_to_runtime(&callee_name) {
@@ -3219,12 +3238,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         // Narrow scalar Option<T> payloads carry their real IR type.
                         // Aggregate payload metadata is tracked separately so the binding
                         // retains the struct/Vec tag needed by field and index lowering.
-                        let payload_ty = ctx
-                            .inst_variant_payload_tys
-                            .get(&ptr_id)
-                            .and_then(|types| types.get(expected_tag as usize))
-                            .copied()
-                            .flatten()
+                        let payload_ty = variant_payload_ty(ctx, ptr_id, expected_tag)
                             .or_else(|| ctx.inst_option_elem_ty.get(&ptr_id).copied())
                             .unwrap_or(Ty::I64);
                         for (i, inner_pat) in inner.iter().enumerate() {
@@ -4154,14 +4168,18 @@ fn lower_unwrap(
         .pattern_aggregates
         .get(&(expr as *const Expr as usize))
         .cloned();
+    // The unwrapped payload is the non-empty variant: `Some` (tag 1) for
+    // Option, `Ok` (tag 0) for Result. `inst_option_elem_ty` only ever carries
+    // an Option's width, so a wide `Result` payload needs the variant map or it
+    // loads as a truncated limb.
+    let payload_tag = 1 - empty_tag;
     let payload_ty = if aggregate.as_ref().is_some_and(|info| info.is_linear) {
         Ty::LinearPtr
     } else if aggregate.is_some() {
         Ty::Ptr
     } else {
-        ctx.inst_option_elem_ty
-            .get(&recv_id)
-            .copied()
+        variant_payload_ty(ctx, recv_id, payload_tag)
+            .or_else(|| ctx.inst_option_elem_ty.get(&recv_id).copied())
             .unwrap_or(Ty::I64)
     };
     let payload = ctx.emit(
@@ -5103,6 +5121,10 @@ pub fn lower_module_with_pattern_aggregates(
                     ret_tag: non_scalar_type_tag(&fn_def.return_ty, &type_aliases),
                     ret_vec_elem: vec_named_elem_type(&fn_def.return_ty, &type_aliases),
                     ret_option_elem: option_named_elem_type(&fn_def.return_ty, &type_aliases),
+                    ret_variant_payload_tys: result_wide_payload_tys(
+                        &fn_def.return_ty,
+                        &type_aliases,
+                    ),
                     param_tys: fn_def
                         .params
                         .iter()
@@ -5946,6 +5968,52 @@ fn ok_limb(r: Result<i128, i64>) -> i64 {
                         && inst.data == InstData::FieldIndex(slot)
                         && inst.ty == expected),
                 "`{fn_name}` payload slot {slot} must lower as {expected:?}, not a truncated limb:\n{func:#?}"
+            );
+        }
+    }
+
+    /// `Result` is built in, so it has no declaration for the match arm to
+    /// consult — its payload width has to travel on the value itself. Cover the
+    /// two ways a wide `Result` reaches a read without being built in the same
+    /// function: `.unwrap()`, which loads the `Ok` slot directly rather than
+    /// through a match arm, and a value handed back by a call.
+    #[test]
+    fn wide_result_payload_survives_unwrap_and_call_return() {
+        let module = lower_source_to_module(
+            r#"
+module WideResultLowering
+
+fn extract(r: Result<i128, i64>) -> i128 [panic] {
+    r.unwrap()
+}
+
+fn passthrough(r: Result<u128, i64>) -> Result<u128, i64> {
+    r
+}
+
+fn via_call(r0: Result<u128, i64>) -> i64 {
+    match passthrough(r0) {
+        Result::Ok(v) => { if v == 0 { 0 } else { 1 } },
+        Result::Err(e) => { 0 },
+    }
+}
+"#,
+            "wide_result_lowering.vow",
+        );
+
+        for (fn_name, expected) in [("extract", Ty::I128), ("via_call", Ty::U128)] {
+            let func = module
+                .functions
+                .iter()
+                .find(|f| f.name == fn_name)
+                .unwrap_or_else(|| panic!("missing function `{fn_name}`"));
+            assert!(
+                insts_of(func)
+                    .iter()
+                    .any(|inst| inst.opcode == Opcode::FieldGet
+                        && inst.data == InstData::FieldIndex(1)
+                        && inst.ty == expected),
+                "`{fn_name}` must read the Ok slot as {expected:?}, not a truncated limb:\n{func:#?}"
             );
         }
     }
@@ -8129,6 +8197,7 @@ fn parse_or_default(s: String) -> i64 {
                 ret_tag: Some("Pair".to_string()),
                 ret_vec_elem: None,
                 ret_option_elem: None,
+                ret_variant_payload_tys: None,
                 param_tys: vec![],
                 param_ast_tys: vec![],
             },
@@ -8189,6 +8258,7 @@ fn parse_or_default(s: String) -> i64 {
                 ret_tag: None,
                 ret_vec_elem: None,
                 ret_option_elem: None,
+                ret_variant_payload_tys: None,
                 param_tys: vec![Ty::U8],
                 param_ast_tys: vec![u8_ty()],
             },
@@ -8266,6 +8336,7 @@ fn parse_or_default(s: String) -> i64 {
                 ret_tag: Some("B".to_string()),
                 ret_vec_elem: None,
                 ret_option_elem: None,
+                ret_variant_payload_tys: None,
                 param_tys: vec![],
                 param_ast_tys: vec![],
             },

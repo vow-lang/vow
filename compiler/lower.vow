@@ -23,6 +23,10 @@ struct LowerCtx {
     func_ret_tags: Vec<String>,
     func_ret_vec_elems: Vec<String>,
     func_ret_option_elems: Vec<i64>,
+    // Wide `Result` payload widths per callee, which func_ret_option_elems
+    // cannot carry. `Result` is built in, so a value returned from a call has
+    // no declaration for the match arm to consult.
+    func_ret_variant_payload_tys: Vec<Vec<i64>>,
     func_return_ast_tid: i64,
     func_param_tys: Vec<Vec<i64>>,
     func_param_ast_tids: Vec<Vec<i64>>,
@@ -120,6 +124,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_ret_tags: Vec::new(),
         func_ret_vec_elems: Vec::new(),
         func_ret_option_elems: Vec::new(),
+        func_ret_variant_payload_tys: Vec::new(),
         func_return_ast_tid: -1,
         func_param_tys: Vec::new(),
         func_param_ast_tids: Vec::new(),
@@ -629,6 +634,17 @@ fn lctx_get_variant_payloads(ctx: LowerCtx, inst_id: i64) -> Vec<i64> {
         }
     }
     Vec::new()
+}
+
+// Payload width recorded for `inst_id`'s variant `tag`, when the value's
+// provenance told lowering what it holds. Built-in Option/Result have no
+// declaration to consult, so this map is the only width they carry.
+// Returns -1 when nothing was recorded for that variant.
+fn lctx_variant_payload_at(ctx: LowerCtx, inst_id: i64, tag: i64) -> i64 {
+    if tag < 0 { return -1; }
+    let payloads: Vec<i64> = lctx_get_variant_payloads(ctx, inst_id);
+    if tag >= payloads.len() { return -1; }
+    payloads[tag]
 }
 
 fn string_vec_equal(a: Vec<String>, b: Vec<String>) -> bool {
@@ -2560,6 +2576,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if ret_option_elem != -1 {
                 lctx_tag(ctx, result, String::from("Option"));
                 lctx_tag_option_elem(ctx, result, ret_option_elem);
+            }
+            let ret_variant_tys: Vec<i64> = ctx.func_ret_variant_payload_tys[fidx];
+            if ret_variant_tys.len() > 0 {
+                lctx_tag_variant_payloads(ctx, result, ret_variant_tys);
             }
             return result;
         }
@@ -4686,7 +4706,16 @@ fn lower_unwrap(ctx: LowerCtx, eid: i64, recv_id: i64, empty_tag: i64) -> i64 {
         } else if aggregate_name.len() > 0 {
             ITY_PTR()
         } else {
-            lctx_get_option_elem_ty(ctx, recv_id)
+            // The unwrapped payload is the non-empty variant: `Some` (tag 1)
+            // for Option, `Ok` (tag 0) for Result. The option-elem map only
+            // ever carries an Option's width, so a wide `Result` payload needs
+            // the variant map or it loads as a truncated limb.
+            let variant_ty: i64 = lctx_variant_payload_at(ctx, recv_id, 1 - empty_tag);
+            if variant_ty != -1 {
+                variant_ty
+            } else {
+                lctx_get_option_elem_ty(ctx, recv_id)
+            }
         }
     };
     let payload_args: Vec<i64> = Vec::new();
@@ -5431,6 +5460,7 @@ fn lower_module_vow(
     let func_ret_tags: Vec<String> = Vec::new();
     let func_ret_vec_elems: Vec<String> = Vec::new();
     let func_ret_option_elems: Vec<i64> = Vec::new();
+    let func_ret_variant_payload_tys: Vec<Vec<i64>> = Vec::new();
     let func_param_tys: Vec<Vec<i64>> = Vec::new();
     let func_param_ast_tids: Vec<Vec<i64>> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
@@ -5539,6 +5569,7 @@ fn lower_module_vow(
             func_ret_tags.push(lower_ast_type_tag_name(a, ret_tid, type_alias_names, type_alias_target_tids));
             func_ret_vec_elems.push(lower_ast_type_vec_elem_name(a, ret_tid, type_alias_names, type_alias_target_tids));
             func_ret_option_elems.push(lower_ast_type_option_elem_ty(a, ret_tid, type_alias_names, type_alias_target_tids));
+            func_ret_variant_payload_tys.push(lower_ast_type_result_wide_payload_tys(a, ret_tid, type_alias_names, type_alias_target_tids));
 
             let params_lid: i64 = fn_params_lid(a, iid);
             let nparams: i64 = list_len(a, params_lid) / 3;
@@ -5754,6 +5785,7 @@ fn lower_module_vow(
     ctx.func_ret_tags = func_ret_tags;
     ctx.func_ret_vec_elems = func_ret_vec_elems;
     ctx.func_ret_option_elems = func_ret_option_elems;
+    ctx.func_ret_variant_payload_tys = func_ret_variant_payload_tys;
     ctx.func_param_tys = func_param_tys;
     ctx.func_param_ast_tids = func_param_ast_tids;
     ctx.struct_names = struct_names;

@@ -45,6 +45,21 @@ fn ok_limb(r: Result<i128, i64>) -> i64 vow {
     }
 }
 
+// A `Result` handed back by a call, rather than received as a parameter, has
+// no declaration for the match arm to consult either.
+fn passthrough(r: Result<i128, i64>) -> Result<i128, i64> {
+    r
+}
+
+fn call_ret_limb(r0: Result<i128, i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+    match passthrough(r0) {
+        Result::Ok(v) => { if v == 0 { 0 } else { 1 } },
+        Result::Err(e) => { 0 },
+    }
+}
+
 fn main() -> i32 [io] {
   print_i64(0);
   0

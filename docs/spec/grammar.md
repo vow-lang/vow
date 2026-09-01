@@ -310,8 +310,10 @@ neighbour. The refusal is at the access, not the declaration: a struct or enum
 may declare a 128-bit member and still compile as long as nothing touches it.
 The refusal does not depend on where the value came from: a 128-bit payload
 read out of an `enum`, `Option`, or `Result` value the function never built —
-a parameter, say — is refused on the declared payload width, at every payload
-position, not just the first. Do not store 128-bit values in aggregates yet.
+a parameter, or a value handed back by a call — is refused on the declared
+payload width, at every payload position rather than just the first, and
+whether the read goes through a `match` arm or `.unwrap()`. Do not store
+128-bit values in aggregates yet.
 
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted
