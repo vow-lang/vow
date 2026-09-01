@@ -586,6 +586,29 @@ fn ity_is_wide(ty: i64) -> bool {
     ty == ITY_I128() || ty == ITY_U128()
 }
 
+fn build_inst_ty_by_id(f: IrFunction) -> Vec<i64> {
+    let inst_ty_by_id: Vec<i64> = Vec::new();
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.id >= 0 {
+                while inst_ty_by_id.len() <= inst.id {
+                    inst_ty_by_id.push(ITY_I64());
+                }
+                inst_ty_by_id[inst.id] = inst.ty;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    inst_ty_by_id
+}
+
 // IR type of the instruction producing `id`, defaulting to the signed form
 // when the operand cannot be resolved.
 fn lookup_inst_ty(f: IrFunction, id: i64) -> i64 {
