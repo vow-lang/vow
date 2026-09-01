@@ -379,12 +379,10 @@ mod tests {
         assert!(output.contains("hint: check the value of y"));
     }
 
-    #[test]
-    fn diagnostic_schema_lists_mutability_error_codes() {
-        // Every ErrorCode the compiler emits must be advertised by the published
-        // diagnostic schema, or a client validating compiler JSON (e.g. from
-        // tests/error/assign_immutable.vow) would reject valid output. Regression
-        // for the #735 mutability codes, emitted but omitted from the schema.
+    /// The `error_code` enum advertised by the published diagnostic schema.
+    /// Every ErrorCode the compiler emits must appear here, or a client
+    /// validating compiler JSON would reject valid output.
+    fn schema_error_codes() -> Vec<serde_json::Value> {
         let schema_src = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../docs/spec/schemas/diagnostic.schema.json"
@@ -392,60 +390,41 @@ mod tests {
         .expect("diagnostic schema must be readable");
         let schema: serde_json::Value =
             serde_json::from_str(&schema_src).expect("diagnostic schema must be valid JSON");
-        let codes = schema["properties"]["error_code"]["enum"]
+        schema["properties"]["error_code"]["enum"]
             .as_array()
-            .expect("schema error_code enum must be an array");
-        for code in [ErrorCode::ImmutableAssignment, ErrorCode::UnusedMut] {
+            .expect("schema error_code enum must be an array")
+            .clone()
+    }
+
+    fn assert_schema_lists(expected: impl IntoIterator<Item = ErrorCode>) {
+        let codes = schema_error_codes();
+        for code in expected {
             let name = serde_json::to_value(code).unwrap();
             assert!(
                 codes.contains(&name),
                 "diagnostic schema is missing emitted error code {name}"
             );
         }
+    }
+
+    #[test]
+    fn diagnostic_schema_lists_mutability_error_codes() {
+        // Regression for the #735 mutability codes, emitted but omitted from
+        // the schema.
+        assert_schema_lists([ErrorCode::ImmutableAssignment, ErrorCode::UnusedMut]);
     }
 
     #[test]
     fn diagnostic_schema_lists_unsupported_pattern() {
-        let schema_src = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../docs/spec/schemas/diagnostic.schema.json"
-        ))
-        .expect("diagnostic schema must be readable");
-        let schema: serde_json::Value =
-            serde_json::from_str(&schema_src).expect("diagnostic schema must be valid JSON");
-        let codes = schema["properties"]["error_code"]["enum"]
-            .as_array()
-            .expect("schema error_code enum must be an array");
-        let name = serde_json::to_value(ErrorCode::UnsupportedPattern).unwrap();
-        assert!(
-            codes.contains(&name),
-            "diagnostic schema is missing emitted error code {name}"
-        );
+        assert_schema_lists([ErrorCode::UnsupportedPattern]);
     }
 
     #[test]
     fn diagnostic_schema_lists_codegen_error_codes() {
-        let schema_src = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../docs/spec/schemas/diagnostic.schema.json"
-        ))
-        .expect("diagnostic schema must be readable");
-        let schema: serde_json::Value =
-            serde_json::from_str(&schema_src).expect("diagnostic schema must be valid JSON");
-        let codes = schema["properties"]["error_code"]["enum"]
-            .as_array()
-            .expect("error_code enum must be an array");
-
-        for code in [
+        assert_schema_lists([
             ErrorCode::CodegenUnsupported,
             ErrorCode::CodegenFailed,
             ErrorCode::LinkFailed,
-        ] {
-            let name = serde_json::to_value(code).unwrap();
-            assert!(
-                codes.contains(&name),
-                "diagnostic schema is missing emitted error code {name}"
-            );
-        }
+        ]);
     }
 }
