@@ -1,0 +1,51 @@
+// TEST: category unverifiable
+module WideEnumPayloadSkipped
+
+// The scrutinee is a parameter, so no construction in this function tells
+// lowering how wide the payload is -- the declaration has to. Without that the
+// FieldGet lowers as i64, slips past the 128-bit gate, and the contract is
+// reported Verified against an 8-byte model of a 128-bit value.
+enum Wide {
+    Value(i128),
+    Empty,
+}
+
+// A wide payload past index 0 is equally erased, so cover that slot too.
+enum Pair {
+    Both(i64, i128),
+    Empty,
+}
+
+fn low_limb(w: Wide) -> i64 vow {
+  ensures: result >= 0
+} {
+    match w {
+        Wide::Value(v) => { if v == 0 { 0 } else { 1 } },
+        Wide::Empty => { 0 },
+    }
+}
+
+fn second_limb(p: Pair) -> i64 vow {
+  ensures: result >= 0
+} {
+    match p {
+        Pair::Both(a, b) => { if b == 0 { 0 } else { 1 } },
+        Pair::Empty => { 0 },
+    }
+}
+
+// `Result` is built in, so its payload width comes from the instantiation
+// rather than from a declaration the match arm can consult.
+fn ok_limb(r: Result<i128, i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+    match r {
+        Result::Ok(v) => { if v == 0 { 0 } else { 1 } },
+        Result::Err(e) => { 0 },
+    }
+}
+
+fn main() -> i32 [io] {
+  print_i64(0);
+  0
+}

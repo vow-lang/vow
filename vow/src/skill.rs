@@ -1665,14 +1665,10 @@ with a named limitation rather than a raw backend verifier dump, before an
 8-byte slot can truncate the value or a 16-byte store can overwrite its
 neighbour. The refusal is at the access, not the declaration: a struct or enum
 may declare a 128-bit member and still compile as long as nothing touches it.
-Do not store 128-bit values in aggregates yet.
-
-One 128-bit aggregate gap is not yet fail-closed. A 128-bit payload read out of
-a user `enum` value that was not constructed in the same function is typed as
-64-bit by the IR, so it escapes the refusal above: the build succeeds and
-computes on the truncated low limb, and a contract over such a read is reported
-`Verified` against the verifier's 8-byte model rather than `Skipped`. Do not
-read 128-bit enum payloads yet.
+The refusal does not depend on where the value came from: a 128-bit payload
+read out of an `enum`, `Option`, or `Result` value the function never built —
+a parameter, say — is refused on the declared payload width, at every payload
+position, not just the first. Do not store 128-bit values in aggregates yet.
 
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted
@@ -6750,14 +6746,10 @@ with a named limitation rather than a raw backend verifier dump, before an
 8-byte slot can truncate the value or a 16-byte store can overwrite its
 neighbour. The refusal is at the access, not the declaration: a struct or enum
 may declare a 128-bit member and still compile as long as nothing touches it.
-Do not store 128-bit values in aggregates yet.
-
-One 128-bit aggregate gap is not yet fail-closed. A 128-bit payload read out of
-a user `enum` value that was not constructed in the same function is typed as
-64-bit by the IR, so it escapes the refusal above: the build succeeds and
-computes on the truncated low limb, and a contract over such a read is reported
-`Verified` against the verifier's 8-byte model rather than `Skipped`. Do not
-read 128-bit enum payloads yet.
+The refusal does not depend on where the value came from: a 128-bit payload
+read out of an `enum`, `Option`, or `Result` value the function never built —
+a parameter, say — is refused on the declared payload width, at every payload
+position, not just the first. Do not store 128-bit values in aggregates yet.
 
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted

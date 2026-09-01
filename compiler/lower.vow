@@ -911,6 +911,24 @@ fn lctx_variant_payload_ty(
     payload[payload_index]
 }
 
+// Declared 128-bit width of an enum variant's payload slot, by enum name.
+//
+// The per-instruction payload maps only know a width when the scrutinee was
+// built in the same function, so a wide payload read out of a parameter would
+// lower as i64 and slip past the wide-aggregate gates in codegen and the C
+// emitters -- truncating the value and letting a contract over it be reported
+// Verified against the 8-byte model. The declaration knows the width whatever
+// the value's provenance. Returns -1 for narrow or unknown payloads: those
+// already lower correctly, and widening them here would change existing
+// FieldGet types.
+fn lctx_declared_wide_payload_ty(
+    ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
+) -> i64 {
+    let ty: i64 = lctx_variant_payload_ty(ctx, enum_name, variant_name, payload_index);
+    if ty == ITY_I128() || ty == ITY_U128() { return ty; }
+    -1
+}
+
 fn lctx_variant_payload_ast_tid(
     ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
 ) -> i64 {
@@ -1179,6 +1197,42 @@ fn lower_ast_type_option_elem_ty(a: AstArena, tid: i64, alias_names: Vec<String>
     let elem_ty: i64 = lower_ast_ty_linear(a, elem_tid, Vec::new(), alias_names, alias_target_tids);
     if elem_ty == ITY_PTR() || elem_ty == ITY_LPTR() || elem_ty == ITY_UNIT() { return -1; }
     elem_ty
+}
+
+// Wide Result<T, E> payload widths, indexed by variant tag (Ok = 0, Err = 1).
+//
+// Result is built in, so the declared per-enum payload table is empty for it --
+// its payload widths come from the instantiation rather than a declaration.
+// Narrow payloads get the -1 sentinel, and an all-narrow Result yields an empty
+// vector so it keeps relying on the existing contextual-widening path.
+fn lower_ast_type_result_wide_payload_tys(
+    a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>
+) -> Vec<i64> {
+    let none: Vec<i64> = Vec::new();
+    let resolved_tid: i64 = lower_resolve_alias_tid(a, tid, alias_names, alias_target_tids);
+    if resolved_tid == -1 { return none; }
+    if type_tag(a, resolved_tid) != TY_GENERIC() { return none; }
+    let name_sid: i64 = type_a(a, resolved_tid);
+    let name: String = arena_str(a, name_sid);
+    if name != String::from("Result") { return none; }
+    let args_lid: i64 = type_b(a, resolved_tid);
+    let n_args: i64 = list_len(a, args_lid);
+    let tys: Vec<i64> = Vec::new();
+    let mut has_wide: bool = false;
+    let mut i: i64 = 0;
+    while i < n_args && i < 2 {
+        let arg_tid: i64 = list_get(a, args_lid, i);
+        let arg_ty: i64 = lower_ast_ty_linear(a, arg_tid, Vec::new(), alias_names, alias_target_tids);
+        if arg_ty == ITY_I128() || arg_ty == ITY_U128() {
+            tys.push(arg_ty);
+            has_wide = true;
+        } else {
+            tys.push(-1);
+        }
+        i = i + 1;
+    }
+    if has_wide { return tys; }
+    none
 }
 
 fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> String {
@@ -4110,11 +4164,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let aggregate_vec_variants: Vec<Vec<i64>> = lctx_get_pattern_vec_variant_payload_ty_path(ctx, inner_pid);
                         let aggregate_option_elem: i64 = lctx_get_pattern_option_elem_ty(ctx, inner_pid);
                         let aggregate_variant_payloads: Vec<i64> = lctx_get_pattern_variant_payload_tys(ctx, inner_pid);
+                        let declared_wide: i64 = lctx_declared_wide_payload_ty(ctx, en, vn, ii);
                         let field_ty: i64 = {
                             if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
                                 ITY_LPTR()
                             } else if aggregate_struct.len() > 0 {
                                 ITY_PTR()
+                            } else if declared_wide != -1 {
+                                declared_wide
                             } else if ii == 0 {
                                 payload_ty
                             } else {
@@ -5271,6 +5328,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                     let opt_elem_ty: i64 = lower_ast_type_option_elem_ty(a, resolved_ptid, ctx.type_alias_names, ctx.type_alias_target_tids);
                     if opt_elem_ty != -1 {
                         lctx_tag_option_elem(ctx, arg_id, opt_elem_ty);
+                    }
+                } else if tn == String::from("Result") {
+                    let res_payload_tys: Vec<i64> = lower_ast_type_result_wide_payload_tys(a, resolved_ptid, ctx.type_alias_names, ctx.type_alias_target_tids);
+                    if res_payload_tys.len() > 0 {
+                        lctx_tag_variant_payloads(ctx, arg_id, res_payload_tys);
                     }
                 }
             }
