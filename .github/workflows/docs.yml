@@ -5,12 +5,16 @@ on:
     branches: [main]
     paths:
       - "docs/spec/**"
+      - "docs/verifier-discipline.md"
+      - "docs/adr/**"
       - "website/**"
       - "scripts/build_docs_site.py"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/spec/**"
+      - "docs/verifier-discipline.md"
+      - "docs/adr/**"
       - "website/**"
       - "scripts/build_docs_site.py"
       - ".github/workflows/docs.yml"
