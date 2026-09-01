@@ -23,7 +23,7 @@
 // `vow-codegen` site (if any) so agents reading either file see the full
 // picture.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -1847,6 +1847,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     // self-hosted IR lowerer produces cross-block references between sibling
     // branches (valid for C codegen but not SSA).
     let mut cross_block_refs: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut phi_ids: BTreeSet<i64> = BTreeSet::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
         let len = block_lengths[bi] as usize;
@@ -1862,6 +1863,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             // Phi nodes need cross-block storage (fed by Upsilons from other blocks)
             if inst_ops[ii] == IOP_PHI {
                 cross_block_refs.insert(inst_ids[ii]);
+                phi_ids.insert(inst_ids[ii]);
             }
         }
     }
@@ -1883,6 +1885,16 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             slot_map.insert(iid, slot);
         }
     }
+    let mut phi_shadow_slots: BTreeMap<i64, StackSlot> = BTreeMap::new();
+    for &iid in &phi_ids {
+        let (size, align_shift) = if is_wide_inst(&iid) { (16, 4) } else { (8, 3) };
+        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            size,
+            align_shift,
+        ));
+        phi_shadow_slots.insert(iid, slot);
+    }
 
     let mut block_arena_ids: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     for &rgn in inst_rgns.iter().take(n_insts) {
@@ -1897,6 +1909,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     if nb > 0 {
         let zero = builder.ins().iconst(types::I64, 0);
         for (&iid, &slot) in &slot_map {
+            builder.ins().stack_store(types::I64, zero, slot, 0);
+            if is_wide_inst(&iid) {
+                builder.ins().stack_store(types::I64, zero, slot, 8);
+            }
+        }
+        for (&iid, &slot) in &phi_shadow_slots {
             builder.ins().stack_store(types::I64, zero, slot, 0);
             if is_wide_inst(&iid) {
                 builder.ins().stack_store(types::I64, zero, slot, 8);
@@ -2415,15 +2433,33 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     builder.ins().trap(TrapCode::unwrap_user(2));
                 }
 
-                IOP_PHI => {}
+                IOP_PHI => {
+                    if let (Some(&shadow_slot), Some(&value_slot)) =
+                        (phi_shadow_slots.get(&iid), slot_map.get(&iid))
+                    {
+                        let lo = builder
+                            .ins()
+                            .stack_load(types::I64, types::I64, shadow_slot, 0);
+                        builder.ins().stack_store(types::I64, lo, value_slot, 0);
+                        if is_wide_inst(&iid) {
+                            let hi =
+                                builder
+                                    .ins()
+                                    .stack_load(types::I64, types::I64, shadow_slot, 8);
+                            builder.ins().stack_store(types::I64, hi, value_slot, 8);
+                        }
+                    }
+                }
                 IOP_UPSILON => {
-                    // Store to the Phi's stack slot so cross-block references work.
+                    // Store to the Phi's shadow slot. The Phi copies its shadow
+                    // into its value slot only when control enters the Phi's block,
+                    // preserving parallel-copy semantics across Upsilon groups.
                     // The pre-resolve loop above already reloaded cross-block args
                     // into value_map, so value_map[val_id] is valid here.
                     if dk == IDATA_PHI_TARGET && alen > 0 {
                         let phi_id = dv;
                         let val_id = all_args[aoff];
-                        if let Some(&slot) = slot_map.get(&phi_id)
+                        if let Some(&slot) = phi_shadow_slots.get(&phi_id)
                             && let Some(&val) = value_map.get(&val_id)
                         {
                             store_slotted_value(&mut builder, slot, val);
