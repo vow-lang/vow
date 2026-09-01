@@ -1,4 +1,4 @@
-// TEST: category unattributed-property
+// TEST: category bounds
 // TEST: counterexample-fn "remainder"
 // TEST: counterexample-blame none
 // TEST: counterexample-vow-id 4294967293
