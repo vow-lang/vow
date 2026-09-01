@@ -27,6 +27,34 @@ ERROR_CODES_LABEL = "error codes"
 COUNTEREXAMPLE_COUNT_LABEL = "counterexamples count"
 ESBMC_INTERNAL_VALUE_PREFIX = "$esbmc$"
 
+# `vow test`'s authoritative output contract. Read back out of the schema
+# rather than restated so a field added there is compared by this blocking
+# gate automatically, instead of drifting out of coverage unnoticed.
+TEST_RESULT_SCHEMA = json.loads(
+    (
+        Path(__file__).resolve().parent.parent
+        / "docs/spec/schemas/test-result.schema.json"
+    ).read_text()
+)
+_TEST_ENTRY_SCHEMA = TEST_RESULT_SCHEMA["$defs"]["TestEntry"]
+# Wall-clock only. Every other field the schema declares is a function of the
+# sources, so the two compilers must agree on it.
+TEST_NONDETERMINISTIC_FIELDS = frozenset({"duration_ms"})
+# Which entry fields name a test rather than describe its outcome. The membership
+# delta keys off these; the rest are compared per shared entry.
+TEST_IDENTITY_FIELDS = ("file", "name", "status")
+TEST_PAYLOAD_FIELDS = tuple(
+    field
+    for field in _TEST_ENTRY_SCHEMA["properties"]
+    if field not in TEST_IDENTITY_FIELDS and field not in TEST_NONDETERMINISTIC_FIELDS
+)
+# Top-level counters: everything but the fields with their own comparison below.
+TEST_COUNT_FIELDS = tuple(
+    field
+    for field in TEST_RESULT_SCHEMA["properties"]
+    if field not in ("status", "tests", "contract_density")
+)
+
 
 def _mismatch(label, rust_value, self_value):
     """The one parity error for a single observable, or none if it agrees."""
@@ -206,6 +234,74 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
     return errors
 
 
+def _missing_test_fields(name, document):
+    """Required `vow test` keys one document omits, counted not enumerated.
+
+    Parity alone cannot see a field both compilers dropped, so the shape is
+    asserted against the schema in absolute terms. Per-entry omissions are
+    tallied rather than listed: one broken emitter would otherwise print a line
+    per test for a suite the size of `compiler/`.
+    """
+    errors = [
+        f"{name} is missing {field}"
+        for field in TEST_RESULT_SCHEMA["required"]
+        if field not in document
+    ]
+    entry_gaps = Counter(
+        field
+        for entry in document.get("tests", [])
+        for field in _TEST_ENTRY_SCHEMA["required"]
+        if field not in entry
+    )
+    errors += [
+        f"{name} tests: {count} entries missing {field}"
+        for field, count in sorted(entry_gaps.items())
+    ]
+    density = document.get("contract_density")
+    if isinstance(density, dict):
+        errors += [
+            f"{name} contract_density is missing {field}"
+            for field in TEST_RESULT_SCHEMA["$defs"]["ContractDensity"]["required"]
+            if field not in density
+        ]
+    return errors
+
+
+def _by_test_identity(entries):
+    grouped = {}
+    for entry in entries:
+        key = tuple(entry.get(field) for field in TEST_IDENTITY_FIELDS)
+        grouped.setdefault(key, []).append(entry)
+    return grouped
+
+
+def _compare_test_entries(rust_tests, self_tests):
+    """Membership delta first, then every stable field of a shared entry."""
+    # Report only the delta, so a one-test disagreement reads as one line
+    # however far the two suites drift apart. Counted rather than set-compared:
+    # suites differing only in how often a name repeats must still name the
+    # entry they disagree on instead of printing an empty delta.
+    rust_ids = _field_multiset(rust_tests, *TEST_IDENTITY_FIELDS)
+    self_ids = _field_multiset(self_tests, *TEST_IDENTITY_FIELDS)
+    errors = []
+    if rust_ids != self_ids:
+        only_rust = _ordered(rust_ids - self_ids)
+        only_self = _ordered(self_ids - rust_ids)
+        errors.append(f"tests: rust-only {only_rust} vs self-only {only_self}")
+
+    rust_by_id = _by_test_identity(rust_tests)
+    self_by_id = _by_test_identity(self_tests)
+    for key in sorted(rust_by_id.keys() & self_by_id.keys(), key=repr):
+        for rust_entry, self_entry in zip(rust_by_id[key], self_by_id[key]):
+            for field in TEST_PAYLOAD_FIELDS:
+                errors += _mismatch(
+                    f"test {key[0]}.{field}",
+                    rust_entry.get(field),
+                    self_entry.get(field),
+                )
+    return errors
+
+
 def compare_test(rust, self_hosted, rust_exit, self_exit):
     """Return parity errors for two ``vow test`` suite results."""
     errors = []
@@ -219,24 +315,24 @@ def compare_test(rust, self_hosted, rust_exit, self_exit):
             errors.append(
                 f"{name} status={document.get('status')}, expected TestsPassed"
             )
+        errors += _missing_test_fields(name, document)
 
     # Equality alone is satisfied by two suites that discovered nothing, which
     # is how a blocking gate goes vacuous exactly when it matters most.
     if not rust.get("total"):
         errors.append(f"rust total={rust.get('total')}, expected a non-empty suite")
 
-    errors += _mismatch("total", rust.get("total"), self_hosted.get("total"))
+    for field in TEST_COUNT_FIELDS:
+        errors += _mismatch(field, rust.get(field), self_hosted.get(field))
+    # Derived from the same sources by each compiler's own frontend, so a
+    # disagreement here is a parity bug the test list alone cannot expose.
+    errors += _mismatch(
+        "contract_density",
+        rust.get("contract_density"),
+        self_hosted.get("contract_density"),
+    )
 
-    # Report only the delta, so a one-test disagreement reads as one line
-    # however far the two suites drift apart. Counted rather than set-compared:
-    # suites differing only in how often a name repeats must still name the
-    # entry they disagree on instead of printing an empty delta.
-    rust_tests = _field_multiset(rust.get("tests", []), "name", "status")
-    self_tests = _field_multiset(self_hosted.get("tests", []), "name", "status")
-    if rust_tests != self_tests:
-        only_rust = _ordered(rust_tests - self_tests)
-        only_self = _ordered(self_tests - rust_tests)
-        errors.append(f"tests: rust-only {only_rust} vs self-only {only_self}")
+    errors += _compare_test_entries(rust.get("tests", []), self_hosted.get("tests", []))
     return errors
 
 
