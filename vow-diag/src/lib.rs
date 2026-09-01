@@ -379,10 +379,10 @@ mod tests {
         assert!(output.contains("hint: check the value of y"));
     }
 
-    /// The `error_code` enum advertised by the published diagnostic schema.
-    /// Every ErrorCode the compiler emits must appear here, or a client
-    /// validating compiler JSON would reject valid output.
-    fn schema_error_codes() -> Vec<serde_json::Value> {
+    /// Every ErrorCode the compiler emits must be advertised by the `error_code`
+    /// enum in the published diagnostic schema, or a client validating compiler
+    /// JSON would reject valid output.
+    fn assert_schema_lists(expected: impl IntoIterator<Item = ErrorCode>) {
         let schema_src = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../docs/spec/schemas/diagnostic.schema.json"
@@ -390,14 +390,9 @@ mod tests {
         .expect("diagnostic schema must be readable");
         let schema: serde_json::Value =
             serde_json::from_str(&schema_src).expect("diagnostic schema must be valid JSON");
-        schema["properties"]["error_code"]["enum"]
+        let codes = schema["properties"]["error_code"]["enum"]
             .as_array()
-            .expect("schema error_code enum must be an array")
-            .clone()
-    }
-
-    fn assert_schema_lists(expected: impl IntoIterator<Item = ErrorCode>) {
-        let codes = schema_error_codes();
+            .expect("schema error_code enum must be an array");
         for code in expected {
             let name = serde_json::to_value(code).unwrap();
             assert!(
