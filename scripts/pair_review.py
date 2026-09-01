@@ -283,32 +283,6 @@ def hash_pair(rust_paths, self_path):
     return h.hexdigest()
 
 
-def read_pair(rust_paths, self_path, max_bytes):
-    """Assemble the review prompt for one pair.
-
-    Truncation is reported in the prompt rather than done silently: a model that
-    does not know it saw half a file will confidently reason about the missing
-    half.
-    """
-    chunks = []
-    for spec in rust_paths:
-        p = REPO_ROOT / spec
-        files = sorted(p.rglob("*.rs")) if p.is_dir() else [p]
-        for f in files:
-            text = f.read_text(errors="replace")
-            rel = f.relative_to(REPO_ROOT)
-            if len(text) > max_bytes:
-                text = text[:max_bytes] + f"\n// [TRUNCATED at {max_bytes} bytes]\n"
-            chunks.append(f"=== RUST: {rel} ===\n{text}")
-    sp = REPO_ROOT / self_path
-    stext = sp.read_text(errors="replace")
-    truncated = len(stext) > max_bytes
-    if truncated:
-        stext = stext[:max_bytes] + f"\n// [TRUNCATED at {max_bytes} bytes]\n"
-    chunks.append(f"=== SELF-HOSTED: {self_path} ===\n{stext}")
-    return "\n\n".join(chunks), truncated
-
-
 def confirm(program, rust, self_bin, timeout):
     """Run one candidate program through the differential runner.
 
@@ -361,54 +335,138 @@ def confirm(program, rust, self_bin, timeout):
         return "refuted", "both compilers agreed"
 
 
-def review_pair(name, model, rust, self_bin, max_bytes, timeout):
-    import llm
+def _plan_record(chunks, preambles):
+    total = len(chunks)
+    records = []
+    for index, chunk in enumerate(chunks, 1):
+        records.append(
+            {
+                "index": index,
+                "bytes": len(render_chunk(chunk, preambles, index, total).encode()),
+                "rust_units": [f"{u.source}:{u.name}" for u in chunk.rust_units],
+                "self_hosted_units": [f"{u.source}:{u.name}" for u in chunk.self_units],
+                "oversize_units": chunk.oversize_units,
+            }
+        )
+    return records
 
-    rust_paths, self_path = PAIRS[name]
-    body, truncated = read_pair(rust_paths, self_path, max_bytes)
-    config = llm.make_config(model)
-    resp = llm.chat(
-        config,
-        SYSTEM,
-        [{"role": "user", "content": body}],
+
+def _coverage(preambles, rust_units, self_units, selected):
+    preamble_bytes = sum(
+        len(text.encode()) for _, text in (*preambles.rust, *preambles.self_hosted)
     )
-    text = resp.content.strip()
-    # Models wrap JSON in fences despite instructions; strip rather than fail.
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-    try:
-        findings = json.loads(text).get("findings", [])
-    except json.JSONDecodeError:
-        return {
-            "pair": name,
-            "error": "model did not return parseable JSON",
-            "raw": text[:2000],
-            "truncated": truncated,
-            "findings": [],
-        }
+    total = preamble_bytes + sum(
+        len(unit.text.encode()) for unit in (*rust_units, *self_units)
+    )
+    if total == 0:
+        return 1.0
+    reviewed = preamble_bytes if selected else 0
+    reviewed += sum(
+        len(unit.text.encode())
+        for chunk in selected
+        for unit in (*chunk.rust_units, *chunk.self_units)
+    )
+    return reviewed / total
 
-    judged = []
-    for f in findings:
-        program = f.get("program", "")
-        if not program.strip():
-            f["verdict"] = "inconclusive"
-            f["verdict_detail"] = "no program supplied"
-        else:
-            verdict, detail = confirm(program, rust, self_bin, timeout)
-            f["verdict"] = verdict
-            f["verdict_detail"] = detail
-        judged.append(f)
 
-    return {
+def review_pair(
+    name,
+    model,
+    rust,
+    self_bin,
+    chunk_bytes,
+    timeout,
+    max_chunks=0,
+    dry_run=False,
+    llm_module=None,
+    confirm_fn=None,
+):
+    """Plan and, unless dry-running, review every selected function chunk."""
+    preambles, rust_units, self_units = load_pair_units(name)
+    chunks = plan_chunks(rust_units, self_units, chunk_bytes, preambles)
+    selected_count = min(max_chunks, len(chunks)) if max_chunks else len(chunks)
+    selected = chunks[:selected_count]
+    result = {
         "pair": name,
-        "truncated": truncated,
-        "input_tokens": resp.input_tokens,
-        "output_tokens": resp.output_tokens,
-        "findings": judged,
+        "truncated": False,
+        "coverage": _coverage(preambles, rust_units, self_units, selected),
+        "plan": {
+            "chunk_bytes": chunk_bytes,
+            "chunks": _plan_record(chunks, preambles),
+        },
+        "chunks_reviewed": [] if dry_run else list(range(1, selected_count + 1)),
+        "chunks_deferred": list(range(selected_count + 1, len(chunks) + 1)),
+        "errors": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "findings": [],
     }
+    if dry_run:
+        return result
+
+    if llm_module is None:
+        import llm as llm_module
+
+    confirm_fn = confirm_fn or confirm
+    config = llm_module.make_config(model)
+    for index, chunk in enumerate(selected, 1):
+        body = render_chunk(chunk, preambles, index, len(chunks))
+        try:
+            response = llm_module.chat(
+                config,
+                SYSTEM,
+                [{"role": "user", "content": body}],
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate provider failures by chunk
+            result["errors"].append(
+                {"chunk_index": index, "error": f"model call failed: {exc}"}
+            )
+            continue
+        result["input_tokens"] += response.input_tokens
+        result["output_tokens"] += response.output_tokens
+        text = response.content.strip()
+        # Models wrap JSON in fences despite instructions; strip rather than fail.
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+        try:
+            parsed = json.loads(text)
+            findings = parsed.get("findings", [])
+            if not isinstance(findings, list):
+                raise ValueError("findings is not a list")
+        except (json.JSONDecodeError, AttributeError, ValueError):
+            result["errors"].append(
+                {
+                    "chunk_index": index,
+                    "error": "model did not return parseable findings JSON",
+                    "raw": text[:2000],
+                }
+            )
+            continue
+
+        for raw_finding in findings:
+            if not isinstance(raw_finding, dict):
+                result["errors"].append(
+                    {
+                        "chunk_index": index,
+                        "error": "model finding was not a JSON object",
+                    }
+                )
+                continue
+            finding = dict(raw_finding)
+            finding["chunk_index"] = index
+            program = finding.get("program", "")
+            if not isinstance(program, str) or not program.strip():
+                finding["verdict"] = "inconclusive"
+                finding["verdict_detail"] = "no program supplied"
+            else:
+                verdict, detail = confirm_fn(program, rust, self_bin, timeout)
+                finding["verdict"] = verdict
+                finding["verdict_detail"] = detail
+            result["findings"].append(finding)
+    return result
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description="Adversarial pair review (#1083)")
     ap.add_argument("--model", default="claude-sonnet-4-20250514")
     ap.add_argument("--rust", default="target/release/vow")
@@ -421,10 +479,21 @@ def main():
     )
     ap.add_argument("--output-dir", default="pair-review.out")
     ap.add_argument(
-        "--max-bytes",
+        "--chunk-bytes",
         type=int,
-        default=180_000,
-        help="per-file prompt budget (default: 180000)",
+        default=120_000,
+        help="rendered prompt budget per chunk (default: 120000)",
+    )
+    ap.add_argument(
+        "--max-chunks-per-pair",
+        type=int,
+        default=0,
+        help="review at most N chunks per pair; 0 is unlimited",
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="write the chunk plan without model or compiler calls",
     )
     ap.add_argument("--timeout", type=int, default=120)
     ap.add_argument(
@@ -432,19 +501,28 @@ def main():
         action="store_true",
         help="review every pair even if unchanged since last review",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    for p in (Path(args.rust), Path(args.self_bin)):
-        if not p.exists():
-            print(f"error: compiler not found: {p}", file=sys.stderr)
-            return 2
+    unknown = sorted(set(args.pair) - set(PAIRS))
+    if unknown:
+        ap.error(f"unknown pair(s): {', '.join(unknown)}")
+    if args.chunk_bytes <= 0:
+        ap.error("--chunk-bytes must be positive")
+    if args.max_chunks_per_pair < 0:
+        ap.error("--max-chunks-per-pair cannot be negative")
+
+    if not args.dry_run:
+        for path in (Path(args.rust), Path(args.self_bin)):
+            if not path.exists():
+                print(f"error: compiler not found: {path}", file=sys.stderr)
+                return 2
 
     ledger = json.loads(LEDGER.read_text()) if LEDGER.exists() else {"pairs": {}}
     names = args.pair or list(PAIRS)
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    reviewed, skipped, results = [], [], []
+    planned, reviewed, skipped, results = [], [], [], []
     for name in names:
         rust_paths, self_path = PAIRS[name]
         digest = hash_pair(rust_paths, self_path)
@@ -456,13 +534,23 @@ def main():
         ):
             skipped.append((name, prior.get("last_reviewed")))
             continue
-        print(f"reviewing {name} ...")
+        action = "planning" if args.dry_run else "reviewing"
+        print(f"{action} {name} ...")
         res = review_pair(
-            name, args.model, args.rust, args.self_bin, args.max_bytes, args.timeout
+            name,
+            args.model,
+            args.rust,
+            args.self_bin,
+            args.chunk_bytes,
+            args.timeout,
+            max_chunks=args.max_chunks_per_pair,
+            dry_run=args.dry_run,
         )
         res["content_hash"] = digest
         results.append(res)
-        reviewed.append(name)
+        planned.append(name)
+        if not args.dry_run:
+            reviewed.append(name)
 
     confirmed = [
         (r["pair"], f)
@@ -485,6 +573,8 @@ def main():
             {
                 "schema_version": 1,
                 "model": args.model,
+                "dry_run": args.dry_run,
+                "planned": planned,
                 "reviewed": reviewed,
                 "skipped_unchanged": [n for n, _ in skipped],
                 "confirmed": len(confirmed),
@@ -500,6 +590,7 @@ def main():
     print()
     print("=== Pair review ===")
     print(f"  model     : {args.model}")
+    print(f"  planned   : {len(planned)} {planned}")
     print(f"  reviewed  : {len(reviewed)} {reviewed}")
     # Report what was not looked at. A run that skipped everything must never
     # read as a clean bill of health.
@@ -507,10 +598,26 @@ def main():
         print(f"  unchanged : {len(skipped)} (not re-reviewed)")
         for n, when in skipped:
             print(f"      {n} — last reviewed {when}")
-    truncated = [r["pair"] for r in results if r.get("truncated")]
-    if truncated:
-        print(f"  truncated : {truncated} — reviewed on partial source")
-    errored = [r["pair"] for r in results if r.get("error")]
+    deferred = [
+        (r["pair"], r["chunks_deferred"], r["coverage"])
+        for r in results
+        if r["chunks_deferred"]
+    ]
+    if deferred:
+        print("  deferred  : review covered only part of these pairs")
+        for pair, chunks, coverage in deferred:
+            print(f"      {pair} — chunks {chunks}; coverage {coverage:.1%}")
+    oversize = [
+        (r["pair"], chunk["index"], chunk["oversize_units"])
+        for r in results
+        for chunk in r["plan"]["chunks"]
+        if chunk["oversize_units"]
+    ]
+    if oversize:
+        print("  oversize  : complete units retained above the byte budget")
+        for pair, index, units in oversize:
+            print(f"      {pair} chunk {index} — {units}")
+    errored = [r["pair"] for r in results if r["errors"]]
     if errored:
         print(f"  errors    : {errored}")
     print(f"  CONFIRMED : {len(confirmed)}")

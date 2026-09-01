@@ -6,7 +6,14 @@ concentrate on it: an unconfirmed claim must never be counted as a finding, and
 a pair must never be reported as reviewed when it was skipped or truncated.
 """
 
+import io
+import json
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import pair_review
 
@@ -156,31 +163,139 @@ class ChunkPlanTest(unittest.TestCase):
         self.assertLessEqual(len(chunks), 12)
 
 
-class ReadPairTest(unittest.TestCase):
-    def test_truncation_is_flagged_and_marked_in_the_text(self):
-        # A model that does not know it saw half a file will reason
-        # confidently about the half it never got.
-        body, truncated = pair_review.read_pair(
-            ["vow-verify/src/c_emitter.rs"], "compiler/c_emitter.vow", 1000
-        )
-
-        self.assertTrue(truncated)
-        self.assertIn("TRUNCATED", body)
-
-    def test_untruncated_pair_reports_false(self):
-        _, truncated = pair_review.read_pair(
-            ["vow-syntax/src/token.rs"], "compiler/span.vow", 10_000_000
-        )
-
-        self.assertFalse(truncated)
-
+class RenderChunkTest(unittest.TestCase):
     def test_both_sides_are_labelled(self):
-        body, _ = pair_review.read_pair(
-            ["vow-syntax/src/token.rs"], "compiler/span.vow", 10_000_000
+        chunk = pair_review.Chunk(
+            rust_units=[pair_review.Unit("r", "fn r() {}\n", "r.rs")],
+            self_units=[pair_review.Unit("v", "fn v() {}\n", "v.vow")],
         )
+        body = pair_review.render_chunk(chunk, None, 1, 1)
 
         self.assertIn("=== RUST:", body)
         self.assertIn("=== SELF-HOSTED:", body)
+
+
+class ReviewReportTest(unittest.TestCase):
+    def run_dry(self, *extra):
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = pair_review.main(
+                    [
+                        "--dry-run",
+                        "--all",
+                        "--output-dir",
+                        directory,
+                        *extra,
+                    ]
+                )
+            report = json.loads((Path(directory) / "results.json").read_text())
+            return status, output.getvalue(), report
+
+    def test_dry_run_emits_all_five_chunk_plans_without_model_calls(self):
+        with mock.patch.dict("sys.modules", {"llm": None}):
+            status, _, report = self.run_dry()
+
+        self.assertEqual(0, status)
+        self.assertEqual(set(pair_review.PAIRS), {p["pair"] for p in report["pairs"]})
+        self.assertTrue(all(p["plan"]["chunks"] for p in report["pairs"]))
+        self.assertEqual([], report["reviewed"])
+
+    def test_coverage_is_one_when_nothing_is_deferred(self):
+        _, _, report = self.run_dry()
+
+        self.assertTrue(all(p["coverage"] == 1.0 for p in report["pairs"]))
+        self.assertTrue(all(not p["truncated"] for p in report["pairs"]))
+
+    def test_deferred_chunks_are_reported_and_coverage_drops(self):
+        _, output, report = self.run_dry(
+            "--pair", "lower", "--max-chunks-per-pair", "2"
+        )
+
+        result = report["pairs"][0]
+        self.assertTrue(result["chunks_deferred"])
+        self.assertLess(result["coverage"], 1.0)
+        self.assertIn("deferred", output)
+
+    @staticmethod
+    def two_chunk_sources():
+        units = [
+            pair_review.Unit("one", "fn one() {\n" + "x" * 500 + "\n}\n", "x.vow"),
+            pair_review.Unit("two", "fn two() {\n" + "y" * 500 + "\n}\n", "x.vow"),
+        ]
+        return pair_review.Preambles(), [], units
+
+    def test_findings_carry_their_chunk_index(self):
+        replies = iter(
+            [
+                SimpleNamespace(
+                    content=json.dumps(
+                        {"findings": [{"claim": "first", "program": "module M\n"}]}
+                    ),
+                    input_tokens=10,
+                    output_tokens=5,
+                ),
+                SimpleNamespace(
+                    content=json.dumps(
+                        {"findings": [{"claim": "second", "program": "module M\n"}]}
+                    ),
+                    input_tokens=10,
+                    output_tokens=5,
+                ),
+            ]
+        )
+        fake_llm = SimpleNamespace(
+            make_config=lambda model: model,
+            chat=lambda *_: next(replies),
+        )
+        with mock.patch.object(
+            pair_review, "load_pair_units", return_value=self.two_chunk_sources()
+        ):
+            result = pair_review.review_pair(
+                "lexer",
+                "model",
+                "rust",
+                "self",
+                600,
+                1,
+                llm_module=fake_llm,
+                confirm_fn=lambda *_: ("refuted", "agreed"),
+            )
+
+        self.assertEqual([1, 2], [f["chunk_index"] for f in result["findings"]])
+
+    def test_unparseable_chunk_does_not_lose_sibling_findings(self):
+        replies = iter(
+            [
+                SimpleNamespace(content="not json", input_tokens=1, output_tokens=1),
+                SimpleNamespace(
+                    content=json.dumps(
+                        {"findings": [{"claim": "kept", "program": ""}]}
+                    ),
+                    input_tokens=1,
+                    output_tokens=1,
+                ),
+            ]
+        )
+        fake_llm = SimpleNamespace(
+            make_config=lambda model: model,
+            chat=lambda *_: next(replies),
+        )
+        with mock.patch.object(
+            pair_review, "load_pair_units", return_value=self.two_chunk_sources()
+        ):
+            result = pair_review.review_pair(
+                "lexer",
+                "model",
+                "rust",
+                "self",
+                600,
+                1,
+                llm_module=fake_llm,
+            )
+
+        self.assertEqual(1, len(result["errors"]))
+        self.assertEqual("kept", result["findings"][0]["claim"])
 
 
 class SystemPromptTest(unittest.TestCase):
