@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from verifier_runtime import check_soundness
@@ -71,12 +72,89 @@ RUST_FN = re.compile(
     re.MULTILINE,
 )
 
+CFG_TEST = re.compile(r"^#\[cfg\(test\)\][ \t]*$", re.MULTILINE)
+CHAR_LIT = re.compile(r"'(?:\\.|[^\\'])'")
+
+
+def _item_end(text, start):
+    """Index just past the brace-balanced Rust item beginning at `start`.
+
+    Brace counting alone is wrong here: the test modules embed Vow programs in
+    raw strings, and those contain unbalanced braces at column 0. So comments,
+    strings, char literals and raw strings are skipped before any brace counts.
+    """
+    index, depth, saw_brace = start, 0, False
+    end = len(text)
+    while index < end:
+        char = text[index]
+        if text.startswith("//", index):
+            newline = text.find("\n", index)
+            index = end if newline == -1 else newline + 1
+            continue
+        if text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            index = end if close == -1 else close + 2
+            continue
+        if char == "r" and index + 1 < end and text[index + 1] in '#"':
+            cursor = index + 1
+            hashes = 0
+            while cursor < end and text[cursor] == "#":
+                hashes += 1
+                cursor += 1
+            if cursor < end and text[cursor] == '"':
+                terminator = '"' + "#" * hashes
+                close = text.find(terminator, cursor + 1)
+                index = end if close == -1 else close + len(terminator)
+                continue
+        if char == '"':
+            index += 1
+            while index < end and text[index] != '"':
+                index += 2 if text[index] == "\\" else 1
+            index += 1
+            continue
+        if char == "'":
+            literal = CHAR_LIT.match(text, index)
+            index += len(literal.group()) if literal else 1
+            continue
+        if char == "{":
+            depth += 1
+            saw_brace = True
+        elif char == "}":
+            depth -= 1
+            if saw_brace and depth == 0:
+                return index + 1
+        elif char == ";" and not saw_brace and depth == 0:
+            return index + 1
+        index += 1
+    return end
+
+
+def strip_cfg_test(text):
+    """Drop `#[cfg(test)]` items so the review budget buys implementation code.
+
+    Two thirds of the Rust units in the declared pairs are test functions, and
+    the self-hosted side has no counterpart for any of them. Reviewing them
+    costs model calls and inflates the coverage figure that stamps the ledger.
+    """
+    kept, position = [], 0
+    for marker in CFG_TEST.finditer(text):
+        if marker.start() < position:
+            continue
+        kept.append(text[position : marker.start()])
+        position = _item_end(text, marker.end())
+    kept.append(text[position:])
+    return "".join(kept)
+
 
 @dataclass(frozen=True)
 class Unit:
     name: str
     text: str
     source: str = ""
+
+    @property
+    def label(self):
+        return f"{self.source}:{self.name}"
 
 
 @dataclass(frozen=True)
@@ -118,21 +196,31 @@ def _source_files(specs, suffix):
     return files
 
 
-def _load_units(files, pattern):
+def _load_units(files, pattern, strip_tests=False):
     preambles = []
     units = []
     for path in files:
         relative = str(path.relative_to(REPO_ROOT))
-        preamble, source_units = split_units(path.read_text(errors="replace"), pattern)
+        text = path.read_text(errors="replace")
+        if strip_tests:
+            text = strip_cfg_test(text)
+        preamble, source_units = split_units(text, pattern)
         preambles.append((relative, preamble))
         units.extend(Unit(unit.name, unit.text, relative) for unit in source_units)
     return tuple(preambles), units
 
 
 def load_pair_units(name):
-    """Load one declared module pair as preambles and function units."""
+    """Load one declared module pair as preambles and function units.
+
+    Rust test items are dropped from the review, but `hash_pair` still digests
+    whole files: a test-only edit therefore forces a re-review it cannot change
+    the content of. That is the safe direction to err in.
+    """
     rust_paths, self_path = PAIRS[name]
-    rust_preambles, rust_units = _load_units(_source_files(rust_paths, ".rs"), RUST_FN)
+    rust_preambles, rust_units = _load_units(
+        _source_files(rust_paths, ".rs"), RUST_FN, strip_tests=True
+    )
     self_preambles, self_units = _load_units(_source_files([self_path], ".vow"), VOW_FN)
     return Preambles(rust_preambles, self_preambles), rust_units, self_units
 
@@ -191,7 +279,7 @@ def plan_chunks(rust_units, self_units, chunk_bytes, preambles=None):
             target = candidate.rust_units if side == "rust" else candidate.self_units
             target.append(unit)
         if rendered_size(candidate) > chunk_bytes:
-            candidate.oversize_units.append(f"{unit.source}:{unit.name}")
+            candidate.oversize_units.append(unit.label)
         current = candidate
 
     def add_group(group_rust, group_self):
@@ -204,16 +292,14 @@ def plan_chunks(rust_units, self_units, chunk_bytes, preambles=None):
         if rendered_size(candidate) <= chunk_bytes:
             current = candidate
             return
-        if nonempty(current):
+        # A matched group is the unit of comparison. Splitting it hands the
+        # model one implementation with no counterpart, which is not a pair
+        # review at all -- so an over-budget group is flagged, never split.
+        finish()
+        current = Chunk(rust_units=[*group_rust], self_units=[*group_self])
+        if rendered_size(current) > chunk_bytes:
+            current.oversize_units = [u.label for u in (*group_rust, *group_self)]
             finish()
-            candidate = Chunk(rust_units=[*group_rust], self_units=[*group_self])
-            if rendered_size(candidate) <= chunk_bytes:
-                current = candidate
-                return
-        for unit in group_rust:
-            add_one(unit, "rust")
-        for unit in group_self:
-            add_one(unit, "self")
 
     used_rust = set()
     for self_unit in self_units:
@@ -303,15 +389,35 @@ demonstrable."""
 def hash_pair(rust_paths, self_path):
     h = hashlib.sha256()
     inner = hashlib.sha256()
-    for spec in rust_paths:
-        p = REPO_ROOT / spec
-        files = sorted(p.rglob("*.rs")) if p.is_dir() else [p]
-        for f in files:
-            inner.update(str(f.relative_to(REPO_ROOT)).encode())
-            inner.update(f.read_bytes())
+    for f in _source_files(rust_paths, ".rs"):
+        inner.update(str(f.relative_to(REPO_ROOT)).encode())
+        inner.update(f.read_bytes())
     h.update(inner.hexdigest().encode())
     h.update((REPO_ROOT / self_path).read_bytes())
     return h.hexdigest()
+
+
+FAIL_CLOSED_SIDE = re.compile(r"^(rust|self-hosted) compiler ")
+
+
+def _agreed_by_crashing(divergences):
+    """Whether the only evidence is that both compilers crashed.
+
+    scripts/equivalence.py files a panic or signal death once per side, because
+    a crash is a bug whatever the peer did. Here it is not evidence that the two
+    implementations *disagree*, which is the only claim a model may have
+    confirmed -- otherwise any crashing input passes the gate.
+    """
+    if any(v["observable"] != "fail_closed" for v in divergences):
+        return False
+    sides = set()
+    for divergence in divergences:
+        side = FAIL_CLOSED_SIDE.match(divergence["detail"])
+        if side:
+            sides.add(side.group(1))
+        elif divergence["detail"].startswith("both "):
+            return True
+    return sides == {"rust", "self-hosted"}
 
 
 def confirm(program, rust, self_bin, timeout):
@@ -356,10 +462,13 @@ def confirm(program, rust, self_bin, timeout):
         rec = data["records"][0] if data["records"] else None
         if rec is None:
             return "inconclusive", "runner examined no file"
-        if rec["divergences"]:
+        divergences = rec["divergences"]
+        if divergences:
             detail = "; ".join(
-                f"[{v['observable']}] {v['detail']}" for v in rec["divergences"]
+                f"[{v['observable']}] {v['detail']}" for v in divergences
             )
+            if _agreed_by_crashing(divergences):
+                return "inconclusive", f"both compilers failed closed: {detail}"
             return "confirmed", detail
         if rec.get("skipped"):
             return "inconclusive", rec["skipped"]
@@ -397,6 +506,21 @@ def confirm_soundness_pair(program, rust, self_bin, timeout):
     return "inconclusive", observed
 
 
+@dataclass(frozen=True)
+class Mode:
+    """Everything that differs between the two questions this harness asks."""
+
+    system: str
+    confirm: object
+    pairs: tuple
+
+
+MODES = {
+    "equivalence": Mode(SYSTEM, confirm, tuple(PAIRS)),
+    "soundness": Mode(SYSTEM_SOUNDNESS, confirm_soundness_pair, ("c_emitter",)),
+}
+
+
 def _plan_record(chunks, preambles):
     total = len(chunks)
     records = []
@@ -405,12 +529,34 @@ def _plan_record(chunks, preambles):
             {
                 "index": index,
                 "bytes": len(render_chunk(chunk, preambles, index, total).encode()),
-                "rust_units": [f"{u.source}:{u.name}" for u in chunk.rust_units],
-                "self_hosted_units": [f"{u.source}:{u.name}" for u in chunk.self_units],
+                "rust_units": [u.label for u in chunk.rust_units],
+                "self_hosted_units": [u.label for u in chunk.self_units],
                 "oversize_units": chunk.oversize_units,
             }
         )
     return records
+
+
+def _unit_bytes(chunks):
+    return sum(
+        len(unit.text.encode())
+        for chunk in chunks
+        for unit in (*chunk.rust_units, *chunk.self_units)
+    )
+
+
+def _paired_coverage(chunks, selected):
+    """Share of unit bytes a model saw with both implementations in front of it.
+
+    `coverage` answers "was every byte shipped?". This answers "was it shipped
+    as a comparison?" -- a run whose tail chunks carry one side only examined
+    that surface, it did not compare it.
+    """
+    total = _unit_bytes(chunks)
+    if total == 0:
+        return 1.0
+    paired = [c for c in selected if c.rust_units and c.self_units]
+    return _unit_bytes(paired) / total
 
 
 def _coverage(preambles, rust_units, self_units, selected):
@@ -445,6 +591,8 @@ def review_pair(
     mode="equivalence",
 ):
     """Plan and, unless dry-running, review every selected function chunk."""
+    if mode not in MODES:
+        raise ValueError(f"unknown review mode: {mode}")
     preambles, rust_units, self_units = load_pair_units(name)
     chunks = plan_chunks(rust_units, self_units, chunk_bytes, preambles)
     selected_count = min(max_chunks, len(chunks)) if max_chunks else len(chunks)
@@ -452,8 +600,8 @@ def review_pair(
     result = {
         "pair": name,
         "mode": mode,
-        "truncated": False,
         "coverage": _coverage(preambles, rust_units, self_units, selected),
+        "paired_coverage": _paired_coverage(chunks, selected),
         "plan": {
             "chunk_bytes": chunk_bytes,
             "chunks": _plan_record(chunks, preambles),
@@ -471,21 +619,15 @@ def review_pair(
     if llm_module is None:
         import llm as llm_module
 
-    if mode not in ("equivalence", "soundness"):
-        raise ValueError(f"unknown review mode: {mode}")
-    if confirm_fn is None:
-        if mode == "soundness":
-            confirm_fn = confirm_soundness_pair
-        else:
-            confirm_fn = confirm
-    system = SYSTEM_SOUNDNESS if mode == "soundness" else SYSTEM
+    spec = MODES[mode]
+    confirm_fn = confirm_fn or spec.confirm
     config = llm_module.make_config(model)
     for index, chunk in enumerate(selected, 1):
         body = render_chunk(chunk, preambles, index, len(chunks))
         try:
             response = llm_module.chat(
                 config,
-                system,
+                spec.system,
                 [{"role": "user", "content": body}],
             )
         except Exception as exc:  # noqa: BLE001 - isolate provider failures by chunk
@@ -537,11 +679,16 @@ def review_pair(
     return result
 
 
-def _validate_pair_entry(entry):
+@lru_cache(maxsize=1)
+def _pair_schema():
     schema = json.loads(
         (REPO_ROOT / "docs" / "equivalence" / "ledger.schema.json").read_text()
     )
-    pair_schema = schema["properties"]["pairs"]["additionalProperties"]
+    return schema["properties"]["pairs"]["additionalProperties"]
+
+
+def _validate_pair_entry(entry):
+    pair_schema = _pair_schema()
     keys = set(entry)
     missing = set(pair_schema["required"]) - keys
     unknown = keys - set(pair_schema["properties"])
@@ -562,7 +709,15 @@ def _ledger_outcome(findings):
 
 
 def write_ledger(ledger, results, date, path=LEDGER):
-    """Atomically stamp only fully reviewed pair rows in the shared ledger."""
+    """Atomically stamp only fully reviewed pair rows in the shared ledger.
+
+    The rows are merged into the ledger as it stands *now*, not into the copy
+    loaded before the model calls: a review runs for minutes, and triage edits
+    issue numbers and corpus rows in the same file meanwhile.
+    """
+    path = Path(path)
+    if path.exists():
+        ledger = json.loads(path.read_text())
     updated = []
     for result in results:
         complete = (
@@ -590,7 +745,6 @@ def write_ledger(ledger, results, date, path=LEDGER):
     if not updated:
         return updated
     ledger["updated"] = date
-    path = Path(path)
     descriptor, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
@@ -604,6 +758,65 @@ def write_ledger(ledger, results, date, path=LEDGER):
     return updated
 
 
+def _print_summary(report, skipped, confirmed, outdir):
+    """Print the run, leading with everything it did not look at.
+
+    A run that skipped, deferred or errored out of most of the surface must
+    never read as a clean bill of health.
+    """
+    results = report["pairs"]
+    print()
+    print("=== Pair review ===")
+    print(f"  model     : {report['model']}")
+    print(f"  mode      : {report['mode']}")
+    print(f"  planned   : {len(report['planned'])} {report['planned']}")
+    print(f"  reviewed  : {len(report['reviewed'])} {report['reviewed']}")
+    if skipped:
+        print(f"  unchanged : {len(skipped)} (not re-reviewed)")
+        for name, when in skipped:
+            print(f"      {name} — last reviewed {when}")
+    deferred = [
+        (r["pair"], r["chunks_deferred"], r["coverage"])
+        for r in results
+        if r["chunks_deferred"]
+    ]
+    if deferred:
+        print("  deferred  : review covered only part of these pairs")
+        for pair, chunks, coverage in deferred:
+            print(f"      {pair} — chunks {chunks}; coverage {coverage:.1%}")
+    unpaired = [
+        (r["pair"], r["paired_coverage"])
+        for r in results
+        if r.get("paired_coverage", 1.0) < 1.0
+    ]
+    if unpaired:
+        print("  unpaired  : bytes shown with only one implementation present")
+        for pair, fraction in unpaired:
+            print(f"      {pair} — {fraction:.1%} of unit bytes seen side by side")
+    oversize = [
+        (r["pair"], chunk["index"], chunk["oversize_units"])
+        for r in results
+        for chunk in r["plan"]["chunks"]
+        if chunk["oversize_units"]
+    ]
+    if oversize:
+        print("  oversize  : complete units retained above the byte budget")
+        for pair, index, units in oversize:
+            print(f"      {pair} chunk {index} — {units}")
+    errored = [r["pair"] for r in results if r["errors"]]
+    if errored:
+        print(f"  errors    : {errored}")
+    print(f"  CONFIRMED : {report['confirmed']}")
+    print(
+        f"  hypotheses: {report['hypotheses']} (unconfirmed — not counted as findings)"
+    )
+    print(f"  refuted   : {report['refuted']}")
+    for pair, finding in confirmed:
+        print(f"    [{pair}] {finding.get('claim', '?')}")
+        print(f"            {finding['verdict_detail']}")
+    print(f"  results   : {outdir / 'results.json'}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Adversarial pair review (#1083)", allow_abbrev=False
@@ -611,7 +824,7 @@ def main(argv=None):
     ap.add_argument("--model", default="claude-sonnet-4-20250514")
     ap.add_argument(
         "--mode",
-        choices=("equivalence", "soundness"),
+        choices=tuple(MODES),
         default="equivalence",
         help="review compiler parity or verifier-model soundness",
     )
@@ -661,6 +874,9 @@ def main(argv=None):
     unknown = sorted(set(args.pair) - set(PAIRS))
     if unknown:
         ap.error(f"unknown pair(s): {', '.join(unknown)}")
+    out_of_mode = sorted(set(args.pair) - set(MODES[args.mode].pairs))
+    if out_of_mode:
+        ap.error(f"--mode {args.mode} does not cover pair(s): {', '.join(out_of_mode)}")
     if args.chunk_bytes <= 0:
         ap.error("--chunk-bytes must be positive")
     if args.max_chunks_per_pair < 0:
@@ -681,7 +897,7 @@ def main(argv=None):
                 return 2
 
     ledger = json.loads(LEDGER.read_text()) if LEDGER.exists() else {"pairs": {}}
-    names = args.pair or (["c_emitter"] if args.mode == "soundness" else list(PAIRS))
+    names = args.pair or list(MODES[args.mode].pairs)
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -690,8 +906,12 @@ def main(argv=None):
         rust_paths, self_path = PAIRS[name]
         digest = hash_pair(rust_paths, self_path)
         prior = ledger.get("pairs", {}).get(name, {})
+        # Only equivalence runs stamp the ledger, so only they may be skipped by
+        # it. A soundness run reading these hashes would skip every pair the
+        # equivalence review had stamped and exit 0 having asked nothing.
         if (
-            not args.all
+            args.mode == "equivalence"
+            and not args.all
             and prior.get("content_hash") == digest
             and prior.get("last_reviewed") not in (None, "never")
         ):
@@ -735,68 +955,22 @@ def main(argv=None):
     if args.update_ledger:
         ledger_updated = write_ledger(ledger, results, args.date, LEDGER)
 
-    (outdir / "results.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "model": args.model,
-                "mode": args.mode,
-                "dry_run": args.dry_run,
-                "planned": planned,
-                "reviewed": reviewed,
-                "skipped_unchanged": [n for n, _ in skipped],
-                "ledger_updated": ledger_updated,
-                "confirmed": len(confirmed),
-                "hypotheses": len(hypotheses),
-                "refuted": refuted,
-                "pairs": results,
-            },
-            indent=2,
-        )
-        + "\n"
-    )
-
-    print()
-    print("=== Pair review ===")
-    print(f"  model     : {args.model}")
-    print(f"  mode      : {args.mode}")
-    print(f"  planned   : {len(planned)} {planned}")
-    print(f"  reviewed  : {len(reviewed)} {reviewed}")
-    # Report what was not looked at. A run that skipped everything must never
-    # read as a clean bill of health.
-    if skipped:
-        print(f"  unchanged : {len(skipped)} (not re-reviewed)")
-        for n, when in skipped:
-            print(f"      {n} — last reviewed {when}")
-    deferred = [
-        (r["pair"], r["chunks_deferred"], r["coverage"])
-        for r in results
-        if r["chunks_deferred"]
-    ]
-    if deferred:
-        print("  deferred  : review covered only part of these pairs")
-        for pair, chunks, coverage in deferred:
-            print(f"      {pair} — chunks {chunks}; coverage {coverage:.1%}")
-    oversize = [
-        (r["pair"], chunk["index"], chunk["oversize_units"])
-        for r in results
-        for chunk in r["plan"]["chunks"]
-        if chunk["oversize_units"]
-    ]
-    if oversize:
-        print("  oversize  : complete units retained above the byte budget")
-        for pair, index, units in oversize:
-            print(f"      {pair} chunk {index} — {units}")
-    errored = [r["pair"] for r in results if r["errors"]]
-    if errored:
-        print(f"  errors    : {errored}")
-    print(f"  CONFIRMED : {len(confirmed)}")
-    print(f"  hypotheses: {len(hypotheses)} (unconfirmed — not counted as findings)")
-    print(f"  refuted   : {refuted}")
-    for pair, f in confirmed:
-        print(f"    [{pair}] {f.get('claim', '?')}")
-        print(f"            {f['verdict_detail']}")
-    print(f"  results   : {outdir / 'results.json'}")
+    report = {
+        "schema_version": 2,
+        "model": args.model,
+        "mode": args.mode,
+        "dry_run": args.dry_run,
+        "planned": planned,
+        "reviewed": reviewed,
+        "skipped_unchanged": [n for n, _ in skipped],
+        "ledger_updated": ledger_updated,
+        "confirmed": len(confirmed),
+        "hypotheses": len(hypotheses),
+        "refuted": refuted,
+        "pairs": results,
+    }
+    (outdir / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+    _print_summary(report, skipped, confirmed, outdir)
 
     return 1 if confirmed else 0
 

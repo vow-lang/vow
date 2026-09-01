@@ -3,7 +3,8 @@
 
 The confirmation gate is the reason this harness is trustworthy, so the tests
 concentrate on it: an unconfirmed claim must never be counted as a finding, and
-a pair must never be reported as reviewed when it was skipped or truncated.
+a pair must never be reported as reviewed when it was skipped or only partly
+reviewed.
 """
 
 import io
@@ -11,12 +12,26 @@ import json
 import shutil
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import equivalence
 import pair_review
+
+
+def fake_llm(*contents):
+    """A provider double that replays one canned response per chunk."""
+    replies = iter(
+        [
+            SimpleNamespace(content=content, input_tokens=1, output_tokens=1)
+            for content in contents
+        ]
+    )
+    return SimpleNamespace(
+        make_config=lambda model: model, chat=lambda *_: next(replies)
+    )
 
 
 class PairSpecTest(unittest.TestCase):
@@ -156,12 +171,123 @@ class ChunkPlanTest(unittest.TestCase):
         self.assertEqual(["huge.vow:huge"], chunks[0].oversize_units)
         self.assertIn(text, pair_review.render_chunk(chunks[0], None, 1, 1))
 
+    def test_matched_group_stays_whole_even_when_oversize(self):
+        body = "x" * 80_000
+        rust = [pair_review.Unit("lower_expr", f"fn lower_expr() {{{body}}}\n", "a.rs")]
+        self_ = [
+            pair_review.Unit("lower_expr", f"fn lower_expr() {{{body}}}\n", "a.vow")
+        ]
+
+        chunks = pair_review.plan_chunks(rust, self_, 50_000)
+
+        self.assertEqual(1, len(chunks))
+        self.assertEqual(["lower_expr"], [u.name for u in chunks[0].rust_units])
+        self.assertEqual(["lower_expr"], [u.name for u in chunks[0].self_units])
+        self.assertEqual(
+            ["a.rs:lower_expr", "a.vow:lower_expr"], chunks[0].oversize_units
+        )
+
+    def test_real_lower_expr_counterparts_share_a_chunk(self):
+        preambles, rust_units, self_units = pair_review.load_pair_units("lower")
+        chunks = pair_review.plan_chunks(rust_units, self_units, 120_000, preambles)
+
+        holding = [
+            c
+            for c in chunks
+            if any(u.name == "lower_expr" for u in (*c.rust_units, *c.self_units))
+        ]
+        self.assertEqual(1, len(holding))
+        self.assertTrue(any(u.name == "lower_expr" for u in holding[0].rust_units))
+        self.assertTrue(any(u.name == "lower_expr" for u in holding[0].self_units))
+
     def test_lower_pair_chunk_count_is_bounded(self):
         preambles, rust_units, self_units = pair_review.load_pair_units("lower")
 
         chunks = pair_review.plan_chunks(rust_units, self_units, 120_000, preambles)
 
         self.assertLessEqual(len(chunks), 12)
+
+
+class StripCfgTestTest(unittest.TestCase):
+    def test_implementation_after_a_test_item_survives(self):
+        # vow-ir/src/lower/mod.rs has `#[cfg(test)] fn ...` followed by real
+        # lowering code; cutting at the first marker would drop it silently.
+        text = (pair_review.REPO_ROOT / "vow-ir/src/lower/mod.rs").read_text()
+        names = {
+            m.group(1)
+            for m in pair_review.RUST_FN.finditer(pair_review.strip_cfg_test(text))
+        }
+
+        self.assertIn("lower_module_with_pattern_aggregates", names)
+        self.assertNotIn("lower_function", names)
+
+    def test_raw_string_braces_do_not_end_a_test_module(self):
+        # The test modules embed Vow programs whose braces sit at column 0.
+        text = (
+            "fn keep() {}\n"
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    #[test]\n"
+            "    fn drop_me() {\n"
+            '        let s = r#"\nstruct S {\n    id: i64,\n}\n"#;\n'
+            "    }\n"
+            "}\n"
+            "fn also_keep() {}\n"
+        )
+
+        stripped = pair_review.strip_cfg_test(text)
+
+        self.assertNotIn("#[test]", stripped)
+        self.assertNotIn("drop_me", stripped)
+        self.assertIn("fn keep()", stripped)
+        self.assertIn("fn also_keep()", stripped)
+
+    def test_declared_rust_sides_ship_no_test_functions(self):
+        for name in pair_review.PAIRS:
+            with self.subTest(pair=name):
+                _, rust_units, _ = pair_review.load_pair_units(name)
+                joined = "".join(unit.text for unit in rust_units)
+                self.assertNotIn("#[test]", joined)
+                self.assertNotIn("#[cfg(test)]", joined)
+
+    def test_lexer_pairing_is_no_longer_captured_by_a_test_helper(self):
+        _, rust_units, _ = pair_review.load_pair_units("lexer")
+        names = [unit.name for unit in rust_units]
+
+        self.assertIn("tokenize", names)
+        self.assertNotIn("lex", names)
+
+
+class FailClosedGateTest(unittest.TestCase):
+    @staticmethod
+    def panic(side):
+        return equivalence.check_fail_closed(
+            side, {"stderr": "thread 'main' panicked at src/x.rs", "exit": 101}
+        )
+
+    def test_both_compilers_crashing_is_not_a_divergence(self):
+        divergences = self.panic("rust") + self.panic("self-hosted")
+
+        self.assertTrue(pair_review._agreed_by_crashing(divergences))
+
+    def test_one_compiler_crashing_still_counts(self):
+        self.assertFalse(pair_review._agreed_by_crashing(self.panic("rust")))
+
+    def test_a_real_observable_is_never_masked(self):
+        divergences = self.panic("rust") + self.panic("self-hosted")
+        divergences.append({"observable": "error_code", "detail": "E0001 vs E0002"})
+
+        self.assertFalse(pair_review._agreed_by_crashing(divergences))
+
+    def test_shared_signal_death_is_agreement(self):
+        divergences = [
+            {
+                "observable": "fail_closed",
+                "detail": "both binaries died on unclassified signal 11",
+            }
+        ]
+
+        self.assertTrue(pair_review._agreed_by_crashing(divergences))
 
 
 class RenderChunkTest(unittest.TestCase):
@@ -206,7 +332,27 @@ class ReviewReportTest(unittest.TestCase):
         _, _, report = self.run_dry()
 
         self.assertTrue(all(p["coverage"] == 1.0 for p in report["pairs"]))
-        self.assertTrue(all(not p["truncated"] for p in report["pairs"]))
+
+    def test_paired_coverage_is_one_when_every_chunk_has_both_sides(self):
+        _, _, report = self.run_dry("--pair", "checker")
+
+        self.assertEqual(1.0, report["pairs"][0]["paired_coverage"])
+
+    def test_single_sided_chunks_lower_paired_coverage_and_are_reported(self):
+        body = "x" * 40_000
+        rust = [pair_review.Unit("only_rust", f"fn only_rust() {{{body}}}\n", "a.rs")]
+        self_ = [pair_review.Unit("only_vow", f"fn only_vow() {{{body}}}\n", "a.vow")]
+        with mock.patch.object(
+            pair_review,
+            "load_pair_units",
+            return_value=(pair_review.Preambles(), rust, self_),
+        ):
+            _, output, report = self.run_dry(
+                "--pair", "lexer", "--chunk-bytes", "45000"
+            )
+
+        self.assertEqual(0.0, report["pairs"][0]["paired_coverage"])
+        self.assertIn("unpaired", output)
 
     def test_deferred_chunks_are_reported_and_coverage_drops(self):
         _, output, report = self.run_dry(
@@ -227,27 +373,9 @@ class ReviewReportTest(unittest.TestCase):
         return pair_review.Preambles(), [], units
 
     def test_findings_carry_their_chunk_index(self):
-        replies = iter(
-            [
-                SimpleNamespace(
-                    content=json.dumps(
-                        {"findings": [{"claim": "first", "program": "module M\n"}]}
-                    ),
-                    input_tokens=10,
-                    output_tokens=5,
-                ),
-                SimpleNamespace(
-                    content=json.dumps(
-                        {"findings": [{"claim": "second", "program": "module M\n"}]}
-                    ),
-                    input_tokens=10,
-                    output_tokens=5,
-                ),
-            ]
-        )
-        fake_llm = SimpleNamespace(
-            make_config=lambda model: model,
-            chat=lambda *_: next(replies),
+        llm = fake_llm(
+            json.dumps({"findings": [{"claim": "first", "program": "module M\n"}]}),
+            json.dumps({"findings": [{"claim": "second", "program": "module M\n"}]}),
         )
         with mock.patch.object(
             pair_review, "load_pair_units", return_value=self.two_chunk_sources()
@@ -259,28 +387,16 @@ class ReviewReportTest(unittest.TestCase):
                 "self",
                 600,
                 1,
-                llm_module=fake_llm,
+                llm_module=llm,
                 confirm_fn=lambda *_: ("refuted", "agreed"),
             )
 
         self.assertEqual([1, 2], [f["chunk_index"] for f in result["findings"]])
 
     def test_unparseable_chunk_does_not_lose_sibling_findings(self):
-        replies = iter(
-            [
-                SimpleNamespace(content="not json", input_tokens=1, output_tokens=1),
-                SimpleNamespace(
-                    content=json.dumps(
-                        {"findings": [{"claim": "kept", "program": ""}]}
-                    ),
-                    input_tokens=1,
-                    output_tokens=1,
-                ),
-            ]
-        )
-        fake_llm = SimpleNamespace(
-            make_config=lambda model: model,
-            chat=lambda *_: next(replies),
+        llm = fake_llm(
+            "not json",
+            json.dumps({"findings": [{"claim": "kept", "program": ""}]}),
         )
         with mock.patch.object(
             pair_review, "load_pair_units", return_value=self.two_chunk_sources()
@@ -292,7 +408,7 @@ class ReviewReportTest(unittest.TestCase):
                 "self",
                 600,
                 1,
-                llm_module=fake_llm,
+                llm_module=llm,
             )
 
         self.assertEqual(1, len(result["errors"]))
@@ -364,6 +480,20 @@ class LedgerWritebackTest(unittest.TestCase):
                     self.original["pairs"]["lexer"], written["pairs"]["lexer"]
                 )
 
+    def test_concurrent_triage_edit_is_not_clobbered(self):
+        # A review runs for minutes; the ledger it loaded at startup is stale by
+        # the time it writes.
+        stale = json.loads(self.ledger_path.read_text())
+        live = json.loads(self.ledger_path.read_text())
+        live["pairs"]["parser"]["confirmed_issues"] = [4242]
+        self.ledger_path.write_text(json.dumps(live))
+
+        pair_review.write_ledger(stale, [self.result()], "2026-09-01", self.ledger_path)
+
+        written = json.loads(self.ledger_path.read_text())
+        self.assertEqual([4242], written["pairs"]["parser"]["confirmed_issues"])
+        self.assertEqual("2026-09-01", written["pairs"]["lexer"]["last_reviewed"])
+
     def test_corpus_and_untouched_pairs_survive(self):
         self.write(self.result())
 
@@ -385,7 +515,6 @@ class LedgerWritebackTest(unittest.TestCase):
     def test_writeback_is_off_by_default(self):
         before = self.ledger_path.read_bytes()
         fake_result = self.result(
-            truncated=False,
             plan={"chunk_bytes": 100, "chunks": []},
             chunks_reviewed=[],
             input_tokens=0,
@@ -488,6 +617,74 @@ class SoundnessModeTest(unittest.TestCase):
             ],
             gate.call_args_list,
         )
+
+    def test_soundness_ignores_the_equivalence_ledger(self):
+        # Soundness runs never stamp the ledger, so an equivalence stamp must
+        # not make them skip -- that would exit 0 having asked nothing.
+        stamped = {
+            "pairs": {
+                "c_emitter": {
+                    "rust": "vow-verify/src/c_emitter.rs",
+                    "self_hosted": "compiler/c_emitter.vow",
+                    "content_hash": pair_review.hash_pair(
+                        *pair_review.PAIRS["c_emitter"]
+                    ),
+                    "last_reviewed": "2026-08-01",
+                    "outcome": "clean",
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "ledger.json"
+            ledger.write_text(json.dumps(stamped))
+            output = Path(directory) / "out"
+            with (
+                mock.patch.object(pair_review, "LEDGER", ledger),
+                redirect_stdout(io.StringIO()),
+            ):
+                pair_review.main(
+                    ["--mode", "soundness", "--dry-run", "--output-dir", str(output)]
+                )
+            report = json.loads((output / "results.json").read_text())
+
+        self.assertEqual(["c_emitter"], report["planned"])
+        self.assertEqual([], report["skipped_unchanged"])
+
+    def test_equivalence_still_skips_an_unchanged_stamped_pair(self):
+        stamped = {
+            "pairs": {
+                "lexer": {
+                    "rust": "vow-syntax/src/lexer.rs",
+                    "self_hosted": "compiler/lexer.vow",
+                    "content_hash": pair_review.hash_pair(*pair_review.PAIRS["lexer"]),
+                    "last_reviewed": "2026-08-01",
+                    "outcome": "clean",
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "ledger.json"
+            ledger.write_text(json.dumps(stamped))
+            output = Path(directory) / "out"
+            with (
+                mock.patch.object(pair_review, "LEDGER", ledger),
+                redirect_stdout(io.StringIO()),
+            ):
+                pair_review.main(
+                    ["--pair", "lexer", "--dry-run", "--output-dir", str(output)]
+                )
+            report = json.loads((output / "results.json").read_text())
+
+        self.assertEqual(["lexer"], report["skipped_unchanged"])
+        self.assertEqual([], report["planned"])
+
+    def test_soundness_rejects_a_pair_it_does_not_cover(self):
+        with (
+            self.assertRaises(SystemExit),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+        ):
+            pair_review.main(["--mode", "soundness", "--pair", "lower", "--dry-run"])
 
     def test_soundness_mode_defaults_to_c_emitter_pair(self):
         with tempfile.TemporaryDirectory() as directory:
