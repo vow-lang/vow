@@ -56,14 +56,15 @@ fn file_read_map_init(
 }
 
 /// Reserved process exit status for any runtime abort — a contract
-/// violation, checked-arithmetic overflow, unwrap-on-None, index-out-of-bounds,
-/// region-literal mutation, runtime-invariant violation, sanitizer trap, stack
-/// overflow, or out-of-memory. A runtime abort is an environment/soundness
-/// failure, never an application result, so it must terminate with a status
-/// that cannot be confused with an application's own `return N` from `main`
-/// (issue #877). 134 = 128 + SIGABRT, the conventional "aborted" status; it is
-/// what the stack-overflow handler and `__vow_malloc` failure already use, so
-/// this unifies every runtime abort on one reserved code. The structured JSON
+/// violation, arithmetic overflow, invalid division or remainder,
+/// unwrap-on-None, index-out-of-bounds, region-literal mutation,
+/// runtime-invariant violation, sanitizer trap, stack overflow, or
+/// out-of-memory. A runtime abort is an environment/soundness failure, never
+/// an application result, so it must terminate with a status that cannot be
+/// confused with an application's own `return N` from `main` (issue #877).
+/// 134 = 128 + SIGABRT, the conventional "aborted" status; it is what the
+/// stack-overflow handler and `__vow_malloc` failure already use, so this
+/// unifies every runtime abort on one reserved code. The structured JSON
 /// envelope written to stderr still identifies which abort occurred.
 const VOW_RUNTIME_ABORT_EXIT: i32 = 134;
 
@@ -2982,12 +2983,12 @@ pub extern "C" fn __vow_mul_sat_u8(a: u8, b: u8) -> u8 {
 // because their type-constraint tables exclude I128. Both backends therefore
 // emit calls to these helpers instead of the native opcodes.
 //
-// The backends emit the same divisor traps Cranelift itself inserts for the
-// narrower widths — a zero divisor for all four, plus `MIN / -1` for signed
-// division — so neither case reaches this code. The guards below are
-// unreachable backstops that keep the helpers total: a Rust panic crossing an
-// `extern "C"` boundary would abort with no diagnostic at all. They call the
-// same `__vow_arithmetic_overflow` reporter the checked operators use.
+// The backends call `__vow_arithmetic_overflow` before the operation for the
+// same conditions Cranelift traps on at narrower widths — a zero divisor for
+// all four operations, plus `MIN / -1` for signed division — so neither case
+// reaches this code. The guards below are unreachable backstops that keep the
+// helpers total: a Rust panic crossing an `extern "C"` boundary would abort
+// with no diagnostic at all.
 //
 // `wrapping_div`/`wrapping_rem` (rather than `/`/`%`) make the `MIN / -1` and
 // `MIN % -1` cases total too; `MIN % -1` is 0 at every width and deliberately

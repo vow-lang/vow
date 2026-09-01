@@ -267,6 +267,11 @@ mutable, arena-owned copy, use `String::from("...")`.
 Wrapping operators silently wrap on overflow. For unsigned operands, including
 `u8`, division and remainder use unsigned semantics.
 
+Division and remainder are the exception when no wrapped result exists. A zero
+divisor aborts with `ArithmeticOverflow` for `/`, `%`, `/!`, and `%!`; signed
+`MIN / -1` likewise aborts for both `/` and `/!`. These rules apply at every
+integer width. Signed `MIN % -1` is representable as `0` and does not abort.
+
 ### Checked Arithmetic
 
 | Operator | Meaning           |
@@ -295,9 +300,9 @@ never hides a program that can die at the operator. Widths `i8`/`u8` through
 `/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler
 routes them through runtime helpers; this is invisible in the language, and
 their trap behaviour matches the narrower widths exactly. Division or
-remainder by zero aborts, as does `/` and `/!` on `MIN / -1` for `i128`, whose
-quotient is not representable. `MIN % -1` is `0` and does not abort, at every
-width.
+remainder by zero aborts at every width, as does signed `/` and `/!` on
+`MIN / -1`, whose quotient is not representable. `MIN % -1` is `0` and does
+not abort.
 
 128-bit values are also **scalar-only** for now. Locals, parameters, returns,
 and temporaries carry both limbs correctly, but a 128-bit value placed inside
