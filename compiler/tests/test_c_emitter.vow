@@ -569,6 +569,11 @@ fn check_inst_ty_by_id_table() -> i64 {
     if table[2] != ITY_U8() { return 202; }
     if table[4] != ITY_U64() { return 203; }
     if table[1] != ITY_I64() { return 204; }
+    if inst_ty_of(table, 2) != ITY_U8() { return 205; }
+    if inst_ty_of(table, 1) != ITY_I64() { return 206; }
+    if inst_ty_of(table, -1) != ITY_I64() { return 207; }
+    if inst_ty_of(table, table.len()) != ITY_I64() { return 208; }
+    if inst_ty_of(table, table.len() + 10) != ITY_I64() { return 209; }
 
     let empty: IrFunction = mk_function(
         21,
@@ -577,7 +582,7 @@ fn check_inst_ty_by_id_table() -> i64 {
         ITY_UNIT(),
         Vec::new()
     );
-    if build_inst_ty_by_id(empty).len() != 0 { return 205; }
+    if build_inst_ty_by_id(empty).len() != 0 { return 210; }
     0
 }
 

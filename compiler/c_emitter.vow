@@ -609,6 +609,13 @@ fn build_inst_ty_by_id(f: IrFunction) -> Vec<i64> {
     inst_ty_by_id
 }
 
+fn inst_ty_of(inst_ty_by_id: Vec<i64>, id: i64) -> i64 {
+    if id < 0 || id >= inst_ty_by_id.len() {
+        return ITY_I64();
+    }
+    inst_ty_by_id[id]
+}
+
 // IR type of the instruction producing `id`, defaulting to the signed form
 // when the operand cannot be resolved.
 fn lookup_inst_ty(f: IrFunction, id: i64) -> i64 {
