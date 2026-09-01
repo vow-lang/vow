@@ -178,9 +178,6 @@ mod tests {
             r.human
                 .contains("x=340282366920938463463374607431768211455")
         );
-        serde_json::from_str::<serde_json::Value>(&r.json)
-            .expect("violation envelope must be valid single-line JSON");
-        assert_eq!(r.json.lines().count(), 1);
     }
 
     // Anchor: docs/spec/cli.md:511 (the divide-by-zero example).

@@ -1,6 +1,6 @@
 // TEST: exit 134
 // TEST: stderr "VowViolation"
-// TEST: stderr "\"x\":5"
+// TEST: stderr ""x":5"
 module U8RequiresViolation
 
 fn takes_byte(x: u8) -> u8 vow {

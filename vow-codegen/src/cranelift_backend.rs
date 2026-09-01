@@ -1842,8 +1842,8 @@ fn emit_overflow_check(
 
 // Layout of one `vow_runtime::VowBinding`, which this backend writes and the
 // runtime reads back: name pointer at 0, tag at 8 (then 7 bytes of padding),
-// payload low limb at 16, payload high limb at 24. Both sides must agree —
-// a writer left at the old 24-byte stride truncates every captured value.
+// payload low limb at 16, payload high limb at 24. `vow-runtime/src/lib.rs`
+// pins the same numbers with `const _` asserts; both sides must agree.
 const BINDING_STRIDE: usize = 32;
 const BINDING_TAG_OFF: usize = 8;
 const BINDING_PAYLOAD_LO_OFF: usize = 16;
@@ -1864,7 +1864,10 @@ fn tag_for_ir_ty(ty: IrTy) -> u8 {
         IrTy::U32 => 10,
         IrTy::I128 => 11,
         IrTy::U128 => 12,
-        _ => 0,
+        // Excluded by the capture collector, so they never reach a binding
+        // record. Listed rather than caught by `_` so that a new `Ty` variant
+        // fails this match instead of silently reporting a wrong value.
+        IrTy::Unit | IrTy::Ptr | IrTy::LinearPtr => 0,
     }
 }
 
@@ -1951,54 +1954,34 @@ fn emit_vow_violation_body(
             ));
             let zero_hi = builder.ins().iconst(types::I64, 0);
             for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
+                let field = |off: usize| (i * BINDING_STRIDE + off) as i32;
                 let name_ptr = builder.ins().symbol_value(types::I64, *name_gv);
                 builder
                     .ins()
-                    .stack_store(types::I64, name_ptr, slot, (i * BINDING_STRIDE) as i32);
+                    .stack_store(types::I64, name_ptr, slot, field(0));
                 let tag_val = builder
                     .ins()
                     .iconst(types::I8, tag_for_ir_ty(*ir_ty) as i64);
-                builder.ins().stack_store(
-                    types::I64,
-                    tag_val,
-                    slot,
-                    (i * BINDING_STRIDE + BINDING_TAG_OFF) as i32,
-                );
+                builder
+                    .ins()
+                    .stack_store(types::I64, tag_val, slot, field(BINDING_TAG_OFF));
                 let (payload, payload_hi): (Value, Value) = match ir_ty {
-                    IrTy::I8 => (builder.ins().sextend(types::I64, *cl_val), zero_hi),
-                    IrTy::U8 => (builder.ins().uextend(types::I64, *cl_val), zero_hi),
-                    IrTy::I16 => (builder.ins().sextend(types::I64, *cl_val), zero_hi),
-                    IrTy::U16 => (builder.ins().uextend(types::I64, *cl_val), zero_hi),
-                    IrTy::I32 => (builder.ins().sextend(types::I64, *cl_val), zero_hi),
-                    IrTy::U32 => (builder.ins().uextend(types::I64, *cl_val), zero_hi),
-                    IrTy::I64 | IrTy::U64 => (*cl_val, zero_hi),
                     IrTy::I128 | IrTy::U128 => builder.ins().isplit(*cl_val),
-                    IrTy::F32 => {
-                        let bits = builder
-                            .ins()
-                            .bitcast(types::I32, MemFlagsData::new(), *cl_val);
-                        (builder.ins().uextend(types::I64, bits), zero_hi)
-                    }
-                    IrTy::F64 => (
-                        builder
-                            .ins()
-                            .bitcast(types::I64, MemFlagsData::new(), *cl_val),
-                        zero_hi,
-                    ),
-                    IrTy::Bool => (*cl_val, zero_hi),
-                    _ => (builder.ins().iconst(types::I64, 0), zero_hi),
+                    // Excluded by the capture collector; store a defined zero
+                    // rather than reinterpreting a pointer as a payload.
+                    IrTy::Unit | IrTy::Ptr | IrTy::LinearPtr => (zero_hi, zero_hi),
+                    // Every other scalar widens to i64 exactly as it does when
+                    // stored into a struct field.
+                    _ => (extend_field_store_value(builder, *cl_val, *ir_ty), zero_hi),
                 };
-                builder.ins().stack_store(
-                    types::I64,
-                    payload,
-                    slot,
-                    (i * BINDING_STRIDE + BINDING_PAYLOAD_LO_OFF) as i32,
-                );
+                builder
+                    .ins()
+                    .stack_store(types::I64, payload, slot, field(BINDING_PAYLOAD_LO_OFF));
                 builder.ins().stack_store(
                     types::I64,
                     payload_hi,
                     slot,
-                    (i * BINDING_STRIDE + BINDING_PAYLOAD_HI_OFF) as i32,
+                    field(BINDING_PAYLOAD_HI_OFF),
                 );
             }
             let base = builder.ins().stack_addr(types::I64, slot, 0);

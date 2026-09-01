@@ -1668,12 +1668,10 @@ with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
 yet modelled in the verifier. Contracts over 128-bit parameters alone do
 verify.
 
-Runtime violation values are *not* one of those gaps. Scalar `i128`/`u128`
-bindings captured by a `vow` block retain both limbs and report their full
-signed or unsigned decimal magnitude in the runtime `VowViolation` `values`
-map. Like `u64` values, they are emitted as bare JSON integer tokens — see
-[`errors.md`](errors.md#vowviolation) for the precision note that binds
-consumers.
+Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
+binding captured by a `vow` block reports its full value in the runtime
+`VowViolation` `values` map. See [`errors.md`](errors.md#vowviolation) for how
+that value is encoded and what a consumer must do to read it exactly.
 
 ### Saturating Arithmetic
 
@@ -6670,12 +6668,10 @@ with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
 yet modelled in the verifier. Contracts over 128-bit parameters alone do
 verify.
 
-Runtime violation values are *not* one of those gaps. Scalar `i128`/`u128`
-bindings captured by a `vow` block retain both limbs and report their full
-signed or unsigned decimal magnitude in the runtime `VowViolation` `values`
-map. Like `u64` values, they are emitted as bare JSON integer tokens — see
-[`errors.md`](errors.md#vowviolation) for the precision note that binds
-consumers.
+Runtime violation values are *not* one of those gaps: a scalar `i128`/`u128`
+binding captured by a `vow` block reports its full value in the runtime
+`VowViolation` `values` map. See [`errors.md`](errors.md#vowviolation) for how
+that value is encoded and what a consumer must do to read it exactly.
 
 ### Saturating Arithmetic
 
