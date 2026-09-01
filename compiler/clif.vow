@@ -514,11 +514,19 @@ fn str_eq_lit(s: String, lit: String) -> bool {
     s == lit
 }
 
+// Status codes returned by `clif_emit_module`, mirroring the shim's own
+// contract (`CLIF_ERR_UNSUPPORTED` in `vow-clif-shim/src/lib.rs`). Callers
+// classify them into structured diagnostics, so the values are part of the
+// interface, not an implementation detail.
+fn CLIF_ERR_COMPILE() -> i64 { -1 }
+fn CLIF_ERR_LINK() -> i64 { -2 }
+fn CLIF_ERR_UNSUPPORTED() -> i64 { -3 }
+
 fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> i64 [io] {
     let ctx: i64 = __vow_clif_create(mode, trace);
     if ctx == 0 {
         eprintln_str(String::from("clif: failed to create context"));
-        return -1;
+        return CLIF_ERR_COMPILE();
     }
 
     let strings: Vec<String> = m.strings;
@@ -578,13 +586,13 @@ fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> 
     let finish_result: i64 = __vow_clif_finish(ctx, obj_path);
     if finish_result != 0 {
         eprintln_str(String::from("clif: finish failed"));
-        return -1;
+        return CLIF_ERR_COMPILE();
     }
 
     let link_result: i64 = __vow_clif_link(obj_path, output_path);
     if link_result != 0 {
         eprintln_str(String::from("clif: link failed"));
-        return -2;
+        return CLIF_ERR_LINK();
     }
 
     0

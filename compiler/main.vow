@@ -1612,7 +1612,7 @@ fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_
 }
 
 fn codegen_failure_diagnostic(result: i64, path: String) -> Diagnostic {
-    if result == -3 {
+    if result == CLIF_ERR_UNSUPPORTED() {
         diag_error(
             EC_CODEGEN_UNSUPPORTED(),
             String::from("native backend does not support an operation used by this program"),
@@ -1621,7 +1621,7 @@ fn codegen_failure_diagnostic(result: i64, path: String) -> Diagnostic {
             0
         )
     } else {
-        if result == -2 {
+        if result == CLIF_ERR_LINK() {
             diag_error(EC_LINK_FAILED(), String::from("native linker failed"), path, 0, 0)
         } else {
             diag_error(EC_CODEGEN_FAILED(), String::from("native code generation failed"), path, 0, 0)
