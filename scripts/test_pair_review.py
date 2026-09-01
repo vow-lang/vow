@@ -432,5 +432,59 @@ class SystemPromptTest(unittest.TestCase):
         self.assertIn("empty findings list", pair_review.SYSTEM)
 
 
+class SoundnessModeTest(unittest.TestCase):
+    def test_soundness_prompt_asks_about_assume_narrowing(self):
+        self.assertIn("__ESBMC_assume", pair_review.SYSTEM_SOUNDNESS)
+        self.assertIn("proves", pair_review.SYSTEM_SOUNDNESS)
+        self.assertIn("permits", pair_review.SYSTEM_SOUNDNESS)
+
+    def test_soundness_prompt_demands_module_header_and_permits_empty_answer(self):
+        self.assertIn("module M", pair_review.SYSTEM_SOUNDNESS)
+        self.assertIn("empty findings list", pair_review.SYSTEM_SOUNDNESS)
+
+    def test_soundness_verdict_mapping(self):
+        cases = [
+            ("SOUNDNESS", "confirmed"),
+            ("ok", "refuted"),
+            ("not-applicable", "inconclusive"),
+            ("skipped", "inconclusive"),
+        ]
+        for runner_verdict, expected in cases:
+            with (
+                self.subTest(runner_verdict=runner_verdict),
+                mock.patch.object(
+                    pair_review,
+                    "check_soundness",
+                    return_value={
+                        "verdict": runner_verdict,
+                        "detail": "runner detail",
+                    },
+                ),
+            ):
+                verdict, detail = pair_review.confirm_soundness("module M\n", "vow", 1)
+                self.assertEqual(expected, verdict)
+                self.assertEqual("runner detail", detail)
+
+    def test_soundness_mode_defaults_to_c_emitter_pair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with redirect_stdout(io.StringIO()):
+                status = pair_review.main(
+                    [
+                        "--mode",
+                        "soundness",
+                        "--dry-run",
+                        "--all",
+                        "--output-dir",
+                        directory,
+                    ]
+                )
+            report = json.loads((Path(directory) / "results.json").read_text())
+
+        self.assertEqual(0, status)
+        self.assertEqual("soundness", report["mode"])
+        self.assertEqual(["c_emitter"], report["planned"])
+        self.assertEqual("soundness", report["pairs"][0]["mode"])
+
+
 if __name__ == "__main__":
     unittest.main()

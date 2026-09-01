@@ -34,6 +34,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from verifier_runtime import check_soundness
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "bench"))
 
@@ -269,6 +271,34 @@ Reply with JSON only, no prose outside it:
 An empty findings list is a perfectly good answer if you find nothing \
 demonstrable."""
 
+SYSTEM_SOUNDNESS = """\
+You are auditing the Rust and self-hosted C emitters for the Vow verifier. The \
+question is model-vs-language soundness: does either emitter add an \
+`__ESBMC_assume` that narrows the verifier's model below what the Vow language \
+actually permits?
+
+Find concrete programs that `vow verify` proves but whose permitted concrete \
+execution violates a vow. A false `Verified` is the only finding class in this \
+mode. Do not report false negatives, precision limitations, stylistic \
+differences, or a suspicious assumption without a discriminating program. The \
+runner will confirm each claim by requiring both `Verified` and a debug-mode \
+`VowViolation`.
+
+Every program must be complete and start with a `module M` declaration.
+
+Reply with JSON only, no prose outside it:
+
+{"findings": [
+  {"claim": "one sentence: how the verifier model is too narrow",
+   "area": "short label",
+   "program": "module M\\nfn main() -> i32 [io] { ... }\\n",
+   "expected_verifier": "why verification incorrectly succeeds",
+   "expected_runtime": "which permitted execution violates which vow"}
+]}
+
+An empty findings list is a perfectly good answer if you find nothing \
+demonstrable."""
+
 
 def hash_pair(rust_paths, self_path):
     h = hashlib.sha256()
@@ -336,6 +366,21 @@ def confirm(program, rust, self_bin, timeout):
         return "refuted", "both compilers agreed"
 
 
+def confirm_soundness(program, verifier, timeout):
+    """Judge a candidate with the verifier-vs-debug-runtime soundness gate."""
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "candidate.vow"
+        source.write_text(program)
+        result = check_soundness(source, Path(verifier), root, timeout)
+    verdict = result.get("verdict")
+    if verdict == "SOUNDNESS":
+        return "confirmed", result.get("detail", "soundness divergence")
+    if verdict == "ok":
+        return "refuted", result.get("detail", "runtime agrees with proof")
+    return "inconclusive", result.get("detail", verdict or "no verdict")
+
+
 def _plan_record(chunks, preambles):
     total = len(chunks)
     records = []
@@ -381,6 +426,7 @@ def review_pair(
     dry_run=False,
     llm_module=None,
     confirm_fn=None,
+    mode="equivalence",
 ):
     """Plan and, unless dry-running, review every selected function chunk."""
     preambles, rust_units, self_units = load_pair_units(name)
@@ -389,6 +435,7 @@ def review_pair(
     selected = chunks[:selected_count]
     result = {
         "pair": name,
+        "mode": mode,
         "truncated": False,
         "coverage": _coverage(preambles, rust_units, self_units, selected),
         "plan": {
@@ -408,14 +455,23 @@ def review_pair(
     if llm_module is None:
         import llm as llm_module
 
-    confirm_fn = confirm_fn or confirm
+    if mode not in ("equivalence", "soundness"):
+        raise ValueError(f"unknown review mode: {mode}")
+    if confirm_fn is None:
+        if mode == "soundness":
+
+            def confirm_fn(program, rust, _self, limit):
+                return confirm_soundness(program, rust, limit)
+        else:
+            confirm_fn = confirm
+    system = SYSTEM_SOUNDNESS if mode == "soundness" else SYSTEM
     config = llm_module.make_config(model)
     for index, chunk in enumerate(selected, 1):
         body = render_chunk(chunk, preambles, index, len(chunks))
         try:
             response = llm_module.chat(
                 config,
-                SYSTEM,
+                system,
                 [{"role": "user", "content": body}],
             )
         except Exception as exc:  # noqa: BLE001 - isolate provider failures by chunk
@@ -535,8 +591,16 @@ def write_ledger(ledger, results, date, path=LEDGER):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Adversarial pair review (#1083)")
+    ap = argparse.ArgumentParser(
+        description="Adversarial pair review (#1083)", allow_abbrev=False
+    )
     ap.add_argument("--model", default="claude-sonnet-4-20250514")
+    ap.add_argument(
+        "--mode",
+        choices=("equivalence", "soundness"),
+        default="equivalence",
+        help="review compiler parity or verifier-model soundness",
+    )
     ap.add_argument("--rust", default="target/release/vow")
     ap.add_argument("--self", dest="self_bin", default="build/vowc")
     ap.add_argument(
@@ -591,6 +655,8 @@ def main(argv=None):
         ap.error("--date is required with --update-ledger")
     if args.update_ledger and args.dry_run:
         ap.error("--update-ledger cannot be used with --dry-run")
+    if args.update_ledger and args.mode == "soundness":
+        ap.error("soundness results do not update the equivalence ledger")
     if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
         ap.error("--date must use YYYY-MM-DD")
 
@@ -601,7 +667,7 @@ def main(argv=None):
                 return 2
 
     ledger = json.loads(LEDGER.read_text()) if LEDGER.exists() else {"pairs": {}}
-    names = args.pair or list(PAIRS)
+    names = args.pair or (["c_emitter"] if args.mode == "soundness" else list(PAIRS))
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -628,6 +694,7 @@ def main(argv=None):
             args.timeout,
             max_chunks=args.max_chunks_per_pair,
             dry_run=args.dry_run,
+            mode=args.mode,
         )
         res["content_hash"] = digest
         results.append(res)
@@ -659,6 +726,7 @@ def main(argv=None):
             {
                 "schema_version": 1,
                 "model": args.model,
+                "mode": args.mode,
                 "dry_run": args.dry_run,
                 "planned": planned,
                 "reviewed": reviewed,
@@ -677,6 +745,7 @@ def main(argv=None):
     print()
     print("=== Pair review ===")
     print(f"  model     : {args.model}")
+    print(f"  mode      : {args.mode}")
     print(f"  planned   : {len(planned)} {planned}")
     print(f"  reviewed  : {len(reviewed)} {reviewed}")
     # Report what was not looked at. A run that skipped everything must never
