@@ -7,9 +7,12 @@ on:
   push:
     branches: [main]
   schedule:
-    # 05:15 UTC -- offset from bootstrap (03:53), equivalence (04:41), and
-    # arena-verify (06:29) so the nightly jobs do not contend for runners.
-    - cron: "15 5 * * *"
+    # 07:20 UTC -- equivalence (04:41) documents a ~90-minute Tier 2 sweep,
+    # so it can still be running past 06:11; arena-verify (06:29) has a
+    # 45-minute timeout ceiling, i.e. through 07:14. 07:20 starts after both
+    # windows close instead of just after their nominal start times, so this
+    # job does not contend with either for runners.
+    - cron: "20 7 * * *"
   workflow_dispatch: {}
 
 permissions:
