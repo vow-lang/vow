@@ -55,6 +55,9 @@ fn EC_ARITH_OVERFLOW_REACHABLE() -> i64 { 34 }
 fn EC_CODEGEN_UNSUPPORTED() -> i64 { 35 }
 fn EC_CODEGEN_FAILED() -> i64 { 36 }
 fn EC_LINK_FAILED() -> i64 { 37 }
+// Emitted when ESBMC reports a failed property that cannot be attributed to
+// a user-authored vow. Mirrors `vow_diag::ErrorCode::VerifierAssertionUnattributed`.
+fn EC_VERIFIER_ASSERTION_UNATTRIBUTED() -> i64 { 38 }
 
 struct Diagnostic {
     severity: i64,
@@ -297,8 +300,11 @@ fn ec_name(code: i64) -> String {
     if code == EC_LINK_FAILED() {
         String::from("LinkFailed")
     } else {
+    if code == EC_VERIFIER_ASSERTION_UNATTRIBUTED() {
+        String::from("VerifierAssertionUnattributed")
+    } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {
