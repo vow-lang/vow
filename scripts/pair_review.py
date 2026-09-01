@@ -813,23 +813,21 @@ def review_pair(
             finding["chunk_index"] = index
             program = finding.get("program", "")
             if not isinstance(program, str) or not program.strip():
-                finding["verdict"] = "inconclusive"
-                finding["verdict_detail"] = "no program supplied"
+                verdict, detail = "error", "no program supplied"
             else:
                 verdict, detail = confirm_fn(program, rust, self_bin, timeout)
-                if verdict == "error":
-                    # The claim stays in the report as an unjudged hypothesis,
-                    # but the run is no longer complete -- so it cannot stamp
-                    # the ledger and skip this pair next month.
-                    result["errors"].append(
-                        {
-                            "chunk_index": index,
-                            "error": f"confirmation gate did not run: {detail}",
-                        }
-                    )
-                    verdict = "inconclusive"
-                finding["verdict"] = verdict
-                finding["verdict_detail"] = detail
+            if verdict == "error":
+                # A claim the gate never judged -- because the model supplied
+                # no program, or because the runner could not run. Either way
+                # the claim stays in the report as a hypothesis, but the run is
+                # no longer complete, so it cannot stamp the ledger and skip
+                # this pair next month.
+                result["errors"].append(
+                    {"chunk_index": index, "error": f"claim not judged: {detail}"}
+                )
+                verdict = "inconclusive"
+            finding["verdict"] = verdict
+            finding["verdict_detail"] = detail
             result["findings"].append(finding)
     return result
 

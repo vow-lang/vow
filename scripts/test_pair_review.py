@@ -609,7 +609,22 @@ class ReviewReportTest(unittest.TestCase):
 
         self.assertEqual("inconclusive", result["findings"][0]["verdict"])
         self.assertEqual(1, len(result["errors"]))
-        self.assertIn("gate did not run", result["errors"][0]["error"])
+        self.assertIn("claim not judged", result["errors"][0]["error"])
+        self.assertFalse(pair_review.reviewed_completely(result))
+
+    def test_a_finding_without_a_program_is_also_unjudged(self):
+        # The gate never ran on this claim either, so the same rule applies:
+        # visible as a hypothesis, but the run is not complete.
+        llm = fake_llm(json.dumps({"findings": [{"claim": "no program"}]}))
+        with mock.patch.object(
+            pair_review, "load_pair_units", return_value=self.two_chunk_sources()
+        ):
+            result = pair_review.review_pair(
+                "lexer", "model", "rust", "self", 600, 1, max_chunks=1, llm_module=llm
+            )
+
+        self.assertEqual("inconclusive", result["findings"][0]["verdict"])
+        self.assertIn("no program supplied", result["errors"][0]["error"])
         self.assertFalse(pair_review.reviewed_completely(result))
 
     def test_reviewed_completely_matches_the_ledger_gate(self):
@@ -627,7 +642,7 @@ class ReviewReportTest(unittest.TestCase):
     def test_unparseable_chunk_does_not_lose_sibling_findings(self):
         llm = fake_llm(
             "not json",
-            json.dumps({"findings": [{"claim": "kept", "program": ""}]}),
+            json.dumps({"findings": [{"claim": "kept", "program": "module M\n"}]}),
         )
         with mock.patch.object(
             pair_review, "load_pair_units", return_value=self.two_chunk_sources()
@@ -640,6 +655,7 @@ class ReviewReportTest(unittest.TestCase):
                 600,
                 1,
                 llm_module=llm,
+                confirm_fn=lambda *_: ("refuted", "agreed"),
             )
 
         self.assertEqual(1, len(result["errors"]))
