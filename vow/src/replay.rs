@@ -389,14 +389,23 @@ fn replay_abort(reason: String) -> ReplayOutcome {
     }
 }
 
+/// Parse a `{"error":"<kind>",...}`-shaped stderr line into its JSON value,
+/// or `None` if the line isn't one (a plain trace/log line, for instance).
+fn parse_json_error_line(line: &str) -> Option<serde_json::Value> {
+    let l = line.trim();
+    if !l.starts_with('{') {
+        return None;
+    }
+    serde_json::from_str(l).ok()
+}
+
 /// Parse a `{"error":"VowViolation","vow_id":N,"blame":"Caller",...}` stderr
 /// line into `(vow_id, blame)`.
 fn parse_vow_violation_line(line: &str) -> Option<(u32, String)> {
-    let l = line.trim();
-    if !l.starts_with('{') || !l.contains("\"error\":\"VowViolation\"") {
+    let v = parse_json_error_line(line)?;
+    if v.get("error")?.as_str()? != "VowViolation" {
         return None;
     }
-    let v: serde_json::Value = serde_json::from_str(l).ok()?;
     let vid = v.get("vow_id")?.as_u64()? as u32;
     let blame = v.get("blame")?.as_str()?.to_string();
     Some((vid, blame))
@@ -405,17 +414,20 @@ fn parse_vow_violation_line(line: &str) -> Option<(u32, String)> {
 /// Parse a structured non-`VowViolation` runtime-abort stderr line into its
 /// error kind.
 fn parse_runtime_abort_line(line: &str) -> Option<String> {
-    let l = line.trim();
-    if !l.starts_with('{') {
-        return None;
-    }
-    let v: serde_json::Value = serde_json::from_str(l).ok()?;
+    let v = parse_json_error_line(line)?;
     let kind = v.get("error")?.as_str()?;
     if kind.is_empty() || kind == "VowViolation" {
         return None;
     }
     Some(kind.to_string())
 }
+
+/// 128 + SIGABRT: the runtime's reserved abort exit status (see
+/// docs/spec/errors.md "Exit status"). Abort classification below gates on
+/// this exact code, not any nonzero exit, so an unrelated nonzero exit that
+/// happens to print an error-shaped line to stderr isn't misclassified as a
+/// runtime abort.
+const RUNTIME_ABORT_EXIT_CODE: i32 = 134;
 
 /// Classify a finished harness run against the counterexample's prediction.
 fn classify_replay_run(
@@ -438,15 +450,15 @@ fn classify_replay_run(
                 ))
             }
         }
-        None => match (success, stderr.lines().find_map(parse_runtime_abort_line)) {
-            (false, Some(kind)) => replay_abort(format!(
+        None => match (code, stderr.lines().find_map(parse_runtime_abort_line)) {
+            (Some(RUNTIME_ABORT_EXIT_CODE), Some(kind)) => replay_abort(format!(
                 "runtime aborted with {kind} before reaching predicted VowViolation vow_id={} blame={}",
                 ce.vow_id, ce.blame
             )),
-            (true, _) => replay_diverge(
+            _ if success => replay_diverge(
                 "harness exited cleanly; no VowViolation fired at runtime".to_string(),
             ),
-            (false, None) => replay_diverge(format!(
+            _ => replay_diverge(format!(
                 "harness exited with status {code:?} but emitted no VowViolation"
             )),
         },
@@ -953,6 +965,18 @@ mod tests {
             outcome.reason.as_deref(),
             Some("harness exited cleanly; no VowViolation fired at runtime")
         );
+    }
+
+    #[test]
+    fn classify_replay_run_diverges_not_aborts_on_nonzero_non_134_exit_with_error_line() {
+        // DebugCall is a verifier no-op but writes an `{"error":...}`-shaped
+        // line to stderr in debug execution. A harness that exits with some
+        // other nonzero status (not the runtime's reserved 134 abort code)
+        // must not be misclassified as "aborted" just because that line is
+        // present — only the exit code identifies a genuine runtime abort.
+        let outcome = classify_replay_run(false, Some(1), "{\"error\":\"Notice\"}\n", &ce("f", 2));
+
+        assert_eq!(outcome.status, "diverged");
     }
 
     #[test]

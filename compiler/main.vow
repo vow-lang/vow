@@ -670,6 +670,17 @@ struct ReplayVerdict {
     reason: String,
 }
 
+struct ReplayScan {
+    violation_line: String,
+    abort_kind: String,
+}
+
+// 128 + SIGABRT: the runtime's reserved abort exit status (docs/spec/errors.md
+// "Exit status"). Gate abort classification on this, not any nonzero code, so
+// an unrelated nonzero exit that happens to print an error-shaped line to
+// stderr isn't misclassified as a runtime abort.
+const RUNTIME_ABORT_EXIT_CODE: i64 = 134;
+
 fn replay_blame_runtime_name(b: i64) -> String {
     if b == DIAG_BLAME_CALLER() { return String::from("Caller"); }
     if b == DIAG_BLAME_CALLEE() { return String::from("Callee"); }
@@ -917,7 +928,8 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     // Confirm only if a SINGLE VowViolation line carries both the predicted
     // vow_id and blame — a substring scan over all of stderr could otherwise
     // splice a vow_id and blame from two different lines into a false confirm.
-    let viol: String = replay_find_violation_line(err);
+    let scan: ReplayScan = replay_scan_stderr(err);
+    let viol: String = scan.violation_line;
     let vowid_needle: String = str3(String::from("\"vow_id\":"), i64_to_string(ce.vow_id), String::from(","));
     let blame_needle: String = str3(String::from("\"blame\":\""), replay_blame_runtime_name(ce.blame), String::from("\""));
     if viol.len() > 0 && viol.contains(vowid_needle) && viol.contains(blame_needle) {
@@ -926,10 +938,9 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     if viol.len() > 0 {
         return replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"));
     }
-    let abort_kind: String = replay_find_abort_kind(err);
-    if abort_kind.len() > 0 && rrc != 0 {
+    if scan.abort_kind.len() > 0 && rrc == RUNTIME_ABORT_EXIT_CODE {
         let reason: String = String::from("runtime aborted with ");
-        reason.push_str(abort_kind);
+        reason.push_str(scan.abort_kind);
         reason.push_str(String::from(" before reaching predicted VowViolation vow_id="));
         reason.push_str(i64_to_string(ce.vow_id));
         reason.push_str(String::from(" blame="));
@@ -942,23 +953,28 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"))
 }
 
-// First stderr line containing the VowViolation marker, or "" if none. Used so
-// the confirm check reads vow_id and blame from one JSON object.
-fn replay_find_violation_line(err: String) -> String {
+// Scans stderr once for both the VowViolation marker (confirm/diverge) and a
+// structured non-VowViolation abort marker (a runtime abort that preempted
+// the predicted VowViolation), so replay_one_ce doesn't walk stderr twice.
+fn replay_scan_stderr(err: String) -> ReplayScan {
     let n: i64 = err.len();
     let mut start: i64 = 0;
     let mut i: i64 = 0;
+    let mut violation_line: String = String::from("");
+    let mut abort_kind: String = String::from("");
     while i <= n {
         if i == n || err.byte_at(i) == 10 {
             let line: String = err.substring(start, i);
-            if line.contains(String::from("\"error\":\"VowViolation\"")) {
-                return line;
+            if violation_line.len() == 0 && line.contains(String::from("\"error\":\"VowViolation\"")) {
+                violation_line = line;
+            } else if abort_kind.len() == 0 {
+                abort_kind = replay_abort_kind_in_line(line);
             }
             start = i + 1;
         }
         i = i + 1;
     }
-    String::from("")
+    ReplayScan { violation_line: violation_line, abort_kind: abort_kind }
 }
 
 // Extract a non-VowViolation `{"error":"<Kind>"}` marker from one stderr
@@ -969,7 +985,16 @@ fn replay_abort_kind_in_line(line: String) -> String {
     let m: i64 = marker.len();
     let mut i: i64 = 0;
     while i + m <= n {
-        if line.substring(i, i + m) == marker {
+        let mut matched: bool = true;
+        let mut j: i64 = 0;
+        while j < m {
+            if line.byte_at(i + j) != marker.byte_at(j) {
+                matched = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if matched {
             let start: i64 = i + m;
             let mut end: i64 = start;
             while end < n && line.byte_at(end) != 34 {
@@ -982,23 +1007,6 @@ fn replay_abort_kind_in_line(line: String) -> String {
                 }
             }
             return String::from("");
-        }
-        i = i + 1;
-    }
-    String::from("")
-}
-
-fn replay_find_abort_kind(err: String) -> String {
-    let n: i64 = err.len();
-    let mut start: i64 = 0;
-    let mut i: i64 = 0;
-    while i <= n {
-        if i == n || err.byte_at(i) == 10 {
-            let kind: String = replay_abort_kind_in_line(err.substring(start, i));
-            if kind.len() > 0 {
-                return kind;
-            }
-            start = i + 1;
         }
         i = i + 1;
     }
