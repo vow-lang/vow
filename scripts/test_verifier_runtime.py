@@ -9,6 +9,7 @@ that keeps a sweep from looking like it measured more than it did.
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import verifier_runtime
 
@@ -52,6 +53,46 @@ class ViolationParsingTest(unittest.TestCase):
         # `ulimit -v 2000000` is the repo-wide rule for self-compiled binaries;
         # expressed in bytes here because setrlimit takes bytes.
         self.assertEqual(2_000_000 * 1024, verifier_runtime.SELF_MEM_LIMIT)
+
+
+def _verify_failed(*replay_values):
+    return {
+        "status": "VerifyFailed",
+        "counterexamples": [
+            {"function": "f", "vow_id": i, "replay": r, "replay_reason": "because"}
+            for i, r in enumerate(replay_values)
+        ],
+    }
+
+
+class PrecisionTest(unittest.TestCase):
+    # `confirmed` is the only evidence that the model's counterexample
+    # actually reproduces at runtime; `aborted` is an honest runtime failure
+    # through some other mechanism, not that evidence.
+    @patch("verifier_runtime.run_json")
+    def test_abort_only_is_inconclusive_not_ok(self, mock_run_json):
+        mock_run_json.return_value = (_verify_failed("aborted"), None)
+
+        result = verifier_runtime.check_precision(Path("f.vow"), "verifier", 30)
+
+        self.assertEqual("skipped", result["verdict"])
+
+    @patch("verifier_runtime.run_json")
+    def test_confirmed_alongside_aborted_is_still_ok(self, mock_run_json):
+        mock_run_json.return_value = (_verify_failed("confirmed", "aborted"), None)
+
+        result = verifier_runtime.check_precision(Path("f.vow"), "verifier", 30)
+
+        self.assertEqual("ok", result["verdict"])
+        self.assertIn("aborted", result["detail"])
+
+    @patch("verifier_runtime.run_json")
+    def test_diverged_is_still_a_precision_finding(self, mock_run_json):
+        mock_run_json.return_value = (_verify_failed("diverged", "aborted"), None)
+
+        result = verifier_runtime.check_precision(Path("f.vow"), "verifier", 30)
+
+        self.assertEqual("PRECISION", result["verdict"])
 
 
 if __name__ == "__main__":
