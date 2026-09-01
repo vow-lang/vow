@@ -396,10 +396,13 @@ class FailClosedGateTest(unittest.TestCase):
         self.assertFalse(pair_review._agreed_by_crashing(divergences))
 
     def test_shared_signal_death_is_agreement(self):
+        # Signal 9, not 11: `compare_runtime` only writes the `both ...` shape
+        # for a signal outside UNSAFE_SIGNALS/TRAP_SIGNALS, and SIGSEGV(11) is
+        # routed to the two per-side details instead.
         divergences = [
             {
                 "observable": "fail_closed",
-                "detail": "both binaries died on unclassified signal 11",
+                "detail": "both binaries died on unclassified signal 9",
             }
         ]
 
