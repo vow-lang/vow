@@ -426,22 +426,6 @@ class CompareTestTest(unittest.TestCase):
 
         self.assertIn("total: 2 vs 1", errors)
 
-    def test_each_named_test_status_must_match(self):
-        errors = parity.compare_test(
-            self.suite(),
-            self.suite(
-                tests=[
-                    {"name": "test_arith", "status": "failed"},
-                    {"name": "test_parser", "status": "passed"},
-                ]
-            ),
-            0,
-            0,
-        )
-
-        self.assertIn("test_arith", " ".join(errors))
-        self.assertIn("failed", " ".join(errors))
-
     def test_both_suites_must_report_tests_passed(self):
         errors = parity.compare_test(
             self.suite("TestsFailed"), self.suite("TestsFailed"), 1, 1

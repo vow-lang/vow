@@ -4,6 +4,7 @@
 import json
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 KNOWN_CEX_DIVERGENCE = re.compile(
@@ -34,16 +35,19 @@ def _mismatch(label, rust_value, self_value):
     return [f"{label}: {rust_value} vs {self_value}"]
 
 
+def _field_multiset(entries, *fields):
+    """Count each entry's `fields` tuple, tolerating absent fields."""
+    return Counter(tuple(entry.get(field) for field in fields) for entry in entries)
+
+
+def _ordered(multiset):
+    # A field may be absent, so the tuples mix None with str and need an order
+    # that tolerates both.
+    return sorted(multiset.elements(), key=repr)
+
+
 def _diagnostic_multiset(diagnostics):
-    # `blame` is absent on non-vow diagnostics, so the tuples mix None with str
-    # and need an order that tolerates both.
-    return sorted(
-        (
-            (diagnostic.get("error_code"), diagnostic.get("blame"))
-            for diagnostic in diagnostics
-        ),
-        key=repr,
-    )
+    return _ordered(_field_multiset(diagnostics, "error_code", "blame"))
 
 
 def _error_codes(diagnostics):
@@ -202,16 +206,6 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
     return errors
 
 
-def _test_multiset(document):
-    # `name` and `status` are absent on a malformed suite result, so the tuples
-    # mix None with str and need the same order-by-repr as _diagnostic_multiset.
-    # A missing field must read as a parity error, never as a TypeError.
-    return sorted(
-        ((test.get("name"), test.get("status")) for test in document.get("tests", [])),
-        key=repr,
-    )
-
-
 def compare_test(rust, self_hosted, rust_exit, self_exit):
     """Return parity errors for two ``vow test`` suite results."""
     errors = []
@@ -233,13 +227,15 @@ def compare_test(rust, self_hosted, rust_exit, self_exit):
 
     errors += _mismatch("total", rust.get("total"), self_hosted.get("total"))
 
-    # Report only the delta: `compiler/` has hundreds of tests, and dumping both
-    # full lists would bury a one-test disagreement in kilobytes of CI log.
-    rust_tests = _test_multiset(rust)
-    self_tests = _test_multiset(self_hosted)
+    # Report only the delta, so a one-test disagreement reads as one line
+    # however far the two suites drift apart. Counted rather than set-compared:
+    # suites differing only in how often a name repeats must still name the
+    # entry they disagree on instead of printing an empty delta.
+    rust_tests = _field_multiset(rust.get("tests", []), "name", "status")
+    self_tests = _field_multiset(self_hosted.get("tests", []), "name", "status")
     if rust_tests != self_tests:
-        only_rust = [test for test in rust_tests if test not in self_tests]
-        only_self = [test for test in self_tests if test not in rust_tests]
+        only_rust = _ordered(rust_tests - self_tests)
+        only_self = _ordered(self_tests - rust_tests)
         errors.append(f"tests: rust-only {only_rust} vs self-only {only_self}")
     return errors
 
@@ -397,12 +393,7 @@ def _ledger_verdict(rust, self_hosted, errors, fixture_path):
 def main(argv=None):
     """Run a comparator over two JSON files for scripts/full_test.sh."""
     args = sys.argv[1:] if argv is None else argv
-    modes = ("json", "error", "test")
-    if (
-        len(args) not in (5, 6)
-        or args[0] not in modes
-        or (args[0] == "test" and len(args) != 5)
-    ):
+    if len(args) not in (5, 6) or args[0] not in ("json", "error", "test"):
         print(
             "usage: parity.py {json,error,test} RUST_JSON SELF_JSON "
             "RUST_EXIT SELF_EXIT [FIXTURE]",

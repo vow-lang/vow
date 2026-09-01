@@ -40,6 +40,11 @@ EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
 
 
+def header(text):
+    """Everything above `jobs:` — triggers, permissions, and top-level keys."""
+    return text[: text.index("\njobs:\n")]
+
+
 def job_blocks(text):
     """Split a workflow's `jobs:` section into one text block per job.
 
@@ -137,9 +142,9 @@ class BootstrapWorkflowTest(unittest.TestCase):
     def test_runs_on_every_push_to_main(self) -> None:
         # The nightly cron alone would attribute a self-hosting break to a day
         # of commits rather than to the merge that caused it.
-        header = self.text[: self.text.index("\njobs:\n")]
+        workflow_header = header(self.text)
 
-        self.assertRegex(header, r"push:\s*\n\s*branches:\s*\[main\]")
+        self.assertRegex(workflow_header, r"push:\s*\n\s*branches:\s*\[main\]")
 
     def test_runs_nightly_as_a_backstop(self) -> None:
         found = crons(self.text)
@@ -191,10 +196,10 @@ class EquivalenceWorkflowTest(unittest.TestCase):
         self.assertIn("path: equivalence.out", self.text)
 
     def test_workflow_keeps_read_only_repository_permissions(self) -> None:
-        header = self.text[: self.text.index("\njobs:\n")]
+        workflow_header = header(self.text)
 
-        self.assertRegex(header, r"permissions:\s*\n\s*contents:\s*read")
-        self.assertNotRegex(header, r"contents:\s*write")
+        self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
+        self.assertNotRegex(workflow_header, r"contents:\s*write")
 
 
 class ParserTest(unittest.TestCase):

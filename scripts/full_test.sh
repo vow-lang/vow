@@ -96,13 +96,8 @@ run_parity() {
     printf '%s' "$rust_json" > "$rust_f"
     printf '%s' "$self_json" > "$self_f"
 
-    local parity_args=("$mode" "$rust_f" "$self_f" "$rust_exit" "$self_exit")
-    if [ -n "$fixture_path" ]; then
-        parity_args+=("$fixture_path")
-    fi
-
     local result
-    if result=$(python3 scripts/parity.py "${parity_args[@]}" 2>&1); then
+    if result=$(python3 scripts/parity.py "$mode" "$rust_f" "$self_f" "$rust_exit" "$self_exit" "$fixture_path" 2>&1); then
         if [[ "$result" == SKIP:* ]]; then
             skip "$label" "${result#SKIP: }"
         else

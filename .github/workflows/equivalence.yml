@@ -10,9 +10,8 @@ name: equivalence
 # sailed past, because no suite swept benchmarks/ differentially.
 #
 # Nightly rather than per-PR: a full sweep needs a bootstrapped build/vowc,
-# which is a ~30-minute job on its own. The blocking two-compiler `vow test
-# compiler/` comparison also remains in bootstrap.yml while #1171 keeps it
-# outside the pull-request latency budget.
+# which is a ~30-minute job on its own. Tier 1 lives elsewhere; see the tier
+# table in docs/equivalence/README.md for which workflow carries which tier.
 on:
   schedule:
     # 04:41 UTC — offset from cargo-mutants (02:17) so the two nightly jobs

@@ -897,14 +897,7 @@ def propose_ledger(document, new, fixed, today):
 
     for record in new:
         path = record["file"]
-        entry = corpus.setdefault(
-            path,
-            {
-                "first_seen": today,
-                "observable": [],
-                "status": "open",
-            },
-        )
+        entry = corpus.setdefault(path, {"first_seen": today})
         observables = (tracked_observables(entry) - just_fixed.get(path, set())) | {
             divergence["observable"] for divergence in record["divergences"]
         }
@@ -971,12 +964,15 @@ def main():
         default=None,
         help="path to ledger.json (default: docs/equivalence/ledger.json)",
     )
-    ap.add_argument(
+    # A proposal is an edit to the ledger this run deliberately ignored, so the
+    # two flags are exclusive; argparse both enforces that and shows it in --help.
+    ledger_use = ap.add_mutually_exclusive_group()
+    ledger_use.add_argument(
         "--no-ledger",
         action="store_true",
         help="report every divergence as new, ignoring tracked ones",
     )
-    ap.add_argument(
+    ledger_use.add_argument(
         "--emit-ledger-update",
         action="store_true",
         help="write a proposed corpus-ledger update into the output directory",
@@ -987,8 +983,6 @@ def main():
         help="ISO date stamped into the proposal's `updated` field (default: UTC today)",
     )
     args = ap.parse_args()
-    if args.emit_ledger_update and args.no_ledger:
-        ap.error("--emit-ledger-update cannot be combined with --no-ledger")
 
     roots = args.roots or [
         REPO_ROOT / "tests",
@@ -1069,8 +1063,7 @@ def main():
     # crash; and a shard that measured too little to be meaningful must not ship
     # a proposal that looks applicable.
     proposal_path = None
-    covered = compared >= args.min_compared
-    if args.emit_ledger_update and covered:
+    if args.emit_ledger_update and compared >= args.min_compared:
         proposal_path = outdir / "ledger.proposed.json"
         proposal = propose_ledger(ledger_document, new, fixed, args.today)
         proposal_path.write_text(json.dumps(proposal, indent=2) + "\n")

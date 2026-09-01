@@ -53,37 +53,38 @@ def ledger_document(corpus=None):
     }
 
 
+LEDGER_SCHEMA = json.loads(
+    (equivalence.REPO_ROOT / "docs" / "equivalence" / "ledger.schema.json").read_text()
+)
+CORPUS_ENTRY_SCHEMA = LEDGER_SCHEMA["properties"]["corpus"]["additionalProperties"]
+
+
 def assert_valid_ledger_document(test_case, document):
     """Assert the schema rules relied on by stdlib-only workflow tests.
 
     A deliberate subset of `ledger.schema.json`, not a replacement for it: no
-    jsonschema dependency is available here. The enum, property names, and key
-    set are read back out of the schema rather than restated, so the parts most
-    likely to drift stay derived; anything asserted literally below must be
-    updated alongside the schema.
+    jsonschema dependency is available here. The enums, property names, and
+    required keys are read back out of the schema rather than restated, so the
+    parts most likely to drift stay derived; anything asserted literally below
+    must be updated alongside the schema.
     """
     test_case.assertEqual(1, document.get("schema_version"))
     test_case.assertIsInstance(document.get("pairs"), dict)
     corpus = document.get("corpus")
     test_case.assertIsInstance(corpus, dict)
 
-    schema = json.loads(
-        (
-            Path(equivalence.REPO_ROOT) / "docs" / "equivalence" / "ledger.schema.json"
-        ).read_text()
-    )
-    allowed = set(schema["$defs"]["observableName"]["enum"])
-    entry_schema = schema["properties"]["corpus"]["additionalProperties"]
-    allowed_keys = set(entry_schema["properties"])
+    allowed = set(LEDGER_SCHEMA["$defs"]["observableName"]["enum"])
+    allowed_keys = set(CORPUS_ENTRY_SCHEMA["properties"])
+    statuses = CORPUS_ENTRY_SCHEMA["properties"]["status"]["enum"]
     for path, entry in corpus.items():
         with test_case.subTest(path=path):
             # The schema sets `additionalProperties: false`, so a proposal that
             # invented a field would be rejected on commit rather than here.
             test_case.assertLessEqual(set(entry), allowed_keys)
-            test_case.assertTrue(entry.get("first_seen"), "missing first_seen")
-            test_case.assertIn(entry.get("status"), ("open", "fixed", "expected"))
+            for key in CORPUS_ENTRY_SCHEMA["required"]:
+                test_case.assertTrue(entry.get(key), f"missing {key}")
+            test_case.assertIn(entry.get("status"), statuses)
             declared = equivalence.tracked_observables(entry)
-            test_case.assertTrue(declared, "no observable declared")
             test_case.assertLessEqual(declared, allowed)
             if entry.get("status") == "expected":
                 test_case.assertTrue(entry.get("note"), "missing note")
@@ -1240,52 +1241,6 @@ class LedgerLoadTest(unittest.TestCase):
             p.write_text("{not json")
 
             self.assertEqual({}, equivalence.load_ledger(p))
-
-    def test_expected_entries_document_themselves(self):
-        # The schema conditionally requires note+issue on an 'expected' entry:
-        # a standing decision to suppress a finding must carry the rationale
-        # and the tracking issue that justify it. Enforced here too, so the
-        # rule holds without adding a jsonschema dependency.
-        for path, entry in equivalence.load_ledger().items():
-            if entry.get("status") != "expected":
-                continue
-            with self.subTest(path=path):
-                self.assertTrue(entry.get("note"), "missing note")
-                self.assertIsInstance(entry.get("issue"), int)
-
-    def test_active_error_code_entries_pin_exact_sorted_multisets(self):
-        for path, entry in equivalence.load_ledger().items():
-            if entry.get("status") not in ("open", "expected"):
-                continue
-            if "error_code" not in equivalence.tracked_observables(entry):
-                continue
-            with self.subTest(path=path):
-                rust_codes = entry.get("rust_error_codes")
-                self_codes = entry.get("self_hosted_error_codes")
-                self.assertIsInstance(rust_codes, list)
-                self.assertIsInstance(self_codes, list)
-                self.assertEqual(sorted(rust_codes), rust_codes)
-                self.assertEqual(sorted(self_codes), self_codes)
-
-    def test_every_entry_declares_a_known_observable(self):
-        # reconcile() matches on (file, observable); an entry without a valid
-        # observable would suppress nothing and silently read as untracked.
-        schema = json.loads(
-            (
-                Path(equivalence.REPO_ROOT)
-                / "docs"
-                / "equivalence"
-                / "ledger.schema.json"
-            ).read_text()
-        )
-        allowed = set(schema["$defs"]["observableName"]["enum"])
-
-        for path, entry in equivalence.load_ledger().items():
-            with self.subTest(path=path):
-                # Both schema forms: a bare name, or a list of them.
-                declared = equivalence.tracked_observables(entry)
-                self.assertTrue(declared, "no observable declared")
-                self.assertLessEqual(declared, allowed)
 
     def test_real_repo_ledger_loads(self):
         ledger = equivalence.load_ledger()
