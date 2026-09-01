@@ -188,6 +188,7 @@ class CiWorkflowTest(unittest.TestCase):
 class FullTestWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:
         self.text = FULL_TEST_WORKFLOW.read_text(encoding="utf-8")
+        self.jobs = job_blocks(self.text)
 
     def test_runs_on_push_to_main_and_nightly(self) -> None:
         workflow_header = header(self.text)
@@ -204,6 +205,16 @@ class FullTestWorkflowTest(unittest.TestCase):
 
         self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
         self.assertNotRegex(workflow_header, r"contents:\s*write")
+
+    def test_gated_on_the_docs_only_classifier(self) -> None:
+        changes = self.jobs["changes"]
+        full_test = self.jobs["full-test"]
+
+        self.assertIn("fetch-depth: 0", changes)
+        self.assertIn("code: ${{ steps.classify.outputs.code }}", changes)
+        self.assertIn("python3 scripts/ci_docs_only.py", changes)
+        self.assertIn("needs: changes", full_test)
+        self.assertIn("if: needs.changes.outputs.code == 'true'", full_test)
 
 
 class EquivalenceWorkflowTest(unittest.TestCase):
