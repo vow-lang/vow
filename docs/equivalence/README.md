@@ -101,6 +101,16 @@ each side independently, because a crash is a bug whatever the peer did — but 
 program that crashes *both* compilers is agreement, and the pair review records
 it as inconclusive rather than letting any crashing input clear the gate.
 
+CONFIRMED is a claim about the program, not about the pair. It means the two
+compilers disagree on the supplied input — a global divergence found *during*
+that pair's review, filed under it because that is where it surfaced. Every
+program traverses every stage, and every observable the runner compares is
+end-to-end CLI behaviour, so nothing mechanical can attribute a divergence to
+the lexer rather than the lowerer. CONFIRMED therefore validates neither the
+stage nor the mechanism the model claimed, only that the disagreement is real.
+Locating it is a triage step for a human, and `confirmed_issues` is where that
+conclusion lands.
+
 ## Reading a report
 
 Every run states what it did **not** cover — shards skipped, budget exhausted,
