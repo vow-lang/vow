@@ -108,6 +108,17 @@ fn check_parse_assert_label_unknown_label_returns_empty() -> i64 {
     0
 }
 
+fn check_parse_assert_label_maps_division_by_zero() -> i64 {
+    if parse_assert_label(assert_label_output(String::from("division by zero"))) != String::from("division or remainder by zero") { return 34; }
+    0
+}
+
+fn check_unattributed_sentinel() -> i64 {
+    if verifier_unattributed_vow_id() != 4294967293 { return 35; }
+    if verifier_unattributed_vow_id() != verifier_caller_precondition_vow_id() - 1 { return 36; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -125,5 +136,9 @@ fn main() -> i32 {
     if r7 != 0 { return i64_to_i32_wrap(r7); }
     let r8: i64 = check_parse_assert_label_unknown_label_returns_empty();
     if r8 != 0 { return i64_to_i32_wrap(r8); }
+    let r9: i64 = check_parse_assert_label_maps_division_by_zero();
+    if r9 != 0 { return i64_to_i32_wrap(r9); }
+    let r10: i64 = check_unattributed_sentinel();
+    if r10 != 0 { return i64_to_i32_wrap(r10); }
     0
 }
