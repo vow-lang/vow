@@ -532,14 +532,13 @@ fn replay_one(
     }
     // Synthetic verifier-only ids never match a runtime-emitted vow_id, so an
     // exact id comparison would always diverge — skip them.
-    if ce.vow_id == UNATTRIBUTED_VOW_ID {
+    if ce.vow_id == CALLER_PRECONDITION_VOW_ID
+        || ce.vow_id == UNSUPPORTED_OP_VOW_ID
+        || ce.vow_id == UNATTRIBUTED_VOW_ID
+    {
         return replay_skip(
-            "replay: synthetic counterexample id (unattributed-property sentinel)".to_string(),
-        );
-    }
-    if ce.vow_id == CALLER_PRECONDITION_VOW_ID || ce.vow_id == UNSUPPORTED_OP_VOW_ID {
-        return replay_skip(
-            "replay: synthetic counterexample id (caller-precondition / unsupported-op sentinel)"
+            "replay: synthetic counterexample id (caller-precondition / unsupported-op / \
+             unattributed-property sentinel)"
                 .to_string(),
         );
     }
@@ -697,7 +696,10 @@ mod tests {
         assert_eq!(out.counterexamples[0].replay.as_deref(), Some("skipped"));
         assert_eq!(
             out.counterexamples[0].replay_reason.as_deref(),
-            Some("replay: synthetic counterexample id (unattributed-property sentinel)")
+            Some(
+                "replay: synthetic counterexample id (caller-precondition / unsupported-op / \
+                 unattributed-property sentinel)"
+            )
         );
     }
 
