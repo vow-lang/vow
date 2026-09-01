@@ -1,0 +1,9 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module U64CheckedLiteralLetUnderflow
+
+fn main() -> i32 {
+    let value: u64 = 0 -! 1;
+    value;
+    0
+}

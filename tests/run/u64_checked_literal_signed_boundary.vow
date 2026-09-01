@@ -1,0 +1,11 @@
+// TEST: exit 0
+module U64CheckedLiteralSignedBoundary
+
+fn value() -> u64 {
+    9223372036854775807 +! 1
+}
+
+fn main() -> i32 {
+    value();
+    0
+}

@@ -1492,7 +1492,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
                 String::from(");\n")
             ));
         } else if inst.dk == IDATA_INTEGER() && inst.dv == ITY_I32() {
-            out.push_str(str3(String::from("  __ESBMC_assert(v"), i64_to_string(iargs[1]), String::from(" < 32, \"i32 shift count\");\n")));
+            out.push_str(str3(String::from("  __ESBMC_assert(v"), i64_to_string(iargs[1]), String::from(" < 32, \"integer shift count\");\n")));
             let opname: String = if op == IOP_SHL() { String::from("shl") } else { String::from("shr") };
             out.push_str(str7(
                 String::from("  v"), i64_to_string(id), cemit_str2(String::from(" = __vow_"), cemit_str2(opname, String::from("_i32(v"))),

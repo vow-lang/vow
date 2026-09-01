@@ -1758,7 +1758,7 @@ fn wide_context_contains_control_flow(a: AstArena, eid: i64) -> bool {
 }
 
 fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
-    if eid == -1 || (ty != ITY_I128() && ty != ITY_U128()) { return; }
+    if eid == -1 || (ty != ITY_U64() && ty != ITY_I128() && ty != ITY_U128()) { return; }
     while ctx.wide_context_tys.len() <= eid {
         ctx.wide_context_tys.push(-1);
     }
@@ -1808,7 +1808,8 @@ fn lctx_record_wide_marker_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64
 }
 
 fn lctx_record_wide_control_flow_context(ctx: LowerCtx, a: AstArena, eid: i64, ty: i64) {
-    if (ty == ITY_I128() || ty == ITY_U128()) && wide_context_contains_control_flow(a, eid) {
+    if ty == ITY_U64() ||
+       ((ty == ITY_I128() || ty == ITY_U128()) && wide_context_contains_control_flow(a, eid)) {
         lctx_record_wide_marker_context(ctx, a, eid, ty);
     }
 }
@@ -1864,7 +1865,7 @@ fn lctx_record_wide_expected_ast_context(ctx: LowerCtx, a: AstArena, eid: i64, e
     if expected_tag == TY_NAMED() {
         let name: String = arena_str(a, type_a(a, resolved_tid));
         let expected_ty: i64 = ity_for_scalar_type_name(name);
-        if expected_ty == ITY_I128() || expected_ty == ITY_U128() {
+        if expected_ty == ITY_U64() || expected_ty == ITY_I128() || expected_ty == ITY_U128() {
             lctx_record_wide_marker_context(ctx, a, eid, expected_ty);
         }
         return;
@@ -1963,6 +1964,10 @@ fn merge_phi_ty(primary: i64, sibling: i64) -> i64 {
 }
 
 fn emit_narrow_integer_constant(ctx: LowerCtx, value: i64, ty: i64) -> i64 {
+    if ty == ITY_U64() {
+        let u64_args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), u64_args, IDATA_CONST_U64(), value, 0, String::from(""));
+    }
     let narrow_op: i64 = if ty == ITY_I8() || ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
     let narrow_data: i64 = if ty == ITY_I8() || ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
     let const_args: Vec<i64> = Vec::new();
@@ -2055,10 +2060,11 @@ fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, original: i64, ty:
     }
     if ty != ITY_I8() && ty != ITY_U8() && ty != ITY_I16() &&
        ty != ITY_U16() && ty != ITY_I32() && ty != ITY_U32() &&
-       ty != ITY_I128() && ty != ITY_U128() {
+       ty != ITY_U64() && ty != ITY_I128() && ty != ITY_U128() {
         return original;
     }
-    if (ty == ITY_I128() || ty == ITY_U128()) && lctx_wide_context_ty(ctx, eid) == ty {
+    if (ty == ITY_U64() || ty == ITY_I128() || ty == ITY_U128()) &&
+       lctx_wide_context_ty(ctx, eid) == ty {
         return original;
     }
     let marker: i64 = lower_integer_marker_as(ctx, a, eid, ty);
@@ -2118,6 +2124,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
     if tag == EXPR_LIT_INT() {
         let context_ty: i64 = lctx_wide_context_ty(ctx, eid);
+        if context_ty == ITY_U64() {
+            return emit_narrow_integer_constant(ctx, expr_a(a, eid), context_ty);
+        }
         if context_ty == ITY_I128() || context_ty == ITY_U128() {
             return emit_wide_integer_constant(ctx, a, eid, context_ty);
         }
@@ -5414,7 +5423,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
 
     if ir_ret == ITY_I8() || ir_ret == ITY_U8() || ir_ret == ITY_I16() ||
        ir_ret == ITY_U16() || ir_ret == ITY_I32() || ir_ret == ITY_U32() ||
-       ir_ret == ITY_I128() || ir_ret == ITY_U128() {
+       ir_ret == ITY_U64() || ir_ret == ITY_I128() || ir_ret == ITY_U128() {
         let result_eid: i64 = block_result_eid(a, body_bid);
         if result_eid != -1 {
             trailing = lower_narrow_literal(ctx, a, result_eid, trailing, ir_ret);

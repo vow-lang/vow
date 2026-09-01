@@ -76,6 +76,38 @@ fn check_counterexample_value_names() -> i64 {
     0
 }
 
+fn assert_label_output(label: String) -> String {
+    let output: String = String::from(
+        "[Counterexample]\n\nViolated property:\n  file f.c line 1 column 1 function f\n  "
+    );
+    output.push_str(label);
+    output.push_str(String::from("\n  condition\n\nVERIFICATION FAILED"));
+    output
+}
+
+fn check_parse_assert_label_maps_known_labels() -> i64 {
+    if parse_assert_label(assert_label_output(String::from("vec bounds"))) != String::from("index out of bounds") { return 23; }
+    if parse_assert_label(assert_label_output(String::from("string bounds"))) != String::from("index out of bounds") { return 24; }
+    if parse_assert_label(assert_label_output(String::from("vec capacity"))) != String::from("vec exceeded the verifier's internal capacity limit") { return 25; }
+    if parse_assert_label(assert_label_output(String::from("string capacity"))) != String::from("string exceeded the verifier's internal capacity limit") { return 26; }
+    if parse_assert_label(assert_label_output(String::from("hashmap capacity"))) != String::from("hashmap exceeded the verifier's internal capacity limit") { return 27; }
+    if parse_assert_label(assert_label_output(String::from("btreemap capacity"))) != String::from("btreemap exceeded the verifier's internal capacity limit") { return 28; }
+    if parse_assert_label(assert_label_output(String::from("integer shift count"))) != String::from("shift amount exceeds the operand's bit width") { return 29; }
+    if parse_assert_label(assert_label_output(String::from("unwrap-none"))) != String::from("unwrap() called on None") { return 30; }
+    0
+}
+
+fn check_parse_assert_label_ignores_vow_and_arith() -> i64 {
+    if parse_assert_label(assert_label_output(String::from("vow:0"))).len() != 0 { return 31; }
+    if parse_assert_label(assert_label_output(String::from("arith:add:0:0:0"))).len() != 0 { return 32; }
+    0
+}
+
+fn check_parse_assert_label_unknown_label_returns_empty() -> i64 {
+    if parse_assert_label(assert_label_output(String::from("some future guard"))).len() != 0 { return 33; }
+    0
+}
+
 fn main() -> i32 {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
@@ -87,5 +119,11 @@ fn main() -> i32 {
     if r4 != 0 { return i64_to_i32_wrap(r4); }
     let r5: i64 = check_counterexample_value_names();
     if r5 != 0 { return i64_to_i32_wrap(r5); }
+    let r6: i64 = check_parse_assert_label_maps_known_labels();
+    if r6 != 0 { return i64_to_i32_wrap(r6); }
+    let r7: i64 = check_parse_assert_label_ignores_vow_and_arith();
+    if r7 != 0 { return i64_to_i32_wrap(r7); }
+    let r8: i64 = check_parse_assert_label_unknown_label_returns_empty();
+    if r8 != 0 { return i64_to_i32_wrap(r8); }
     0
 }

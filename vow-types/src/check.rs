@@ -640,6 +640,48 @@ fn is_integer_or_lit_int(ty: &Ty) -> bool {
     ty.is_integer() || ty.is_lit_int()
 }
 
+/// The legality outcome of an `as` cast from `src` to `tgt`, as a neutral
+/// value the caller acts on. Pure and total in the two types alone: it names
+/// *which kind* of cast this is, never the `ErrorCode`, message, or hint —
+/// diagnostics stay at the call site, mirroring the `method_result_type` and
+/// `integer_type_range` seams. `Ok` covers same-width/widening integer casts
+/// and an unreachable (`Never`) source, both of which report nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CastVerdict {
+    /// `src` is an integer literal into a concrete integer type: the caller
+    /// must range-check the literal value against `tgt`.
+    LiteralRange,
+    /// `tgt` is strictly narrower than `src`: an illegal narrowing `as`.
+    Narrowing,
+    /// The types are not connected by `as` at all.
+    Mismatch,
+    /// Permitted with nothing to report.
+    Ok,
+}
+
+/// Classifies an `as` cast by legality. The branch priority matches the
+/// original inline `if/else if` chain exactly: the literal case is decided
+/// before the width comparison (a `LitInt` has no `integer_width`, so a
+/// literal into a non-integer target falls through to `Mismatch`), and a
+/// widening/same-width pair returns `Ok` rather than reaching the `Never`
+/// check below it.
+fn cast_verdict(src: &Ty, tgt: &Ty) -> CastVerdict {
+    if src.is_lit_int() && tgt.is_integer() {
+        return CastVerdict::LiteralRange;
+    }
+    if let (Some(src_width), Some(tgt_width)) = (src.integer_width(), tgt.integer_width()) {
+        return if tgt_width < src_width {
+            CastVerdict::Narrowing
+        } else {
+            CastVerdict::Ok
+        };
+    }
+    if *src != Ty::Never {
+        return CastVerdict::Mismatch;
+    }
+    CastVerdict::Ok
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct IntegerTypeRange {
     positive_max: u128,
@@ -2705,12 +2747,11 @@ impl<'e> Checker<'e> {
                     }
                     _ => Ty::Unit,
                 };
-                if src_ty.is_lit_int() && tgt_ty.is_integer() {
-                    self.check_integer_literal_range(operand, &tgt_ty);
-                } else if let (Some(src_width), Some(tgt_width)) =
-                    (src_ty.integer_width(), tgt_ty.integer_width())
-                {
-                    if tgt_width < src_width {
+                match cast_verdict(&src_ty, &tgt_ty) {
+                    CastVerdict::LiteralRange => {
+                        self.check_integer_literal_range(operand, &tgt_ty);
+                    }
+                    CastVerdict::Narrowing => {
                         self.emit_error_with_hints(
                             ErrorCode::NarrowingCastNotAllowed,
                             format!("cannot cast {src_ty} to {tgt_ty} via as"),
@@ -2720,13 +2761,18 @@ impl<'e> Checker<'e> {
                             )],
                         );
                     }
-                } else if src_ty != Ty::Never {
-                    self.emit_error_with_hints(
-                        ErrorCode::TypeMismatch,
-                        format!("cannot cast `{src_ty}` to `{tgt_ty}`"),
-                        operand.span,
-                        vec!["`as` only permits same-width or widening integer casts".to_string()],
-                    );
+                    CastVerdict::Mismatch => {
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            format!("cannot cast `{src_ty}` to `{tgt_ty}`"),
+                            operand.span,
+                            vec![
+                                "`as` only permits same-width or widening integer casts"
+                                    .to_string(),
+                            ],
+                        );
+                    }
+                    CastVerdict::Ok => {}
                 }
                 if let Some(root_src) = self.zero_extended_source(operand, &src_ty, &tgt_ty) {
                     self.nonneg_casts
@@ -6857,6 +6903,39 @@ mod tests {
 
     fn opt_of(inner: Ty) -> Ty {
         Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![inner])
+    }
+
+    #[test]
+    fn cast_verdict_classifies_as_cast_legality() {
+        // Integer literal into a concrete integer defers to the range check.
+        assert_eq!(
+            cast_verdict(&Ty::LitInt, &Ty::U8),
+            CastVerdict::LiteralRange
+        );
+        assert_eq!(
+            cast_verdict(&Ty::LitInt, &Ty::I64),
+            CastVerdict::LiteralRange
+        );
+
+        // A literal into a non-integer target is not a range check — it is a mismatch.
+        assert_eq!(cast_verdict(&Ty::LitInt, &Ty::Str), CastVerdict::Mismatch);
+
+        // Strictly narrower target is an illegal narrowing cast, signed or unsigned.
+        assert_eq!(cast_verdict(&Ty::I64, &Ty::I32), CastVerdict::Narrowing);
+        assert_eq!(cast_verdict(&Ty::U128, &Ty::U8), CastVerdict::Narrowing);
+
+        // Same-width and widening integer casts are permitted with nothing to report.
+        assert_eq!(cast_verdict(&Ty::I32, &Ty::I32), CastVerdict::Ok);
+        assert_eq!(cast_verdict(&Ty::I32, &Ty::I64), CastVerdict::Ok);
+        assert_eq!(cast_verdict(&Ty::U8, &Ty::U64), CastVerdict::Ok);
+
+        // An unreachable source is suppressed, never a mismatch.
+        assert_eq!(cast_verdict(&Ty::Never, &Ty::Str), CastVerdict::Ok);
+        assert_eq!(cast_verdict(&Ty::Never, &Ty::I32), CastVerdict::Ok);
+
+        // Unrelated non-integer types are a mismatch.
+        assert_eq!(cast_verdict(&Ty::Bool, &Ty::I32), CastVerdict::Mismatch);
+        assert_eq!(cast_verdict(&Ty::Str, &Ty::I64), CastVerdict::Mismatch);
     }
 
     #[test]

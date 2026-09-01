@@ -1,0 +1,12 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module U64CheckedLiteralArgUnderflow
+
+fn consume(value: u64) -> u64 {
+    value
+}
+
+fn main() -> i32 {
+    consume(0 -! 1);
+    0
+}

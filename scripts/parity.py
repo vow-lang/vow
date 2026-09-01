@@ -53,13 +53,13 @@ TEST_TRACKED_DIVERGENT_FIELDS = frozenset({"diagnostics"})
 # self-hosted a path string), and ESBMC's `$esbmc$` internals are noise. Routed
 # through the same format-tolerant comparison `compare_json` already applies.
 TEST_COUNTEREXAMPLE_FIELD = "counterexamples"
-# Every counterexample field the schema declares bar the three the comparison
-# owns: `source` is the documented shape divergence, `values` is compared
-# separately with the ESBMC internals stripped, and `violation` is added by
-# `_counterexample_fields` only when both sides blamed a contract clause. The
-# rest — `call_sites`, `violating_args`, `execution_path`, `branch_decisions`,
-# `replay`, `replay_reason` — are deterministic for the same sources and
-# derived here so a field added to the schema is compared automatically.
+# Every counterexample field the schema declares except the two the comparison
+# owns separately: `source` is the documented shape divergence, and `values`
+# is compared with the ESBMC internals stripped. The rest — including
+# `violation`, `call_sites`, `violating_args`, `execution_path`,
+# `branch_decisions`, `replay`, and `replay_reason` — are deterministic for the
+# same sources and derived here so a field added to the schema is compared
+# automatically.
 _COUNTEREXAMPLE_SCHEMA, _ = schema_check.load(
     Path(__file__).resolve().parent.parent
     / "docs/spec/schemas/counterexample.schema.json"
@@ -67,7 +67,7 @@ _COUNTEREXAMPLE_SCHEMA, _ = schema_check.load(
 COUNTEREXAMPLE_COMPARED_FIELDS = tuple(
     field
     for field in _COUNTEREXAMPLE_SCHEMA["properties"]
-    if field not in ("source", VALUES_LABEL, "violation")
+    if field not in ("source", VALUES_LABEL)
 )
 # Which entry fields name a test rather than describe its outcome. The membership
 # delta keys off these; the rest are compared per shared entry.
@@ -169,17 +169,6 @@ def _counterexample_values(counterexample):
     }
 
 
-def _counterexample_fields(base, rust_cex, self_cex):
-    """Include contract text only when both counterexamples matched a vow."""
-    fields = list(base)
-    # With blame "none", neither compiler matched a contract clause and each
-    # currently emits a different fallback placeholder (#1144). Contract-backed
-    # violations have stable source text and must remain parity checked (#1113).
-    if rust_cex.get("blame") != "none" and self_cex.get("blame") != "none":
-        fields.append("violation")
-    return fields
-
-
 def _values_match_after_rename(
     rust_counterexamples, self_counterexamples, rust_name, self_name
 ):
@@ -210,7 +199,7 @@ def _compare_counterexamples(rust_counterexamples, self_counterexamples, fields)
     for index, (rust_cex, self_cex) in enumerate(
         zip(rust_counterexamples, self_counterexamples)
     ):
-        for field in _counterexample_fields(fields, rust_cex, self_cex):
+        for field in fields:
             rust_value = rust_cex.get(field)
             self_value = self_cex.get(field)
             # An unknown vow_id is spelled 0, -1, or absent depending on which
@@ -277,13 +266,15 @@ def compare_json(rust, self_hosted, rust_exit, self_exit):
         if len(self_counterexamples) == 0:
             errors.append("self has no counterexamples for VerifyFailed")
         errors += _compare_counterexamples(
-            rust_counterexamples, self_counterexamples, ("function", "blame")
+            rust_counterexamples,
+            self_counterexamples,
+            ("function", "blame", "violation"),
         )
     else:
         errors += _compare_counterexamples(
             rust_counterexamples,
             self_counterexamples,
-            ("function", "vow_id", "blame"),
+            ("function", "vow_id", "blame", "violation"),
         )
 
     return errors
