@@ -35,14 +35,34 @@ bugs. That result ordering is why the tiers below are sequenced corpus-first.
 
 | Tier | Cadence | Cost | Blocking | What runs |
 |---|---|---|---|---|
-| 1 | every PR | seconds | yes | promoted fixtures in `tests/` |
+| 1 | local full suite; nightly compiler tests | minutes | yes where run | promoted fixtures plus `vow test compiler/` under both compilers |
 | 2 | nightly | ~90 min, sharded | no | full-corpus sweep (`scripts/equivalence.py`) |
 | 3 | monthly | credentialed, agent-driven | no | adversarial AI pair review |
 
 **Tier 1** is where found bugs stay fixed. Every confirmed divergence is
 delta-debugged to a minimal reproducer and committed as a `tests/run/` or
 `tests/error/` fixture, so the existing suite regression-guards it forever. This
-tier is cheap precisely because the expensive sweeps happen elsewhere.
+tier is intended to block every PR. It does not yet do so: the promoted-fixture
+parity harness runs in `scripts/full_test.sh`, which is not on the PR path, and
+the two-compiler `vow test compiler/` comparison is a blocking step in the Linux
+`bootstrap.yml` job (pushes to `main` plus nightly). That comparison covers the
+whole documented `vow test` contract — every field in
+`docs/spec/schemas/test-result.schema.json` except the wall-clock `duration_ms`
+and `tests[].diagnostics`, read back out of the schema so a field added there is
+gated automatically. It also validates each document against that schema in
+absolute terms, since parity alone cannot see a field both compilers dropped or
+corrupted the same way. `diagnostics` is excluded because it is a live
+divergence, not a tolerated one: the Rust runner attaches each entry's compile
+diagnostics while the self-hosted runner emits none (#1183), and the schema for
+them has drifted from both emitters (#1184). Both must close before the field
+can be gated.
+
+The self-hosted suite produced no JSON before a 45-minute bound in one fresh
+concatenated run; the full Section 10b later completed both compilers plus its
+interface checks in 17.8 minutes. Both measurements came from a contended
+development host and are placement evidence, not clean benchmarks. #1171 tracks
+the performance gap that prevents responsible per-PR placement. This is a
+stated coverage gap, not an advisory green check.
 
 **Tier 2** re-establishes equivalence against a moving codebase. It is
 deterministic and credential-free, so it runs unattended.
@@ -51,7 +71,39 @@ deterministic and credential-free, so it runs unattended.
 is why it is an agent command rather than a workflow step. It reviews matched
 module pairs (`lexer.rs` ↔ `lexer.vow`, and so on) for semantic divergence, and
 publishes to `docs/equivalence/<YYYY-MM>/` alongside the monthly audit's own
-reports.
+reports. Sources are split into whole function items and packed into bounded
+prompts; no source tail is truncated, and a matched Rust/self-hosted pair always
+shares a chunk so the model always has both sides in front of it. An oversize
+group remains whole and is reported explicitly, while an operator-imposed chunk
+cap lowers the reported coverage and leaves the remaining chunks visibly
+deferred. Rust `#[cfg(test)]` items are excluded — two thirds of the Rust units
+in the declared pairs are tests with no self-hosted counterpart.
+
+Everything that is not a function item — a file's `struct`, `enum` and `impl`
+declarations — goes to that file's preamble, which is repeated in every chunk of
+the pair. Cutting from one `fn` token to the next would instead file `struct
+Checker` and `impl Checker` under whichever function happened to precede them,
+and the packer would then put that function in a different chunk from the
+methods those declarations govern.
+
+Counterparts are matched on name, allowing for the two conventions the compilers
+differ by: a receiver prefix the self-hosted side spells out (`lctx_merge_inst_ty`
+↔ `merge_inst_ty`) and a trailing qualifier one side adds (`lower_requires` ↔
+`lower_requires_clauses`). Exact names are claimed first, across every unit, so
+an approximate match can never strand an exact one. What is left over is real
+asymmetry between the two implementations, and the run reports it: alongside
+`coverage` and `paired_coverage` (both chunk-level), `matched_coverage` is the
+share of unit bytes that sat beside their own counterpart, and `unmatched_units`
+names every function that did not. A chunk of 80 Rust units next to 3
+self-hosted ones is fully `paired` and almost entirely unmatched — only the
+third figure says so.
+
+The same machinery has a separate `soundness` mode for the two C emitters. It
+asks whether an emitted `__ESBMC_assume` narrows the verifier model below what
+Vow permits, then confirms candidates with the verifier-vs-debug-runtime gate.
+That is a model-vs-language question, not a Rust-vs-self-hosted equivalence
+outcome, so soundness runs never update the pair ledger — nor read it, since a
+pair an equivalence run stamped has not been asked the soundness question.
 
 ## The rule for tier 3
 
@@ -63,6 +115,21 @@ This is not optional rigour. The 2026-06-12 verification-honesty pass found that
 half of the preceding audit's severities were overstated. An unconfirmed finding
 costs more reviewer time than it saves, so a hypothesis without a runner verdict
 is published as a hypothesis and excluded from the summary counts.
+
+"Disagree" is read strictly. The runner files a panic or signal death against
+each side independently, because a crash is a bug whatever the peer did — but a
+program that crashes *both* compilers is agreement, and the pair review records
+it as inconclusive rather than letting any crashing input clear the gate.
+
+CONFIRMED is a claim about the program, not about the pair. It means the two
+compilers disagree on the supplied input — a global divergence found *during*
+that pair's review, filed under it because that is where it surfaced. Every
+program traverses every stage, and every observable the runner compares is
+end-to-end CLI behaviour, so nothing mechanical can attribute a divergence to
+the lexer rather than the lowerer. CONFIRMED therefore validates neither the
+stage nor the mechanism the model claimed, only that the disagreement is real.
+Locating it is a triage step for a human, and `confirmed_issues` is where that
+conclusion lands.
 
 ## Reading a report
 
@@ -95,7 +162,33 @@ a run re-reviews only **changed** pairs and reports the rest as explicitly
 skipped. For the corpus it records which files have ever diverged, so a
 regression is distinguishable from a new finding.
 
+Pair rows are written atomically by `pair_review.py --update-ledger --date
+<YYYY-MM-DD>` after a complete, error-free equivalence review. A deferred or
+errored pair keeps its prior hash and date, forcing the next run to revisit it.
+The harness preserves the corpus rows and confirmed issue numbers; operators
+still add issue and promoted-fixture metadata during triage.
+
 Schema: see `ledger.schema.json`.
+
+### Who writes it
+
+Tier 2 reads the committed ledger and emits `ledger.proposed.json` into every
+shard artifact. The workflow deliberately retains `contents: read`, so this is
+a reviewable proposal rather than an unattended commit. Each shard proposal
+contains that shard's corpus findings while preserving all untouched corpus
+entries and the entire module-pair block.
+
+A shard that misses its `--min-compared` floor emits no proposal at all, and
+says so in its summary. A run that measured almost nothing must not hand back a
+file that looks applicable. The `updated` stamp comes from `--today` (default:
+UTC today) rather than local time, so re-running a sweep reproduces its
+proposal byte-for-byte.
+
+Tier 3 runs an unsharded sweep, applies its `ledger.proposed.json`, adds the
+issue/fixture context that requires judgement, and commits the result together
+with the module-pair hashes only the adversarial review can compute. Applying a
+nightly result instead requires merging the four shard proposals; no individual
+shard claims coverage of the other three.
 
 ### Tier-1 parity suppressions
 
@@ -150,10 +243,18 @@ ones to revisit first when widening the comparison:
 
 ```bash
 # Tier 2 — full-corpus differential sweep (deterministic, no credentials)
-python3 scripts/equivalence.py --rust target/release/vow --self build/vowc
+python3 scripts/equivalence.py --rust target/release/vow --self build/vowc \
+  --emit-ledger-update
 
 # Tier 3 — adversarial pair review (needs ANTHROPIC_API_KEY or OPENAI_API_KEY)
-python3 scripts/pair_review.py --model claude-sonnet-4-20250514
+python3 scripts/pair_review.py --dry-run --all
+python3 scripts/pair_review.py --model claude-sonnet-4-20250514 \
+  --update-ledger --date <YYYY-MM-DD>
+
+# Separate verifier-model soundness question (c_emitter pair only)
+python3 scripts/pair_review.py --mode soundness --dry-run
+python3 scripts/pair_review.py --mode soundness \
+  --model claude-sonnet-4-20250514
 ```
 
 Bootstrap first (`cargo build --all --release && scripts/bootstrap.sh --skip-cargo`): both tiers must

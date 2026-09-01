@@ -23,6 +23,10 @@ struct LowerCtx {
     func_ret_tags: Vec<String>,
     func_ret_vec_elems: Vec<String>,
     func_ret_option_elems: Vec<i64>,
+    // Wide `Result` payload widths per callee, which func_ret_option_elems
+    // cannot carry. `Result` is built in, so a value returned from a call has
+    // no declaration for the match arm to consult.
+    func_ret_variant_payload_tys: Vec<Vec<i64>>,
     func_return_ast_tid: i64,
     func_param_tys: Vec<Vec<i64>>,
     func_param_ast_tids: Vec<Vec<i64>>,
@@ -120,6 +124,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_ret_tags: Vec::new(),
         func_ret_vec_elems: Vec::new(),
         func_ret_option_elems: Vec::new(),
+        func_ret_variant_payload_tys: Vec::new(),
         func_return_ast_tid: -1,
         func_param_tys: Vec::new(),
         func_param_ast_tids: Vec::new(),
@@ -631,6 +636,17 @@ fn lctx_get_variant_payloads(ctx: LowerCtx, inst_id: i64) -> Vec<i64> {
     Vec::new()
 }
 
+// Payload width recorded for `inst_id`'s variant `tag`, when the value's
+// provenance told lowering what it holds. Built-in Option/Result have no
+// declaration to consult, so this map is the only width they carry.
+// Returns -1 when nothing was recorded for that variant.
+fn lctx_variant_payload_at(ctx: LowerCtx, inst_id: i64, tag: i64) -> i64 {
+    if tag < 0 { return -1; }
+    let payloads: Vec<i64> = lctx_get_variant_payloads(ctx, inst_id);
+    if tag >= payloads.len() { return -1; }
+    payloads[tag]
+}
+
 fn string_vec_equal(a: Vec<String>, b: Vec<String>) -> bool {
     if a.len() != b.len() { return false; }
     let mut i: i64 = 0;
@@ -911,6 +927,24 @@ fn lctx_variant_payload_ty(
     payload[payload_index]
 }
 
+// Declared 128-bit width of an enum variant's payload slot, by enum name.
+//
+// The per-instruction payload maps only know a width when the scrutinee was
+// built in the same function, so a wide payload read out of a parameter would
+// lower as i64 and slip past the wide-aggregate gates in codegen and the C
+// emitters -- truncating the value and letting a contract over it be reported
+// Verified against the 8-byte model. The declaration knows the width whatever
+// the value's provenance. Returns -1 for narrow or unknown payloads: those
+// already lower correctly, and widening them here would change existing
+// FieldGet types.
+fn lctx_declared_wide_payload_ty(
+    ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
+) -> i64 {
+    let ty: i64 = lctx_variant_payload_ty(ctx, enum_name, variant_name, payload_index);
+    if ty == ITY_I128() || ty == ITY_U128() { return ty; }
+    -1
+}
+
 fn lctx_variant_payload_ast_tid(
     ctx: LowerCtx, enum_name: String, variant_name: String, payload_index: i64
 ) -> i64 {
@@ -1179,6 +1213,42 @@ fn lower_ast_type_option_elem_ty(a: AstArena, tid: i64, alias_names: Vec<String>
     let elem_ty: i64 = lower_ast_ty_linear(a, elem_tid, Vec::new(), alias_names, alias_target_tids);
     if elem_ty == ITY_PTR() || elem_ty == ITY_LPTR() || elem_ty == ITY_UNIT() { return -1; }
     elem_ty
+}
+
+// Wide Result<T, E> payload widths, indexed by variant tag (Ok = 0, Err = 1).
+//
+// Result is built in, so the declared per-enum payload table is empty for it --
+// its payload widths come from the instantiation rather than a declaration.
+// Narrow payloads get the -1 sentinel, and an all-narrow Result yields an empty
+// vector so it keeps relying on the existing contextual-widening path.
+fn lower_ast_type_result_wide_payload_tys(
+    a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>
+) -> Vec<i64> {
+    let none: Vec<i64> = Vec::new();
+    let resolved_tid: i64 = lower_resolve_alias_tid(a, tid, alias_names, alias_target_tids);
+    if resolved_tid == -1 { return none; }
+    if type_tag(a, resolved_tid) != TY_GENERIC() { return none; }
+    let name_sid: i64 = type_a(a, resolved_tid);
+    let name: String = arena_str(a, name_sid);
+    if name != String::from("Result") { return none; }
+    let args_lid: i64 = type_b(a, resolved_tid);
+    let n_args: i64 = list_len(a, args_lid);
+    let tys: Vec<i64> = Vec::new();
+    let mut has_wide: bool = false;
+    let mut i: i64 = 0;
+    while i < n_args && i < 2 {
+        let arg_tid: i64 = list_get(a, args_lid, i);
+        let arg_ty: i64 = lower_ast_ty_linear(a, arg_tid, Vec::new(), alias_names, alias_target_tids);
+        if arg_ty == ITY_I128() || arg_ty == ITY_U128() {
+            tys.push(arg_ty);
+            has_wide = true;
+        } else {
+            tys.push(-1);
+        }
+        i = i + 1;
+    }
+    if has_wide { return tys; }
+    none
 }
 
 fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64, alias_names: Vec<String>, alias_target_tids: Vec<i64>) -> String {
@@ -2506,6 +2576,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if ret_option_elem != -1 {
                 lctx_tag(ctx, result, String::from("Option"));
                 lctx_tag_option_elem(ctx, result, ret_option_elem);
+            }
+            let ret_variant_tys: Vec<i64> = ctx.func_ret_variant_payload_tys[fidx];
+            if ret_variant_tys.len() > 0 {
+                lctx_tag_variant_payloads(ctx, result, ret_variant_tys);
             }
             return result;
         }
@@ -4110,11 +4184,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                         let aggregate_vec_variants: Vec<Vec<i64>> = lctx_get_pattern_vec_variant_payload_ty_path(ctx, inner_pid);
                         let aggregate_option_elem: i64 = lctx_get_pattern_option_elem_ty(ctx, inner_pid);
                         let aggregate_variant_payloads: Vec<i64> = lctx_get_pattern_variant_payload_tys(ctx, inner_pid);
+                        let declared_wide: i64 = lctx_declared_wide_payload_ty(ctx, en, vn, ii);
                         let field_ty: i64 = {
                             if aggregate_struct.len() > 0 && lctx_pattern_is_linear(ctx, inner_pid) == 1 {
                                 ITY_LPTR()
                             } else if aggregate_struct.len() > 0 {
                                 ITY_PTR()
+                            } else if declared_wide != -1 {
+                                declared_wide
                             } else if ii == 0 {
                                 payload_ty
                             } else {
@@ -4629,7 +4706,16 @@ fn lower_unwrap(ctx: LowerCtx, eid: i64, recv_id: i64, empty_tag: i64) -> i64 {
         } else if aggregate_name.len() > 0 {
             ITY_PTR()
         } else {
-            lctx_get_option_elem_ty(ctx, recv_id)
+            // The unwrapped payload is the non-empty variant: `Some` (tag 1)
+            // for Option, `Ok` (tag 0) for Result. The option-elem map only
+            // ever carries an Option's width, so a wide `Result` payload needs
+            // the variant map or it loads as a truncated limb.
+            let variant_ty: i64 = lctx_variant_payload_at(ctx, recv_id, 1 - empty_tag);
+            if variant_ty != -1 {
+                variant_ty
+            } else {
+                lctx_get_option_elem_ty(ctx, recv_id)
+            }
         }
     };
     let payload_args: Vec<i64> = Vec::new();
@@ -5272,6 +5358,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                     if opt_elem_ty != -1 {
                         lctx_tag_option_elem(ctx, arg_id, opt_elem_ty);
                     }
+                } else if tn == String::from("Result") {
+                    let res_payload_tys: Vec<i64> = lower_ast_type_result_wide_payload_tys(a, resolved_ptid, ctx.type_alias_names, ctx.type_alias_target_tids);
+                    if res_payload_tys.len() > 0 {
+                        lctx_tag_variant_payloads(ctx, arg_id, res_payload_tys);
+                    }
                 }
             }
         }
@@ -5369,6 +5460,7 @@ fn lower_module_vow(
     let func_ret_tags: Vec<String> = Vec::new();
     let func_ret_vec_elems: Vec<String> = Vec::new();
     let func_ret_option_elems: Vec<i64> = Vec::new();
+    let func_ret_variant_payload_tys: Vec<Vec<i64>> = Vec::new();
     let func_param_tys: Vec<Vec<i64>> = Vec::new();
     let func_param_ast_tids: Vec<Vec<i64>> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
@@ -5477,6 +5569,7 @@ fn lower_module_vow(
             func_ret_tags.push(lower_ast_type_tag_name(a, ret_tid, type_alias_names, type_alias_target_tids));
             func_ret_vec_elems.push(lower_ast_type_vec_elem_name(a, ret_tid, type_alias_names, type_alias_target_tids));
             func_ret_option_elems.push(lower_ast_type_option_elem_ty(a, ret_tid, type_alias_names, type_alias_target_tids));
+            func_ret_variant_payload_tys.push(lower_ast_type_result_wide_payload_tys(a, ret_tid, type_alias_names, type_alias_target_tids));
 
             let params_lid: i64 = fn_params_lid(a, iid);
             let nparams: i64 = list_len(a, params_lid) / 3;
@@ -5692,6 +5785,7 @@ fn lower_module_vow(
     ctx.func_ret_tags = func_ret_tags;
     ctx.func_ret_vec_elems = func_ret_vec_elems;
     ctx.func_ret_option_elems = func_ret_option_elems;
+    ctx.func_ret_variant_payload_tys = func_ret_variant_payload_tys;
     ctx.func_param_tys = func_param_tys;
     ctx.func_param_ast_tids = func_param_ast_tids;
     ctx.struct_names = struct_names;
