@@ -211,6 +211,34 @@ pub fn extract_arith_site(output: &str) -> Option<ArithOverflowSite> {
     None
 }
 
+/// Parse the label of a verifier-model assertion that is not a user-authored
+/// contract clause, returning the stable description exposed in structured
+/// counterexamples.
+pub fn extract_assert_label(output: &str) -> Option<&'static str> {
+    let mut in_violated = false;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed == "Violated property:" {
+            in_violated = true;
+            continue;
+        }
+        if in_violated {
+            let description = match trimmed {
+                "vec bounds" | "string bounds" => "index out of bounds",
+                "vec capacity" => "vec exceeded the verifier's internal capacity limit",
+                "string capacity" => "string exceeded the verifier's internal capacity limit",
+                "hashmap capacity" => "hashmap exceeded the verifier's internal capacity limit",
+                "btreemap capacity" => "btreemap exceeded the verifier's internal capacity limit",
+                "integer shift count" => "shift amount exceeds the operand's bit width",
+                "unwrap-none" => "unwrap() called on None",
+                _ => continue,
+            };
+            return Some(description);
+        }
+    }
+    None
+}
+
 fn parse_arith_label(rest: &str) -> Option<ArithOverflowSite> {
     let mut parts = rest.split(':');
     let abort = ArithAbort::from_label(parts.next()?)?;
@@ -1889,6 +1917,67 @@ VERIFICATION SUCCESSFUL";
         assert_eq!(v.get(&0), Some(&true));
         assert_eq!(v.get(&1), Some(&true));
         assert!(v.values().all(|p| *p));
+    }
+
+    #[test]
+    fn extract_assert_label_maps_known_verifier_checks() {
+        let cases = [
+            ("vec bounds", "index out of bounds"),
+            ("string bounds", "index out of bounds"),
+            (
+                "vec capacity",
+                "vec exceeded the verifier's internal capacity limit",
+            ),
+            (
+                "string capacity",
+                "string exceeded the verifier's internal capacity limit",
+            ),
+            (
+                "hashmap capacity",
+                "hashmap exceeded the verifier's internal capacity limit",
+            ),
+            (
+                "btreemap capacity",
+                "btreemap exceeded the verifier's internal capacity limit",
+            ),
+            (
+                "integer shift count",
+                "shift amount exceeds the operand's bit width",
+            ),
+            ("unwrap-none", "unwrap() called on None"),
+        ];
+
+        for (label, description) in cases {
+            let output = format!(
+                "[Counterexample]\n\nViolated property:\n  file f.c line 1 column 1 function f\n  {label}\n  condition\n\nVERIFICATION FAILED"
+            );
+            assert_eq!(
+                extract_assert_label(&output),
+                Some(description),
+                "failed to map {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_assert_label_ignores_contract_and_arithmetic_labels() {
+        for label in ["vow:0", "arith:add:0:0:0"] {
+            let output = format!(
+                "[Counterexample]\n\nViolated property:\n  file f.c line 1 column 1 function f\n  {label}\n  condition\n\nVERIFICATION FAILED"
+            );
+            assert_eq!(extract_assert_label(&output), None, "matched {label}");
+        }
+    }
+
+    #[test]
+    fn extract_assert_label_ignores_unknown_labels() {
+        let output = "[Counterexample]\n\n\
+                      Violated property:\n\
+                        file f.c line 1 column 1 function f\n\
+                        some future guard\n\
+                        condition\n\n\
+                      VERIFICATION FAILED";
+        assert_eq!(extract_assert_label(output), None);
     }
 
     #[test]
