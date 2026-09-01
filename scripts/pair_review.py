@@ -282,7 +282,7 @@ execution violates a vow. A false `Verified` is the only finding class in this \
 mode. Do not report false negatives, precision limitations, stylistic \
 differences, or a suspicious assumption without a discriminating program. The \
 runner will confirm each claim by requiring both `Verified` and a debug-mode \
-`VowViolation`.
+`VowViolation`, using both compilers independently.
 
 Every program must be complete and start with a `module M` declaration.
 
@@ -381,6 +381,22 @@ def confirm_soundness(program, verifier, timeout):
     return "inconclusive", result.get("detail", verdict or "no verdict")
 
 
+def confirm_soundness_pair(program, rust, self_bin, timeout):
+    """Run the model-vs-runtime gate independently for both C emitters."""
+    rust_result = confirm_soundness(program, rust, timeout)
+    self_result = confirm_soundness(program, self_bin, timeout)
+    observed = (
+        f"rust: {rust_result[0]} ({rust_result[1]}); "
+        f"self-hosted: {self_result[0]} ({self_result[1]})"
+    )
+    verdicts = {rust_result[0], self_result[0]}
+    if "confirmed" in verdicts:
+        return "confirmed", observed
+    if verdicts == {"refuted"}:
+        return "refuted", observed
+    return "inconclusive", observed
+
+
 def _plan_record(chunks, preambles):
     total = len(chunks)
     records = []
@@ -459,9 +475,7 @@ def review_pair(
         raise ValueError(f"unknown review mode: {mode}")
     if confirm_fn is None:
         if mode == "soundness":
-
-            def confirm_fn(program, rust, _self, limit):
-                return confirm_soundness(program, rust, limit)
+            confirm_fn = confirm_soundness_pair
         else:
             confirm_fn = confirm
     system = SYSTEM_SOUNDNESS if mode == "soundness" else SYSTEM

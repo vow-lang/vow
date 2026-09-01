@@ -465,6 +465,30 @@ class SoundnessModeTest(unittest.TestCase):
                 self.assertEqual(expected, verdict)
                 self.assertEqual("runner detail", detail)
 
+    def test_soundness_pair_gate_checks_both_compilers(self):
+        with mock.patch.object(
+            pair_review,
+            "confirm_soundness",
+            side_effect=[
+                ("refuted", "no Rust violation"),
+                ("confirmed", "self-hosted false proof"),
+            ],
+        ) as gate:
+            verdict, detail = pair_review.confirm_soundness_pair(
+                "module M\n", "rust-vow", "self-vow", 7
+            )
+
+        self.assertEqual("confirmed", verdict)
+        self.assertIn("rust: refuted", detail)
+        self.assertIn("self-hosted: confirmed", detail)
+        self.assertEqual(
+            [
+                mock.call("module M\n", "rust-vow", 7),
+                mock.call("module M\n", "self-vow", 7),
+            ],
+            gate.call_args_list,
+        )
+
     def test_soundness_mode_defaults_to_c_emitter_pair(self):
         with tempfile.TemporaryDirectory() as directory:
             with redirect_stdout(io.StringIO()):
