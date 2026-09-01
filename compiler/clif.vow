@@ -515,13 +515,18 @@ fn str_eq_lit(s: String, lit: String) -> bool {
 }
 
 // Status codes returned by `clif_emit_module`, mirroring the shim's own
-// contract (`CLIF_ERR_UNSUPPORTED` in `vow-clif-shim/src/lib.rs`). Callers
-// classify them into structured diagnostics, so the values are part of the
-// interface, not an implementation detail.
+// contract in `vow-clif-shim/src/lib.rs`. Callers classify them into
+// structured diagnostics, so the values are part of the interface, not an
+// implementation detail.
 fn CLIF_ERR_COMPILE() -> i64 { -1 }
 fn CLIF_ERR_LINK() -> i64 { -2 }
 fn CLIF_ERR_UNSUPPORTED() -> i64 { -3 }
 fn CLIF_ERR_IO() -> i64 { -4 }
+fn CLIF_ERR_WIDE_AGGREGATE_FIELD() -> i64 { -5 }
+
+fn CLIF_WIDE_AGGREGATE_FIELD_MSG() -> String {
+    String::from("128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour")
+}
 
 fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> i64 [io] {
     let ctx: i64 = __vow_clif_create(mode, trace);

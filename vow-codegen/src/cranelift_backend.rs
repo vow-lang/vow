@@ -24,6 +24,9 @@ use crate::return_materialization::{
 };
 use crate::{Backend, BuildMode, CodegenError, CompiledObject, TraceMode};
 
+const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate \
+     field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
+
 pub struct CraneliftBackend;
 
 impl CraneliftBackend {
@@ -435,20 +438,23 @@ fn extend_field_store_value(
     builder: &mut FunctionBuilder<'_>,
     value: Value,
     source_ty: IrTy,
-) -> Value {
+) -> Result<Value, CodegenError> {
     match source_ty {
-        IrTy::I8 | IrTy::I16 | IrTy::I32 => builder.ins().sextend(types::I64, value),
-        IrTy::U8 | IrTy::U16 | IrTy::U32 => builder.ins().uextend(types::I64, value),
+        IrTy::I8 | IrTy::I16 | IrTy::I32 => Ok(builder.ins().sextend(types::I64, value)),
+        IrTy::U8 | IrTy::U16 | IrTy::U32 => Ok(builder.ins().uextend(types::I64, value)),
+        IrTy::I128 | IrTy::U128 => Err(CodegenError::UnsupportedOpcode(
+            WIDE_AGGREGATE_FIELD_MSG.to_string(),
+        )),
         IrTy::F32 => {
             let bits = builder
                 .ins()
                 .bitcast(types::I32, MemFlagsData::new(), value);
-            builder.ins().uextend(types::I64, bits)
+            Ok(builder.ins().uextend(types::I64, bits))
         }
-        IrTy::F64 => builder
+        IrTy::F64 => Ok(builder
             .ins()
-            .bitcast(types::I64, MemFlagsData::new(), value),
-        _ => value,
+            .bitcast(types::I64, MemFlagsData::new(), value)),
+        _ => Ok(value),
     }
 }
 
@@ -1777,6 +1783,11 @@ fn lower_inst(
         // Struct / enum field access
         // ------------------------------------------------------------------
         Opcode::FieldGet => {
+            if matches!(inst.ty, IrTy::I128 | IrTy::U128) {
+                return Err(CodegenError::UnsupportedOpcode(
+                    WIDE_AGGREGATE_FIELD_MSG.to_string(),
+                ));
+            }
             if let InstData::FieldIndex(idx) = inst.data {
                 let base = ctx.value_map[&inst.args[0]];
                 let offset = (idx as i32) * 8;
@@ -1807,7 +1818,7 @@ fn lower_inst(
                     .get(&inst.args[1])
                     .copied()
                     .unwrap_or(IrTy::I64);
-                let store_val = extend_field_store_value(builder, new_val, source_ty);
+                let store_val = extend_field_store_value(builder, new_val, source_ty)?;
                 builder
                     .ins()
                     .store(MemFlagsData::trusted(), store_val, base, offset);
@@ -1972,7 +1983,7 @@ fn emit_vow_violation_body(
                     IrTy::Unit | IrTy::Ptr | IrTy::LinearPtr => (zero_hi, zero_hi),
                     // Every other scalar widens to i64 exactly as it does when
                     // stored into a struct field.
-                    _ => (extend_field_store_value(builder, *cl_val, *ir_ty), zero_hi),
+                    _ => (extend_field_store_value(builder, *cl_val, *ir_ty)?, zero_hi),
                 };
                 builder
                     .ins()
@@ -3434,9 +3445,9 @@ mod tests {
         let unsigned_i8 = builder.ins().iconst(types::I8, -1);
         coerce_call_argument(&mut builder, unsigned_i8, IrTy::U8, types::I64).unwrap();
         let signed_i16 = builder.ins().iconst(types::I16, -1);
-        extend_field_store_value(&mut builder, signed_i16, IrTy::I16);
+        extend_field_store_value(&mut builder, signed_i16, IrTy::I16).unwrap();
         let unsigned_i16 = builder.ins().iconst(types::I16, -1);
-        extend_field_store_value(&mut builder, unsigned_i16, IrTy::U16);
+        extend_field_store_value(&mut builder, unsigned_i16, IrTy::U16).unwrap();
 
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
@@ -6015,6 +6026,93 @@ mod tests {
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn wide_field_load_is_rejected_before_cranelift_verification() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::I128,
+                vec![
+                    inst(
+                        0,
+                        Opcode::RegionAlloc,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::AllocSize { size: 16, align: 8 },
+                    ),
+                    inst(
+                        1,
+                        Opcode::FieldGet,
+                        Ty::I128,
+                        vec![0],
+                        InstData::FieldIndex(0),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            )],
+        );
+
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        let Err(CodegenError::UnsupportedOpcode(message)) = result else {
+            panic!("128-bit field loads must be rejected before Cranelift verification");
+        };
+        assert!(
+            message.contains("128-bit struct fields and enum payloads"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn wide_field_store_is_rejected_before_it_can_overwrite_an_adjacent_slot() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::Unit,
+                vec![
+                    inst(
+                        0,
+                        Opcode::RegionAlloc,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::AllocSize { size: 24, align: 8 },
+                    ),
+                    inst(
+                        1,
+                        Opcode::ConstI128,
+                        Ty::I128,
+                        vec![],
+                        InstData::ConstI128(1_i128 << 80),
+                    ),
+                    inst(
+                        2,
+                        Opcode::FieldSet,
+                        Ty::Unit,
+                        vec![0, 1],
+                        InstData::FieldIndex(0),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            )],
+        );
+
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        let Err(CodegenError::UnsupportedOpcode(message)) = result else {
+            panic!("128-bit field stores must be rejected before they can overwrite a slot");
+        };
+        assert!(
+            message.contains("128-bit struct fields and enum payloads"),
+            "{message}"
+        );
     }
 
     #[test]
