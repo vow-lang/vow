@@ -77,7 +77,7 @@ extra:
 
 # NOTE: the `reference/` and `stdlib.md` pages below are generated from the
 # canonical markdown in docs/spec/ by scripts/build_docs_site.py. Run that
-# script before `mkdocs build`/`serve` (the docs workflow and website/README
+# script before `zensical build`/`serve` (the docs workflow and website/README
 # both do this). The tutorial and landing pages are authored here directly.
 nav:
   - Home: index.md
