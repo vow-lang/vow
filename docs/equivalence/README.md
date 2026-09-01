@@ -52,15 +52,19 @@ is why it is an agent command rather than a workflow step. It reviews matched
 module pairs (`lexer.rs` ↔ `lexer.vow`, and so on) for semantic divergence, and
 publishes to `docs/equivalence/<YYYY-MM>/` alongside the monthly audit's own
 reports. Sources are split at function boundaries and packed into bounded
-prompts; no source tail is truncated. An oversize function remains whole and is
-reported explicitly, while an operator-imposed chunk cap lowers the reported
-coverage and leaves the remaining chunks visibly deferred.
+prompts; no source tail is truncated, and a matched Rust/self-hosted pair always
+shares a chunk so the model always has both sides in front of it. An oversize
+group remains whole and is reported explicitly, while an operator-imposed chunk
+cap lowers the reported coverage and leaves the remaining chunks visibly
+deferred. Rust `#[cfg(test)]` items are excluded — two thirds of the Rust units
+in the declared pairs are tests with no self-hosted counterpart.
 
 The same machinery has a separate `soundness` mode for the two C emitters. It
 asks whether an emitted `__ESBMC_assume` narrows the verifier model below what
 Vow permits, then confirms candidates with the verifier-vs-debug-runtime gate.
 That is a model-vs-language question, not a Rust-vs-self-hosted equivalence
-outcome, so soundness runs never update the pair ledger.
+outcome, so soundness runs never update the pair ledger — nor read it, since a
+pair an equivalence run stamped has not been asked the soundness question.
 
 ## The rule for tier 3
 
@@ -72,6 +76,11 @@ This is not optional rigour. The 2026-06-12 verification-honesty pass found that
 half of the preceding audit's severities were overstated. An unconfirmed finding
 costs more reviewer time than it saves, so a hypothesis without a runner verdict
 is published as a hypothesis and excluded from the summary counts.
+
+"Disagree" is read strictly. The runner files a panic or signal death against
+each side independently, because a crash is a bug whatever the peer did — but a
+program that crashes *both* compilers is agreement, and the pair review records
+it as inconclusive rather than letting any crashing input clear the gate.
 
 ## Reading a report
 
@@ -172,8 +181,8 @@ python3 scripts/pair_review.py --dry-run --all
 python3 scripts/pair_review.py --model claude-sonnet-4-20250514 \
   --update-ledger --date <YYYY-MM-DD>
 
-# Separate verifier-model soundness question (defaults to c_emitter only)
-python3 scripts/pair_review.py --mode soundness --dry-run --all
+# Separate verifier-model soundness question (c_emitter pair only)
+python3 scripts/pair_review.py --mode soundness --dry-run
 python3 scripts/pair_review.py --mode soundness \
   --model claude-sonnet-4-20250514
 ```

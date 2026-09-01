@@ -80,24 +80,32 @@ the two compilers disagree on a concrete program. The harness enforces this — 
 finding because it sounds plausible or because a model was confident. This repo has been burned: the
 2026-06-12 verification-honesty pass found half of the preceding audit's severities overstated.
 
-Every function unit is retained whole. If one exceeds `--chunk-bytes`, the plan marks it `oversize`
-instead of truncating it. If a chunk cap or model error prevents full review, report the pair's exact
-coverage and deferred/error chunk indexes rather than implying full coverage; the harness deliberately
-leaves that pair's prior ledger hash untouched.
+Every function unit is retained whole, and a matched Rust/self-hosted pair always shares one chunk —
+splitting it would hand the model one implementation with no counterpart, which is not a pair review.
+If a group exceeds `--chunk-bytes`, the plan marks it `oversize` instead of splitting or truncating it.
+Rust `#[cfg(test)]` items are excluded: two thirds of the Rust units in the declared pairs are test
+functions with no self-hosted counterpart, and paying for them buys nothing.
+
+Report two coverage figures. `coverage` is the share of unit bytes shipped to a model; `paired_coverage`
+is the share it saw with both implementations present, and the run prints an `unpaired` line whenever
+that is below 100%. If a chunk cap or model error prevents full review, report the pair's exact coverage
+and deferred/error chunk indexes rather than implying full coverage; the harness deliberately leaves that
+pair's prior ledger hash untouched.
 
 ### Step 2b — C-model soundness variant
 
-Run this as a separate question. It defaults to the `c_emitter` pair and asks whether either emitter's
+Run this as a separate question. It covers the `c_emitter` pair only and asks whether either emitter's
 `__ESBMC_assume` statements narrow the verifier model below language semantics. The gate runs each
 candidate through both compilers independently and confirms only `Verified` plus a debug-runtime
-`VowViolation`. Soundness results do not update the equivalence ledger.
+`VowViolation`. Soundness results do not update the equivalence ledger — and because they do not write
+it, they do not read it either: a soundness run never skips on an equivalence run's content hash.
 
 ```bash
-python3 scripts/pair_review.py --mode soundness --dry-run --all \
+python3 scripts/pair_review.py --mode soundness --dry-run \
   --chunk-bytes 120000 \
   --output-dir /tmp/pair-review-soundness-plan-<YYYY-MM>
 
-python3 scripts/pair_review.py --mode soundness --model <MODEL> --all \
+python3 scripts/pair_review.py --mode soundness --model <MODEL> \
   --rust target/release/vow --self build/vowc \
   --chunk-bytes 120000 \
   --output-dir /tmp/pair-review-soundness-<YYYY-MM>
@@ -142,9 +150,9 @@ Update `docs/equivalence/README.md` with an index row per month.
 
 ## Step 5 — Report what you did not cover
 
-Every run states its gaps explicitly: pairs skipped as unchanged, oversize function units, chunks
-deferred by a spend cap, model-error chunks, corpus files skipped and why, and any shard or budget that
-ran out. A run that silently examined a fraction of the surface must never read as a clean bill of
+Every run states its gaps explicitly: pairs skipped as unchanged, oversize function groups, bytes shown
+without a counterpart (`paired_coverage` below 100%), chunks deferred by a spend cap, model-error chunks,
+corpus files skipped and why, and any shard or budget that ran out. A run that silently examined a fraction of the surface must never read as a clean bill of
 health. `vowc mutants`' `missed.txt` convention is the model here.
 
 ## Step 6 — Propose, don't act
