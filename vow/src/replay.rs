@@ -390,13 +390,18 @@ fn replay_abort(reason: String) -> ReplayOutcome {
 }
 
 /// Parse a `{"error":"<kind>",...}`-shaped stderr line into its JSON value,
-/// or `None` if the line isn't one (a plain trace/log line, for instance).
+/// or `None` if the line isn't one. `debug_str`/`debug_i64`/`debug_u64` write
+/// to stderr without a trailing newline, so a preceding debug write can
+/// coalesce onto the same line as the runtime's envelope (e.g.
+/// `"traced: 5{\"error\":\"IndexOutOfBounds\"}"`); scan right-to-left for the
+/// envelope's stable marker so a debug prefix doesn't hide it.
 fn parse_json_error_line(line: &str) -> Option<serde_json::Value> {
-    let l = line.trim();
-    if !l.starts_with('{') {
-        return None;
-    }
-    serde_json::from_str(l).ok()
+    let l = line.trim_end();
+    l.match_indices("{\"error\":\"")
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .find_map(|(start, _)| serde_json::from_str(&l[start..]).ok())
 }
 
 /// Parse a `{"error":"VowViolation","vow_id":N,"blame":"Caller",...}` stderr
@@ -436,8 +441,13 @@ fn classify_replay_run(
     stderr: &str,
     ce: &StructuredCounterexample,
 ) -> ReplayOutcome {
-    match stderr.lines().find_map(parse_vow_violation_line) {
-        Some((vid, blame)) => {
+    match (code, stderr.lines().find_map(parse_vow_violation_line)) {
+        // `__vow_violation` exits with the same reserved abort status as any
+        // other runtime abort, so a genuine VowViolation is exit-134 too.
+        // Gating on it here closes the same false-match surface the abort
+        // arm below guards against: a debug write that happens to coalesce
+        // a VowViolation-shaped substring onto its line.
+        (Some(RUNTIME_ABORT_EXIT_CODE), Some((vid, blame))) => {
             if vid == ce.vow_id && blame.eq_ignore_ascii_case(&ce.blame) {
                 ReplayOutcome {
                     status: "confirmed",
@@ -450,7 +460,7 @@ fn classify_replay_run(
                 ))
             }
         }
-        None => match (code, stderr.lines().find_map(parse_runtime_abort_line)) {
+        _ => match (code, stderr.lines().find_map(parse_runtime_abort_line)) {
             (Some(RUNTIME_ABORT_EXIT_CODE), Some(kind)) => replay_abort(format!(
                 "runtime aborted with {kind} before reaching predicted VowViolation vow_id={} blame={}",
                 ce.vow_id, ce.blame
@@ -977,6 +987,39 @@ mod tests {
         let outcome = classify_replay_run(false, Some(1), "{\"error\":\"Notice\"}\n", &ce("f", 2));
 
         assert_eq!(outcome.status, "diverged");
+    }
+
+    #[test]
+    fn classify_replay_run_reports_aborted_when_abort_marker_is_coalesced_with_debug_output() {
+        // `debug_str`/`debug_i64`/`debug_u64` write to stderr with no trailing
+        // newline, so a debug call right before a genuine abort lands on the
+        // same line as the runtime's `{"error":...}` envelope. The abort must
+        // still be recognized even though the line no longer starts with `{`.
+        let outcome = classify_replay_run(
+            false,
+            Some(134),
+            "tracing peek 5{\"error\":\"IndexOutOfBounds\"}\n",
+            &ce("f", 2),
+        );
+
+        assert_eq!(outcome.status, "aborted");
+        assert!(outcome.reason.unwrap().contains("IndexOutOfBounds"));
+    }
+
+    #[test]
+    fn classify_replay_run_does_not_confirm_a_violation_shaped_line_on_the_wrong_exit_code() {
+        // `__vow_violation` always exits 134, so a VowViolation-shaped line
+        // paired with any other exit status cannot be a genuine violation —
+        // it can only be debug output that happens to look like one. Confirm
+        // is gated on exit 134 for the same reason abort classification is.
+        let outcome = classify_replay_run(
+            false,
+            Some(1),
+            "{\"error\":\"VowViolation\",\"vow_id\":2,\"blame\":\"Callee\"}\n",
+            &ce("f", 2),
+        );
+
+        assert_ne!(outcome.status, "confirmed");
     }
 
     #[test]
