@@ -226,6 +226,15 @@ class FullTestWorkflowTest(unittest.TestCase):
         self.assertIn("astral-sh/setup-uv", full_test)
         self.assertIn("scripts/full_test.sh", full_test)
 
+    def test_enforces_a_minimum_passed_count(self) -> None:
+        full_test = self.jobs["full-test"]
+
+        self.assertIn("set -o pipefail", full_test)
+        self.assertIn("tee /tmp/full_test.log", full_test)
+        self.assertIn(r"grep -oP '\d+(?= passed)'", full_test)
+        self.assertIn('test -n "$passed"', full_test)
+        self.assertIn('[ "$passed" -ge 500 ]', full_test)
+
 
 class EquivalenceWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:

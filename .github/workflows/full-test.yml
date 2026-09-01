@@ -52,4 +52,9 @@ jobs:
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
       - name: Rust and self-hosted differential suite
-        run: scripts/full_test.sh
+        run: |
+          set -o pipefail
+          scripts/full_test.sh 2>&1 | tee /tmp/full_test.log
+          passed=$(grep -oP '\d+(?= passed)' /tmp/full_test.log | tail -1)
+          test -n "$passed"
+          [ "$passed" -ge 500 ]
