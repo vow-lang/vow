@@ -70,6 +70,15 @@ unsafe fn read_vow_string(vow_vec_ptr: i64) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// Status codes returned across the FFI boundary (must match compiler/clif.vow)
+//
+// Callers classify these into structured diagnostics, so the values are part
+// of the interface, not an implementation detail. `0` means success.
+// ---------------------------------------------------------------------------
+
+const CLIF_ERR_UNSUPPORTED: i64 = -3;
+
+// ---------------------------------------------------------------------------
 // IR type/opcode constants (must match compiler/ir.vow)
 // ---------------------------------------------------------------------------
 
@@ -166,8 +175,6 @@ fn report_narrowed_wide_argument() {
          (epic #526); narrowing here would silently drop the high 64 bits"
     );
 }
-
-const CLIF_ERR_UNSUPPORTED: i64 = -3;
 
 fn extend_field_store_value(
     builder: &mut FunctionBuilder<'_>,
