@@ -11,8 +11,7 @@
 
 use std::path::PathBuf;
 
-use vow_codegen::CodegenError;
-use vow_diag::{Blame, Diagnostic, Severity, SourceLocation};
+use vow_diag::{Diagnostic, Severity};
 
 use crate::{BuildOutput, BuildStatus, StructuredCounterexample};
 
@@ -391,34 +390,12 @@ pub(crate) fn compile_failed(message: String, diagnostics: Vec<Diagnostic>) -> B
     }
 }
 
-/// The structured diagnostic for a backend error. Backend errors carry no
-/// instruction origin, so the span is the whole file. Callers push this onto
-/// the frontend diagnostics and pass the compatibility `message` to
-/// [`compile_failed`]; returning the value (rather than a `BuildOutput` the
-/// caller has to index back into) keeps the stderr and JSON channels reading
-/// the same diagnostic.
-pub(crate) fn codegen_diagnostic(error: &CodegenError, file: &str) -> Diagnostic {
-    Diagnostic {
-        severity: Severity::Error,
-        code: error.error_code(),
-        message: error.to_string(),
-        primary: SourceLocation {
-            file: file.to_string(),
-            byte_offset: 0,
-            byte_len: 0,
-        },
-        secondary: vec![],
-        blame: Blame::None,
-        hints: vec![],
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{BuildStatus, CeCallSite, CeSource, CeViolatingArg, StructuredCounterexample};
     use vow_codegen::CodegenError;
-    use vow_diag::{Blame, ErrorCode, Severity, SourceLocation};
+    use vow_diag::{Blame, ErrorCode, SourceLocation};
 
     fn ce(function: &str, blame: &str) -> StructuredCounterexample {
         StructuredCounterexample {
@@ -915,11 +892,12 @@ mod tests {
 
     #[test]
     fn codegen_failed_attaches_one_structured_diagnostic() {
-        // Mirrors what `codegen_error_to_output` composes in main.rs.
+        // Mirrors what `codegen_error_to_output` composes in main.rs. The
+        // diagnostic's own shape is covered by `vow-codegen`'s tests.
         let error = CodegenError::UnsupportedOpcode("wide aggregate".to_string());
         let mut diagnostics = vec![diag("frontend note")];
-        diagnostics.push(codegen_diagnostic(&error, "wide.vow"));
-        let out = compile_failed(format!("{error:?}"), diagnostics);
+        diagnostics.push(error.to_diagnostic("wide.vow"));
+        let out = compile_failed(error.failure_message(), diagnostics);
 
         assert!(matches!(out.status, BuildStatus::CompileFailed { .. }));
         assert!(out.executable.is_none());
@@ -927,17 +905,7 @@ mod tests {
         assert_eq!(out.diagnostics[0].message, "frontend note");
         assert_eq!(out.diagnostics[1].severity, Severity::Error);
         assert_eq!(out.diagnostics[1].code, ErrorCode::CodegenUnsupported);
-        assert_eq!(out.diagnostics[1].message, error.to_string());
-        assert_eq!(
-            out.diagnostics[1].primary,
-            SourceLocation {
-                file: "wide.vow".to_string(),
-                byte_offset: 0,
-                byte_len: 0,
-            }
-        );
-        assert!(out.diagnostics[1].secondary.is_empty());
-        assert_eq!(out.diagnostics[1].blame, Blame::None);
+        assert_eq!(out.diagnostics[1].primary.file, "wide.vow");
         assert!(out.counterexamples.is_empty());
     }
 }

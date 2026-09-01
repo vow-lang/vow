@@ -306,10 +306,10 @@ fn codegen_error_to_output(
     source: &Path,
     mut diagnostics: Vec<Diagnostic>,
 ) -> BuildOutput {
-    let diagnostic = verify_outcome::codegen_diagnostic(&error, source.to_string_lossy().as_ref());
+    let diagnostic = error.to_diagnostic(source.to_string_lossy().as_ref());
     let _ = emit_frontend_diagnostics_to_stderr(std::slice::from_ref(&diagnostic));
     diagnostics.push(diagnostic);
-    verify_outcome::compile_failed(format!("{error:?}"), diagnostics)
+    verify_outcome::compile_failed(error.failure_message(), diagnostics)
 }
 
 fn link_obj(obj_path: &Path, output_path: &Path) -> Result<PathBuf, CodegenError> {
