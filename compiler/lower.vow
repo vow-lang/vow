@@ -4060,7 +4060,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let call_args: Vec<i64> = Vec::new();
         call_args.push(vec_ptr);
         call_args.push(idx_id);
-        let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
+        let raw_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
+        let elem_ty: i64 = lctx_lower_ast_ty(ctx, elem_ast_tid);
+        let result: i64 = lower_narrow_literal(ctx, a, eid, raw_result, elem_ty);
         lctx_propagate_vec_elem(ctx, vec_ptr, result);
         lctx_tag_declared_ast_tid(ctx, result, elem_ast_tid);
         return result;
