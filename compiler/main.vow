@@ -1611,7 +1611,7 @@ fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_
     all_proven
 }
 
-fn codegen_failure_diagnostic(result: i64, path: String) -> Diagnostic {
+fn codegen_failure_diagnostic(result: i64, path: String, obj_path: String) -> Diagnostic {
     if result == CLIF_ERR_UNSUPPORTED() {
         diag_error(
             EC_CODEGEN_UNSUPPORTED(),
@@ -1623,14 +1623,14 @@ fn codegen_failure_diagnostic(result: i64, path: String) -> Diagnostic {
     } else if result == CLIF_ERR_LINK() {
         diag_error(EC_LINK_FAILED(), String::from("native linker failed"), path, 0, 0)
     } else if result == CLIF_ERR_IO() {
-        diag_error(EC_IO_ERROR(), String::from("cannot write the generated object file"), path, 0, 0)
+        diag_error(EC_IO_ERROR(), str2(String::from("cannot write the generated object file: "), obj_path), path, 0, 0)
     } else {
         diag_error(EC_CODEGEN_FAILED(), String::from("native code generation failed"), path, 0, 0)
     }
 }
 
-fn emit_codegen_failure(result: i64, path: String, dctx: DiagCtx) [io] {
-    let d: Diagnostic = codegen_failure_diagnostic(result, path);
+fn emit_codegen_failure(result: i64, path: String, obj_path: String, dctx: DiagCtx) [io] {
+    let d: Diagnostic = codegen_failure_diagnostic(result, path, obj_path);
     diag_ctx_emit(dctx, d);
     eprintln_str(diag_to_human(d, dctx));
 }
@@ -1642,7 +1642,7 @@ fn emit_codegen_failure(result: i64, path: String, dctx: DiagCtx) [io] {
 fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, path: String, dctx: DiagCtx) -> i64 [io] {
     let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
     if result != 0 {
-        emit_codegen_failure(result, path, dctx);
+        emit_codegen_failure(result, path, str2(out, String::from(".o")), dctx);
         diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
         return 1;
     }
@@ -2181,7 +2181,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
                 if result != 0 {
                     let duration: i64 = time_unix_ms() - start_time;
-                    let codegen_diag: Diagnostic = codegen_failure_diagnostic(result, test_path);
+                    let codegen_diag: Diagnostic = codegen_failure_diagnostic(result, test_path, str2(tmp_out, String::from(".o")));
                     let diag_json2: String = str3(String::from("["), diag_to_json(codegen_diag, checked.dctx), String::from("]"));
                     let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json2);
                     entries_json.push(entry);
@@ -2375,7 +2375,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             emit_ir_warnings(ir_mod, dctx);
             let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
             if result != 0 {
-                emit_codegen_failure(result, path, dctx);
+                emit_codegen_failure(result, path, str2(out, String::from(".o")), dctx);
                 diag_emit_build_json(String::from("CompileFailed"), String::from(""), dctx);
                 return 1;
             }

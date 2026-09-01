@@ -584,7 +584,10 @@ pub(crate) fn run_pipeline_from_frontend(
 
     if let Err(e) = compiled.write_to_file(&obj_path) {
         let _ = verify_handle.join();
-        return codegen_error_to_output(CodegenError::Io(e.to_string()), source, all_diagnostics);
+        // The diagnostic's span names the Vow source, so the object path only
+        // reaches the caller if the message carries it.
+        let error = CodegenError::Io(format!("{}: {e}", obj_path.display()));
+        return codegen_error_to_output(error, source, all_diagnostics);
     }
 
     if let Some(p) = prof {
