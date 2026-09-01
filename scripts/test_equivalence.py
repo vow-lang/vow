@@ -7,6 +7,7 @@ divergence that is not reported, a skip that is counted as coverage, or a
 nondeterministic program mistaken for a miscompile.
 """
 
+import io
 import json
 import tempfile
 import unittest
@@ -1311,6 +1312,42 @@ class EmitLedgerUpdateCliTest(unittest.TestCase):
             self.run_sweep(root, emit=False)
 
             self.assertFalse(stale.exists())
+
+    def test_a_below_floor_run_does_not_advertise_a_proposal_path(self):
+        # The "NO LONGER DIVERGING" block prints where the proposal landed.
+        # Pointing an operator at a path nothing wrote — and that this run just
+        # deleted — contradicts the "none" line printed just above it.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(
+                equivalence,
+                "reconcile",
+                return_value=([], [], [{"file": "a.vow", "observables": ["runtime"]}]),
+            ):
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                    self.run_sweep(root, min_compared="20")
+
+        printed = out.getvalue()
+        self.assertIn("NO LONGER DIVERGING", printed)
+        self.assertNotIn("proposed update:", printed)
+
+    def test_a_crashing_sweep_leaves_no_stale_completion_sentinel(self):
+        # equivalence.yml reads results.json's presence as proof the sweep
+        # completed, so a previous run's copy turns a crash into a divergence
+        # verdict. Clearing it up front is the only placement that survives a
+        # crash inside the sweep itself.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _exit, output = self.run_sweep(root)
+            self.assertTrue((output / "results.json").exists())
+
+            with mock.patch.object(
+                equivalence, "reconcile", side_effect=RuntimeError("boom")
+            ):
+                with self.assertRaises(RuntimeError):
+                    self.run_sweep(root)
+
+            self.assertFalse((output / "results.json").exists())
 
     def test_results_json_is_written_last(self):
         # equivalence.yml treats results.json's presence as proof the sweep

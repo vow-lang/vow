@@ -1017,6 +1017,16 @@ def main():
 
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
+    # Neither artifact may outlive the sweep that produced it. In a reused
+    # --output-dir both are read as claims about THIS run: equivalence.yml
+    # treats results.json's presence as proof the sweep completed (so a stale
+    # one turns a crash into a divergence verdict), and an operator applies
+    # ledger.proposed.json wholesale. Cleared up front rather than before each
+    # write, because a sweep that dies inside check_file never reaches either.
+    proposal_path = outdir / "ledger.proposed.json"
+    results_path = outdir / "results.json"
+    for sentinel in (proposal_path, results_path):
+        sentinel.unlink(missing_ok=True)
 
     print(f"=== Differential equivalence sweep: {len(corpus)} files ===")
     print(f"  rust: {rust}")
@@ -1073,17 +1083,11 @@ def main():
     # equivalence.yml keys off its presence to tell a divergence verdict from a
     # crash; and a shard that measured too little to be meaningful must not ship
     # a proposal that looks applicable.
-    # An earlier sweep's proposal in a reused --output-dir must not survive a
-    # run that declines to produce one: the summary would say "none" while the
-    # directory an operator applies, or the workflow uploads, still holds a
-    # stale file from different measurements.
-    proposal_path = outdir / "ledger.proposed.json"
-    proposal_path.unlink(missing_ok=True)
     proposed = args.emit_ledger_update and compared >= args.min_compared
     if proposed:
         proposal = propose_ledger(ledger_document, new, fixed, args.today)
         proposal_path.write_text(json.dumps(proposal, indent=2) + "\n")
-    (outdir / "results.json").write_text(json.dumps(results, indent=2))
+    results_path.write_text(json.dumps(results, indent=2))
 
     # Report what was NOT covered. A sweep that silently skipped most of the
     # corpus reads as "all clear" when it measured almost nothing.
@@ -1101,7 +1105,7 @@ def main():
         print("  skip reasons:")
         for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
             print(f"    {count:5d}  {reason}")
-    print(f"  results  : {outdir / 'results.json'}")
+    print(f"  results  : {results_path}")
     if proposed:
         print(f"  ledger proposal: {proposal_path}")
     elif args.emit_ledger_update:
@@ -1117,7 +1121,7 @@ def main():
             print(
                 f"    {f['file']}  [{obs}]" + (f"  (issue #{issue})" if issue else "")
             )
-        if proposal_path is not None:
+        if proposed:
             print(f"    proposed update: {proposal_path}")
 
     if compared < args.min_compared:
