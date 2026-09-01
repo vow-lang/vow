@@ -1620,12 +1620,10 @@ fn codegen_failure_diagnostic(result: i64, path: String) -> Diagnostic {
             0,
             0
         )
+    } else if result == CLIF_ERR_LINK() {
+        diag_error(EC_LINK_FAILED(), String::from("native linker failed"), path, 0, 0)
     } else {
-        if result == CLIF_ERR_LINK() {
-            diag_error(EC_LINK_FAILED(), String::from("native linker failed"), path, 0, 0)
-        } else {
-            diag_error(EC_CODEGEN_FAILED(), String::from("native code generation failed"), path, 0, 0)
-        }
+        diag_error(EC_CODEGEN_FAILED(), String::from("native code generation failed"), path, 0, 0)
     }
 }
 
@@ -1636,10 +1634,9 @@ fn emit_codegen_failure(result: i64, path: String, dctx: DiagCtx) [io] {
 }
 
 // Codegen phase: emits the native object via Cranelift FFI and links it.
-// Returns 0 on success. On failure (`clif_emit_module` returns -1 = compile,
-// -2 = link, -3 = unsupported), the helper emits the `CompileFailed` JSON and returns 1;
-// the orchestrator propagates that as the process exit code. Behavior matches
-// the inline branches the original `run_build` carried.
+// Returns 0 on success. On any non-zero `clif_emit_module` status the helper
+// emits the classified diagnostic and the `CompileFailed` JSON, and returns 1;
+// the orchestrator propagates that as the process exit code.
 fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, path: String, dctx: DiagCtx) -> i64 [io] {
     let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
     if result != 0 {
