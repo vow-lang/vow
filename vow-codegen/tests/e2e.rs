@@ -618,6 +618,8 @@ fn vow_violation_reports_u8_variable_value() {
     );
 }
 
+/// The captured argument is `171 * 2^64`, whose low 64 bits are exactly zero,
+/// so a capture that keeps only the low limb reports `"x":0` (issue #1077).
 #[test]
 fn vow_violation_reports_i128_variable_value() {
     use vow_diag::Blame;

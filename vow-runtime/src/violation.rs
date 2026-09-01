@@ -148,6 +148,7 @@ mod tests {
             format_value(TAG_I128, i128::MIN as u128),
             "-170141183460469231731687303715884105728"
         );
+        // 171 * 2^64: low limb zero, so a low-limb-only render would say "0".
         assert_eq!(
             format_value(TAG_I128, 3154393236604333326336),
             "3154393236604333326336"

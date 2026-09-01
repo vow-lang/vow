@@ -1840,6 +1840,15 @@ fn emit_overflow_check(
     Ok(())
 }
 
+// Layout of one `vow_runtime::VowBinding`, which this backend writes and the
+// runtime reads back: name pointer at 0, tag at 8 (then 7 bytes of padding),
+// payload low limb at 16, payload high limb at 24. Both sides must agree —
+// a writer left at the old 24-byte stride truncates every captured value.
+const BINDING_STRIDE: usize = 32;
+const BINDING_TAG_OFF: usize = 8;
+const BINDING_PAYLOAD_LO_OFF: usize = 16;
+const BINDING_PAYLOAD_HI_OFF: usize = 24;
+
 fn tag_for_ir_ty(ty: IrTy) -> u8 {
     match ty {
         IrTy::I32 => 0,
@@ -1937,21 +1946,24 @@ fn emit_vow_violation_body(
         let (bindings_ptr, count_val) = if n > 0 {
             let slot: StackSlot = builder.create_sized_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
-                (32 * n) as u32,
+                (BINDING_STRIDE * n) as u32,
                 3,
             ));
+            let zero_hi = builder.ins().iconst(types::I64, 0);
             for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
                 let name_ptr = builder.ins().symbol_value(types::I64, *name_gv);
                 builder
                     .ins()
-                    .stack_store(types::I64, name_ptr, slot, (i * 32) as i32);
+                    .stack_store(types::I64, name_ptr, slot, (i * BINDING_STRIDE) as i32);
                 let tag_val = builder
                     .ins()
                     .iconst(types::I8, tag_for_ir_ty(*ir_ty) as i64);
-                builder
-                    .ins()
-                    .stack_store(types::I64, tag_val, slot, (i * 32 + 8) as i32);
-                let zero_hi = builder.ins().iconst(types::I64, 0);
+                builder.ins().stack_store(
+                    types::I64,
+                    tag_val,
+                    slot,
+                    (i * BINDING_STRIDE + BINDING_TAG_OFF) as i32,
+                );
                 let (payload, payload_hi): (Value, Value) = match ir_ty {
                     IrTy::I8 => (builder.ins().sextend(types::I64, *cl_val), zero_hi),
                     IrTy::U8 => (builder.ins().uextend(types::I64, *cl_val), zero_hi),
@@ -1976,12 +1988,18 @@ fn emit_vow_violation_body(
                     IrTy::Bool => (*cl_val, zero_hi),
                     _ => (builder.ins().iconst(types::I64, 0), zero_hi),
                 };
-                builder
-                    .ins()
-                    .stack_store(types::I64, payload, slot, (i * 32 + 16) as i32);
-                builder
-                    .ins()
-                    .stack_store(types::I64, payload_hi, slot, (i * 32 + 24) as i32);
+                builder.ins().stack_store(
+                    types::I64,
+                    payload,
+                    slot,
+                    (i * BINDING_STRIDE + BINDING_PAYLOAD_LO_OFF) as i32,
+                );
+                builder.ins().stack_store(
+                    types::I64,
+                    payload_hi,
+                    slot,
+                    (i * BINDING_STRIDE + BINDING_PAYLOAD_HI_OFF) as i32,
+                );
             }
             let base = builder.ins().stack_addr(types::I64, slot, 0);
             let cnt = builder.ins().iconst(types::I32, n as i64);

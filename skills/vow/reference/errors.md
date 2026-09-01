@@ -563,6 +563,13 @@ The `blame` field indicates who is at fault:
 - `Caller` — a `requires` was violated (the caller passed bad arguments)
 - `Callee` — an `ensures` or `invariant` was violated (the function has a bug)
 
+**Wide integer values.** `values` entries are bare JSON number tokens and are
+not bounded by `i64`. A `u64`, `i128`, or `u128` binding reports its full
+magnitude, which can exceed the range an IEEE-754 double represents exactly —
+`u128::MAX` renders as `340282366920938463463374607431768211455`. A consumer
+that acts on the exact value must read it with an arbitrary-precision JSON
+number parser; a default `double` parser silently rounds it.
+
 **Fix:** See the `description` and `values` fields to understand which predicate failed and with what runtime values.
 
 ### ArithmeticOverflow

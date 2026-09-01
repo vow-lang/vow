@@ -39,7 +39,7 @@
       "additionalProperties": {
         "type": ["integer", "number", "boolean"]
       },
-      "description": "Runtime values of free variables in the predicate (optional, present when bindings exist)"
+      "description": "Runtime values of free variables in the predicate (optional, present when bindings exist). Integer entries are unbounded: u64, i128 and u128 bindings render at full width and may exceed the exact range of an IEEE-754 double, so consumers must use an arbitrary-precision number parser"
     }
   },
   "additionalProperties": false

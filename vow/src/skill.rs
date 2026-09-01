@@ -1661,18 +1661,19 @@ elements are refused because the element helpers are i64-only, and a 128-bit
 struct field or enum payload (including `Option<i128>`) fails codegen. Do not
 store 128-bit values in aggregates yet.
 
-Scalar `i128`/`u128` bindings captured by a `vow` block retain both limbs and
-report their full signed or unsigned decimal magnitude in the runtime
-`VowViolation` `values` map. Like `u64` values, they are emitted as bare JSON
-integer tokens; consumers that require exact 128-bit values must use an
-arbitrary-precision JSON number parser.
-
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted
 function whose body contains a 128-bit *constant* is reported as `Skipped`
 with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
 yet modelled in the verifier. Contracts over 128-bit parameters alone do
 verify.
+
+Runtime violation values are *not* one of those gaps. Scalar `i128`/`u128`
+bindings captured by a `vow` block retain both limbs and report their full
+signed or unsigned decimal magnitude in the runtime `VowViolation` `values`
+map. Like `u64` values, they are emitted as bare JSON integer tokens — see
+[`errors.md`](errors.md#vowviolation) for the precision note that binds
+consumers.
 
 ### Saturating Arithmetic
 
@@ -3127,6 +3128,11 @@ compiled out. Each is marked below.
 ```
 
 Schema: [`schemas/vow-violation.schema.json`](schemas/vow-violation.schema.json).
+
+`values` entries are bare JSON number tokens and are not bounded by `i64`:
+`u64`, `i128`, and `u128` bindings render at full width, so a consumer that
+acts on the exact value needs an arbitrary-precision number parser. See
+[`errors.md`](errors.md#vowviolation).
 
 ### ArithmeticOverflow
 
@@ -4632,6 +4638,13 @@ These are emitted to stderr as JSON when a compiled program runs (debug mode for
 The `blame` field indicates who is at fault:
 - `Caller` — a `requires` was violated (the caller passed bad arguments)
 - `Callee` — an `ensures` or `invariant` was violated (the function has a bug)
+
+**Wide integer values.** `values` entries are bare JSON number tokens and are
+not bounded by `i64`. A `u64`, `i128`, or `u128` binding reports its full
+magnitude, which can exceed the range an IEEE-754 double represents exactly —
+`u128::MAX` renders as `340282366920938463463374607431768211455`. A consumer
+that acts on the exact value must read it with an arbitrary-precision JSON
+number parser; a default `double` parser silently rounds it.
 
 **Fix:** See the `description` and `values` fields to understand which predicate failed and with what runtime values.
 
@@ -6330,7 +6343,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "additionalProperties": {
         "type": ["integer", "number", "boolean"]
       },
-      "description": "Runtime values of free variables in the predicate (optional, present when bindings exist)"
+      "description": "Runtime values of free variables in the predicate (optional, present when bindings exist). Integer entries are unbounded: u64, i128 and u128 bindings render at full width and may exceed the exact range of an IEEE-754 double, so consumers must use an arbitrary-precision number parser"
     }
   },
   "additionalProperties": false
@@ -6650,18 +6663,19 @@ elements are refused because the element helpers are i64-only, and a 128-bit
 struct field or enum payload (including `Option<i128>`) fails codegen. Do not
 store 128-bit values in aggregates yet.
 
-Scalar `i128`/`u128` bindings captured by a `vow` block retain both limbs and
-report their full signed or unsigned decimal magnitude in the runtime
-`VowViolation` `values` map. Like `u64` values, they are emitted as bare JSON
-integer tokens; consumers that require exact 128-bit values must use an
-arbitrary-precision JSON number parser.
-
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted
 function whose body contains a 128-bit *constant* is reported as `Skipped`
 with `unsupported opcode ConstI128`, because `ConstI128`/`ConstU128` are not
 yet modelled in the verifier. Contracts over 128-bit parameters alone do
 verify.
+
+Runtime violation values are *not* one of those gaps. Scalar `i128`/`u128`
+bindings captured by a `vow` block retain both limbs and report their full
+signed or unsigned decimal magnitude in the runtime `VowViolation` `values`
+map. Like `u64` values, they are emitted as bare JSON integer tokens — see
+[`errors.md`](errors.md#vowviolation) for the precision note that binds
+consumers.
 
 ### Saturating Arithmetic
 
@@ -8117,6 +8131,11 @@ compiled out. Each is marked below.
 ```
 
 Schema: [`schemas/vow-violation.schema.json`](schemas/vow-violation.schema.json).
+
+`values` entries are bare JSON number tokens and are not bounded by `i64`:
+`u64`, `i128`, and `u128` bindings render at full width, so a consumer that
+acts on the exact value needs an arbitrary-precision number parser. See
+[`errors.md`](errors.md#vowviolation).
 
 ### ArithmeticOverflow
 
@@ -9625,6 +9644,13 @@ These are emitted to stderr as JSON when a compiled program runs (debug mode for
 The `blame` field indicates who is at fault:
 - `Caller` — a `requires` was violated (the caller passed bad arguments)
 - `Callee` — an `ensures` or `invariant` was violated (the function has a bug)
+
+**Wide integer values.** `values` entries are bare JSON number tokens and are
+not bounded by `i64`. A `u64`, `i128`, or `u128` binding reports its full
+magnitude, which can exceed the range an IEEE-754 double represents exactly —
+`u128::MAX` renders as `340282366920938463463374607431768211455`. A consumer
+that acts on the exact value must read it with an arbitrary-precision JSON
+number parser; a default `double` parser silently rounds it.
 
 **Fix:** See the `description` and `values` fields to understand which predicate failed and with what runtime values.
 
@@ -11314,7 +11340,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
       "additionalProperties": {
         "type": ["integer", "number", "boolean"]
       },
-      "description": "Runtime values of free variables in the predicate (optional, present when bindings exist)"
+      "description": "Runtime values of free variables in the predicate (optional, present when bindings exist). Integer entries are unbounded: u64, i128 and u128 bindings render at full width and may exceed the exact range of an IEEE-754 double, so consumers must use an arbitrary-precision number parser"
     }
   },
   "additionalProperties": false
