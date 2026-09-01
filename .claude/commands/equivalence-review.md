@@ -86,11 +86,14 @@ If a group exceeds `--chunk-bytes`, the plan marks it `oversize` instead of spli
 Rust `#[cfg(test)]` items are excluded: two thirds of the Rust units in the declared pairs are test
 functions with no self-hosted counterpart, and paying for them buys nothing.
 
-Report two coverage figures. `coverage` is the share of unit bytes shipped to a model; `paired_coverage`
-is the share it saw with both implementations present, and the run prints an `unpaired` line whenever
-that is below 100%. If a chunk cap or model error prevents full review, report the pair's exact coverage
-and deferred/error chunk indexes rather than implying full coverage; the harness deliberately leaves that
-pair's prior ledger hash untouched.
+Report three coverage figures, weakest first. `coverage` is the share of unit bytes shipped to a model.
+`paired_coverage` is the share it saw in a chunk carrying both implementations, and the run prints an
+`unpaired` line whenever that is below 100%. `matched_coverage` is the share it saw beside that function's
+own counterpart — the only one of the three that answers "was this function compared?", since a chunk of
+80 Rust units next to 3 self-hosted ones is fully `paired` and almost entirely unmatched. The run prints
+an `unmatched` line naming every such function. If a chunk cap or model error prevents full review, report
+the pair's exact coverage and deferred/error chunk indexes rather than implying full coverage; the harness
+deliberately leaves that pair's prior ledger hash untouched.
 
 ### Step 2b — C-model soundness variant
 
@@ -151,7 +154,8 @@ Update `docs/equivalence/README.md` with an index row per month.
 ## Step 5 — Report what you did not cover
 
 Every run states its gaps explicitly: pairs skipped as unchanged, oversize function groups, bytes shown
-without a counterpart (`paired_coverage` below 100%), chunks deferred by a spend cap, model-error chunks,
+without a counterpart (`paired_coverage` below 100%), functions reviewed with no counterpart of their own
+beside them (`matched_coverage` and the `unmatched` list), chunks deferred by a spend cap, model-error chunks,
 corpus files skipped and why, and any shard or budget that ran out. A run that silently examined a fraction of the surface must never read as a clean bill of
 health. `vowc mutants`' `missed.txt` convention is the model here.
 

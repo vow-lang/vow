@@ -117,7 +117,8 @@ class PairSpecTest(unittest.TestCase):
 
 
 class SplitUnitsTest(unittest.TestCase):
-    def test_units_reassemble_each_file_byte_for_byte(self):
+    def test_units_and_preamble_partition_each_file_byte_for_byte(self):
+        """Units tile the file in order; the preamble is exactly the rest."""
         cases = [
             ("compiler/lower.vow", pair_review.VOW_FN),
             ("compiler/c_emitter.vow", pair_review.VOW_FN),
@@ -128,7 +129,42 @@ class SplitUnitsTest(unittest.TestCase):
             with self.subTest(path=relative):
                 text = (pair_review.REPO_ROOT / relative).read_text()
                 preamble, units = pair_review.split_units(text, pattern)
-                self.assertEqual(text, preamble + "".join(u.text for u in units))
+                cursor, residue = 0, []
+                for unit in units:
+                    start = text.find(unit.text, cursor)
+                    self.assertGreaterEqual(start, cursor, unit.label)
+                    residue.append(text[cursor:start])
+                    cursor = start + len(unit.text)
+                residue.append(text[cursor:])
+                self.assertEqual(preamble, "".join(residue))
+
+    def test_container_declarations_reach_every_chunk(self):
+        # A method chunk with no `struct`/`impl` in front of it hands the model
+        # a receiver it cannot see the fields of.
+        preambles, _, _ = pair_review.load_pair_units("checker")
+        context = "".join(text for _, text in preambles.rust)
+
+        self.assertIn("pub struct Checker<'e>", context)
+        self.assertIn("impl<'e> Checker<'e> {", context)
+
+    def test_a_function_keeps_its_own_doc_comment(self):
+        text = (
+            "use std::fmt;\n\n"
+            "/// Doc for one.\n"
+            "#[inline]\n"
+            "pub fn one() -> u32 { 1 }\n\n"
+            "pub struct Held { field: u32 }\n\n"
+            "/// Doc for two.\n"
+            "fn two() -> u32 { 2 }\n"
+        )
+        preamble, units = pair_review.split_units(text, pair_review.RUST_FN)
+
+        self.assertEqual(["one", "two"], [u.name for u in units])
+        self.assertIn("/// Doc for one.", units[0].text)
+        self.assertIn("#[inline]", units[0].text)
+        self.assertIn("/// Doc for two.", units[1].text)
+        self.assertIn("pub struct Held", preamble)
+        self.assertNotIn("pub struct Held", units[0].text)
 
     def test_vow_split_finds_every_top_level_function(self):
         cases = [("compiler/lower.vow", 135), ("compiler/lexer.vow", 14)]
@@ -159,6 +195,50 @@ class ChunkPlanTest(unittest.TestCase):
         self.assertTrue(pair_review.related("lctx_merge_inst_ty", "merge_inst_ty"))
         self.assertTrue(pair_review.related("lower_expr", "lower_expr"))
         self.assertFalse(pair_review.related("lower_expr", "lower_stmt"))
+
+    def test_related_matches_a_trailing_qualifier(self):
+        # The two compilers also disagree by a suffix one side adds.
+        self.assertTrue(pair_review.related("lower_requires", "lower_requires_clauses"))
+        self.assertTrue(pair_review.related("check_expr_inner", "check_expr"))
+        self.assertFalse(pair_review.related("lower_requires", "lower_requireses"))
+
+    def test_a_loose_match_never_strands_an_exact_one(self):
+        # `lower_expr` matches `lower_expr_inner` by qualifier, but
+        # `lower_expr_inner` matches it by name -- and the name must win, or
+        # the exact counterpart is reviewed alone.
+        names = ("lower_expr", "lower_expr_inner")
+        rust = [pair_review.Unit(n, f"fn {n}() {{}}\n", "a.rs") for n in names]
+        selves = [pair_review.Unit(n, f"fn {n}() {{}}\n", "a.vow") for n in names]
+
+        groups = dict(
+            (tuple(s.name for s in gs), tuple(r.name for r in gr))
+            for gr, gs in pair_review.match_units(rust, selves)
+        )
+
+        self.assertEqual(("lower_expr",), groups[("lower_expr",)])
+        self.assertEqual(("lower_expr_inner",), groups[("lower_expr_inner",)])
+
+    def test_unmatched_units_are_named_and_lower_matched_coverage(self):
+        # A chunk with both sides present still leaves a function uncompared
+        # when nothing in it is that function's counterpart.
+        chunk = pair_review.Chunk(
+            rust_units=[
+                pair_review.Unit("check_expr", "fn check_expr() {}\n", "a.rs"),
+                pair_review.Unit(
+                    "suggest_similar", "fn suggest_similar() {}\n", "a.rs"
+                ),
+            ],
+            self_units=[
+                pair_review.Unit("check_expr", "fn check_expr() {}\n", "b.vow")
+            ],
+        )
+
+        self.assertEqual(1.0, pair_review._paired_coverage([chunk], [chunk]))
+        self.assertEqual(
+            ["a.rs:suggest_similar"],
+            [u.label for u in pair_review._unmatched([chunk])],
+        )
+        self.assertLess(pair_review._matched_coverage([chunk]), 1.0)
 
     def test_every_real_lower_unit_lands_in_exactly_one_chunk(self):
         preambles, rust_units, self_units = pair_review.load_pair_units("lower")

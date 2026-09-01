@@ -51,13 +51,32 @@ deterministic and credential-free, so it runs unattended.
 is why it is an agent command rather than a workflow step. It reviews matched
 module pairs (`lexer.rs` ↔ `lexer.vow`, and so on) for semantic divergence, and
 publishes to `docs/equivalence/<YYYY-MM>/` alongside the monthly audit's own
-reports. Sources are split at function boundaries and packed into bounded
+reports. Sources are split into whole function items and packed into bounded
 prompts; no source tail is truncated, and a matched Rust/self-hosted pair always
 shares a chunk so the model always has both sides in front of it. An oversize
 group remains whole and is reported explicitly, while an operator-imposed chunk
 cap lowers the reported coverage and leaves the remaining chunks visibly
 deferred. Rust `#[cfg(test)]` items are excluded — two thirds of the Rust units
 in the declared pairs are tests with no self-hosted counterpart.
+
+Everything that is not a function item — a file's `struct`, `enum` and `impl`
+declarations — goes to that file's preamble, which is repeated in every chunk of
+the pair. Cutting from one `fn` token to the next would instead file `struct
+Checker` and `impl Checker` under whichever function happened to precede them,
+and the packer would then put that function in a different chunk from the
+methods those declarations govern.
+
+Counterparts are matched on name, allowing for the two conventions the compilers
+differ by: a receiver prefix the self-hosted side spells out (`lctx_merge_inst_ty`
+↔ `merge_inst_ty`) and a trailing qualifier one side adds (`lower_requires` ↔
+`lower_requires_clauses`). Exact names are claimed first, across every unit, so
+an approximate match can never strand an exact one. What is left over is real
+asymmetry between the two implementations, and the run reports it: alongside
+`coverage` and `paired_coverage` (both chunk-level), `matched_coverage` is the
+share of unit bytes that sat beside their own counterpart, and `unmatched_units`
+names every function that did not. A chunk of 80 Rust units next to 3
+self-hosted ones is fully `paired` and almost entirely unmatched — only the
+third figure says so.
 
 The same machinery has a separate `soundness` mode for the two C emitters. It
 asks whether an emitted `__ESBMC_assume` narrows the verifier model below what

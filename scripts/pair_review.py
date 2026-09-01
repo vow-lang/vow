@@ -170,22 +170,70 @@ class Chunk:
     oversize_units: list[str] = field(default_factory=list)
 
 
+# No `^`: this is used with `match(text, line_start, ...)`, and an unanchored
+# `^` does not match at an explicit `pos` unless the pattern is MULTILINE.
+LEADING_LINE = re.compile(r"[ \t]*(?://|#!?\[)")
+
+
+def _unit_start(text, position, floor):
+    """Back up over the doc comments and attributes introducing an item.
+
+    The function regexes match the `fn` line itself, so without this the `///`
+    explaining a function would be filed away from it.
+    """
+    start = position
+    while start > floor:
+        previous = text.rfind("\n", 0, start - 1) + 1
+        if previous < floor or not LEADING_LINE.match(text, previous, start):
+            break
+        start = previous
+    return start
+
+
 def split_units(text, pattern):
-    """Split source at function boundaries without dropping any text."""
-    matches = list(pattern.finditer(text))
-    if not matches:
-        return text, []
-    preamble = text[: matches[0].start()]
-    units = []
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        units.append(Unit(match.group(1), text[match.start() : end]))
-    return preamble, units
+    """Split source into whole function items, hoisting everything else.
+
+    A Rust file's `struct`, `enum` and `impl` declarations sit *between* two
+    functions, so cutting from one `fn` token to the next files them under
+    whichever function happens to precede them -- and that function is usually
+    packed into a different chunk from the methods the declaration governs,
+    leaving those model calls with method bodies and no receiver. Everything
+    that is not a function item goes to the preamble instead, which
+    `_chunk_parts` repeats in every chunk of the pair.
+
+    No text is dropped: the preamble is exactly the file minus its function
+    items, and the units tile the rest in source order.
+    """
+    residue, units, cursor = [], [], 0
+    for match in pattern.finditer(text):
+        # A `fn` nested inside a function body belongs to the item already
+        # taken, not to a unit of its own.
+        if match.start() < cursor:
+            continue
+        start = _unit_start(text, match.start(), cursor)
+        residue.append(text[cursor:start])
+        cursor = _item_end(text, match.end())
+        units.append(Unit(match.group(1), text[start:cursor]))
+    residue.append(text[cursor:])
+    return "".join(residue), units
 
 
 def related(left, right):
-    """Whether function names use the same name or a receiver prefix."""
-    return left == right or left.endswith("_" + right) or right.endswith("_" + left)
+    """Whether two function names denote the same function in both compilers.
+
+    The two implementations name the same function three ways: identically, with
+    a receiver prefix the self-hosted side spells out (`lctx_merge_inst_ty` vs
+    `merge_inst_ty`), and with a trailing qualifier one side adds
+    (`lower_requires` vs `lower_requires_clauses`). All three are the same
+    function under a different convention, and a chunk that separates them is
+    not a pair review of it.
+    """
+    if left == right:
+        return True
+    return any(
+        long.startswith(short + "_") or long.endswith("_" + short)
+        for long, short in ((left, right), (right, left))
+    )
 
 
 def _source_files(specs, suffix):
@@ -313,21 +361,38 @@ def plan_chunks(rust_units, self_units, chunk_bytes, preambles=None):
             current.oversize_units = [u.label for u in (*group_rust, *group_self)]
             finish()
 
-    used_rust = set()
-    for self_unit in self_units:
-        matches = [
-            (index, rust_unit)
-            for index, rust_unit in enumerate(rust_units)
-            if index not in used_rust and related(self_unit.name, rust_unit.name)
-        ]
-        used_rust.update(index for index, _ in matches)
-        add_group([unit for _, unit in matches], [self_unit])
-
-    for index, rust_unit in enumerate(rust_units):
-        if index not in used_rust:
-            add_group([rust_unit], [])
+    for group_rust, group_self in match_units(rust_units, self_units):
+        add_group(group_rust, group_self)
     finish()
     return chunks
+
+
+def match_units(rust_units, self_units):
+    """Group each self-hosted unit with the Rust units implementing the same thing.
+
+    A Rust unit can only be claimed once, so the order of claiming decides who
+    gets it. Exact names are therefore settled first, across every self-hosted
+    unit, before any approximate name is allowed to take anything: otherwise an
+    early `lower_expr` claims `lower_expr_inner` by prefix and the later, exact
+    `lower_expr_inner` is stranded in a chunk of its own.
+
+    Yields `(rust_units, self_units)` groups -- a matched pair, then one group
+    per Rust unit with no counterpart at all.
+    """
+    claimed, groups = set(), [[] for _ in self_units]
+    for matches in (str.__eq__, related):
+        for self_index, self_unit in enumerate(self_units):
+            for rust_index, rust_unit in enumerate(rust_units):
+                if rust_index in claimed or not matches(self_unit.name, rust_unit.name):
+                    continue
+                claimed.add(rust_index)
+                groups[self_index].append(rust_unit)
+
+    for self_index, self_unit in enumerate(self_units):
+        yield groups[self_index], [self_unit]
+    for index, rust_unit in enumerate(rust_units):
+        if index not in claimed:
+            yield [rust_unit], []
 
 
 SYSTEM = """\
@@ -588,6 +653,35 @@ def _paired_coverage(chunks, selected):
     return _unit_bytes(paired) / total
 
 
+def _unmatched(chunks):
+    """The units reviewed with no counterpart of their own beside them.
+
+    A chunk carrying both sides still says nothing about a single function
+    inside it: 80 Rust units next to 3 self-hosted ones reads as fully paired
+    under `paired_coverage`, which is a chunk-level question. This is the
+    unit-level one -- the difference between a function that was compared and
+    one that was merely shipped.
+    """
+    return [
+        unit
+        for chunk in chunks
+        for unit, peers in (
+            *((u, chunk.self_units) for u in chunk.rust_units),
+            *((u, chunk.rust_units) for u in chunk.self_units),
+        )
+        if not any(related(unit.name, peer.name) for peer in peers)
+    ]
+
+
+def _matched_coverage(chunks):
+    """Share of unit bytes sitting in a chunk beside a related counterpart."""
+    total = _unit_bytes(chunks)
+    if total == 0:
+        return 1.0
+    lost = sum(len(unit.text.encode()) for unit in _unmatched(chunks))
+    return (total - lost) / total
+
+
 def _coverage(preambles, chunks, selected):
     """Share of source bytes a model saw at all, preambles included.
 
@@ -630,6 +724,8 @@ def review_pair(
         "mode": mode,
         "coverage": _coverage(preambles, chunks, selected),
         "paired_coverage": _paired_coverage(chunks, selected),
+        "matched_coverage": _matched_coverage(selected),
+        "unmatched_units": [unit.label for unit in _unmatched(selected)],
         "plan": {
             "chunk_bytes": chunk_bytes,
             "chunks": _plan_record(chunks, preambles),
@@ -786,6 +882,11 @@ def write_ledger(ledger, results, date, path=LEDGER):
     return updated
 
 
+# How many unmatched function labels the summary names before deferring to
+# results.json. Enough to start reading, few enough not to bury the run.
+SUMMARY_SAMPLE = 5
+
+
 def _print_summary(report, skipped, confirmed, outdir):
     """Print the run, leading with everything it did not look at.
 
@@ -821,6 +922,24 @@ def _print_summary(report, skipped, confirmed, outdir):
         print("  unpaired  : bytes shown with only one implementation present")
         for pair, fraction in unpaired:
             print(f"      {pair} — {fraction:.1%} of unit bytes seen side by side")
+    unmatched = [
+        (r["pair"], r["matched_coverage"], r["unmatched_units"])
+        for r in results
+        if r.get("unmatched_units")
+    ]
+    if unmatched:
+        print("  unmatched : functions reviewed with no counterpart beside them")
+        for pair, fraction, units in unmatched:
+            print(
+                f"      {pair} — {fraction:.1%} of unit bytes matched; "
+                f"{len(units)} functions unmatched"
+            )
+            # The full list is in results.json; naming a few here is enough to
+            # start reading, and printing 129 labels buries the rest of the run.
+            for label in units[:SUMMARY_SAMPLE]:
+                print(f"          {label}")
+            if len(units) > SUMMARY_SAMPLE:
+                print(f"          ... and {len(units) - SUMMARY_SAMPLE} more")
     oversize = [
         (r["pair"], chunk["index"], chunk["oversize_units"])
         for r in results
