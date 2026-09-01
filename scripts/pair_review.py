@@ -498,14 +498,20 @@ def _agreed_by_crashing(divergences):
     """
     if any(v["observable"] != "fail_closed" for v in divergences):
         return False
-    sides = set()
+    sides, both = set(), False
     for divergence in divergences:
         side = FAIL_CLOSED_SIDE.match(divergence["detail"])
         if side:
             sides.add(side.group(1))
         elif divergence["detail"].startswith("both "):
-            return True
-    return sides == {"rust", "self-hosted"}
+            both = True
+    # A `both ...` record is only agreement when it is the *whole* story. No
+    # producer currently mixes it with a one-sided record, but returning early
+    # on the first one would swallow that one-sided evidence if one ever did --
+    # reopening the hole by the same route the shape-blind regex opened it.
+    if sides:
+        return sides == {"rust", "self-hosted"}
+    return both
 
 
 def confirm(program, rust, self_bin, timeout):
@@ -513,8 +519,13 @@ def confirm(program, rust, self_bin, timeout):
 
     Returns (verdict, detail). The runner is the judge: `confirmed` means it
     observed a divergence, `refuted` means both compilers agreed, and
-    `inconclusive` means it could not compare (both rejected the program, a
-    timeout, nondeterminism).
+    `inconclusive` means it compared and could not distinguish (both rejected
+    the program, both failed closed).
+
+    `error` is the fourth verdict and a different kind of answer: the gate did
+    not run at all. That must never be filed as an ordinary hypothesis, because
+    an unjudged claim would otherwise let the pair stamp the ledger and be
+    skipped on every later run -- retiring a possible divergence nobody checked.
     """
     with tempfile.TemporaryDirectory() as d:
         src = Path(d) / "candidate.vow"
@@ -543,13 +554,13 @@ def confirm(program, rust, self_bin, timeout):
         results = Path(d) / "out" / "results.json"
         if not results.exists():
             return (
-                "inconclusive",
+                "error",
                 f"runner produced no results (exit {proc.returncode})",
             )
         data = json.loads(results.read_text())
         rec = data["records"][0] if data["records"] else None
         if rec is None:
-            return "inconclusive", "runner examined no file"
+            return "error", "runner examined no file"
         divergences = rec["divergences"]
         if divergences:
             detail = "; ".join(
@@ -575,6 +586,11 @@ def confirm_soundness(program, verifier, timeout):
         return "confirmed", result.get("detail", "soundness divergence")
     if verdict == "ok":
         return "refuted", result.get("detail", "runtime agrees with proof")
+    # `skipped` is the verifier or the debug build failing to run, not an answer
+    # about the program; `not-applicable` is an answer (it was never proved, so
+    # it cannot be a false proof).
+    if verdict == "skipped":
+        return "error", result.get("detail", "soundness gate did not run")
     return "inconclusive", result.get("detail", verdict or "no verdict")
 
 
@@ -591,6 +607,10 @@ def confirm_soundness_pair(program, rust, self_bin, timeout):
         return "confirmed", observed
     if verdicts == {"refuted"}:
         return "refuted", observed
+    # One side's gate failing to run leaves the claim unjudged, whatever the
+    # other side said.
+    if "error" in verdicts:
+        return "error", observed
     return "inconclusive", observed
 
 
@@ -797,6 +817,17 @@ def review_pair(
                 finding["verdict_detail"] = "no program supplied"
             else:
                 verdict, detail = confirm_fn(program, rust, self_bin, timeout)
+                if verdict == "error":
+                    # The claim stays in the report as an unjudged hypothesis,
+                    # but the run is no longer complete -- so it cannot stamp
+                    # the ledger and skip this pair next month.
+                    result["errors"].append(
+                        {
+                            "chunk_index": index,
+                            "error": f"confirmation gate did not run: {detail}",
+                        }
+                    )
+                    verdict = "inconclusive"
                 finding["verdict"] = verdict
                 finding["verdict_detail"] = detail
             result["findings"].append(finding)
@@ -832,6 +863,23 @@ def _ledger_outcome(findings):
     return "clean"
 
 
+def reviewed_completely(result):
+    """Whether a pair was reviewed end to end, with every claim judged.
+
+    The one predicate behind both the ledger stamp and the report's `reviewed`
+    list, so a pair can never be stamped as reviewed in one and not the other.
+    Deliberately *not* a function of `paired_coverage` or `matched_coverage`:
+    those measure how much of the pair has a counterpart at all, which is a
+    property of the two implementations rather than of this run, and no re-run
+    can raise them. Gating on them would block every pair forever.
+    """
+    return (
+        result.get("coverage") == 1.0
+        and not result.get("chunks_deferred")
+        and not result.get("errors")
+    )
+
+
 def write_ledger(ledger, results, date, path=LEDGER):
     """Atomically stamp only fully reviewed pair rows in the shared ledger.
 
@@ -844,12 +892,7 @@ def write_ledger(ledger, results, date, path=LEDGER):
         ledger = json.loads(path.read_text())
     updated = []
     for result in results:
-        complete = (
-            result.get("coverage") == 1.0
-            and not result.get("chunks_deferred")
-            and not result.get("errors")
-        )
-        if not complete:
+        if not reviewed_completely(result):
             continue
         name = result["pair"]
         if name not in ledger.get("pairs", {}):
@@ -1103,7 +1146,9 @@ def main(argv=None):
         "mode": args.mode,
         "dry_run": args.dry_run,
         "planned": planned,
-        "reviewed": [] if args.dry_run else planned,
+        "reviewed": []
+        if args.dry_run
+        else [r["pair"] for r in results if reviewed_completely(r)],
         "skipped_unchanged": [n for n, _ in skipped],
         "ledger_updated": ledger_updated,
         "confirmed": len(confirmed),

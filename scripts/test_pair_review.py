@@ -405,6 +405,22 @@ class FailClosedGateTest(unittest.TestCase):
 
         self.assertTrue(pair_review._agreed_by_crashing(divergences))
 
+    def test_a_both_detail_never_swallows_one_sided_evidence(self):
+        # No producer mixes the two today, but the gate must not be the thing
+        # standing between a real one-sided divergence and `confirmed`.
+        divergences = [
+            {
+                "observable": "fail_closed",
+                "detail": "both binaries died on unclassified signal 9",
+            },
+            {
+                "observable": "fail_closed",
+                "detail": "rust compiler panicked: 'panicked at'",
+            },
+        ]
+
+        self.assertFalse(pair_review._agreed_by_crashing(divergences))
+
     def test_shared_missing_json_is_agreement(self):
         divergences = [
             {
@@ -566,6 +582,45 @@ class ReviewReportTest(unittest.TestCase):
 
         self.assertEqual([1, 2], [f["chunk_index"] for f in result["findings"]])
 
+    def test_an_unrunnable_gate_is_an_error_not_a_hypothesis(self):
+        # `confirm` returns `error` when equivalence.py could not judge the
+        # program at all. Filed as a plain hypothesis it would leave the run
+        # looking complete, stamp the ledger, and skip the pair next month.
+        llm = fake_llm(
+            json.dumps({"findings": [{"claim": "unjudged", "program": "module M\n"}]})
+        )
+        with mock.patch.object(
+            pair_review, "load_pair_units", return_value=self.two_chunk_sources()
+        ):
+            result = pair_review.review_pair(
+                "lexer",
+                "model",
+                "rust",
+                "self",
+                600,
+                1,
+                max_chunks=1,
+                llm_module=llm,
+                confirm_fn=lambda *_: ("error", "runner examined no file"),
+            )
+
+        self.assertEqual("inconclusive", result["findings"][0]["verdict"])
+        self.assertEqual(1, len(result["errors"]))
+        self.assertIn("gate did not run", result["errors"][0]["error"])
+        self.assertFalse(pair_review.reviewed_completely(result))
+
+    def test_reviewed_completely_matches_the_ledger_gate(self):
+        complete = {"coverage": 1.0, "chunks_deferred": [], "errors": []}
+
+        self.assertTrue(pair_review.reviewed_completely(complete))
+        self.assertFalse(
+            pair_review.reviewed_completely({**complete, "chunks_deferred": [3]})
+        )
+        self.assertFalse(
+            pair_review.reviewed_completely({**complete, "errors": [{"error": "x"}]})
+        )
+        self.assertFalse(pair_review.reviewed_completely({**complete, "coverage": 0.9}))
+
     def test_unparseable_chunk_does_not_lose_sibling_findings(self):
         llm = fake_llm(
             "not json",
@@ -643,6 +698,10 @@ class LedgerWritebackTest(unittest.TestCase):
             self.result(chunks_deferred=[2]),
             self.result(errors=[{"chunk_index": 1, "error": "bad JSON"}]),
             self.result(coverage=0.5),
+            # An unjudged claim must not retire the pair for a month.
+            self.result(
+                errors=[{"chunk_index": 1, "error": "confirmation gate did not run"}]
+            ),
         ]
         for result in cases:
             with self.subTest(result=result):
@@ -652,6 +711,14 @@ class LedgerWritebackTest(unittest.TestCase):
                 self.assertEqual(
                     self.original["pairs"]["lexer"], written["pairs"]["lexer"]
                 )
+
+    def test_unmatched_coverage_alone_never_blocks_a_stamp(self):
+        # `matched_coverage` measures asymmetry between the two implementations,
+        # which no re-run can raise; gating on it would block every pair forever.
+        self.write(self.result(matched_coverage=0.46, paired_coverage=0.96))
+
+        written = json.loads(self.ledger_path.read_text())
+        self.assertEqual("2026-09-01", written["pairs"]["lexer"]["last_reviewed"])
 
     def test_concurrent_triage_edit_is_not_clobbered(self):
         # A review runs for minutes; the ledger it loaded at startup is stale by
@@ -749,7 +816,9 @@ class SoundnessModeTest(unittest.TestCase):
             ("SOUNDNESS", "confirmed"),
             ("ok", "refuted"),
             ("not-applicable", "inconclusive"),
-            ("skipped", "inconclusive"),
+            # `skipped` is the gate failing to run, not a judgement on the
+            # program -- it must not read as an ordinary hypothesis.
+            ("skipped", "error"),
         ]
         for runner_verdict, expected in cases:
             with (

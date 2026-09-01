@@ -145,7 +145,10 @@ every confirmed one.
 - **Still tracked** — one line, pointing at the ledger rather than re-litigating each entry.
 
 Append a row to a running metrics table: files compared, new divergences, tracked divergences, pairs
-reviewed, pairs skipped-unchanged, confirmed findings, hypotheses, refuted. Trend lines matter more than
+reviewed, pairs skipped-unchanged, confirmed findings, hypotheses, refuted. `reviewed` counts only pairs
+that completed every chunk with no errors — the same predicate that gates a ledger stamp — so a pair
+capped by `--max-chunks-per-pair` or carrying a model/confirmation error stays in `planned` and out of
+`reviewed`, rather than reading as covered. Trend lines matter more than
 any single run — a month where `compared` drops sharply is a coverage regression even if divergences are
 flat.
 
