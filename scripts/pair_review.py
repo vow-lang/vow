@@ -225,21 +225,34 @@ def load_pair_units(name):
     return Preambles(rust_preambles, self_preambles), rust_units, self_units
 
 
+JOIN = "\n\n"
+
+
+def _unit_part(unit, kind):
+    return f"=== {kind}: {unit.source} (function {unit.name}) ===\n{unit.text}"
+
+
+def _chunk_parts(chunk, preambles, index, total):
+    """The rendered pieces of a chunk, in order, before they are joined.
+
+    `plan_chunks` sizes candidate chunks by summing these rather than rendering
+    them, so both paths must read the layout from here.
+    """
+    return [
+        f"=== REVIEW CHUNK {index} OF {total} ===\n",
+        *(f"=== RUST PREAMBLE: {src} ===\n{txt}" for src, txt in preambles.rust),
+        *(_unit_part(unit, "RUST") for unit in chunk.rust_units),
+        *(
+            f"=== SELF-HOSTED PREAMBLE: {src} ===\n{txt}"
+            for src, txt in preambles.self_hosted
+        ),
+        *(_unit_part(unit, "SELF-HOSTED") for unit in chunk.self_units),
+    ]
+
+
 def render_chunk(chunk, preambles=None, index=1, total=1):
     """Render a review chunk with enough source context to stand alone."""
-    preambles = preambles or Preambles()
-    parts = [f"=== REVIEW CHUNK {index} OF {total} ===\n"]
-    for source, text in preambles.rust:
-        parts.append(f"=== RUST PREAMBLE: {source} ===\n{text}")
-    for unit in chunk.rust_units:
-        parts.append(f"=== RUST: {unit.source} (function {unit.name}) ===\n{unit.text}")
-    for source, text in preambles.self_hosted:
-        parts.append(f"=== SELF-HOSTED PREAMBLE: {source} ===\n{text}")
-    for unit in chunk.self_units:
-        parts.append(
-            f"=== SELF-HOSTED: {unit.source} (function {unit.name}) ===\n{unit.text}"
-        )
-    return "\n\n".join(parts)
+    return JOIN.join(_chunk_parts(chunk, preambles or Preambles(), index, total))
 
 
 def plan_chunks(rust_units, self_units, chunk_bytes, preambles=None):
@@ -250,37 +263,36 @@ def plan_chunks(rust_units, self_units, chunk_bytes, preambles=None):
     chunks = []
     current = Chunk()
 
-    def nonempty(chunk):
-        return bool(chunk.rust_units or chunk.self_units)
+    # A deliberately wide placeholder keeps the final `i of n` header from
+    # pushing a planned chunk over its byte budget.
+    fixed = _chunk_parts(Chunk(), preambles, 999_999, 999_999)
+    join_bytes = len(JOIN.encode())
+    base_bytes = sum(len(part.encode()) for part in fixed) + join_bytes * (
+        len(fixed) - 1
+    )
+    part_bytes = {}
+
+    def part_size(unit, kind):
+        # Each unit contributes one part plus the join before it, and a unit's
+        # part never varies, so sizing a candidate is arithmetic rather than a
+        # re-render of everything already packed.
+        key = (kind, unit)
+        if key not in part_bytes:
+            part_bytes[key] = len(_unit_part(unit, kind).encode()) + join_bytes
+        return part_bytes[key]
 
     def rendered_size(chunk):
-        # A deliberately wide placeholder keeps the final `i of n` header from
-        # pushing a planned chunk over its byte budget.
-        return len(render_chunk(chunk, preambles, 999_999, 999_999).encode())
+        return (
+            base_bytes
+            + sum(part_size(u, "RUST") for u in chunk.rust_units)
+            + sum(part_size(u, "SELF-HOSTED") for u in chunk.self_units)
+        )
 
     def finish():
         nonlocal current
-        if nonempty(current):
+        if current.rust_units or current.self_units:
             chunks.append(current)
             current = Chunk()
-
-    def add_one(unit, side):
-        nonlocal current
-        candidate = Chunk(
-            rust_units=[*current.rust_units],
-            self_units=[*current.self_units],
-            oversize_units=[*current.oversize_units],
-        )
-        target = candidate.rust_units if side == "rust" else candidate.self_units
-        target.append(unit)
-        if nonempty(current) and rendered_size(candidate) > chunk_bytes:
-            finish()
-            candidate = Chunk()
-            target = candidate.rust_units if side == "rust" else candidate.self_units
-            target.append(unit)
-        if rendered_size(candidate) > chunk_bytes:
-            candidate.oversize_units.append(unit.label)
-        current = candidate
 
     def add_group(group_rust, group_self):
         nonlocal current
@@ -313,7 +325,7 @@ def plan_chunks(rust_units, self_units, chunk_bytes, preambles=None):
 
     for index, rust_unit in enumerate(rust_units):
         if index not in used_rust:
-            add_one(rust_unit, "rust")
+            add_group([rust_unit], [])
     finish()
     return chunks
 
@@ -513,11 +525,17 @@ class Mode:
     system: str
     confirm: object
     pairs: tuple
+    # Only a mode that stamps the ledger may be skipped by it. A mode that
+    # reads these hashes without writing them would skip every pair another
+    # mode had stamped and exit 0 having asked nothing.
+    uses_ledger: bool
 
 
 MODES = {
-    "equivalence": Mode(SYSTEM, confirm, tuple(PAIRS)),
-    "soundness": Mode(SYSTEM_SOUNDNESS, confirm_soundness_pair, ("c_emitter",)),
+    "equivalence": Mode(SYSTEM, confirm, tuple(PAIRS), uses_ledger=True),
+    "soundness": Mode(
+        SYSTEM_SOUNDNESS, confirm_soundness_pair, ("c_emitter",), uses_ledger=False
+    ),
 }
 
 
@@ -559,21 +577,20 @@ def _paired_coverage(chunks, selected):
     return _unit_bytes(paired) / total
 
 
-def _coverage(preambles, rust_units, self_units, selected):
+def _coverage(preambles, chunks, selected):
+    """Share of source bytes a model saw at all, preambles included.
+
+    `plan_chunks` places every unit in exactly one chunk, so `chunks` is the
+    whole corpus -- measuring both sides of the ratio through `_unit_bytes`
+    keeps this metric and `paired_coverage` counting the same bytes.
+    """
     preamble_bytes = sum(
         len(text.encode()) for _, text in (*preambles.rust, *preambles.self_hosted)
     )
-    total = preamble_bytes + sum(
-        len(unit.text.encode()) for unit in (*rust_units, *self_units)
-    )
+    total = preamble_bytes + _unit_bytes(chunks)
     if total == 0:
         return 1.0
-    reviewed = preamble_bytes if selected else 0
-    reviewed += sum(
-        len(unit.text.encode())
-        for chunk in selected
-        for unit in (*chunk.rust_units, *chunk.self_units)
-    )
+    reviewed = (preamble_bytes if selected else 0) + _unit_bytes(selected)
     return reviewed / total
 
 
@@ -600,7 +617,7 @@ def review_pair(
     result = {
         "pair": name,
         "mode": mode,
-        "coverage": _coverage(preambles, rust_units, self_units, selected),
+        "coverage": _coverage(preambles, chunks, selected),
         "paired_coverage": _paired_coverage(chunks, selected),
         "plan": {
             "chunk_bytes": chunk_bytes,
@@ -646,7 +663,7 @@ def review_pair(
             findings = parsed.get("findings", [])
             if not isinstance(findings, list):
                 raise ValueError("findings is not a list")
-        except (json.JSONDecodeError, AttributeError, ValueError):
+        except (AttributeError, ValueError):
             result["errors"].append(
                 {
                     "chunk_index": index,
@@ -885,8 +902,8 @@ def main(argv=None):
         ap.error("--date is required with --update-ledger")
     if args.update_ledger and args.dry_run:
         ap.error("--update-ledger cannot be used with --dry-run")
-    if args.update_ledger and args.mode == "soundness":
-        ap.error("soundness results do not update the equivalence ledger")
+    if args.update_ledger and not MODES[args.mode].uses_ledger:
+        ap.error(f"{args.mode} results do not update the equivalence ledger")
     if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
         ap.error("--date must use YYYY-MM-DD")
 
@@ -901,16 +918,13 @@ def main(argv=None):
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    planned, reviewed, skipped, results = [], [], [], []
+    planned, skipped, results = [], [], []
     for name in names:
         rust_paths, self_path = PAIRS[name]
         digest = hash_pair(rust_paths, self_path)
         prior = ledger.get("pairs", {}).get(name, {})
-        # Only equivalence runs stamp the ledger, so only they may be skipped by
-        # it. A soundness run reading these hashes would skip every pair the
-        # equivalence review had stamped and exit 0 having asked nothing.
         if (
-            args.mode == "equivalence"
+            MODES[args.mode].uses_ledger
             and not args.all
             and prior.get("content_hash") == digest
             and prior.get("last_reviewed") not in (None, "never")
@@ -933,8 +947,6 @@ def main(argv=None):
         res["content_hash"] = digest
         results.append(res)
         planned.append(name)
-        if not args.dry_run:
-            reviewed.append(name)
 
     confirmed = [
         (r["pair"], f)
@@ -961,7 +973,7 @@ def main(argv=None):
         "mode": args.mode,
         "dry_run": args.dry_run,
         "planned": planned,
-        "reviewed": reviewed,
+        "reviewed": [] if args.dry_run else planned,
         "skipped_unchanged": [n for n, _ in skipped],
         "ledger_updated": ledger_updated,
         "confirmed": len(confirmed),

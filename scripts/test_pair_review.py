@@ -12,7 +12,7 @@ import json
 import shutil
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -32,6 +32,41 @@ def fake_llm(*contents):
     return SimpleNamespace(
         make_config=lambda model: model, chat=lambda *_: next(replies)
     )
+
+
+def stamp_ledger(directory, pair):
+    """Write a ledger marking `pair` reviewed at its current content hash."""
+    rust_paths, self_path = pair_review.PAIRS[pair]
+    path = Path(directory) / "ledger.json"
+    entry = {
+        "rust": rust_paths[0],
+        "self_hosted": self_path,
+        "content_hash": pair_review.hash_pair(rust_paths, self_path),
+        "last_reviewed": "2026-08-01",
+        "outcome": "clean",
+    }
+    path.write_text(json.dumps({"pairs": {pair: entry}}))
+    return path
+
+
+def run_dry(*argv, ledger=None):
+    """Drive `main` through a dry run and return (status, stdout, results.json).
+
+    `ledger` stamps that pair as already reviewed at its current content hash,
+    which is the only input that makes a run skip a pair.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        stamped = (
+            mock.patch.object(pair_review, "LEDGER", stamp_ledger(directory, ledger))
+            if ledger
+            else nullcontext()
+        )
+        output = Path(directory) / "out"
+        stdout = io.StringIO()
+        with stamped, redirect_stdout(stdout):
+            status = pair_review.main([*argv, "--dry-run", "--output-dir", str(output)])
+        report = json.loads((output / "results.json").read_text())
+        return status, stdout.getvalue(), report
 
 
 class PairSpecTest(unittest.TestCase):
@@ -301,23 +336,28 @@ class RenderChunkTest(unittest.TestCase):
         self.assertIn("=== RUST:", body)
         self.assertIn("=== SELF-HOSTED:", body)
 
+    def test_summed_parts_equal_the_rendered_byte_count(self):
+        # plan_chunks budgets chunks by summing part sizes instead of rendering
+        # them. If that arithmetic drifts from the renderer, the planner ships
+        # prompts over the model's context budget.
+        preambles, rust_units, self_units = pair_review.load_pair_units("lexer")
+        chunks = pair_review.plan_chunks(rust_units, self_units, 40_000, preambles)
+
+        for index, chunk in enumerate(chunks, 1):
+            with self.subTest(chunk=index):
+                parts = pair_review._chunk_parts(chunk, preambles, index, len(chunks))
+                summed = sum(len(part.encode()) for part in parts) + len(
+                    pair_review.JOIN.encode()
+                ) * (len(parts) - 1)
+                rendered = pair_review.render_chunk(
+                    chunk, preambles, index, len(chunks)
+                )
+                self.assertEqual(len(rendered.encode()), summed)
+
 
 class ReviewReportTest(unittest.TestCase):
     def run_dry(self, *extra):
-        with tempfile.TemporaryDirectory() as directory:
-            output = io.StringIO()
-            with redirect_stdout(output):
-                status = pair_review.main(
-                    [
-                        "--dry-run",
-                        "--all",
-                        "--output-dir",
-                        directory,
-                        *extra,
-                    ]
-                )
-            report = json.loads((Path(directory) / "results.json").read_text())
-            return status, output.getvalue(), report
+        return run_dry("--all", *extra)
 
     def test_dry_run_emits_all_five_chunk_plans_without_model_calls(self):
         with mock.patch.dict("sys.modules", {"llm": None}):
@@ -621,59 +661,13 @@ class SoundnessModeTest(unittest.TestCase):
     def test_soundness_ignores_the_equivalence_ledger(self):
         # Soundness runs never stamp the ledger, so an equivalence stamp must
         # not make them skip -- that would exit 0 having asked nothing.
-        stamped = {
-            "pairs": {
-                "c_emitter": {
-                    "rust": "vow-verify/src/c_emitter.rs",
-                    "self_hosted": "compiler/c_emitter.vow",
-                    "content_hash": pair_review.hash_pair(
-                        *pair_review.PAIRS["c_emitter"]
-                    ),
-                    "last_reviewed": "2026-08-01",
-                    "outcome": "clean",
-                }
-            }
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            ledger = Path(directory) / "ledger.json"
-            ledger.write_text(json.dumps(stamped))
-            output = Path(directory) / "out"
-            with (
-                mock.patch.object(pair_review, "LEDGER", ledger),
-                redirect_stdout(io.StringIO()),
-            ):
-                pair_review.main(
-                    ["--mode", "soundness", "--dry-run", "--output-dir", str(output)]
-                )
-            report = json.loads((output / "results.json").read_text())
+        _, _, report = run_dry("--mode", "soundness", ledger="c_emitter")
 
         self.assertEqual(["c_emitter"], report["planned"])
         self.assertEqual([], report["skipped_unchanged"])
 
     def test_equivalence_still_skips_an_unchanged_stamped_pair(self):
-        stamped = {
-            "pairs": {
-                "lexer": {
-                    "rust": "vow-syntax/src/lexer.rs",
-                    "self_hosted": "compiler/lexer.vow",
-                    "content_hash": pair_review.hash_pair(*pair_review.PAIRS["lexer"]),
-                    "last_reviewed": "2026-08-01",
-                    "outcome": "clean",
-                }
-            }
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            ledger = Path(directory) / "ledger.json"
-            ledger.write_text(json.dumps(stamped))
-            output = Path(directory) / "out"
-            with (
-                mock.patch.object(pair_review, "LEDGER", ledger),
-                redirect_stdout(io.StringIO()),
-            ):
-                pair_review.main(
-                    ["--pair", "lexer", "--dry-run", "--output-dir", str(output)]
-                )
-            report = json.loads((output / "results.json").read_text())
+        _, _, report = run_dry("--pair", "lexer", ledger="lexer")
 
         self.assertEqual(["lexer"], report["skipped_unchanged"])
         self.assertEqual([], report["planned"])
@@ -687,19 +681,7 @@ class SoundnessModeTest(unittest.TestCase):
             pair_review.main(["--mode", "soundness", "--pair", "lower", "--dry-run"])
 
     def test_soundness_mode_defaults_to_c_emitter_pair(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with redirect_stdout(io.StringIO()):
-                status = pair_review.main(
-                    [
-                        "--mode",
-                        "soundness",
-                        "--dry-run",
-                        "--all",
-                        "--output-dir",
-                        directory,
-                    ]
-                )
-            report = json.loads((Path(directory) / "results.json").read_text())
+        status, _, report = run_dry("--mode", "soundness", "--all")
 
         self.assertEqual(0, status)
         self.assertEqual("soundness", report["mode"])
