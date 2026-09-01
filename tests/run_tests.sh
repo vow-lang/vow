@@ -389,7 +389,7 @@ for f in "$SCRIPT_DIR"/run/*.vow; do
 
   # Check stderr (substring match, as in the debug lane)
   if [[ -n "$TEST_STDERR" ]]; then
-    expected_stderr="$(echo -e "$TEST_STDERR")"
+    expected_stderr="$(echo -e "${TEST_STDERR//\\\"/\"}")"
     actual_stderr="$(cat "$run_stderr" 2>/dev/null)"
     if [[ "$actual_stderr" != *"$expected_stderr"* ]]; then
       fail "$name" "stderr missing: $expected_stderr"
@@ -865,7 +865,7 @@ for f in "$SCRIPT_DIR"/debug/*.vow; do
 
   # Check stderr substring
   if [[ -n "$TEST_STDERR" ]]; then
-    expected_stderr="$(echo -e "$TEST_STDERR")"
+    expected_stderr="$(echo -e "${TEST_STDERR//\\\"/\"}")"
     if [[ "$actual_stderr" != *"$expected_stderr"* ]]; then
       fail "$name" "stderr missing: $expected_stderr"
       echo "    actual stderr: $(echo "$actual_stderr" | head -3)"
@@ -962,7 +962,7 @@ print(len([x for x in xs if x.get('severity', 'error') == 'error']))
     run_vowc build --no-verify "$f" 2>"$TMPDIR/error_${name}_stderr" >/dev/null
     set -e
     actual_stderr="$(cat "$TMPDIR/error_${name}_stderr")"
-    expected_stderr="$(echo -e "$TEST_STDERR")"
+    expected_stderr="$(echo -e "${TEST_STDERR//\\\"/\"}")"
     if [[ "$actual_stderr" != *"$expected_stderr"* ]]; then
       fail "$name" "stderr missing: $expected_stderr"
       continue

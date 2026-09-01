@@ -314,32 +314,22 @@ fn call_wide_helper(
     Ok(builder.inst_results(call)[0])
 }
 
-/// Trap on the two divisor conditions Cranelift traps on for the narrower
-/// widths, so 128-bit `/` and `%` abort exactly where `i64` `/` and `%` do
-/// rather than reaching the runtime helper: a zero divisor always, and
-/// `MIN / -1` for signed division, whose true quotient has no representation.
-/// Both are emitted in every build mode, matching `sdiv`/`udiv` lowering.
-///
-/// The two conditions trap separately so each carries the same `TrapCode`
-/// Cranelift's own lowering uses — `INTEGER_DIVISION_BY_ZERO` for the zero
-/// divisor, `INTEGER_OVERFLOW` for `MIN / -1` (see `isa/*/lower.isle`, which
-/// distinguishes them). Collapsing both into one branch would be cheaper, but
-/// this seam exists to reproduce native behavior, and the trap code is part of
-/// that behavior even though nothing decodes it today.
+/// Build the condition under which 128-bit division or remainder must abort:
+/// a zero divisor always, plus `MIN / -1` for signed division. The caller
+/// routes the combined condition through the runtime overflow reporter.
 ///
 /// Signed remainder is deliberately excluded from the `MIN % -1` check:
 /// `sdiv` traps there but `srem` does not, and `i64::MIN % -1` returns 0
 /// today. `wrapping_rem` in the helper gives the same 0.
-fn emit_divisor_traps(
+fn wide_divisor_trap_condition(
     builder: &mut FunctionBuilder<'_>,
     opcode: Opcode,
     ty: IrTy,
     dividend: Value,
     divisor: Value,
-) {
+) -> Value {
     let zero = wide_iconst(builder, 0);
-    let is_zero = builder.ins().icmp(IntCC::Equal, divisor, zero);
-    emit_conditional_trap(builder, is_zero, TrapCode::INTEGER_DIVISION_BY_ZERO);
+    let mut condition = builder.ins().icmp(IntCC::Equal, divisor, zero);
 
     let is_signed_division =
         ty == IrTy::I128 && matches!(opcode, Opcode::WrappingDiv | Opcode::CheckedDiv);
@@ -349,22 +339,9 @@ fn emit_divisor_traps(
         let dividend_is_min = builder.ins().icmp(IntCC::Equal, dividend, min);
         let divisor_is_neg_one = builder.ins().icmp(IntCC::Equal, divisor, neg_one);
         let overflows = builder.ins().band(dividend_is_min, divisor_is_neg_one);
-        emit_conditional_trap(builder, overflows, TrapCode::INTEGER_OVERFLOW);
+        condition = builder.ins().bor(condition, overflows);
     }
-}
-
-/// Trap with `code` when `condition` holds, continuing in a fresh block.
-fn emit_conditional_trap(builder: &mut FunctionBuilder<'_>, condition: Value, code: TrapCode) {
-    let trap_block = builder.create_block();
-    let cont_block = builder.create_block();
-    builder
-        .ins()
-        .brif(condition, trap_block, &[], cont_block, &[]);
-    builder.switch_to_block(trap_block);
-    builder.seal_block(trap_block);
-    builder.ins().trap(code);
-    builder.switch_to_block(cont_block);
-    builder.seal_block(cont_block);
+    condition
 }
 
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty: IrTy) -> Value {
@@ -1077,7 +1054,9 @@ fn lower_inst(
         Opcode::WrappingDiv | Opcode::WrappingRem => {
             let is_div = inst.opcode == Opcode::WrappingDiv;
             let val = if let Some(sym) = wide_helper_symbol(inst.opcode, inst.ty) {
-                emit_divisor_traps(builder, inst.opcode, inst.ty, arg!(0), arg!(1));
+                let trap_if =
+                    wide_divisor_trap_condition(builder, inst.opcode, inst.ty, arg!(0), arg!(1));
+                emit_overflow_check(builder, trap_if, ctx)?;
                 call_wide_helper(builder, ctx, sym, arg!(0), arg!(1))?
             } else {
                 match (is_div, integer_is_signed) {
@@ -1128,23 +1107,12 @@ fn lower_inst(
         Opcode::CheckedDiv | Opcode::CheckedRem => {
             let wide = wide_helper_symbol(inst.opcode, inst.ty);
             let cl_ty = builder.func.dfg.value_type(arg!(1));
-            let zero = if cl_ty == types::I128 {
-                wide_iconst(builder, 0)
+            let trap_if = if cl_ty == types::I128 {
+                wide_divisor_trap_condition(builder, inst.opcode, inst.ty, arg!(0), arg!(1))
             } else {
-                builder.ins().iconst(cl_ty, 0)
+                let zero = builder.ins().iconst(cl_ty, 0);
+                builder.ins().icmp(IntCC::Equal, arg!(1), zero)
             };
-            let mut trap_if = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
-            // Cranelift's own `sdiv` traps on `MIN / -1` at the narrower
-            // widths; the routed 128-bit path has to reproduce that, and on
-            // the checked operator it surfaces as ArithmeticOverflow.
-            if inst.ty == IrTy::I128 && inst.opcode == Opcode::CheckedDiv {
-                let min = wide_iconst(builder, i128::MIN as u128);
-                let neg_one = wide_iconst(builder, -1i128 as u128);
-                let dividend_is_min = builder.ins().icmp(IntCC::Equal, arg!(0), min);
-                let divisor_is_neg_one = builder.ins().icmp(IntCC::Equal, arg!(1), neg_one);
-                let overflows = builder.ins().band(dividend_is_min, divisor_is_neg_one);
-                trap_if = builder.ins().bor(trap_if, overflows);
-            }
             emit_overflow_check(builder, trap_if, ctx)?;
             let val = if let Some(sym) = wide {
                 call_wide_helper(builder, ctx, sym, arg!(0), arg!(1))?
