@@ -1059,6 +1059,10 @@ fn lower_inst(
                 emit_overflow_check(builder, trap_if, ctx)?;
                 call_wide_helper(builder, ctx, sym, arg!(0), arg!(1))?
             } else {
+                let cl_ty = builder.func.dfg.value_type(arg!(1));
+                let zero = builder.ins().iconst(cl_ty, 0);
+                let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
+                emit_overflow_check(builder, is_zero, ctx)?;
                 match (is_div, integer_is_signed) {
                     (true, true) => builder.ins().sdiv(arg!(0), arg!(1)),
                     (true, false) => builder.ins().udiv(arg!(0), arg!(1)),

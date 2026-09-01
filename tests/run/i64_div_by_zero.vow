@@ -1,0 +1,16 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module I64DivByZero
+
+fn zero() -> i64 {
+    0
+}
+
+fn divide() -> i64 {
+    10 / zero()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}

@@ -1,0 +1,16 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module I32RemByZero
+
+fn zero() -> i32 {
+    0
+}
+
+fn remainder() -> i32 {
+    10 % zero()
+}
+
+fn main() -> i32 {
+    remainder();
+    0
+}

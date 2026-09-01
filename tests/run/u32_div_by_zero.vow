@@ -1,0 +1,16 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module U32DivByZero
+
+fn zero() -> u32 {
+    0
+}
+
+fn divide() -> u32 {
+    10 / zero()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}
