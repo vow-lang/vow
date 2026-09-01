@@ -78,6 +78,7 @@ unsafe fn read_vow_string(vow_vec_ptr: i64) -> &'static str {
 
 const CLIF_ERR_UNSUPPORTED: i64 = -3;
 const CLIF_ERR_IO: i64 = -4;
+const CLIF_ERR_WIDE_AGGREGATE_FIELD: i64 = -5;
 
 // ---------------------------------------------------------------------------
 // IR type/opcode constants (must match compiler/ir.vow)
@@ -177,24 +178,35 @@ fn report_narrowed_wide_argument() {
     );
 }
 
+const WIDE_AGGREGATE_FIELD_MSG: &str = "128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate \
+     field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour";
+
+fn reject_wide_aggregate_field() -> i64 {
+    eprintln!("clif_shim: {WIDE_AGGREGATE_FIELD_MSG}");
+    CLIF_ERR_WIDE_AGGREGATE_FIELD
+}
+
 fn extend_field_store_value(
     builder: &mut FunctionBuilder<'_>,
     value: Value,
     source_ty: i64,
-) -> Value {
+) -> Option<Value> {
     match source_ty {
-        ITY_I8 | ITY_I16 | ITY_I32 => builder.ins().sextend(types::I64, value),
-        ITY_U8 | ITY_U16 | ITY_U32 => builder.ins().uextend(types::I64, value),
+        ITY_I8 | ITY_I16 | ITY_I32 => Some(builder.ins().sextend(types::I64, value)),
+        ITY_U8 | ITY_U16 | ITY_U32 => Some(builder.ins().uextend(types::I64, value)),
+        ITY_I128 | ITY_U128 => None,
         ITY_F32 => {
             let bits = builder
                 .ins()
                 .bitcast(types::I32, MemFlagsData::new(), value);
-            builder.ins().uextend(types::I64, bits)
+            Some(builder.ins().uextend(types::I64, bits))
         }
-        ITY_F64 => builder
-            .ins()
-            .bitcast(types::I64, MemFlagsData::new(), value),
-        _ => value,
+        ITY_F64 => Some(
+            builder
+                .ins()
+                .bitcast(types::I64, MemFlagsData::new(), value),
+        ),
+        _ => Some(value),
     }
 }
 
@@ -2452,7 +2464,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 }
                             }
 
-                            emit_vow_check(
+                            if let Err(status) = emit_vow_check(
                                 &mut builder,
                                 pred,
                                 vow_id,
@@ -2462,7 +2474,9 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 &vow_desc_gvs,
                                 trace_vow_ref,
                                 fn_name_gv,
-                            );
+                            ) {
+                                return status;
+                            }
                         }
                     }
                 }
@@ -2757,6 +2771,9 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
                 // Struct / enum field access
                 IOP_FIELD_GET => {
+                    if ity_is_wide(ity) {
+                        return reject_wide_aggregate_field();
+                    }
                     if dk == IDATA_FIELD {
                         let idx = dv;
                         let base = arg!(0);
@@ -2791,7 +2808,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             .get(&all_args[aoff + 1])
                             .copied()
                             .unwrap_or(ITY_I64);
-                        let store_val = extend_field_store_value(&mut builder, new_val, source_ty);
+                        let Some(store_val) =
+                            extend_field_store_value(&mut builder, new_val, source_ty)
+                        else {
+                            return reject_wide_aggregate_field();
+                        };
                         builder
                             .ins()
                             .store(MemFlagsData::trusted(), store_val, base, offset);
@@ -3097,7 +3118,7 @@ fn emit_vow_check(
     vow_desc_gvs: &HashMap<i64, GlobalValue>,
     trace_vow_ref: Option<FuncRef>,
     fn_name_gv: Option<GlobalValue>,
-) {
+) -> Result<(), i64> {
     let one = builder.ins().iconst(types::I64, 1);
     let inv = builder.ins().bxor(predicate, one);
 
@@ -3150,7 +3171,13 @@ fn emit_vow_check(
                     ITY_UNIT | ITY_PTR | ITY_LPTR => (zero_hi, zero_hi),
                     // Every other scalar widens to i64 exactly as it does when
                     // stored into a struct field.
-                    _ => (extend_field_store_value(builder, *cl_val, *ir_ty), zero_hi),
+                    _ => {
+                        let Some(payload) = extend_field_store_value(builder, *cl_val, *ir_ty)
+                        else {
+                            return Err(reject_wide_aggregate_field());
+                        };
+                        (payload, zero_hi)
+                    }
                 };
                 builder
                     .ins()
@@ -3199,6 +3226,7 @@ fn emit_vow_check(
         let passed = builder.ins().iconst(types::I64, 1);
         builder.ins().call(tv_ref, &[name_ptr, vid, passed]);
     }
+    Ok(())
 }
 
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, ret_ty: i64) -> Value {
@@ -3899,9 +3927,9 @@ mod tests {
         let unsigned_i8 = builder.ins().iconst(types::I8, -1);
         coerce_call_argument(&mut builder, unsigned_i8, ITY_U8, types::I64).unwrap();
         let signed_i16 = builder.ins().iconst(types::I16, -1);
-        extend_field_store_value(&mut builder, signed_i16, ITY_I16);
+        extend_field_store_value(&mut builder, signed_i16, ITY_I16).unwrap();
         let unsigned_i16 = builder.ins().iconst(types::I16, -1);
-        extend_field_store_value(&mut builder, unsigned_i16, ITY_U16);
+        extend_field_store_value(&mut builder, unsigned_i16, ITY_U16).unwrap();
 
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
@@ -4595,6 +4623,70 @@ mod tests {
         add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
         unsafe {
             assert_eq!(__vow_clif_fn_end(ctx), -1);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn wide_field_load_is_rejected_through_the_streamed_ffi() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "wide_field_load", ITY_I128, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            16,
+            8,
+            &[],
+        );
+        add_test_inst(ctx, 1, IOP_FIELD_GET, ITY_I128, IDATA_FIELD, 0, 0, &[0]);
+        add_test_inst(ctx, 2, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[1]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), CLIF_ERR_WIDE_AGGREGATE_FIELD);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn wide_field_store_is_rejected_through_the_streamed_ffi() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "wide_field_store", ITY_UNIT, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            0,
+            IOP_REGION_ALLOC,
+            ITY_PTR,
+            IDATA_ALLOC_SIZE,
+            24,
+            8,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            1,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            0,
+            1 << 16,
+            &[],
+        );
+        add_test_inst(ctx, 2, IOP_FIELD_SET, ITY_UNIT, IDATA_FIELD, 0, 0, &[0, 1]);
+        add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), CLIF_ERR_WIDE_AGGREGATE_FIELD);
             __vow_clif_destroy(ctx);
         }
     }

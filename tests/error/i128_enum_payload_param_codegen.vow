@@ -1,0 +1,23 @@
+// TEST: error-code CodegenUnsupported
+// TEST: error-count 1
+// TEST: build-json '128-bit struct fields and enum payloads' in x.get('message', '')
+module I128EnumPayloadParamCodegen
+
+// The scrutinee is a parameter, so nothing in this function tells lowering how
+// wide the payload is -- only the declaration does. Reading it must be refused
+// on the declared width rather than truncating to the low limb.
+enum Wide {
+    Value(i128),
+    Empty,
+}
+
+fn low_limb(w: Wide) -> i64 {
+    match w {
+        Wide::Value(v) => { if v == 0 { 0 } else { 1 } },
+        Wide::Empty => { 0 },
+    }
+}
+
+fn main() -> i32 {
+    0
+}

@@ -1,0 +1,14 @@
+// TEST: error-code CodegenUnsupported
+// TEST: error-count 1
+// TEST: build-json '128-bit struct fields and enum payloads' in x.get('message', '')
+module I128ResultUnwrapCodegen
+
+// `.unwrap()` reads the `Ok` payload directly rather than through a match arm.
+// `Result` is built in, so its width comes from the parameter's instantiation.
+fn extract(r: Result<i128, i64>) -> i128 [panic] {
+    r.unwrap()
+}
+
+fn main() -> i32 {
+    0
+}
