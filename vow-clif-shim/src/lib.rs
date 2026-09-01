@@ -23,7 +23,7 @@
 // `vow-codegen` site (if any) so agents reading either file see the full
 // picture.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -1847,6 +1847,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     // self-hosted IR lowerer produces cross-block references between sibling
     // branches (valid for C codegen but not SSA).
     let mut cross_block_refs: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut phi_ids: BTreeSet<i64> = BTreeSet::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
         let len = block_lengths[bi] as usize;
@@ -1862,6 +1863,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             // Phi nodes need cross-block storage (fed by Upsilons from other blocks)
             if inst_ops[ii] == IOP_PHI {
                 cross_block_refs.insert(inst_ids[ii]);
+                phi_ids.insert(inst_ids[ii]);
             }
         }
     }
@@ -1883,6 +1885,16 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             slot_map.insert(iid, slot);
         }
     }
+    let mut phi_shadow_slots: BTreeMap<i64, StackSlot> = BTreeMap::new();
+    for &iid in &phi_ids {
+        let (size, align_shift) = if is_wide_inst(&iid) { (16, 4) } else { (8, 3) };
+        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            size,
+            align_shift,
+        ));
+        phi_shadow_slots.insert(iid, slot);
+    }
 
     let mut block_arena_ids: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     for &rgn in inst_rgns.iter().take(n_insts) {
@@ -1897,6 +1909,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     if nb > 0 {
         let zero = builder.ins().iconst(types::I64, 0);
         for (&iid, &slot) in &slot_map {
+            builder.ins().stack_store(types::I64, zero, slot, 0);
+            if is_wide_inst(&iid) {
+                builder.ins().stack_store(types::I64, zero, slot, 8);
+            }
+        }
+        for (&iid, &slot) in &phi_shadow_slots {
             builder.ins().stack_store(types::I64, zero, slot, 0);
             if is_wide_inst(&iid) {
                 builder.ins().stack_store(types::I64, zero, slot, 8);
@@ -2415,15 +2433,33 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     builder.ins().trap(TrapCode::unwrap_user(2));
                 }
 
-                IOP_PHI => {}
+                IOP_PHI => {
+                    if let (Some(&shadow_slot), Some(&value_slot)) =
+                        (phi_shadow_slots.get(&iid), slot_map.get(&iid))
+                    {
+                        let lo = builder
+                            .ins()
+                            .stack_load(types::I64, types::I64, shadow_slot, 0);
+                        builder.ins().stack_store(types::I64, lo, value_slot, 0);
+                        if is_wide_inst(&iid) {
+                            let hi =
+                                builder
+                                    .ins()
+                                    .stack_load(types::I64, types::I64, shadow_slot, 8);
+                            builder.ins().stack_store(types::I64, hi, value_slot, 8);
+                        }
+                    }
+                }
                 IOP_UPSILON => {
-                    // Store to the Phi's stack slot so cross-block references work.
+                    // Store to the Phi's shadow slot. The Phi copies its shadow
+                    // into its value slot only when control enters the Phi's block,
+                    // preserving parallel-copy semantics across Upsilon groups.
                     // The pre-resolve loop above already reloaded cross-block args
                     // into value_map, so value_map[val_id] is valid here.
                     if dk == IDATA_PHI_TARGET && alen > 0 {
                         let phi_id = dv;
                         let val_id = all_args[aoff];
-                        if let Some(&slot) = slot_map.get(&phi_id)
+                        if let Some(&slot) = phi_shadow_slots.get(&phi_id)
                             && let Some(&val) = value_map.get(&val_id)
                         {
                             store_slotted_value(&mut builder, slot, val);
@@ -4286,6 +4322,70 @@ mod tests {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn assert_test_function_runtime_value(
+        ctx: i64,
+        name: &str,
+        value_ty: i64,
+        const_op: i64,
+        const_kind: i64,
+        expected_lo: i64,
+        expected_hi: i64,
+    ) {
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 1, ITY_I32, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 1, IOP_CALL, value_ty, IDATA_CALL_TARGET, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            2,
+            const_op,
+            value_ty,
+            const_kind,
+            expected_lo,
+            expected_hi,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            3,
+            IOP_NE,
+            ITY_BOOL,
+            IDATA_INTEGER,
+            value_ty,
+            0,
+            &[1, 2],
+        );
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join(format!("{name}.o"));
+        let executable_path = temp_dir.path().join(name);
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        unsafe {
+            assert_eq!(
+                __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64),
+                0
+            );
+        }
+        link_float_phi_test_object(&object_path, &executable_path);
+
+        let output = std::process::Command::new(&executable_path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "generated executable returned the wrong value\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
     #[test]
     fn f64_phi_loaded_from_cross_block_slot_returns_expected_runtime_value() {
         assert_cross_block_float_phi_runtime_value(
@@ -4315,6 +4415,418 @@ mod tests {
             2.5f32.to_bits() as i64,
             1.0f32.to_bits() as i64,
             2.5f32.to_bits() as i64,
+        );
+    }
+
+    #[test]
+    fn back_edge_upsilons_are_a_parallel_copy_not_a_sequential_one() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "parallel_back_edge", ITY_I64, false);
+        declare_test_function(ctx, 1, "main", ITY_I32, true);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I64, 0), 0);
+        }
+
+        // Entry: initialize the two loop-carried Phis to a = 0 and b = 1.
+        add_test_block(ctx);
+        add_test_inst(ctx, 1, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(ctx, 2, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 1, 0, &[]);
+        add_test_inst(ctx, 3, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 10, 0, &[1]);
+        add_test_inst(ctx, 4, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 11, 0, &[2]);
+        add_test_inst(ctx, 5, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 1, 0, &[]);
+
+        // Header: execute the body once, then carry a into the exit block.
+        add_test_block(ctx);
+        add_test_inst(ctx, 10, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 11, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 12, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            13,
+            IOP_GT,
+            ITY_BOOL,
+            IDATA_INTEGER,
+            ITY_I64,
+            0,
+            &[11, 12],
+        );
+        add_test_inst(
+            ctx,
+            14,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            30,
+            0,
+            &[10],
+        );
+        add_test_inst(
+            ctx,
+            15,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            31,
+            0,
+            &[11],
+        );
+        add_test_inst(
+            ctx,
+            16,
+            IOP_BRANCH,
+            ITY_UNIT,
+            IDATA_BRANCH_TARGETS,
+            2,
+            3,
+            &[13],
+        );
+
+        // Body: the hostile order must still copy the old b into a.
+        add_test_block(ctx);
+        add_test_inst(ctx, 20, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            21,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            11,
+            0,
+            &[20],
+        );
+        add_test_inst(
+            ctx,
+            22,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            10,
+            0,
+            &[11],
+        );
+        add_test_inst(ctx, 23, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 1, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 30, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 31, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 32, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[30]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        // The process exits zero only when the loop returns the expected 1.
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 1, ITY_I32, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 1, IOP_CALL, ITY_I64, IDATA_CALL_TARGET, 0, 0, &[]);
+        add_test_inst(ctx, 2, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 1, 0, &[]);
+        add_test_inst(ctx, 3, IOP_NE, ITY_BOOL, IDATA_INTEGER, ITY_I64, 0, &[1, 2]);
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join("parallel_back_edge.o");
+        let executable_path = temp_dir.path().join("parallel_back_edge");
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        unsafe {
+            assert_eq!(
+                __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64),
+                0
+            );
+        }
+        link_float_phi_test_object(&object_path, &executable_path);
+
+        let output = std::process::Command::new(&executable_path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "back-edge Upsilons did not copy in parallel\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    fn back_edge_upsilons_swap_two_loop_carried_values() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "parallel_swap", ITY_I64, false);
+        declare_test_function(ctx, 1, "main", ITY_I32, true);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I64, 0), 0);
+        }
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 1, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 4, 0, &[]);
+        add_test_inst(ctx, 2, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 9, 0, &[]);
+        add_test_inst(ctx, 3, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 1, 0, &[]);
+        add_test_inst(ctx, 4, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 10, 0, &[1]);
+        add_test_inst(ctx, 5, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 11, 0, &[2]);
+        add_test_inst(ctx, 6, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 12, 0, &[3]);
+        add_test_inst(ctx, 7, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 1, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 10, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 11, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 12, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 13, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            14,
+            IOP_GT,
+            ITY_BOOL,
+            IDATA_INTEGER,
+            ITY_I64,
+            0,
+            &[12, 13],
+        );
+        add_test_inst(
+            ctx,
+            15,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            40,
+            0,
+            &[10],
+        );
+        add_test_inst(
+            ctx,
+            16,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            41,
+            0,
+            &[11],
+        );
+        add_test_inst(
+            ctx,
+            17,
+            IOP_BRANCH,
+            ITY_UNIT,
+            IDATA_BRANCH_TARGETS,
+            2,
+            3,
+            &[14],
+        );
+
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            20,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            10,
+            0,
+            &[11],
+        );
+        add_test_inst(
+            ctx,
+            21,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            11,
+            0,
+            &[10],
+        );
+        add_test_inst(ctx, 22, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            23,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            12,
+            0,
+            &[22],
+        );
+        add_test_inst(ctx, 24, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 1, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 40, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 41, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 42, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 10, 0, &[]);
+        add_test_inst(
+            ctx,
+            43,
+            IOP_WMUL,
+            ITY_I64,
+            IDATA_INTEGER,
+            ITY_I64,
+            0,
+            &[40, 42],
+        );
+        add_test_inst(
+            ctx,
+            44,
+            IOP_WADD,
+            ITY_I64,
+            IDATA_INTEGER,
+            ITY_I64,
+            0,
+            &[43, 41],
+        );
+        add_test_inst(ctx, 45, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[44]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        assert_test_function_runtime_value(
+            ctx,
+            "parallel_swap",
+            ITY_I64,
+            IOP_CONST_I64,
+            IDATA_CONST_I64,
+            94,
+            0,
+        );
+    }
+
+    #[test]
+    fn wide_phi_shadow_slot_preserves_both_limbs() {
+        const HI: i64 = 0x00AB;
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "parallel_wide_copy", ITY_I128, false);
+        declare_test_function(ctx, 1, "main", ITY_I32, true);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I128, 0), 0);
+        }
+
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            1,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            0,
+            0,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            2,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            7,
+            HI,
+            &[],
+        );
+        add_test_inst(ctx, 3, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 1, 0, &[]);
+        add_test_inst(ctx, 4, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 10, 0, &[1]);
+        add_test_inst(ctx, 5, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 11, 0, &[2]);
+        add_test_inst(ctx, 6, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 12, 0, &[3]);
+        add_test_inst(ctx, 7, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 1, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 10, IOP_PHI, ITY_I128, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 11, IOP_PHI, ITY_I128, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 12, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 13, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            14,
+            IOP_GT,
+            ITY_BOOL,
+            IDATA_INTEGER,
+            ITY_I64,
+            0,
+            &[12, 13],
+        );
+        add_test_inst(
+            ctx,
+            15,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            40,
+            0,
+            &[10],
+        );
+        add_test_inst(
+            ctx,
+            16,
+            IOP_BRANCH,
+            ITY_UNIT,
+            IDATA_BRANCH_TARGETS,
+            2,
+            3,
+            &[14],
+        );
+
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            20,
+            IOP_CONST_I128,
+            ITY_I128,
+            IDATA_CONST_I128,
+            0,
+            0,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            21,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            11,
+            0,
+            &[20],
+        );
+        add_test_inst(
+            ctx,
+            22,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            10,
+            0,
+            &[11],
+        );
+        add_test_inst(ctx, 23, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            24,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            12,
+            0,
+            &[23],
+        );
+        add_test_inst(ctx, 25, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 1, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 40, IOP_PHI, ITY_I128, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 41, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[40]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        assert_test_function_runtime_value(
+            ctx,
+            "parallel_wide_copy",
+            ITY_I128,
+            IOP_CONST_I128,
+            IDATA_CONST_I128,
+            7,
+            HI,
         );
     }
 
