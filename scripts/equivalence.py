@@ -589,13 +589,31 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
 # ---------------------------------------------------------------------------
 
 
-def check_file(vow_file, rust, slf, outdir, timeout):
+# What `read_directives` returns for a file that declares nothing. A candidate
+# a model wrote is not a corpus fixture, so `--no-directives` hands this back
+# instead of letting the input steer the comparison that judges it.
+NO_DIRECTIVES = {
+    "skip": None,
+    "expected_exit": None,
+    "verify_only": False,
+    "stdin": None,
+    "stdin_file": None,
+}
+
+
+def check_file(
+    vow_file, rust, slf, outdir, timeout, honour_directives=True, verify_only=False
+):
     rel = (
         str(Path(vow_file).relative_to(REPO_ROOT))
         if str(vow_file).startswith(str(REPO_ROOT))
         else str(vow_file)
     )
-    directives = read_directives(vow_file)
+    directives = read_directives(vow_file) if honour_directives else NO_DIRECTIVES
+    if verify_only:
+        # Which comparison to run is the harness's choice, not the input's, so
+        # this is selected out of band and survives --no-directives.
+        directives = {**directives, "verify_only": True}
     record = {"file": rel, "divergences": [], "skipped": None}
 
     if directives["skip"]:
@@ -993,6 +1011,18 @@ def main():
         default=datetime.now(timezone.utc).date().isoformat(),
         help="ISO date stamped into the proposal's `updated` field (default: UTC today)",
     )
+    # Not a ledger flag: this is about whose input steers the run, so it is
+    # outside the mutually exclusive group above.
+    ap.add_argument(
+        "--no-directives",
+        action="store_true",
+        help="ignore `// TEST:` directives — the input is a candidate, not a fixture",
+    )
+    ap.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="compare `verify` rather than `build` for every file, whatever it declares",
+    )
     args = ap.parse_args()
 
     roots = args.roots or [
@@ -1044,7 +1074,15 @@ def main():
     started = time.time()
     records, diverged, skipped, compared = [], [], [], 0
     for i, f in enumerate(corpus, 1):
-        rec = check_file(f, rust, slf, outdir, args.timeout)
+        rec = check_file(
+            f,
+            rust,
+            slf,
+            outdir,
+            args.timeout,
+            honour_directives=not args.no_directives,
+            verify_only=args.verify_only,
+        )
         records.append(rec)
         if rec["divergences"]:
             diverged.append(rec)
