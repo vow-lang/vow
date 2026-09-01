@@ -51,7 +51,16 @@ deterministic and credential-free, so it runs unattended.
 is why it is an agent command rather than a workflow step. It reviews matched
 module pairs (`lexer.rs` ↔ `lexer.vow`, and so on) for semantic divergence, and
 publishes to `docs/equivalence/<YYYY-MM>/` alongside the monthly audit's own
-reports.
+reports. Sources are split at function boundaries and packed into bounded
+prompts; no source tail is truncated. An oversize function remains whole and is
+reported explicitly, while an operator-imposed chunk cap lowers the reported
+coverage and leaves the remaining chunks visibly deferred.
+
+The same machinery has a separate `soundness` mode for the two C emitters. It
+asks whether an emitted `__ESBMC_assume` narrows the verifier model below what
+Vow permits, then confirms candidates with the verifier-vs-debug-runtime gate.
+That is a model-vs-language question, not a Rust-vs-self-hosted equivalence
+outcome, so soundness runs never update the pair ledger.
 
 ## The rule for tier 3
 
@@ -94,6 +103,12 @@ It records, per module pair, the content hash last reviewed and the outcome, so
 a run re-reviews only **changed** pairs and reports the rest as explicitly
 skipped. For the corpus it records which files have ever diverged, so a
 regression is distinguishable from a new finding.
+
+Pair rows are written atomically by `pair_review.py --update-ledger --date
+<YYYY-MM-DD>` after a complete, error-free equivalence review. A deferred or
+errored pair keeps its prior hash and date, forcing the next run to revisit it.
+The harness preserves the corpus rows and confirmed issue numbers; operators
+still add issue and promoted-fixture metadata during triage.
 
 Schema: see `ledger.schema.json`.
 
@@ -153,7 +168,14 @@ ones to revisit first when widening the comparison:
 python3 scripts/equivalence.py --rust target/release/vow --self build/vowc
 
 # Tier 3 — adversarial pair review (needs ANTHROPIC_API_KEY or OPENAI_API_KEY)
-python3 scripts/pair_review.py --model claude-sonnet-4-20250514
+python3 scripts/pair_review.py --dry-run --all
+python3 scripts/pair_review.py --model claude-sonnet-4-20250514 \
+  --update-ledger --date <YYYY-MM-DD>
+
+# Separate verifier-model soundness question (defaults to c_emitter only)
+python3 scripts/pair_review.py --mode soundness --dry-run --all
+python3 scripts/pair_review.py --mode soundness \
+  --model claude-sonnet-4-20250514
 ```
 
 Bootstrap first (`cargo build --all --release && scripts/bootstrap.sh --skip-cargo`): both tiers must

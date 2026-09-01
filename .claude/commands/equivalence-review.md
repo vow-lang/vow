@@ -50,10 +50,25 @@ bug got fixed and the ledger (plus any `// TEST: known-divergence` directive) is
 
 ## Step 2 — Adversarial pair review
 
+Plan the credentialed calls first and include the per-pair chunk counts, byte totals, oversize units and
+coverage from `results.json` in the report:
+
+```bash
+python3 scripts/pair_review.py --dry-run \
+  --rust target/release/vow --self build/vowc \
+  --chunk-bytes 120000 \
+  --output-dir /tmp/pair-review-plan-<YYYY-MM>
+```
+
+Then run the review. `--max-chunks-per-pair N` is an explicit spend cap; omitted (or 0) means all
+chunks. A capped pair is reported with deferred chunks and is not stamped in the ledger.
+
 ```bash
 python3 scripts/pair_review.py --model <MODEL> \
   --rust target/release/vow --self build/vowc \
-  --output-dir /tmp/pair-review-<YYYY-MM>
+  --chunk-bytes 120000 \
+  --output-dir /tmp/pair-review-<YYYY-MM> \
+  --update-ledger --date <YYYY-MM-DD>
 ```
 
 Unchanged pairs are skipped via the ledger's content hash; pass `--all` only if you deliberately want a
@@ -65,8 +80,28 @@ the two compilers disagree on a concrete program. The harness enforces this — 
 finding because it sounds plausible or because a model was confident. This repo has been burned: the
 2026-06-12 verification-honesty pass found half of the preceding audit's severities overstated.
 
-Findings the harness marks `truncated` were reviewed on partial source (`lower.vow` is ~248KB,
-`c_emitter.vow` ~148KB). Say so in the report rather than implying full coverage.
+Every function unit is retained whole. If one exceeds `--chunk-bytes`, the plan marks it `oversize`
+instead of truncating it. If a chunk cap or model error prevents full review, report the pair's exact
+coverage and deferred/error chunk indexes rather than implying full coverage; the harness deliberately
+leaves that pair's prior ledger hash untouched.
+
+### Step 2b — C-model soundness variant
+
+Run this as a separate question. It defaults to the `c_emitter` pair and asks whether either emitter's
+`__ESBMC_assume` statements narrow the verifier model below language semantics. The gate runs each
+candidate through both compilers independently and confirms only `Verified` plus a debug-runtime
+`VowViolation`. Soundness results do not update the equivalence ledger.
+
+```bash
+python3 scripts/pair_review.py --mode soundness --dry-run --all \
+  --chunk-bytes 120000 \
+  --output-dir /tmp/pair-review-soundness-plan-<YYYY-MM>
+
+python3 scripts/pair_review.py --mode soundness --model <MODEL> --all \
+  --rust target/release/vow --self build/vowc \
+  --chunk-bytes 120000 \
+  --output-dir /tmp/pair-review-soundness-<YYYY-MM>
+```
 
 ## Step 3 — Triage each confirmed divergence
 
@@ -83,7 +118,8 @@ For each one, in this order:
    under the current `build/vowc`, add `// TEST: known-divergence <issue> "<why>"` so `full_test.sh`
    reports a loud SKIP instead of turning the tree red — and so it becomes a hard FAIL the moment the
    bug is fixed, forcing the directive's removal.
-5. **Record it in the ledger** with an issue number and, once one exists, the fixture path.
+5. **Complete the ledger metadata.** The harness writes complete pair-review hashes, dates and outcomes.
+   You write confirmed issue numbers, plus corpus rows and fixture paths created during triage.
 
 ## Step 4 — Publish
 
@@ -106,10 +142,10 @@ Update `docs/equivalence/README.md` with an index row per month.
 
 ## Step 5 — Report what you did not cover
 
-Every run states its gaps explicitly: pairs skipped as unchanged, pairs reviewed on truncated source,
-corpus files skipped and why, and any shard or budget that ran out. A run that silently examined a
-fraction of the surface must never read as a clean bill of health. `vowc mutants`' `missed.txt`
-convention is the model here.
+Every run states its gaps explicitly: pairs skipped as unchanged, oversize function units, chunks
+deferred by a spend cap, model-error chunks, corpus files skipped and why, and any shard or budget that
+ran out. A run that silently examined a fraction of the surface must never read as a clean bill of
+health. `vowc mutants`' `missed.txt` convention is the model here.
 
 ## Step 6 — Propose, don't act
 
