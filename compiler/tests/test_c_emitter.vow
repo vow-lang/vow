@@ -220,6 +220,7 @@ fn check_narrow_shifts_use_helpers() -> i64 {
     funcs.push(shift_function(32, String::from("shl_i16"), ITY_I16(), IOP_SHL()));
     funcs.push(shift_function(33, String::from("shr_u16"), ITY_U16(), IOP_SHR()));
     funcs.push(shift_function(34, String::from("shl_u32"), ITY_U32(), IOP_SHL()));
+    funcs.push(shift_function(40, String::from("shl_i32"), ITY_I32(), IOP_SHL()));
 
     let c: String = emit_c_module(mk_module(funcs), 16, 16, 16, 16);
     if !c.contains(String::from("static inline int8_t __vow_shl_i8")) { return 30; }
@@ -232,6 +233,12 @@ fn check_narrow_shifts_use_helpers() -> i64 {
     if !c.contains(String::from("__vow_shl_i16(v0, v1)")) { return 37; }
     if !c.contains(String::from("__vow_shr_u16(v0, v1)")) { return 38; }
     if !c.contains(String::from("__vow_shl_u32(v0, v1)")) { return 39; }
+    if !c.contains(String::from("__vow_shl_i32(v0, v1)")) { return 41; }
+    // The i32 shift-count assert must share the same "integer shift count"
+    // label the other widths use, so counterexample parsing (#1144) maps it
+    // to the same description on both compilers instead of falling through.
+    if !c.contains(String::from(" < 32, \"integer shift count\");")) { return 42; }
+    if c.contains(String::from("\"i32 shift count\"")) { return 43; }
     0
 }
 

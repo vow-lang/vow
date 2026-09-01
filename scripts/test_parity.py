@@ -189,7 +189,7 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
             errors,
         )
 
-    def test_unattributed_counterexample_violation_is_not_compared(self):
+    def test_none_blame_counterexample_violation_must_match(self):
         rust = document(
             "VerifyFailed",
             counterexamples=[
@@ -201,7 +201,10 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
             counterexamples=[{"function": "f", "blame": "none", "violation": ""}],
         )
 
-        self.assertEqual([], parity.compare_json(rust, self_hosted, 1, 1))
+        self.assertEqual(
+            ["counterexample[0].violation: [Counterexample] vs "],
+            parity.compare_json(rust, self_hosted, 1, 1),
+        )
 
     def test_unknown_vow_ids_are_equivalent(self):
         rust = document(counterexamples=[{"function": "f", "vow_id": 0}])
@@ -830,7 +833,7 @@ class CompareTestTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            set(schema["properties"]) - {"source", "values", "violation"},
+            set(schema["properties"]) - {"source", "values"},
             set(parity.COUNTEREXAMPLE_COMPARED_FIELDS),
         )
 

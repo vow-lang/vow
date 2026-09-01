@@ -350,6 +350,10 @@ If `violating_args[].value` is `""`, Vow could not statically recover the
 caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
+When `blame` is `"none"`, `violation` describes the failed verifier-model check
+(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
+than exposing raw verifier output.
+
 ### Fields Reference
 
 | Field              | Type                | When Present      | Description                               |
