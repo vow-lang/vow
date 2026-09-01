@@ -409,16 +409,27 @@ def hash_pair(rust_paths, self_path):
     return h.hexdigest()
 
 
-FAIL_CLOSED_SIDE = re.compile(r"^(rust|self-hosted) compiler ")
+# Every one-sided fail_closed detail scripts/equivalence.py writes opens with
+# the side it blames -- a panicking or signal-killed compiler, a compiler that
+# emitted no parseable JSON, and a generated binary killed by a memory-unsafety
+# signal. Anchoring on the side alone rather than on the words that follow it
+# keeps a new shape from silently reading as "no side", which is the reading
+# that lets an input both implementations choked on pass the gate.
+FAIL_CLOSED_SIDE = re.compile(r"^(rust|self-hosted)\b")
 
 
 def _agreed_by_crashing(divergences):
-    """Whether the only evidence is that both compilers crashed.
+    """Whether the only evidence is that both implementations failed closed.
 
-    scripts/equivalence.py files a panic or signal death once per side, because
-    a crash is a bug whatever the peer did. Here it is not evidence that the two
-    implementations *disagree*, which is the only claim a model may have
-    confirmed -- otherwise any crashing input passes the gate.
+    scripts/equivalence.py files a panic, a signal death or a missing-JSON
+    contract breach once per side, because each is a bug whatever the peer did.
+    Here it is not evidence that the two implementations *disagree*, which is
+    the only claim a model may have confirmed -- otherwise any input that kills
+    both compilers, or both binaries, passes the gate.
+
+    A shape naming one side only ("rust compiler timed out ...; self-hosted
+    completed") is left as a divergence: that IS the two implementations
+    behaving differently.
     """
     if any(v["observable"] != "fail_closed" for v in divergences):
         return False

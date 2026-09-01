@@ -9,6 +9,7 @@ reviewed.
 
 import io
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -323,6 +324,58 @@ class FailClosedGateTest(unittest.TestCase):
         ]
 
         self.assertTrue(pair_review._agreed_by_crashing(divergences))
+
+    def test_shared_missing_json_is_agreement(self):
+        divergences = [
+            {
+                "observable": "fail_closed",
+                "detail": f"{side} emitted no parseable JSON (exit 1)",
+            }
+            for side in ("rust", "self-hosted")
+        ]
+
+        self.assertTrue(pair_review._agreed_by_crashing(divergences))
+
+    def test_shared_binary_memory_unsafety_is_agreement(self):
+        divergences = [
+            {
+                "observable": "fail_closed",
+                "detail": (
+                    f"{side} binary died on SIGSEGV (11) "
+                    "\u2014 memory unsafety, not a trap"
+                ),
+            }
+            for side in ("rust", "self-hosted")
+        ]
+
+        self.assertTrue(pair_review._agreed_by_crashing(divergences))
+
+    def test_one_sided_timeout_is_still_a_divergence(self):
+        divergences = [
+            {
+                "observable": "fail_closed",
+                "detail": "rust compiler timed out after 120s; self-hosted completed",
+            }
+        ]
+
+        self.assertFalse(pair_review._agreed_by_crashing(divergences))
+
+    def test_every_equivalence_fail_closed_shape_names_a_side(self):
+        """The gate reads details equivalence.py writes; keep the two in step."""
+        source = Path(equivalence.__file__).read_text()
+        shapes = re.findall(
+            r'"observable": "fail_closed",\s*"detail": \(?\s*(?:f?")(.*?)"',
+            source,
+            re.DOTALL,
+        )
+        self.assertGreaterEqual(len(shapes), 5)
+        for shape in shapes:
+            detail = shape.replace("{name}", "rust").replace("{hung}", "rust")
+            self.assertTrue(
+                pair_review.FAIL_CLOSED_SIDE.match(detail)
+                or detail.startswith("both "),
+                f"unrecognised fail_closed shape: {detail!r}",
+            )
 
 
 class RenderChunkTest(unittest.TestCase):
