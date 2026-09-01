@@ -53,6 +53,13 @@ jobs:
         uses: ./.github/actions/install-esbmc
       - name: Rust and self-hosted differential suite
         run: |
+          # full_test.sh already exits non-zero when FAIL>0 (caught above by
+          # pipefail), so this guards a different failure mode: FAIL==0 but
+          # most assertions silently degraded into skips (e.g. a broken
+          # ESBMC install). 500 is a conservative floor below the ~590
+          # assertions #1094 measured and the 976 passed seen locally for
+          # this change, leaving headroom for legitimate environment-specific
+          # skips on a runner this workflow has not executed on before.
           set -o pipefail
           scripts/full_test.sh 2>&1 | tee /tmp/full_test.log
           passed=$(grep -oP '\d+(?= passed)' /tmp/full_test.log | tail -1)
