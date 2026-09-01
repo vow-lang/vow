@@ -5209,6 +5209,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("caller argument value; `arg_offset` and `arg_length` still identify the\n"));
     r.push_str(String::from("argument expression.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("When `blame` is `\"none\"`, `violation` describes the failed verifier-model check\n"));
+    r.push_str(String::from("(such as collection bounds or capacity, unwrap-on-None, or shift count) rather\n"));
+    r.push_str(String::from("than exposing raw verifier output.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Field              | Type                | When Present      | Description                               |\n"));
@@ -8279,7 +8283,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"violation\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Description of the violated contract clause\"\n"));
+    r.push_str(String::from("      \"description\": \"Description of the violated contract clause, or of the internal check that failed when blame is \\\"none\\\"\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"vow_id\": {\n"));
     r.push_str(String::from("      \"type\": \"integer\",\n"));
@@ -10315,6 +10319,10 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("If `violating_args[].value` is `\"\"`, Vow could not statically recover the\n"));
     r.push_str(String::from("caller argument value; `arg_offset` and `arg_length` still identify the\n"));
     r.push_str(String::from("argument expression.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("When `blame` is `\"none\"`, `violation` describes the failed verifier-model check\n"));
+    r.push_str(String::from("(such as collection bounds or capacity, unwrap-on-None, or shift count) rather\n"));
+    r.push_str(String::from("than exposing raw verifier output.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
@@ -13393,7 +13401,7 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"violation\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Description of the violated contract clause\"\n"));
+    r.push_str(String::from("      \"description\": \"Description of the violated contract clause, or of the internal check that failed when blame is \\\"none\\\"\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"vow_id\": {\n"));
     r.push_str(String::from("      \"type\": \"integer\",\n"));
