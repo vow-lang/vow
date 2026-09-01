@@ -2767,7 +2767,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
                 // Struct / enum field access
                 IOP_FIELD_GET => {
-                    if matches!(ity, ITY_I128 | ITY_U128) {
+                    if ity_is_wide(ity) {
                         report_wide_aggregate_field();
                         return -1;
                     }

@@ -454,6 +454,8 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
     vars
 }
 
+// Ids of the 128-bit-typed instructions, for resolving the type of a
+// `FieldSet` value operand. A `FieldGet` carries its own width in `inst.ty`.
 fn collect_wide_vars(func: &Function) -> HashSet<u32> {
     func.blocks
         .iter()
@@ -735,7 +737,7 @@ pub fn is_modelable(
 
                 // Collection/Option field reads have dedicated models; all other
                 // FieldGets are user-struct slot reads under the heap model.
-                Opcode::FieldGet => !wide_vars.contains(&inst.id.0),
+                Opcode::FieldGet => !matches!(inst.ty, Ty::I128 | Ty::U128),
 
                 // User-struct heap model: allocation and field writes are slot ops.
                 Opcode::RegionAlloc => true,
@@ -840,8 +842,8 @@ fn first_unsupported_opcode(
                 {
                     return Some(format!("{:?} at 128-bit width", inst.opcode));
                 }
-                Opcode::FieldGet if wide_vars.contains(&inst.id.0) => {
-                    return Some("FieldGet at 128-bit width".to_string());
+                Opcode::FieldGet if matches!(inst.ty, Ty::I128 | Ty::U128) => {
+                    return Some(format!("{:?} at 128-bit width", inst.opcode));
                 }
                 Opcode::FieldSet
                     if inst
@@ -849,7 +851,7 @@ fn first_unsupported_opcode(
                         .get(1)
                         .is_some_and(|value| wide_vars.contains(&value.0)) =>
                 {
-                    return Some("FieldSet at 128-bit width".to_string());
+                    return Some(format!("{:?} at 128-bit width", inst.opcode));
                 }
                 Opcode::Call => match &inst.data {
                     InstData::CallExtern(name) => {

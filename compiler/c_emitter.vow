@@ -380,7 +380,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                         false
                     }
                 } else if op == IOP_FIELD_GET() {
-                    !vec_contains_i64(wide_vars, inst.id)
+                    inst.ty != ITY_I128() && inst.ty != ITY_U128()
                 } else if op == IOP_REGION_ALLOC() {
                     true
                 } else if op == IOP_FIELD_SET() {
@@ -455,11 +455,11 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
             if is_checked_arith_op(op) && checked_arith_ty(inst) == ITY_UNIT() {
                 return cemit_str2(opcode_name(op), String::from(" at 128-bit width"));
             }
-            if op == IOP_FIELD_GET() && vec_contains_i64(wide_vars, inst.id) {
-                return String::from("FieldGet at 128-bit width");
+            if op == IOP_FIELD_GET() && (inst.ty == ITY_I128() || inst.ty == ITY_U128()) {
+                return cemit_str2(opcode_name(op), String::from(" at 128-bit width"));
             }
             if op == IOP_FIELD_SET() && field_set_carries_wide(inst, wide_vars) {
-                return String::from("FieldSet at 128-bit width");
+                return cemit_str2(opcode_name(op), String::from(" at 128-bit width"));
             }
             if op == IOP_CALL() {
                 if inst.dk == IDATA_CALL_EXTERN() {
@@ -1012,6 +1012,8 @@ fn collect_option_vars(f: IrFunction) -> Vec<i64> {
     result
 }
 
+// Ids of the 128-bit-typed instructions, for resolving the type of a
+// FieldSet value operand. A FieldGet carries its own width in inst.ty.
 fn collect_wide_vars(f: IrFunction) -> Vec<i64> {
     let result: Vec<i64> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
