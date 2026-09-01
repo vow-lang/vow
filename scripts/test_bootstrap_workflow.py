@@ -36,6 +36,7 @@ BOOTSTRAP_WORKFLOW = WORKFLOWS / "bootstrap.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
 EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
 FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
+FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
@@ -234,6 +235,15 @@ class FullTestWorkflowTest(unittest.TestCase):
         self.assertIn(r"grep -oP '\d+(?= passed)'", full_test)
         self.assertIn('test -n "$passed"', full_test)
         self.assertIn('[ "$passed" -ge 500 ]', full_test)
+
+    def test_passed_count_grep_matches_full_test_sh_summary_format(self) -> None:
+        # Ties the workflow's grep pattern to the summary line it actually
+        # greps: a rename of "passed" in full_test.sh's print_summary would
+        # silently disable the floor check while every string-matching test
+        # above still passes.
+        script = FULL_TEST_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("${PASS} passed", script)
 
 
 class EquivalenceWorkflowTest(unittest.TestCase):
