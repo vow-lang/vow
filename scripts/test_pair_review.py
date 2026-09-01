@@ -36,6 +36,11 @@ def fake_llm(*contents):
     )
 
 
+def usable_llm():
+    """A provider double that satisfies `main`'s `--model` preflight."""
+    return SimpleNamespace(make_config=lambda model: model)
+
+
 def stamp_ledger(directory, pair):
     """Write a ledger marking `pair` reviewed at its current content hash."""
     rust_paths, self_path = pair_review.PAIRS[pair]
@@ -234,7 +239,7 @@ class ChunkPlanTest(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(1.0, pair_review._paired_coverage([chunk], [chunk]))
+        self.assertEqual(1.0, pair_review._paired_coverage([chunk]))
         self.assertEqual(
             ["a.rs:suggest_similar"],
             [u.label for u in pair_review._unmatched([chunk])],
@@ -621,6 +626,19 @@ class ReviewReportTest(unittest.TestCase):
         self.assertEqual(0.0, report["pairs"][0]["paired_coverage"])
         self.assertIn("unpaired", output)
 
+    def test_a_cap_lowers_coverage_but_not_paired_coverage(self):
+        # Every checker chunk carries both sides, so a cap defers bytes without
+        # showing any of them one-sided. Folding deferral into this metric would
+        # print the one-sided warning about chunks nobody was shown.
+        _, output, report = self.run_dry(
+            "--pair", "checker", "--max-chunks-per-pair", "1"
+        )
+
+        result = report["pairs"][0]
+        self.assertLess(result["coverage"], 1.0)
+        self.assertEqual(1.0, result["paired_coverage"])
+        self.assertNotIn("unpaired", output)
+
     def test_deferred_chunks_are_reported_and_coverage_drops(self):
         _, output, report = self.run_dry(
             "--pair", "lower", "--max-chunks-per-pair", "2"
@@ -858,6 +876,7 @@ class LedgerWritebackTest(unittest.TestCase):
         compiler.touch()
         output = Path(self.directory.name) / "output"
         with (
+            mock.patch.dict("sys.modules", {"llm": usable_llm()}),
             mock.patch.object(pair_review, "LEDGER", self.ledger_path),
             mock.patch.object(pair_review, "review_pair", return_value=fake_result),
             redirect_stdout(io.StringIO()),
@@ -879,6 +898,39 @@ class LedgerWritebackTest(unittest.TestCase):
         self.assertEqual(0, status)
         self.assertEqual(before, self.ledger_path.read_bytes())
 
+    def test_an_unusable_model_exits_two(self):
+        # Escaping as a traceback would exit 1 -- the code that means
+        # "confirmed divergences" -- so a typo would report findings.
+        compiler = Path(self.directory.name) / "compiler"
+        compiler.touch()
+        stub = SimpleNamespace(
+            make_config=mock.Mock(side_effect=ValueError("Cannot infer provider"))
+        )
+        stderr = io.StringIO()
+        with (
+            mock.patch.dict("sys.modules", {"llm": stub}),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(stderr),
+        ):
+            status = pair_review.main(
+                [
+                    "--all",
+                    "--pair",
+                    "lexer",
+                    "--model",
+                    "nonesuch-9",
+                    "--rust",
+                    str(compiler),
+                    "--self",
+                    str(compiler),
+                    "--output-dir",
+                    str(Path(self.directory.name) / "bad-model"),
+                ]
+            )
+
+        self.assertEqual(2, status)
+        self.assertIn("nonesuch-9", stderr.getvalue())
+
     def test_an_errored_run_exits_two(self):
         # Exit 1 means "confirmed findings". A run whose chunks errored or left
         # a claim unjudged is not a verdict at all, so it takes the same
@@ -895,6 +947,7 @@ class LedgerWritebackTest(unittest.TestCase):
         compiler = Path(self.directory.name) / "compiler"
         compiler.touch()
         with (
+            mock.patch.dict("sys.modules", {"llm": usable_llm()}),
             mock.patch.object(pair_review, "LEDGER", self.ledger_path),
             mock.patch.object(pair_review, "review_pair", return_value=errored),
             redirect_stdout(io.StringIO()),

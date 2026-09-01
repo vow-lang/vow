@@ -676,14 +676,20 @@ def _unit_bytes(chunks):
     )
 
 
-def _paired_coverage(chunks, selected):
-    """Share of unit bytes a model saw with both implementations in front of it.
+def _paired_coverage(selected):
+    """Share of reviewed unit bytes seen with both implementations present.
 
-    `coverage` answers "was every byte shipped?". This answers "was it shipped
-    as a comparison?" -- a run whose tail chunks carry one side only examined
-    that surface, it did not compare it.
+    `coverage` answers "was every byte shipped?". This answers "of what was
+    shipped, how much was shipped as a comparison?" -- a run whose tail chunks
+    carry one side only examined that surface, it did not compare it.
+
+    Measured over the selected chunks alone, like `_matched_coverage`. Dividing
+    by the whole plan would fold deferral back in, so a `--max-chunks-per-pair`
+    cap would print the one-sided warning about chunks that were never shown at
+    all and that carry both sides perfectly well. Deferral is `coverage` and
+    `chunks_deferred`'s question, asked and answered there.
     """
-    total = _unit_bytes(chunks)
+    total = _unit_bytes(selected)
     if total == 0:
         return 1.0
     paired = [c for c in selected if c.rust_units and c.self_units]
@@ -760,7 +766,7 @@ def review_pair(
         "pair": name,
         "mode": mode,
         "coverage": _coverage(preambles, chunks, selected),
-        "paired_coverage": _paired_coverage(chunks, selected),
+        "paired_coverage": _paired_coverage(selected),
         "matched_coverage": _matched_coverage(selected),
         "unmatched_units": [unit.label for unit in _unmatched(selected)],
         "plan": {
@@ -1100,6 +1106,18 @@ def main(argv=None):
             if not path.exists():
                 print(f"error: compiler not found: {path}", file=sys.stderr)
                 return 2
+        # Same class as a missing compiler: unusable run-wide input, caught
+        # before any ledger read, plan or spend. Left to surface from inside
+        # review_pair it escapes the per-chunk handler as a traceback and exits
+        # 1 -- the code that means "confirmed divergences" -- so a typo in
+        # --model would report findings to a caller reading only the status.
+        try:
+            import llm
+
+            llm.make_config(args.model)
+        except (ImportError, ValueError) as exc:
+            print(f"error: unusable --model {args.model}: {exc}", file=sys.stderr)
+            return 2
 
     ledger = json.loads(LEDGER.read_text()) if LEDGER.exists() else {"pairs": {}}
     names = args.pair or list(MODES[args.mode].pairs)
