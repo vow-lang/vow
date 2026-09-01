@@ -1,0 +1,20 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module I32DivMinByNegOne
+
+fn neg_one() -> i32 {
+    -1
+}
+
+fn minimum() -> i32 {
+    -2147483648
+}
+
+fn divide() -> i32 {
+    minimum() / neg_one()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}
