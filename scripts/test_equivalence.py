@@ -1238,7 +1238,7 @@ class ProposeLedgerTest(unittest.TestCase):
 
 
 class EmitLedgerUpdateCliTest(unittest.TestCase):
-    def run_sweep(self, root, min_compared="0", extra=()):
+    def run_sweep(self, root, min_compared="0", extra=(), emit=True):
         """Run main() over an empty corpus, returning (exit_code, output dir)."""
         rust = root / "rust"
         self_hosted = root / "self"
@@ -1259,7 +1259,7 @@ class EmitLedgerUpdateCliTest(unittest.TestCase):
             str(output),
             "--min-compared",
             min_compared,
-            "--emit-ledger-update",
+            *(["--emit-ledger-update"] if emit else []),
             *extra,
         ]
 
@@ -1286,6 +1286,31 @@ class EmitLedgerUpdateCliTest(unittest.TestCase):
 
             self.assertEqual(2, exit_code)
             self.assertFalse((output / "ledger.proposed.json").exists())
+
+    def test_a_below_floor_run_clears_an_earlier_proposal(self):
+        # A reused --output-dir must not keep a proposal from a different
+        # sweep: the summary says "none" while the directory an operator
+        # applies, or the workflow uploads, still holds the stale file.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _exit, output = self.run_sweep(root)
+            self.assertTrue((output / "ledger.proposed.json").exists())
+
+            exit_code, output = self.run_sweep(root, min_compared="20")
+
+            self.assertEqual(2, exit_code)
+            self.assertFalse((output / "ledger.proposed.json").exists())
+
+    def test_a_run_without_the_flag_clears_an_earlier_proposal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _exit, output = self.run_sweep(root)
+            stale = output / "ledger.proposed.json"
+            self.assertTrue(stale.exists())
+
+            self.run_sweep(root, emit=False)
+
+            self.assertFalse(stale.exists())
 
     def test_results_json_is_written_last(self):
         # equivalence.yml treats results.json's presence as proof the sweep

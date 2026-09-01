@@ -1073,9 +1073,14 @@ def main():
     # equivalence.yml keys off its presence to tell a divergence verdict from a
     # crash; and a shard that measured too little to be meaningful must not ship
     # a proposal that looks applicable.
-    proposal_path = None
-    if args.emit_ledger_update and compared >= args.min_compared:
-        proposal_path = outdir / "ledger.proposed.json"
+    # An earlier sweep's proposal in a reused --output-dir must not survive a
+    # run that declines to produce one: the summary would say "none" while the
+    # directory an operator applies, or the workflow uploads, still holds a
+    # stale file from different measurements.
+    proposal_path = outdir / "ledger.proposed.json"
+    proposal_path.unlink(missing_ok=True)
+    proposed = args.emit_ledger_update and compared >= args.min_compared
+    if proposed:
         proposal = propose_ledger(ledger_document, new, fixed, args.today)
         proposal_path.write_text(json.dumps(proposal, indent=2) + "\n")
     (outdir / "results.json").write_text(json.dumps(results, indent=2))
@@ -1097,7 +1102,7 @@ def main():
         for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
             print(f"    {count:5d}  {reason}")
     print(f"  results  : {outdir / 'results.json'}")
-    if proposal_path is not None:
+    if proposed:
         print(f"  ledger proposal: {proposal_path}")
     elif args.emit_ledger_update:
         print("  ledger proposal: none — coverage floor not met")
