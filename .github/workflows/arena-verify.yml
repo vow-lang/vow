@@ -48,6 +48,7 @@ jobs:
         with:
           # Both ends of the range have to be present for `git diff base...head`.
           fetch-depth: 0
+          persist-credentials: false
       - id: classify
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -66,6 +67,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
       - name: Arena verification runner tests
