@@ -928,14 +928,18 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     // Confirm only if a SINGLE VowViolation line carries both the predicted
     // vow_id and blame — a substring scan over all of stderr could otherwise
     // splice a vow_id and blame from two different lines into a false confirm.
+    // `__vow_violation` always exits with the reserved abort status, so a
+    // genuine violation is exit-134 too; gating on it here closes the same
+    // false-match surface the abort branch below guards against (a debug
+    // write that coalesces a VowViolation-shaped substring onto its line).
     let scan: ReplayScan = replay_scan_stderr(err);
     let viol: String = scan.violation_line;
     let vowid_needle: String = str3(String::from("\"vow_id\":"), i64_to_string(ce.vow_id), String::from(","));
     let blame_needle: String = str3(String::from("\"blame\":\""), replay_blame_runtime_name(ce.blame), String::from("\""));
-    if viol.len() > 0 && viol.contains(vowid_needle) && viol.contains(blame_needle) {
-        return ReplayVerdict { status: String::from("confirmed"), reason: String::from("") };
-    }
-    if viol.len() > 0 {
+    if viol.len() > 0 && rrc == RUNTIME_ABORT_EXIT_CODE {
+        if viol.contains(vowid_needle) && viol.contains(blame_needle) {
+            return ReplayVerdict { status: String::from("confirmed"), reason: String::from("") };
+        }
         return replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"));
     }
     if scan.abort_kind.len() > 0 && rrc == RUNTIME_ABORT_EXIT_CODE {
@@ -956,6 +960,12 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
 // Scans stderr once for both the VowViolation marker (confirm/diverge) and a
 // structured non-VowViolation abort marker (a runtime abort that preempted
 // the predicted VowViolation), so replay_one_ce doesn't walk stderr twice.
+// Classification is per line, keyed off that line's LAST `"error":"<kind>"`
+// occurrence (mirroring the Rust replay path's right-to-left envelope scan):
+// debug_str/debug_i64/debug_u64 write to stderr without a trailing newline,
+// so debug output can coalesce onto the same line as a real runtime envelope
+// (before or after it), and only the rightmost envelope is the one the
+// process actually produced last.
 fn replay_scan_stderr(err: String) -> ReplayScan {
     let n: i64 = err.len();
     let mut start: i64 = 0;
@@ -965,10 +975,13 @@ fn replay_scan_stderr(err: String) -> ReplayScan {
     while i <= n {
         if i == n || err.byte_at(i) == 10 {
             let line: String = err.substring(start, i);
-            if violation_line.len() == 0 && line.contains(String::from("\"error\":\"VowViolation\"")) {
-                violation_line = line;
-            } else if abort_kind.len() == 0 {
-                abort_kind = replay_abort_kind_in_line(line);
+            let kind: String = replay_last_error_kind_in_line(line);
+            if kind == String::from("VowViolation") {
+                if violation_line.len() == 0 {
+                    violation_line = line;
+                }
+            } else if kind.len() > 0 && abort_kind.len() == 0 {
+                abort_kind = kind;
             }
             start = i + 1;
         }
@@ -977,13 +990,15 @@ fn replay_scan_stderr(err: String) -> ReplayScan {
     ReplayScan { violation_line: violation_line, abort_kind: abort_kind }
 }
 
-// Extract a non-VowViolation `{"error":"<Kind>"}` marker from one stderr
-// line. Runtime abort diagnostics use this stable JSON envelope.
-fn replay_abort_kind_in_line(line: String) -> String {
+// Extract the kind from the LAST `{"error":"<Kind>"}` marker in one stderr
+// line (rightmost wins), or "" if the line has none. The kind may be
+// "VowViolation" — the caller decides what that means for this line.
+fn replay_last_error_kind_in_line(line: String) -> String {
     let marker: String = String::from("\"error\":\"");
     let n: i64 = line.len();
     let m: i64 = marker.len();
     let mut i: i64 = 0;
+    let mut found: String = String::from("");
     while i + m <= n {
         let mut matched: bool = true;
         let mut j: i64 = 0;
@@ -1001,16 +1016,12 @@ fn replay_abort_kind_in_line(line: String) -> String {
                 end = end + 1;
             }
             if end > start {
-                let kind: String = line.substring(start, end);
-                if kind != String::from("VowViolation") {
-                    return kind;
-                }
+                found = line.substring(start, end);
             }
-            return String::from("");
         }
         i = i + 1;
     }
-    String::from("")
+    found
 }
 
 fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: String) -> Vec<VerifyCE> [io] {
