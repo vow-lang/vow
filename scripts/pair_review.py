@@ -26,9 +26,11 @@ content hash so an unchanged pair is skipped rather than re-reviewed.
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +58,35 @@ PAIRS = {
     "lower": (["vow-ir/src/lower"], "compiler/lower.vow"),
     "c_emitter": (["vow-verify/src/c_emitter.rs"], "compiler/c_emitter.vow"),
 }
+
+VOW_FN = re.compile(r"^fn\s+([A-Za-z_][A-Za-z0-9_]*)\b", re.MULTILINE)
+RUST_FN = re.compile(
+    r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?"
+    r"(?:(?:async|unsafe|const)\s+)*"
+    r'(?:extern\s+"[^"]+"\s+)?'
+    r"fn\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+    re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class Unit:
+    name: str
+    text: str
+
+
+def split_units(text, pattern):
+    """Split source at function boundaries without dropping any text."""
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return text, []
+    preamble = text[: matches[0].start()]
+    units = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        units.append(Unit(match.group(1), text[match.start() : end]))
+    return preamble, units
+
 
 SYSTEM = """\
 You are auditing two independent implementations of the same compiler stage for \
@@ -153,12 +184,17 @@ def confirm(program, rust, self_bin, timeout):
                 sys.executable,
                 str(REPO_ROOT / "scripts" / "equivalence.py"),
                 str(src),
-                "--rust", str(rust),
-                "--self", str(self_bin),
-                "--output-dir", str(Path(d) / "out"),
-                "--timeout", str(timeout),
+                "--rust",
+                str(rust),
+                "--self",
+                str(self_bin),
+                "--output-dir",
+                str(Path(d) / "out"),
+                "--timeout",
+                str(timeout),
                 "--no-ledger",
-                "--min-compared", "0",
+                "--min-compared",
+                "0",
             ],
             capture_output=True,
             text=True,
@@ -166,7 +202,10 @@ def confirm(program, rust, self_bin, timeout):
         )
         results = Path(d) / "out" / "results.json"
         if not results.exists():
-            return "inconclusive", f"runner produced no results (exit {proc.returncode})"
+            return (
+                "inconclusive",
+                f"runner produced no results (exit {proc.returncode})",
+            )
         data = json.loads(results.read_text())
         rec = data["records"][0] if data["records"] else None
         if rec is None:
@@ -233,14 +272,25 @@ def main():
     ap.add_argument("--model", default="claude-sonnet-4-20250514")
     ap.add_argument("--rust", default="target/release/vow")
     ap.add_argument("--self", dest="self_bin", default="build/vowc")
-    ap.add_argument("--pair", action="append", default=[],
-                    help="review only this pair; repeatable (default: all)")
+    ap.add_argument(
+        "--pair",
+        action="append",
+        default=[],
+        help="review only this pair; repeatable (default: all)",
+    )
     ap.add_argument("--output-dir", default="pair-review.out")
-    ap.add_argument("--max-bytes", type=int, default=180_000,
-                    help="per-file prompt budget (default: 180000)")
+    ap.add_argument(
+        "--max-bytes",
+        type=int,
+        default=180_000,
+        help="per-file prompt budget (default: 180000)",
+    )
     ap.add_argument("--timeout", type=int, default=120)
-    ap.add_argument("--all", action="store_true",
-                    help="review every pair even if unchanged since last review")
+    ap.add_argument(
+        "--all",
+        action="store_true",
+        help="review every pair even if unchanged since last review",
+    )
     args = ap.parse_args()
 
     for p in (Path(args.rust), Path(args.self_bin)):
@@ -274,11 +324,15 @@ def main():
         reviewed.append(name)
 
     confirmed = [
-        (r["pair"], f) for r in results for f in r["findings"]
+        (r["pair"], f)
+        for r in results
+        for f in r["findings"]
         if f.get("verdict") == "confirmed"
     ]
     hypotheses = [
-        (r["pair"], f) for r in results for f in r["findings"]
+        (r["pair"], f)
+        for r in results
+        for f in r["findings"]
         if f.get("verdict") == "inconclusive"
     ]
     refuted = sum(

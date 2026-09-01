@@ -6,10 +6,7 @@ concentrate on it: an unconfirmed claim must never be counted as a finding, and
 a pair must never be reported as reviewed when it was skipped or truncated.
 """
 
-import hashlib
-import tempfile
 import unittest
-from pathlib import Path
 
 import pair_review
 
@@ -19,13 +16,9 @@ class PairSpecTest(unittest.TestCase):
         # A typo'd path would silently review nothing.
         for name, (rust_paths, self_path) in pair_review.PAIRS.items():
             with self.subTest(pair=name):
-                self.assertTrue(
-                    (pair_review.REPO_ROOT / self_path).exists(), self_path
-                )
+                self.assertTrue((pair_review.REPO_ROOT / self_path).exists(), self_path)
                 for spec in rust_paths:
-                    self.assertTrue(
-                        (pair_review.REPO_ROOT / spec).exists(), spec
-                    )
+                    self.assertTrue((pair_review.REPO_ROOT / spec).exists(), spec)
 
     def test_pair_hash_changes_when_self_hosted_side_changes(self):
         rust_paths, self_path = pair_review.PAIRS["lexer"]
@@ -62,6 +55,44 @@ class PairSpecTest(unittest.TestCase):
             target.write_bytes(original)
 
         self.assertNotEqual(before, after)
+
+
+class SplitUnitsTest(unittest.TestCase):
+    def test_units_reassemble_each_file_byte_for_byte(self):
+        cases = [
+            ("compiler/lower.vow", pair_review.VOW_FN),
+            ("compiler/c_emitter.vow", pair_review.VOW_FN),
+            ("vow-ir/src/lower/mod.rs", pair_review.RUST_FN),
+            ("vow-types/src/check.rs", pair_review.RUST_FN),
+        ]
+        for relative, pattern in cases:
+            with self.subTest(path=relative):
+                text = (pair_review.REPO_ROOT / relative).read_text()
+                preamble, units = pair_review.split_units(text, pattern)
+                self.assertEqual(text, preamble + "".join(u.text for u in units))
+
+    def test_vow_split_finds_every_top_level_function(self):
+        cases = [("compiler/lower.vow", 135), ("compiler/lexer.vow", 14)]
+        for relative, expected in cases:
+            with self.subTest(path=relative):
+                text = (pair_review.REPO_ROOT / relative).read_text()
+                _, units = pair_review.split_units(text, pair_review.VOW_FN)
+                self.assertEqual(expected, len(units))
+
+    def test_rust_split_finds_free_functions_and_impl_methods(self):
+        text = (pair_review.REPO_ROOT / "vow-ir/src/lower/mod.rs").read_text()
+        _, units = pair_review.split_units(text, pair_review.RUST_FN)
+
+        names = [unit.name for unit in units]
+        self.assertIn("lower_expr", names)
+        self.assertIn("merge_inst_ty", names)
+
+    def test_preamble_holds_leading_declarations(self):
+        text = (pair_review.REPO_ROOT / "compiler/lower.vow").read_text()
+        preamble, _ = pair_review.split_units(text, pair_review.VOW_FN)
+
+        self.assertTrue(preamble)
+        self.assertNotIn("\nfn ", preamble)
 
 
 class ReadPairTest(unittest.TestCase):
