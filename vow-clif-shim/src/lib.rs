@@ -77,6 +77,7 @@ unsafe fn read_vow_string(vow_vec_ptr: i64) -> &'static str {
 // ---------------------------------------------------------------------------
 
 const CLIF_ERR_UNSUPPORTED: i64 = -3;
+const CLIF_ERR_IO: i64 = -4;
 
 // ---------------------------------------------------------------------------
 // IR type/opcode constants (must match compiler/ir.vow)
@@ -2842,9 +2843,13 @@ pub unsafe extern "C" fn __vow_clif_finish(ctx_ptr: i64, obj_path_ptr: i64) -> i
         }
     };
 
+    // The object bytes are already built, so a failed write is the
+    // filesystem's answer (unwritable directory, full disk), not a backend
+    // defect. `CompiledObject::write_to_file` reaches `CodegenError::Io` on
+    // the Rust side, so both compilers must land on `IoError` here.
     if let Err(e) = std::fs::write(obj_path, &bytes) {
         eprintln!("clif_shim: write {obj_path}: {e}");
-        return -1;
+        return CLIF_ERR_IO;
     }
 
     0
@@ -5087,6 +5092,39 @@ mod tests {
                 __vow_clif_destroy(ctx);
             }
         }
+    }
+
+    /// An unwritable object path is the filesystem's answer, not a backend
+    /// defect: `__vow_clif_finish` must report it as `CLIF_ERR_IO` so
+    /// `codegen_failure_diagnostic` reaches `IoError` rather than blaming the
+    /// backend, matching what `CompiledObject::write_to_file` produces on the
+    /// Rust side.
+    #[test]
+    fn finish_reports_an_unwritable_object_path_as_io() {
+        assert_ne!(CLIF_ERR_IO, CLIF_ERR_UNSUPPORTED);
+        assert_ne!(CLIF_ERR_IO, -1);
+
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "noop", ITY_UNIT, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 0, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        // A path under a directory that does not exist: the module emits
+        // fine, only the write fails.
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join("no_such_dir").join("noop.o");
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        let status = unsafe { __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64) };
+
+        assert_eq!(status, CLIF_ERR_IO);
+        assert!(!object_path.exists());
     }
 
     #[test]

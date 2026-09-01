@@ -1622,6 +1622,8 @@ fn codegen_failure_diagnostic(result: i64, path: String) -> Diagnostic {
         )
     } else if result == CLIF_ERR_LINK() {
         diag_error(EC_LINK_FAILED(), String::from("native linker failed"), path, 0, 0)
+    } else if result == CLIF_ERR_IO() {
+        diag_error(EC_IO_ERROR(), String::from("cannot write the generated object file"), path, 0, 0)
     } else {
         diag_error(EC_CODEGEN_FAILED(), String::from("native code generation failed"), path, 0, 0)
     }
@@ -6836,6 +6838,23 @@ fn skill_bundle() -> String {
     r.push_str(String::from("runtime archive are installed and accessible. When building Vow itself, run\n"));
     r.push_str(String::from("`cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### IoError\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Module loading, Code Generation\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Two build-pipeline\n"));
+    r.push_str(String::from("sites produce this code: a `use` declaration naming a module the driver cannot\n"));
+    r.push_str(String::from("read, and a generated object file the backend cannot write (unwritable output\n"));
+    r.push_str(String::from("directory, full disk, read-only filesystem). The object bytes are already\n"));
+    r.push_str(String::from("built by the time the write is attempted, so this is the filesystem's answer\n"));
+    r.push_str(String::from("rather than a backend defect -- which is why it is not `CodegenFailed`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
+    r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
+    r.push_str(String::from("verify the `-o` destination's parent directory exists and is writable, and\n"));
+    r.push_str(String::from("that the filesystem has free space. Re-running the same build after fixing the\n"));
+    r.push_str(String::from("filesystem succeeds; changing the source will not help.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)\n"));
@@ -11902,6 +11921,23 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Fix:** Inspect the diagnostic message and verify that the host linker and Vow\n"));
     r.push_str(String::from("runtime archive are installed and accessible. When building Vow itself, run\n"));
     r.push_str(String::from("`cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### IoError\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Module loading, Code Generation\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Two build-pipeline\n"));
+    r.push_str(String::from("sites produce this code: a `use` declaration naming a module the driver cannot\n"));
+    r.push_str(String::from("read, and a generated object file the backend cannot write (unwritable output\n"));
+    r.push_str(String::from("directory, full disk, read-only filesystem). The object bytes are already\n"));
+    r.push_str(String::from("built by the time the write is attempted, so this is the filesystem's answer\n"));
+    r.push_str(String::from("rather than a backend defect -- which is why it is not `CodegenFailed`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
+    r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
+    r.push_str(String::from("verify the `-o` destination's parent directory exists and is writable, and\n"));
+    r.push_str(String::from("that the filesystem has free space. Re-running the same build after fixing the\n"));
+    r.push_str(String::from("filesystem succeeds; changing the source will not help.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));

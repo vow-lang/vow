@@ -543,6 +543,23 @@ this code.
 runtime archive are installed and accessible. When building Vow itself, run
 `cargo build --release --all` or set `VOW_RUNTIME_PATH` to the runtime archive.
 
+### IoError
+
+**Phase:** Module loading, Code Generation
+
+**Meaning:** The compiler could not read or write a file. Two build-pipeline
+sites produce this code: a `use` declaration naming a module the driver cannot
+read, and a generated object file the backend cannot write (unwritable output
+directory, full disk, read-only filesystem). The object bytes are already
+built by the time the write is attempted, so this is the filesystem's answer
+rather than a backend defect — which is why it is not `CodegenFailed`.
+
+**Fix:** Check the path in the diagnostic message. For a module load, verify
+the `use` path resolves relative to the importing file. For an object write,
+verify the `-o` destination's parent directory exists and is writable, and
+that the filesystem has free space. Re-running the same build after fixing the
+filesystem succeeds; changing the source will not help.
+
 ### VerificationSkipped
 
 **Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
