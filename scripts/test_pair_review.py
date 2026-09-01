@@ -7,6 +7,7 @@ a pair must never be reported as reviewed when it was skipped or only partly
 reviewed.
 """
 
+import contextlib
 import io
 import json
 import re
@@ -475,6 +476,80 @@ class FailClosedGateTest(unittest.TestCase):
                 or detail.startswith("both "),
                 f"unrecognised fail_closed shape: {detail!r}",
             )
+
+
+class CandidateDirectiveTest(unittest.TestCase):
+    """A candidate the model wrote must not be able to steer its own judge."""
+
+    @staticmethod
+    def written_candidate(program):
+        """The text `confirm` hands to scripts/equivalence.py."""
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            seen["text"] = Path(argv[2]).read_text()
+            raise StopIteration
+
+        with mock.patch.object(pair_review.subprocess, "run", fake_run):
+            with contextlib.suppress(StopIteration):
+                pair_review.confirm(program, "rust", "self", 1)
+        return seen["text"]
+
+    def test_every_test_directive_is_stripped(self):
+        program = (
+            "module M\n"
+            '// TEST: skip "nothing to see"\n'
+            "// TEST: stdin-file absent.txt\n"
+            "// TEST: verify-only\n"
+            "// TEST: exit 3\n"
+            '// TEST: stdin "x"\n'
+            "fn main() -> i32 [io] { 0 }\n"
+        )
+
+        written = self.written_candidate(program)
+
+        self.assertNotIn("// TEST:", written)
+        self.assertIn("module M", written)
+        self.assertIn("fn main() -> i32 [io] { 0 }", written)
+
+    def test_an_ordinary_comment_survives(self):
+        program = "module M\n// a real comment\nfn main() -> i32 [io] { 0 }\n"
+
+        self.assertIn("// a real comment", self.written_candidate(program))
+
+    def test_a_skipped_record_is_unjudged_not_a_hypothesis(self):
+        # Whatever made the runner skip -- a dual compile timeout,
+        # nondeterminism -- the observable the claim is about was never
+        # compared, so the run must not read as complete.
+        def fake_run(argv, **kwargs):
+            outdir = Path(argv[argv.index("--output-dir") + 1])
+            outdir.mkdir(parents=True, exist_ok=True)
+            (outdir / "results.json").write_text(
+                json.dumps(
+                    {"records": [{"divergences": [], "skipped": "nondeterministic"}]}
+                )
+            )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(pair_review.subprocess, "run", fake_run):
+            verdict, detail = pair_review.confirm("module M\n", "rust", "self", 1)
+
+        self.assertEqual("error", verdict)
+        self.assertEqual("nondeterministic", detail)
+
+    def test_an_agreed_comparison_is_still_refuted(self):
+        def fake_run(argv, **kwargs):
+            outdir = Path(argv[argv.index("--output-dir") + 1])
+            outdir.mkdir(parents=True, exist_ok=True)
+            (outdir / "results.json").write_text(
+                json.dumps({"records": [{"divergences": [], "skipped": None}]})
+            )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(pair_review.subprocess, "run", fake_run):
+            verdict, _ = pair_review.confirm("module M\n", "rust", "self", 1)
+
+        self.assertEqual("refuted", verdict)
 
 
 class RenderChunkTest(unittest.TestCase):

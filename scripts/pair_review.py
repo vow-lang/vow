@@ -482,6 +482,15 @@ def hash_pair(rust_paths, self_path):
 # that lets an input both implementations choked on pass the gate.
 FAIL_CLOSED_SIDE = re.compile(r"^(rust|self-hosted)\b")
 
+# `// TEST:` lines steer scripts/equivalence.py -- skip the file, compare only
+# `verify`, feed stdin, declare an expected exit. That is a corpus-fixture
+# mechanism, and a candidate the model wrote is not a fixture. Left in, one
+# comment line in a fabricated program defeats the gate that exists to catch
+# fabricated programs: `// TEST: stdin-file nope.txt` raises `fixture_error`,
+# which is not `fail_closed`, so `_agreed_by_crashing` passes it through and
+# every claim carrying it is reported CONFIRMED.
+TEST_DIRECTIVE = re.compile(r"^// TEST:.*$\n?", re.MULTILINE)
+
 
 def _agreed_by_crashing(divergences):
     """Whether the only evidence is that both implementations failed closed.
@@ -517,10 +526,13 @@ def _agreed_by_crashing(divergences):
 def confirm(program, rust, self_bin, timeout):
     """Run one candidate program through the differential runner.
 
+    `// TEST:` directives are stripped first: the runner honours them, and a
+    candidate that can steer its own judge is not being judged.
+
     Returns (verdict, detail). The runner is the judge: `confirmed` means it
     observed a divergence, `refuted` means both compilers agreed, and
-    `inconclusive` means it compared and could not distinguish (both rejected
-    the program, both failed closed).
+    `inconclusive` means it compared and could not distinguish (both failed
+    closed).
 
     `error` is the fourth verdict and a different kind of answer: the gate did
     not run at all. That must never be filed as an ordinary hypothesis, because
@@ -529,7 +541,7 @@ def confirm(program, rust, self_bin, timeout):
     """
     with tempfile.TemporaryDirectory() as d:
         src = Path(d) / "candidate.vow"
-        src.write_text(program)
+        src.write_text(TEST_DIRECTIVE.sub("", program))
         proc = subprocess.run(
             [
                 sys.executable,
@@ -570,7 +582,12 @@ def confirm(program, rust, self_bin, timeout):
                 return "inconclusive", f"both compilers failed closed: {detail}"
             return "confirmed", detail
         if rec.get("skipped"):
-            return "inconclusive", rec["skipped"]
+            # Every reason the runner skips -- a dual compile timeout,
+            # nondeterminism, a runtime timeout -- means the observable the
+            # claim is about was never compared. `both rejected and agreed on
+            # why` is deliberately not a skip there, so a real comparison still
+            # reaches the `refuted` below.
+            return "error", rec["skipped"]
         return "refuted", "both compilers agreed"
 
 
