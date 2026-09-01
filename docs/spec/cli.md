@@ -522,6 +522,11 @@ compiled out. Each is marked below.
 
 Schema: [`schemas/vow-violation.schema.json`](schemas/vow-violation.schema.json).
 
+`values` entries are bare JSON number tokens and are not bounded by `i64`:
+`u64`, `i128`, and `u128` bindings render at full width, so a consumer that
+acts on the exact value needs an arbitrary-precision number parser. See
+[`errors.md`](errors.md#vowviolation).
+
 ### ArithmeticOverflow
 
 ```json

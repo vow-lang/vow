@@ -3040,6 +3040,15 @@ fn store_slotted_value(builder: &mut FunctionBuilder<'_>, slot: StackSlot, value
     builder.ins().stack_store(types::I64, store_val, slot, 0);
 }
 
+// Layout of one `vow_runtime::VowBinding`, which this backend writes and the
+// runtime reads back: name pointer at 0, tag at 8 (then 7 bytes of padding),
+// payload low limb at 16, payload high limb at 24. `vow-runtime/src/lib.rs`
+// pins the same numbers with `const _` asserts; both sides must agree.
+const BINDING_STRIDE: usize = 32;
+const BINDING_TAG_OFF: usize = 8;
+const BINDING_PAYLOAD_LO_OFF: usize = 16;
+const BINDING_PAYLOAD_HI_OFF: usize = 24;
+
 fn tag_for_ir_ty(ty: i64) -> i64 {
     match ty {
         ITY_I32 => 0,
@@ -3053,6 +3062,8 @@ fn tag_for_ir_ty(ty: i64) -> i64 {
         ITY_I16 => 8,
         ITY_U16 => 9,
         ITY_U32 => 10,
+        ITY_I128 => 11,
+        ITY_U128 => 12,
         _ => 0,
     }
 }
@@ -3100,41 +3111,38 @@ fn emit_vow_check(
         let (bindings_ptr, count_val) = if n > 0 {
             let slot: StackSlot = builder.create_sized_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
-                (24 * n) as u32,
+                (BINDING_STRIDE * n) as u32,
                 3,
             ));
+            let zero_hi = builder.ins().iconst(types::I64, 0);
             for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
+                let field = |off: usize| (i * BINDING_STRIDE + off) as i32;
                 let name_ptr = builder.ins().symbol_value(types::I64, *name_gv);
                 builder
                     .ins()
-                    .stack_store(types::I64, name_ptr, slot, (i * 24) as i32);
+                    .stack_store(types::I64, name_ptr, slot, field(0));
                 let tag_val = builder.ins().iconst(types::I8, tag_for_ir_ty(*ir_ty));
                 builder
                     .ins()
-                    .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
-                let payload: Value = match *ir_ty {
-                    ITY_I8 => builder.ins().sextend(types::I64, *cl_val),
-                    ITY_U8 => builder.ins().uextend(types::I64, *cl_val),
-                    ITY_I16 => builder.ins().sextend(types::I64, *cl_val),
-                    ITY_U16 => builder.ins().uextend(types::I64, *cl_val),
-                    ITY_I32 => builder.ins().sextend(types::I64, *cl_val),
-                    ITY_U32 => builder.ins().uextend(types::I64, *cl_val),
-                    ITY_I64 | ITY_U64 => *cl_val,
-                    ITY_F32 => {
-                        let bits = builder
-                            .ins()
-                            .bitcast(types::I32, MemFlagsData::new(), *cl_val);
-                        builder.ins().uextend(types::I64, bits)
-                    }
-                    ITY_F64 => builder
-                        .ins()
-                        .bitcast(types::I64, MemFlagsData::new(), *cl_val),
-                    ITY_BOOL => *cl_val,
-                    _ => builder.ins().iconst(types::I64, 0),
+                    .stack_store(types::I64, tag_val, slot, field(BINDING_TAG_OFF));
+                let (payload, payload_hi): (Value, Value) = match *ir_ty {
+                    ITY_I128 | ITY_U128 => builder.ins().isplit(*cl_val),
+                    // Excluded by the capture collector; store a defined zero
+                    // rather than reinterpreting a pointer as a payload.
+                    ITY_UNIT | ITY_PTR | ITY_LPTR => (zero_hi, zero_hi),
+                    // Every other scalar widens to i64 exactly as it does when
+                    // stored into a struct field.
+                    _ => (extend_field_store_value(builder, *cl_val, *ir_ty), zero_hi),
                 };
                 builder
                     .ins()
-                    .stack_store(types::I64, payload, slot, (i * 24 + 16) as i32);
+                    .stack_store(types::I64, payload, slot, field(BINDING_PAYLOAD_LO_OFF));
+                builder.ins().stack_store(
+                    types::I64,
+                    payload_hi,
+                    slot,
+                    field(BINDING_PAYLOAD_HI_OFF),
+                );
             }
             let base = builder.ins().stack_addr(types::I64, slot, 0);
             let cnt = builder.ins().iconst(types::I32, n as i64);
@@ -4894,6 +4902,69 @@ mod tests {
                 __vow_clif_fn_vow(
                     ctx,
                     7,
+                    &description as *const VowVec as i64,
+                    &binding_ids_vec as *const VowVec as i64,
+                    &binding_names_vec as *const VowVec as i64,
+                ),
+                0
+            );
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn wide_vow_captures_compile_through_streamed_ffi() {
+        let param_tys = [ITY_I128, ITY_U128];
+        let ctx = __vow_clif_create(1, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function_with_params(ctx, "capture_wide", &param_tys, ITY_UNIT);
+        let param_tys_vec = vow_i64_vec(&param_tys);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_begin(ctx, 0, ITY_UNIT, &param_tys_vec as *const VowVec as i64,),
+                0
+            );
+        }
+        add_test_block(ctx);
+        for (id, ty) in param_tys.into_iter().enumerate() {
+            add_test_inst(
+                ctx,
+                id as i64,
+                IOP_GET_ARG,
+                ty,
+                IDATA_ARG_INDEX,
+                id as i64,
+                0,
+                &[],
+            );
+        }
+        add_test_inst(
+            ctx,
+            2,
+            IOP_CONST_BOOL,
+            ITY_BOOL,
+            IDATA_CONST_BOOL,
+            1,
+            0,
+            &[],
+        );
+        add_test_inst(ctx, 3, IOP_VOW_REQ, ITY_UNIT, IDATA_VOW_ID, 9, 0, &[2]);
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+
+        let description = vow_string("wide captures");
+        let binding_ids_vec = vow_i64_vec(&[0, 1]);
+        let binding_names = [vow_string("i128v"), vow_string("u128v")];
+        let binding_name_ptrs: Vec<i64> = binding_names
+            .iter()
+            .map(|name| name as *const VowVec as i64)
+            .collect();
+        let binding_names_vec = vow_i64_vec(&binding_name_ptrs);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_vow(
+                    ctx,
+                    9,
                     &description as *const VowVec as i64,
                     &binding_ids_vec as *const VowVec as i64,
                     &binding_names_vec as *const VowVec as i64,

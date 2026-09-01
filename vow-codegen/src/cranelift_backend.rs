@@ -1840,6 +1840,15 @@ fn emit_overflow_check(
     Ok(())
 }
 
+// Layout of one `vow_runtime::VowBinding`, which this backend writes and the
+// runtime reads back: name pointer at 0, tag at 8 (then 7 bytes of padding),
+// payload low limb at 16, payload high limb at 24. `vow-runtime/src/lib.rs`
+// pins the same numbers with `const _` asserts; both sides must agree.
+const BINDING_STRIDE: usize = 32;
+const BINDING_TAG_OFF: usize = 8;
+const BINDING_PAYLOAD_LO_OFF: usize = 16;
+const BINDING_PAYLOAD_HI_OFF: usize = 24;
+
 fn tag_for_ir_ty(ty: IrTy) -> u8 {
     match ty {
         IrTy::I32 => 0,
@@ -1853,7 +1862,12 @@ fn tag_for_ir_ty(ty: IrTy) -> u8 {
         IrTy::I16 => 8,
         IrTy::U16 => 9,
         IrTy::U32 => 10,
-        _ => 0,
+        IrTy::I128 => 11,
+        IrTy::U128 => 12,
+        // Excluded by the capture collector, so they never reach a binding
+        // record. Listed rather than caught by `_` so that a new `Ty` variant
+        // fails this match instead of silently reporting a wrong value.
+        IrTy::Unit | IrTy::Ptr | IrTy::LinearPtr => 0,
     }
 }
 
@@ -1935,43 +1949,40 @@ fn emit_vow_violation_body(
         let (bindings_ptr, count_val) = if n > 0 {
             let slot: StackSlot = builder.create_sized_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
-                (24 * n) as u32,
+                (BINDING_STRIDE * n) as u32,
                 3,
             ));
+            let zero_hi = builder.ins().iconst(types::I64, 0);
             for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
+                let field = |off: usize| (i * BINDING_STRIDE + off) as i32;
                 let name_ptr = builder.ins().symbol_value(types::I64, *name_gv);
                 builder
                     .ins()
-                    .stack_store(types::I64, name_ptr, slot, (i * 24) as i32);
+                    .stack_store(types::I64, name_ptr, slot, field(0));
                 let tag_val = builder
                     .ins()
                     .iconst(types::I8, tag_for_ir_ty(*ir_ty) as i64);
                 builder
                     .ins()
-                    .stack_store(types::I64, tag_val, slot, (i * 24 + 8) as i32);
-                let payload: Value = match ir_ty {
-                    IrTy::I8 => builder.ins().sextend(types::I64, *cl_val),
-                    IrTy::U8 => builder.ins().uextend(types::I64, *cl_val),
-                    IrTy::I16 => builder.ins().sextend(types::I64, *cl_val),
-                    IrTy::U16 => builder.ins().uextend(types::I64, *cl_val),
-                    IrTy::I32 => builder.ins().sextend(types::I64, *cl_val),
-                    IrTy::U32 => builder.ins().uextend(types::I64, *cl_val),
-                    IrTy::I64 | IrTy::U64 => *cl_val,
-                    IrTy::F32 => {
-                        let bits = builder
-                            .ins()
-                            .bitcast(types::I32, MemFlagsData::new(), *cl_val);
-                        builder.ins().uextend(types::I64, bits)
-                    }
-                    IrTy::F64 => builder
-                        .ins()
-                        .bitcast(types::I64, MemFlagsData::new(), *cl_val),
-                    IrTy::Bool => *cl_val,
-                    _ => builder.ins().iconst(types::I64, 0),
+                    .stack_store(types::I64, tag_val, slot, field(BINDING_TAG_OFF));
+                let (payload, payload_hi): (Value, Value) = match ir_ty {
+                    IrTy::I128 | IrTy::U128 => builder.ins().isplit(*cl_val),
+                    // Excluded by the capture collector; store a defined zero
+                    // rather than reinterpreting a pointer as a payload.
+                    IrTy::Unit | IrTy::Ptr | IrTy::LinearPtr => (zero_hi, zero_hi),
+                    // Every other scalar widens to i64 exactly as it does when
+                    // stored into a struct field.
+                    _ => (extend_field_store_value(builder, *cl_val, *ir_ty), zero_hi),
                 };
                 builder
                     .ins()
-                    .stack_store(types::I64, payload, slot, (i * 24 + 16) as i32);
+                    .stack_store(types::I64, payload, slot, field(BINDING_PAYLOAD_LO_OFF));
+                builder.ins().stack_store(
+                    types::I64,
+                    payload_hi,
+                    slot,
+                    field(BINDING_PAYLOAD_HI_OFF),
+                );
             }
             let base = builder.ins().stack_addr(types::I64, slot, 0);
             let cnt = builder.ins().iconst(types::I32, n as i64);
@@ -7078,6 +7089,61 @@ mod tests {
                             InstData::VowId(VowId(0)),
                         ),
                         inst(8, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                    ],
+                }],
+                local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
+                source_file: "test.vow".to_string(),
+            }],
+        );
+
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_vow_captures_128_bit_widths() {
+        let module = make_module(
+            "test",
+            vec![Function {
+                id: FuncId(0),
+                name: "capture_wide".to_string(),
+                params: vec![Ty::I128, Ty::U128],
+                param_names: vec![],
+                return_ty: Ty::Unit,
+                effects: vec![],
+                vows: vec![VowEntry {
+                    id: VowId(0),
+                    description: "wide captures".to_string(),
+                    blame: vow_diag::Blame::Caller,
+                    bindings: vec![
+                        ("i128v".to_string(), InstId(0)),
+                        ("u128v".to_string(), InstId(1)),
+                    ],
+                    file: "test.vow".to_string(),
+                    offset: 1,
+                }],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::I128, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::GetArg, Ty::U128, vec![], InstData::ArgIndex(1)),
+                        inst(
+                            2,
+                            Opcode::ConstBool,
+                            Ty::Bool,
+                            vec![],
+                            InstData::ConstBool(true),
+                        ),
+                        inst(
+                            3,
+                            Opcode::VowRequires,
+                            Ty::Unit,
+                            vec![2],
+                            InstData::VowId(VowId(0)),
+                        ),
+                        inst(4, Opcode::Return, Ty::Unit, vec![], InstData::None),
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),

@@ -1,0 +1,17 @@
+// TEST: exit 134
+// TEST: stderr "VowViolation"
+// TEST: stderr ""x":3154393236604333326336"
+module I128RequiresViolation
+
+// 3154393236604333326336 is 171 * 2^64, so its low 64 bits are exactly zero.
+// A capture that keeps only the low limb reports "x":0 — the #1077 bug.
+fn requires_negative(x: i128) -> i128 vow {
+    requires: x < 0
+} {
+    x
+}
+
+fn main() -> i32 [io] {
+    requires_negative(3154393236604333326336);
+    0
+}

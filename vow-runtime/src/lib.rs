@@ -73,7 +73,17 @@ pub struct VowBinding {
     pub tag: u8,
     _pad: [u8; 7],
     pub payload: u64,
+    pub payload_hi: u64,
 }
+
+// The two Cranelift writers hand-roll this layout rather than sharing it:
+// `vow-codegen/src/cranelift_backend.rs` and `vow-clif-shim/src/lib.rs` (neither
+// depends on this crate). Changing a field here means changing their
+// `BINDING_*` constants in the same commit.
+const _: () = assert!(core::mem::size_of::<VowBinding>() == 32);
+const _: () = assert!(core::mem::align_of::<VowBinding>() == 8);
+const _: () = assert!(core::mem::offset_of!(VowBinding, payload) == 16);
+const _: () = assert!(core::mem::offset_of!(VowBinding, payload_hi) == 24);
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_violation(
@@ -98,10 +108,14 @@ pub unsafe extern "C" fn __vow_violation(
     let file = decode(file_ptr);
     // Decode the C ABI records into owned data first so the pure renderer can
     // borrow plain `&str`s, keeping it free of `unsafe` and raw pointers.
-    let decoded: Vec<(String, u8, u64)> = (0..binding_count as usize)
+    let decoded: Vec<(String, u8, u128)> = (0..binding_count as usize)
         .map(|i| {
             let b = unsafe { &*bindings_ptr.add(i) };
-            (decode(b.name), b.tag, b.payload)
+            (
+                decode(b.name),
+                b.tag,
+                u128::from(b.payload) | (u128::from(b.payload_hi) << 64),
+            )
         })
         .collect();
     let bindings: Vec<ValueBinding<'_>> = decoded

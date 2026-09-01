@@ -20,13 +20,15 @@ const TAG_I8: u8 = 7;
 const TAG_I16: u8 = 8;
 const TAG_U16: u8 = 9;
 const TAG_U32: u8 = 10;
+const TAG_I128: u8 = 11;
+const TAG_U128: u8 = 12;
 
 /// A decoded predicate binding: a free variable's name and its captured runtime
 /// value. `lib.rs` builds these from the `VowBinding` C ABI records.
 pub(crate) struct ValueBinding<'a> {
     pub name: &'a str,
     pub tag: u8,
-    pub payload: u64,
+    pub payload: u128,
 }
 
 /// The two rendered lines for a single violation: the structured JSON envelope
@@ -45,19 +47,22 @@ pub(crate) struct RenderedViolation {
 /// schema decision (`values` is `["integer","number","boolean"]` with
 /// `additionalProperties: false`), so it is tracked separately under #436 rather
 /// than papered over here.
-pub(crate) fn format_value(tag: u8, payload: u64) -> String {
+pub(crate) fn format_value(tag: u8, payload: u128) -> String {
+    let lo = payload as u64;
     match tag {
-        TAG_I32 => format!("{}", payload as i32),
-        TAG_I64 => format!("{}", payload as i64),
-        TAG_F32 => format!("{}", f32::from_bits(payload as u32)),
-        TAG_F64 => format!("{}", f64::from_bits(payload)),
-        TAG_BOOL => if payload != 0 { "true" } else { "false" }.to_string(),
-        TAG_U64 => format!("{payload}"),
-        TAG_U8 => format!("{}", payload as u8),
-        TAG_I8 => format!("{}", payload as i8),
-        TAG_I16 => format!("{}", payload as i16),
-        TAG_U16 => format!("{}", payload as u16),
-        TAG_U32 => format!("{}", payload as u32),
+        TAG_I32 => format!("{}", lo as i32),
+        TAG_I64 => format!("{}", lo as i64),
+        TAG_F32 => format!("{}", f32::from_bits(lo as u32)),
+        TAG_F64 => format!("{}", f64::from_bits(lo)),
+        TAG_BOOL => if lo != 0 { "true" } else { "false" }.to_string(),
+        TAG_U64 => format!("{lo}"),
+        TAG_U8 => format!("{}", lo as u8),
+        TAG_I8 => format!("{}", lo as i8),
+        TAG_I16 => format!("{}", lo as i16),
+        TAG_U16 => format!("{}", lo as u16),
+        TAG_U32 => format!("{}", lo as u32),
+        TAG_I128 => format!("{}", payload as i128),
+        TAG_U128 => format!("{payload}"),
         _ => format!("0x{payload:x}"),
     }
 }
@@ -127,20 +132,52 @@ mod tests {
 
     #[test]
     fn format_value_renders_each_tag() {
-        assert_eq!(format_value(TAG_I32, (-5i32) as u32 as u64), "-5");
-        assert_eq!(format_value(TAG_I64, (-5i64) as u64), "-5");
-        assert_eq!(format_value(TAG_F64, 1.5f64.to_bits()), "1.5");
-        assert_eq!(format_value(TAG_F32, 1.5f32.to_bits() as u64), "1.5");
+        assert_eq!(format_value(TAG_I32, (-5i32) as u32 as u128), "-5");
+        assert_eq!(format_value(TAG_I64, (-5i64) as u64 as u128), "-5");
+        assert_eq!(format_value(TAG_F64, 1.5f64.to_bits() as u128), "1.5");
+        assert_eq!(format_value(TAG_F32, 1.5f32.to_bits() as u128), "1.5");
         assert_eq!(format_value(TAG_BOOL, 0), "false");
         assert_eq!(format_value(TAG_BOOL, 1), "true");
         assert_eq!(format_value(TAG_U64, 42), "42");
         assert_eq!(format_value(TAG_U8, 255), "255");
-        assert_eq!(format_value(TAG_I8, (-128_i8) as u8 as u64), "-128");
-        assert_eq!(format_value(TAG_I16, (-32768_i16) as u16 as u64), "-32768");
-        assert_eq!(format_value(TAG_U16, u64::from(u16::MAX)), "65535");
-        assert_eq!(format_value(TAG_U32, u64::from(u32::MAX)), "4294967295");
+        assert_eq!(format_value(TAG_I8, (-128_i8) as u8 as u128), "-128");
+        assert_eq!(format_value(TAG_I16, (-32768_i16) as u16 as u128), "-32768");
+        assert_eq!(format_value(TAG_U16, u128::from(u16::MAX)), "65535");
+        assert_eq!(format_value(TAG_U32, u128::from(u32::MAX)), "4294967295");
+        assert_eq!(
+            format_value(TAG_I128, i128::MIN as u128),
+            "-170141183460469231731687303715884105728"
+        );
+        // 171 * 2^64: low limb zero, so a low-limb-only render would say "0".
+        assert_eq!(
+            format_value(TAG_I128, 3154393236604333326336),
+            "3154393236604333326336"
+        );
+        assert_eq!(
+            format_value(TAG_U128, u128::MAX),
+            "340282366920938463463374607431768211455"
+        );
         // Unknown tag falls back to a hex dump of the raw payload.
         assert_eq!(format_value(99, 0xdead), "0xdead");
+    }
+
+    #[test]
+    fn render_violation_reports_full_128_bit_magnitude() {
+        let bindings = [ValueBinding {
+            name: "x",
+            tag: TAG_U128,
+            payload: u128::MAX,
+        }];
+        let r = render_violation(0, 0, "x < 0", "wide.vow", 17, &bindings);
+
+        assert!(
+            r.json
+                .contains(r#""x":340282366920938463463374607431768211455"#)
+        );
+        assert!(
+            r.human
+                .contains("x=340282366920938463463374607431768211455")
+        );
     }
 
     // Anchor: docs/spec/cli.md:511 (the divide-by-zero example).
