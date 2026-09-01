@@ -192,7 +192,7 @@ pub(crate) fn build_structured_counterexample_with_module(
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
 ) -> StructuredCounterexample {
     use vow_ir::InstData;
-    let vid = ce.vow_id.unwrap_or(0);
+    let vid = ce.vow_id.unwrap_or(vow_verify::UNATTRIBUTED_VOW_ID);
     let resolved_callee_precondition = ce.callee_precondition.and_then(|pre| {
         let module = module?;
         let callee = module.functions.iter().find(|f| f.id.0 == pre.func_id)?;
@@ -992,6 +992,7 @@ mod tests {
     fn structured_counterexample_vec_bounds_maps_to_index_out_of_bounds() {
         let sce = structured_unattributed_counterexample("vec bounds");
 
+        assert_eq!(sce.vow_id, vow_verify::UNATTRIBUTED_VOW_ID);
         assert_eq!(sce.violation, "index out of bounds");
         assert_ne!(
             sce.violation, "[Counterexample]",
@@ -1004,6 +1005,7 @@ mod tests {
     fn structured_counterexample_string_capacity_maps_to_capacity_message() {
         let sce = structured_unattributed_counterexample("string capacity");
 
+        assert_eq!(sce.vow_id, vow_verify::UNATTRIBUTED_VOW_ID);
         assert_eq!(
             sce.violation,
             "string exceeded the verifier's internal capacity limit"
@@ -1019,11 +1021,28 @@ mod tests {
     fn structured_counterexample_unrecognized_label_does_not_leak_raw_line() {
         let sce = structured_unattributed_counterexample("some future guard");
 
+        assert_eq!(sce.vow_id, vow_verify::UNATTRIBUTED_VOW_ID);
         assert_eq!(sce.violation, "internal verifier assertion failed");
         assert_ne!(
             sce.violation, "[Counterexample]",
             "must not fall through to raw ESBMC line"
         );
+        assert_eq!(sce.blame, "none");
+    }
+
+    #[test]
+    fn structured_unattributed_counterexample_uses_reserved_vow_id() {
+        let sce = structured_unattributed_counterexample("integer shift count");
+
+        assert_eq!(sce.vow_id, vow_verify::UNATTRIBUTED_VOW_ID);
+    }
+
+    #[test]
+    fn structured_division_by_zero_counterexample_is_unattributed() {
+        let sce = structured_unattributed_counterexample("division by zero");
+
+        assert_eq!(sce.vow_id, vow_verify::UNATTRIBUTED_VOW_ID);
+        assert_eq!(sce.violation, "division or remainder by zero");
         assert_eq!(sce.blame, "none");
     }
 
