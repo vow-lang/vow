@@ -307,9 +307,25 @@ fn codegen_error_to_output(
     mut diagnostics: Vec<Diagnostic>,
 ) -> BuildOutput {
     let diagnostic = error.to_diagnostic(source.to_string_lossy().as_ref());
-    let _ = emit_frontend_diagnostics_to_stderr(std::slice::from_ref(&diagnostic));
+    let emission = emit_frontend_diagnostics_to_stderr(std::slice::from_ref(&diagnostic));
     diagnostics.push(diagnostic);
-    verify_outcome::compile_failed(error.failure_message(), diagnostics)
+
+    // The backend error is the primary failure and its structured `error_code`
+    // is what the caller acts on, so a failed stderr write annotates it rather
+    // than replacing it. A broken pipe stays tolerated, as everywhere else.
+    let message = match emission {
+        Ok(()) => error.failure_message(),
+        Err(emission_error) if is_broken_pipe(&emission_error) => error.failure_message(),
+        Err(emission_error) => {
+            let combined = format!(
+                "{}; failed to emit backend diagnostics: {emission_error}",
+                error.failure_message()
+            );
+            write_stderr_best_effort(format_args!("vow build: {combined}"));
+            combined
+        }
+    };
+    verify_outcome::compile_failed(message, diagnostics)
 }
 
 fn link_obj(obj_path: &Path, output_path: &Path) -> Result<PathBuf, CodegenError> {
