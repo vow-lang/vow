@@ -425,6 +425,28 @@ fn check_wide_constants_are_non_modelable() -> i64 {
     0
 }
 
+// Push the get/set call for an indexed container access (id `base_id`,
+// consuming `base_id` itself for the stored value in the set case) followed
+// by its return. Shared by the single-block and cross-block indexed-container
+// fixtures below.
+fn push_index_op_insts(insts: Vec<IrInst>, base_id: i64, index_extern: String) {
+    if index_extern == String::from("__vow_vec_set_val") {
+        insts.push(mk_inst_const_i64(base_id, 7));
+        let set_args: Vec<i64> = Vec::new();
+        set_args.push(0);
+        set_args.push(2);
+        set_args.push(base_id);
+        insts.push(mk_inst_call_extern(base_id + 1, ITY_UNIT(), set_args, index_extern));
+        insts.push(mk_inst_return(base_id + 2, 1));
+    } else {
+        let get_args: Vec<i64> = Vec::new();
+        get_args.push(0);
+        get_args.push(2);
+        insts.push(mk_inst_call_extern(base_id, ITY_I64(), get_args, index_extern));
+        insts.push(mk_inst_return(base_id + 1, 1));
+    }
+}
+
 // Build a one-block function that indexes a container parameter, marking the
 // container with `len_extern` so the emitter classifies it, and indexing it
 // with `idx_ty` via `index_extern`. Mirrors `indexed_container_fn` in
@@ -438,21 +460,7 @@ fn indexed_container_function(len_extern: String, index_extern: String, idx_ty: 
     insts.push(mk_inst_call_extern(1, ITY_I64(), len_args, len_extern));
 
     insts.push(mk_inst_arg(2, idx_ty, 1));
-
-    if index_extern == String::from("__vow_vec_set_val") {
-        insts.push(mk_inst_const_i64(3, 7));
-        let set_args: Vec<i64> = Vec::new();
-        set_args.push(0);
-        set_args.push(2);
-        set_args.push(3);
-        insts.push(mk_inst_call_extern(4, ITY_UNIT(), set_args, index_extern));
-    } else {
-        let get_args: Vec<i64> = Vec::new();
-        get_args.push(0);
-        get_args.push(2);
-        insts.push(mk_inst_call_extern(4, ITY_I64(), get_args, index_extern));
-    }
-    insts.push(mk_inst_return(5, 1));
+    push_index_op_insts(insts, 3, index_extern);
 
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, insts));
@@ -489,21 +497,7 @@ fn indexed_container_cross_block_function(len_extern: String, index_extern: Stri
     ));
 
     let body_insts: Vec<IrInst> = Vec::new();
-    if index_extern == String::from("__vow_vec_set_val") {
-        body_insts.push(mk_inst_const_i64(4, 7));
-        let set_args: Vec<i64> = Vec::new();
-        set_args.push(0);
-        set_args.push(2);
-        set_args.push(4);
-        body_insts.push(mk_inst_call_extern(5, ITY_UNIT(), set_args, index_extern));
-        body_insts.push(mk_inst_return(6, 1));
-    } else {
-        let get_args: Vec<i64> = Vec::new();
-        get_args.push(0);
-        get_args.push(2);
-        body_insts.push(mk_inst_call_extern(4, ITY_I64(), get_args, index_extern));
-        body_insts.push(mk_inst_return(5, 1));
-    }
+    push_index_op_insts(body_insts, 4, index_extern);
 
     let blocks: Vec<IrBlock> = Vec::new();
     blocks.push(mk_block(0, entry_insts));
