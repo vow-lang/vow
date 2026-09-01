@@ -1153,6 +1153,89 @@ class ProposeLedgerTest(unittest.TestCase):
         self.assertEqual("open", entry["status"])
         assert_valid_ledger_document(self, proposed)
 
+    def test_an_already_fixed_observable_is_not_reopened_by_a_new_one(self):
+        # An entry fixed by an EARLIER sweep never appears in `fixed`, so the
+        # disappearance pass cannot drop its observable. Carrying it into this
+        # reopen would claim a runtime gap nothing measured this run.
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "runtime",
+                    "status": "fixed",
+                }
+            }
+        )
+
+        proposed = equivalence.propose_ledger(
+            document,
+            [{"file": "a.vow", "divergences": [{"observable": "exit_code"}]}],
+            [],
+            "2026-09-01",
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual("exit_code", entry["observable"])
+        self.assertEqual("open", entry["status"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_reopening_a_fixed_entry_drops_its_stale_error_code_multisets(self):
+        # The pinned multisets exist to stop a DIFFERENT diagnostic regression
+        # inheriting the exception. Retained past a reopen on another
+        # observable they would do exactly that.
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "error_code",
+                    "status": "fixed",
+                    "rust_error_codes": ["TypeMismatch"],
+                    "self_hosted_error_codes": ["UnknownName"],
+                }
+            }
+        )
+
+        proposed = equivalence.propose_ledger(
+            document,
+            [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}],
+            [],
+            "2026-09-01",
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual("runtime", entry["observable"])
+        self.assertNotIn("rust_error_codes", entry)
+        self.assertNotIn("self_hosted_error_codes", entry)
+        assert_valid_ledger_document(self, proposed)
+
+    def test_an_open_error_code_entry_keeps_its_multisets_when_a_gap_is_added(self):
+        # The error_code divergence is still live and still suppressing, so the
+        # schema still requires both pinned multisets on the reopened entry.
+        document = ledger_document(
+            {
+                "a.vow": {
+                    "first_seen": "2026-08-25",
+                    "observable": "error_code",
+                    "status": "open",
+                    "rust_error_codes": ["TypeMismatch"],
+                    "self_hosted_error_codes": ["UnknownName"],
+                }
+            }
+        )
+
+        proposed = equivalence.propose_ledger(
+            document,
+            [{"file": "a.vow", "divergences": [{"observable": "runtime"}]}],
+            [],
+            "2026-09-01",
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual(["error_code", "runtime"], entry["observable"])
+        self.assertEqual(["TypeMismatch"], entry["rust_error_codes"])
+        self.assertEqual(["UnknownName"], entry["self_hosted_error_codes"])
+        assert_valid_ledger_document(self, proposed)
+
 
 class EmitLedgerUpdateCliTest(unittest.TestCase):
     def run_sweep(self, root, min_compared="0", extra=()):

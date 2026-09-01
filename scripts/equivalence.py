@@ -888,17 +888,23 @@ def propose_ledger(document, new, fixed, today):
             # recognizable as a regression rather than a first-time finding.
             entry["status"] = "fixed"
 
-    # An observable this run proved gone must not be resurrected by an
-    # unrelated new finding on the same file. The partial-fix branch above
-    # already drops it from `observable`; the full-fix branch deliberately
-    # retains it, so without this the union below would put it straight back
-    # and the next reconcile would suppress its recurrence as `known`.
-    just_fixed = {finding["file"]: set(finding["observables"]) for finding in fixed}
-
     for record in new:
         path = record["file"]
         entry = corpus.setdefault(path, {"first_seen": today})
-        observables = (tracked_observables(entry) - just_fixed.get(path, set())) | {
+        # A `fixed` entry retains its observable so a reappearance reads as a
+        # regression, but nothing observed that observable this run. Carrying
+        # it into a reopen driven by an unrelated new finding would mark it
+        # live again — suppressing its next real recurrence as `known`, then
+        # reporting it `fixed` all over again. The full-fix branch above sets
+        # this status for an observable fixed by *this* sweep; one fixed by an
+        # *earlier* sweep never reaches `fixed` at all (reconcile only reports
+        # `open`/`expected` entries), so the status is what distinguishes both.
+        carried = (
+            frozenset()
+            if entry.get("status") == "fixed"
+            else tracked_observables(entry)
+        )
+        observables = carried | {
             divergence["observable"] for divergence in record["divergences"]
         }
         entry["observable"] = _observable_field(observables)
@@ -915,6 +921,11 @@ def propose_ledger(document, new, fixed, today):
         if error_code is not None:
             entry["rust_error_codes"] = sorted(error_code.get("rust", []))
             entry["self_hosted_error_codes"] = sorted(error_code.get("self_hosted", []))
+        elif "error_code" not in observables:
+            # Mirrors the partial-fix branch: a multiset that no longer pins an
+            # active error_code divergence must not linger on a reopened entry.
+            entry.pop("rust_error_codes", None)
+            entry.pop("self_hosted_error_codes", None)
 
     proposed["corpus"] = dict(sorted(corpus.items()))
     return proposed
