@@ -629,6 +629,14 @@ fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path:
             }
             vi = vi + 1;
         }
+        if ce_violation.len() == 0 {
+            let assert_description: String = parse_assert_label(vr.raw_output);
+            if assert_description.len() > 0 {
+                ce_violation = assert_description;
+            } else {
+                ce_violation = String::from("internal verifier assertion failed");
+            }
+        }
     }
     VerifyCE {
         function: f.name,
