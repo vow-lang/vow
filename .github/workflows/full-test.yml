@@ -1,0 +1,70 @@
+name: Full differential suite
+
+# Run the complete Rust-vs-self-hosted suite after each merge and nightly. It
+# stays off the pull-request path while #1171 makes its runtime unsuitable for
+# a required per-PR check.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 07:20 UTC -- equivalence (04:41) documents a ~90-minute Tier 2 sweep,
+    # so it can still be running past 06:11; arena-verify (06:29) has a
+    # 45-minute timeout ceiling, i.e. through 07:14. 07:20 starts after both
+    # windows close instead of just after their nominal start times, so this
+    # job does not contend with either for runners.
+    - cron: "20 7 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # Scheduled and manual events have no commit range, so the fail-open
+  # classifier reports code=true and always runs the backstop.
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: classify
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  full-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: bench/uv.lock
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Rust and self-hosted differential suite
+        run: |
+          # full_test.sh already exits non-zero when FAIL>0 (caught above by
+          # pipefail), so this guards a different failure mode: FAIL==0 but
+          # most assertions silently degraded into skips (e.g. a broken
+          # ESBMC install). 500 is a conservative floor below the ~590
+          # assertions #1094 measured and the 976 passed seen locally for
+          # this change, leaving headroom for legitimate environment-specific
+          # skips on a runner this workflow has not executed on before.
+          set -o pipefail
+          scripts/full_test.sh 2>&1 | tee /tmp/full_test.log
+          passed=$(grep -oP '\d+(?= passed)' /tmp/full_test.log | tail -1)
+          test -n "$passed"
+          [ "$passed" -ge 500 ]

@@ -18,10 +18,10 @@ an image detail. The workflows are uniformly formatted (top-level job keys at
 exactly two spaces, bodies deeper), which is all the structure these assertions
 need.
 
-Also guards `equivalence.yml`'s read-only permissions and ledger-proposal
-wiring. That belongs here rather than in its own module because it is the same
-question -- which workflow carries which equivalence tier -- under the same
-stdlib-only constraint.
+Also guards the scheduled full-test and equivalence workflows. That belongs
+here rather than in separate modules because it is the same question -- which
+workflow carries which equivalence tier -- under the same stdlib-only
+constraint.
 """
 
 from __future__ import annotations
@@ -35,6 +35,8 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 BOOTSTRAP_WORKFLOW = WORKFLOWS / "bootstrap.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
 EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
+FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
+FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
@@ -182,6 +184,66 @@ class CiWorkflowTest(unittest.TestCase):
         for name in ("build-and-test", "build-and-test-macos"):
             with self.subTest(job=name):
                 self.assertIn("concat_vow.sh", jobs[name])
+
+
+class FullTestWorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = FULL_TEST_WORKFLOW.read_text(encoding="utf-8")
+        self.jobs = job_blocks(self.text)
+
+    def test_runs_on_push_to_main_and_nightly(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"push:\s*\n\s*branches:\s*\[main\]")
+        found = crons(self.text)
+        self.assertTrue(found, "expected a scheduled run")
+        for cron in found:
+            with self.subTest(cron=cron):
+                self.assertTrue(cron.endswith("* * *"), "expected a daily cron")
+
+    def test_workflow_keeps_read_only_repository_permissions(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
+        self.assertNotRegex(workflow_header, r"contents:\s*write")
+
+    def test_gated_on_the_docs_only_classifier(self) -> None:
+        changes = self.jobs["changes"]
+        full_test = self.jobs["full-test"]
+
+        self.assertIn("fetch-depth: 0", changes)
+        self.assertIn("code: ${{ steps.classify.outputs.code }}", changes)
+        self.assertIn("python3 scripts/ci_docs_only.py", changes)
+        self.assertIn("needs: changes", full_test)
+        self.assertIn("if: needs.changes.outputs.code == 'true'", full_test)
+
+    def test_runs_full_test_sh_with_required_toolchain(self) -> None:
+        full_test = self.jobs["full-test"]
+
+        self.assertIn("actions/checkout", full_test)
+        self.assertIn("dtolnay/rust-toolchain", full_test)
+        self.assertIn("Swatinem/rust-cache", full_test)
+        self.assertIn("install-esbmc", full_test)
+        self.assertIn("astral-sh/setup-uv", full_test)
+        self.assertIn("scripts/full_test.sh", full_test)
+
+    def test_enforces_a_minimum_passed_count(self) -> None:
+        full_test = self.jobs["full-test"]
+
+        self.assertIn("set -o pipefail", full_test)
+        self.assertIn("tee /tmp/full_test.log", full_test)
+        self.assertIn(r"grep -oP '\d+(?= passed)'", full_test)
+        self.assertIn('test -n "$passed"', full_test)
+        self.assertIn('[ "$passed" -ge 500 ]', full_test)
+
+    def test_passed_count_grep_matches_full_test_sh_summary_format(self) -> None:
+        # Ties the workflow's grep pattern to the summary line it actually
+        # greps: a rename of "passed" in full_test.sh's print_summary would
+        # silently disable the floor check while every string-matching test
+        # above still passes.
+        script = FULL_TEST_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("${PASS} passed", script)
 
 
 class EquivalenceWorkflowTest(unittest.TestCase):

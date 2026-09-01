@@ -35,18 +35,20 @@ bugs. That result ordering is why the tiers below are sequenced corpus-first.
 
 | Tier | Cadence | Cost | Blocking | What runs |
 |---|---|---|---|---|
-| 1 | local full suite; nightly compiler tests | minutes | yes where run | promoted fixtures plus `vow test compiler/` under both compilers |
+| 1 | push to `main`, nightly, local on demand | minutes | yes where run | promoted fixtures plus `vow test compiler/` under both compilers |
 | 2 | nightly | ~90 min, sharded | no | full-corpus sweep (`scripts/equivalence.py`) |
 | 3 | monthly | credentialed, agent-driven | no | adversarial AI pair review |
 
 **Tier 1** is where found bugs stay fixed. Every confirmed divergence is
 delta-debugged to a minimal reproducer and committed as a `tests/run/` or
 `tests/error/` fixture, so the existing suite regression-guards it forever. This
-tier is intended to block every PR. It does not yet do so: the promoted-fixture
-parity harness runs in `scripts/full_test.sh`, which is not on the PR path, and
-the two-compiler `vow test compiler/` comparison is a blocking step in the Linux
-`bootstrap.yml` job (pushes to `main` plus nightly). That comparison covers the
-whole documented `vow test` contract — every field in
+tier now runs automatically after every code-bearing push to `main` and
+nightly: `full-test.yml` runs the complete `scripts/full_test.sh`
+promoted-fixture parity harness, while the Linux `bootstrap.yml` job
+independently runs the two-compiler `vow test compiler/` comparison. Both jobs
+fail when their Tier-1 comparison fails, but neither is on the pull-request
+path. The compiler comparison covers the whole documented `vow test` contract
+— every field in
 `docs/spec/schemas/test-result.schema.json` except the wall-clock `duration_ms`
 and `tests[].diagnostics`, read back out of the schema so a field added there is
 gated automatically. It also validates each document against that schema in
@@ -61,8 +63,9 @@ The self-hosted suite produced no JSON before a 45-minute bound in one fresh
 concatenated run; the full Section 10b later completed both compilers plus its
 interface checks in 17.8 minutes. Both measurements came from a contended
 development host and are placement evidence, not clean benchmarks. #1171 tracks
-the performance gap that prevents responsible per-PR placement. This is a
-stated coverage gap, not an advisory green check.
+the performance gap that prevents responsible per-PR placement. Until that gap
+closes, Tier 1 catches a regression on the first `main` push that includes it
+rather than adding roughly 40 minutes to every pull request.
 
 **Tier 2** re-establishes equivalence against a moving codebase. It is
 deterministic and credential-free, so it runs unattended.
