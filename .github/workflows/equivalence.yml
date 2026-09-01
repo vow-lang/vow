@@ -10,8 +10,8 @@ name: equivalence
 # sailed past, because no suite swept benchmarks/ differentially.
 #
 # Nightly rather than per-PR: a full sweep needs a bootstrapped build/vowc,
-# which is a ~30-minute job on its own. Per-PR protection comes from the
-# promoted fixtures in tests/ (tier 1), which the normal suite already runs.
+# which is a ~30-minute job on its own. Tier 1 lives elsewhere; see the tier
+# table in docs/equivalence/README.md for which workflow carries which tier.
 on:
   schedule:
     # 04:41 UTC — offset from cargo-mutants (02:17) so the two nightly jobs
@@ -70,6 +70,7 @@ jobs:
             --self build/vowc \
             --shard ${{ matrix.shard }}/4 \
             --output-dir equivalence.out \
+            --emit-ledger-update \
             --min-compared 20
           status=$?
           set -e
@@ -91,6 +92,8 @@ jobs:
           if [ -f equivalence.out/results.json ]; then
             python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
+          from pathlib import Path
+
           d = json.load(open("equivalence.out/results.json"))
           c = d["compilers"]
           print(f"### Shard: {d['compared']} compared, "
@@ -98,6 +101,8 @@ jobs:
           print()
           print(f"- rust `{c['rust']['sha256'][:16]}`")
           print(f"- self-hosted `{c['self_hosted']['sha256'][:16]}`")
+          if Path("equivalence.out/ledger.proposed.json").exists():
+              print("- ledger update: `ledger.proposed.json` (artifact)")
           print()
           for r in d["records"]:
               for v in r["divergences"]:

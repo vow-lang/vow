@@ -35,14 +35,34 @@ bugs. That result ordering is why the tiers below are sequenced corpus-first.
 
 | Tier | Cadence | Cost | Blocking | What runs |
 |---|---|---|---|---|
-| 1 | every PR | seconds | yes | promoted fixtures in `tests/` |
+| 1 | local full suite; nightly compiler tests | minutes | yes where run | promoted fixtures plus `vow test compiler/` under both compilers |
 | 2 | nightly | ~90 min, sharded | no | full-corpus sweep (`scripts/equivalence.py`) |
 | 3 | monthly | credentialed, agent-driven | no | adversarial AI pair review |
 
 **Tier 1** is where found bugs stay fixed. Every confirmed divergence is
 delta-debugged to a minimal reproducer and committed as a `tests/run/` or
 `tests/error/` fixture, so the existing suite regression-guards it forever. This
-tier is cheap precisely because the expensive sweeps happen elsewhere.
+tier is intended to block every PR. It does not yet do so: the promoted-fixture
+parity harness runs in `scripts/full_test.sh`, which is not on the PR path, and
+the two-compiler `vow test compiler/` comparison is a blocking step in the Linux
+`bootstrap.yml` job (pushes to `main` plus nightly). That comparison covers the
+whole documented `vow test` contract — every field in
+`docs/spec/schemas/test-result.schema.json` except the wall-clock `duration_ms`
+and `tests[].diagnostics`, read back out of the schema so a field added there is
+gated automatically. It also validates each document against that schema in
+absolute terms, since parity alone cannot see a field both compilers dropped or
+corrupted the same way. `diagnostics` is excluded because it is a live
+divergence, not a tolerated one: the Rust runner attaches each entry's compile
+diagnostics while the self-hosted runner emits none (#1183), and the schema for
+them has drifted from both emitters (#1184). Both must close before the field
+can be gated.
+
+The self-hosted suite produced no JSON before a 45-minute bound in one fresh
+concatenated run; the full Section 10b later completed both compilers plus its
+interface checks in 17.8 minutes. Both measurements came from a contended
+development host and are placement evidence, not clean benchmarks. #1171 tracks
+the performance gap that prevents responsible per-PR placement. This is a
+stated coverage gap, not an advisory green check.
 
 **Tier 2** re-establishes equivalence against a moving codebase. It is
 deterministic and credential-free, so it runs unattended.
@@ -97,6 +117,26 @@ regression is distinguishable from a new finding.
 
 Schema: see `ledger.schema.json`.
 
+### Who writes it
+
+Tier 2 reads the committed ledger and emits `ledger.proposed.json` into every
+shard artifact. The workflow deliberately retains `contents: read`, so this is
+a reviewable proposal rather than an unattended commit. Each shard proposal
+contains that shard's corpus findings while preserving all untouched corpus
+entries and the entire module-pair block.
+
+A shard that misses its `--min-compared` floor emits no proposal at all, and
+says so in its summary. A run that measured almost nothing must not hand back a
+file that looks applicable. The `updated` stamp comes from `--today` (default:
+UTC today) rather than local time, so re-running a sweep reproduces its
+proposal byte-for-byte.
+
+Tier 3 runs an unsharded sweep, applies its `ledger.proposed.json`, adds the
+issue/fixture context that requires judgement, and commits the result together
+with the module-pair hashes only the adversarial review can compute. Applying a
+nightly result instead requires merging the four shard proposals; no individual
+shard claims coverage of the other three.
+
 ### Tier-1 parity suppressions
 
 Known `diagnostics[].error_code` divergences in the compile-error comparator
@@ -150,7 +190,8 @@ ones to revisit first when widening the comparison:
 
 ```bash
 # Tier 2 — full-corpus differential sweep (deterministic, no credentials)
-python3 scripts/equivalence.py --rust target/release/vow --self build/vowc
+python3 scripts/equivalence.py --rust target/release/vow --self build/vowc \
+  --emit-ledger-update
 
 # Tier 3 — adversarial pair review (needs ANTHROPIC_API_KEY or OPENAI_API_KEY)
 python3 scripts/pair_review.py --model claude-sonnet-4-20250514

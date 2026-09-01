@@ -38,6 +38,7 @@ total miscompile of a benchmark reference that had been invisible to the fixed p
 
 ```bash
 python3 scripts/equivalence.py --rust target/release/vow --self build/vowc \
+  --emit-ledger-update \
   --output-dir /tmp/equivalence-<YYYY-MM>
 ```
 
@@ -83,7 +84,8 @@ For each one, in this order:
    under the current `build/vowc`, add `// TEST: known-divergence <issue> "<why>"` so `full_test.sh`
    reports a loud SKIP instead of turning the tree red — and so it becomes a hard FAIL the moment the
    bug is fixed, forcing the directive's removal.
-5. **Record it in the ledger** with an issue number and, once one exists, the fixture path.
+5. **Apply `ledger.proposed.json`**, then add the issue number and, once one exists, the fixture path.
+   The proposal updates corpus history only; preserve and update the pair-review hashes separately.
 
 ## Step 4 — Publish
 

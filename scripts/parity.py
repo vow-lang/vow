@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Compare structured output from the Rust and self-hosted compilers."""
 
+import copy
 import json
 import re
 import sys
+from collections import Counter
 from pathlib import Path
+
+import schema_check
 
 KNOWN_CEX_DIVERGENCE = re.compile(
     (
@@ -26,6 +30,108 @@ ERROR_CODES_LABEL = "error codes"
 COUNTEREXAMPLE_COUNT_LABEL = "counterexamples count"
 ESBMC_INTERNAL_VALUE_PREFIX = "$esbmc$"
 
+# `vow test`'s authoritative output contract. Read back out of the schema
+# rather than restated so a field added there is compared by this blocking
+# gate automatically, instead of drifting out of coverage unnoticed.
+TEST_RESULT_SCHEMA, TEST_SCHEMA_DIR = schema_check.load(
+    Path(__file__).resolve().parent.parent / "docs/spec/schemas/test-result.schema.json"
+)
+_TEST_ENTRY_SCHEMA = TEST_RESULT_SCHEMA["$defs"]["TestEntry"]
+# Wall-clock only. Every other field the schema declares is a function of the
+# sources, so the two compilers must agree on it.
+TEST_NONDETERMINISTIC_FIELDS = frozenset({"duration_ms"})
+# A LIVE divergence, not a tolerated one: under `vow test` the Rust runner
+# attaches each entry's compile diagnostics (up to 999 RegionRootEscape notes
+# on `compiler/`) while the self-hosted runner emits `[]` for every entry
+# (#1183). No comparison absorbs a 999-vs-0 count — not raw equality, not the
+# (error_code, blame) multiset `compare_json` uses — so comparing it in any
+# form would leave this blocking gate permanently red. Excluded by name, with
+# the issue attached, so re-including it is a deliberate act once #1183 closes.
+TEST_TRACKED_DIVERGENT_FIELDS = frozenset({"diagnostics"})
+# Compared, but not by raw equality: `counterexample.schema.json` documents
+# `source` as differing in SHAPE between the two emitters (Rust a span object,
+# self-hosted a path string), and ESBMC's `$esbmc$` internals are noise. Routed
+# through the same format-tolerant comparison `compare_json` already applies.
+TEST_COUNTEREXAMPLE_FIELD = "counterexamples"
+# Every counterexample field the schema declares bar the three the comparison
+# owns: `source` is the documented shape divergence, `values` is compared
+# separately with the ESBMC internals stripped, and `violation` is added by
+# `_counterexample_fields` only when both sides blamed a contract clause. The
+# rest — `call_sites`, `violating_args`, `execution_path`, `branch_decisions`,
+# `replay`, `replay_reason` — are deterministic for the same sources and
+# derived here so a field added to the schema is compared automatically.
+_COUNTEREXAMPLE_SCHEMA, _ = schema_check.load(
+    Path(__file__).resolve().parent.parent
+    / "docs/spec/schemas/counterexample.schema.json"
+)
+COUNTEREXAMPLE_COMPARED_FIELDS = tuple(
+    field
+    for field in _COUNTEREXAMPLE_SCHEMA["properties"]
+    if field not in ("source", VALUES_LABEL, "violation")
+)
+# Which entry fields name a test rather than describe its outcome. The membership
+# delta keys off these; the rest are compared per shared entry.
+TEST_IDENTITY_FIELDS = ("file", "name", "status")
+TEST_PAYLOAD_FIELDS = tuple(
+    field
+    for field in _TEST_ENTRY_SCHEMA["properties"]
+    if field
+    not in {
+        *TEST_IDENTITY_FIELDS,
+        *TEST_NONDETERMINISTIC_FIELDS,
+        *TEST_TRACKED_DIVERGENT_FIELDS,
+        TEST_COUNTEREXAMPLE_FIELD,
+    }
+)
+# Top-level counters: everything but the fields with their own comparison below.
+TEST_COUNT_FIELDS = tuple(
+    field
+    for field in TEST_RESULT_SCHEMA["properties"]
+    if field not in ("status", "tests", "contract_density")
+)
+# Collapses `tests[7].stdout` and `tests[8].stdout` onto one counted line: a
+# broken emitter must not print a violation per test for a suite the size of
+# `compiler/`.
+TEST_ENTRY_INDEX = re.compile(r"\[[0-9]+\]")
+# Three counters over seven per-test statuses: everything that is neither
+# `passed` nor `skipped` counts toward `failed`, `contract_skipped` included
+# (docs/spec/cli.md). Bucketed off the schema enum so a per-test status added
+# there lands in `failed` rather than silently escaping the reconciliation.
+TEST_COUNTER_STATUSES = {
+    "passed": ("passed",),
+    "failed": tuple(
+        status
+        for status in _TEST_ENTRY_SCHEMA["properties"]["status"]["enum"]
+        if status not in ("passed", "skipped")
+    ),
+    "skipped": ("skipped",),
+}
+
+
+def _gated_schema(schema):
+    """The contract this gate governs: the schema minus its excluded fields.
+
+    A field the gate has stopped comparing is also a field it must stop
+    validating, or an excluded subtree could still fail the run. That matters
+    concretely: `diagnostic.schema.json` sets `additionalProperties: false` and
+    declares neither `blame` nor `hints`, yet both emitters send them (#1184),
+    so validating `tests[].diagnostics` would report 6276 violations on today's
+    `compiler/` corpus for a field #1183 already excludes.
+    """
+    gated = copy.deepcopy(schema)
+    entry = gated["$defs"]["TestEntry"]
+    for field in TEST_TRACKED_DIVERGENT_FIELDS:
+        entry["properties"].pop(field, None)
+    entry["required"] = [
+        field
+        for field in entry["required"]
+        if field not in TEST_TRACKED_DIVERGENT_FIELDS
+    ]
+    return gated
+
+
+GATED_TEST_RESULT_SCHEMA = _gated_schema(TEST_RESULT_SCHEMA)
+
 
 def _mismatch(label, rust_value, self_value):
     """The one parity error for a single observable, or none if it agrees."""
@@ -34,16 +140,19 @@ def _mismatch(label, rust_value, self_value):
     return [f"{label}: {rust_value} vs {self_value}"]
 
 
+def _field_multiset(entries, *fields):
+    """Count each entry's `fields` tuple, tolerating absent fields."""
+    return Counter(tuple(entry.get(field) for field in fields) for entry in entries)
+
+
+def _ordered(multiset):
+    # A field may be absent, so the tuples mix None with str and need an order
+    # that tolerates both.
+    return sorted(multiset.elements(), key=repr)
+
+
 def _diagnostic_multiset(diagnostics):
-    # `blame` is absent on non-vow diagnostics, so the tuples mix None with str
-    # and need an order that tolerates both.
-    return sorted(
-        (
-            (diagnostic.get("error_code"), diagnostic.get("blame"))
-            for diagnostic in diagnostics
-        ),
-        key=repr,
-    )
+    return _ordered(_field_multiset(diagnostics, "error_code", "blame"))
 
 
 def _error_codes(diagnostics):
@@ -202,6 +311,142 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
     return errors
 
 
+def _contract_errors(name, document):
+    """How one document violates the `vow test` schema, counted not enumerated.
+
+    Absolute, not comparative: parity alone cannot see a field that both
+    compilers dropped, or corrupted the same way. Violations are collapsed onto
+    one counted line per distinct shape, because one broken emitter would
+    otherwise print a line per test for a suite the size of `compiler/`.
+    """
+    counted = Counter(
+        TEST_ENTRY_INDEX.sub("[]", error)
+        for error in schema_check.validate(
+            document, GATED_TEST_RESULT_SCHEMA, TEST_SCHEMA_DIR
+        )
+    )
+    errors = [
+        f"{name} {error}" if count == 1 else f"{name} {error} ({count} entries)"
+        for error, count in sorted(counted.items())
+    ]
+    # Only meaningful once the document is otherwise valid: a missing or
+    # mistyped counter is already reported above, and re-reporting it as an
+    # inconsistency would say the same thing twice.
+    return errors or _consistency_errors(name, document)
+
+
+def _consistency_errors(name, document):
+    """Ways a document's own aggregates contradict its own test list.
+
+    Neither of the other two checks can see this. Parity is blind to a miscount
+    both emitters share, and JSON Schema cannot express a relationship between
+    two fields — so `total: 1, passed: 1, tests: []` is schema-valid, agrees
+    across compilers, and would otherwise report a suite that ran nothing.
+    """
+    tests = document["tests"]
+    errors = []
+    if document["total"] != len(tests):
+        errors.append(
+            f"{name} total={document['total']} but tests has {len(tests)} entries"
+        )
+    by_status = Counter(entry["status"] for entry in tests)
+    tallied = {}
+    for counter, statuses in TEST_COUNTER_STATUSES.items():
+        tallied[counter] = sum(by_status[status] for status in statuses)
+        if document[counter] != tallied[counter]:
+            errors.append(
+                f"{name} {counter}={document[counter]} but {tallied[counter]} "
+                f"entries are {counter}"
+            )
+    if document["total"] != sum(tallied.values()):
+        errors.append(
+            f"{name} total={document['total']} but passed+failed+skipped="
+            f"{sum(tallied.values())}"
+        )
+    if document["status"] == "TestsPassed" and tallied["failed"]:
+        errors.append(
+            f"{name} status=TestsPassed with {tallied['failed']} failed entries"
+        )
+    return errors
+
+
+def _by_test_identity(entries):
+    grouped = {}
+    for entry in entries:
+        key = tuple(entry.get(field) for field in TEST_IDENTITY_FIELDS)
+        grouped.setdefault(key, []).append(entry)
+    return grouped
+
+
+def _compare_test_entries(rust_tests, self_tests):
+    """Membership delta first, then every stable field of a shared entry."""
+    # Report only the delta, so a one-test disagreement reads as one line
+    # however far the two suites drift apart. Counted rather than set-compared:
+    # suites differing only in how often a name repeats must still name the
+    # entry they disagree on instead of printing an empty delta.
+    rust_ids = _field_multiset(rust_tests, *TEST_IDENTITY_FIELDS)
+    self_ids = _field_multiset(self_tests, *TEST_IDENTITY_FIELDS)
+    errors = []
+    if rust_ids != self_ids:
+        only_rust = _ordered(rust_ids - self_ids)
+        only_self = _ordered(self_ids - rust_ids)
+        errors.append(f"tests: rust-only {only_rust} vs self-only {only_self}")
+
+    rust_by_id = _by_test_identity(rust_tests)
+    self_by_id = _by_test_identity(self_tests)
+    for key in sorted(rust_by_id.keys() & self_by_id.keys(), key=repr):
+        for rust_entry, self_entry in zip(rust_by_id[key], self_by_id[key]):
+            for field in TEST_PAYLOAD_FIELDS:
+                errors += _mismatch(
+                    f"test {key[0]}.{field}",
+                    rust_entry.get(field),
+                    self_entry.get(field),
+                )
+            errors += [
+                f"test {key[0]}.{error}"
+                for error in _compare_counterexamples(
+                    rust_entry.get(TEST_COUNTEREXAMPLE_FIELD, []),
+                    self_entry.get(TEST_COUNTEREXAMPLE_FIELD, []),
+                    COUNTEREXAMPLE_COMPARED_FIELDS,
+                )
+            ]
+    return errors
+
+
+def compare_test(rust, self_hosted, rust_exit, self_exit):
+    """Return parity errors for two ``vow test`` suite results."""
+    errors = []
+    for name, document, exit_code in (
+        ("rust", rust, rust_exit),
+        ("self", self_hosted, self_exit),
+    ):
+        if exit_code != 0:
+            errors.append(f"{name} exited {exit_code}, expected 0")
+        if document.get("status") != "TestsPassed":
+            errors.append(
+                f"{name} status={document.get('status')}, expected TestsPassed"
+            )
+        errors += _contract_errors(name, document)
+
+    # Equality alone is satisfied by two suites that discovered nothing, which
+    # is how a blocking gate goes vacuous exactly when it matters most.
+    if not rust.get("total"):
+        errors.append(f"rust total={rust.get('total')}, expected a non-empty suite")
+
+    for field in TEST_COUNT_FIELDS:
+        errors += _mismatch(field, rust.get(field), self_hosted.get(field))
+    # Derived from the same sources by each compiler's own frontend, so a
+    # disagreement here is a parity bug the test list alone cannot expose.
+    errors += _mismatch(
+        "contract_density",
+        rust.get("contract_density"),
+        self_hosted.get("contract_density"),
+    )
+
+    errors += _compare_test_entries(rust.get("tests", []), self_hosted.get("tests", []))
+    return errors
+
+
 def _load_documents(rust_path, self_path):
     with open(rust_path) as rust_file:
         rust = json.load(rust_file)
@@ -355,9 +600,9 @@ def _ledger_verdict(rust, self_hosted, errors, fixture_path):
 def main(argv=None):
     """Run a comparator over two JSON files for scripts/full_test.sh."""
     args = sys.argv[1:] if argv is None else argv
-    if len(args) not in (5, 6) or args[0] not in ("json", "error"):
+    if len(args) not in (5, 6) or args[0] not in ("json", "error", "test"):
         print(
-            "usage: parity.py {json,error} RUST_JSON SELF_JSON "
+            "usage: parity.py {json,error,test} RUST_JSON SELF_JSON "
             "RUST_EXIT SELF_EXIT [FIXTURE]",
             file=sys.stderr,
         )
@@ -371,7 +616,10 @@ def main(argv=None):
         print(f"FAIL: JSON parse error: {error}")
         return 1
 
-    if mode == "json":
+    if mode == "test":
+        errors = compare_test(rust, self_hosted, int(rust_exit), int(self_exit))
+        verdict = None
+    elif mode == "json":
         errors = compare_json(rust, self_hosted, int(rust_exit), int(self_exit))
         try:
             verdict = _known_cex_verdict(rust, self_hosted, errors, fixture_path)
