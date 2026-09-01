@@ -502,12 +502,7 @@ class CompareTestTest(unittest.TestCase):
         # The full lists would be kilobytes of log for `compiler/`.
         errors = parity.compare_test(
             self.suite(),
-            self.suite(
-                tests=[
-                    self.entry("test_arith"),
-                    self.entry("test_parser", status="failed"),
-                ]
-            ),
+            self.suite(tests=[self.entry("test_arith"), self.entry("test_lexer")]),
             0,
             0,
         )
@@ -517,17 +512,32 @@ class CompareTestTest(unittest.TestCase):
                 "tests: rust-only "
                 "[('compiler/test_parser.vow', 'test_parser', 'passed')] "
                 "vs self-only "
-                "[('compiler/test_parser.vow', 'test_parser', 'failed')]"
+                "[('compiler/test_lexer.vow', 'test_lexer', 'passed')]"
             ],
             errors,
         )
 
     def test_aggregate_counters_must_match(self):
         # `total` alone leaves passed/failed/skipped uncompared, so a compiler
-        # that miscounts outcomes while discovering the same files goes green.
-        errors = parity.compare_test(self.suite(), self.suite(passed=1, failed=1), 0, 0)
+        # that files the same discovered tests under different outcomes goes
+        # green. Both documents stay internally consistent, so the only
+        # findings are the cross-compiler ones.
+        errors = parity.compare_test(
+            self.suite(),
+            self.suite(
+                passed=1,
+                skipped=1,
+                tests=[
+                    self.entry("test_arith"),
+                    self.entry("test_parser", status="skipped"),
+                ],
+            ),
+            0,
+            0,
+        )
 
-        self.assertEqual(["passed: 2 vs 1", "failed: 0 vs 1"], errors)
+        self.assertIn("passed: 2 vs 1", errors)
+        self.assertIn("skipped: 0 vs 1", errors)
 
     def test_contract_density_must_match(self):
         # Each compiler's own frontend counts this, so a divergence is a
@@ -711,6 +721,74 @@ class CompareTestTest(unittest.TestCase):
         self.assertIn(
             "test compiler/test_arith.vow.counterexamples count: 1 vs 0", real
         )
+
+    def test_a_nonzero_total_with_no_entries_is_rejected(self):
+        # The non-empty check only asserts `total` is truthy, and parity is
+        # blind to a miscount both emitters share, so a suite that ran nothing
+        # while claiming otherwise reaches the blocking gate green.
+        hollow = self.suite(total=1, tests=[])
+
+        errors = parity.compare_test(hollow, hollow, 0, 0)
+
+        self.assertIn("rust total=1 but tests has 0 entries", errors)
+        self.assertIn("rust passed=1 but 0 entries are passed", errors)
+        self.assertIn("rust total=1 but passed+failed+skipped=0", errors)
+
+    def test_counters_are_reconciled_against_the_entry_statuses(self):
+        inconsistent = self.suite(
+            total=2,
+            passed=2,
+            tests=[
+                self.entry("test_arith"),
+                self.entry("test_parser", status="verify_failed"),
+            ],
+        )
+
+        errors = parity.compare_test(inconsistent, inconsistent, 0, 0)
+
+        # `verify_failed` counts toward `failed`, per docs/spec/cli.md.
+        self.assertIn("rust passed=2 but 1 entries are passed", errors)
+        self.assertIn("rust failed=0 but 1 entries are failed", errors)
+        self.assertIn("rust status=TestsPassed with 1 failed entries", errors)
+
+    def test_a_skipped_entry_is_counted_as_skipped_not_failed(self):
+        consistent = self.suite(
+            total=2,
+            passed=1,
+            skipped=1,
+            tests=[
+                self.entry("test_arith"),
+                self.entry("test_parser", status="skipped"),
+            ],
+        )
+
+        self.assertEqual([], parity.compare_test(consistent, consistent, 0, 0))
+
+    def test_every_per_test_status_is_bucketed_into_a_counter(self):
+        # A status added to the schema must land in a counter rather than
+        # escaping the reconciliation and making it vacuous for that entry.
+        schema = json.loads(
+            (REPO_ROOT / "docs/spec/schemas/test-result.schema.json").read_text()
+        )
+        declared = set(schema["$defs"]["TestEntry"]["properties"]["status"]["enum"])
+        bucketed = {
+            status
+            for statuses in parity.TEST_COUNTER_STATUSES.values()
+            for status in statuses
+        }
+
+        self.assertEqual(declared, bucketed)
+
+    def test_a_schema_violation_suppresses_the_consistency_report(self):
+        # A missing counter is already reported as a schema violation; saying
+        # it again as an inconsistency is the same finding twice.
+        without_total = self.suite()
+        del without_total["total"]
+
+        errors = parity.compare_test(without_total, without_total, 0, 0)
+
+        self.assertIn("rust total is missing", errors)
+        self.assertFalse([e for e in errors if "but tests has" in e])
 
     def test_optional_counterexample_fields_are_compared(self):
         # `function`/`vow_id`/`blame` alone leave the rest of the documented

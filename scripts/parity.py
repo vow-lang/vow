@@ -93,6 +93,19 @@ TEST_COUNT_FIELDS = tuple(
 # broken emitter must not print a violation per test for a suite the size of
 # `compiler/`.
 TEST_ENTRY_INDEX = re.compile(r"\[[0-9]+\]")
+# Three counters over seven per-test statuses: everything that is neither
+# `passed` nor `skipped` counts toward `failed`, `contract_skipped` included
+# (docs/spec/cli.md). Bucketed off the schema enum so a per-test status added
+# there lands in `failed` rather than silently escaping the reconciliation.
+TEST_COUNTER_STATUSES = {
+    "passed": ("passed",),
+    "failed": tuple(
+        status
+        for status in _TEST_ENTRY_SCHEMA["properties"]["status"]["enum"]
+        if status not in ("passed", "skipped")
+    ),
+    "skipped": ("skipped",),
+}
 
 
 def _gated_schema(schema):
@@ -312,10 +325,49 @@ def _contract_errors(name, document):
             document, GATED_TEST_RESULT_SCHEMA, TEST_SCHEMA_DIR
         )
     )
-    return [
+    errors = [
         f"{name} {error}" if count == 1 else f"{name} {error} ({count} entries)"
         for error, count in sorted(counted.items())
     ]
+    # Only meaningful once the document is otherwise valid: a missing or
+    # mistyped counter is already reported above, and re-reporting it as an
+    # inconsistency would say the same thing twice.
+    return errors or _consistency_errors(name, document)
+
+
+def _consistency_errors(name, document):
+    """Ways a document's own aggregates contradict its own test list.
+
+    Neither of the other two checks can see this. Parity is blind to a miscount
+    both emitters share, and JSON Schema cannot express a relationship between
+    two fields — so `total: 1, passed: 1, tests: []` is schema-valid, agrees
+    across compilers, and would otherwise report a suite that ran nothing.
+    """
+    tests = document["tests"]
+    errors = []
+    if document["total"] != len(tests):
+        errors.append(
+            f"{name} total={document['total']} but tests has {len(tests)} entries"
+        )
+    by_status = Counter(entry["status"] for entry in tests)
+    tallied = {}
+    for counter, statuses in TEST_COUNTER_STATUSES.items():
+        tallied[counter] = sum(by_status[status] for status in statuses)
+        if document[counter] != tallied[counter]:
+            errors.append(
+                f"{name} {counter}={document[counter]} but {tallied[counter]} "
+                f"entries are {counter}"
+            )
+    if document["total"] != sum(tallied.values()):
+        errors.append(
+            f"{name} total={document['total']} but passed+failed+skipped="
+            f"{sum(tallied.values())}"
+        )
+    if document["status"] == "TestsPassed" and tallied["failed"]:
+        errors.append(
+            f"{name} status=TestsPassed with {tallied['failed']} failed entries"
+        )
+    return errors
 
 
 def _by_test_identity(entries):
