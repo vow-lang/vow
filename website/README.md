@@ -55,6 +55,9 @@ direct dependencies in `requirements.in`, then refresh the lockfile with:
 uvx --python 3.13 --from pip-tools pip-compile --generate-hashes --strip-extras --output-file website/requirements.txt website/requirements.in
 ```
 
+pip-tools 7.6.1 adds `--no-index` to the generated header on its own; the command
+above is correct as written even though the header doesn't match it verbatim.
+
 ## Deployment
 
 `.github/workflows/docs.yml` assembles the source, builds with `--strict`, and deploys
