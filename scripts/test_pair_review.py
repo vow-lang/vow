@@ -879,6 +879,43 @@ class LedgerWritebackTest(unittest.TestCase):
         self.assertEqual(0, status)
         self.assertEqual(before, self.ledger_path.read_bytes())
 
+    def test_an_errored_run_exits_two(self):
+        # Exit 1 means "confirmed findings". A run whose chunks errored or left
+        # a claim unjudged is not a verdict at all, so it takes the same
+        # incomplete-run code scripts/equivalence.py uses for its coverage floor
+        # -- exiting 0 would let a caller reading only the status take a run
+        # that measured nothing for a clean bill of health.
+        errored = self.result(
+            plan={"chunk_bytes": 100, "chunks": []},
+            chunks_reviewed=[1],
+            input_tokens=0,
+            output_tokens=0,
+            errors=[{"chunk_index": 1, "error": "claim not judged: no program"}],
+        )
+        compiler = Path(self.directory.name) / "compiler"
+        compiler.touch()
+        with (
+            mock.patch.object(pair_review, "LEDGER", self.ledger_path),
+            mock.patch.object(pair_review, "review_pair", return_value=errored),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+        ):
+            status = pair_review.main(
+                [
+                    "--all",
+                    "--pair",
+                    "lexer",
+                    "--rust",
+                    str(compiler),
+                    "--self",
+                    str(compiler),
+                    "--output-dir",
+                    str(Path(self.directory.name) / "errored-out"),
+                ]
+            )
+
+        self.assertEqual(2, status)
+
 
 class SystemPromptTest(unittest.TestCase):
     def test_prompt_demands_a_module_header(self):

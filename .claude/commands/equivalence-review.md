@@ -74,6 +74,11 @@ python3 scripts/pair_review.py --model <MODEL> \
 Unchanged pairs are skipped via the ledger's content hash; pass `--all` only if you deliberately want a
 full re-review. Needs `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`).
 
+Exit codes match `scripts/equivalence.py`: `0` complete with nothing confirmed, `1` confirmed findings,
+`2` the run is not a verdict — a missing compiler, or any chunk that errored or left a claim unjudged.
+`2` takes precedence over `1`. A pair capped by `--max-chunks-per-pair` is *not* an error: the cap is a
+deliberate spend choice, so it is reported as deferred and left unstamped, and the run still exits 0.
+
 **The rule, and it is not negotiable:** a claim is a hypothesis until `scripts/equivalence.py` confirms
 the two compilers disagree on a concrete program. The harness enforces this — `confirmed` / `refuted` /
 `inconclusive` — and you must preserve the distinction in the report. Do not promote a hypothesis to a

@@ -1174,6 +1174,18 @@ def main(argv=None):
     (outdir / "results.json").write_text(json.dumps(report, indent=2) + "\n")
     _print_summary(report, skipped, confirmed, outdir)
 
+    # 2 before 1, as in scripts/equivalence.py: a run whose chunks errored or
+    # whose claims went unjudged did not measure what it was asked to, and a
+    # caller reading only the status must not take that for a verdict. Deferred
+    # chunks are not an error -- an operator-imposed spend cap is a deliberate
+    # choice, reported and left unstamped rather than failed.
+    if any(r["errors"] for r in results):
+        print(
+            "\nFAIL: some chunks errored or left a claim unjudged"
+            " — this run is not a verdict.",
+            file=sys.stderr,
+        )
+        return 2
     return 1 if confirmed else 0
 
 
