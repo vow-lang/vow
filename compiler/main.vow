@@ -2182,6 +2182,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 if result != 0 {
                     let duration: i64 = time_unix_ms() - start_time;
                     let codegen_diag: Diagnostic = codegen_failure_diagnostic(result, test_path, str2(tmp_out, String::from(".o")));
+                    eprintln_str(diag_to_human(codegen_diag, checked.dctx));
                     let diag_json2: String = str3(String::from("["), diag_to_json(codegen_diag, checked.dctx), String::from("]"));
                     let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json2);
                     entries_json.push(entry);
