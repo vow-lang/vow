@@ -4319,6 +4319,141 @@ mod tests {
     }
 
     #[test]
+    fn back_edge_upsilons_are_a_parallel_copy_not_a_sequential_one() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "parallel_back_edge", ITY_I64, false);
+        declare_test_function(ctx, 1, "main", ITY_I32, true);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_I64, 0), 0);
+        }
+
+        // Entry: initialize the two loop-carried Phis to a = 0 and b = 1.
+        add_test_block(ctx);
+        add_test_inst(ctx, 1, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(ctx, 2, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 1, 0, &[]);
+        add_test_inst(ctx, 3, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 10, 0, &[1]);
+        add_test_inst(ctx, 4, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 11, 0, &[2]);
+        add_test_inst(ctx, 5, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 1, 0, &[]);
+
+        // Header: execute the body once, then carry a into the exit block.
+        add_test_block(ctx);
+        add_test_inst(ctx, 10, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 11, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 12, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            13,
+            IOP_GT,
+            ITY_BOOL,
+            IDATA_INTEGER,
+            ITY_I64,
+            0,
+            &[11, 12],
+        );
+        add_test_inst(
+            ctx,
+            14,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            30,
+            0,
+            &[10],
+        );
+        add_test_inst(
+            ctx,
+            15,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            31,
+            0,
+            &[11],
+        );
+        add_test_inst(
+            ctx,
+            16,
+            IOP_BRANCH,
+            ITY_UNIT,
+            IDATA_BRANCH_TARGETS,
+            2,
+            3,
+            &[13],
+        );
+
+        // Body: the hostile order must still copy the old b into a.
+        add_test_block(ctx);
+        add_test_inst(ctx, 20, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 0, 0, &[]);
+        add_test_inst(
+            ctx,
+            21,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            11,
+            0,
+            &[20],
+        );
+        add_test_inst(
+            ctx,
+            22,
+            IOP_UPSILON,
+            ITY_UNIT,
+            IDATA_PHI_TARGET,
+            10,
+            0,
+            &[11],
+        );
+        add_test_inst(ctx, 23, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 1, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 30, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 31, IOP_PHI, ITY_I64, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 32, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[30]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        // The process exits zero only when the loop returns the expected 1.
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 1, ITY_I32, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 1, IOP_CALL, ITY_I64, IDATA_CALL_TARGET, 0, 0, &[]);
+        add_test_inst(ctx, 2, IOP_CONST_I64, ITY_I64, IDATA_CONST_I64, 1, 0, &[]);
+        add_test_inst(ctx, 3, IOP_NE, ITY_BOOL, IDATA_INTEGER, ITY_I64, 0, &[1, 2]);
+        add_test_inst(ctx, 4, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[3]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join("parallel_back_edge.o");
+        let executable_path = temp_dir.path().join("parallel_back_edge");
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        unsafe {
+            assert_eq!(
+                __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64),
+                0
+            );
+        }
+        link_float_phi_test_object(&object_path, &executable_path);
+
+        let output = std::process::Command::new(&executable_path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "back-edge Upsilons did not copy in parallel\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
     fn phase3_narrow_intrinsic_signatures_use_native_abi_widths() {
         for (name, expected) in [
             ("i8", Some(types::I8)),
