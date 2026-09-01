@@ -712,6 +712,50 @@ class CompareTestTest(unittest.TestCase):
             "test compiler/test_arith.vow.counterexamples count: 1 vs 0", real
         )
 
+    def test_optional_counterexample_fields_are_compared(self):
+        # `function`/`vow_id`/`blame` alone leave the rest of the documented
+        # counterexample contract — the fields that say WHERE and HOW the
+        # violation was reached — outside the gate.
+        def suite_with(**overrides):
+            return self.suite(
+                tests=[
+                    self.entry(
+                        "test_arith", counterexamples=[counterexample(**overrides)]
+                    ),
+                    self.entry("test_parser"),
+                ]
+            )
+
+        def call_site(caller_function):
+            return {
+                "caller_function": caller_function,
+                "file": "a.vow",
+                "offset": 0,
+                "length": 1,
+            }
+
+        errors = parity.compare_test(
+            suite_with(call_sites=[call_site("f")]),
+            suite_with(call_sites=[call_site("g")]),
+            0,
+            0,
+        )
+
+        self.assertEqual(1, len(errors))
+        self.assertIn("counterexample[0].call_sites:", errors[0])
+        self.assertIn("'caller_function': 'f'", errors[0])
+        self.assertIn("'caller_function': 'g'", errors[0])
+
+    def test_the_compared_counterexample_fields_are_read_out_of_the_schema(self):
+        schema = json.loads(
+            (REPO_ROOT / "docs/spec/schemas/counterexample.schema.json").read_text()
+        )
+
+        self.assertEqual(
+            set(schema["properties"]) - {"source", "values", "violation"},
+            set(parity.COUNTEREXAMPLE_COMPARED_FIELDS),
+        )
+
     def test_the_compared_contract_is_read_out_of_the_schema(self):
         # Restating the field lists here would let a schema addition silently
         # stop being gated; these are derived, so this pins the derivation.

@@ -53,6 +53,22 @@ TEST_TRACKED_DIVERGENT_FIELDS = frozenset({"diagnostics"})
 # self-hosted a path string), and ESBMC's `$esbmc$` internals are noise. Routed
 # through the same format-tolerant comparison `compare_json` already applies.
 TEST_COUNTEREXAMPLE_FIELD = "counterexamples"
+# Every counterexample field the schema declares bar the three the comparison
+# owns: `source` is the documented shape divergence, `values` is compared
+# separately with the ESBMC internals stripped, and `violation` is added by
+# `_counterexample_fields` only when both sides blamed a contract clause. The
+# rest — `call_sites`, `violating_args`, `execution_path`, `branch_decisions`,
+# `replay`, `replay_reason` — are deterministic for the same sources and
+# derived here so a field added to the schema is compared automatically.
+_COUNTEREXAMPLE_SCHEMA, _ = schema_check.load(
+    Path(__file__).resolve().parent.parent
+    / "docs/spec/schemas/counterexample.schema.json"
+)
+COUNTEREXAMPLE_COMPARED_FIELDS = tuple(
+    field
+    for field in _COUNTEREXAMPLE_SCHEMA["properties"]
+    if field not in ("source", VALUES_LABEL, "violation")
+)
 # Which entry fields name a test rather than describe its outcome. The membership
 # delta keys off these; the rest are compared per shared entry.
 TEST_IDENTITY_FIELDS = ("file", "name", "status")
@@ -339,7 +355,7 @@ def _compare_test_entries(rust_tests, self_tests):
                 for error in _compare_counterexamples(
                     rust_entry.get(TEST_COUNTEREXAMPLE_FIELD, []),
                     self_entry.get(TEST_COUNTEREXAMPLE_FIELD, []),
-                    ("function", "vow_id", "blame"),
+                    COUNTEREXAMPLE_COMPARED_FIELDS,
                 )
             ]
     return errors
