@@ -15,6 +15,7 @@ the hand-written pages (home, tutorial, reference/index) are committed.
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -35,17 +36,26 @@ REFERENCE_PAGES = [
     "examples.md",
 ]
 
-# Targeted link rewrites: relative links in the canonical files that point outside
-# the copied set must be retargeted to absolute GitHub URLs (external links are not
-# validated by mkdocs --strict and stay correct on the site).
-LINK_REWRITES = {
-    "grammar.md": [
-        (
-            "](../adr/0001-numeric-tower-narrow-ints.md)",
-            f"]({GITHUB_BLOB}/docs/adr/0001-numeric-tower-narrow-ints.md)",
-        ),
-    ],
-}
+# Links in the canonical files are relative to `docs/spec/`. Sibling links
+# (`errors.md#...`) already resolve inside the copied set; a `../` prefix always
+# escapes it, so those are retargeted at GitHub — external links are not validated
+# by `mkdocs --strict` and stay correct on the published site.
+ESCAPING_LINK = re.compile(r"\]\(\.\./([^)#]+)(#[^)]*)?\)")
+
+
+def _retarget_escaping_links(text: str, page: str) -> str:
+    """Point `../`-prefixed links at GitHub, failing loudly on a dead target."""
+
+    def repl(match: re.Match[str]) -> str:
+        target, anchor = match.group(1), match.group(2) or ""
+        if not (REPO / "docs" / target).exists():
+            raise SystemExit(
+                f"{page}: link '../{target}' has no target at docs/{target}. "
+                "Fix the link in the canonical file."
+            )
+        return f"]({GITHUB_BLOB}/docs/{target}{anchor})"
+
+    return ESCAPING_LINK.sub(repl, text)
 
 
 def _reset(path: Path) -> None:
@@ -74,22 +84,16 @@ def main() -> None:
         src = SPEC / name
         if not src.is_file():
             raise SystemExit(f"missing canonical page: {src}")
-        text = src.read_text()
-        for old, new in LINK_REWRITES.get(name, []):
-            if old not in text:
-                raise SystemExit(
-                    f"link-rewrite target not found in {name!r}: {old!r}\n"
-                    "The canonical file changed; update LINK_REWRITES."
-                )
-            text = text.replace(old, new)
-        (REFERENCE / name).write_text(text)
+        (REFERENCE / name).write_text(_retarget_escaping_links(src.read_text(), name))
         copied += 1
 
     # Standard library reference is a single comprehensive page.
     stdlib_src = SPEC / "stdlib.md"
     if not stdlib_src.is_file():
         raise SystemExit(f"missing canonical page: {stdlib_src}")
-    (SITE_DOCS / "stdlib.md").write_text(stdlib_src.read_text())
+    (SITE_DOCS / "stdlib.md").write_text(
+        _retarget_escaping_links(stdlib_src.read_text(), "stdlib.md")
+    )
     copied += 1
 
     # JSON schemas referenced by cli.md, served as static assets.
