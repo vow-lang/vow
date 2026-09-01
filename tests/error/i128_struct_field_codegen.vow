@@ -1,0 +1,14 @@
+// TEST: error-code CodegenUnsupported
+// TEST: error-count 1
+// TEST: build-json '128-bit struct fields and enum payloads' in x.get('message', '')
+module I128StructFieldCodegen
+
+struct Box {
+    value: i128,
+}
+
+fn main() -> i32 {
+    let boxed: Box = Box { value: 18446744073709551616 };
+    let value: i128 = boxed.value;
+    if value == 0 { 0 } else { 1 }
+}

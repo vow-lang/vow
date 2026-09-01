@@ -1612,7 +1612,15 @@ fn build_drain_verify_phase(esbmc_bin: String, in_flight_h: Vec<i64>, in_flight_
 }
 
 fn codegen_failure_diagnostic(result: i64, path: String, obj_path: String) -> Diagnostic {
-    if result == CLIF_ERR_UNSUPPORTED() {
+    if result == CLIF_ERR_WIDE_AGGREGATE_FIELD() {
+        diag_error(
+            EC_CODEGEN_UNSUPPORTED(),
+            CLIF_WIDE_AGGREGATE_FIELD_MSG(),
+            path,
+            0,
+            0
+        )
+    } else if result == CLIF_ERR_UNSUPPORTED() {
         diag_error(
             EC_CODEGEN_UNSUPPORTED(),
             String::from("native backend does not support an operation used by this program"),
