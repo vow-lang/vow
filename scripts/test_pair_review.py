@@ -95,6 +95,67 @@ class SplitUnitsTest(unittest.TestCase):
         self.assertNotIn("\nfn ", preamble)
 
 
+class ChunkPlanTest(unittest.TestCase):
+    def test_related_matches_receiver_prefix_convention(self):
+        self.assertTrue(pair_review.related("lctx_merge_inst_ty", "merge_inst_ty"))
+        self.assertTrue(pair_review.related("lower_expr", "lower_expr"))
+        self.assertFalse(pair_review.related("lower_expr", "lower_stmt"))
+
+    def test_every_real_lower_unit_lands_in_exactly_one_chunk(self):
+        preambles, rust_units, self_units = pair_review.load_pair_units("lower")
+        chunks = pair_review.plan_chunks(rust_units, self_units, 120_000, preambles)
+
+        self.assertEqual(len(rust_units), sum(len(c.rust_units) for c in chunks))
+        self.assertEqual(len(self_units), sum(len(c.self_units) for c in chunks))
+        self.assertEqual(
+            sorted((u.source, u.name, u.text) for u in rust_units),
+            sorted((u.source, u.name, u.text) for c in chunks for u in c.rust_units),
+        )
+        self.assertEqual(
+            sorted((u.source, u.name, u.text) for u in self_units),
+            sorted((u.source, u.name, u.text) for c in chunks for u in c.self_units),
+        )
+
+    def test_unmatched_rust_unit_gets_its_own_chunk(self):
+        rust_units = [pair_review.Unit("rust_only", "fn rust_only() {}\n", "a.rs")]
+        self_units = [pair_review.Unit("vow_only", "fn vow_only() {}\n", "a.vow")]
+
+        chunks = pair_review.plan_chunks(rust_units, self_units, 10_000)
+
+        self.assertEqual(["rust_only"], [u.name for c in chunks for u in c.rust_units])
+
+    def test_chunks_respect_rendered_byte_budget(self):
+        preambles, rust_units, self_units = pair_review.load_pair_units("lower")
+        chunks = pair_review.plan_chunks(rust_units, self_units, 40_000, preambles)
+
+        for index, chunk in enumerate(chunks, 1):
+            with self.subTest(chunk=index):
+                rendered = pair_review.render_chunk(
+                    chunk, preambles, index, len(chunks)
+                )
+                self.assertTrue(
+                    len(rendered.encode()) <= 40_000 or chunk.oversize_units,
+                    len(rendered.encode()),
+                )
+
+    def test_oversize_unit_is_reported_and_preserved(self):
+        text = "fn huge() {\n" + ("x" * 200_000) + "\n}\n"
+        units = [pair_review.Unit("huge", text, "huge.vow")]
+
+        chunks = pair_review.plan_chunks([], units, 50_000)
+
+        self.assertEqual(1, len(chunks))
+        self.assertEqual(["huge.vow:huge"], chunks[0].oversize_units)
+        self.assertIn(text, pair_review.render_chunk(chunks[0], None, 1, 1))
+
+    def test_lower_pair_chunk_count_is_bounded(self):
+        preambles, rust_units, self_units = pair_review.load_pair_units("lower")
+
+        chunks = pair_review.plan_chunks(rust_units, self_units, 120_000, preambles)
+
+        self.assertLessEqual(len(chunks), 12)
+
+
 class ReadPairTest(unittest.TestCase):
     def test_truncation_is_flagged_and_marked_in_the_text(self):
         # A model that does not know it saw half a file will reason

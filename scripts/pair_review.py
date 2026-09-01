@@ -30,7 +30,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +73,20 @@ RUST_FN = re.compile(
 class Unit:
     name: str
     text: str
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class Preambles:
+    rust: tuple[tuple[str, str], ...] = ()
+    self_hosted: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass
+class Chunk:
+    rust_units: list[Unit] = field(default_factory=list)
+    self_units: list[Unit] = field(default_factory=list)
+    oversize_units: list[str] = field(default_factory=list)
 
 
 def split_units(text, pattern):
@@ -86,6 +100,133 @@ def split_units(text, pattern):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         units.append(Unit(match.group(1), text[match.start() : end]))
     return preamble, units
+
+
+def related(left, right):
+    """Whether function names use the same name or a receiver prefix."""
+    return left == right or left.endswith("_" + right) or right.endswith("_" + left)
+
+
+def _source_files(specs, suffix):
+    files = []
+    for spec in specs:
+        path = REPO_ROOT / spec
+        files.extend(sorted(path.rglob(f"*{suffix}")) if path.is_dir() else [path])
+    return files
+
+
+def _load_units(files, pattern):
+    preambles = []
+    units = []
+    for path in files:
+        relative = str(path.relative_to(REPO_ROOT))
+        preamble, source_units = split_units(path.read_text(errors="replace"), pattern)
+        preambles.append((relative, preamble))
+        units.extend(Unit(unit.name, unit.text, relative) for unit in source_units)
+    return tuple(preambles), units
+
+
+def load_pair_units(name):
+    """Load one declared module pair as preambles and function units."""
+    rust_paths, self_path = PAIRS[name]
+    rust_preambles, rust_units = _load_units(_source_files(rust_paths, ".rs"), RUST_FN)
+    self_preambles, self_units = _load_units(_source_files([self_path], ".vow"), VOW_FN)
+    return Preambles(rust_preambles, self_preambles), rust_units, self_units
+
+
+def render_chunk(chunk, preambles=None, index=1, total=1):
+    """Render a review chunk with enough source context to stand alone."""
+    preambles = preambles or Preambles()
+    parts = [f"=== REVIEW CHUNK {index} OF {total} ===\n"]
+    for source, text in preambles.rust:
+        parts.append(f"=== RUST PREAMBLE: {source} ===\n{text}")
+    for unit in chunk.rust_units:
+        parts.append(f"=== RUST: {unit.source} (function {unit.name}) ===\n{unit.text}")
+    for source, text in preambles.self_hosted:
+        parts.append(f"=== SELF-HOSTED PREAMBLE: {source} ===\n{text}")
+    for unit in chunk.self_units:
+        parts.append(
+            f"=== SELF-HOSTED: {unit.source} (function {unit.name}) ===\n{unit.text}"
+        )
+    return "\n\n".join(parts)
+
+
+def plan_chunks(rust_units, self_units, chunk_bytes, preambles=None):
+    """Pair related functions and greedily pack complete units into prompts."""
+    if chunk_bytes <= 0:
+        raise ValueError("chunk_bytes must be positive")
+    preambles = preambles or Preambles()
+    chunks = []
+    current = Chunk()
+
+    def nonempty(chunk):
+        return bool(chunk.rust_units or chunk.self_units)
+
+    def rendered_size(chunk):
+        # A deliberately wide placeholder keeps the final `i of n` header from
+        # pushing a planned chunk over its byte budget.
+        return len(render_chunk(chunk, preambles, 999_999, 999_999).encode())
+
+    def finish():
+        nonlocal current
+        if nonempty(current):
+            chunks.append(current)
+            current = Chunk()
+
+    def add_one(unit, side):
+        nonlocal current
+        candidate = Chunk(
+            rust_units=[*current.rust_units],
+            self_units=[*current.self_units],
+            oversize_units=[*current.oversize_units],
+        )
+        target = candidate.rust_units if side == "rust" else candidate.self_units
+        target.append(unit)
+        if nonempty(current) and rendered_size(candidate) > chunk_bytes:
+            finish()
+            candidate = Chunk()
+            target = candidate.rust_units if side == "rust" else candidate.self_units
+            target.append(unit)
+        if rendered_size(candidate) > chunk_bytes:
+            candidate.oversize_units.append(f"{unit.source}:{unit.name}")
+        current = candidate
+
+    def add_group(group_rust, group_self):
+        nonlocal current
+        candidate = Chunk(
+            rust_units=[*current.rust_units, *group_rust],
+            self_units=[*current.self_units, *group_self],
+            oversize_units=[*current.oversize_units],
+        )
+        if rendered_size(candidate) <= chunk_bytes:
+            current = candidate
+            return
+        if nonempty(current):
+            finish()
+            candidate = Chunk(rust_units=[*group_rust], self_units=[*group_self])
+            if rendered_size(candidate) <= chunk_bytes:
+                current = candidate
+                return
+        for unit in group_rust:
+            add_one(unit, "rust")
+        for unit in group_self:
+            add_one(unit, "self")
+
+    used_rust = set()
+    for self_unit in self_units:
+        matches = [
+            (index, rust_unit)
+            for index, rust_unit in enumerate(rust_units)
+            if index not in used_rust and related(self_unit.name, rust_unit.name)
+        ]
+        used_rust.update(index for index, _ in matches)
+        add_group([unit for _, unit in matches], [self_unit])
+
+    for index, rust_unit in enumerate(rust_units):
+        if index not in used_rust:
+            add_one(rust_unit, "rust")
+    finish()
+    return chunks
 
 
 SYSTEM = """\
