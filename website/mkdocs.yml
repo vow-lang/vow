@@ -11,6 +11,13 @@ copyright: Vow is open source under the MIT License.
 
 docs_dir: docs
 
+# `--strict` promotes warnings to errors, but MkDocs reports a link to a missing
+# *anchor* at INFO by default, so a broken cross-reference passes CI silently.
+# Raise it to a warning so the strict gate actually catches one.
+validation:
+  links:
+    anchors: warn
+
 theme:
   name: material
   features:
