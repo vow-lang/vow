@@ -1510,9 +1510,10 @@ work will complete those paths. Never weaken contracts to fit the verifier.
 8-byte slot to every field regardless of declared type (narrow ints are
 padded). The two-slot layout for `i128`/`u128` accepted by
 [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) is not implemented yet,
-so the compiler refuses 128-bit fields instead of storing them in an undersized
-slot. There is no packing or natural-alignment layout today; FFI structs that
-need a specific C layout must shim through `Vec<u8>` or extern wrappers.
+so the compiler refuses reads and writes of 128-bit fields instead of storing
+them in an undersized slot. There is no packing or natural-alignment layout
+today; FFI structs that need a specific C layout must shim through `Vec<u8>` or
+extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -1657,15 +1658,21 @@ width.
 
 128-bit values are also **scalar-only** for now. Locals, parameters, returns,
 and temporaries carry both limbs correctly, but a 128-bit value placed inside
-an aggregate does not, and the compiler rejects every such program rather than
-producing one that computes on a truncated value: `Vec<i128>`/`Vec<u128>`
-elements are refused because the element helpers are i64-only, and a 128-bit
-struct field or enum payload (including `Option<i128>` and 128-bit `Result`
-payloads) fails codegen with a named limitation rather than a raw backend
-verifier dump. Enum, `Option`, and `Result` payloads are refused at their
-construction site, before an 8-byte slot can truncate the value or a 16-byte
-store can overwrite its neighbour. Do not store 128-bit values in aggregates
-yet.
+an aggregate does not: `Vec<i128>`/`Vec<u128>` elements are refused because the
+element helpers are i64-only, and reading or writing a 128-bit struct field —
+or constructing a 128-bit enum, `Option`, or `Result` payload — fails codegen
+with a named limitation rather than a raw backend verifier dump, before an
+8-byte slot can truncate the value or a 16-byte store can overwrite its
+neighbour. The refusal is at the access, not the declaration: a struct or enum
+may declare a 128-bit member and still compile as long as nothing touches it.
+Do not store 128-bit values in aggregates yet.
+
+One 128-bit aggregate gap is not yet fail-closed. A 128-bit payload read out of
+a user `enum` value that was not constructed in the same function is typed as
+64-bit by the IR, so it escapes the refusal above: the build succeeds and
+computes on the truncated low limb, and a contract over such a read is reported
+`Verified` against the verifier's 8-byte model rather than `Skipped`. Do not
+read 128-bit enum payloads yet.
 
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted
@@ -2891,8 +2898,8 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 |-----------------|---------------------------------------------|
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, unsupported code generation, backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
@@ -6588,9 +6595,10 @@ work will complete those paths. Never weaken contracts to fit the verifier.
 8-byte slot to every field regardless of declared type (narrow ints are
 padded). The two-slot layout for `i128`/`u128` accepted by
 [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md) is not implemented yet,
-so the compiler refuses 128-bit fields instead of storing them in an undersized
-slot. There is no packing or natural-alignment layout today; FFI structs that
-need a specific C layout must shim through `Vec<u8>` or extern wrappers.
+so the compiler refuses reads and writes of 128-bit fields instead of storing
+them in an undersized slot. There is no packing or natural-alignment layout
+today; FFI structs that need a specific C layout must shim through `Vec<u8>` or
+extern wrappers.
 
 ### Built-in Parameterized Types
 
@@ -6735,15 +6743,21 @@ width.
 
 128-bit values are also **scalar-only** for now. Locals, parameters, returns,
 and temporaries carry both limbs correctly, but a 128-bit value placed inside
-an aggregate does not, and the compiler rejects every such program rather than
-producing one that computes on a truncated value: `Vec<i128>`/`Vec<u128>`
-elements are refused because the element helpers are i64-only, and a 128-bit
-struct field or enum payload (including `Option<i128>` and 128-bit `Result`
-payloads) fails codegen with a named limitation rather than a raw backend
-verifier dump. Enum, `Option`, and `Result` payloads are refused at their
-construction site, before an 8-byte slot can truncate the value or a 16-byte
-store can overwrite its neighbour. Do not store 128-bit values in aggregates
-yet.
+an aggregate does not: `Vec<i128>`/`Vec<u128>` elements are refused because the
+element helpers are i64-only, and reading or writing a 128-bit struct field —
+or constructing a 128-bit enum, `Option`, or `Result` payload — fails codegen
+with a named limitation rather than a raw backend verifier dump, before an
+8-byte slot can truncate the value or a 16-byte store can overwrite its
+neighbour. The refusal is at the access, not the declaration: a struct or enum
+may declare a 128-bit member and still compile as long as nothing touches it.
+Do not store 128-bit values in aggregates yet.
+
+One 128-bit aggregate gap is not yet fail-closed. A 128-bit payload read out of
+a user `enum` value that was not constructed in the same function is typed as
+64-bit by the IR, so it escapes the refusal above: the build succeeds and
+computes on the truncated low limb, and a contract over such a read is reported
+`Verified` against the verifier's 8-byte model rather than `Skipped`. Do not
+read 128-bit enum payloads yet.
 
 These are backend gaps, not language rules; the type checker accepts all of
 these at 128-bit width. Verification is a separate matter: a contracted
@@ -7970,8 +7984,8 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 |-----------------|---------------------------------------------|
 | `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. May still carry `ArithOverflowReachable` *Warnings* in `diagnostics[]`: those report a checked operator (`+!`, `-!`, `*!`, `/!`, `%!`) whose `ArithmeticOverflow` abort is reachable. The abort is the operator's specified behaviour and the contract is proved for every returning execution, so the status stays `Verified` (exit 0). See [`errors.md`](errors.md#arithoverflowreachable). |
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
-| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
-| `CompileFailed` | Parse error, type error, module load error, unsupported code generation, backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Struct construction (`RegionAlloc`) and field reads/writes (`FieldGet`/`FieldSet`) **are** modelled via the user-struct heap model, except at 128-bit width: that slot is 8 bytes, so a `FieldGet`/`FieldSet` carrying an `i128`/`u128` is reported `FieldGet at 128-bit width` / `FieldSet at 128-bit width` instead of being modelled. Each skipped function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
+| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
