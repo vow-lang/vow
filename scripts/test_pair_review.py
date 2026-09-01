@@ -210,6 +210,52 @@ class SplitUnitsTest(unittest.TestCase):
         self.assertTrue(units[0].text.rstrip().endswith("}"))
         self.assertNotIn("1", preamble)
 
+    def test_a_function_inside_a_literal_or_comment_is_not_an_item(self):
+        # Lifting it out tears the container in half, and the halves land in
+        # the preamble, which is repeated in every chunk of the pair.
+        cases = {
+            "raw string": (
+                'pub const P: &str = r#"\n'
+                "pub fn fake() -> i64 { 1 }\n"
+                '"#;\n'
+                "fn real() -> i64 { 2 }\n"
+            ),
+            "block comment": (
+                "/*\nfn dead() -> i64 { 0 }\n*/\nfn real() -> i64 { 2 }\n"
+            ),
+        }
+        for label, text in cases.items():
+            with self.subTest(container=label):
+                preamble, units = pair_review.split_units(text, pair_review.RUST_FN)
+
+                self.assertEqual(["real"], [u.name for u in units])
+                self.assertIn("fn fake" if "fake" in text else "fn dead", preamble)
+
+    def test_a_multiline_const_generic_is_loud_too(self):
+        # Its stray `}` ends a line, so the trailing-text check sees nothing --
+        # the signature's unbalanced `<` is what catches this shape.
+        with self.assertRaises(pair_review.UnsupportedItem):
+            pair_review.split_units(
+                "fn f() -> Foo<\n    { N }\n> {\n    body();\n}\n",
+                pair_review.RUST_FN,
+            )
+
+    def test_ordinary_generics_and_comparisons_are_not_flagged(self):
+        # The angle check must not fire on real code: `->` is not a closer,
+        # `>>` is two, and a comparison lives inside the body.
+        cases = [
+            "fn g() -> Vec<Vec<i64>> { vec![] }\n",
+            "fn g(a: i64, b: i64) -> bool { a < b }\n",
+            "fn magic() -> i64 { 86 }   // 'V'\n",
+        ]
+        for source in cases:
+            with self.subTest(source=source.strip()):
+                _, units = pair_review.split_units(source, pair_review.RUST_FN)
+
+                self.assertEqual(
+                    ["g" if "fn g" in source else "magic"], [u.name for u in units]
+                )
+
     def test_an_item_the_scanner_cannot_end_is_loud(self):
         # A const-generic `Bar<{ N }>` needs a real parser. Truncating silently
         # would leave a named unit that still matches and still counts covered.

@@ -273,6 +273,62 @@ class UnsupportedItem(Exception):
     """
 
 
+def _trailing_code(text, cursor):
+    """Code following `cursor` on its own line, ignoring comments.
+
+    `fn magic() -> i64 { 86 }   // 'V'` ends where it should; the comment after
+    it is not evidence the scanner stopped early. Only real code there is.
+    """
+    end = len(text)
+    index = cursor
+    while index < end and text[index] != "\n":
+        if text[index] in " \t":
+            index += 1
+            continue
+        skipped = _skip_noncode(text, index)
+        if skipped is None:
+            line_end = text.find("\n", index)
+            return text[index : end if line_end == -1 else line_end].strip()
+        if skipped > index and "\n" in text[index:skipped]:
+            return ""  # a comment that runs past this line
+        index = skipped
+    return ""
+
+
+def _signature_angles(text, start):
+    """`<` minus `>` across a signature, counted at bracket depth 0.
+
+    Zero for every signature `_item_end` understands; non-zero means it stopped
+    inside a generic argument list, which is the one shape it cannot parse.
+
+    Both restrictions are load-bearing. Counting only outside `(`/`[` keeps a
+    Vow parameter refinement (`fn f(a: i64 where a >= 0)`) from scoring; and
+    `->`/`=>` are skipped while `>>` and `>=` are not, so `Vec<Vec<i64>>`
+    balances instead of reading as two stray closers.
+    """
+    index, brackets, angles = start, 0, 0
+    end = len(text)
+    while index < end:
+        skipped = _skip_noncode(text, index)
+        if skipped is not None:
+            index = skipped
+            continue
+        char = text[index]
+        if char in "([":
+            brackets += 1
+        elif char in ")]":
+            brackets -= 1
+        elif brackets == 0:
+            if char in "{;":
+                break
+            if char == "<":
+                angles += 1
+            elif char == ">" and text[index - 1] not in "-=":
+                angles -= 1
+        index += 1
+    return angles
+
+
 def split_units(text, pattern):
     """Split source into whole function items, hoisting everything else.
 
@@ -287,27 +343,41 @@ def split_units(text, pattern):
     No text is dropped: the preamble is exactly the file minus its function
     items, and the units tile the rest in source order.
     """
-    residue, units, cursor = [], [], 0
-    for match in pattern.finditer(text):
-        # A `fn` nested inside a function body belongs to the item already
-        # taken, not to a unit of its own.
-        if match.start() < cursor:
+    residue, units, cursor, index = [], [], 0, 0
+    end = len(text)
+    while index < end:
+        # Discovery walks code positions rather than scanning raw text, so a
+        # `fn` at column 0 inside a raw string or a block comment is that
+        # container's data. Taken as an item it would be lifted out, tearing
+        # the literal in half -- and the halves land in the preamble, which
+        # `_chunk_parts` repeats in every chunk of the pair.
+        skipped = _skip_noncode(text, index)
+        if skipped is not None:
+            index = skipped
+            continue
+        match = pattern.match(text, index)
+        if match is None:
+            index += 1
             continue
         start = _unit_start(text, match.start(), cursor)
         residue.append(text[cursor:start])
         cursor = _item_end(text, match.end())
-        # In rustfmt'd source an item always ends at end of line. Anything else
-        # means the scanner stopped inside a signature it does not understand
-        # -- a const-generic `Bar<{ N }>`, say, where `<` is ambiguous without
-        # a real parser. Fail loudly; a half unit is worse than no review.
-        line_end = text.find("\n", cursor)
-        trailing = text[cursor : len(text) if line_end == -1 else line_end]
-        if trailing.strip():
+        # In rustfmt'd source an item always ends at end of line, and a
+        # signature's angle brackets balance. Either failing means the scanner
+        # stopped inside a signature it does not understand -- a const-generic
+        # `Bar<{ N }>`, where `<` is ambiguous without a real parser. The angle
+        # check is what catches the multiline form, whose stray `}` ends a line
+        # and so leaves the first check nothing to see. Fail loudly; a half
+        # unit keeps its name, still matches, still counts as covered.
+        trailing = _trailing_code(text, cursor)
+        angles = _signature_angles(text, match.end())
+        if trailing or angles:
+            stopped = trailing[:60] or f"an unclosed `<` ({angles:+d})"
             raise UnsupportedItem(
-                f"cannot find the end of `{match.group(1)}`: "
-                f"stopped before {trailing.strip()[:60]!r}"
+                f"cannot find the end of `{match.group(1)}`: stopped at {stopped!r}"
             )
         units.append(Unit(match.group(1), text[start:cursor]))
+        index = cursor
     residue.append(text[cursor:])
     return "".join(residue), units
 
