@@ -574,12 +574,69 @@ class CandidateDirectiveTest(unittest.TestCase):
             "confirm",
             side_effect=[("refuted", "agreed"), ("confirmed", "status differs")],
         ):
-            verdict, detail = pair_review.confirm_both_paths(
+            verdict, detail, unjudged = pair_review.confirm_both_paths(
                 "module M\n", "rust", "self", 1
             )
 
         self.assertEqual("confirmed", verdict)
         self.assertIn("status differs", detail)
+        self.assertIsNone(unjudged)
+
+    def test_a_failed_verify_gate_is_reported_beside_a_build_finding(self):
+        # The build path never executes either C emitter, so a build-only
+        # divergence must not let the pair read as reviewed when the path that
+        # does exercise them failed to run.
+        with mock.patch.object(
+            pair_review,
+            "confirm",
+            side_effect=[("confirmed", "exit differs"), ("error", "compile timeout")],
+        ):
+            verdict, detail, unjudged = pair_review.confirm_both_paths(
+                "module M\n", "rust", "self", 1
+            )
+
+        self.assertEqual("confirmed", verdict)
+        self.assertIn("exit differs", detail)
+        self.assertIn("verify path did not run", unjudged)
+
+    def test_a_raising_gate_costs_one_claim_not_the_run(self):
+        llm = fake_llm(
+            json.dumps(
+                {
+                    "findings": [
+                        {"claim": "first", "program": "module M\n"},
+                        {"claim": "second", "program": "module M\n"},
+                    ]
+                }
+            )
+        )
+
+        def gate(*_):
+            if not getattr(gate, "raised", False):
+                gate.raised = True
+                raise FileNotFoundError("target/release/vow")
+            return "refuted", "agreed"
+
+        with mock.patch.object(
+            pair_review,
+            "load_pair_units",
+            return_value=ReviewReportTest.two_chunk_sources(),
+        ):
+            result = pair_review.review_pair(
+                "lexer",
+                "model",
+                "rust",
+                "self",
+                600,
+                1,
+                max_chunks=1,
+                llm_module=llm,
+                confirm_fn=gate,
+            )
+
+        self.assertEqual(["first", "second"], [f["claim"] for f in result["findings"]])
+        self.assertIn("gate raised", result["errors"][0]["error"])
+        self.assertFalse(pair_review.reviewed_completely(result))
 
     def test_the_runner_is_told_to_ignore_directives(self):
         self.assertIn("--no-directives", self.candidate_argv("module M\n"))

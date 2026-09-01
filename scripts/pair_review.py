@@ -657,11 +657,21 @@ def confirm_both_paths(program, rust, self_bin, timeout):
     build = confirm(program, rust, self_bin, timeout)
     verify = confirm(program, rust, self_bin, timeout, verify_only=True)
     observed = f"build: {build[0]} ({build[1]}); verify: {verify[0]} ({verify[1]})"
+    # A `build` divergence is a real answer, but it is an answer about a run
+    # that never executed either C emitter. If the verify path -- the one that
+    # does -- failed to run, the pair has not been reviewed however loud the
+    # build path was, so the failure is reported alongside the verdict rather
+    # than in place of it.
+    unjudged = "; ".join(
+        f"{path} path did not run: {why}"
+        for path, (result, why) in (("build", build), ("verify", verify))
+        if result == "error"
+    )
     verdicts = {build[0], verify[0]}
     for verdict in ("confirmed", "error", "inconclusive"):
         if verdict in verdicts:
-            return verdict, observed
-    return "refuted", observed
+            return verdict, observed, unjudged or None
+    return "refuted", observed, unjudged or None
 
 
 def confirm_soundness(program, verifier, timeout):
@@ -940,18 +950,29 @@ def review_pair(
             finding["chunk_index"] = index
             program = finding.get("program", "")
             if not isinstance(program, str) or not program.strip():
-                verdict, detail = "error", "no program supplied"
+                outcome = ("error", "no program supplied")
             else:
-                verdict, detail = confirm_fn(program, rust, self_bin, timeout)
-            if verdict == "error":
-                # A claim the gate never judged -- because the model supplied
-                # no program, or because the runner could not run. Either way
-                # the claim stays in the report as a hypothesis, but the run is
-                # no longer complete, so it cannot stamp the ledger and skip
-                # this pair next month.
+                try:
+                    outcome = confirm_fn(program, rust, self_bin, timeout)
+                except Exception as exc:  # noqa: BLE001 - isolate gate failures
+                    # The model call above is isolated per chunk for the same
+                    # reason. Unguarded, one raising gate escapes main's loop
+                    # before results.json is written and costs the run every
+                    # finding from every pair -- after real spend.
+                    outcome = ("error", f"confirmation gate raised: {exc}")
+            # A gate may answer the claim and still report that one of the
+            # paths it needed did not run. Those are separate facts, so the
+            # third element carries the second without overwriting the first.
+            verdict, detail, *rest = outcome
+            unjudged = detail if verdict == "error" else (rest[0] if rest else None)
+            if unjudged:
+                # A claim the gate never judged. It stays in the report, but
+                # the run is no longer complete, so it cannot stamp the ledger
+                # and skip this pair next month.
                 result["errors"].append(
-                    {"chunk_index": index, "error": f"claim not judged: {detail}"}
+                    {"chunk_index": index, "error": f"claim not judged: {unjudged}"}
                 )
+            if verdict == "error":
                 verdict = "inconclusive"
             finding["verdict"] = verdict
             finding["verdict_detail"] = detail
