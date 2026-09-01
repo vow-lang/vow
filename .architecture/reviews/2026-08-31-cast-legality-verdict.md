@@ -5,7 +5,7 @@
 `compiler/main.vow`, `vow/src/skill.rs`, and the spec/skill markdown dominate the raw churn but
 are embedded-string or documentation surfaces with no pure-policy seam, so attention went to the
 Rust type-checker and codegen paths where recent bug-fix churn clusters.
-**Picked**: `cast-legality-verdict` — see [PR](#) and `.architecture/backlog.md`
+**Picked**: `cast-legality-verdict` — see the PR and `.architecture/backlog.md`
 **Degradations**: none. `gh` authenticated; `codebase-design` available; sub-agent exploration used.
 
 Diagram convention (replaces the upstream HTML legend): **solid edges are the interface**
