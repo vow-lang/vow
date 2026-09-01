@@ -197,6 +197,19 @@ class SplitUnitsTest(unittest.TestCase):
 
                 self.assertEqual([source.strip()], [u.text.strip() for u in units])
 
+    def test_a_nested_block_comment_is_one_comment(self):
+        # Rust block comments nest, unlike C. Stopping at the first `*/` leaks
+        # the tail into the scan, and the brace in it ends the item early --
+        # silently, because the leak lands at end of line where the
+        # unterminated-item guard sees nothing to complain about.
+        text = "fn one() -> u32 {\n    /* outer /* inner */ tail } */\n    1\n}\n"
+        preamble, units = pair_review.split_units(text, pair_review.RUST_FN)
+
+        self.assertEqual(1, len(units))
+        self.assertIn("    1\n", units[0].text)
+        self.assertTrue(units[0].text.rstrip().endswith("}"))
+        self.assertNotIn("1", preamble)
+
     def test_an_item_the_scanner_cannot_end_is_loud(self):
         # A const-generic `Bar<{ N }>` needs a real parser. Truncating silently
         # would leave a named unit that still matches and still counts covered.
@@ -1154,6 +1167,41 @@ class LedgerWritebackTest(unittest.TestCase):
 
         self.assertEqual(2, status)
         self.assertTrue((outdir / "results.json").exists())
+
+    def test_a_rejected_argument_leaves_no_stale_results(self):
+        # The custom validation exits before the compiler check, so clearing
+        # the artifact after it would leave the previous run looking current.
+        outdir = Path(self.directory.name) / "bad-args"
+        outdir.mkdir()
+        (outdir / "results.json").write_text('{"confirmed": 7}\n')
+        with (
+            self.assertRaises(SystemExit),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+        ):
+            pair_review.main(
+                ["--pair", "nosuch", "--output-dir", str(outdir), "--dry-run"]
+            )
+
+        self.assertFalse((outdir / "results.json").exists())
+
+    def test_a_soundness_run_survives_a_broken_equivalence_ledger(self):
+        # Soundness neither writes this ledger nor reads it, so a malformed one
+        # is not its problem.
+        broken = Path(self.directory.name) / "broken-ledger.json"
+        broken.write_text("{ this is not json")
+        outdir = Path(self.directory.name) / "soundness-out"
+        with (
+            mock.patch.object(pair_review, "LEDGER", broken),
+            redirect_stdout(io.StringIO()),
+        ):
+            status = pair_review.main(
+                ["--mode", "soundness", "--dry-run", "--output-dir", str(outdir)]
+            )
+
+        report = json.loads((outdir / "results.json").read_text())
+        self.assertEqual(0, status)
+        self.assertEqual(["c_emitter"], report["planned"])
 
     def test_a_failed_run_leaves_no_stale_results(self):
         # The documented output directory is a dated one that gets reused.

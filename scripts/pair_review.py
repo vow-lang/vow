@@ -88,8 +88,19 @@ def _skip_noncode(text, index):
         newline = text.find("\n", index)
         return end if newline == -1 else newline + 1
     if text.startswith("/*", index):
-        close = text.find("*/", index + 2)
-        return end if close == -1 else close + 2
+        # Rust block comments nest, unlike C: `/* a /* b */ c */` is one
+        # comment. Stopping at the first `*/` leaks its tail into the scan,
+        # and a brace in that tail corrupts depth silently -- the one way this
+        # scanner could fail without failing loud.
+        depth, cursor = 1, index + 2
+        while cursor < end and depth:
+            if text.startswith("/*", cursor):
+                depth, cursor = depth + 1, cursor + 2
+            elif text.startswith("*/", cursor):
+                depth, cursor = depth - 1, cursor + 2
+            else:
+                cursor += 1
+        return cursor if not depth else end
     char = text[index]
     if char == "r" and index + 1 < end and text[index + 1] in '#"':
         cursor = index + 1
@@ -1233,6 +1244,18 @@ def main(argv=None):
     )
     args = ap.parse_args(argv)
 
+    # Before the custom validation below, the ledger read, and any model call
+    # -- each of which can abort. The documented output directory is a dated
+    # one that gets reused, and a run that dies partway must not leave the
+    # previous run's results.json sitting there presenting itself as current.
+    # scripts/equivalence.py established this invariant; two scripts in one
+    # programme should not disagree on it. argparse's own errors (an unknown
+    # flag, a non-integer --chunk-bytes) abort inside parse_args and stay out
+    # of reach. The directory is not created here: `missing_ok` covers a
+    # missing parent too, so a typo'd path leaves no directory behind.
+    results_path = Path(args.output_dir) / "results.json"
+    results_path.unlink(missing_ok=True)
+
     unknown = sorted(set(args.pair) - set(PAIRS))
     if unknown:
         ap.error(f"unknown pair(s): {', '.join(unknown)}")
@@ -1252,15 +1275,8 @@ def main(argv=None):
     if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
         ap.error("--date must use YYYY-MM-DD")
 
-    # Before any validation, ledger read or model call that can abort: the
-    # documented output directory is a dated one that gets reused, and a run
-    # that dies partway must not leave the previous run's results.json sitting
-    # there presenting itself as current. scripts/equivalence.py established
-    # this invariant; two scripts in one programme should not disagree on it.
     outdir = Path(args.output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
-    results_path = outdir / "results.json"
-    results_path.unlink(missing_ok=True)
 
     if not args.dry_run:
         for path in (Path(args.rust), Path(args.self_bin)):
@@ -1280,7 +1296,13 @@ def main(argv=None):
             print(f"error: unusable --model {args.model}: {exc}", file=sys.stderr)
             return 2
 
-    ledger = json.loads(LEDGER.read_text()) if LEDGER.exists() else {"pairs": {}}
+    # A soundness run neither writes this ledger nor reads it, so a malformed
+    # or unreadable equivalence ledger must not abort one.
+    ledger = (
+        json.loads(LEDGER.read_text())
+        if MODES[args.mode].uses_ledger and LEDGER.exists()
+        else {"pairs": {}}
+    )
     names = args.pair or list(MODES[args.mode].pairs)
 
     planned, skipped, results = [], [], []
