@@ -3889,13 +3889,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let elem_ast_type = known_expr_ast_type(ctx, expr);
             let vec_ptr = lower_expr(ctx, base);
             let idx_id = lower_expr(ctx, index);
-            let result = ctx.emit(
+            let raw_result = ctx.emit(
                 Opcode::Call,
                 Ty::I64,
                 vec![vec_ptr, idx_id],
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
+            let result = if let Some(ast_type) = elem_ast_type.as_ref() {
+                let elem_ty =
+                    lower_ty_with_linear(ast_type, &ctx.linear_owner_names, &ctx.type_aliases);
+                lower_narrow_literal(ctx, expr, raw_result, elem_ty)
+            } else {
+                raw_result
+            };
             propagate_vec_element_metadata(ctx, vec_ptr, result);
             if let Some(ast_type) = elem_ast_type {
                 ctx.inst_declared_ast_types.insert(result, ast_type);
@@ -5899,6 +5906,73 @@ fn unsigned_max() -> u128 {
 
     fn insts_of(func: &Function) -> Vec<&Inst> {
         func.blocks.iter().flat_map(|block| &block.insts).collect()
+    }
+
+    #[test]
+    fn narrow_vec_index_reads_type_surrounding_arithmetic() {
+        let module = lower_source_to_module(
+            r#"
+module NarrowVecIndexLowering
+
+fn shifted_difference(values: Vec<u32>) -> u32 {
+    (values[0] - values[1]) >> 1
+}
+"#,
+            "narrow_vec_index_lowering.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+        let raw_reads: Vec<_> = insts
+            .iter()
+            .filter(|inst| {
+                inst.opcode == Opcode::Call
+                    && inst.ty == Ty::I64
+                    && inst.data == InstData::CallExtern("__vow_vec_get_val".to_string())
+            })
+            .collect();
+        assert_eq!(raw_reads.len(), 2, "expected two raw Vec reads:\n{func:#?}");
+
+        let narrowed_reads: Vec<_> = insts
+            .iter()
+            .filter(|inst| {
+                inst.opcode == Opcode::IntCast
+                    && inst.ty == Ty::U32
+                    && inst.data
+                        == InstData::IntegerCast {
+                            from: IntegerType::I64,
+                            to: IntegerType::U32,
+                        }
+                    && raw_reads.iter().any(|read| inst.args == vec![read.id])
+            })
+            .collect();
+        assert_eq!(
+            narrowed_reads.len(),
+            2,
+            "each raw Vec read must narrow before use:\n{func:#?}"
+        );
+
+        let sub = insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::WrappingSub)
+            .expect("wrapping subtraction");
+        assert_eq!(sub.ty, Ty::U32, "subtraction must use Vec element width");
+        assert_eq!(sub.data, InstData::Integer(IntegerType::U32));
+        assert_eq!(
+            sub.args,
+            narrowed_reads
+                .iter()
+                .map(|read| read.id)
+                .collect::<Vec<_>>()
+        );
+
+        let shift = insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::Shr)
+            .expect("right shift");
+        assert_eq!(shift.ty, Ty::U32, "shift must use Vec element width");
+        assert_eq!(shift.data, InstData::Integer(IntegerType::U32));
+        assert_eq!(shift.args[0], sub.id);
     }
 
     /// A 128-bit enum payload read out of a value this function never built
