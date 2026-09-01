@@ -173,12 +173,17 @@ class SplitUnitsTest(unittest.TestCase):
         self.assertNotIn("pub struct Held", units[0].text)
 
     def test_vow_split_finds_every_top_level_function(self):
-        cases = [("compiler/lower.vow", 135), ("compiler/lexer.vow", 14)]
-        for relative, expected in cases:
+        # Counted against the file rather than a literal: these modules gain
+        # functions regularly, and a hardcoded total fails on someone else's
+        # commit while proving nothing about the split.
+        for relative in ("compiler/lower.vow", "compiler/lexer.vow"):
             with self.subTest(path=relative):
                 text = (pair_review.REPO_ROOT / relative).read_text()
+                declared = [m.group(1) for m in pair_review.VOW_FN.finditer(text)]
                 _, units = pair_review.split_units(text, pair_review.VOW_FN)
-                self.assertEqual(expected, len(units))
+
+                self.assertGreater(len(declared), 10, "file has no functions to find")
+                self.assertEqual(declared, [unit.name for unit in units])
 
     def test_rust_split_finds_free_functions_and_impl_methods(self):
         text = (pair_review.REPO_ROOT / "vow-ir/src/lower/mod.rs").read_text()
