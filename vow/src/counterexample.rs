@@ -14,7 +14,9 @@
 use crate::{
     CeBranchDecision, CeCallSite, CePathStep, CeSource, CeViolatingArg, StructuredCounterexample,
 };
-use vow_verify::{CALLER_PRECONDITION_VOW_ID, Counterexample, UNSUPPORTED_OP_VOW_ID};
+use vow_verify::{
+    CALLER_PRECONDITION_VOW_ID, Counterexample, UNSUPPORTED_OP_VOW_ID, extract_assert_label,
+};
 
 fn build_c_to_source_name_map(
     func: &vow_ir::Function,
@@ -224,8 +226,10 @@ pub(crate) fn build_structured_counterexample_with_module(
         entry.description.clone()
     } else if caller_precondition {
         "callee precondition violated by the caller".to_string()
+    } else if let Some(description) = extract_assert_label(&ce.raw_output) {
+        description.to_string()
     } else {
-        ce.description.clone()
+        "internal verifier assertion failed".to_string()
     };
     let blame = resolve_ce_blame(caller_precondition, vow_entry.map(|v| v.blame)).to_string();
     let source = if unsupported_op {
@@ -505,6 +509,37 @@ pub(crate) fn build_call_site_index(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn structured_unattributed_counterexample(label: &str) -> StructuredCounterexample {
+        use vow_ir::{FuncId, Function, RegionSummary, Ty};
+
+        let func = Function {
+            id: FuncId(0),
+            name: "fails_internal_check".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let ce = Counterexample {
+            arith_overflow: None,
+            description: "[Counterexample]".to_string(),
+            vow_id: None,
+            callee_precondition: None,
+            values: vec![],
+            block_visits: vec![],
+            raw_output: format!(
+                "[Counterexample]\n\nViolated property:\n  file f.c line 1 column 1 function f\n  {label}\n  condition\n\nVERIFICATION FAILED"
+            ),
+        };
+
+        build_structured_counterexample(&func, &ce, "test.vow", &std::collections::HashMap::new())
+    }
 
     #[test]
     fn build_c_to_source_name_map_basic() {
@@ -951,6 +986,45 @@ mod tests {
         );
         assert_eq!(sce.blame, "none");
         assert!(sce.source.is_none());
+    }
+
+    #[test]
+    fn structured_counterexample_vec_bounds_maps_to_index_out_of_bounds() {
+        let sce = structured_unattributed_counterexample("vec bounds");
+
+        assert_eq!(sce.violation, "index out of bounds");
+        assert_ne!(
+            sce.violation, "[Counterexample]",
+            "must not fall through to raw ESBMC line"
+        );
+        assert_eq!(sce.blame, "none");
+    }
+
+    #[test]
+    fn structured_counterexample_string_capacity_maps_to_capacity_message() {
+        let sce = structured_unattributed_counterexample("string capacity");
+
+        assert_eq!(
+            sce.violation,
+            "string exceeded the verifier's internal capacity limit"
+        );
+        assert_ne!(
+            sce.violation, "[Counterexample]",
+            "must not fall through to raw ESBMC line"
+        );
+        assert_eq!(sce.blame, "none");
+    }
+
+    #[test]
+    fn structured_counterexample_unrecognized_label_does_not_leak_raw_line() {
+        let sce = structured_unattributed_counterexample("some future guard");
+
+        assert_eq!(sce.violation, "internal verifier assertion failed");
+        assert_ne!(
+            sce.violation, "[Counterexample]",
+            "must not fall through to raw ESBMC line"
+        );
+        assert_eq!(sce.blame, "none");
     }
 
     #[test]
