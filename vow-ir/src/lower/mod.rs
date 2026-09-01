@@ -786,8 +786,9 @@ pub(crate) struct LowerCtx {
     enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>>,
     // enum name → variant tag → complete declared payload types
     enum_variant_payload_ast_types: Rc<HashMap<String, Vec<Vec<AstType>>>>,
-    // Expressions inside a wide contextual control-flow expression, keyed by
-    // their stable AST address for the duration of function lowering.
+    // Integer markers that need their context before lowering: wide values and
+    // u64, whose signedness differs from the default i64 marker type. Keyed by
+    // stable AST address for the duration of function lowering.
     wide_literal_contexts: HashMap<usize, Ty>,
     linear_owner_names: HashSet<String>,
     type_aliases: Rc<HashMap<String, AstType>>,
@@ -1390,7 +1391,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .get(&(expr as *const _ as usize))
                 .copied()
             {
-                Some(ty @ (Ty::I128 | Ty::U128)) => emit_narrow_integer_constant(ctx, *v, ty, span),
+                Some(ty @ (Ty::U64 | Ty::I128 | Ty::U128)) => {
+                    emit_narrow_integer_constant(ctx, *v, ty, span)
+                }
                 _ => ctx.emit(
                     Opcode::ConstI64,
                     Ty::I64,
@@ -4410,7 +4413,7 @@ fn wide_context_contains_control_flow(expr: &Expr) -> bool {
 }
 
 fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
-    if !matches!(ty, Ty::I128 | Ty::U128) {
+    if !matches!(ty, Ty::U64 | Ty::I128 | Ty::U128) {
         return;
     }
     ctx.wide_literal_contexts
@@ -4456,7 +4459,9 @@ fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
 }
 
 fn record_wide_control_flow_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
-    if matches!(ty, Ty::I128 | Ty::U128) && wide_context_contains_control_flow(expr) {
+    if ty == Ty::U64
+        || (matches!(ty, Ty::I128 | Ty::U128) && wide_context_contains_control_flow(expr))
+    {
         record_wide_marker_context(ctx, expr, ty);
     }
 }
@@ -4502,6 +4507,7 @@ fn record_wide_expected_ast_context(ctx: &mut LowerCtx, expr: &Expr, expected: &
     match expected {
         AstType::Named { name, .. } => {
             let ty = match name.as_str() {
+                "u64" => Some(Ty::U64),
                 "i128" => Some(Ty::I128),
                 "u128" => Some(Ty::U128),
                 _ => None,
@@ -4577,6 +4583,13 @@ fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: u128, ty: Ty, span: S
             Ty::U32,
             vec![],
             InstData::ConstI32(value as u32 as i32),
+            span,
+        ),
+        Ty::U64 => ctx.emit(
+            Opcode::ConstU64,
+            Ty::U64,
+            vec![],
+            InstData::ConstU64(value as u64),
             span,
         ),
         Ty::I128 => ctx.emit(
@@ -4666,11 +4679,11 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
 fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
     if !matches!(
         ty,
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::U64 | Ty::I128 | Ty::U128
     ) {
         return original;
     }
-    if matches!(ty, Ty::I128 | Ty::U128)
+    if matches!(ty, Ty::U64 | Ty::I128 | Ty::U128)
         && ctx
             .wide_literal_contexts
             .get(&(expr as *const _ as usize))
@@ -5013,7 +5026,7 @@ fn lower_function_with_pattern_aggregates(
 
     if matches!(
         return_ty,
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::U64 | Ty::I128 | Ty::U128
     ) && let Some(expr) = &fn_def.body.trailing_expr
     {
         trailing = lower_narrow_literal(&mut ctx, expr, trailing, return_ty);
