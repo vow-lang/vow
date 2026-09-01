@@ -554,6 +554,33 @@ class CandidateDirectiveTest(unittest.TestCase):
             pair_review.confirm(program, "rust", "self", 1)
         return seen["argv"]
 
+    def test_the_c_emitter_pair_is_judged_on_the_verify_path_too(self):
+        # The C emitters only run under `verify`; comparing `build` alone
+        # refutes every claim about them without either one executing.
+        calls = []
+
+        def fake_confirm(program, rust, self_bin, timeout, verify_only=False):
+            calls.append(verify_only)
+            return "refuted", "agreed"
+
+        with mock.patch.object(pair_review, "confirm", fake_confirm):
+            pair_review.confirm_both_paths("module M\n", "rust", "self", 1)
+
+        self.assertEqual([False, True], calls)
+
+    def test_a_verify_path_confirmation_is_not_lost_to_the_build_path(self):
+        with mock.patch.object(
+            pair_review,
+            "confirm",
+            side_effect=[("refuted", "agreed"), ("confirmed", "status differs")],
+        ):
+            verdict, detail = pair_review.confirm_both_paths(
+                "module M\n", "rust", "self", 1
+            )
+
+        self.assertEqual("confirmed", verdict)
+        self.assertIn("status differs", detail)
+
     def test_the_runner_is_told_to_ignore_directives(self):
         self.assertIn("--no-directives", self.candidate_argv("module M\n"))
 
@@ -953,6 +980,77 @@ class LedgerWritebackTest(unittest.TestCase):
 
         self.assertEqual(0, status)
         self.assertEqual(before, self.ledger_path.read_bytes())
+
+    def test_a_ledger_failure_still_writes_the_run_results(self):
+        # results.json holds every finding from every model call this run made.
+        # A ledger problem must not discard it, nor exit 1 -- the code that
+        # means "confirmed findings".
+        compiler = Path(self.directory.name) / "compiler"
+        compiler.touch()
+        outdir = Path(self.directory.name) / "ledger-blew-up"
+        clean = self.result(
+            plan={"chunk_bytes": 100, "chunks": []},
+            chunks_reviewed=[1],
+            input_tokens=0,
+            output_tokens=0,
+        )
+        with (
+            mock.patch.dict("sys.modules", {"llm": usable_llm()}),
+            mock.patch.object(pair_review, "LEDGER", self.ledger_path),
+            mock.patch.object(pair_review, "review_pair", return_value=clean),
+            mock.patch.object(
+                pair_review, "write_ledger", side_effect=ValueError("no pair entry")
+            ),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+        ):
+            status = pair_review.main(
+                [
+                    "--all",
+                    "--pair",
+                    "lexer",
+                    "--rust",
+                    str(compiler),
+                    "--self",
+                    str(compiler),
+                    "--output-dir",
+                    str(outdir),
+                    "--update-ledger",
+                    "--date",
+                    "2026-09-01",
+                ]
+            )
+
+        report = json.loads((outdir / "results.json").read_text())
+        self.assertEqual(2, status)
+        self.assertEqual([], report["ledger_updated"])
+        self.assertIn(
+            "ledger writeback failed", report["pairs"][0]["errors"][0]["error"]
+        )
+
+    def test_a_failed_run_leaves_no_stale_results(self):
+        # The documented output directory is a dated one that gets reused.
+        outdir = Path(self.directory.name) / "reused"
+        outdir.mkdir()
+        (outdir / "results.json").write_text('{"confirmed": 7}\n')
+        missing = Path(self.directory.name) / "not-a-compiler"
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            status = pair_review.main(
+                [
+                    "--all",
+                    "--pair",
+                    "lexer",
+                    "--rust",
+                    str(missing),
+                    "--self",
+                    str(missing),
+                    "--output-dir",
+                    str(outdir),
+                ]
+            )
+
+        self.assertEqual(2, status)
+        self.assertFalse((outdir / "results.json").exists())
 
     def test_an_unusable_model_exits_two(self):
         # Escaping as a traceback would exit 1 -- the code that means

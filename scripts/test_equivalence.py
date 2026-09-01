@@ -272,6 +272,44 @@ class DirectiveTest(unittest.TestCase):
 
         self.assertEqual("directive: nothing to see", honoured["skipped"])
 
+    def test_verify_only_survives_no_directives(self):
+        # Which comparison runs is the harness's choice; suppressing the
+        # candidate's directives must not also suppress that choice.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "candidate.vow"
+            p.write_text("module T\n")
+            out = Path(d) / "out"
+            seen = {}
+
+            def fake_compare_verify(r, s):
+                seen["ran"] = True
+                return []
+
+            compiled = {
+                "timeout": False,
+                "exit": 0,
+                "stdout": "",
+                "stderr": "",
+                "json": {"status": "Verified", "diagnostics": []},
+            }
+            with (
+                mock.patch.object(equivalence, "run_compiler", return_value=compiled),
+                mock.patch.object(
+                    equivalence, "compare_verify", side_effect=fake_compare_verify
+                ),
+            ):
+                equivalence.check_file(
+                    p,
+                    "rust",
+                    "self",
+                    out,
+                    1,
+                    honour_directives=False,
+                    verify_only=True,
+                )
+
+        self.assertTrue(seen.get("ran"), "the verify comparison never ran")
+
     def test_the_neutral_record_matches_a_file_declaring_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "t.vow"

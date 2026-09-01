@@ -571,7 +571,7 @@ def _agreed_by_crashing(divergences):
     return both
 
 
-def confirm(program, rust, self_bin, timeout):
+def confirm(program, rust, self_bin, timeout, verify_only=False):
     """Run one candidate program through the differential runner.
 
     The runner is told to ignore `// TEST:` directives: it honours them for
@@ -611,6 +611,7 @@ def confirm(program, rust, self_bin, timeout):
                 "--no-directives",
                 "--min-compared",
                 "0",
+                *(["--verify-only"] if verify_only else []),
             ],
             capture_output=True,
             text=True,
@@ -642,6 +643,25 @@ def confirm(program, rust, self_bin, timeout):
             # reaches the `refuted` below.
             return "error", rec["skipped"]
         return "refuted", "both compilers agreed"
+
+
+def confirm_both_paths(program, rust, self_bin, timeout):
+    """Judge a candidate through `build` and again through `verify`.
+
+    The C emitters are only executed on the `verify` path, so a claim about
+    them compared through `build` alone is refuted without either implementation
+    under review having run. The prompt is generic, though, and a model shown
+    the emitters also raises claims that only show up through `build`, so both
+    paths are run rather than swapped.
+    """
+    build = confirm(program, rust, self_bin, timeout)
+    verify = confirm(program, rust, self_bin, timeout, verify_only=True)
+    observed = f"build: {build[0]} ({build[1]}); verify: {verify[0]} ({verify[1]})"
+    verdicts = {build[0], verify[0]}
+    for verdict in ("confirmed", "error", "inconclusive"):
+        if verdict in verdicts:
+            return verdict, observed
+    return "refuted", observed
 
 
 def confirm_soundness(program, verifier, timeout):
@@ -696,6 +716,10 @@ class Mode:
     # mode had stamped and exit 0 having asked nothing.
     uses_ledger: bool
 
+
+# Pairs whose implementations the `build` path never executes, so an
+# equivalence review of them has to compare `verify` as well.
+VERIFY_PATH_PAIRS = frozenset({"c_emitter"})
 
 MODES = {
     "equivalence": Mode(SYSTEM, confirm, tuple(PAIRS), uses_ledger=True),
@@ -864,7 +888,10 @@ def review_pair(
         import llm as llm_module
 
     spec = MODES[mode]
-    confirm_fn = confirm_fn or spec.confirm
+    if confirm_fn is None:
+        confirm_fn = spec.confirm
+        if confirm_fn is confirm and name in VERIFY_PATH_PAIRS:
+            confirm_fn = confirm_both_paths
     config = llm_module.make_config(model)
     for index, chunk in enumerate(selected, 1):
         body = render_chunk(chunk, preambles, index, len(chunks))
@@ -1178,6 +1205,16 @@ def main(argv=None):
     if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
         ap.error("--date must use YYYY-MM-DD")
 
+    # Before any validation, ledger read or model call that can abort: the
+    # documented output directory is a dated one that gets reused, and a run
+    # that dies partway must not leave the previous run's results.json sitting
+    # there presenting itself as current. scripts/equivalence.py established
+    # this invariant; two scripts in one programme should not disagree on it.
+    outdir = Path(args.output_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    results_path = outdir / "results.json"
+    results_path.unlink(missing_ok=True)
+
     if not args.dry_run:
         for path in (Path(args.rust), Path(args.self_bin)):
             if not path.exists():
@@ -1198,8 +1235,6 @@ def main(argv=None):
 
     ledger = json.loads(LEDGER.read_text()) if LEDGER.exists() else {"pairs": {}}
     names = args.pair or list(MODES[args.mode].pairs)
-    outdir = Path(args.output_dir)
-    outdir.mkdir(parents=True, exist_ok=True)
 
     planned, skipped, results = [], [], []
     for name in names:
@@ -1248,7 +1283,17 @@ def main(argv=None):
     )
     ledger_updated = []
     if args.update_ledger:
-        ledger_updated = write_ledger(ledger, results, args.date, LEDGER)
+        try:
+            ledger_updated = write_ledger(ledger, results, args.date, LEDGER)
+        except ValueError as exc:
+            # results.json holds every finding from every model call this run
+            # made. Letting this escape would discard all of it after real
+            # spend, and exit 1 -- the code reserved for confirmed findings.
+            for result in results:
+                if reviewed_completely(result):
+                    result["errors"].append(
+                        {"chunk_index": 0, "error": f"ledger writeback failed: {exc}"}
+                    )
 
     report = {
         "schema_version": 2,
@@ -1266,7 +1311,7 @@ def main(argv=None):
         "refuted": refuted,
         "pairs": results,
     }
-    (outdir / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+    results_path.write_text(json.dumps(report, indent=2) + "\n")
     _print_summary(report, skipped, confirmed, outdir)
 
     # 2 before 1, as in scripts/equivalence.py: a run whose chunks errored or

@@ -601,13 +601,19 @@ NO_DIRECTIVES = {
 }
 
 
-def check_file(vow_file, rust, slf, outdir, timeout, honour_directives=True):
+def check_file(
+    vow_file, rust, slf, outdir, timeout, honour_directives=True, verify_only=False
+):
     rel = (
         str(Path(vow_file).relative_to(REPO_ROOT))
         if str(vow_file).startswith(str(REPO_ROOT))
         else str(vow_file)
     )
     directives = read_directives(vow_file) if honour_directives else NO_DIRECTIVES
+    if verify_only:
+        # Which comparison to run is the harness's choice, not the input's, so
+        # this is selected out of band and survives --no-directives.
+        directives = {**directives, "verify_only": True}
     record = {"file": rel, "divergences": [], "skipped": None}
 
     if directives["skip"]:
@@ -1012,6 +1018,11 @@ def main():
         action="store_true",
         help="ignore `// TEST:` directives — the input is a candidate, not a fixture",
     )
+    ap.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="compare `verify` rather than `build` for every file, whatever it declares",
+    )
     args = ap.parse_args()
 
     roots = args.roots or [
@@ -1064,7 +1075,13 @@ def main():
     records, diverged, skipped, compared = [], [], [], 0
     for i, f in enumerate(corpus, 1):
         rec = check_file(
-            f, rust, slf, outdir, args.timeout, honour_directives=not args.no_directives
+            f,
+            rust,
+            slf,
+            outdir,
+            args.timeout,
+            honour_directives=not args.no_directives,
+            verify_only=args.verify_only,
         )
         records.append(rec)
         if rec["divergences"]:
