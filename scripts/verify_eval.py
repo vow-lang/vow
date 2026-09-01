@@ -82,7 +82,7 @@ GAP_FIXED = "gap_fixed"
 REPLAY = "replay"
 OK = "ok"
 
-VALID_REPLAY = {"confirmed", "diverged", "skipped"}
+VALID_REPLAY = {"confirmed", "diverged", "aborted", "skipped"}
 
 
 class Expect:
@@ -207,7 +207,7 @@ def parse_directives(path, default_status):
                 if not rm or rm.group(1) not in VALID_REPLAY:
                     raise ValueError(
                         f"{path}: malformed replay directive "
-                        f"(expected: replay <confirmed|diverged|skipped>): {body!r}"
+                        f"(expected: replay <confirmed|diverged|aborted|skipped>): {body!r}"
                     )
                 exp.replay_expect = rm.group(1)
             elif body.startswith("cex"):

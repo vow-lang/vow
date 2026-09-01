@@ -775,6 +775,10 @@ fn replay_diverge(reason: String) -> ReplayVerdict {
     ReplayVerdict { status: String::from("diverged"), reason: reason }
 }
 
+fn replay_abort(reason: String) -> ReplayVerdict {
+    ReplayVerdict { status: String::from("aborted"), reason: reason }
+}
+
 fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String) -> ReplayVerdict [io] {
     if ce.function == String::from("main") {
         return replay_skip(String::from("cannot replay the entry function `main`"));
@@ -919,6 +923,19 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     if viol.len() > 0 && viol.contains(vowid_needle) && viol.contains(blame_needle) {
         return ReplayVerdict { status: String::from("confirmed"), reason: String::from("") };
     }
+    if viol.len() > 0 {
+        return replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"));
+    }
+    let abort_kind: String = replay_find_abort_kind(err);
+    if abort_kind.len() > 0 {
+        let reason: String = String::from("runtime aborted with ");
+        reason.push_str(abort_kind);
+        reason.push_str(String::from(" before reaching predicted VowViolation vow_id="));
+        reason.push_str(i64_to_string(ce.vow_id));
+        reason.push_str(String::from(" blame="));
+        reason.push_str(replay_blame_runtime_name(ce.blame));
+        return replay_abort(reason);
+    }
     if rrc == 0 {
         return replay_diverge(String::from("harness exited cleanly; no VowViolation fired at runtime"));
     }
@@ -936,6 +953,50 @@ fn replay_find_violation_line(err: String) -> String {
             let line: String = err.substring(start, i);
             if line.contains(String::from("\"error\":\"VowViolation\"")) {
                 return line;
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+// Extract a non-VowViolation `{"error":"<Kind>"}` marker from one stderr
+// line. Runtime abort diagnostics use this stable JSON envelope.
+fn replay_abort_kind_in_line(line: String) -> String {
+    let marker: String = String::from("\"error\":\"");
+    let n: i64 = line.len();
+    let m: i64 = marker.len();
+    let mut i: i64 = 0;
+    while i + m <= n {
+        if line.substring(i, i + m) == marker {
+            let start: i64 = i + m;
+            let mut end: i64 = start;
+            while end < n && line.byte_at(end) != 34 {
+                end = end + 1;
+            }
+            if end > start {
+                let kind: String = line.substring(start, end);
+                if kind != String::from("VowViolation") {
+                    return kind;
+                }
+            }
+            return String::from("");
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+fn replay_find_abort_kind(err: String) -> String {
+    let n: i64 = err.len();
+    let mut start: i64 = 0;
+    let mut i: i64 = 0;
+    while i <= n {
+        if i == n || err.byte_at(i) == 10 {
+            let kind: String = replay_abort_kind_in_line(err.substring(start, i));
+            if kind.len() > 0 {
+                return kind;
             }
             start = i + 1;
         }
