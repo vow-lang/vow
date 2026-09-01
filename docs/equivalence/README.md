@@ -46,9 +46,12 @@ tier is intended to block every PR. It does not yet do so: the promoted-fixture
 parity harness runs in `scripts/full_test.sh`, which is not on the PR path, and
 the two-compiler `vow test compiler/` comparison is a blocking step in the Linux
 `bootstrap.yml` job (pushes to `main` plus nightly). The self-hosted suite
-currently exceeds a 45-minute bound on a contended development host; #1171
-tracks the performance gap that prevents responsible per-PR placement. This is
-a stated coverage gap, not an advisory green check.
+produced no JSON before a 45-minute bound in one fresh concatenated run; the
+full Section 10b later completed both compilers plus its interface checks in
+17.8 minutes. Both measurements came from a contended development host and are
+placement evidence, not clean benchmarks. #1171 tracks the performance gap that
+prevents responsible per-PR placement. This is a stated coverage gap, not an
+advisory green check.
 
 **Tier 2** re-establishes equivalence against a moving codebase. It is
 deterministic and credential-free, so it runs unattended.
