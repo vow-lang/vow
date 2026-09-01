@@ -187,6 +187,34 @@ class DirectiveTest(unittest.TestCase):
                 b"", equivalence.stdin_bytes(equivalence.read_directives(p))
             )
 
+    def test_no_directives_never_reads_the_candidate_for_directives(self):
+        # A candidate a model wrote is not a fixture: it must not be able to
+        # excuse itself from the comparison that judges it.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "candidate.vow"
+            p.write_text('// TEST: skip "nothing to see"\nmodule T\n')
+            out = Path(d) / "out"
+
+            honoured = equivalence.check_file(p, "rust", "self", out, 1)
+            with mock.patch.object(
+                equivalence, "read_directives", side_effect=AssertionError("consulted")
+            ):
+                # Compilation fails on the fake binaries; reaching that at all
+                # proves the skip was not taken and directives were not read.
+                with self.assertRaises(FileNotFoundError):
+                    equivalence.check_file(
+                        p, "rust", "self", out, 1, honour_directives=False
+                    )
+
+        self.assertEqual("directive: nothing to see", honoured["skipped"])
+
+    def test_the_neutral_record_matches_a_file_declaring_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.vow"
+            p.write_text("module T\n")
+
+            self.assertEqual(equivalence.read_directives(p), equivalence.NO_DIRECTIVES)
+
 
 class ExpectedSignalTest(unittest.TestCase):
     def test_declared_trap_exit_becomes_an_expected_signal(self):

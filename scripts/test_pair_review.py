@@ -172,6 +172,39 @@ class SplitUnitsTest(unittest.TestCase):
         self.assertIn("pub struct Held", preamble)
         self.assertNotIn("pub struct Held", units[0].text)
 
+    def test_a_vow_contract_block_does_not_end_the_function(self):
+        # `fn f() -> T vow { requires: ... } { body }` has two brace groups.
+        # Stopping at the first leaves the contract as the unit and files the
+        # body elsewhere -- the whole implementation missing from the review.
+        text = (pair_review.REPO_ROOT / "compiler/lexer.vow").read_text()
+        preamble, units = pair_review.split_units(text, pair_review.VOW_FN)
+        contracted = next(u for u in units if u.name == "is_whitespace")
+
+        self.assertIn("requires:", contracted.text)
+        self.assertIn("b == 32 || b == 9 || b == 10 || b == 13", contracted.text)
+        self.assertTrue(contracted.text.rstrip().endswith("}"))
+        self.assertNotIn("b == 32", preamble)
+
+    def test_a_signature_brace_is_not_the_body(self):
+        cases = [
+            "fn g(x: [u8; 4]) -> i32 { 1 }\n",
+            "fn f() -> [u8; const { 1 }] { [0] }\n",
+            "fn t(&self) -> u32;\n",
+        ]
+        for source in cases:
+            with self.subTest(source=source.strip()):
+                _, units = pair_review.split_units(source, pair_review.RUST_FN)
+
+                self.assertEqual([source.strip()], [u.text.strip() for u in units])
+
+    def test_an_item_the_scanner_cannot_end_is_loud(self):
+        # A const-generic `Bar<{ N }>` needs a real parser. Truncating silently
+        # would leave a named unit that still matches and still counts covered.
+        with self.assertRaises(pair_review.UnsupportedItem):
+            pair_review.split_units(
+                "fn h() -> Bar<{ 1 }> { Bar }\n", pair_review.RUST_FN
+            )
+
     def test_vow_split_finds_every_top_level_function(self):
         # Counted against the file rather than a literal: these modules gain
         # functions regularly, and a hardcoded total fails on someone else's
@@ -505,27 +538,45 @@ class CandidateDirectiveTest(unittest.TestCase):
                 pair_review.confirm(program, "rust", "self", 1)
         return seen["text"]
 
-    def test_every_test_directive_is_stripped(self):
+    @staticmethod
+    def candidate_argv(program):
+        """The argv `confirm` hands to scripts/equivalence.py."""
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            seen["argv"] = argv
+            raise StopIteration
+
+        with (
+            mock.patch.object(pair_review.subprocess, "run", fake_run),
+            contextlib.suppress(StopIteration),
+        ):
+            pair_review.confirm(program, "rust", "self", 1)
+        return seen["argv"]
+
+    def test_the_runner_is_told_to_ignore_directives(self):
+        self.assertIn("--no-directives", self.candidate_argv("module M\n"))
+
+    def test_the_judged_program_is_the_reported_one(self):
+        # Byte-identical, directives included. Rewriting the text would make the
+        # verdict describe a program the report does not contain.
         program = (
             "module M\n"
             '// TEST: skip "nothing to see"\n'
             "// TEST: stdin-file absent.txt\n"
-            "// TEST: verify-only\n"
-            "// TEST: exit 3\n"
-            '// TEST: stdin "x"\n'
             "fn main() -> i32 [io] { 0 }\n"
         )
 
-        written = self.written_candidate(program)
+        self.assertEqual(program, self.written_candidate(program))
 
-        self.assertNotIn("// TEST:", written)
-        self.assertIn("module M", written)
-        self.assertIn("fn main() -> i32 [io] { 0 }", written)
+    def test_a_directive_inside_a_string_is_program_data(self):
+        # Vow strings admit literal newlines, so this line is a value, not a
+        # comment -- deleting it would change what the program means.
+        program = (
+            'module M\nfn main() -> i32 [io] {\n  print("a\n// TEST: x");\n  0\n}\n'
+        )
 
-    def test_an_ordinary_comment_survives(self):
-        program = "module M\n// a real comment\nfn main() -> i32 [io] { 0 }\n"
-
-        self.assertIn("// a real comment", self.written_candidate(program))
+        self.assertEqual(program, self.written_candidate(program))
 
     def test_a_skipped_record_is_unjudged_not_a_hypothesis(self):
         # Whatever made the runner skip -- a dual compile timeout,

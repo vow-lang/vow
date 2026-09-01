@@ -587,13 +587,25 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
 # ---------------------------------------------------------------------------
 
 
-def check_file(vow_file, rust, slf, outdir, timeout):
+# What `read_directives` returns for a file that declares nothing. A candidate
+# a model wrote is not a corpus fixture, so `--no-directives` hands this back
+# instead of letting the input steer the comparison that judges it.
+NO_DIRECTIVES = {
+    "skip": None,
+    "expected_exit": None,
+    "verify_only": False,
+    "stdin": None,
+    "stdin_file": None,
+}
+
+
+def check_file(vow_file, rust, slf, outdir, timeout, honour_directives=True):
     rel = (
         str(Path(vow_file).relative_to(REPO_ROOT))
         if str(vow_file).startswith(str(REPO_ROOT))
         else str(vow_file)
     )
-    directives = read_directives(vow_file)
+    directives = read_directives(vow_file) if honour_directives else NO_DIRECTIVES
     record = {"file": rel, "divergences": [], "skipped": None}
 
     if directives["skip"]:
@@ -892,6 +904,11 @@ def main():
         action="store_true",
         help="report every divergence as new, ignoring tracked ones",
     )
+    ap.add_argument(
+        "--no-directives",
+        action="store_true",
+        help="ignore `// TEST:` directives — the input is a candidate, not a fixture",
+    )
     args = ap.parse_args()
 
     roots = args.roots or [
@@ -926,7 +943,9 @@ def main():
     started = time.time()
     records, diverged, skipped, compared = [], [], [], 0
     for i, f in enumerate(corpus, 1):
-        rec = check_file(f, rust, slf, outdir, args.timeout)
+        rec = check_file(
+            f, rust, slf, outdir, args.timeout, honour_directives=not args.no_directives
+        )
         records.append(rec)
         if rec["divergences"]:
             diverged.append(rec)

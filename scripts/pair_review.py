@@ -77,13 +77,18 @@ CHAR_LIT = re.compile(r"'(?:\\.|[^\\'])'")
 
 
 def _item_end(text, start):
-    """Index just past the brace-balanced Rust item beginning at `start`.
+    """Index just past the brace-balanced item beginning at `start`.
 
     Brace counting alone is wrong here: the test modules embed Vow programs in
     raw strings, and those contain unbalanced braces at column 0. So comments,
     strings, char literals and raw strings are skipped before any brace counts.
+
+    A Vow function with a contract has *two* brace groups -- `fn f() -> T vow {
+    requires: ... } { body }` -- so closing the first one does not end the item.
+    Stopping there leaves the signature and the contract as the unit and files
+    the body elsewhere, which is the whole function missing from the review.
     """
-    index, depth, saw_brace = start, 0, False
+    index, depth, saw_brace, brackets = start, 0, False, 0
     end = len(text)
     while index < end:
         char = text[index]
@@ -116,17 +121,48 @@ def _item_end(text, start):
             literal = CHAR_LIT.match(text, index)
             index += len(literal.group()) if literal else 1
             continue
-        if char == "{":
-            depth += 1
-            saw_brace = True
+        if char in "([":
+            brackets += 1
+        elif char in ")]":
+            brackets -= 1
+        elif char == "{":
+            # A brace inside `(`/`[` is a signature, not a body: the `{ 1 }` of
+            # `-> [u8; const { 1 }]` must not open the item, or the item ends
+            # at that brace and the real body is lost.
+            if brackets == 0:
+                depth += 1
+                saw_brace = True
         elif char == "}":
-            depth -= 1
-            if saw_brace and depth == 0:
-                return index + 1
-        elif char == ";" and not saw_brace and depth == 0:
+            if brackets == 0:
+                depth -= 1
+                if saw_brace and depth == 0:
+                    if not _opens_again(text, index + 1):
+                        return index + 1
+                    # A Vow contract block: the body is the next group, so
+                    # start looking for a brace again rather than stopping.
+                    saw_brace = False
+        elif char == ";" and not saw_brace and depth == 0 and brackets == 0:
+            # `;` ends a bodiless item (a trait method). Inside brackets it is
+            # the `;` of an array type like `[u8; 4]`, which ends nothing.
             return index + 1
         index += 1
     return end
+
+
+def _opens_again(text, index):
+    """Whether another brace group opens right after `index`, comments aside."""
+    end = len(text)
+    while index < end:
+        if text[index].isspace():
+            index += 1
+        elif text.startswith("//", index):
+            newline = text.find("\n", index)
+            if newline == -1:
+                return False
+            index = newline + 1
+        else:
+            return text[index] == "{"
+    return False
 
 
 def strip_cfg_test(text):
@@ -190,6 +226,16 @@ def _unit_start(text, position, floor):
     return start
 
 
+class UnsupportedItem(Exception):
+    """`_item_end` could not find where an item ends.
+
+    Raised rather than returned because the alternative is silent: a truncated
+    unit still has a name, still matches its counterpart, and still counts as
+    covered, so every metric reads clean while the model is shown a function
+    signature with no body under it.
+    """
+
+
 def split_units(text, pattern):
     """Split source into whole function items, hoisting everything else.
 
@@ -213,6 +259,17 @@ def split_units(text, pattern):
         start = _unit_start(text, match.start(), cursor)
         residue.append(text[cursor:start])
         cursor = _item_end(text, match.end())
+        # In rustfmt'd source an item always ends at end of line. Anything else
+        # means the scanner stopped inside a signature it does not understand
+        # -- a const-generic `Bar<{ N }>`, say, where `<` is ambiguous without
+        # a real parser. Fail loudly; a half unit is worse than no review.
+        line_end = text.find("\n", cursor)
+        trailing = text[cursor : len(text) if line_end == -1 else line_end]
+        if trailing.strip():
+            raise UnsupportedItem(
+                f"cannot find the end of `{match.group(1)}`: "
+                f"stopped before {trailing.strip()[:60]!r}"
+            )
         units.append(Unit(match.group(1), text[start:cursor]))
     residue.append(text[cursor:])
     return "".join(residue), units
@@ -482,15 +539,6 @@ def hash_pair(rust_paths, self_path):
 # that lets an input both implementations choked on pass the gate.
 FAIL_CLOSED_SIDE = re.compile(r"^(rust|self-hosted)\b")
 
-# `// TEST:` lines steer scripts/equivalence.py -- skip the file, compare only
-# `verify`, feed stdin, declare an expected exit. That is a corpus-fixture
-# mechanism, and a candidate the model wrote is not a fixture. Left in, one
-# comment line in a fabricated program defeats the gate that exists to catch
-# fabricated programs: `// TEST: stdin-file nope.txt` raises `fixture_error`,
-# which is not `fail_closed`, so `_agreed_by_crashing` passes it through and
-# every claim carrying it is reported CONFIRMED.
-TEST_DIRECTIVE = re.compile(r"^// TEST:.*$\n?", re.MULTILINE)
-
 
 def _agreed_by_crashing(divergences):
     """Whether the only evidence is that both implementations failed closed.
@@ -526,8 +574,12 @@ def _agreed_by_crashing(divergences):
 def confirm(program, rust, self_bin, timeout):
     """Run one candidate program through the differential runner.
 
-    `// TEST:` directives are stripped first: the runner honours them, and a
-    candidate that can steer its own judge is not being judged.
+    The runner is told to ignore `// TEST:` directives: it honours them for
+    corpus fixtures, and a candidate that can steer its own judge is not being
+    judged. Passing `--no-directives` rather than editing the text keeps the
+    program that was judged byte-identical to the one the report publishes --
+    `// TEST:` is a valid line inside a Vow string, and rewriting it would make
+    the verdict describe a program nobody can reproduce from the artifact.
 
     Returns (verdict, detail). The runner is the judge: `confirmed` means it
     observed a divergence, `refuted` means both compilers agreed, and
@@ -541,7 +593,7 @@ def confirm(program, rust, self_bin, timeout):
     """
     with tempfile.TemporaryDirectory() as d:
         src = Path(d) / "candidate.vow"
-        src.write_text(TEST_DIRECTIVE.sub("", program))
+        src.write_text(program)
         proc = subprocess.run(
             [
                 sys.executable,
@@ -556,6 +608,7 @@ def confirm(program, rust, self_bin, timeout):
                 "--timeout",
                 str(timeout),
                 "--no-ledger",
+                "--no-directives",
                 "--min-compared",
                 "0",
             ],
@@ -742,6 +795,25 @@ def _coverage(preambles, chunks, selected):
     return reviewed / total
 
 
+def _empty_result(name, mode, chunk_bytes, error):
+    """A pair that could not be planned: reviewed nothing, stamps nothing."""
+    return {
+        "pair": name,
+        "mode": mode,
+        "coverage": 0.0,
+        "paired_coverage": 0.0,
+        "matched_coverage": 0.0,
+        "unmatched_units": [],
+        "plan": {"chunk_bytes": chunk_bytes, "chunks": []},
+        "chunks_reviewed": [],
+        "chunks_deferred": [],
+        "errors": [{"chunk_index": 0, "error": error}],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "findings": [],
+    }
+
+
 def review_pair(
     name,
     model,
@@ -758,7 +830,12 @@ def review_pair(
     """Plan and, unless dry-running, review every selected function chunk."""
     if mode not in MODES:
         raise ValueError(f"unknown review mode: {mode}")
-    preambles, rust_units, self_units = load_pair_units(name)
+    try:
+        preambles, rust_units, self_units = load_pair_units(name)
+    except UnsupportedItem as exc:
+        # Nothing was reviewed, and `errors` keeps `reviewed_completely` false
+        # so the pair cannot be stamped on a plan that was never built.
+        return _empty_result(name, mode, chunk_bytes, f"cannot split source: {exc}")
     chunks = plan_chunks(rust_units, self_units, chunk_bytes, preambles)
     selected_count = min(max_chunks, len(chunks)) if max_chunks else len(chunks)
     selected = chunks[:selected_count]
