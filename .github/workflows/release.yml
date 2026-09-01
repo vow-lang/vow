@@ -73,7 +73,7 @@ jobs:
             verify: false
           - os: macos
             arch: x86_64
-            runner: macos-15-intel
+            runner: macos-13
             verify: false
     runs-on: ${{ matrix.runner }}
     steps:
