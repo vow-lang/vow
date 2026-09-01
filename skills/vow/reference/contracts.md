@@ -417,4 +417,6 @@ extern "C" {
 }
 ```
 
-The contract applies to all functions declared in the block. ESBMC uses `requires` as assumptions and `ensures` as assertions when verifying callers of extern functions.
+The contract applies to all functions declared in the block, and documents the expected behavior of foreign functions for readers of the code.
+
+**Declaration-only today.** Extern-declared functions can be declared and type-checked, but not called: both compilers reject a call to an extern-declared function with `UnsupportedFeature`, because neither compiler yet lowers extern-declared calls to IR/codegen with their declared signatures, and neither propagates the block's contract into verification. ESBMC does not use `requires`/`ensures` on an extern block as assumptions or assertions yet — the contract's only effect today is gating the `MissingContract` check above.
