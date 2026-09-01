@@ -76,6 +76,45 @@ CFG_TEST = re.compile(r"^#\[cfg\(test\)\][ \t]*$", re.MULTILINE)
 CHAR_LIT = re.compile(r"'(?:\\.|[^\\'])'")
 
 
+def _skip_noncode(text, index):
+    """Index past the comment, string or char literal starting at `index`.
+
+    None when `index` is ordinary code. Both scanners in this file share it:
+    they must agree on what counts as code, or one ends up reading the other's
+    string content as syntax.
+    """
+    end = len(text)
+    if text.startswith("//", index):
+        newline = text.find("\n", index)
+        return end if newline == -1 else newline + 1
+    if text.startswith("/*", index):
+        close = text.find("*/", index + 2)
+        return end if close == -1 else close + 2
+    char = text[index]
+    if char == "r" and index + 1 < end and text[index + 1] in '#"':
+        cursor = index + 1
+        hashes = 0
+        while cursor < end and text[cursor] == "#":
+            hashes += 1
+            cursor += 1
+        if cursor < end and text[cursor] == '"':
+            terminator = '"' + "#" * hashes
+            close = text.find(terminator, cursor + 1)
+            return end if close == -1 else close + len(terminator)
+        return None
+    if char == '"':
+        cursor = index + 1
+        while cursor < end and text[cursor] != '"':
+            cursor += 2 if text[cursor] == "\\" else 1
+        return cursor + 1
+    if char == "'":
+        # A miss advances one char rather than failing: that is what tolerates
+        # a lifetime like `&'static str`, which is not a char literal.
+        literal = CHAR_LIT.match(text, index)
+        return index + (len(literal.group()) if literal else 1)
+    return None
+
+
 def _item_end(text, start):
     """Index just past the brace-balanced item beginning at `start`.
 
@@ -91,36 +130,11 @@ def _item_end(text, start):
     index, depth, saw_brace, brackets = start, 0, False, 0
     end = len(text)
     while index < end:
+        skipped = _skip_noncode(text, index)
+        if skipped is not None:
+            index = skipped
+            continue
         char = text[index]
-        if text.startswith("//", index):
-            newline = text.find("\n", index)
-            index = end if newline == -1 else newline + 1
-            continue
-        if text.startswith("/*", index):
-            close = text.find("*/", index + 2)
-            index = end if close == -1 else close + 2
-            continue
-        if char == "r" and index + 1 < end and text[index + 1] in '#"':
-            cursor = index + 1
-            hashes = 0
-            while cursor < end and text[cursor] == "#":
-                hashes += 1
-                cursor += 1
-            if cursor < end and text[cursor] == '"':
-                terminator = '"' + "#" * hashes
-                close = text.find(terminator, cursor + 1)
-                index = end if close == -1 else close + len(terminator)
-                continue
-        if char == '"':
-            index += 1
-            while index < end and text[index] != '"':
-                index += 2 if text[index] == "\\" else 1
-            index += 1
-            continue
-        if char == "'":
-            literal = CHAR_LIT.match(text, index)
-            index += len(literal.group()) if literal else 1
-            continue
         if char in "([":
             brackets += 1
         elif char in ")]":
@@ -172,12 +186,24 @@ def strip_cfg_test(text):
     the self-hosted side has no counterpart for any of them. Reviewing them
     costs model calls and inflates the coverage figure that stamps the ledger.
     """
-    kept, position = [], 0
-    for marker in CFG_TEST.finditer(text):
-        if marker.start() < position:
+    kept, position, index = [], 0, 0
+    end = len(text)
+    while index < end:
+        skipped = _skip_noncode(text, index)
+        if skipped is not None:
+            # A `#[cfg(test)]` line inside a raw string is that string's data.
+            # Matching it would start `_item_end` inside the string, where its
+            # own string-awareness cannot help, and delete real code by brace
+            # balance -- silently, since the truncation leaves nothing for
+            # split_units' end-of-line guard to catch.
+            index = skipped
             continue
-        kept.append(text[position : marker.start()])
-        position = _item_end(text, marker.end())
+        marker = CFG_TEST.match(text, index)
+        if marker:
+            kept.append(text[position:index])
+            position = index = _item_end(text, marker.end())
+            continue
+        index += 1
     kept.append(text[position:])
     return "".join(kept)
 
@@ -1306,7 +1332,7 @@ def main(argv=None):
     if args.update_ledger:
         try:
             ledger_updated = write_ledger(ledger, results, args.date, LEDGER)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             # results.json holds every finding from every model call this run
             # made. Letting this escape would discard all of it after real
             # spend, and exit 1 -- the code reserved for confirmed findings.

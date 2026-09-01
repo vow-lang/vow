@@ -381,6 +381,32 @@ class StripCfgTestTest(unittest.TestCase):
         self.assertIn("lower_module_with_pattern_aggregates", names)
         self.assertNotIn("lower_function", names)
 
+    def test_a_cfg_marker_inside_a_raw_string_is_string_data(self):
+        # `_item_end` skips strings from where it starts, which cannot help if
+        # the match that started it was itself inside one -- it then deletes
+        # real code by brace balance, and leaves nothing for split_units'
+        # end-of-line guard to catch.
+        text = (
+            "fn critical_impl() -> u32 {\n"
+            '    let v = r#"\n'
+            "#[cfg(test)]\n"
+            '"#;\n'
+            "    1\n"
+            "}\n\n"
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    fn t() {}\n"
+            "}\n\n"
+            "fn another() -> u32 { 2 }\n"
+        )
+
+        kept = pair_review.strip_cfg_test(text)
+
+        self.assertIn("fn critical_impl", kept)
+        self.assertIn("fn another", kept)
+        self.assertIn('r#"', kept)
+        self.assertNotIn("mod tests", kept)
+
     def test_raw_string_braces_do_not_end_a_test_module(self):
         # The test modules embed Vow programs whose braces sit at column 0.
         text = (
@@ -1084,6 +1110,50 @@ class LedgerWritebackTest(unittest.TestCase):
         self.assertIn(
             "ledger writeback failed", report["pairs"][0]["errors"][0]["error"]
         )
+
+    def test_a_ledger_io_failure_still_writes_the_run_results(self):
+        # A read-only checkout or a full disk raises OSError, not ValueError,
+        # from mkstemp/os.replace -- the same loss for a different reason.
+        compiler = Path(self.directory.name) / "compiler"
+        compiler.touch()
+        outdir = Path(self.directory.name) / "ledger-io"
+        clean = self.result(
+            plan={"chunk_bytes": 100, "chunks": []},
+            chunks_reviewed=[1],
+            input_tokens=0,
+            output_tokens=0,
+        )
+        with (
+            mock.patch.dict("sys.modules", {"llm": usable_llm()}),
+            mock.patch.object(pair_review, "LEDGER", self.ledger_path),
+            mock.patch.object(pair_review, "review_pair", return_value=clean),
+            mock.patch.object(
+                pair_review,
+                "write_ledger",
+                side_effect=OSError(30, "Read-only file system"),
+            ),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+        ):
+            status = pair_review.main(
+                [
+                    "--all",
+                    "--pair",
+                    "lexer",
+                    "--rust",
+                    str(compiler),
+                    "--self",
+                    str(compiler),
+                    "--output-dir",
+                    str(outdir),
+                    "--update-ledger",
+                    "--date",
+                    "2026-09-01",
+                ]
+            )
+
+        self.assertEqual(2, status)
+        self.assertTrue((outdir / "results.json").exists())
 
     def test_a_failed_run_leaves_no_stale_results(self):
         # The documented output directory is a dated one that gets reused.
