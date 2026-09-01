@@ -927,7 +927,7 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
         return replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"));
     }
     let abort_kind: String = replay_find_abort_kind(err);
-    if abort_kind.len() > 0 {
+    if abort_kind.len() > 0 && rrc != 0 {
         let reason: String = String::from("runtime aborted with ");
         reason.push_str(abort_kind);
         reason.push_str(String::from(" before reaching predicted VowViolation vow_id="));

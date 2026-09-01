@@ -438,15 +438,15 @@ fn classify_replay_run(
                 ))
             }
         }
-        None => match stderr.lines().find_map(parse_runtime_abort_line) {
-            Some(kind) => replay_abort(format!(
+        None => match (success, stderr.lines().find_map(parse_runtime_abort_line)) {
+            (false, Some(kind)) => replay_abort(format!(
                 "runtime aborted with {kind} before reaching predicted VowViolation vow_id={} blame={}",
                 ce.vow_id, ce.blame
             )),
-            None if success => replay_diverge(
+            (true, _) => replay_diverge(
                 "harness exited cleanly; no VowViolation fired at runtime".to_string(),
             ),
-            None => replay_diverge(format!(
+            (false, None) => replay_diverge(format!(
                 "harness exited with status {code:?} but emitted no VowViolation"
             )),
         },
@@ -928,6 +928,25 @@ mod tests {
     #[test]
     fn classify_replay_run_still_diverges_on_clean_exit_with_no_marker() {
         let outcome = classify_replay_run(true, Some(0), "", &ce("f", 2));
+
+        assert_eq!(outcome.status, "diverged");
+        assert_eq!(
+            outcome.reason.as_deref(),
+            Some("harness exited cleanly; no VowViolation fired at runtime")
+        );
+    }
+
+    #[test]
+    fn classify_replay_run_diverges_not_aborts_when_abort_marker_precedes_clean_exit() {
+        // `eprintln_str` is a user-callable [io] builtin: a harness can print an
+        // `{"error":...}`-shaped line to stderr and still exit 0 afterward. That
+        // must not be classified as "aborted" — the process didn't fail.
+        let outcome = classify_replay_run(
+            true,
+            Some(0),
+            "{\"error\":\"CustomDiagnostic\"}\n",
+            &ce("f", 2),
+        );
 
         assert_eq!(outcome.status, "diverged");
         assert_eq!(
