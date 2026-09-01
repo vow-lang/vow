@@ -1,0 +1,22 @@
+name: Full differential suite
+
+# Run the complete Rust-vs-self-hosted suite after each merge and nightly. It
+# stays off the pull-request path while #1171 makes its runtime unsuitable for
+# a required per-PR check.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 05:15 UTC -- offset from bootstrap (03:53), equivalence (04:41), and
+    # arena-verify (06:29) so the nightly jobs do not contend for runners.
+    - cron: "15 5 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  full-test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"

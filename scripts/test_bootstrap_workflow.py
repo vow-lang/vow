@@ -18,10 +18,10 @@ an image detail. The workflows are uniformly formatted (top-level job keys at
 exactly two spaces, bodies deeper), which is all the structure these assertions
 need.
 
-Also guards `equivalence.yml`'s read-only permissions and ledger-proposal
-wiring. That belongs here rather than in its own module because it is the same
-question -- which workflow carries which equivalence tier -- under the same
-stdlib-only constraint.
+Also guards the scheduled full-test and equivalence workflows. That belongs
+here rather than in separate modules because it is the same question -- which
+workflow carries which equivalence tier -- under the same stdlib-only
+constraint.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 BOOTSTRAP_WORKFLOW = WORKFLOWS / "bootstrap.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
 EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
+FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
@@ -182,6 +183,27 @@ class CiWorkflowTest(unittest.TestCase):
         for name in ("build-and-test", "build-and-test-macos"):
             with self.subTest(job=name):
                 self.assertIn("concat_vow.sh", jobs[name])
+
+
+class FullTestWorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = FULL_TEST_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_runs_on_push_to_main_and_nightly(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"push:\s*\n\s*branches:\s*\[main\]")
+        found = crons(self.text)
+        self.assertTrue(found, "expected a scheduled run")
+        for cron in found:
+            with self.subTest(cron=cron):
+                self.assertTrue(cron.endswith("* * *"), "expected a daily cron")
+
+    def test_workflow_keeps_read_only_repository_permissions(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
+        self.assertNotRegex(workflow_header, r"contents:\s*write")
 
 
 class EquivalenceWorkflowTest(unittest.TestCase):
