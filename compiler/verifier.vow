@@ -627,6 +627,55 @@ fn parse_vow_label(output: String) -> ParsedVowLabel {
     parsed_vow_label_none()
 }
 
+fn describe_assert_label(label: String) -> String {
+    if label == String::from("vec bounds") || label == String::from("string bounds") {
+        return String::from("index out of bounds");
+    }
+    if label == String::from("vec capacity") {
+        return String::from("vec exceeded the verifier's internal capacity limit");
+    }
+    if label == String::from("string capacity") {
+        return String::from("string exceeded the verifier's internal capacity limit");
+    }
+    if label == String::from("hashmap capacity") {
+        return String::from("hashmap exceeded the verifier's internal capacity limit");
+    }
+    if label == String::from("btreemap capacity") {
+        return String::from("btreemap exceeded the verifier's internal capacity limit");
+    }
+    if label == String::from("integer shift count") {
+        return String::from("shift amount exceeds the operand's bit width");
+    }
+    if label == String::from("unwrap-none") {
+        return String::from("unwrap() called on None");
+    }
+    String::from("")
+}
+
+// Parse a verifier-model assertion label that is not a user-authored contract
+// clause, returning the stable description exposed in structured
+// counterexamples. Mirrors `vow_verify::esbmc::extract_assert_label`.
+fn parse_assert_label(output: String) -> String {
+    let lines: Vec<String> = Vec::new();
+    split_lines(output, lines);
+    let n: i64 = lines.len();
+    let mut in_violated: bool = false;
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("Violated property:") {
+            in_violated = true;
+        } else if in_violated {
+            let description: String = describe_assert_label(line);
+            if description.len() > 0 {
+                return description;
+            }
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
 // Parse the `arith:<cause>:<span_start>:<span_len>` property label the C emitter
 // attaches to a checked-arithmetic obligation (`emit_checked_arith`).
 //
