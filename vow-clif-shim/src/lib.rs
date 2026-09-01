@@ -2236,8 +2236,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, val);
                 }
                 IOP_REM_F32 | IOP_REM_F64 => {
+                    // A backend gap, not a backend defect: Cranelift has no
+                    // frem, so the operation is unimplemented rather than
+                    // broken. `cranelift_backend.rs` answers the same opcodes
+                    // with `UnsupportedOpcode`; both compilers must agree.
                     eprintln!("clif_shim: float remainder not supported");
-                    return -1;
+                    return CLIF_ERR_UNSUPPORTED;
                 }
 
                 // Float comparisons
@@ -5089,6 +5093,39 @@ mod tests {
             add_test_inst(ctx, 1, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[0]);
             unsafe {
                 assert_eq!(__vow_clif_fn_end(ctx), 0, "{name}");
+                __vow_clif_destroy(ctx);
+            }
+        }
+    }
+
+    /// Float remainder has no Cranelift instruction, so both backends refuse
+    /// it. `cranelift_backend.rs` answers `UnsupportedOpcode`; the shim must
+    /// answer `CLIF_ERR_UNSUPPORTED` so the two compilers agree on
+    /// `CodegenUnsupported` rather than one of them blaming a compiler bug.
+    ///
+    /// No `tests/error/*.vow` fixture can reach here: both lowerers map `%`
+    /// to the wrapping-integer opcode for every operand type, so `IOP_REM_F*`
+    /// is only reachable from hand-built IR like this. See issue #1164.
+    #[test]
+    fn float_remainder_is_refused_as_unsupported() {
+        for (name, op, ty) in [("f32", IOP_REM_F32, ITY_F32), ("f64", IOP_REM_F64, ITY_F64)] {
+            let ctx = __vow_clif_create(0, 0);
+            assert_ne!(ctx, 0);
+            declare_test_function(ctx, 0, name, ITY_UNIT, false);
+            unsafe {
+                assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+            }
+            add_test_block(ctx);
+            add_test_inst(ctx, 0, IOP_CONST_F64, ty, IDATA_CONST_F64, 0, 1, &[]);
+            add_test_inst(ctx, 1, IOP_CONST_F64, ty, IDATA_CONST_F64, 0, 2, &[]);
+            add_test_inst(ctx, 2, op, ty, IDATA_NONE, 0, 0, &[0, 1]);
+            add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+            unsafe {
+                assert_eq!(
+                    __vow_clif_fn_end(ctx),
+                    CLIF_ERR_UNSUPPORTED,
+                    "{name}: float remainder is unimplemented, not an internal failure"
+                );
                 __vow_clif_destroy(ctx);
             }
         }
