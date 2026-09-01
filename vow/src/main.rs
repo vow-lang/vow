@@ -304,14 +304,12 @@ fn run_verify_only_inner(
 fn codegen_error_to_output(
     error: CodegenError,
     source: &Path,
-    diagnostics: Vec<Diagnostic>,
+    mut diagnostics: Vec<Diagnostic>,
 ) -> BuildOutput {
-    let output =
-        verify_outcome::codegen_failed(&error, source.to_string_lossy().as_ref(), diagnostics);
-    if let Some(diagnostic) = output.diagnostics.last() {
-        let _ = emit_frontend_diagnostics_to_stderr(std::slice::from_ref(diagnostic));
-    }
-    output
+    let diagnostic = verify_outcome::codegen_diagnostic(&error, source.to_string_lossy().as_ref());
+    let _ = emit_frontend_diagnostics_to_stderr(std::slice::from_ref(&diagnostic));
+    diagnostics.push(diagnostic);
+    verify_outcome::compile_failed(format!("{error:?}"), diagnostics)
 }
 
 fn link_obj(obj_path: &Path, output_path: &Path) -> Result<PathBuf, CodegenError> {

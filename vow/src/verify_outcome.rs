@@ -391,14 +391,14 @@ pub(crate) fn compile_failed(message: String, diagnostics: Vec<Diagnostic>) -> B
     }
 }
 
-/// Fail a build for a backend error while preserving a stable, structured
-/// diagnostic alongside the compatibility `message` field.
-pub(crate) fn codegen_failed(
-    error: &CodegenError,
-    file: &str,
-    mut diagnostics: Vec<Diagnostic>,
-) -> BuildOutput {
-    diagnostics.push(Diagnostic {
+/// The structured diagnostic for a backend error. Backend errors carry no
+/// instruction origin, so the span is the whole file. Callers push this onto
+/// the frontend diagnostics and pass the compatibility `message` to
+/// [`compile_failed`]; returning the value (rather than a `BuildOutput` the
+/// caller has to index back into) keeps the stderr and JSON channels reading
+/// the same diagnostic.
+pub(crate) fn codegen_diagnostic(error: &CodegenError, file: &str) -> Diagnostic {
+    Diagnostic {
         severity: Severity::Error,
         code: error.error_code(),
         message: error.to_string(),
@@ -410,8 +410,7 @@ pub(crate) fn codegen_failed(
         secondary: vec![],
         blame: Blame::None,
         hints: vec![],
-    });
-    compile_failed(format!("{error:?}"), diagnostics)
+    }
 }
 
 #[cfg(test)]
@@ -916,8 +915,11 @@ mod tests {
 
     #[test]
     fn codegen_failed_attaches_one_structured_diagnostic() {
+        // Mirrors what `codegen_error_to_output` composes in main.rs.
         let error = CodegenError::UnsupportedOpcode("wide aggregate".to_string());
-        let out = codegen_failed(&error, "wide.vow", vec![diag("frontend note")]);
+        let mut diagnostics = vec![diag("frontend note")];
+        diagnostics.push(codegen_diagnostic(&error, "wide.vow"));
+        let out = compile_failed(format!("{error:?}"), diagnostics);
 
         assert!(matches!(out.status, BuildStatus::CompileFailed { .. }));
         assert!(out.executable.is_none());
