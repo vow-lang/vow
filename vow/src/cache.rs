@@ -17,10 +17,9 @@ const VERIFY_CACHE_FAILURE_HEADER: &str = "FAILED v3";
 // reductions, narrow Option parameter payloads, width-preserving unary
 // negation, aggregate match-payload tags (which also change FieldGet indices
 // for the same source), the fail-closed 128-bit aggregate-field guard, and
-// element-width narrowing at Vec index reads all make pre-cutover objects
-// unsafe to reuse.
-const COMPILE_CACHE_ABI_VERSION: &str =
-    "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-v7";
+// element-width narrowing at Vec index reads, and unsigned lowering for u64
+// checked literal expressions all make pre-cutover objects unsafe to reuse.
+const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-u64-literal-v8";
 
 pub struct CompileCache {
     dir: PathBuf,
@@ -762,6 +761,25 @@ mod tests {
             "Release",
             "Off",
             "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-v6",
+        )
+        .unwrap();
+        let current_key = CompileCache::cache_key(&deps, "Release", "Off").unwrap();
+
+        assert_ne!(legacy_key, current_key);
+    }
+
+    #[test]
+    fn compile_cache_key_invalidates_pre_u64_checked_literal_objects() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.vow");
+        std::fs::write(&a, "module A").unwrap();
+
+        let deps = DependencyManifest::from_paths(vec![a]);
+        let legacy_key = CompileCache::cache_key_with_abi_seed(
+            &deps,
+            "Release",
+            "Off",
+            "static-string-arena-slot-utf8-lexer-narrow-unary-match-aggregate-wide-guard-index-v7",
         )
         .unwrap();
         let current_key = CompileCache::cache_key(&deps, "Release", "Off").unwrap();
