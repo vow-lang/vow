@@ -364,7 +364,7 @@ fn generate_replay_harness(
 
 /// Verdict of replaying one counterexample.
 struct ReplayOutcome {
-    status: &'static str, // "confirmed" | "diverged" | "skipped"
+    status: &'static str, // "confirmed" | "diverged" | "aborted" | "skipped"
     reason: Option<String>,
 }
 
@@ -382,6 +382,13 @@ fn replay_diverge(reason: String) -> ReplayOutcome {
     }
 }
 
+fn replay_abort(reason: String) -> ReplayOutcome {
+    ReplayOutcome {
+        status: "aborted",
+        reason: Some(reason),
+    }
+}
+
 /// Parse a `{"error":"VowViolation","vow_id":N,"blame":"Caller",...}` stderr
 /// line into `(vow_id, blame)`.
 fn parse_vow_violation_line(line: &str) -> Option<(u32, String)> {
@@ -393,6 +400,21 @@ fn parse_vow_violation_line(line: &str) -> Option<(u32, String)> {
     let vid = v.get("vow_id")?.as_u64()? as u32;
     let blame = v.get("blame")?.as_str()?.to_string();
     Some((vid, blame))
+}
+
+/// Parse a structured non-`VowViolation` runtime-abort stderr line into its
+/// error kind.
+fn parse_runtime_abort_line(line: &str) -> Option<String> {
+    let l = line.trim();
+    if !l.starts_with('{') {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(l).ok()?;
+    let kind = v.get("error")?.as_str()?;
+    if kind.is_empty() || kind == "VowViolation" {
+        return None;
+    }
+    Some(kind.to_string())
 }
 
 /// Classify a finished harness run against the counterexample's prediction.
@@ -416,12 +438,18 @@ fn classify_replay_run(
                 ))
             }
         }
-        None if success => {
-            replay_diverge("harness exited cleanly; no VowViolation fired at runtime".to_string())
-        }
-        None => replay_diverge(format!(
-            "harness exited with status {code:?} but emitted no VowViolation"
-        )),
+        None => match stderr.lines().find_map(parse_runtime_abort_line) {
+            Some(kind) => replay_abort(format!(
+                "runtime aborted with {kind} before reaching predicted VowViolation vow_id={} blame={}",
+                ce.vow_id, ce.blame
+            )),
+            None if success => replay_diverge(
+                "harness exited cleanly; no VowViolation fired at runtime".to_string(),
+            ),
+            None => replay_diverge(format!(
+                "harness exited with status {code:?} but emitted no VowViolation"
+            )),
+        },
     }
 }
 
@@ -861,6 +889,51 @@ mod tests {
         );
         assert_eq!(parse_vow_violation_line("not json"), None);
         assert_eq!(parse_vow_violation_line(r#"{"error":"Other"}"#), None);
+    }
+
+    #[test]
+    fn parse_runtime_abort_line_extracts_kind_and_ignores_vow_violation() {
+        assert_eq!(
+            parse_runtime_abort_line(r#"{"error":"IndexOutOfBounds"}"#),
+            Some("IndexOutOfBounds".to_string())
+        );
+        assert_eq!(
+            parse_runtime_abort_line(r#"{"error":"ArithmeticOverflow"}"#),
+            Some("ArithmeticOverflow".to_string())
+        );
+        assert_eq!(
+            parse_runtime_abort_line(r#"{"error":"VowViolation","vow_id":2,"blame":"Caller"}"#),
+            None
+        );
+        assert_eq!(parse_runtime_abort_line("index out of bounds"), None);
+        assert_eq!(parse_runtime_abort_line(r#"{"error":7}"#), None);
+    }
+
+    #[test]
+    fn classify_replay_run_reports_aborted_when_bounds_check_preempts_vow_check() {
+        let outcome = classify_replay_run(
+            false,
+            Some(134),
+            "{\"error\":\"IndexOutOfBounds\"}\nindex out of bounds\n",
+            &ce("last_element", 7),
+        );
+
+        assert_eq!(outcome.status, "aborted");
+        let reason = outcome.reason.unwrap();
+        assert!(reason.contains("IndexOutOfBounds"));
+        assert!(reason.contains("vow_id=7"));
+        assert!(reason.contains("blame=Callee"));
+    }
+
+    #[test]
+    fn classify_replay_run_still_diverges_on_clean_exit_with_no_marker() {
+        let outcome = classify_replay_run(true, Some(0), "", &ce("f", 2));
+
+        assert_eq!(outcome.status, "diverged");
+        assert_eq!(
+            outcome.reason.as_deref(),
+            Some("harness exited cleanly; no VowViolation fired at runtime")
+        );
     }
 
     #[test]
