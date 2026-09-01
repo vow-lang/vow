@@ -1,0 +1,22 @@
+// TEST: stdout "2147483647\n0\n0\n"
+module VecIndexNarrowArith
+
+fn main() -> i32 [io] {
+    let sub_values: Vec<u32> = Vec::new();
+    sub_values.push(0u32);
+    sub_values.push(1u32);
+    let shifted_difference: u32 = (sub_values[0] - sub_values[1]) >> 1;
+    print_u64(shifted_difference as u64);
+    print_str("\n");
+
+    let mul_values: Vec<u32> = Vec::new();
+    mul_values.push(4294967295u32);
+    let shifted_product: u32 = (mul_values[0] * mul_values[0]) >> 4;
+    print_u64(shifted_product as u64);
+    print_str("\n");
+
+    let divided_product: u32 = (mul_values[0] * mul_values[0]) / 7u32;
+    print_u64(divided_product as u64);
+    print_str("\n");
+    0
+}

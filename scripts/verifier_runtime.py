@@ -71,7 +71,12 @@ def run_json(binary, args, timeout, limit=False):
 
 
 def run_debug_binary(path, timeout):
-    """Run a --mode debug binary and look for a VowViolation on stderr."""
+    """Run a --mode debug binary and look for a VowViolation on stderr.
+
+    Returns `(violation, error)` like `run_json`, because "ran and did not
+    violate" and "never finished" are different answers: collapsing both to
+    None makes a hung binary read as proof that the verifier was right.
+    """
     try:
         proc = subprocess.run(
             [str(path)],
@@ -82,16 +87,16 @@ def run_debug_binary(path, timeout):
             stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
-        return None
+        return None, f"debug binary timed out after {timeout}s"
     # __vow_violation writes the JSON to stderr, then exits non-zero.
     for line in proc.stderr.splitlines():
         line = line.strip()
         if '"VowViolation"' in line:
             try:
-                return json.loads(line)
+                return json.loads(line), None
             except json.JSONDecodeError:
-                return {"error": "VowViolation", "raw": line}
-    return None
+                return {"error": "VowViolation", "raw": line}, None
+    return None, None
 
 
 def check_soundness(vow_file, verifier, outdir, timeout):
@@ -100,9 +105,7 @@ def check_soundness(vow_file, verifier, outdir, timeout):
     Only programs the verifier actually proved are subjects: a fixture it
     already rejects cannot produce a false proof.
     """
-    verify, err = run_json(
-        verifier, ["verify", "--no-cache", str(vow_file)], timeout
-    )
+    verify, err = run_json(verifier, ["verify", "--no-cache", str(vow_file)], timeout)
     if verify is None:
         return {"direction": "soundness", "verdict": "skipped", "detail": err}
     if verify.get("status") != "Verified":
@@ -115,8 +118,16 @@ def check_soundness(vow_file, verifier, outdir, timeout):
     exe = outdir / (Path(vow_file).stem + "_dbg")
     build, err = run_json(
         verifier,
-        ["build", "--mode", "debug", "--no-verify", "--no-cache",
-         str(vow_file), "-o", str(exe)],
+        [
+            "build",
+            "--mode",
+            "debug",
+            "--no-verify",
+            "--no-cache",
+            str(vow_file),
+            "-o",
+            str(exe),
+        ],
         timeout,
     )
     if build is None or not build.get("executable"):
@@ -126,9 +137,14 @@ def check_soundness(vow_file, verifier, outdir, timeout):
             "detail": err or "debug build produced no executable",
         }
 
-    violation = run_debug_binary(exe, timeout)
+    violation, err = run_debug_binary(exe, timeout)
     exe.unlink(missing_ok=True)
     Path(str(exe) + ".o").unlink(missing_ok=True)
+    if err:
+        # The runtime half never answered, so neither did the gate. `skipped`
+        # is the file's existing "no verdict" verdict, which the pair-review
+        # adapter already turns into an unjudged claim.
+        return {"direction": "soundness", "verdict": "skipped", "detail": err}
     if violation is None:
         return {"direction": "soundness", "verdict": "ok", "detail": "no violation"}
     return {
@@ -211,8 +227,12 @@ def main():
     ap.add_argument("--output-dir", default="verifier-runtime.out")
     ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--shard", default=None, metavar="K/N")
-    ap.add_argument("--min-checked", type=int, default=1,
-                    help="fail if fewer than N fixtures reached a verdict")
+    ap.add_argument(
+        "--min-checked",
+        type=int,
+        default=1,
+        help="fail if fewer than N fixtures reached a verdict",
+    )
     args = ap.parse_args()
 
     verifier = Path(args.verifier)
@@ -250,8 +270,14 @@ def main():
         text = f.read_text(errors="replace")
         skip = DIRECTIVE_SKIP.search(text)
         if skip:
-            records.append({"file": rel, "checks": [
-                {"verdict": "skipped", "detail": f"directive: {skip.group(1)}"}]})
+            records.append(
+                {
+                    "file": rel,
+                    "checks": [
+                        {"verdict": "skipped", "detail": f"directive: {skip.group(1)}"}
+                    ],
+                }
+            )
             continue
         known_gap = DIRECTIVE_KNOWN_GAP.search(text)
 

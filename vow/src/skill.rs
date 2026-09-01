@@ -3376,7 +3376,7 @@ fn get_element(v: Vec<i64>, i: i64) -> i64 vow {
 
 ### Fill Pattern with Loop Invariant
 
-See the worked CEGIS example in [examples.md](examples.md#3-vec-fill--loop-invariant).
+See the worked CEGIS example in [examples.md](examples.md#3-vec-fill-loop-invariant).
 
 ## String Contracts
 
@@ -8463,7 +8463,7 @@ fn get_element(v: Vec<i64>, i: i64) -> i64 vow {
 
 ### Fill Pattern with Loop Invariant
 
-See the worked CEGIS example in [examples.md](examples.md#3-vec-fill--loop-invariant).
+See the worked CEGIS example in [examples.md](examples.md#3-vec-fill-loop-invariant).
 
 ## String Contracts
 

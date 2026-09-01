@@ -5608,7 +5608,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fill Pattern with Loop Invariant\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("See the worked CEGIS example in [examples.md](examples.md#3-vec-fill--loop-invariant).\n"));
+    r.push_str(String::from("See the worked CEGIS example in [examples.md](examples.md#3-vec-fill-loop-invariant).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## String Contracts\n"));
     r.push_str(String::from("\n"));
@@ -10719,7 +10719,7 @@ fn skill_support_content_reference_contracts_md_2474f258() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fill Pattern with Loop Invariant\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("See the worked CEGIS example in [examples.md](examples.md#3-vec-fill--loop-invariant).\n"));
+    r.push_str(String::from("See the worked CEGIS example in [examples.md](examples.md#3-vec-fill-loop-invariant).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## String Contracts\n"));
     r.push_str(String::from("\n"));

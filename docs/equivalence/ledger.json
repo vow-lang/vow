@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-08-31",
+  "updated": "2026-09-01",
   "pairs": {
     "lexer": {
       "rust": "vow-syntax/src/lexer.rs, vow-syntax/src/token.rs",
@@ -47,8 +47,8 @@
     "benchmarks/medium/M13_gcd/reference.vow": {
       "first_seen": "2026-08-25",
       "observable": "runtime",
-      "status": "open",
-      "note": "gcd returns 0 for every input under the self-hosted compiler: a loop-body `let` reads its initializer after a later same-iteration reassignment.",
+      "status": "fixed",
+      "note": "Was caused by the Cranelift shim writing Upsilons directly into Phi value slots, which made parallel loop back-edge copies execute sequentially. Per-Phi shadow slots now preserve the prior loop-carried values.",
       "issue": 1087,
       "fixture": "tests/run/euclid_gcd_swap_loop.vow"
     },
@@ -177,16 +177,16 @@
     "tests/run/euclid_gcd_swap_loop.vow": {
       "first_seen": "2026-08-25",
       "observable": "runtime",
-      "status": "open",
-      "note": "Euclid-level reproducer for #1087, promoted as a tier-1 regression fixture. Diverges by design until #1087 is fixed.",
+      "status": "fixed",
+      "note": "Was a Euclid-level reproducer for the Cranelift shim's sequential Upsilon lowering. Per-Phi shadow slots now preserve parallel back-edge copy semantics; retained as a tier-1 regression fixture.",
       "issue": 1087,
       "fixture": "tests/run/euclid_gcd_swap_loop.vow"
     },
     "tests/run/loop_body_let_from_carried_var.vow": {
       "first_seen": "2026-08-25",
       "observable": "runtime",
-      "status": "open",
-      "note": "Minimal 9-line reproducer for #1087, promoted as a tier-1 regression fixture. Diverges by design until #1087 is fixed.",
+      "status": "fixed",
+      "note": "Was the minimal reproducer for the Cranelift shim's sequential Upsilon lowering. Per-Phi shadow slots now preserve parallel back-edge copy semantics; retained as a tier-1 regression fixture.",
       "issue": 1087,
       "fixture": "tests/run/loop_body_let_from_carried_var.vow"
     }

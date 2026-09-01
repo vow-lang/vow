@@ -252,6 +252,8 @@ The shim uses stack slots instead of SSA values for all instruction results. Thi
 because the self-hosted IR has cross-block references between sibling branches (e.g., an else
 branch referencing a value from the then branch), which violates Cranelift's SSA dominance
 requirements. Each instruction result is stored in a stack slot; reads load from the slot.
+Each `Phi` also owns a shadow slot: `Upsilon` writes the shadow, and the `Phi` copies it into
+the value slot on block entry so back-edge `Upsilon` groups retain parallel-copy semantics.
 `BTreeMap` (not `HashMap`) is used for `slot_map` to ensure deterministic codegen for binary
 fixed-point reproducibility.
 
