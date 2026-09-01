@@ -593,7 +593,9 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
             }
             let mut fi: i64 = 0;
             while fi < nf {
-                register_fn(e, m, list_get(a, fns_lid, fi));
+                let ext_fid: i64 = list_get(a, fns_lid, fi);
+                register_fn(e, m, ext_fid);
+                env_mark_extern_fn(e, arena_str(a, fn_name_sid(a, ext_fid)));
                 fi = fi + 1;
             }
         }
@@ -2506,6 +2508,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 msg.push_str(name);
                 msg.push_str(String::from("`"));
                 env_emit_error(e, msg, expr_span(a, eid));
+                return CTY_NEVER();
+            }
+            if env_is_extern_fn(e, name) {
+                let msg: String = String::from("calling extern-declared function `");
+                msg.push_str(name);
+                msg.push_str(String::from("` is not yet supported"));
+                env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid));
                 return CTY_NEVER();
             }
             if e.fn_param_count[fidx] != n_args {

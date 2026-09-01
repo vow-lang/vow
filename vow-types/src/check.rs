@@ -1163,6 +1163,7 @@ impl<'e> Checker<'e> {
                                 effects,
                             },
                         );
+                        self.env.mark_extern_fn(&f.name);
                     }
                 }
                 _ => {}
@@ -2052,6 +2053,22 @@ impl<'e> Checker<'e> {
                         return Ty::Never;
                     }
                 };
+                if self.env.is_extern_fn(name) {
+                    self.emit_error_with_hints(
+                        ErrorCode::UnsupportedFeature,
+                        format!(
+                            "calling extern-declared function `{name}` is not yet supported"
+                        ),
+                        expr.span,
+                        vec![
+                            "extern \"C\" functions can be declared but not called yet; lowering extern calls to IR/codegen is not implemented".to_string(),
+                        ],
+                    );
+                    for arg in args {
+                        self.check_expr(arg);
+                    }
+                    return Ty::Never;
+                }
                 if args.len() != param_tys.len() {
                     let sig_str = param_tys
                         .iter()
