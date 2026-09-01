@@ -172,10 +172,7 @@ class CompareJsonCharacterizationTest(unittest.TestCase):
         errors = parity.compare_json(rust, self_hosted, 1, 1)
 
         self.assertEqual(
-            [
-                "counterexample[0].violation: "
-                "x as u64 > 0 vs x as i64 > 0"
-            ],
+            ["counterexample[0].violation: x as u64 > 0 vs x as i64 > 0"],
             errors,
         )
 
@@ -390,6 +387,79 @@ class CompareErrorCharacterizationTest(unittest.TestCase):
         )
 
         self.assertEqual(["rust has no diagnostics", "self has no diagnostics"], errors)
+
+
+class CompareTestTest(unittest.TestCase):
+    @staticmethod
+    def suite(status="TestsPassed", total=2, tests=None):
+        return document(
+            status,
+            total=total,
+            tests=(
+                [
+                    {"name": "test_arith", "status": "passed"},
+                    {"name": "test_parser", "status": "passed"},
+                ]
+                if tests is None
+                else tests
+            ),
+        )
+
+    def test_passing_suites_with_the_same_test_results_agree(self):
+        rust = self.suite()
+        self_hosted = self.suite(
+            tests=list(reversed(rust["tests"])),
+        )
+
+        self.assertEqual([], parity.compare_test(rust, self_hosted, 0, 0))
+
+    def test_discovered_test_counts_must_match(self):
+        errors = parity.compare_test(
+            self.suite(total=2),
+            self.suite(
+                total=1,
+                tests=[{"name": "test_arith", "status": "passed"}],
+            ),
+            0,
+            0,
+        )
+
+        self.assertIn("total: 2 vs 1", errors)
+
+    def test_each_named_test_status_must_match(self):
+        errors = parity.compare_test(
+            self.suite(),
+            self.suite(
+                tests=[
+                    {"name": "test_arith", "status": "failed"},
+                    {"name": "test_parser", "status": "passed"},
+                ]
+            ),
+            0,
+            0,
+        )
+
+        self.assertIn("test_arith", " ".join(errors))
+        self.assertIn("failed", " ".join(errors))
+
+    def test_both_suites_must_report_tests_passed(self):
+        errors = parity.compare_test(
+            self.suite("TestsFailed"), self.suite("TestsFailed"), 1, 1
+        )
+
+        self.assertIn("rust status=TestsFailed, expected TestsPassed", errors)
+        self.assertIn("self status=TestsFailed, expected TestsPassed", errors)
+
+    def test_each_process_must_exit_zero(self):
+        errors = parity.compare_test(self.suite(), self.suite(), 3, 4)
+
+        self.assertIn("rust exited 3, expected 0", errors)
+        self.assertIn("self exited 4, expected 0", errors)
+
+    def test_cli_exposes_test_mode_without_a_fixture(self):
+        completed = run_parity_cli("test", self.suite(), self.suite(), 0, 0)
+
+        self.assertEqual((0, "OK"), (completed.returncode, completed.stdout.strip()))
 
 
 class CompareErrorCodeParityTest(unittest.TestCase):

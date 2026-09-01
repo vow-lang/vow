@@ -202,6 +202,34 @@ def compare_error(rust, self_hosted, rust_exit, self_exit):
     return errors
 
 
+def compare_test(rust, self_hosted, rust_exit, self_exit):
+    """Return parity errors for two ``vow test`` suite results."""
+    errors = []
+    for name, document, exit_code in (
+        ("rust", rust, rust_exit),
+        ("self", self_hosted, self_exit),
+    ):
+        if exit_code != 0:
+            errors.append(f"{name} exited {exit_code}, expected 0")
+        if document.get("status") != "TestsPassed":
+            errors.append(
+                f"{name} status={document.get('status')}, expected TestsPassed"
+            )
+
+    errors += _mismatch("total", rust.get("total"), self_hosted.get("total"))
+    errors += _mismatch(
+        "tests",
+        sorted(
+            (test.get("name"), test.get("status")) for test in rust.get("tests", [])
+        ),
+        sorted(
+            (test.get("name"), test.get("status"))
+            for test in self_hosted.get("tests", [])
+        ),
+    )
+    return errors
+
+
 def _load_documents(rust_path, self_path):
     with open(rust_path) as rust_file:
         rust = json.load(rust_file)
@@ -355,9 +383,14 @@ def _ledger_verdict(rust, self_hosted, errors, fixture_path):
 def main(argv=None):
     """Run a comparator over two JSON files for scripts/full_test.sh."""
     args = sys.argv[1:] if argv is None else argv
-    if len(args) not in (5, 6) or args[0] not in ("json", "error"):
+    modes = ("json", "error", "test")
+    if (
+        len(args) not in (5, 6)
+        or args[0] not in modes
+        or (args[0] == "test" and len(args) != 5)
+    ):
         print(
-            "usage: parity.py {json,error} RUST_JSON SELF_JSON "
+            "usage: parity.py {json,error,test} RUST_JSON SELF_JSON "
             "RUST_EXIT SELF_EXIT [FIXTURE]",
             file=sys.stderr,
         )
@@ -371,7 +404,10 @@ def main(argv=None):
         print(f"FAIL: JSON parse error: {error}")
         return 1
 
-    if mode == "json":
+    if mode == "test":
+        errors = compare_test(rust, self_hosted, int(rust_exit), int(self_exit))
+        verdict = None
+    elif mode == "json":
         errors = compare_json(rust, self_hosted, int(rust_exit), int(self_exit))
         try:
             verdict = _known_cex_verdict(rust, self_hosted, errors, fixture_path)
