@@ -88,6 +88,24 @@ class BootstrapWorkflowTest(unittest.TestCase):
         self.assertNotIn("bootstrap.sh --no-verify", linux)
         self.assertIn("install-esbmc", linux)
 
+    def test_linux_compares_the_compiler_test_suite_after_bootstrap(self) -> None:
+        linux = self.jobs["bootstrap"]
+
+        rust_test = "target/release/vow test compiler/"
+        self_test = "build/vowc test compiler/"
+        comparator = "scripts/parity.py test"
+        for command in (rust_test, self_test, comparator):
+            with self.subTest(command=command):
+                self.assertIn(command, linux)
+        self.assertLess(linux.index("scripts/bootstrap.sh"), linux.index(self_test))
+        self.assertIn("ulimit -v 2000000", linux)
+
+    def test_linux_compiler_test_comparison_is_blocking(self) -> None:
+        linux = self.jobs["bootstrap"]
+
+        self.assertNotIn("continue-on-error", linux)
+        self.assertIn("timeout-minutes: 90", linux)
+
     def test_runs_on_every_push_to_main(self) -> None:
         # The nightly cron alone would attribute a self-hosting break to a day
         # of commits rather than to the merge that caused it.

@@ -72,6 +72,21 @@ jobs:
         uses: ./.github/actions/install-esbmc
       - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
         run: scripts/bootstrap.sh --stage3-no-verify
+      - name: Compiler test suite, both compilers (equivalence tier 1)
+        # This is blocking but nightly rather than per-PR while #1171 keeps the
+        # self-hosted suite outside the pull-request latency budget. Running it
+        # here also compares the verified fixed point, not the weaker stage-1
+        # concatenated compiler available in ci.yml.
+        run: |
+          ulimit -v 2000000
+          set +e
+          target/release/vow test compiler/ > /tmp/rust_test.json
+          rust_exit=$?
+          build/vowc test compiler/ > /tmp/self_test.json
+          self_exit=$?
+          set -e
+          python3 scripts/parity.py test /tmp/rust_test.json /tmp/self_test.json \
+            "$rust_exit" "$self_exit"
       - name: Verifier-evaluation suite (self-hosted)
         # Holds the fixed-point self-hosted compiler to the same exact
         # ground-truth blame/vow_id corpus as the Rust verifier.
