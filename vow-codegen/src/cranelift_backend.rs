@@ -1983,7 +1983,7 @@ fn emit_vow_violation_body(
                     IrTy::Unit | IrTy::Ptr | IrTy::LinearPtr => (zero_hi, zero_hi),
                     // Every other scalar widens to i64 exactly as it does when
                     // stored into a struct field.
-                    _ => (extend_field_store_value(builder, *cl_val, *ir_ty), zero_hi),
+                    _ => (extend_field_store_value(builder, *cl_val, *ir_ty)?, zero_hi),
                 };
                 builder
                     .ins()
