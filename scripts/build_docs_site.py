@@ -39,21 +39,27 @@ REFERENCE_PAGES = [
 # Links in the canonical files are relative to `docs/spec/`. Sibling links
 # (`errors.md#...`) already resolve inside the copied set; a `../` prefix always
 # escapes it, so those are retargeted at GitHub — external links are not validated
-# by `mkdocs --strict` and stay correct on the published site.
-ESCAPING_LINK = re.compile(r"\]\(\.\./([^)#]+)(#[^)]*)?\)")
+# by `mkdocs --strict` and stay correct on the published site. The path group
+# excludes whitespace so a standard Markdown title (`](../f.md "details")`) isn't
+# folded into the path and mistaken for a dead target.
+ESCAPING_LINK = re.compile(r'\]\(\.\./([^)#\s]+)(#[^)\s]*)?(\s+"[^"]*")?\)')
 
 
 def _retarget_escaping_links(text: str, page: str) -> str:
     """Point `../`-prefixed links at GitHub, failing loudly on a dead target."""
 
     def repl(match: re.Match[str]) -> str:
-        target, anchor = match.group(1), match.group(2) or ""
+        target, anchor, title = (
+            match.group(1),
+            match.group(2) or "",
+            match.group(3) or "",
+        )
         if not (REPO / "docs" / target).exists():
             raise SystemExit(
                 f"{page}: link '../{target}' has no target at docs/{target}. "
                 "Fix the link in the canonical file."
             )
-        return f"]({GITHUB_BLOB}/docs/{target}{anchor})"
+        return f"]({GITHUB_BLOB}/docs/{target}{anchor}{title})"
 
     return ESCAPING_LINK.sub(repl, text)
 
