@@ -36,6 +36,7 @@ BOOTSTRAP_WORKFLOW = WORKFLOWS / "bootstrap.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
 EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
 FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
+PROMOTED_FIXTURES_WORKFLOW = WORKFLOWS / "promoted-fixtures.yml"
 RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
 FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
 
@@ -272,6 +273,66 @@ class FullTestWorkflowTest(unittest.TestCase):
         self.assertIn("${PASS} passed", script)
 
 
+class PromotedFixturesWorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = PROMOTED_FIXTURES_WORKFLOW.read_text(encoding="utf-8")
+        self.jobs = job_blocks(self.text)
+
+    def test_runs_on_pull_requests_without_duplicate_main_pushes(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(
+            workflow_header,
+            r"pull_request:\s*\n\s*branches:\s*\[main\]",
+        )
+        self.assertNotRegex(workflow_header, r"(?m)^  push:")
+        self.assertNotRegex(workflow_header, r"(?m)^  schedule:")
+
+    def test_workflow_keeps_read_only_repository_permissions(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
+        self.assertNotRegex(workflow_header, r"contents:\s*write")
+
+    def test_gated_on_the_docs_only_classifier(self) -> None:
+        changes = self.jobs["changes"]
+        promoted = self.jobs["promoted-fixtures"]
+
+        self.assertIn("fetch-depth: 0", changes)
+        self.assertIn("code: ${{ steps.classify.outputs.code }}", changes)
+        self.assertIn("python3 scripts/ci_docs_only.py", changes)
+        self.assertIn("needs: changes", promoted)
+        self.assertIn("if: needs.changes.outputs.code == 'true'", promoted)
+
+    def test_job_is_bounded_and_blocking(self) -> None:
+        promoted = self.jobs["promoted-fixtures"]
+
+        self.assertIn("timeout-minutes: 30", promoted)
+        self.assertNotIn("continue-on-error", promoted)
+
+    def test_runs_promoted_route_with_required_toolchain(self) -> None:
+        promoted = self.jobs["promoted-fixtures"]
+
+        self.assertIn("actions/checkout", promoted)
+        self.assertIn("dtolnay/rust-toolchain", promoted)
+        self.assertIn("Swatinem/rust-cache", promoted)
+        self.assertIn("install-esbmc", promoted)
+        self.assertNotIn("astral-sh/setup-uv", promoted)
+        self.assertIn(
+            "VOW_FULL_TEST_PROMOTED_ONLY=1 scripts/full_test.sh",
+            promoted,
+        )
+
+    def test_enforces_a_minimum_passed_count(self) -> None:
+        promoted = self.jobs["promoted-fixtures"]
+
+        self.assertIn("set -o pipefail", promoted)
+        self.assertIn("tee /tmp/promoted_fixtures.log", promoted)
+        self.assertIn(r"grep -oP '\d+(?= passed)'", promoted)
+        self.assertIn('test -n "$passed"', promoted)
+        self.assertIn('[ "$passed" -ge 600 ]', promoted)
+
+
 class FullTestPromotedGateTest(unittest.TestCase):
     def setUp(self) -> None:
         self.script = FULL_TEST_SCRIPT.read_text(encoding="utf-8")
@@ -357,6 +418,10 @@ class ParserTest(unittest.TestCase):
         # every assertion above vacuously pass.
         self.assertIn("bootstrap", job_blocks(BOOTSTRAP_WORKFLOW.read_text()))
         self.assertIn("build-and-test", job_blocks(CI_WORKFLOW.read_text()))
+        self.assertIn(
+            "promoted-fixtures",
+            job_blocks(PROMOTED_FIXTURES_WORKFLOW.read_text()),
+        )
 
 
 if __name__ == "__main__":
