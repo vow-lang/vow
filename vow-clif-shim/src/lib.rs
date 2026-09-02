@@ -2904,14 +2904,14 @@ pub unsafe extern "C" fn __vow_clif_finish(ctx_ptr: i64, obj_path_ptr: i64) -> i
         }
     };
 
-    if let Some(parent) = std::path::Path::new(obj_path).parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!(
-                "clif_shim: create object directory {}: {e}",
-                parent.display()
-            );
-            return CLIF_ERR_IO;
-        }
+    if let Some(parent) = std::path::Path::new(obj_path).parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "clif_shim: create object directory {}: {e}",
+            parent.display()
+        );
+        return CLIF_ERR_IO;
     }
 
     // The object bytes are already built, so a failed write is the

@@ -578,12 +578,12 @@ pub(crate) fn run_pipeline_from_frontend(
         }
     };
 
-    if let Some(parent) = output_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            let _ = verify_handle.join();
-            let error = CodegenError::Io(format!("{}: {e}", parent.display()));
-            return codegen_error_to_output(error, source, all_diagnostics);
-        }
+    if let Some(parent) = output_path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        let _ = verify_handle.join();
+        let error = CodegenError::Io(format!("{}: {e}", parent.display()));
+        return codegen_error_to_output(error, source, all_diagnostics);
     }
 
     if let Err(e) = compiled.write_to_file(&obj_path) {
