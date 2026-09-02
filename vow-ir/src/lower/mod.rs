@@ -4712,6 +4712,22 @@ fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: T
 
 fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty, InstData) {
     let result_ty = *operand_ty;
+    let float_opcode = match (op, operand_ty) {
+        (BinOp::Add, Ty::F32) => Some(Opcode::AddF32),
+        (BinOp::Sub, Ty::F32) => Some(Opcode::SubF32),
+        (BinOp::Mul, Ty::F32) => Some(Opcode::MulF32),
+        (BinOp::Div, Ty::F32) => Some(Opcode::DivF32),
+        (BinOp::Rem, Ty::F32) => Some(Opcode::RemF32),
+        (BinOp::Add, Ty::F64) => Some(Opcode::AddF64),
+        (BinOp::Sub, Ty::F64) => Some(Opcode::SubF64),
+        (BinOp::Mul, Ty::F64) => Some(Opcode::MulF64),
+        (BinOp::Div, Ty::F64) => Some(Opcode::DivF64),
+        (BinOp::Rem, Ty::F64) => Some(Opcode::RemF64),
+        _ => None,
+    };
+    if let Some(opcode) = float_opcode {
+        return (opcode, result_ty, InstData::None);
+    }
     let integer_data = InstData::Integer(integer_type_for_ir_ty(result_ty));
     match op {
         BinOp::Add => (Opcode::WrappingAdd, result_ty, integer_data),
@@ -5919,6 +5935,51 @@ fn unsigned_max() -> u128 {
 
     fn insts_of(func: &Function) -> Vec<&Inst> {
         func.blocks.iter().flat_map(|block| &block.insts).collect()
+    }
+
+    #[test]
+    fn float_arithmetic_uses_float_opcodes() {
+        let module = lower_source_to_module(
+            r#"
+module FloatArithmeticLowering
+
+fn add_f32(a: f32, b: f32) -> f32 { a + b }
+fn sub_f32(a: f32, b: f32) -> f32 { a - b }
+fn mul_f32(a: f32, b: f32) -> f32 { a * b }
+fn div_f32(a: f32, b: f32) -> f32 { a / b }
+fn rem_f32(a: f32, b: f32) -> f32 { a % b }
+
+fn add_f64(a: f64, b: f64) -> f64 { a + b }
+fn sub_f64(a: f64, b: f64) -> f64 { a - b }
+fn mul_f64(a: f64, b: f64) -> f64 { a * b }
+fn div_f64(a: f64, b: f64) -> f64 { a / b }
+fn rem_f64(a: f64, b: f64) -> f64 { a % b }
+"#,
+            "float_arithmetic_lowering.vow",
+        );
+
+        let expected = [
+            (Opcode::AddF32, Ty::F32),
+            (Opcode::SubF32, Ty::F32),
+            (Opcode::MulF32, Ty::F32),
+            (Opcode::DivF32, Ty::F32),
+            (Opcode::RemF32, Ty::F32),
+            (Opcode::AddF64, Ty::F64),
+            (Opcode::SubF64, Ty::F64),
+            (Opcode::MulF64, Ty::F64),
+            (Opcode::DivF64, Ty::F64),
+            (Opcode::RemF64, Ty::F64),
+        ];
+
+        assert_eq!(module.functions.len(), expected.len());
+        for (func, (opcode, ty)) in module.functions.iter().zip(expected) {
+            let arithmetic = insts_of(func)
+                .into_iter()
+                .find(|inst| inst.opcode == opcode)
+                .unwrap_or_else(|| panic!("missing {opcode:?} in {func:#?}"));
+            assert_eq!(arithmetic.ty, ty, "{}", func.name);
+            assert_eq!(arithmetic.data, InstData::None, "{}", func.name);
+        }
     }
 
     #[test]
