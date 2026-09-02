@@ -211,6 +211,7 @@ compare_error() {
 }
 
 run_promoted_run_tests() {
+    section_begin "Section 4: Run Tests"
     for vow_file in tests/run/*.vow; do
         name=$(basename "$vow_file" .vow)
 
@@ -310,6 +311,7 @@ run_promoted_run_tests() {
 }
 
 run_promoted_error_tests() {
+    section_begin "Section 7: Error Handling"
     cat > "$TMPDIR/parse_error.vow" <<'EOF'
 module M 123
 EOF
@@ -489,10 +491,8 @@ section_begin "Section 0: Setup"
 setup_compilers
 
 if [ "${VOW_FULL_TEST_PROMOTED_ONLY:-0}" = "1" ]; then
-    section_begin "Section 4: Run Tests"
     run_promoted_run_tests
     echo ""
-    section_begin "Section 7: Error Handling"
     run_promoted_error_tests
     echo ""
     summary_status=0
@@ -737,7 +737,6 @@ echo ""
 
 # ─── Section 4: Run Tests (tests/run/) ────────────────────────────
 
-section_begin "Section 4: Run Tests"
 run_promoted_run_tests
 echo ""
 
@@ -1276,7 +1275,6 @@ echo ""
 
 # ─── Section 7: Error Handling ─────────────────────────────────────
 
-section_begin "Section 7: Error Handling"
 run_promoted_error_tests
 echo ""
 

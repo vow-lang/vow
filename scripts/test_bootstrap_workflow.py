@@ -351,28 +351,22 @@ class FullTestPromotedGateTest(unittest.TestCase):
                 )
 
     def test_promoted_only_route_stops_before_the_complete_suite(self) -> None:
-        gate = re.search(
-            r'if \[ "\$\{VOW_FULL_TEST_PROMOTED_ONLY:-0\}" = "1" \]; then\n'
-            r"(?P<body>.*?)\nfi",
-            self.script,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(gate)
-        assert gate is not None
-
         section_zero = self.script.index('section_begin "Section 0: Setup"')
         setup_call = self.script.index("\nsetup_compilers\n", section_zero)
+        gate_start = self.script.index(
+            'if [ "${VOW_FULL_TEST_PROMOTED_ONLY:-0}" = "1" ]; then', setup_call
+        )
+        run_call = self.script.index("run_promoted_run_tests", gate_start)
+        error_call = self.script.index("run_promoted_error_tests", run_call)
+        print_summary_call = self.script.index(
+            "print_summary || summary_status=$?", error_call
+        )
+        exit_call = self.script.index('exit "$summary_status"', print_summary_call)
+        gate_end = self.script.index("\nfi\n", exit_call)
         section_zero_b = self.script.index("# ─── Section 0b")
-        self.assertLess(setup_call, gate.start())
-        self.assertLess(gate.end(), section_zero_b)
 
-        body = gate.group("body")
-        self.assertIn('section_begin "Section 4: Run Tests"', body)
-        self.assertIn("run_promoted_run_tests", body)
-        self.assertIn('section_begin "Section 7: Error Handling"', body)
-        self.assertIn("run_promoted_error_tests", body)
-        self.assertIn("print_summary || summary_status=$?", body)
-        self.assertIn('exit "$summary_status"', body)
+        self.assertLess(setup_call, gate_start)
+        self.assertLess(gate_end, section_zero_b)
 
 
 class EquivalenceWorkflowTest(unittest.TestCase):
