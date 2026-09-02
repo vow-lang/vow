@@ -1337,7 +1337,9 @@ fn verify_collect_and_report(
         if st == VERIFY_FAILED() {
             eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
             emit_ce_vars(vr);
-            ces.push(build_ce_from_result(f, ir_mod, vr, path));
+            if ces.len() == 0 {
+                ces.push(build_ce_from_result(f, ir_mod, vr, path));
+            }
             return 0;
         }
         if st == VERIFY_TIMEOUT() {
@@ -1372,7 +1374,9 @@ fn verify_collect_and_report(
     if st == VERIFY_FAILED() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
         emit_ce_vars(vr);
-        ces.push(build_ce_from_result(f, ir_mod, vr, path));
+        if ces.len() == 0 {
+            ces.push(build_ce_from_result(f, ir_mod, vr, path));
+        }
         return 0;
     }
     if st == VERIFY_TIMEOUT() || st == VERIFY_UNKNOWN() {
@@ -5140,6 +5144,14 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("For a multi-function `verify` or verified `build`, a halt-class result (definitive\n"));
+    r.push_str(String::from("counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function\n"));
+    r.push_str(String::from("checks from being launched. Checks already claimed by parallel workers finish, and the compiler\n"));
+    r.push_str(String::from("reports the halt from the lowest module-declaration-order function in that claimed set. Therefore\n"));
+    r.push_str(String::from("`counterexamples[]` contains at most one entry; a reported soft failure leaves it empty and uses\n"));
+    r.push_str(String::from("`verify_status` instead. Fix the reported failure and run verification again to surface a later\n"));
+    r.push_str(String::from("failure.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
@@ -5223,7 +5235,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
-    r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
+    r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |\n"));
     r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
     r.push_str(String::from("\n"));
@@ -10253,6 +10265,14 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("For a multi-function `verify` or verified `build`, a halt-class result (definitive\n"));
+    r.push_str(String::from("counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function\n"));
+    r.push_str(String::from("checks from being launched. Checks already claimed by parallel workers finish, and the compiler\n"));
+    r.push_str(String::from("reports the halt from the lowest module-declaration-order function in that claimed set. Therefore\n"));
+    r.push_str(String::from("`counterexamples[]` contains at most one entry; a reported soft failure leaves it empty and uses\n"));
+    r.push_str(String::from("`verify_status` instead. Fix the reported failure and run verification again to surface a later\n"));
+    r.push_str(String::from("failure.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
@@ -10336,7 +10356,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
-    r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
+    r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |\n"));
     r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
     r.push_str(String::from("\n"));
