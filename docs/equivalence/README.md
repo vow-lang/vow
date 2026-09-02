@@ -35,7 +35,7 @@ bugs. That result ordering is why the tiers below are sequenced corpus-first.
 
 | Tier | Cadence | Cost | Blocking | What runs |
 |---|---|---|---|---|
-| 1 | pull requests for promoted fixtures; push to `main`, nightly, local on demand | minutes | yes | promoted fixtures plus `vow test compiler/` under both compilers |
+| 1 | pull requests for promoted fixtures; push to `main`, nightly, local on demand | minutes | yes where run | promoted fixtures plus `vow test compiler/` under both compilers |
 | 2 | nightly | ~90 min, sharded | no | full-corpus sweep (`scripts/equivalence.py`) |
 | 3 | monthly | credentialed, agent-driven | no | adversarial AI pair review |
 
