@@ -6,8 +6,8 @@ central correctness claim: `build/vowc` compiles itself to a byte-identical
 binary. Moving that off pull requests trades latency for a later signal, and the
 trade is only sound while several things hold at once -- it still runs on every
 push to `main` (so a break is attributed to one merge), it still runs nightly
-(the backstop), it covers both platforms, and the Linux leg still verifies with
-ESBMC. Drop any one and the guarantee quietly becomes something weaker than it
+(the backstop), it covers both platforms, and both legs still verify with ESBMC.
+Drop any one and the guarantee quietly becomes something weaker than it
 reads. These are cheap structural assertions, not a substitute for it running.
 
 Deliberately parses with `re` rather than PyYAML. This module runs in
@@ -100,6 +100,13 @@ class BootstrapWorkflowTest(unittest.TestCase):
         self.assertIn("--stage3-no-verify", linux)
         self.assertNotIn("bootstrap.sh --no-verify", linux)
         self.assertIn("install-esbmc", linux)
+
+    def test_macos_bootstrap_verifies_with_esbmc(self) -> None:
+        macos = self.jobs["bootstrap-macos"]
+
+        self.assertIn("--stage3-no-verify", macos)
+        self.assertNotIn("bootstrap.sh --no-verify", macos)
+        self.assertIn("install-esbmc", macos)
 
     def compiler_test_step(self) -> str:
         """Just the tier-1 comparison step.

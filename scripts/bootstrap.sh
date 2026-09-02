@@ -33,7 +33,7 @@ usage() {
     echo "Options:"
     echo "  --skip-cargo         Skip Stage 0 if Rust binary already built"
     echo "  --no-verify          Skip ESBMC verification at every stage. Useful on"
-    echo "                       platforms where ESBMC is unavailable (e.g. macOS)."
+    echo "                       platforms where ESBMC is unavailable."
     echo "                       Verification does not change codegen, so the"
     echo "                       SHA-256 fixed-point check remains meaningful."
     echo "  --stage3-no-verify   Skip ESBMC verification on Stage 3 only (Stages 1-2"
