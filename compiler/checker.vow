@@ -584,6 +584,20 @@ fn check_module(e: CheckEnv, m: Module, item_files: Vec<String>) [io] {
         let id: i64 = item_id(item);
         if kind == ITEM_FN() {
             register_fn(e, m, id);
+        } else if kind == ITEM_EXTERN() {
+            let a: AstArena = m.arena;
+            let fns_lid: i64 = ext_fns_lid(a, id);
+            let nf: i64 = list_len(a, fns_lid);
+            if ext_vow_lid(a, id) == -1 && nf > 0 {
+                env_emit_error_code(e, EC_MISSING_CONTRACT(), String::from("extern block requires a vow contract"), ext_span(a, id));
+            }
+            let mut fi: i64 = 0;
+            while fi < nf {
+                let ext_fid: i64 = list_get(a, fns_lid, fi);
+                register_fn(e, m, ext_fid);
+                env_mark_extern_fn(e, arena_str(a, fn_name_sid(a, ext_fid)));
+                fi = fi + 1;
+            }
         }
         i = i + 1;
     }
@@ -2494,6 +2508,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 msg.push_str(name);
                 msg.push_str(String::from("`"));
                 env_emit_error(e, msg, expr_span(a, eid));
+                return CTY_NEVER();
+            }
+            if env_is_extern_fn(e, name) {
+                let msg: String = String::from("calling extern-declared function `");
+                msg.push_str(name);
+                msg.push_str(String::from("` is not yet supported"));
+                env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid));
                 return CTY_NEVER();
             }
             if e.fn_param_count[fidx] != n_args {

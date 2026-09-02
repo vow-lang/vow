@@ -979,12 +979,12 @@ This aliasing is the intended behavior for arena and hash-table patterns where b
 Declare external C functions (a `vow` contract block is required):
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 

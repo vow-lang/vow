@@ -65,7 +65,9 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@2af88edc33c2d5ff8a473fd1c5ab83052f77afee # cargo-llvm-cov
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+        with:
+          tool: cargo-llvm-cov
       - name: Install ESBMC
         uses: ./.github/actions/install-esbmc
       - run: cargo build --all
@@ -83,6 +85,8 @@ jobs:
         run: python3 scripts/test_ci_docs_only.py
       - name: CI workflow-shape unit tests
         run: python3 scripts/test_bootstrap_workflow.py
+      - name: Install-ESBMC action unit tests
+        run: python3 scripts/test_install_esbmc_action.py
       - name: Docs site link-rewrite unit tests
         run: python3 scripts/test_build_docs_site.py
       - name: Benchmark skeleton fidelity unit tests

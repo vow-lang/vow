@@ -282,6 +282,14 @@ rationale.
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
+For a multi-function `verify` or verified `build`, a halt-class result (definitive
+counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function
+checks from being launched. Checks already claimed by parallel workers finish, and the compiler
+reports the halt from the lowest module-declaration-order function in that claimed set. Therefore
+`counterexamples[]` contains at most one entry; a reported soft failure leaves it empty and uses
+`verify_status` instead. Fix the reported failure and run verification again to surface a later
+failure.
+
 ### Verified Example
 
 ```json
@@ -365,7 +373,7 @@ than exposing raw verifier output.
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
-| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
+| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
