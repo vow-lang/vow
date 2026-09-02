@@ -437,17 +437,15 @@ else
     compare_json "build-no-verify/missing-output-parent" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$missing_parent_fixture"
 fi
 
-if [ -x "$rust_missing_parent_output" ]; then
-    pass "build-no-verify/rust-creates-output-parent"
-else
-    fail "build-no-verify/rust-creates-output-parent" "missing executable: $rust_missing_parent_output"
-fi
-
-if [ -x "$self_missing_parent_output" ]; then
-    pass "build-no-verify/self-creates-output-parent"
-else
-    fail "build-no-verify/self-creates-output-parent" "missing executable: $self_missing_parent_output"
-fi
+for name_output in "rust:$rust_missing_parent_output" "self:$self_missing_parent_output"; do
+    compiler="${name_output%%:*}"
+    output="${name_output#*:}"
+    if [ -x "$output" ]; then
+        pass "build-no-verify/${compiler}-creates-output-parent"
+    else
+        fail "build-no-verify/${compiler}-creates-output-parent" "missing executable: $output"
+    fi
+done
 echo ""
 
 # ─── Section 2: Verify ─────────────────────────────────────────────
