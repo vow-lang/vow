@@ -58,12 +58,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Keep each four-line entry contiguous: the workflow-shape test
+          # parses these blocks and permits comments between entries.
           - os: linux
             arch: x86_64
             runner: ubuntu-24.04
             verify: true
-          # The pinned ESBMC zip is Ubuntu x86_64-only; Linux aarch64 and
-          # macOS packages use --no-verify while keeping the fixed-point check.
+          # Linux aarch64 has an upstream archive but no checksum pin yet.
           - os: linux
             arch: aarch64
             runner: ubuntu-24.04-arm
@@ -71,10 +72,11 @@ jobs:
           - os: macos
             arch: aarch64
             runner: macos-15
-            verify: false
+            verify: true
+          # The upstream macOS artifact is arm64-only.
           - os: macos
             arch: x86_64
-            runner: macos-13
+            runner: macos-15-intel
             verify: false
     runs-on: ${{ matrix.runner }}
     steps:
@@ -88,9 +90,8 @@ jobs:
         env:
           VERSION: ${{ needs.plan.outputs.version }}
         run: bash .github/semantic-release/set-version.sh "$VERSION"
-      # Linux x86_64 only -- `matrix.verify` is false everywhere the action
-      # cannot serve a binary (macOS, aarch64), and those legs bootstrap
-      # with --no-verify.
+      # `matrix.verify` is true only where the action has a checksum-pinned
+      # archive; all other legs keep the fixed-point check with --no-verify.
       - name: Install ESBMC
         if: matrix.verify
         uses: ./.github/actions/install-esbmc

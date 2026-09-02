@@ -1,0 +1,14 @@
+// TEST: error-code UnsupportedFeature
+module ExternCallUnsupported
+
+extern "C" {
+    vow {
+        requires: true
+    }
+    fn external_thing(x: i64) -> i64;
+}
+
+fn main() -> i32 {
+    external_thing(1);
+    0
+}

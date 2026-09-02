@@ -1,0 +1,5 @@
+module MissingModuleSymbolReference
+
+use nonexistent
+
+fn main() -> i32 { f() }

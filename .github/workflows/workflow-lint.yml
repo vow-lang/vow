@@ -27,7 +27,9 @@ jobs:
 
       - name: actionlint
         env:
-          ACTIONLINT_VERSION: 1.7.7
+          # 1.7.8+ is required to recognize the `macos-15-intel` runner label
+          # used in release.yml; 1.7.7 reports it as an unknown runner-label.
+          ACTIONLINT_VERSION: 1.7.12
         run: |
           curl -fsSL -o actionlint.tar.gz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"

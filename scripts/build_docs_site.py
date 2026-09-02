@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Assemble the MkDocs site source from the canonical specification.
+"""Assemble the Zensical site source from the canonical specification.
 
 The website renders the SAME markdown that lives in `docs/spec/` (and that the
 compiler embeds into its agent skill via `generate_help.py`) — it must never fork
 those files. This script copies the curated reference pages into `website/docs/`
 and applies the few link rewrites needed for the site to build cleanly under
-`mkdocs build --strict`.
+`zensical build --strict`.
 
-Run this before `mkdocs build` / `mkdocs serve`. The generated pages are gitignored;
-the hand-written pages (home, tutorial, reference/index) are committed.
+Run this before `zensical build` / `zensical serve`. The generated pages are
+gitignored; the hand-written pages (home, tutorial, reference/index) are committed.
 
     python scripts/build_docs_site.py
 """
@@ -39,7 +39,7 @@ REFERENCE_PAGES = [
 # Links in the canonical files are relative to `docs/spec/`. Sibling links
 # (`errors.md#...`) already resolve inside the copied set; a `../` prefix always
 # escapes it, so those are retargeted at GitHub — external links are not validated
-# by `mkdocs --strict` and stay correct on the published site. The path group
+# by `zensical --strict` and stay correct on the published site. The path group
 # excludes whitespace so a standard Markdown title (`](../f.md "details")`) isn't
 # folded into the path and mistaken for a dead target.
 ESCAPING_LINK = re.compile(r'\]\(\.\./([^)#\s]+)(#[^)\s]*)?(\s+"[^"]*")?\)')

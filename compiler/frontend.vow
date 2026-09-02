@@ -186,7 +186,9 @@ fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) 
     let n_items: i64 = all_items.len();
     let e: CheckEnv = env_new(dctx, path);
     let t_check: i64 = trace_now(t);
-    check_module(e, merged, item_files);
+    if !diag_ctx_has_errors(dctx) {
+        check_module(e, merged, item_files);
+    }
     trace_span(t, String::from("typecheck"), PID_COMPILER(), TID_MAIN(), t_check, trace_now(t) - t_check, String::from(""));
     trace_sample(t, trace_now(t));
     let checked: CheckedFrontend = CheckedFrontend {

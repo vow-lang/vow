@@ -104,6 +104,11 @@ pub struct TypeEnv {
     /// stay on `scopes` and are untouched.
     mut_info: Vec<Vec<(String, MutInfo)>>,
     fn_sigs: HashMap<String, FnSig>,
+    /// Names registered from an `extern "C"` block. Calling one is rejected
+    /// with `UnsupportedFeature`: neither compiler lowers extern-declared
+    /// calls to IR yet, so silently falling through to the generic unresolved-
+    /// call path would use a fabricated signature instead of the declared one.
+    extern_fn_names: HashSet<String>,
     struct_defs: HashMap<String, StructInfo>,
     enum_defs: HashMap<String, EnumInfo>,
     type_aliases: HashMap<String, Ty>,
@@ -457,6 +462,7 @@ impl TypeEnv {
             scopes: vec![HashMap::new()],
             mut_info: vec![Vec::new()],
             fn_sigs: HashMap::new(),
+            extern_fn_names: HashSet::new(),
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
             type_aliases: HashMap::new(),
@@ -548,6 +554,14 @@ impl TypeEnv {
 
     pub fn lookup_fn(&self, name: &str) -> Option<&FnSig> {
         self.fn_sigs.get(name)
+    }
+
+    pub fn mark_extern_fn(&mut self, name: impl Into<String>) {
+        self.extern_fn_names.insert(name.into());
+    }
+
+    pub fn is_extern_fn(&self, name: &str) -> bool {
+        self.extern_fn_names.contains(name)
     }
 
     pub fn define_struct(&mut self, name: impl Into<String>, info: StructInfo) {

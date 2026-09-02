@@ -1,0 +1,10 @@
+// TEST: error-code MissingContract
+module ExternMissingContract
+
+extern "C" {
+    fn external_thing(x: i64) -> i64;
+}
+
+fn main() -> i32 {
+    0
+}
