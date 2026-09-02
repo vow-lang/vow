@@ -6,16 +6,18 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## same-operand-type-verdict
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 23/25 (leverage 4, locality 5, blast radius 1, heat 5)
-- **Files**: ~1 estimated
+- **Files**: ~1 estimated (actual: 1)
 - **Modules**: `vow-types/src/check.rs` (`check_same_numeric` ~L3016, `check_same_integer` ~L3124;
   call sites L1812/L1818/L1873/L1907)
 - **Summary**: collapse the two line-for-line-twin operand-type checks into one pure
-  `same_operand_verdict(lhs, rhs, class) -> SameOperandVerdict`, mirroring the landed `cast_verdict`
-  seam; each method keeps only its distinct `ErrorCode::TypeMismatch` message/hint at the call site.
+  `same_operand_ty(lhs, rhs, class) -> Result<Ty, OperandError>` (Design C, adjudicated over the
+  bespoke-enum Design A), mirroring the landed `cast_verdict` seam; each method keeps only its distinct
+  `ErrorCode::TypeMismatch` message/hint at the call site.
 - **First seen**: 2026-09-03
 - **Report**: `.architecture/reviews/2026-09-03-same-operand-type-verdict.md`
+- **PR**: #1234
 - **Reason**: picked this firing (top score); within 1 point of the runner-up
   `integer-literal-range-fit`.
 
