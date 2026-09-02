@@ -2904,6 +2904,16 @@ pub unsafe extern "C" fn __vow_clif_finish(ctx_ptr: i64, obj_path_ptr: i64) -> i
         }
     };
 
+    if let Some(parent) = std::path::Path::new(obj_path).parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!(
+                "clif_shim: create object directory {}: {e}",
+                parent.display()
+            );
+            return CLIF_ERR_IO;
+        }
+    }
+
     // The object bytes are already built, so a failed write is the
     // filesystem's answer (unwritable directory, full disk), not a backend
     // defect. `CompiledObject::write_to_file` reaches `CodegenError::Io` on
@@ -5828,15 +5838,38 @@ mod tests {
             assert_eq!(__vow_clif_fn_end(ctx), 0);
         }
 
-        // A path under a directory that does not exist: the module emits
-        // fine, only the write fails.
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let object_path = temp_dir.path().join("no_such_dir").join("noop.o");
+        let blocking_file = temp_dir.path().join("blocking_file");
+        std::fs::write(&blocking_file, "not a directory").unwrap();
+        let object_path = blocking_file.join("noop.o");
         let object_path_vec = vow_string(object_path.to_str().unwrap());
         let status = unsafe { __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64) };
 
         assert_eq!(status, CLIF_ERR_IO);
         assert!(!object_path.exists());
+    }
+
+    #[test]
+    fn finish_creates_missing_parent_directories() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "noop", ITY_UNIT, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 0, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join("missing").join("deep").join("noop.o");
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        let status = unsafe { __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64) };
+
+        assert_eq!(status, 0);
+        assert!(object_path.is_file());
     }
 
     #[test]
