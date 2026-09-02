@@ -559,9 +559,11 @@ rather than a backend defect — which is why it is not `CodegenFailed`.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
-verify the `-o` destination's parent directory exists and is writable, and
-that the filesystem has free space. Re-running the same build after fixing the
-filesystem succeeds; changing the source will not help.
+the compiler creates missing parent directories automatically; verify that no
+path component is a regular file, that permissions allow creating directories
+and writing the object, and that the filesystem is writable and has free
+space. Re-running the same build after fixing the filesystem succeeds;
+changing the source will not help.
 
 ### VerificationSkipped
 
