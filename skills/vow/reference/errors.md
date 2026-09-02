@@ -557,7 +557,9 @@ generated object file the backend cannot write (full disk, read-only
 filesystem, or another write failure). The object bytes are already built by
 the time either the directory creation or the write is attempted, so this is
 the filesystem's answer rather than a backend defect — which is why it is not
-`CodegenFailed`.
+`CodegenFailed`. When this code comes from module loading, compilation stops
+before type-checking, so diagnostics do not include follow-on errors for names
+from the missing module.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,

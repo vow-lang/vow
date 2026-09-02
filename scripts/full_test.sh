@@ -423,6 +423,29 @@ for vow_file in examples/*.vow; do
     echo "$rust_json" > "$TMPDIR/rust_${name}.json"
     echo "$self_json" > "$TMPDIR/self_${name}.json"
 done
+
+missing_parent_fixture="examples/hello.vow"
+rust_missing_parent_output="$TMPDIR/rust_missing_output_parent/out"
+self_missing_parent_output="$TMPDIR/self_missing_output_parent/out"
+rust_json="" self_json="" rust_exit=0 self_exit=0
+rust_json=$($RUST build --no-verify "$missing_parent_fixture" -o "$rust_missing_parent_output" 2>/dev/null) || rust_exit=$?
+self_json=$(run_self build --no-verify "$missing_parent_fixture" -o "$self_missing_parent_output" 2>/dev/null) || self_exit=$?
+
+if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
+    fail "build-no-verify/missing-output-parent" "empty output (rust=$rust_exit, self=$self_exit)"
+else
+    compare_json "build-no-verify/missing-output-parent" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$missing_parent_fixture"
+fi
+
+for name_output in "rust:$rust_missing_parent_output" "self:$self_missing_parent_output"; do
+    compiler="${name_output%%:*}"
+    output="${name_output#*:}"
+    if [ -x "$output" ]; then
+        pass "build-no-verify/${compiler}-creates-output-parent"
+    else
+        fail "build-no-verify/${compiler}-creates-output-parent" "missing executable: $output"
+    fi
+done
 echo ""
 
 # ─── Section 2: Verify ─────────────────────────────────────────────

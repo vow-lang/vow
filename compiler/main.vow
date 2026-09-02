@@ -6908,7 +6908,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("filesystem, or another write failure). The object bytes are already built by\n"));
     r.push_str(String::from("the time either the directory creation or the write is attempted, so this is\n"));
     r.push_str(String::from("the filesystem's answer rather than a backend defect -- which is why it is not\n"));
-    r.push_str(String::from("`CodegenFailed`.\n"));
+    r.push_str(String::from("`CodegenFailed`. When this code comes from module loading, compilation stops\n"));
+    r.push_str(String::from("before type-checking, so diagnostics do not include follow-on errors for names\n"));
+    r.push_str(String::from("from the missing module.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
     r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
@@ -12039,7 +12041,9 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("filesystem, or another write failure). The object bytes are already built by\n"));
     r.push_str(String::from("the time either the directory creation or the write is attempted, so this is\n"));
     r.push_str(String::from("the filesystem's answer rather than a backend defect -- which is why it is not\n"));
-    r.push_str(String::from("`CodegenFailed`.\n"));
+    r.push_str(String::from("`CodegenFailed`. When this code comes from module loading, compilation stops\n"));
+    r.push_str(String::from("before type-checking, so diagnostics do not include follow-on errors for names\n"));
+    r.push_str(String::from("from the missing module.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
     r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
