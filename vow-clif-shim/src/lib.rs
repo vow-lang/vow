@@ -2904,6 +2904,10 @@ pub unsafe extern "C" fn __vow_clif_finish(ctx_ptr: i64, obj_path_ptr: i64) -> i
         }
     };
 
+    if let Some(parent) = std::path::Path::new(obj_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
     // The object bytes are already built, so a failed write is the
     // filesystem's answer (unwritable directory, full disk), not a backend
     // defect. `CompiledObject::write_to_file` reaches `CodegenError::Io` on
@@ -4196,6 +4200,21 @@ mod tests {
         unsafe {
             assert_eq!(__vow_clif_fn_block(ctx), 0);
         }
+    }
+
+    fn build_noop_ctx() -> i64 {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "noop", ITY_UNIT, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 0, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+        ctx
     }
 
     fn compile_cross_block_float_phi(
@@ -5806,32 +5825,35 @@ mod tests {
         }
     }
 
-    /// An unwritable object path is the filesystem's answer, not a backend
-    /// defect: `__vow_clif_finish` must report it as `CLIF_ERR_IO` so
+    #[test]
+    fn finish_creates_a_missing_parent_directory() {
+        let ctx = build_noop_ctx();
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join("no_such_dir").join("noop.o");
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        let status = unsafe { __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64) };
+
+        assert_eq!(status, 0);
+        assert!(object_path.exists());
+    }
+
+    /// A non-directory path component is the filesystem's answer, not a
+    /// backend defect: `__vow_clif_finish` must report it as `CLIF_ERR_IO` so
     /// `codegen_failure_diagnostic` reaches `IoError` rather than blaming the
     /// backend, matching what `CompiledObject::write_to_file` produces on the
     /// Rust side.
     #[test]
-    fn finish_reports_an_unwritable_object_path_as_io() {
+    fn finish_reports_a_non_directory_parent_as_io() {
         assert_ne!(CLIF_ERR_IO, CLIF_ERR_UNSUPPORTED);
         assert_ne!(CLIF_ERR_IO, -1);
 
-        let ctx = __vow_clif_create(0, 0);
-        assert_ne!(ctx, 0);
-        declare_test_function(ctx, 0, "noop", ITY_UNIT, false);
-        unsafe {
-            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
-        }
-        add_test_block(ctx);
-        add_test_inst(ctx, 0, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
-        unsafe {
-            assert_eq!(__vow_clif_fn_end(ctx), 0);
-        }
+        let ctx = build_noop_ctx();
 
-        // A path under a directory that does not exist: the module emits
-        // fine, only the write fails.
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let object_path = temp_dir.path().join("no_such_dir").join("noop.o");
+        let blocker_path = temp_dir.path().join("blocker");
+        std::fs::write(&blocker_path, b"not a directory").unwrap();
+        let object_path = blocker_path.join("noop.o");
         let object_path_vec = vow_string(object_path.to_str().unwrap());
         let status = unsafe { __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64) };
 
