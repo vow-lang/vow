@@ -3868,6 +3868,13 @@ fn skill_bundle() -> String {
     r.push_str(String::from("Wrapping operators silently wrap on overflow. For unsigned operands, including\n"));
     r.push_str(String::from("`u8`, division and remainder use unsigned semantics.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to\n"));
+    r.push_str(String::from("native floating-point arithmetic. Unchecked `%` is accepted by the frontend\n"));
+    r.push_str(String::from("and lowers to a floating-point remainder opcode, but native backends do not yet\n"));
+    r.push_str(String::from("implement that opcode; a build fails closed with `CodegenUnsupported`. Checked\n"));
+    r.push_str(String::from("float operators do not yet have dedicated float IR or backend lowering and\n"));
+    r.push_str(String::from("remain unsupported.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Checked Arithmetic\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Operator | Meaning           |\n"));
@@ -8986,6 +8993,13 @@ fn skill_support_content_reference_grammar_md_92418de9() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Wrapping operators silently wrap on overflow. For unsigned operands, including\n"));
     r.push_str(String::from("`u8`, division and remainder use unsigned semantics.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to\n"));
+    r.push_str(String::from("native floating-point arithmetic. Unchecked `%` is accepted by the frontend\n"));
+    r.push_str(String::from("and lowers to a floating-point remainder opcode, but native backends do not yet\n"));
+    r.push_str(String::from("implement that opcode; a build fails closed with `CodegenUnsupported`. Checked\n"));
+    r.push_str(String::from("float operators do not yet have dedicated float IR or backend lowering and\n"));
+    r.push_str(String::from("remain unsupported.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Checked Arithmetic\n"));
     r.push_str(String::from("\n"));
