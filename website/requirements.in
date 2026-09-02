@@ -1,2 +1,7 @@
 # Direct documentation-site dependencies.
-mkdocs-material>=9.5,<10
+#
+# Zensical is the successor to MkDocs + Material for MkDocs, by the same team.
+# It reads the existing `mkdocs.yml` unchanged. Material for MkDocs reaches end
+# of life on 2026-11-05, and MkDocs 2.0 drops the plugin and theming systems it
+# depends on with no migration path.
+zensical

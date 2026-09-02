@@ -1,0 +1,13 @@
+// TEST: exit 0
+module ExternBlockContracted
+
+extern "C" {
+    vow {
+        requires: true
+    }
+    fn write_thing(fd: i64, n: i64) -> i64 [io];
+}
+
+fn main() -> () [io] {
+    print_i64(1);
+}

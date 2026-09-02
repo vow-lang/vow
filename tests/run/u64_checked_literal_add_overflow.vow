@@ -1,0 +1,12 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module U64CheckedLiteralAddOverflow
+
+fn overflow() -> u64 {
+    18446744073709551615 +! 1
+}
+
+fn main() -> i32 {
+    overflow();
+    0
+}

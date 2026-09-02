@@ -11,8 +11,18 @@ copyright: Vow is open source under the MIT License.
 
 docs_dir: docs
 
+# `--strict` promotes warnings to errors, but MkDocs reports a link to a missing
+# *anchor* at INFO by default, so a broken cross-reference passes CI silently.
+# Raise it to a warning so the strict gate actually catches one.
+validation:
+  links:
+    anchors: warn
+
 theme:
   name: material
+  # Zensical ships the Material look as its `classic` variant and defaults to the
+  # newer `modern` one; pin `classic` so the switch is invisible to readers.
+  variant: classic
   features:
     - navigation.tabs
     - navigation.sections
@@ -52,9 +62,6 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
-  - pymdownx.emoji:
-      emoji_index: !!python/name:material.extensions.emoji.twemoji
-      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -70,7 +77,7 @@ extra:
 
 # NOTE: the `reference/` and `stdlib.md` pages below are generated from the
 # canonical markdown in docs/spec/ by scripts/build_docs_site.py. Run that
-# script before `mkdocs build`/`serve` (the docs workflow and website/README
+# script before `zensical build`/`serve` (the docs workflow and website/README
 # both do this). The tutorial and landing pages are authored here directly.
 nav:
   - Home: index.md

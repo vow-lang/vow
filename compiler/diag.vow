@@ -234,6 +234,9 @@ fn ec_name(code: i64) -> String {
     if code == EC_LOWERING_WARNING() {
         String::from("LoweringWarning")
     } else {
+    if code == EC_IO_ERROR() {
+        String::from("IoError")
+    } else {
     if code == EC_MISSING_CONTRACT() {
         String::from("MissingContract")
     } else {
@@ -297,8 +300,8 @@ fn ec_name(code: i64) -> String {
     if code == EC_LINK_FAILED() {
         String::from("LinkFailed")
     } else {
-        String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+        String::from("Unknown")
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {

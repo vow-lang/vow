@@ -8,15 +8,17 @@ description: Restore or install a checksum-verified ESBMC release
 # drift apart -- which is how the repo ended up pinned to 8.1 for four
 # releases.
 #
-# `version` and `sha256` move together: the checksum is of the release
-# archive for that exact version, and it is part of the cache key, so a
-# rotation forces a fresh download and re-verify even if the version is
-# unchanged. To bump:
+# `version` and the platform checksums move together: each checksum is of
+# the release archive for that exact version, and it is part of the cache
+# key, so a rotation forces a fresh download and re-verify even if the
+# version is unchanged. To bump:
 #
 #   curl -fsSLO https://github.com/esbmc/esbmc/releases/download/v<N>/esbmc-linux.zip
+#   curl -fsSLO https://github.com/esbmc/esbmc/releases/download/v<N>/esbmc-macos.zip
 #   sha256sum esbmc-linux.zip
+#   shasum -a 256 esbmc-macos.zip
 #
-# Both are still inputs, so a workflow that needs to pin a different
+# All are still inputs, so a workflow that needs to pin a different
 # version (bisecting a solver regression, say) can override them.
 inputs:
   version:
@@ -27,15 +29,43 @@ inputs:
     description: SHA-256 checksum of the Linux release archive
     required: false
     default: d8da304dd0dfce6c9f488379f03a72e768bce8598c22478c980e1704247352f1
+  sha256-macos:
+    description: SHA-256 checksum of the macOS release archive
+    required: false
+    default: a5a9b4443775c346ed14c9a20c36e459c460f61ebeaa33f89daa14f9ae4d786d
 
 runs:
   using: composite
   steps:
+    - name: Select ESBMC archive
+      id: select
+      shell: bash
+      env:
+        ESBMC_SHA256_LINUX: ${{ inputs.sha256 }}
+        ESBMC_SHA256_MACOS: ${{ inputs.sha256-macos }}
+      run: |
+        case "$RUNNER_OS/$RUNNER_ARCH" in
+          Linux/X64)
+            esbmc_zip=esbmc-linux.zip
+            esbmc_sha256="$ESBMC_SHA256_LINUX"
+            ;;
+          macOS/ARM64)
+            esbmc_zip=esbmc-macos.zip
+            esbmc_sha256="$ESBMC_SHA256_MACOS"
+            ;;
+          *)
+            echo "no ESBMC pin for runner platform $RUNNER_OS/$RUNNER_ARCH" >&2
+            exit 1
+            ;;
+        esac
+        echo "zip=$esbmc_zip" >> "$GITHUB_OUTPUT"
+        echo "sha256=$esbmc_sha256" >> "$GITHUB_OUTPUT"
+
     - name: Validate inputs
       shell: bash
       env:
         ESBMC_VERSION: ${{ inputs.version }}
-        ESBMC_SHA256: ${{ inputs.sha256 }}
+        ESBMC_SHA256: ${{ steps.select.outputs.sha256 }}
       run: |
         if [[ -z "$ESBMC_VERSION" ]]; then
           echo "version input must not be empty" >&2
@@ -48,25 +78,29 @@ runs:
 
     - name: Cache ESBMC
       id: cache-esbmc
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/esbmc
-        key: esbmc-${{ inputs.version }}-${{ inputs.sha256 }}-ubuntu-24.04
+        key: esbmc-${{ inputs.version }}-${{ steps.select.outputs.sha256 }}-${{ runner.os }}-${{ runner.arch }}
 
     - name: Install ESBMC
       if: steps.cache-esbmc.outputs.cache-hit != 'true'
       shell: bash
       env:
         ESBMC_VERSION: ${{ inputs.version }}
-        ESBMC_SHA256: ${{ inputs.sha256 }}
-        ESBMC_ZIP: esbmc-linux.zip
+        ESBMC_SHA256: ${{ steps.select.outputs.sha256 }}
+        ESBMC_ZIP: ${{ steps.select.outputs.zip }}
       run: |
         ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
 
         curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
           -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
 
-        echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
+        if command -v sha256sum >/dev/null 2>&1; then
+          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
+        else
+          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | shasum -a 256 --check --strict -
+        fi
 
         unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
         rm "/tmp/$ESBMC_ZIP"

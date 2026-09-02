@@ -1024,7 +1024,7 @@ fn skill_json() -> String {
       "visibility": "pub fn \u2014 public functions visible to importers"
     },
     "type_aliases": "type Name = Type",
-    "extern_blocks": "extern \"C\" vow { requires: ... } { fn name(x: i64) -> i64 [unsafe] }",
+    "extern_blocks": "extern \"C\" { vow { requires: ... } fn name(x: i64) -> i64 [unsafe]; }",
     "methods": {
       "Vec<T>": [
         "Vec::new()",
@@ -2331,12 +2331,12 @@ This aliasing is the intended behavior for arena and hash-table patterns where b
 Declare external C functions (a `vow` contract block is required):
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
@@ -2900,6 +2900,14 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
+For a multi-function `verify` or verified `build`, a halt-class result (definitive
+counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function
+checks from being launched. Checks already claimed by parallel workers finish, and the compiler
+reports the halt from the lowest module-declaration-order function in that claimed set. Therefore
+`counterexamples[]` contains at most one entry; a reported soft failure leaves it empty and uses
+`verify_status` instead. Fix the reported failure and run verification again to surface a later
+failure.
+
 ### Verified Example
 
 ```json
@@ -2969,6 +2977,10 @@ If `violating_args[].value` is `""`, Vow could not statically recover the
 caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
+When `blame` is `"none"`, `violation` describes the failed verifier-model check
+(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
+than exposing raw verifier output.
+
 ### Fields Reference
 
 | Field              | Type                | When Present      | Description                               |
@@ -2979,7 +2991,7 @@ argument expression.
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
-| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
+| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
@@ -3382,7 +3394,7 @@ fn get_element(v: Vec<i64>, i: i64) -> i64 vow {
 
 ### Fill Pattern with Loop Invariant
 
-See the worked CEGIS example in [examples.md](examples.md#3-vec-fill--loop-invariant).
+See the worked CEGIS example in [examples.md](examples.md#3-vec-fill-loop-invariant).
 
 ## String Contracts
 
@@ -3636,16 +3648,18 @@ ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 Every `extern "C"` block **must** include a `vow { ... }` contract specifying the expected behavior of foreign functions. Omitting the contract is a `MissingContract` error.
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
-The contract applies to all functions declared in the block. ESBMC uses `requires` as assumptions and `ensures` as assertions when verifying callers of extern functions.
+The contract applies to all functions declared in the block, and documents the expected behavior of foreign functions for readers of the code.
+
+**Declaration-only today.** Extern-declared functions can be declared and type-checked, but not called: both compilers reject a call to an extern-declared function with `UnsupportedFeature`, because neither compiler yet lowers extern-declared calls to IR/codegen with their declared signatures, and neither propagates the block's contract into verification. ESBMC does not use `requires`/`ensures` on an extern block as assumptions or assertions yet — the contract's only effect today is gating the `MissingContract` check above.
 
 ---
 
@@ -4649,16 +4663,21 @@ runtime archive are installed and accessible. When building Vow itself, run
 
 **Meaning:** The compiler could not read or write a file. Two build-pipeline
 sites produce this code: a `use` declaration naming a module the driver cannot
-read, and a generated object file the backend cannot write (unwritable output
-directory, full disk, read-only filesystem). The object bytes are already
-built by the time the write is attempted, so this is the filesystem's answer
-rather than a backend defect — which is why it is not `CodegenFailed`.
+read, and a generated object file whose parent directory the backend cannot
+create or write into (permission denied, full disk, read-only filesystem, or a
+path component that is not a directory). Missing output parent directories are
+created automatically. The object bytes are already built by the time the
+write is attempted, so this is the filesystem's answer rather than a backend
+defect — which is why it is not `CodegenFailed`.
+When this code comes from module loading, compilation stops before type-checking,
+so diagnostics do not include follow-on errors for names from the missing module.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
-verify the `-o` destination's parent directory exists and is writable, and
-that the filesystem has free space. Re-running the same build after fixing the
-filesystem succeeds; changing the source will not help.
+verify the `-o` destination's parent directory can be created and written to,
+that every existing path component is a directory, and that the filesystem has
+free space. Re-running the same build after fixing the filesystem succeeds;
+changing the source will not help.
 
 ### VerificationSkipped
 
@@ -6045,7 +6064,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "violation": {
       "type": "string",
-      "description": "Description of the violated contract clause"
+      "description": "Description of the violated contract clause, or of the internal check that failed when blame is \"none\""
     },
     "vow_id": {
       "type": "integer",
@@ -7420,12 +7439,12 @@ This aliasing is the intended behavior for arena and hash-table patterns where b
 Declare external C functions (a `vow` contract block is required):
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
@@ -7990,6 +8009,14 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
+For a multi-function `verify` or verified `build`, a halt-class result (definitive
+counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function
+checks from being launched. Checks already claimed by parallel workers finish, and the compiler
+reports the halt from the lowest module-declaration-order function in that claimed set. Therefore
+`counterexamples[]` contains at most one entry; a reported soft failure leaves it empty and uses
+`verify_status` instead. Fix the reported failure and run verification again to surface a later
+failure.
+
 ### Verified Example
 
 ```json
@@ -8059,6 +8086,10 @@ If `violating_args[].value` is `""`, Vow could not statically recover the
 caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
+When `blame` is `"none"`, `violation` describes the failed verifier-model check
+(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
+than exposing raw verifier output.
+
 ### Fields Reference
 
 | Field              | Type                | When Present      | Description                               |
@@ -8069,7 +8100,7 @@ argument expression.
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
-| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
+| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
@@ -8473,7 +8504,7 @@ fn get_element(v: Vec<i64>, i: i64) -> i64 vow {
 
 ### Fill Pattern with Loop Invariant
 
-See the worked CEGIS example in [examples.md](examples.md#3-vec-fill--loop-invariant).
+See the worked CEGIS example in [examples.md](examples.md#3-vec-fill-loop-invariant).
 
 ## String Contracts
 
@@ -8727,16 +8758,18 @@ ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 Every `extern "C"` block **must** include a `vow { ... }` contract specifying the expected behavior of foreign functions. Omitting the contract is a `MissingContract` error.
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
-The contract applies to all functions declared in the block. ESBMC uses `requires` as assumptions and `ensures` as assertions when verifying callers of extern functions.
+The contract applies to all functions declared in the block, and documents the expected behavior of foreign functions for readers of the code.
+
+**Declaration-only today.** Extern-declared functions can be declared and type-checked, but not called: both compilers reject a call to an extern-declared function with `UnsupportedFeature`, because neither compiler yet lowers extern-declared calls to IR/codegen with their declared signatures, and neither propagates the block's contract into verification. ESBMC does not use `requires`/`ensures` on an extern block as assumptions or assertions yet — the contract's only effect today is gating the `MissingContract` check above.
 "#,
         ),
         (
@@ -9742,16 +9775,21 @@ runtime archive are installed and accessible. When building Vow itself, run
 
 **Meaning:** The compiler could not read or write a file. Two build-pipeline
 sites produce this code: a `use` declaration naming a module the driver cannot
-read, and a generated object file the backend cannot write (unwritable output
-directory, full disk, read-only filesystem). The object bytes are already
-built by the time the write is attempted, so this is the filesystem's answer
-rather than a backend defect — which is why it is not `CodegenFailed`.
+read, and a generated object file whose parent directory the backend cannot
+create or write into (permission denied, full disk, read-only filesystem, or a
+path component that is not a directory). Missing output parent directories are
+created automatically. The object bytes are already built by the time the
+write is attempted, so this is the filesystem's answer rather than a backend
+defect — which is why it is not `CodegenFailed`.
+When this code comes from module loading, compilation stops before type-checking,
+so diagnostics do not include follow-on errors for names from the missing module.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
-verify the `-o` destination's parent directory exists and is writable, and
-that the filesystem has free space. Re-running the same build after fixing the
-filesystem succeeds; changing the source will not help.
+verify the `-o` destination's parent directory can be created and written to,
+that every existing path component is a directory, and that the filesystem has
+free space. Re-running the same build after fixing the filesystem succeeds;
+changing the source will not help.
 
 ### VerificationSkipped
 
@@ -11133,7 +11171,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "violation": {
       "type": "string",
-      "description": "Description of the violated contract clause"
+      "description": "Description of the violated contract clause, or of the internal check that failed when blame is \"none\""
     },
     "vow_id": {
       "type": "integer",

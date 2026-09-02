@@ -6,8 +6,8 @@ central correctness claim: `build/vowc` compiles itself to a byte-identical
 binary. Moving that off pull requests trades latency for a later signal, and the
 trade is only sound while several things hold at once -- it still runs on every
 push to `main` (so a break is attributed to one merge), it still runs nightly
-(the backstop), it covers both platforms, and the Linux leg still verifies with
-ESBMC. Drop any one and the guarantee quietly becomes something weaker than it
+(the backstop), it covers both platforms, and both legs still verify with ESBMC.
+Drop any one and the guarantee quietly becomes something weaker than it
 reads. These are cheap structural assertions, not a substitute for it running.
 
 Deliberately parses with `re` rather than PyYAML. This module runs in
@@ -18,10 +18,10 @@ an image detail. The workflows are uniformly formatted (top-level job keys at
 exactly two spaces, bodies deeper), which is all the structure these assertions
 need.
 
-Also guards `equivalence.yml`'s read-only permissions and ledger-proposal
-wiring. That belongs here rather than in its own module because it is the same
-question -- which workflow carries which equivalence tier -- under the same
-stdlib-only constraint.
+Also guards the scheduled full-test and equivalence workflows. That belongs
+here rather than in separate modules because it is the same question -- which
+workflow carries which equivalence tier -- under the same stdlib-only
+constraint.
 """
 
 from __future__ import annotations
@@ -35,6 +35,9 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 BOOTSTRAP_WORKFLOW = WORKFLOWS / "bootstrap.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
 EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
+FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
+RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
+FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
@@ -83,21 +86,22 @@ class BootstrapWorkflowTest(unittest.TestCase):
 
     def test_covers_both_platforms(self) -> None:
         self.assertIn("runs-on: ubuntu-latest", self.jobs["bootstrap"])
-        self.assertIn("runs-on: macos-latest", self.jobs["bootstrap-macos"])
+        self.assertIn("runs-on: macos-15", self.jobs["bootstrap-macos"])
 
     def test_runs_the_bootstrap_script_on_both_platforms(self) -> None:
         for name in ("bootstrap", "bootstrap-macos"):
             with self.subTest(job=name):
                 self.assertIn("scripts/bootstrap.sh", self.jobs[name])
 
-    def test_linux_bootstrap_verifies_with_esbmc(self) -> None:
+    def test_bootstrap_verifies_with_esbmc(self) -> None:
         # --stage3-no-verify halves wall time; Stages 1-2 still verify. A bare
         # --no-verify here would silently drop ESBMC from the whole pipeline.
-        linux = self.jobs["bootstrap"]
-
-        self.assertIn("--stage3-no-verify", linux)
-        self.assertNotIn("bootstrap.sh --no-verify", linux)
-        self.assertIn("install-esbmc", linux)
+        for name in ("bootstrap", "bootstrap-macos"):
+            with self.subTest(job=name):
+                job = self.jobs[name]
+                self.assertIn("--stage3-no-verify", job)
+                self.assertNotIn("bootstrap.sh --no-verify", job)
+                self.assertIn("install-esbmc", job)
 
     def compiler_test_step(self) -> str:
         """Just the tier-1 comparison step.
@@ -182,6 +186,90 @@ class CiWorkflowTest(unittest.TestCase):
         for name in ("build-and-test", "build-and-test-macos"):
             with self.subTest(job=name):
                 self.assertIn("concat_vow.sh", jobs[name])
+
+
+class ReleaseWorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        entry = re.compile(
+            r"^\s{10}- os: (\S+)\n"
+            r"\s{12}arch: (\S+)\n"
+            r"\s{12}runner: (\S+)\n"
+            r"\s{12}verify: (true|false)$",
+            re.MULTILINE,
+        )
+        self.matrix = {
+            (os_name, arch): {"runner": runner, "verify": verify}
+            for os_name, arch, runner, verify in entry.findall(text)
+        }
+
+    def test_release_matrix_verifies_supported_platforms(self) -> None:
+        self.assertEqual("true", self.matrix[("linux", "x86_64")]["verify"])
+        self.assertEqual("true", self.matrix[("macos", "aarch64")]["verify"])
+        self.assertEqual(
+            {"runner": "macos-15-intel", "verify": "false"},
+            self.matrix[("macos", "x86_64")],
+        )
+
+
+class FullTestWorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = FULL_TEST_WORKFLOW.read_text(encoding="utf-8")
+        self.jobs = job_blocks(self.text)
+
+    def test_runs_on_push_to_main_and_nightly(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"push:\s*\n\s*branches:\s*\[main\]")
+        found = crons(self.text)
+        self.assertTrue(found, "expected a scheduled run")
+        for cron in found:
+            with self.subTest(cron=cron):
+                self.assertTrue(cron.endswith("* * *"), "expected a daily cron")
+
+    def test_workflow_keeps_read_only_repository_permissions(self) -> None:
+        workflow_header = header(self.text)
+
+        self.assertRegex(workflow_header, r"permissions:\s*\n\s*contents:\s*read")
+        self.assertNotRegex(workflow_header, r"contents:\s*write")
+
+    def test_gated_on_the_docs_only_classifier(self) -> None:
+        changes = self.jobs["changes"]
+        full_test = self.jobs["full-test"]
+
+        self.assertIn("fetch-depth: 0", changes)
+        self.assertIn("code: ${{ steps.classify.outputs.code }}", changes)
+        self.assertIn("python3 scripts/ci_docs_only.py", changes)
+        self.assertIn("needs: changes", full_test)
+        self.assertIn("if: needs.changes.outputs.code == 'true'", full_test)
+
+    def test_runs_full_test_sh_with_required_toolchain(self) -> None:
+        full_test = self.jobs["full-test"]
+
+        self.assertIn("actions/checkout", full_test)
+        self.assertIn("dtolnay/rust-toolchain", full_test)
+        self.assertIn("Swatinem/rust-cache", full_test)
+        self.assertIn("install-esbmc", full_test)
+        self.assertIn("astral-sh/setup-uv", full_test)
+        self.assertIn("scripts/full_test.sh", full_test)
+
+    def test_enforces_a_minimum_passed_count(self) -> None:
+        full_test = self.jobs["full-test"]
+
+        self.assertIn("set -o pipefail", full_test)
+        self.assertIn("tee /tmp/full_test.log", full_test)
+        self.assertIn(r"grep -oP '\d+(?= passed)'", full_test)
+        self.assertIn('test -n "$passed"', full_test)
+        self.assertIn('[ "$passed" -ge 500 ]', full_test)
+
+    def test_passed_count_grep_matches_full_test_sh_summary_format(self) -> None:
+        # Ties the workflow's grep pattern to the summary line it actually
+        # greps: a rename of "passed" in full_test.sh's print_summary would
+        # silently disable the floor check while every string-matching test
+        # above still passes.
+        script = FULL_TEST_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("${PASS} passed", script)
 
 
 class EquivalenceWorkflowTest(unittest.TestCase):

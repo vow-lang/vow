@@ -154,7 +154,7 @@ fn get_element(v: Vec<i64>, i: i64) -> i64 vow {
 
 ### Fill Pattern with Loop Invariant
 
-See the worked CEGIS example in [examples.md](examples.md#3-vec-fill--loop-invariant).
+See the worked CEGIS example in [examples.md](examples.md#3-vec-fill-loop-invariant).
 
 ## String Contracts
 
@@ -408,13 +408,15 @@ ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
 Every `extern "C"` block **must** include a `vow { ... }` contract specifying the expected behavior of foreign functions. Omitting the contract is a `MissingContract` error.
 
 ```vow
-extern "C" vow {
-    requires: fd >= 0
-    ensures: return >= 0
-}
-{
-    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+extern "C" {
+    vow {
+        requires: fd >= 0
+        ensures: result >= 0
+    }
+    fn write_thing(fd: i32, ptr: i64, len: i64) -> i64 [io];
 }
 ```
 
-The contract applies to all functions declared in the block. ESBMC uses `requires` as assumptions and `ensures` as assertions when verifying callers of extern functions.
+The contract applies to all functions declared in the block, and documents the expected behavior of foreign functions for readers of the code.
+
+**Declaration-only today.** Extern-declared functions can be declared and type-checked, but not called: both compilers reject a call to an extern-declared function with `UnsupportedFeature`, because neither compiler yet lowers extern-declared calls to IR/codegen with their declared signatures, and neither propagates the block's contract into verification. ESBMC does not use `requires`/`ensures` on an extern block as assumptions or assertions yet — the contract's only effect today is gating the `MissingContract` check above.

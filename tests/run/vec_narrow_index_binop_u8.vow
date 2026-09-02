@@ -1,0 +1,15 @@
+// TEST: stdout "200"
+module VecNarrowIndexBinopU8
+
+fn main() -> i32 [io] {
+    let v: Vec<u8> = Vec::new();
+    v.push(200u8);
+    let mut s: u8 = 0;
+    let mut j: i64 = 0;
+    if j < 1 {
+        s = s + v[j];
+        j = j + 1;
+    }
+    print_u64(s as u64);
+    0
+}

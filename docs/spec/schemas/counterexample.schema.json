@@ -17,7 +17,7 @@
     },
     "violation": {
       "type": "string",
-      "description": "Description of the violated contract clause"
+      "description": "Description of the violated contract clause, or of the internal check that failed when blame is \"none\""
     },
     "vow_id": {
       "type": "integer",

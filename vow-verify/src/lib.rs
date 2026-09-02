@@ -10,9 +10,10 @@ pub use c_emitter::{
 pub use esbmc::{
     ArithOverflowSite, CalleePrecondition, Counterexample, DEFAULT_MAX_K_STEP, ReachVerdict,
     VerificationResult, VerifyRequest, emit_bodyreplace_c_source, emit_reach_c_source,
-    emit_verify_c_source, extract_arith_site, find_esbmc, function_has_ensures,
-    function_has_requires, parse_esbmc_output, run_esbmc_bodyreplace, run_esbmc_k_induction,
-    run_esbmc_multi_property, run_esbmc_reach, run_esbmc_with_max_k_step, verify,
+    emit_verify_c_source, extract_arith_site, extract_assert_label, find_esbmc,
+    function_has_ensures, function_has_requires, parse_esbmc_output, run_esbmc_bodyreplace,
+    run_esbmc_k_induction, run_esbmc_multi_property, run_esbmc_reach, run_esbmc_with_max_k_step,
+    verify,
 };
 pub use solver_strategy::{
     DEFAULT_AUTO_TIMEOUT_SECS, DEFAULT_ESBMC_MEMLIMIT_MB, Encoding, Solver, SolverConfig,

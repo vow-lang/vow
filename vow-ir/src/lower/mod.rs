@@ -786,8 +786,9 @@ pub(crate) struct LowerCtx {
     enum_variant_payload_tys: HashMap<String, Vec<Vec<Ty>>>,
     // enum name → variant tag → complete declared payload types
     enum_variant_payload_ast_types: Rc<HashMap<String, Vec<Vec<AstType>>>>,
-    // Expressions inside a wide contextual control-flow expression, keyed by
-    // their stable AST address for the duration of function lowering.
+    // Integer markers that need their context before lowering: wide values and
+    // u64, whose signedness differs from the default i64 marker type. Keyed by
+    // stable AST address for the duration of function lowering.
     wide_literal_contexts: HashMap<usize, Ty>,
     linear_owner_names: HashSet<String>,
     type_aliases: Rc<HashMap<String, AstType>>,
@@ -1390,7 +1391,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .get(&(expr as *const _ as usize))
                 .copied()
             {
-                Some(ty @ (Ty::I128 | Ty::U128)) => emit_narrow_integer_constant(ctx, *v, ty, span),
+                Some(ty @ (Ty::U64 | Ty::I128 | Ty::U128)) => {
+                    emit_narrow_integer_constant(ctx, *v, ty, span)
+                }
                 _ => ctx.emit(
                     Opcode::ConstI64,
                     Ty::I64,
@@ -3889,13 +3892,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let elem_ast_type = known_expr_ast_type(ctx, expr);
             let vec_ptr = lower_expr(ctx, base);
             let idx_id = lower_expr(ctx, index);
-            let result = ctx.emit(
+            let raw_result = ctx.emit(
                 Opcode::Call,
                 Ty::I64,
                 vec![vec_ptr, idx_id],
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
             );
+            let result = if let Some(ast_type) = elem_ast_type.as_ref() {
+                let elem_ty =
+                    lower_ty_with_linear(ast_type, &ctx.linear_owner_names, &ctx.type_aliases);
+                lower_narrow_literal(ctx, expr, raw_result, elem_ty)
+            } else {
+                raw_result
+            };
             propagate_vec_element_metadata(ctx, vec_ptr, result);
             if let Some(ast_type) = elem_ast_type {
                 ctx.inst_declared_ast_types.insert(result, ast_type);
@@ -4403,7 +4413,7 @@ fn wide_context_contains_control_flow(expr: &Expr) -> bool {
 }
 
 fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
-    if !matches!(ty, Ty::I128 | Ty::U128) {
+    if !matches!(ty, Ty::U64 | Ty::I128 | Ty::U128) {
         return;
     }
     ctx.wide_literal_contexts
@@ -4449,7 +4459,9 @@ fn record_wide_marker_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
 }
 
 fn record_wide_control_flow_context(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) {
-    if matches!(ty, Ty::I128 | Ty::U128) && wide_context_contains_control_flow(expr) {
+    if ty == Ty::U64
+        || (matches!(ty, Ty::I128 | Ty::U128) && wide_context_contains_control_flow(expr))
+    {
         record_wide_marker_context(ctx, expr, ty);
     }
 }
@@ -4495,6 +4507,7 @@ fn record_wide_expected_ast_context(ctx: &mut LowerCtx, expr: &Expr, expected: &
     match expected {
         AstType::Named { name, .. } => {
             let ty = match name.as_str() {
+                "u64" => Some(Ty::U64),
                 "i128" => Some(Ty::I128),
                 "u128" => Some(Ty::U128),
                 _ => None,
@@ -4570,6 +4583,13 @@ fn emit_narrow_integer_constant(ctx: &mut LowerCtx, value: u128, ty: Ty, span: S
             Ty::U32,
             vec![],
             InstData::ConstI32(value as u32 as i32),
+            span,
+        ),
+        Ty::U64 => ctx.emit(
+            Opcode::ConstU64,
+            Ty::U64,
+            vec![],
+            InstData::ConstU64(value as u64),
             span,
         ),
         Ty::I128 => ctx.emit(
@@ -4659,11 +4679,11 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
 fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
     if !matches!(
         ty,
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::U64 | Ty::I128 | Ty::U128
     ) {
         return original;
     }
-    if matches!(ty, Ty::I128 | Ty::U128)
+    if matches!(ty, Ty::U64 | Ty::I128 | Ty::U128)
         && ctx
             .wide_literal_contexts
             .get(&(expr as *const _ as usize))
@@ -5006,7 +5026,7 @@ fn lower_function_with_pattern_aggregates(
 
     if matches!(
         return_ty,
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
+        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::U64 | Ty::I128 | Ty::U128
     ) && let Some(expr) = &fn_def.body.trailing_expr
     {
         trailing = lower_narrow_literal(&mut ctx, expr, trailing, return_ty);
@@ -5899,6 +5919,73 @@ fn unsigned_max() -> u128 {
 
     fn insts_of(func: &Function) -> Vec<&Inst> {
         func.blocks.iter().flat_map(|block| &block.insts).collect()
+    }
+
+    #[test]
+    fn narrow_vec_index_reads_type_surrounding_arithmetic() {
+        let module = lower_source_to_module(
+            r#"
+module NarrowVecIndexLowering
+
+fn shifted_difference(values: Vec<u32>) -> u32 {
+    (values[0] - values[1]) >> 1
+}
+"#,
+            "narrow_vec_index_lowering.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+        let raw_reads: Vec<_> = insts
+            .iter()
+            .filter(|inst| {
+                inst.opcode == Opcode::Call
+                    && inst.ty == Ty::I64
+                    && inst.data == InstData::CallExtern("__vow_vec_get_val".to_string())
+            })
+            .collect();
+        assert_eq!(raw_reads.len(), 2, "expected two raw Vec reads:\n{func:#?}");
+
+        let narrowed_reads: Vec<_> = insts
+            .iter()
+            .filter(|inst| {
+                inst.opcode == Opcode::IntCast
+                    && inst.ty == Ty::U32
+                    && inst.data
+                        == InstData::IntegerCast {
+                            from: IntegerType::I64,
+                            to: IntegerType::U32,
+                        }
+                    && raw_reads.iter().any(|read| inst.args == vec![read.id])
+            })
+            .collect();
+        assert_eq!(
+            narrowed_reads.len(),
+            2,
+            "each raw Vec read must narrow before use:\n{func:#?}"
+        );
+
+        let sub = insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::WrappingSub)
+            .expect("wrapping subtraction");
+        assert_eq!(sub.ty, Ty::U32, "subtraction must use Vec element width");
+        assert_eq!(sub.data, InstData::Integer(IntegerType::U32));
+        assert_eq!(
+            sub.args,
+            narrowed_reads
+                .iter()
+                .map(|read| read.id)
+                .collect::<Vec<_>>()
+        );
+
+        let shift = insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::Shr)
+            .expect("right shift");
+        assert_eq!(shift.ty, Ty::U32, "shift must use Vec element width");
+        assert_eq!(shift.data, InstData::Integer(IntegerType::U32));
+        assert_eq!(shift.args[0], sub.id);
     }
 
     /// A 128-bit enum payload read out of a value this function never built

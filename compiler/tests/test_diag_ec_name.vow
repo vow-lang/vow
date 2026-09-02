@@ -1,0 +1,12 @@
+module TestDiagEcName
+
+use diag
+
+fn main() -> i32 {
+    if ec_name(EC_IO_ERROR()) != String::from("IoError") { return 1; }
+    if ec_name(EC_UNTERMINATED_STRING()) != String::from("UnterminatedString") { return 2; }
+    if ec_name(EC_LINK_FAILED()) != String::from("LinkFailed") { return 3; }
+    if ec_name(-1) != String::from("Unknown") { return 4; }
+
+    0
+}

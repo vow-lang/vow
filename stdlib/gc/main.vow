@@ -1,5 +1,4 @@
 // TEST: stdout "PASS alloc\nPASS read\nPASS write\nPASS collect_frees_unreachable\nPASS roots_survive\nPASS ref_traversal\nPASS slot_reuse\nPASS count_tracking\nPASS remove_root"
-// TEST: known-cex-count-divergence 1155 "Rust stops after first failed function"
 module Main
 use gc
 
