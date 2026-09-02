@@ -1628,8 +1628,10 @@ For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
 native floating-point arithmetic. Unchecked `%` is accepted by the frontend
 and lowers to a floating-point remainder opcode, but native backends do not yet
 implement that opcode; a build fails closed with `CodegenUnsupported`. Checked
-float operators do not yet have dedicated float IR or backend lowering and
-remain unsupported.
+float operators do not yet have dedicated float IR or backend lowering; the
+lowerer still maps them to the integer checked-arithmetic opcodes, which crash
+the Cranelift verifier on float operands and fail with an internal
+`CodegenFailed` error rather than a clean rejection ([#1218](https://github.com/vow-lang/vow/issues/1218)).
 
 ### Checked Arithmetic
 
@@ -6732,8 +6734,10 @@ For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
 native floating-point arithmetic. Unchecked `%` is accepted by the frontend
 and lowers to a floating-point remainder opcode, but native backends do not yet
 implement that opcode; a build fails closed with `CodegenUnsupported`. Checked
-float operators do not yet have dedicated float IR or backend lowering and
-remain unsupported.
+float operators do not yet have dedicated float IR or backend lowering; the
+lowerer still maps them to the integer checked-arithmetic opcodes, which crash
+the Cranelift verifier on float operands and fail with an internal
+`CodegenFailed` error rather than a clean rejection ([#1218](https://github.com/vow-lang/vow/issues/1218)).
 
 ### Checked Arithmetic
 
