@@ -1,0 +1,56 @@
+name: Promoted equivalence fixtures
+
+# Keep confirmed Rust/self-hosted divergences on the blocking pull-request path
+# without paying for the complete post-merge differential suite. full-test.yml
+# already includes these fixtures on pushes to main, so this workflow is
+# intentionally pull-request-only.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci_docs_only.py --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  promoted-fixtures:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Rust and self-hosted promoted fixture parity
+        run: |
+          # The harness exits non-zero for any parity failure. The floor catches
+          # a different failure mode where most fixtures silently become skips:
+          # this route measured 748 passes locally, and 600 still leaves ample
+          # runner-specific headroom while failing if either fixture family is
+          # accidentally dropped.
+          set -o pipefail
+          VOW_FULL_TEST_PROMOTED_ONLY=1 scripts/full_test.sh 2>&1 | tee /tmp/promoted_fixtures.log
+          passed=$(grep -oP '\d+(?= passed)' /tmp/promoted_fixtures.log | tail -1)
+          test -n "$passed"
+          [ "$passed" -ge 600 ]
