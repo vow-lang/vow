@@ -107,12 +107,12 @@
     },
     "replay": {
       "type": "string",
-      "enum": ["confirmed", "diverged", "skipped"],
+      "enum": ["confirmed", "diverged", "aborted", "skipped"],
       "description": "Differential-test outcome, present only with --replay-cex"
     },
     "replay_reason": {
       "type": "string",
-      "description": "Human-readable explanation for a diverged or skipped replay"
+      "description": "Human-readable explanation for an aborted, diverged, or skipped replay"
     }
   },
   "additionalProperties": false

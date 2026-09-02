@@ -364,7 +364,7 @@ fn generate_replay_harness(
 
 /// Verdict of replaying one counterexample.
 struct ReplayOutcome {
-    status: &'static str, // "confirmed" | "diverged" | "skipped"
+    status: &'static str, // "confirmed" | "diverged" | "aborted" | "skipped"
     reason: Option<String>,
 }
 
@@ -382,17 +382,78 @@ fn replay_diverge(reason: String) -> ReplayOutcome {
     }
 }
 
+fn replay_abort(reason: String) -> ReplayOutcome {
+    ReplayOutcome {
+        status: "aborted",
+        reason: Some(reason),
+    }
+}
+
+/// Parse a `{"error":"<kind>",...}`-shaped stderr line into its JSON value,
+/// or `None` if the line isn't one. `debug_str`/`debug_i64`/`debug_u64` write
+/// to stderr without a trailing newline, so a preceding debug write can
+/// coalesce onto the same line as the runtime's envelope (e.g.
+/// `"traced: 5{\"error\":\"IndexOutOfBounds\"}"`); scan right-to-left for the
+/// envelope's stable marker so a debug prefix doesn't hide it.
+fn parse_json_error_line(line: &str) -> Option<serde_json::Value> {
+    let l = line.trim_end();
+    l.match_indices("{\"error\":\"")
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .find_map(|(start, _)| serde_json::from_str(&l[start..]).ok())
+}
+
 /// Parse a `{"error":"VowViolation","vow_id":N,"blame":"Caller",...}` stderr
 /// line into `(vow_id, blame)`.
 fn parse_vow_violation_line(line: &str) -> Option<(u32, String)> {
-    let l = line.trim();
-    if !l.starts_with('{') || !l.contains("\"error\":\"VowViolation\"") {
+    let v = parse_json_error_line(line)?;
+    if v.get("error")?.as_str()? != "VowViolation" {
         return None;
     }
-    let v: serde_json::Value = serde_json::from_str(l).ok()?;
     let vid = v.get("vow_id")?.as_u64()? as u32;
     let blame = v.get("blame")?.as_str()?.to_string();
     Some((vid, blame))
+}
+
+/// Parse a structured non-`VowViolation` runtime-abort stderr line into its
+/// error kind.
+fn parse_runtime_abort_line(line: &str) -> Option<String> {
+    let v = parse_json_error_line(line)?;
+    let kind = v.get("error")?.as_str()?;
+    if kind.is_empty() || kind == "VowViolation" {
+        return None;
+    }
+    Some(kind.to_string())
+}
+
+/// 128 + SIGABRT: the runtime's reserved abort exit status (see
+/// docs/spec/errors.md "Exit status"). Abort classification below gates on
+/// this exact code, not any nonzero exit, so an unrelated nonzero exit that
+/// happens to print an error-shaped line to stderr isn't misclassified as a
+/// runtime abort.
+const RUNTIME_ABORT_EXIT_CODE: i32 = 134;
+
+/// The kind of stderr envelope a line carries, once matched.
+enum ErrorLineKind {
+    Violation(u32, String),
+    Abort(String),
+}
+
+/// The LAST envelope-bearing line on stderr, scanning from the end. Nothing
+/// runs after the runtime writes its final envelope and aborts, so the last
+/// matching line — whether a genuine violation or a genuine abort — is the
+/// event that actually terminated the run; an earlier line whose debug
+/// output happens to look like an envelope (violation- or abort-shaped)
+/// must not take precedence over it.
+fn last_error_line(stderr: &str) -> Option<ErrorLineKind> {
+    stderr.lines().rev().find_map(|line| {
+        if let Some((vid, blame)) = parse_vow_violation_line(line) {
+            Some(ErrorLineKind::Violation(vid, blame))
+        } else {
+            parse_runtime_abort_line(line).map(ErrorLineKind::Abort)
+        }
+    })
 }
 
 /// Classify a finished harness run against the counterexample's prediction.
@@ -402,8 +463,13 @@ fn classify_replay_run(
     stderr: &str,
     ce: &StructuredCounterexample,
 ) -> ReplayOutcome {
-    match stderr.lines().find_map(parse_vow_violation_line) {
-        Some((vid, blame)) => {
+    match (code, last_error_line(stderr)) {
+        // `__vow_violation` exits with the same reserved abort status as any
+        // other runtime abort, so a genuine VowViolation is exit-134 too.
+        // Gating on it here closes the same false-match surface the abort
+        // arm below guards against: a debug write that happens to coalesce
+        // a VowViolation-shaped substring onto its line.
+        (Some(RUNTIME_ABORT_EXIT_CODE), Some(ErrorLineKind::Violation(vid, blame))) => {
             if vid == ce.vow_id && blame.eq_ignore_ascii_case(&ce.blame) {
                 ReplayOutcome {
                     status: "confirmed",
@@ -416,10 +482,14 @@ fn classify_replay_run(
                 ))
             }
         }
-        None if success => {
+        (Some(RUNTIME_ABORT_EXIT_CODE), Some(ErrorLineKind::Abort(kind))) => replay_abort(format!(
+            "runtime aborted with {kind} before reaching predicted VowViolation vow_id={} blame={}",
+            ce.vow_id, ce.blame
+        )),
+        _ if success => {
             replay_diverge("harness exited cleanly; no VowViolation fired at runtime".to_string())
         }
-        None => replay_diverge(format!(
+        _ => replay_diverge(format!(
             "harness exited with status {code:?} but emitted no VowViolation"
         )),
     }
@@ -883,6 +953,133 @@ mod tests {
         );
         assert_eq!(parse_vow_violation_line("not json"), None);
         assert_eq!(parse_vow_violation_line(r#"{"error":"Other"}"#), None);
+    }
+
+    #[test]
+    fn parse_runtime_abort_line_extracts_kind_and_ignores_vow_violation() {
+        assert_eq!(
+            parse_runtime_abort_line(r#"{"error":"IndexOutOfBounds"}"#),
+            Some("IndexOutOfBounds".to_string())
+        );
+        assert_eq!(
+            parse_runtime_abort_line(r#"{"error":"ArithmeticOverflow"}"#),
+            Some("ArithmeticOverflow".to_string())
+        );
+        assert_eq!(
+            parse_runtime_abort_line(r#"{"error":"VowViolation","vow_id":2,"blame":"Caller"}"#),
+            None
+        );
+        assert_eq!(parse_runtime_abort_line("index out of bounds"), None);
+        assert_eq!(parse_runtime_abort_line(r#"{"error":7}"#), None);
+    }
+
+    #[test]
+    fn classify_replay_run_reports_aborted_when_bounds_check_preempts_vow_check() {
+        let outcome = classify_replay_run(
+            false,
+            Some(134),
+            "{\"error\":\"IndexOutOfBounds\"}\nindex out of bounds\n",
+            &ce("last_element", 7),
+        );
+
+        assert_eq!(outcome.status, "aborted");
+        let reason = outcome.reason.unwrap();
+        assert!(reason.contains("IndexOutOfBounds"));
+        assert!(reason.contains("vow_id=7"));
+        assert!(reason.contains("blame=Callee"));
+    }
+
+    #[test]
+    fn classify_replay_run_still_diverges_on_clean_exit_with_no_marker() {
+        let outcome = classify_replay_run(true, Some(0), "", &ce("f", 2));
+
+        assert_eq!(outcome.status, "diverged");
+        assert_eq!(
+            outcome.reason.as_deref(),
+            Some("harness exited cleanly; no VowViolation fired at runtime")
+        );
+    }
+
+    #[test]
+    fn classify_replay_run_diverges_not_aborts_when_abort_marker_precedes_clean_exit() {
+        // `eprintln_str` is a user-callable [io] builtin: a harness can print an
+        // `{"error":...}`-shaped line to stderr and still exit 0 afterward. That
+        // must not be classified as "aborted" — the process didn't fail.
+        let outcome = classify_replay_run(
+            true,
+            Some(0),
+            "{\"error\":\"CustomDiagnostic\"}\n",
+            &ce("f", 2),
+        );
+
+        assert_eq!(outcome.status, "diverged");
+        assert_eq!(
+            outcome.reason.as_deref(),
+            Some("harness exited cleanly; no VowViolation fired at runtime")
+        );
+    }
+
+    #[test]
+    fn classify_replay_run_diverges_not_aborts_on_nonzero_non_134_exit_with_error_line() {
+        // DebugCall is a verifier no-op but writes an `{"error":...}`-shaped
+        // line to stderr in debug execution. A harness that exits with some
+        // other nonzero status (not the runtime's reserved 134 abort code)
+        // must not be misclassified as "aborted" just because that line is
+        // present — only the exit code identifies a genuine runtime abort.
+        let outcome = classify_replay_run(false, Some(1), "{\"error\":\"Notice\"}\n", &ce("f", 2));
+
+        assert_eq!(outcome.status, "diverged");
+    }
+
+    #[test]
+    fn classify_replay_run_reports_aborted_when_abort_marker_is_coalesced_with_debug_output() {
+        // `debug_str`/`debug_i64`/`debug_u64` write to stderr with no trailing
+        // newline, so a debug call right before a genuine abort lands on the
+        // same line as the runtime's `{"error":...}` envelope. The abort must
+        // still be recognized even though the line no longer starts with `{`.
+        let outcome = classify_replay_run(
+            false,
+            Some(134),
+            "tracing peek 5{\"error\":\"IndexOutOfBounds\"}\n",
+            &ce("f", 2),
+        );
+
+        assert_eq!(outcome.status, "aborted");
+        assert!(outcome.reason.unwrap().contains("IndexOutOfBounds"));
+    }
+
+    #[test]
+    fn classify_replay_run_reports_aborted_when_a_fake_violation_line_precedes_a_real_abort() {
+        // Nothing runs after the runtime writes its final envelope and
+        // aborts, so a genuine abort envelope is always the LAST
+        // envelope-bearing line. An earlier debug_str call that happens to
+        // print a complete VowViolation-shaped line of its own must not
+        // take precedence over the real, later abort.
+        let outcome = classify_replay_run(
+            false,
+            Some(134),
+            "{\"error\":\"VowViolation\",\"vow_id\":99,\"blame\":\"Caller\"}\n{\"error\":\"IndexOutOfBounds\"}\n",
+            &ce("f", 2),
+        );
+
+        assert_eq!(outcome.status, "aborted");
+        assert!(outcome.reason.unwrap().contains("IndexOutOfBounds"));
+    }
+
+    #[test]
+    fn classify_replay_run_does_not_confirm_a_violation_shaped_line_on_the_wrong_exit_code() {
+        // `__vow_violation` always exits 134, so a VowViolation-shaped line
+        // paired with any other exit status cannot be a genuine violation —
+        // it can only be debug output that happens to look like one. Confirm
+        // is gated on exit 134 for the same reason abort classification is.
+        let outcome = classify_replay_run(
+            false,
+            Some(1),
+            "{\"error\":\"VowViolation\",\"vow_id\":2,\"blame\":\"Callee\"}\n",
+            &ce("f", 2),
+        );
+
+        assert_ne!(outcome.status, "confirmed");
     }
 
     #[test]

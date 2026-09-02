@@ -387,7 +387,13 @@ For each counterexample, Vow maps the ESBMC assignment back to concrete Vow inpu
 |----------------|---------|
 | `"confirmed"`  | The harness fired `VowViolation` with the **same `vow_id` and the same blame** the counterexample predicted. High-confidence: the model agrees with runtime. |
 | `"diverged"`   | The harness exited cleanly, or fired a *different* `vow_id`/blame. Either the verifier C model is wrong (a model false-positive) or the counterexample values do not reach the violation in real execution. `replay_reason` explains which. |
+| `"aborted"`    | The harness emitted a structured runtime-abort diagnostic before reaching any `VowViolation` (for example, `IndexOutOfBounds`). The program failed, but through a different mechanism than the counterexample predicted; `replay_reason` names the abort and the unreached `vow_id`/blame. |
 | `"skipped"`    | Replay was not attempted (e.g. an input type outside v1 scope, a Unit/aggregate parameter, the function is not defined in the entry file, or harness compilation failed). `replay_reason` gives the cause. |
+
+`"aborted"` is distinct from `"diverged"`: it preserves positive runtime evidence that the
+program failed while keeping `"diverged"` for runs where the verifier and runtime disagree about
+whether the predicted failure is reachable. Runtime aborts use the reserved exit status `134` and
+the structured diagnostics documented under [Runtime Errors](errors.md#runtime-errors).
 
 **v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `"skipped"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `"skipped"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `"skipped"` by the self-hosted compiler.
 

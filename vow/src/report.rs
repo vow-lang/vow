@@ -117,7 +117,8 @@ pub struct CounterexampleJson {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub branch_decisions: Vec<CeBranchDecisionJson>,
     /// `--replay-cex` differential-test outcome (issue #335): `"confirmed"`,
-    /// `"diverged"`, or `"skipped"`. Absent unless `--replay-cex` was passed.
+    /// `"diverged"`, `"aborted"`, or `"skipped"`. Absent unless
+    /// `--replay-cex` was passed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

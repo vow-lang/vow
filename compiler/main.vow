@@ -678,6 +678,17 @@ struct ReplayVerdict {
     reason: String,
 }
 
+struct ReplayScan {
+    violation_line: String,
+    abort_kind: String,
+}
+
+// 128 + SIGABRT: the runtime's reserved abort exit status (docs/spec/errors.md
+// "Exit status"). Gate abort classification on this, not any nonzero code, so
+// an unrelated nonzero exit that happens to print an error-shaped line to
+// stderr isn't misclassified as a runtime abort.
+const RUNTIME_ABORT_EXIT_CODE: i64 = 134;
+
 fn replay_blame_runtime_name(b: i64) -> String {
     if b == DIAG_BLAME_CALLER() { return String::from("Caller"); }
     if b == DIAG_BLAME_CALLEE() { return String::from("Callee"); }
@@ -781,6 +792,10 @@ fn replay_skip(reason: String) -> ReplayVerdict {
 
 fn replay_diverge(reason: String) -> ReplayVerdict {
     ReplayVerdict { status: String::from("diverged"), reason: reason }
+}
+
+fn replay_abort(reason: String) -> ReplayVerdict {
+    ReplayVerdict { status: String::from("aborted"), reason: reason }
 }
 
 fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String) -> ReplayVerdict [io] {
@@ -921,11 +936,28 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     // Confirm only if a SINGLE VowViolation line carries both the predicted
     // vow_id and blame — a substring scan over all of stderr could otherwise
     // splice a vow_id and blame from two different lines into a false confirm.
-    let viol: String = replay_find_violation_line(err);
+    // `__vow_violation` always exits with the reserved abort status, so a
+    // genuine violation is exit-134 too; gating on it here closes the same
+    // false-match surface the abort branch below guards against (a debug
+    // write that coalesces a VowViolation-shaped substring onto its line).
+    let scan: ReplayScan = replay_scan_stderr(err);
+    let viol: String = scan.violation_line;
     let vowid_needle: String = str3(String::from("\"vow_id\":"), i64_to_string(ce.vow_id), String::from(","));
     let blame_needle: String = str3(String::from("\"blame\":\""), replay_blame_runtime_name(ce.blame), String::from("\""));
-    if viol.len() > 0 && viol.contains(vowid_needle) && viol.contains(blame_needle) {
-        return ReplayVerdict { status: String::from("confirmed"), reason: String::from("") };
+    if viol.len() > 0 && rrc == RUNTIME_ABORT_EXIT_CODE {
+        if viol.contains(vowid_needle) && viol.contains(blame_needle) {
+            return ReplayVerdict { status: String::from("confirmed"), reason: String::from("") };
+        }
+        return replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"));
+    }
+    if scan.abort_kind.len() > 0 && rrc == RUNTIME_ABORT_EXIT_CODE {
+        let reason: String = String::from("runtime aborted with ");
+        reason.push_str(scan.abort_kind);
+        reason.push_str(String::from(" before reaching predicted VowViolation vow_id="));
+        reason.push_str(i64_to_string(ce.vow_id));
+        reason.push_str(String::from(" blame="));
+        reason.push_str(replay_blame_runtime_name(ce.blame));
+        return replay_abort(reason);
     }
     if rrc == 0 {
         return replay_diverge(String::from("harness exited cleanly; no VowViolation fired at runtime"));
@@ -933,23 +965,73 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     replay_diverge(String::from("runtime violation did not match predicted vow_id/blame"))
 }
 
-// First stderr line containing the VowViolation marker, or "" if none. Used so
-// the confirm check reads vow_id and blame from one JSON object.
-fn replay_find_violation_line(err: String) -> String {
+// Scans stderr once for both the VowViolation marker (confirm/diverge) and a
+// structured non-VowViolation abort marker (a runtime abort that preempted
+// the predicted VowViolation), so replay_one_ce doesn't walk stderr twice.
+// Classification is keyed off the LAST envelope-bearing line overall (each
+// line's own kind picked via its LAST `"error":"<kind>"` occurrence, mirroring
+// the Rust replay path's right-to-left envelope scan): nothing runs after the
+// runtime writes its final envelope and aborts, so the last matching line —
+// violation or abort — is the event that actually terminated the run, and an
+// earlier line whose debug output happens to look like an envelope must not
+// take precedence over it. Every match overwrites both fields so only the
+// winning line's classification survives.
+fn replay_scan_stderr(err: String) -> ReplayScan {
     let n: i64 = err.len();
     let mut start: i64 = 0;
     let mut i: i64 = 0;
+    let mut violation_line: String = String::from("");
+    let mut abort_kind: String = String::from("");
     while i <= n {
         if i == n || err.byte_at(i) == 10 {
             let line: String = err.substring(start, i);
-            if line.contains(String::from("\"error\":\"VowViolation\"")) {
-                return line;
+            let kind: String = replay_last_error_kind_in_line(line);
+            if kind == String::from("VowViolation") {
+                violation_line = line;
+                abort_kind = String::from("");
+            } else if kind.len() > 0 {
+                abort_kind = kind;
+                violation_line = String::from("");
             }
             start = i + 1;
         }
         i = i + 1;
     }
-    String::from("")
+    ReplayScan { violation_line: violation_line, abort_kind: abort_kind }
+}
+
+// Extract the kind from the LAST `{"error":"<Kind>"}` marker in one stderr
+// line (rightmost wins), or "" if the line has none. The kind may be
+// "VowViolation" — the caller decides what that means for this line.
+fn replay_last_error_kind_in_line(line: String) -> String {
+    let marker: String = String::from("{\"error\":\"");
+    let n: i64 = line.len();
+    let m: i64 = marker.len();
+    let mut i: i64 = 0;
+    let mut found: String = String::from("");
+    while i + m <= n {
+        let mut matched: bool = true;
+        let mut j: i64 = 0;
+        while j < m {
+            if line.byte_at(i + j) != marker.byte_at(j) {
+                matched = false;
+                break;
+            }
+            j = j + 1;
+        }
+        if matched {
+            let start: i64 = i + m;
+            let mut end: i64 = start;
+            while end < n && line.byte_at(end) != 34 {
+                end = end + 1;
+            }
+            if end > start {
+                found = line.substring(start, end);
+            }
+        }
+        i = i + 1;
+    }
+    found
 }
 
 fn replay_all(ces: Vec<VerifyCE>, fns: Vec<IrFunction>, path: String, argv0: String) -> Vec<VerifyCE> [io] {
@@ -5270,7 +5352,13 @@ fn skill_bundle() -> String {
     r.push_str(String::from("|----------------|---------|\n"));
     r.push_str(String::from("| `\"confirmed\"`  | The harness fired `VowViolation` with the **same `vow_id` and the same blame** the counterexample predicted. High-confidence: the model agrees with runtime. |\n"));
     r.push_str(String::from("| `\"diverged\"`   | The harness exited cleanly, or fired a *different* `vow_id`/blame. Either the verifier C model is wrong (a model false-positive) or the counterexample values do not reach the violation in real execution. `replay_reason` explains which. |\n"));
+    r.push_str(String::from("| `\"aborted\"`    | The harness emitted a structured runtime-abort diagnostic before reaching any `VowViolation` (for example, `IndexOutOfBounds`). The program failed, but through a different mechanism than the counterexample predicted; `replay_reason` names the abort and the unreached `vow_id`/blame. |\n"));
     r.push_str(String::from("| `\"skipped\"`    | Replay was not attempted (e.g. an input type outside v1 scope, a Unit/aggregate parameter, the function is not defined in the entry file, or harness compilation failed). `replay_reason` gives the cause. |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`\"aborted\"` is distinct from `\"diverged\"`: it preserves positive runtime evidence that the\n"));
+    r.push_str(String::from("program failed while keeping `\"diverged\"` for runs where the verifier and runtime disagree about\n"));
+    r.push_str(String::from("whether the predicted failure is reachable. Runtime aborts use the reserved exit status `134` and\n"));
+    r.push_str(String::from("the structured diagnostics documented under [Runtime Errors](errors.md#runtime-errors).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `\"skipped\"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `\"skipped\"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `\"skipped\"` by the self-hosted compiler.\n"));
     r.push_str(String::from("\n"));
@@ -8441,12 +8529,12 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"replay\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"enum\": [\"confirmed\", \"diverged\", \"skipped\"],\n"));
+    r.push_str(String::from("      \"enum\": [\"confirmed\", \"diverged\", \"aborted\", \"skipped\"],\n"));
     r.push_str(String::from("      \"description\": \"Differential-test outcome, present only with --replay-cex\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"replay_reason\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Human-readable explanation for a diverged or skipped replay\"\n"));
+    r.push_str(String::from("      \"description\": \"Human-readable explanation for an aborted, diverged, or skipped replay\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"additionalProperties\": false\n"));
@@ -10444,7 +10532,13 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("|----------------|---------|\n"));
     r.push_str(String::from("| `\"confirmed\"`  | The harness fired `VowViolation` with the **same `vow_id` and the same blame** the counterexample predicted. High-confidence: the model agrees with runtime. |\n"));
     r.push_str(String::from("| `\"diverged\"`   | The harness exited cleanly, or fired a *different* `vow_id`/blame. Either the verifier C model is wrong (a model false-positive) or the counterexample values do not reach the violation in real execution. `replay_reason` explains which. |\n"));
+    r.push_str(String::from("| `\"aborted\"`    | The harness emitted a structured runtime-abort diagnostic before reaching any `VowViolation` (for example, `IndexOutOfBounds`). The program failed, but through a different mechanism than the counterexample predicted; `replay_reason` names the abort and the unreached `vow_id`/blame. |\n"));
     r.push_str(String::from("| `\"skipped\"`    | Replay was not attempted (e.g. an input type outside v1 scope, a Unit/aggregate parameter, the function is not defined in the entry file, or harness compilation failed). `replay_reason` gives the cause. |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`\"aborted\"` is distinct from `\"diverged\"`: it preserves positive runtime evidence that the\n"));
+    r.push_str(String::from("program failed while keeping `\"diverged\"` for runs where the verifier and runtime disagree about\n"));
+    r.push_str(String::from("whether the predicted failure is reachable. Runtime aborts use the reserved exit status `134` and\n"));
+    r.push_str(String::from("the structured diagnostics documented under [Runtime Errors](errors.md#runtime-errors).\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**v1 input scope.** Reconstruction supports scalar parameters (`i64`, `u64`, `bool`) and bounded `Vec` of those scalars. `String`, `HashMap`, `BTreeMap`, struct, reference, and nested-aggregate parameters are reported as `\"skipped\"` with a reason. The self-hosted compiler's v1 reconstructs scalars only and reports `Vec` parameters as `\"skipped\"` (the Rust compiler additionally reconstructs bounded `Vec`s); both report identical outcomes for scalar and aggregate-skip cases. Replaying a counterexample for a function whose entry file already defines `main` is `\"skipped\"` by the self-hosted compiler.\n"));
     r.push_str(String::from("\n"));
@@ -13622,12 +13716,12 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"replay\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"enum\": [\"confirmed\", \"diverged\", \"skipped\"],\n"));
+    r.push_str(String::from("      \"enum\": [\"confirmed\", \"diverged\", \"aborted\", \"skipped\"],\n"));
     r.push_str(String::from("      \"description\": \"Differential-test outcome, present only with --replay-cex\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"replay_reason\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"description\": \"Human-readable explanation for a diverged or skipped replay\"\n"));
+    r.push_str(String::from("      \"description\": \"Human-readable explanation for an aborted, diverged, or skipped replay\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"additionalProperties\": false\n"));

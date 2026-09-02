@@ -1,0 +1,33 @@
+// TEST: category bounds
+// TEST: counterexample-fn "past_end"
+// TEST: counterexample-blame none
+// TEST: counterexample-vow-id 4294967293
+// TEST: replay skipped
+//
+// Unattributed-bounds fixture (#1090). `past_end`'s `requires: n == 1` pins a
+// scalar input; the one-element Vec is indexed at one, so ESBMC reports the
+// internal "vec bounds" property (blame none) rather than a user-authored
+// clause. Since PR #1207, an unattributed property is reported with the
+// reserved `UNATTRIBUTED_VOW_ID` sentinel, and both replay implementations
+// unconditionally skip replay for it: a synthetic id never matches a
+// runtime-emitted vow_id, so attempting the comparison would always read as
+// "diverged" even though nothing is actually wrong. Skipping is the honest
+// outcome here, not a regression of #1090 — the original "off-by-one bounds"
+// scenario in the issue title is definitionally unattributed, so it can no
+// longer reach the "aborted" classification this PR's fix commits added to
+// `classify_replay_run` (`vow/src/replay.rs`) and `replay_scan_stderr`
+// (`compiler/main.vow`); those are covered directly by unit tests with
+// synthetic stderr instead (see `classify_replay_run_reports_aborted_when_*`
+// in `vow/src/replay.rs`), since they are pure functions of a string and
+// don't need a live counterexample to exercise.
+// No `fn main` is present, allowing the self-hosted replay path to run.
+module ReplayUnattributedBounds
+
+fn past_end(n: i64) -> i64 vow {
+  requires: n == 1,
+  ensures: result >= 0
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(7);
+  v[n]
+}

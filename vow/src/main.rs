@@ -108,10 +108,12 @@ pub struct StructuredCounterexample {
     pub violating_args: Vec<CeViolatingArg>,
     pub execution_path: Vec<CePathStep>,
     pub branch_decisions: Vec<CeBranchDecision>,
-    /// `--replay-cex` outcome: `"confirmed"`, `"diverged"`, or `"skipped"`.
+    /// `--replay-cex` outcome: `"confirmed"`, `"diverged"`, `"aborted"`, or
+    /// `"skipped"`.
     /// `None` unless replay was requested. See `replay` (issue #335).
     pub replay: Option<String>,
-    /// Reason string for a `diverged` or `skipped` replay; `None` otherwise.
+    /// Reason string for an `aborted`, `diverged`, or `skipped` replay; `None`
+    /// otherwise.
     pub replay_reason: Option<String>,
     /// Raw ESBMC counterexample assignments (`p0`, `v3`, …), before
     /// name-mapping. Consumed by replay harness generation; never serialized.

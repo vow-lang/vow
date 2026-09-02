@@ -160,9 +160,9 @@ def check_soundness(vow_file, verifier, outdir, timeout):
 def check_precision(vow_file, verifier, timeout):
     """VerifyFailed ⇒ every counterexample replays concretely.
 
-    `replay: diverged` is the finding. `skipped` is not: the replay harness
-    declines cases it cannot model (aggregates on some paths, an entry file that
-    defines main), and counting those as failures would drown the real ones.
+    `replay: diverged` is the finding. `aborted` is an honest runtime failure
+    that preempted the predicted vow check, while `skipped` means the replay
+    harness declined a case it cannot model. Neither is a precision failure.
     """
     result, err = run_json(
         verifier,
@@ -186,11 +186,12 @@ def check_precision(vow_file, verifier, timeout):
             "detail": "VerifyFailed with no counterexample",
         }
 
-    diverged, skipped, confirmed = [], [], 0
+    diverged, aborted, skipped, confirmed = [], [], [], 0
+    buckets = {"diverged": diverged, "aborted": aborted}
     for ce in ces:
         replay = ce.get("replay")
-        if replay == "diverged":
-            diverged.append(
+        if replay in buckets:
+            buckets[replay].append(
                 f"{ce.get('function')} vow_id={ce.get('vow_id')}: "
                 f"{ce.get('replay_reason')}"
             )
@@ -206,10 +207,24 @@ def check_precision(vow_file, verifier, timeout):
             "detail": "; ".join(diverged),
         }
     if confirmed:
+        detail = f"{confirmed} counterexample(s) confirmed"
+        if aborted:
+            detail += f"; {len(aborted)} aborted before reaching the vow check: "
+            detail += "; ".join(aborted)
         return {
             "direction": "precision",
             "verdict": "ok",
-            "detail": f"{confirmed} counterexample(s) replayed",
+            "detail": detail,
+        }
+    if aborted:
+        # No counterexample confirmed a VowViolation, so an abort-only result
+        # cannot satisfy the differential gate (--min-checked) — it's honest
+        # runtime failure evidence, not validation that the model is right.
+        return {
+            "direction": "precision",
+            "verdict": "skipped",
+            "detail": f"{len(aborted)} aborted before reaching the vow check: "
+            + "; ".join(aborted),
         }
     return {
         "direction": "precision",
