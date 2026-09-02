@@ -5820,6 +5820,23 @@ mod tests {
         }
     }
 
+    /// Builds a single-block `noop` function ready for `__vow_clif_finish`,
+    /// shared by the object-write error-path tests below.
+    fn build_noop_module() -> i64 {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, 0, "noop", ITY_UNIT, false);
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
+        }
+        add_test_block(ctx);
+        add_test_inst(ctx, 0, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+        }
+        ctx
+    }
+
     /// An unwritable object path is the filesystem's answer, not a backend
     /// defect: `__vow_clif_finish` must report it as `CLIF_ERR_IO` so
     /// `codegen_failure_diagnostic` reaches `IoError` rather than blaming the
@@ -5832,17 +5849,7 @@ mod tests {
         assert_ne!(CLIF_ERR_IO, CLIF_ERR_UNSUPPORTED);
         assert_ne!(CLIF_ERR_IO, -1);
 
-        let ctx = __vow_clif_create(0, 0);
-        assert_ne!(ctx, 0);
-        declare_test_function(ctx, 0, "noop", ITY_UNIT, false);
-        unsafe {
-            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
-        }
-        add_test_block(ctx);
-        add_test_inst(ctx, 0, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
-        unsafe {
-            assert_eq!(__vow_clif_fn_end(ctx), 0);
-        }
+        let ctx = build_noop_module();
 
         let temp_dir = tempfile::TempDir::new().unwrap();
         let object_path = temp_dir.path().join("noop.o");
@@ -5863,17 +5870,7 @@ mod tests {
         assert_ne!(CLIF_ERR_IO_MKDIR, CLIF_ERR_IO);
         assert_ne!(CLIF_ERR_IO_MKDIR, -1);
 
-        let ctx = __vow_clif_create(0, 0);
-        assert_ne!(ctx, 0);
-        declare_test_function(ctx, 0, "noop", ITY_UNIT, false);
-        unsafe {
-            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
-        }
-        add_test_block(ctx);
-        add_test_inst(ctx, 0, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
-        unsafe {
-            assert_eq!(__vow_clif_fn_end(ctx), 0);
-        }
+        let ctx = build_noop_module();
 
         let temp_dir = tempfile::TempDir::new().unwrap();
         let blocking_file = temp_dir.path().join("blocking_file");
@@ -5888,17 +5885,7 @@ mod tests {
 
     #[test]
     fn finish_creates_missing_parent_directories() {
-        let ctx = __vow_clif_create(0, 0);
-        assert_ne!(ctx, 0);
-        declare_test_function(ctx, 0, "noop", ITY_UNIT, false);
-        unsafe {
-            assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
-        }
-        add_test_block(ctx);
-        add_test_inst(ctx, 0, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
-        unsafe {
-            assert_eq!(__vow_clif_fn_end(ctx), 0);
-        }
+        let ctx = build_noop_module();
 
         let temp_dir = tempfile::TempDir::new().unwrap();
         let object_path = temp_dir.path().join("missing").join("deep").join("noop.o");
