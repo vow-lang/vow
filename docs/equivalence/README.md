@@ -220,10 +220,12 @@ stale directives cannot accumulate.
 Every `compare_json` path enforces the expected counterexample count: zero for
 soft verification failures and equal between compilers otherwise. Because the
 values directive is scoped to values only, it cannot mask a count divergence.
-Known count divergences use the separate fixture-local
-`// TEST: known-cex-count-divergence <issue> "<why>"` directive. It applies only
-to a hard `VerifyFailed` count mismatch, cannot cover any per-counterexample
-field mismatch, and becomes a hard failure once the counts agree.
+No count-divergence suppression is currently active: #1155 established the
+shared single-counterexample stopping policy and removed the former GC and math
+fixture directives. The comparator still recognizes the fixture-local
+`// TEST: known-cex-count-divergence <issue> "<why>"` form on older branches; it
+applies only to a hard `VerifyFailed` count mismatch, cannot cover any
+per-counterexample field mismatch, and becomes a hard failure once counts agree.
 
 Two suppressions are unconditional rather than per-fixture, so they are the
 ones to revisit first when widening the comparison:
