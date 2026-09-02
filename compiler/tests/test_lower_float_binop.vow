@@ -1,0 +1,87 @@
+module TestLowerFloatBinop
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+fn check_float_binops(
+    ty: i64,
+    add: i64,
+    sub: i64,
+    mul: i64,
+    div: i64,
+    rem: i64,
+) -> i64 {
+    if binop_opcode(BINOP_ADD(), ty) != add { return 1; }
+    if binop_opcode(BINOP_SUB(), ty) != sub { return 2; }
+    if binop_opcode(BINOP_MUL(), ty) != mul { return 3; }
+    if binop_opcode(BINOP_DIV(), ty) != div { return 4; }
+    if binop_opcode(BINOP_REM(), ty) != rem { return 5; }
+    if binop_result_ty(BINOP_ADD(), ty) != ty { return 6; }
+    0
+}
+
+fn check_float_binop_data() -> i64 {
+    let source: String = String::from(
+        "module FloatArithmetic\nfn add(a: f64, b: f64) -> f64 { a + b }"
+    );
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("float_arithmetic.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(String::from("float_arithmetic.vow"));
+    let lowered: IrModule = lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    );
+
+    if lowered.functions.len() != 1 { return 21; }
+    let function: IrFunction = lowered.functions[0];
+    let mut block_index: i64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: i64 = 0;
+        while inst_index < block.insts.len() {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.op == IOP_ADD_F64() {
+                if inst.ty != ITY_F64() { return 22; }
+                if inst.dk != IDATA_NONE() { return 23; }
+                if inst.dv != 0 || inst.dv2 != 0 { return 24; }
+                return 0;
+            }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    25
+}
+
+fn main() -> i32 {
+    let f32_result: i64 = check_float_binops(
+        ITY_F32(),
+        IOP_ADD_F32(),
+        IOP_SUB_F32(),
+        IOP_MUL_F32(),
+        IOP_DIV_F32(),
+        IOP_REM_F32(),
+    );
+    if f32_result != 0 { return i64_to_i32_wrap(f32_result); }
+
+    let f64_result: i64 = check_float_binops(
+        ITY_F64(),
+        IOP_ADD_F64(),
+        IOP_SUB_F64(),
+        IOP_MUL_F64(),
+        IOP_DIV_F64(),
+        IOP_REM_F64(),
+    );
+    if f64_result != 0 { return i64_to_i32_wrap(f64_result + 10); }
+    let data_result: i64 = check_float_binop_data();
+    if data_result != 0 { return i64_to_i32_wrap(data_result); }
+    0
+}

@@ -1496,9 +1496,13 @@ pub fn api_function(x: i64) -> i64 {
 | `()`   | Unit type                |
 | `!`    | Never type (diverges)    |
 
-There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`,
-indices are `i64`. This is deliberate — it preserves binary fixed point
-reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
+Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
+types preserves binary fixed-point reproducibility across compilation hosts;
+see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). `Vec::len()` and
+indices currently use `i64`, but their signedness is independent of this
+determinism rationale. [ADR 0003](../adr/0003-unsigned-size-types.md) specifies
+that lengths, indices, and capacities will move to fixed-width `u64` as part of
+epic #1104.
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -1624,6 +1628,20 @@ mutable, arena-owned copy, use `String::from("...")`.
 Wrapping operators silently wrap on overflow. For unsigned operands, including
 `u8`, division and remainder use unsigned semantics.
 
+Division and remainder are the exception when no wrapped result exists. A zero
+divisor aborts with `ArithmeticOverflow` for `/`, `%`, `/!`, and `%!`; signed
+`MIN / -1` likewise aborts for both `/` and `/!`. These rules apply at every
+integer width. Signed `MIN % -1` is representable as `0` and does not abort.
+
+For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
+native floating-point arithmetic. Unchecked `%` is accepted by the frontend
+and lowers to a floating-point remainder opcode, but native backends do not yet
+implement that opcode; a build fails closed with `CodegenUnsupported`. Checked
+float operators do not yet have dedicated float IR or backend lowering; the
+lowerer still maps them to the integer checked-arithmetic opcodes, which crash
+the Cranelift verifier on float operands and fail with an internal
+`CodegenFailed` error rather than a clean rejection ([#1218](https://github.com/vow-lang/vow/issues/1218)).
+
 ### Checked Arithmetic
 
 | Operator | Meaning           |
@@ -1652,9 +1670,9 @@ never hides a program that can die at the operator. Widths `i8`/`u8` through
 `/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler
 routes them through runtime helpers; this is invisible in the language, and
 their trap behaviour matches the narrower widths exactly. Division or
-remainder by zero aborts, as does `/` and `/!` on `MIN / -1` for `i128`, whose
-quotient is not representable. `MIN % -1` is `0` and does not abort, at every
-width.
+remainder by zero aborts at every width, as does signed `/` and `/!` on
+`MIN / -1`, whose quotient is not representable. `MIN % -1` is `0` and does
+not abort.
 
 128-bit values are also **scalar-only** for now. Locals, parameters, returns,
 and temporaries carry both limbs correctly, but a 128-bit value placed inside
@@ -2876,13 +2894,14 @@ that path produces `Unverified` (exit 0).
 
 The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits
 with whatever its `main` returns, with one reserved exception: any runtime abort — out-of-memory,
-contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal
-mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`**. By
-convention `134` is reserved for aborts: it is never produced *spontaneously* by a normal `main`
-return, so a program that does not itself return or `process_exit(134)` can treat any `134` as a
-runtime abort rather than an application result. The reservation is a convention, not enforced — a
-program that deliberately exits `134` opts out. See the *Exit status* note under Runtime Errors in
-[`errors.md`](errors.md) for the full list and rationale.
+contract violation, arithmetic overflow, division or remainder by zero, unwrap-on-`None`,
+index-out-of-bounds, region-literal mutation, stack overflow, or a sanitizer trap — terminates with
+the reserved status **`134`**. By convention `134` is reserved for aborts: it is never produced
+*spontaneously* by a normal `main` return, so a program that does not itself return or
+`process_exit(134)` can treat any `134` as a runtime abort rather than an application result. The
+reservation is a convention, not enforced — a program that deliberately exits `134` opts out. See
+the *Exit status* note under Runtime Errors in [`errors.md`](errors.md) for the full list and
+rationale.
 
 ## Build Output JSON
 
@@ -2978,8 +2997,8 @@ caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
-(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
-than exposing raw verifier output.
+(such as division by zero, collection bounds or capacity, unwrap-on-None, or
+shift count) rather than exposing raw verifier output.
 
 ### Fields Reference
 
@@ -3170,7 +3189,9 @@ acts on the exact value needs an arbitrary-precision number parser. See
 {"error":"ArithmeticOverflow"}
 ```
 
-Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runtime.
+Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows, or
+when checked or unchecked division/remainder has no result because the divisor
+is zero or signed division evaluates `MIN / -1`.
 
 ### UnwrapOnNone
 
@@ -4661,22 +4682,23 @@ runtime archive are installed and accessible. When building Vow itself, run
 
 **Phase:** Module loading, Code Generation
 
-**Meaning:** The compiler could not read or write a file. Two build-pipeline
+**Meaning:** The compiler could not read or write a file. Three build-pipeline
 sites produce this code: a `use` declaration naming a module the driver cannot
-read, and a generated object file whose parent directory the backend cannot
-create or write into (permission denied, full disk, read-only filesystem, or a
-path component that is not a directory). Missing output parent directories are
-created automatically. The object bytes are already built by the time the
-write is attempted, so this is the filesystem's answer rather than a backend
-defect — which is why it is not `CodegenFailed`.
-When this code comes from module loading, compilation stops before type-checking,
-so diagnostics do not include follow-on errors for names from the missing module.
+read, a generated object's output directory the backend cannot create, and a
+generated object file the backend cannot write (full disk, read-only
+filesystem, or another write failure). The object bytes are already built by
+the time either the directory creation or the write is attempted, so this is
+the filesystem's answer rather than a backend defect — which is why it is not
+`CodegenFailed`. When this code comes from module loading, compilation stops
+before type-checking, so diagnostics do not include follow-on errors for names
+from the missing module.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
-verify the `-o` destination's parent directory can be created and written to,
-that every existing path component is a directory, and that the filesystem has
-free space. Re-running the same build after fixing the filesystem succeeds;
+the compiler creates missing parent directories automatically; verify that no
+path component is a regular file, that permissions allow creating directories
+and writing the object, and that the filesystem is writable and has free
+space. Re-running the same build after fixing the filesystem succeeds;
 changing the source will not help.
 
 ### VerificationSkipped
@@ -4724,6 +4746,24 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 
 **Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
 
+### VerifierAssertionUnattributed
+
+**Phase:** Verification
+**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "none"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+
+```json
+{
+  "error_code": "VerifierAssertionUnattributed",
+  "severity": "error",
+  "message": "verification failed in `remainder` on an unattributed property: division or remainder by zero",
+  "span": { "file": "", "offset": 0, "length": 0 }
+}
+```
+
+The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -4753,17 +4793,24 @@ number parser; a default `double` parser silently rounds it.
 
 ### ArithmeticOverflow
 
-**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`) overflows at runtime.
+**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`)
+overflows at runtime; or checked or unchecked division/remainder encounters a
+zero divisor; or signed `/` or `/!` evaluates `MIN / -1`.
 
 ```json
 {"error":"ArithmeticOverflow"}
 ```
 
-**Fix:** Use wrapping arithmetic (`+`, `-`, etc.) if overflow is acceptable, or add bounds contracts to prevent overflow.
+**Fix:** For addition, subtraction, or multiplication, use wrapping arithmetic
+if overflow is acceptable, or add bounds contracts to prevent overflow. For
+division and remainder, rule out a zero divisor and, for signed division, the
+`MIN / -1` case.
 
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run. A checked operator's abort is part of the operator's
-meaning, not a debug-mode check: wrapping arithmetic is spelled `+`, `-`, `*`.
+meaning, not a debug-mode check. Division and remainder also abort when no
+result exists, regardless of whether their checked or unchecked spelling is
+used.
 
 ### UnwrapOnNone
 
@@ -6069,7 +6116,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Function-local ID of the violated vow clause"
+      "description": "Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow"
     },
     "source": {
       "oneOf": [
@@ -6208,7 +6255,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "LinkFailed",
         "RegionConflict",
         "RegionLinear",
-        "RegionRootEscape"
+        "RegionRootEscape",
+        "VerifierAssertionUnattributed"
       ],
       "description": "Machine-readable error code"
     },
@@ -6604,9 +6652,13 @@ pub fn api_function(x: i64) -> i64 {
 | `()`   | Unit type                |
 | `!`    | Never type (diverges)    |
 
-There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`,
-indices are `i64`. This is deliberate — it preserves binary fixed point
-reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
+Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
+types preserves binary fixed-point reproducibility across compilation hosts;
+see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). `Vec::len()` and
+indices currently use `i64`, but their signedness is independent of this
+determinism rationale. [ADR 0003](../adr/0003-unsigned-size-types.md) specifies
+that lengths, indices, and capacities will move to fixed-width `u64` as part of
+epic #1104.
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -6732,6 +6784,20 @@ mutable, arena-owned copy, use `String::from("...")`.
 Wrapping operators silently wrap on overflow. For unsigned operands, including
 `u8`, division and remainder use unsigned semantics.
 
+Division and remainder are the exception when no wrapped result exists. A zero
+divisor aborts with `ArithmeticOverflow` for `/`, `%`, `/!`, and `%!`; signed
+`MIN / -1` likewise aborts for both `/` and `/!`. These rules apply at every
+integer width. Signed `MIN % -1` is representable as `0` and does not abort.
+
+For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
+native floating-point arithmetic. Unchecked `%` is accepted by the frontend
+and lowers to a floating-point remainder opcode, but native backends do not yet
+implement that opcode; a build fails closed with `CodegenUnsupported`. Checked
+float operators do not yet have dedicated float IR or backend lowering; the
+lowerer still maps them to the integer checked-arithmetic opcodes, which crash
+the Cranelift verifier on float operands and fail with an internal
+`CodegenFailed` error rather than a clean rejection ([#1218](https://github.com/vow-lang/vow/issues/1218)).
+
 ### Checked Arithmetic
 
 | Operator | Meaning           |
@@ -6760,9 +6826,9 @@ never hides a program that can die at the operator. Widths `i8`/`u8` through
 `/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler
 routes them through runtime helpers; this is invisible in the language, and
 their trap behaviour matches the narrower widths exactly. Division or
-remainder by zero aborts, as does `/` and `/!` on `MIN / -1` for `i128`, whose
-quotient is not representable. `MIN % -1` is `0` and does not abort, at every
-width.
+remainder by zero aborts at every width, as does signed `/` and `/!` on
+`MIN / -1`, whose quotient is not representable. `MIN % -1` is `0` and does
+not abort.
 
 128-bit values are also **scalar-only** for now. Locals, parameters, returns,
 and temporaries carry both limbs correctly, but a 128-bit value placed inside
@@ -7985,13 +8051,14 @@ that path produces `Unverified` (exit 0).
 
 The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits
 with whatever its `main` returns, with one reserved exception: any runtime abort — out-of-memory,
-contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal
-mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`**. By
-convention `134` is reserved for aborts: it is never produced *spontaneously* by a normal `main`
-return, so a program that does not itself return or `process_exit(134)` can treat any `134` as a
-runtime abort rather than an application result. The reservation is a convention, not enforced — a
-program that deliberately exits `134` opts out. See the *Exit status* note under Runtime Errors in
-[`errors.md`](errors.md) for the full list and rationale.
+contract violation, arithmetic overflow, division or remainder by zero, unwrap-on-`None`,
+index-out-of-bounds, region-literal mutation, stack overflow, or a sanitizer trap — terminates with
+the reserved status **`134`**. By convention `134` is reserved for aborts: it is never produced
+*spontaneously* by a normal `main` return, so a program that does not itself return or
+`process_exit(134)` can treat any `134` as a runtime abort rather than an application result. The
+reservation is a convention, not enforced — a program that deliberately exits `134` opts out. See
+the *Exit status* note under Runtime Errors in [`errors.md`](errors.md) for the full list and
+rationale.
 
 ## Build Output JSON
 
@@ -8087,8 +8154,8 @@ caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
-(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
-than exposing raw verifier output.
+(such as division by zero, collection bounds or capacity, unwrap-on-None, or
+shift count) rather than exposing raw verifier output.
 
 ### Fields Reference
 
@@ -8279,7 +8346,9 @@ acts on the exact value needs an arbitrary-precision number parser. See
 {"error":"ArithmeticOverflow"}
 ```
 
-Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runtime.
+Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows, or
+when checked or unchecked division/remainder has no result because the divisor
+is zero or signed division evaluates `MIN / -1`.
 
 ### UnwrapOnNone
 
@@ -9773,22 +9842,23 @@ runtime archive are installed and accessible. When building Vow itself, run
 
 **Phase:** Module loading, Code Generation
 
-**Meaning:** The compiler could not read or write a file. Two build-pipeline
+**Meaning:** The compiler could not read or write a file. Three build-pipeline
 sites produce this code: a `use` declaration naming a module the driver cannot
-read, and a generated object file whose parent directory the backend cannot
-create or write into (permission denied, full disk, read-only filesystem, or a
-path component that is not a directory). Missing output parent directories are
-created automatically. The object bytes are already built by the time the
-write is attempted, so this is the filesystem's answer rather than a backend
-defect — which is why it is not `CodegenFailed`.
-When this code comes from module loading, compilation stops before type-checking,
-so diagnostics do not include follow-on errors for names from the missing module.
+read, a generated object's output directory the backend cannot create, and a
+generated object file the backend cannot write (full disk, read-only
+filesystem, or another write failure). The object bytes are already built by
+the time either the directory creation or the write is attempted, so this is
+the filesystem's answer rather than a backend defect — which is why it is not
+`CodegenFailed`. When this code comes from module loading, compilation stops
+before type-checking, so diagnostics do not include follow-on errors for names
+from the missing module.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
-verify the `-o` destination's parent directory can be created and written to,
-that every existing path component is a directory, and that the filesystem has
-free space. Re-running the same build after fixing the filesystem succeeds;
+the compiler creates missing parent directories automatically; verify that no
+path component is a regular file, that permissions allow creating directories
+and writing the object, and that the filesystem is writable and has free
+space. Re-running the same build after fixing the filesystem succeeds;
 changing the source will not help.
 
 ### VerificationSkipped
@@ -9836,6 +9906,24 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 
 **Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
 
+### VerifierAssertionUnattributed
+
+**Phase:** Verification
+**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "none"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+
+```json
+{
+  "error_code": "VerifierAssertionUnattributed",
+  "severity": "error",
+  "message": "verification failed in `remainder` on an unattributed property: division or remainder by zero",
+  "span": { "file": "", "offset": 0, "length": 0 }
+}
+```
+
+The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -9865,17 +9953,24 @@ number parser; a default `double` parser silently rounds it.
 
 ### ArithmeticOverflow
 
-**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`) overflows at runtime.
+**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`)
+overflows at runtime; or checked or unchecked division/remainder encounters a
+zero divisor; or signed `/` or `/!` evaluates `MIN / -1`.
 
 ```json
 {"error":"ArithmeticOverflow"}
 ```
 
-**Fix:** Use wrapping arithmetic (`+`, `-`, etc.) if overflow is acceptable, or add bounds contracts to prevent overflow.
+**Fix:** For addition, subtraction, or multiplication, use wrapping arithmetic
+if overflow is acceptable, or add bounds contracts to prevent overflow. For
+division and remainder, rule out a zero divisor and, for signed division, the
+`MIN / -1` case.
 
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run. A checked operator's abort is part of the operator's
-meaning, not a debug-mode check: wrapping arithmetic is spelled `+`, `-`, `*`.
+meaning, not a debug-mode check. Division and remainder also abort when no
+result exists, regardless of whether their checked or unchecked spelling is
+used.
 
 ### UnwrapOnNone
 
@@ -11176,7 +11271,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Function-local ID of the violated vow clause"
+      "description": "Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow"
     },
     "source": {
       "oneOf": [
@@ -11314,7 +11409,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "LinkFailed",
         "RegionConflict",
         "RegionLinear",
-        "RegionRootEscape"
+        "RegionRootEscape",
+        "VerifierAssertionUnattributed"
       ],
       "description": "Machine-readable error code"
     },

@@ -1,0 +1,20 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module I8DivMinByNegOne
+
+fn neg_one() -> i8 {
+    -1
+}
+
+fn minimum() -> i8 {
+    -128
+}
+
+fn divide() -> i8 {
+    minimum() / neg_one()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}

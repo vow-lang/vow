@@ -1,12 +1,12 @@
 // TEST: exit 134
 // TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
-module I128RemByZero
+module I32RemByZero
 
-fn zero() -> i128 {
+fn zero() -> i32 {
     0
 }
 
-fn remainder() -> i128 {
+fn remainder() -> i32 {
     10 % zero()
 }
 

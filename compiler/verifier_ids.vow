@@ -20,3 +20,10 @@ fn verifier_caller_precondition_vow_id() -> i64 {
 fn verifier_caller_precondition_vow_id_str() -> String {
     i64_to_string(verifier_caller_precondition_vow_id())
 }
+
+// Sentinel vow_id reported when ESBMC fails a property that cannot be
+// attributed to a user-authored vow.
+// Mirrors `vow_verify::c_emitter::UNATTRIBUTED_VOW_ID = u32::MAX - 2`.
+fn verifier_unattributed_vow_id() -> i64 {
+    4294967293
+}

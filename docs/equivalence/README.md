@@ -35,20 +35,23 @@ bugs. That result ordering is why the tiers below are sequenced corpus-first.
 
 | Tier | Cadence | Cost | Blocking | What runs |
 |---|---|---|---|---|
-| 1 | push to `main`, nightly, local on demand | minutes | yes where run | promoted fixtures plus `vow test compiler/` under both compilers |
+| 1 | pull requests for promoted fixtures; push to `main`, nightly, local on demand | minutes | yes where run | promoted fixtures plus `vow test compiler/` under both compilers |
 | 2 | nightly | ~90 min, sharded | no | full-corpus sweep (`scripts/equivalence.py`) |
 | 3 | monthly | credentialed, agent-driven | no | adversarial AI pair review |
 
 **Tier 1** is where found bugs stay fixed. Every confirmed divergence is
 delta-debugged to a minimal reproducer and committed as a `tests/run/` or
-`tests/error/` fixture, so the existing suite regression-guards it forever. This
-tier now runs automatically after every code-bearing push to `main` and
-nightly: `full-test.yml` runs the complete `scripts/full_test.sh`
-promoted-fixture parity harness, while the Linux `bootstrap.yml` job
-independently runs the two-compiler `vow test compiler/` comparison. Both jobs
-fail when their Tier-1 comparison fails, but neither is on the pull-request
-path. The compiler comparison covers the whole documented `vow test` contract
-— every field in
+`tests/error/` fixture, so the existing suite regression-guards it forever. The
+promoted-fixture half now blocks every code-bearing pull request through
+`promoted-fixtures.yml`, which runs only the `tests/run/` and `tests/error/`
+parity sections of `scripts/full_test.sh`. The same functions still run inside
+the complete `full-test.yml` suite after every push to `main` and nightly, so
+the two paths cannot drift from `scripts/parity.py`'s comparison and suppression
+rules. The Linux `bootstrap.yml` job independently runs the two-compiler
+`vow test compiler/` comparison after pushes to `main` and nightly; that half
+of Tier 1 remains off the pull-request path pending #1171. All three placements
+fail when their Tier-1 comparison fails. The compiler comparison covers the
+whole documented `vow test` contract — every field in
 `docs/spec/schemas/test-result.schema.json` except the wall-clock `duration_ms`
 and `tests[].diagnostics`, read back out of the schema so a field added there is
 gated automatically. It also validates each document against that schema in
@@ -63,9 +66,11 @@ The self-hosted suite produced no JSON before a 45-minute bound in one fresh
 concatenated run; the full Section 10b later completed both compilers plus its
 interface checks in 17.8 minutes. Both measurements came from a contended
 development host and are placement evidence, not clean benchmarks. #1171 tracks
-the performance gap that prevents responsible per-PR placement. Until that gap
-closes, Tier 1 catches a regression on the first `main` push that includes it
-rather than adding roughly 40 minutes to every pull request.
+the performance gap that prevents responsible per-PR placement of the compiler
+comparison. Until that gap closes, promoted fixtures catch covered regressions
+before merge, while the broader compiler comparison catches its regressions on
+the first `main` push that includes them rather than adding roughly 40 minutes
+to every pull request.
 
 **Tier 2** re-establishes equivalence against a moving codebase. It is
 deterministic and credential-free, so it runs unattended.

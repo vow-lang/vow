@@ -102,6 +102,10 @@ pub enum ErrorCode {
     // wanted, and it is invisible in the contract verdict. Does not change the
     // build status (#585).
     ArithOverflowReachable,
+    // Emitted when ESBMC reports a failed property that cannot be attributed
+    // to a user-authored vow. The failure remains fail-closed, but must not be
+    // presented as a fabricated contract violation.
+    VerifierAssertionUnattributed,
 }
 
 pub trait DiagnosticEmitter {
@@ -421,5 +425,10 @@ mod tests {
             ErrorCode::CodegenFailed,
             ErrorCode::LinkFailed,
         ]);
+    }
+
+    #[test]
+    fn diagnostic_schema_lists_verifier_assertion_unattributed() {
+        assert_schema_lists([ErrorCode::VerifierAssertionUnattributed]);
     }
 }

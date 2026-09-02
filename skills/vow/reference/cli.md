@@ -257,13 +257,14 @@ that path produces `Unverified` (exit 0).
 
 The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits
 with whatever its `main` returns, with one reserved exception: any runtime abort — out-of-memory,
-contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal
-mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`**. By
-convention `134` is reserved for aborts: it is never produced *spontaneously* by a normal `main`
-return, so a program that does not itself return or `process_exit(134)` can treat any `134` as a
-runtime abort rather than an application result. The reservation is a convention, not enforced — a
-program that deliberately exits `134` opts out. See the *Exit status* note under Runtime Errors in
-[`errors.md`](errors.md) for the full list and rationale.
+contract violation, arithmetic overflow, division or remainder by zero, unwrap-on-`None`,
+index-out-of-bounds, region-literal mutation, stack overflow, or a sanitizer trap — terminates with
+the reserved status **`134`**. By convention `134` is reserved for aborts: it is never produced
+*spontaneously* by a normal `main` return, so a program that does not itself return or
+`process_exit(134)` can treat any `134` as a runtime abort rather than an application result. The
+reservation is a convention, not enforced — a program that deliberately exits `134` opts out. See
+the *Exit status* note under Runtime Errors in [`errors.md`](errors.md) for the full list and
+rationale.
 
 ## Build Output JSON
 
@@ -359,8 +360,8 @@ caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
-(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
-than exposing raw verifier output.
+(such as division by zero, collection bounds or capacity, unwrap-on-None, or
+shift count) rather than exposing raw verifier output.
 
 ### Fields Reference
 
@@ -551,7 +552,9 @@ acts on the exact value needs an arbitrary-precision number parser. See
 {"error":"ArithmeticOverflow"}
 ```
 
-Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runtime.
+Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows, or
+when checked or unchecked division/remainder has no result because the divisor
+is zero or signed division evaluates `MIN / -1`.
 
 ### UnwrapOnNone
 

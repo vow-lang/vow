@@ -1,0 +1,20 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module I64CheckedDivMinByNegOne
+
+fn neg_one() -> i64 {
+    -1
+}
+
+fn minimum() -> i64 {
+    -9223372036854775808
+}
+
+fn divide() -> i64 {
+    minimum() /! neg_one()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}
