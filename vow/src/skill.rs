@@ -4655,12 +4655,14 @@ runtime archive are installed and accessible. When building Vow itself, run
 
 **Phase:** Module loading, Code Generation
 
-**Meaning:** The compiler could not read or write a file. Two build-pipeline
+**Meaning:** The compiler could not read or write a file. Three build-pipeline
 sites produce this code: a `use` declaration naming a module the driver cannot
-read, and a generated object file the backend cannot write (unwritable output
-directory, full disk, read-only filesystem). The object bytes are already
-built by the time the write is attempted, so this is the filesystem's answer
-rather than a backend defect — which is why it is not `CodegenFailed`.
+read, a generated object's output directory the backend cannot create, and a
+generated object file the backend cannot write (full disk, read-only
+filesystem, or another write failure). The object bytes are already built by
+the time either the directory creation or the write is attempted, so this is
+the filesystem's answer rather than a backend defect — which is why it is not
+`CodegenFailed`.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
@@ -9758,12 +9760,14 @@ runtime archive are installed and accessible. When building Vow itself, run
 
 **Phase:** Module loading, Code Generation
 
-**Meaning:** The compiler could not read or write a file. Two build-pipeline
+**Meaning:** The compiler could not read or write a file. Three build-pipeline
 sites produce this code: a `use` declaration naming a module the driver cannot
-read, and a generated object file the backend cannot write (unwritable output
-directory, full disk, read-only filesystem). The object bytes are already
-built by the time the write is attempted, so this is the filesystem's answer
-rather than a backend defect — which is why it is not `CodegenFailed`.
+read, a generated object's output directory the backend cannot create, and a
+generated object file the backend cannot write (full disk, read-only
+filesystem, or another write failure). The object bytes are already built by
+the time either the directory creation or the write is attempted, so this is
+the filesystem's answer rather than a backend defect — which is why it is not
+`CodegenFailed`.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
