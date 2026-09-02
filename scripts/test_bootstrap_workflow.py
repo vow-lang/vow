@@ -6,8 +6,8 @@ central correctness claim: `build/vowc` compiles itself to a byte-identical
 binary. Moving that off pull requests trades latency for a later signal, and the
 trade is only sound while several things hold at once -- it still runs on every
 push to `main` (so a break is attributed to one merge), it still runs nightly
-(the backstop), it covers both platforms, and the Linux leg still verifies with
-ESBMC. Drop any one and the guarantee quietly becomes something weaker than it
+(the backstop), it covers both platforms, and both legs still verify with ESBMC.
+Drop any one and the guarantee quietly becomes something weaker than it
 reads. These are cheap structural assertions, not a substitute for it running.
 
 Deliberately parses with `re` rather than PyYAML. This module runs in
@@ -36,6 +36,7 @@ BOOTSTRAP_WORKFLOW = WORKFLOWS / "bootstrap.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
 EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
 FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
+RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
 FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
@@ -85,21 +86,22 @@ class BootstrapWorkflowTest(unittest.TestCase):
 
     def test_covers_both_platforms(self) -> None:
         self.assertIn("runs-on: ubuntu-latest", self.jobs["bootstrap"])
-        self.assertIn("runs-on: macos-latest", self.jobs["bootstrap-macos"])
+        self.assertIn("runs-on: macos-15", self.jobs["bootstrap-macos"])
 
     def test_runs_the_bootstrap_script_on_both_platforms(self) -> None:
         for name in ("bootstrap", "bootstrap-macos"):
             with self.subTest(job=name):
                 self.assertIn("scripts/bootstrap.sh", self.jobs[name])
 
-    def test_linux_bootstrap_verifies_with_esbmc(self) -> None:
+    def test_bootstrap_verifies_with_esbmc(self) -> None:
         # --stage3-no-verify halves wall time; Stages 1-2 still verify. A bare
         # --no-verify here would silently drop ESBMC from the whole pipeline.
-        linux = self.jobs["bootstrap"]
-
-        self.assertIn("--stage3-no-verify", linux)
-        self.assertNotIn("bootstrap.sh --no-verify", linux)
-        self.assertIn("install-esbmc", linux)
+        for name in ("bootstrap", "bootstrap-macos"):
+            with self.subTest(job=name):
+                job = self.jobs[name]
+                self.assertIn("--stage3-no-verify", job)
+                self.assertNotIn("bootstrap.sh --no-verify", job)
+                self.assertIn("install-esbmc", job)
 
     def compiler_test_step(self) -> str:
         """Just the tier-1 comparison step.
@@ -184,6 +186,30 @@ class CiWorkflowTest(unittest.TestCase):
         for name in ("build-and-test", "build-and-test-macos"):
             with self.subTest(job=name):
                 self.assertIn("concat_vow.sh", jobs[name])
+
+
+class ReleaseWorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        entry = re.compile(
+            r"^\s{10}- os: (\S+)\n"
+            r"\s{12}arch: (\S+)\n"
+            r"\s{12}runner: (\S+)\n"
+            r"\s{12}verify: (true|false)$",
+            re.MULTILINE,
+        )
+        self.matrix = {
+            (os_name, arch): {"runner": runner, "verify": verify}
+            for os_name, arch, runner, verify in entry.findall(text)
+        }
+
+    def test_release_matrix_verifies_supported_platforms(self) -> None:
+        self.assertEqual("true", self.matrix[("linux", "x86_64")]["verify"])
+        self.assertEqual("true", self.matrix[("macos", "aarch64")]["verify"])
+        self.assertEqual(
+            {"runner": "macos-15-intel", "verify": "false"},
+            self.matrix[("macos", "x86_64")],
+        )
 
 
 class FullTestWorkflowTest(unittest.TestCase):
