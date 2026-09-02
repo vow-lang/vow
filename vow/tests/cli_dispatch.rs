@@ -158,3 +158,36 @@ fn build_reports_io_error_when_output_directory_cannot_be_created() {
         "mkdir failure should name the directory, not a later object write: {message}"
     );
 }
+
+#[test]
+fn build_creates_missing_output_parent_directory() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source = write_program(&dir, "m.vow");
+    let output_parent = dir.path().join("missing").join("deep");
+    let output_path = output_parent.join("out.bin");
+
+    let out = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            source.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let json = parse_json(&stdout);
+
+    assert!(
+        output_parent.is_dir(),
+        "build should create nested output directories\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if is_runtime_link_failure(out.status.code(), &json) {
+        eprintln!("SKIP: runtime archive not present in this environment");
+        return;
+    }
+    assert_eq!(out.status.code(), Some(0), "stdout: {stdout}");
+    assert_eq!(json["status"], "Unverified");
+}
