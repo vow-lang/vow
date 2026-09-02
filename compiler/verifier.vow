@@ -649,6 +649,9 @@ fn describe_assert_label(label: String) -> String {
     if label == String::from("unwrap-none") {
         return String::from("unwrap() called on None");
     }
+    if label == String::from("division by zero") {
+        return String::from("division or remainder by zero");
+    }
     String::from("")
 }
 

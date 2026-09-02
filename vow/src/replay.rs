@@ -18,7 +18,7 @@ use std::path::Path;
 use crate::frontend::{FrontendGoal, prepare_frontend};
 use crate::{BuildOutput, BuildStatus, StructuredCounterexample, run_pipeline};
 use vow_codegen::{BuildMode, TraceMode};
-use vow_verify::{CALLER_PRECONDITION_VOW_ID, UNSUPPORTED_OP_VOW_ID};
+use vow_verify::{CALLER_PRECONDITION_VOW_ID, UNATTRIBUTED_VOW_ID, UNSUPPORTED_OP_VOW_ID};
 
 /// One reconstructed argument for the replay call.
 #[derive(Debug, Clone, PartialEq)]
@@ -530,12 +530,15 @@ fn replay_one(
     if ce.function == "main" {
         return replay_skip("cannot replay the entry function `main`".to_string());
     }
-    // Synthetic verifier-only ids (caller-precondition / unsupported-op
-    // sentinels) never match a runtime-emitted vow_id, so an exact id comparison
-    // would always diverge — skip them.
-    if ce.vow_id == CALLER_PRECONDITION_VOW_ID || ce.vow_id == UNSUPPORTED_OP_VOW_ID {
+    // Synthetic verifier-only ids never match a runtime-emitted vow_id, so an
+    // exact id comparison would always diverge — skip them.
+    if ce.vow_id == CALLER_PRECONDITION_VOW_ID
+        || ce.vow_id == UNSUPPORTED_OP_VOW_ID
+        || ce.vow_id == UNATTRIBUTED_VOW_ID
+    {
         return replay_skip(
-            "replay: synthetic counterexample id (caller-precondition / unsupported-op sentinel)"
+            "replay: synthetic counterexample id (caller-precondition / unsupported-op / \
+             unattributed-property sentinel)"
                 .to_string(),
         );
     }
@@ -679,6 +682,25 @@ mod tests {
         run_replay_cex(&path, &mut out);
         assert_eq!(out.counterexamples[0].replay.as_deref(), Some("skipped"));
         assert_eq!(out.counterexamples[1].replay.as_deref(), Some("skipped"));
+    }
+
+    #[test]
+    fn run_replay_cex_skips_unattributed_sentinel_without_codegen() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M\n\nfn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n";
+        let path = write_source(&dir, "m.vow", src);
+        let mut out = output_with(vec![ce("add", vow_verify::UNATTRIBUTED_VOW_ID)]);
+
+        run_replay_cex(&path, &mut out);
+
+        assert_eq!(out.counterexamples[0].replay.as_deref(), Some("skipped"));
+        assert_eq!(
+            out.counterexamples[0].replay_reason.as_deref(),
+            Some(
+                "replay: synthetic counterexample id (caller-precondition / unsupported-op / \
+                 unattributed-property sentinel)"
+            )
+        );
     }
 
     // ---- Counterexample replay (--replay-cex, issue #335) ----

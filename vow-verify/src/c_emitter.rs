@@ -2064,6 +2064,11 @@ pub const UNSUPPORTED_OP_VOW_ID: u32 = u32::MAX;
 /// with the target function's vow of the same index and mislabel the violation.
 pub const CALLER_PRECONDITION_VOW_ID: u32 = u32::MAX - 1;
 
+/// Sentinel `vow_id` reported when ESBMC fails a property that cannot be
+/// attributed to a user-authored vow. Reserved so the diagnostic pipeline does
+/// not silently collide with the function's first vow.
+pub const UNATTRIBUTED_VOW_ID: u32 = u32::MAX - 2;
+
 fn emit_unsupported_for_verification(inst: &Inst, out: &mut String) {
     let id = inst.id.0;
     // The assertion text must be exactly `vow:<id>` — `extract_vow_id` calls

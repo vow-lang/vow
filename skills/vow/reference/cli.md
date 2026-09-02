@@ -360,8 +360,8 @@ caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
-(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
-than exposing raw verifier output.
+(such as division by zero, collection bounds or capacity, unwrap-on-None, or
+shift count) rather than exposing raw verifier output.
 
 ### Fields Reference
 

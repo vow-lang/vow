@@ -1,0 +1,12 @@
+// TEST: category bounds
+// TEST: counterexample-fn "remainder"
+// TEST: counterexample-blame none
+// TEST: counterexample-vow-id 4294967293
+// TEST: counterexample-violation "division or remainder by zero"
+module DivisionByZeroUnattributed
+
+fn remainder(a: i64, b: i64) -> i64 vow {
+  ensures: result == result
+} {
+  a % b
+}

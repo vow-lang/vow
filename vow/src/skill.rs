@@ -1496,9 +1496,13 @@ pub fn api_function(x: i64) -> i64 {
 | `()`   | Unit type                |
 | `!`    | Never type (diverges)    |
 
-There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`,
-indices are `i64`. This is deliberate — it preserves binary fixed point
-reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
+Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
+types preserves binary fixed-point reproducibility across compilation hosts;
+see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). `Vec::len()` and
+indices currently use `i64`, but their signedness is independent of this
+determinism rationale. [ADR 0003](../adr/0003-unsigned-size-types.md) specifies
+that lengths, indices, and capacities will move to fixed-width `u64` as part of
+epic #1104.
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -1628,6 +1632,15 @@ Division and remainder are the exception when no wrapped result exists. A zero
 divisor aborts with `ArithmeticOverflow` for `/`, `%`, `/!`, and `%!`; signed
 `MIN / -1` likewise aborts for both `/` and `/!`. These rules apply at every
 integer width. Signed `MIN % -1` is representable as `0` and does not abort.
+
+For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
+native floating-point arithmetic. Unchecked `%` is accepted by the frontend
+and lowers to a floating-point remainder opcode, but native backends do not yet
+implement that opcode; a build fails closed with `CodegenUnsupported`. Checked
+float operators do not yet have dedicated float IR or backend lowering; the
+lowerer still maps them to the integer checked-arithmetic opcodes, which crash
+the Cranelift verifier on float operands and fail with an internal
+`CodegenFailed` error rather than a clean rejection ([#1218](https://github.com/vow-lang/vow/issues/1218)).
 
 ### Checked Arithmetic
 
@@ -2984,8 +2997,8 @@ caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
-(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
-than exposing raw verifier output.
+(such as division by zero, collection bounds or capacity, unwrap-on-None, or
+shift count) rather than exposing raw verifier output.
 
 ### Fields Reference
 
@@ -4726,6 +4739,24 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 
 **Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
 
+### VerifierAssertionUnattributed
+
+**Phase:** Verification
+**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "none"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+
+```json
+{
+  "error_code": "VerifierAssertionUnattributed",
+  "severity": "error",
+  "message": "verification failed in `remainder` on an unattributed property: division or remainder by zero",
+  "span": { "file": "", "offset": 0, "length": 0 }
+}
+```
+
+The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -6078,7 +6109,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Function-local ID of the violated vow clause"
+      "description": "Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow"
     },
     "source": {
       "oneOf": [
@@ -6217,7 +6248,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "LinkFailed",
         "RegionConflict",
         "RegionLinear",
-        "RegionRootEscape"
+        "RegionRootEscape",
+        "VerifierAssertionUnattributed"
       ],
       "description": "Machine-readable error code"
     },
@@ -6613,9 +6645,13 @@ pub fn api_function(x: i64) -> i64 {
 | `()`   | Unit type                |
 | `!`    | Never type (diverges)    |
 
-There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`,
-indices are `i64`. This is deliberate — it preserves binary fixed point
-reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
+Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
+types preserves binary fixed-point reproducibility across compilation hosts;
+see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). `Vec::len()` and
+indices currently use `i64`, but their signedness is independent of this
+determinism rationale. [ADR 0003](../adr/0003-unsigned-size-types.md) specifies
+that lengths, indices, and capacities will move to fixed-width `u64` as part of
+epic #1104.
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
@@ -6745,6 +6781,15 @@ Division and remainder are the exception when no wrapped result exists. A zero
 divisor aborts with `ArithmeticOverflow` for `/`, `%`, `/!`, and `%!`; signed
 `MIN / -1` likewise aborts for both `/` and `/!`. These rules apply at every
 integer width. Signed `MIN % -1` is representable as `0` and does not abort.
+
+For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
+native floating-point arithmetic. Unchecked `%` is accepted by the frontend
+and lowers to a floating-point remainder opcode, but native backends do not yet
+implement that opcode; a build fails closed with `CodegenUnsupported`. Checked
+float operators do not yet have dedicated float IR or backend lowering; the
+lowerer still maps them to the integer checked-arithmetic opcodes, which crash
+the Cranelift verifier on float operands and fail with an internal
+`CodegenFailed` error rather than a clean rejection ([#1218](https://github.com/vow-lang/vow/issues/1218)).
 
 ### Checked Arithmetic
 
@@ -8102,8 +8147,8 @@ caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
-(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
-than exposing raw verifier output.
+(such as division by zero, collection bounds or capacity, unwrap-on-None, or
+shift count) rather than exposing raw verifier output.
 
 ### Fields Reference
 
@@ -9847,6 +9892,24 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 
 **Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
 
+### VerifierAssertionUnattributed
+
+**Phase:** Verification
+**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "none"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+
+```json
+{
+  "error_code": "VerifierAssertionUnattributed",
+  "severity": "error",
+  "message": "verification failed in `remainder` on an unattributed property: division or remainder by zero",
+  "span": { "file": "", "offset": 0, "length": 0 }
+}
+```
+
+The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -11194,7 +11257,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Function-local ID of the violated vow clause"
+      "description": "Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow"
     },
     "source": {
       "oneOf": [
@@ -11332,7 +11395,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "LinkFailed",
         "RegionConflict",
         "RegionLinear",
-        "RegionRootEscape"
+        "RegionRootEscape",
+        "VerifierAssertionUnattributed"
       ],
       "description": "Machine-readable error code"
     },

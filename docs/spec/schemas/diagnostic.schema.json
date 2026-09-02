@@ -37,7 +37,8 @@
         "LinkFailed",
         "RegionConflict",
         "RegionLinear",
-        "RegionRootEscape"
+        "RegionRootEscape",
+        "VerifierAssertionUnattributed"
       ],
       "description": "Machine-readable error code"
     },

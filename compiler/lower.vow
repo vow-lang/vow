@@ -1284,6 +1284,28 @@ fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
     requires: is_valid_binop(op),
     ensures: result != -1
 } {
+    if ir_ty_is_float(operand_ty) {
+        if op == BINOP_ADD() {
+            if operand_ty == ITY_F32() { return IOP_ADD_F32(); }
+            return IOP_ADD_F64();
+        }
+        if op == BINOP_SUB() {
+            if operand_ty == ITY_F32() { return IOP_SUB_F32(); }
+            return IOP_SUB_F64();
+        }
+        if op == BINOP_MUL() {
+            if operand_ty == ITY_F32() { return IOP_MUL_F32(); }
+            return IOP_MUL_F64();
+        }
+        if op == BINOP_DIV() {
+            if operand_ty == ITY_F32() { return IOP_DIV_F32(); }
+            return IOP_DIV_F64();
+        }
+        if op == BINOP_REM() {
+            if operand_ty == ITY_F32() { return IOP_REM_F32(); }
+            return IOP_REM_F64();
+        }
+    }
     if op == BINOP_ADD() { return IOP_WADD(); }
     if op == BINOP_SUB() { return IOP_WSUB(); }
     if op == BINOP_MUL() { return IOP_WMUL(); }
@@ -1319,7 +1341,7 @@ fn is_comparison_binop(op: i64) -> bool {
 // into compiler tests trips a latent Cranelift bug on the equivalent inline OR chain.
 fn is_binop_result_ty(ty: i64) -> bool {
     if ty == ITY_BOOL() { return true; }
-    ir_ty_is_integer(ty)
+    ir_ty_is_integer(ty) || ir_ty_is_float(ty)
 }
 
 fn binop_result_ty(op: i64, operand_ty: i64) -> i64 vow {
@@ -1328,6 +1350,7 @@ fn binop_result_ty(op: i64, operand_ty: i64) -> i64 vow {
 } {
     if is_comparison_binop(op) { return ITY_BOOL(); }
     if ir_ty_is_integer(operand_ty) { return operand_ty; }
+    if ir_ty_is_float(operand_ty) { return operand_ty; }
     ITY_I64()
 }
 
@@ -1681,6 +1704,10 @@ fn ir_ty_is_integer(ty: i64) -> bool {
     ty == ITY_I8() || ty == ITY_U8() || ty == ITY_I16() || ty == ITY_U16() ||
     ty == ITY_I32() || ty == ITY_U32() || ty == ITY_I64() || ty == ITY_U64() ||
     ty == ITY_I128() || ty == ITY_U128()
+}
+
+fn ir_ty_is_float(ty: i64) -> bool {
+    ty == ITY_F32() || ty == ITY_F64()
 }
 
 fn block_result_eid(a: AstArena, bid: i64) -> i64 {
@@ -2348,7 +2375,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let bin_args: Vec<i64> = Vec::new();
         bin_args.push(lhs_id);
         bin_args.push(rhs_id);
-        let bin_id: i64 = lctx_emit(ctx, iop, rty, bin_args, IDATA_INTEGER(), operand_ty, 0, String::from(""));
+        let mut bin_data_kind: i64 = IDATA_INTEGER();
+        let mut bin_data_value: i64 = operand_ty;
+        if ir_ty_is_float(operand_ty) {
+            bin_data_kind = IDATA_NONE();
+            bin_data_value = 0;
+        }
+        let bin_id: i64 = lctx_emit(ctx, iop, rty, bin_args, bin_data_kind, bin_data_value, 0, String::from(""));
         // #585: anchor a checked operator's span for its abort diagnostic.
         if is_checked_arith_op(iop) {
             lctx_set_inst_span(ctx, bin_id, expr_span(a, eid));
