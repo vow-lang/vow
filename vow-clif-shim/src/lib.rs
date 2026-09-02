@@ -5793,7 +5793,10 @@ mod tests {
     /// is only reachable from hand-built IR like this. See issue #1164.
     #[test]
     fn float_remainder_is_refused_as_unsupported() {
-        for (name, op, ty) in [("f32", IOP_REM_F32, ITY_F32), ("f64", IOP_REM_F64, ITY_F64)] {
+        for (name, op, ty, const_op, const_data) in [
+            ("f32", IOP_REM_F32, ITY_F32, IOP_CONST_F32, IDATA_CONST_F32),
+            ("f64", IOP_REM_F64, ITY_F64, IOP_CONST_F64, IDATA_CONST_F64),
+        ] {
             let ctx = __vow_clif_create(0, 0);
             assert_ne!(ctx, 0);
             declare_test_function(ctx, 0, name, ITY_UNIT, false);
@@ -5801,8 +5804,8 @@ mod tests {
                 assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
             }
             add_test_block(ctx);
-            add_test_inst(ctx, 0, IOP_CONST_F64, ty, IDATA_CONST_F64, 0, 1, &[]);
-            add_test_inst(ctx, 1, IOP_CONST_F64, ty, IDATA_CONST_F64, 0, 2, &[]);
+            add_test_inst(ctx, 0, const_op, ty, const_data, 0, 1, &[]);
+            add_test_inst(ctx, 1, const_op, ty, const_data, 0, 2, &[]);
             add_test_inst(ctx, 2, op, ty, IDATA_NONE, 0, 0, &[0, 1]);
             add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
             unsafe {
