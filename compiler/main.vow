@@ -1644,6 +1644,8 @@ fn codegen_failure_diagnostic(result: i64, path: String, obj_path: String) -> Di
         diag_error(EC_LINK_FAILED(), String::from("native linker failed"), path, 0, 0)
     } else if result == CLIF_ERR_IO() {
         diag_error(EC_IO_ERROR(), str2(String::from("cannot write the generated object file: "), obj_path), path, 0, 0)
+    } else if result == CLIF_ERR_IO_MKDIR() {
+        diag_error(EC_IO_ERROR(), str2(String::from("cannot create the output directory: "), skill_parent_dir(obj_path)), path, 0, 0)
     } else {
         diag_error(EC_CODEGEN_FAILED(), String::from("native code generation failed"), path, 0, 0)
     }

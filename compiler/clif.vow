@@ -523,6 +523,7 @@ fn CLIF_ERR_LINK() -> i64 { -2 }
 fn CLIF_ERR_UNSUPPORTED() -> i64 { -3 }
 fn CLIF_ERR_IO() -> i64 { -4 }
 fn CLIF_ERR_WIDE_AGGREGATE_FIELD() -> i64 { -5 }
+fn CLIF_ERR_IO_MKDIR() -> i64 { -6 }
 
 fn CLIF_WIDE_AGGREGATE_FIELD_MSG() -> String {
     String::from("128-bit struct fields and enum payloads are not supported yet (epic #526): an aggregate field slot is 8 bytes, so a 128-bit field would truncate or overwrite its neighbour")
