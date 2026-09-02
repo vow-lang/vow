@@ -272,6 +272,48 @@ class FullTestWorkflowTest(unittest.TestCase):
         self.assertIn("${PASS} passed", script)
 
 
+class FullTestPromotedGateTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.script = FULL_TEST_SCRIPT.read_text(encoding="utf-8")
+
+    def test_compiler_setup_is_a_reusable_step(self) -> None:
+        self.assertEqual(2, self.script.count("setup_compilers"))
+        self.assertRegex(self.script, r"(?m)^setup_compilers\(\) \{$")
+
+    def test_promoted_fixture_steps_are_shared_by_both_routes(self) -> None:
+        for name in ("run_promoted_run_tests", "run_promoted_error_tests"):
+            with self.subTest(function=name):
+                self.assertEqual(3, self.script.count(name))
+                self.assertEqual(
+                    1,
+                    len(re.findall(rf"(?m)^{name}\(\) \{{$", self.script)),
+                )
+
+    def test_promoted_only_route_stops_before_the_complete_suite(self) -> None:
+        gate = re.search(
+            r'if \[ "\$\{VOW_FULL_TEST_PROMOTED_ONLY:-0\}" = "1" \]; then\n'
+            r"(?P<body>.*?)\nfi",
+            self.script,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(gate)
+        assert gate is not None
+
+        section_zero = self.script.index('section_begin "Section 0: Setup"')
+        setup_call = self.script.index("\nsetup_compilers\n", section_zero)
+        section_zero_b = self.script.index("# ─── Section 0b")
+        self.assertLess(setup_call, gate.start())
+        self.assertLess(gate.end(), section_zero_b)
+
+        body = gate.group("body")
+        self.assertIn('section_begin "Section 4: Run Tests"', body)
+        self.assertIn("run_promoted_run_tests", body)
+        self.assertIn('section_begin "Section 7: Error Handling"', body)
+        self.assertIn("run_promoted_error_tests", body)
+        self.assertIn("print_summary || summary_status=$?", body)
+        self.assertIn('exit "$summary_status"', body)
+
+
 class EquivalenceWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:
         self.text = EQUIVALENCE_WORKFLOW.read_text(encoding="utf-8")
