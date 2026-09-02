@@ -4,8 +4,8 @@ pub mod solver_strategy;
 
 pub use c_emitter::{
     ARITH_ASSERT_SUPPRESS_MACRO, ArithAbort, CALLER_PRECONDITION_VOW_ID, ConstantValue,
-    UNSUPPORTED_OP_VOW_ID, VerifyLimits, contracts_only_source, detect_constant_functions,
-    non_modelable_reason,
+    UNATTRIBUTED_VOW_ID, UNSUPPORTED_OP_VOW_ID, VerifyLimits, contracts_only_source,
+    detect_constant_functions, non_modelable_reason,
 };
 pub use esbmc::{
     ArithOverflowSite, CalleePrecondition, Counterexample, DEFAULT_MAX_K_STEP, ReachVerdict,

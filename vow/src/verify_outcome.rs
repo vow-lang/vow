@@ -171,7 +171,9 @@ fn dedup_warnings(warnings: &[VerifyWarning]) -> Vec<&VerifyWarning> {
 ///
 /// Note the fallback asymmetry with [`blame_to_diag_blame`]: an unrecognised
 /// blame maps to `VowRequiresViolated` (a *caller* code) here, but to
-/// `Blame::None` there. This is preserved behaviour, not a fix.
+/// `Blame::None` there. Unattributed ESBMC properties are intercepted before
+/// this mapping; the fallback remains for the separately reserved unsupported
+/// operation sentinel.
 fn blame_to_error_code(blame: &str) -> vow_diag::ErrorCode {
     match blame {
         "caller" => vow_diag::ErrorCode::VowRequiresViolated,
@@ -259,13 +261,27 @@ pub(crate) fn to_output_with_warnings(
                     }
                     _ => {}
                 }
+                let (code, message) = if sce.vow_id == vow_verify::UNATTRIBUTED_VOW_ID {
+                    (
+                        vow_diag::ErrorCode::VerifierAssertionUnattributed,
+                        format!(
+                            "verification failed in `{}` on an unattributed property: {}",
+                            sce.function, sce.violation
+                        ),
+                    )
+                } else {
+                    (
+                        blame_to_error_code(&sce.blame),
+                        format!(
+                            "contract violation in `{}`: {}",
+                            sce.function, sce.violation
+                        ),
+                    )
+                };
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
-                    code: blame_to_error_code(&sce.blame),
-                    message: format!(
-                        "contract violation in `{}`: {}",
-                        sce.function, sce.violation
-                    ),
+                    code,
+                    message,
                     primary,
                     secondary,
                     blame: blame_to_diag_blame(&sce.blame),
@@ -637,6 +653,29 @@ mod tests {
         assert_eq!(d.blame, Blame::Callee);
         assert_eq!(d.hints.len(), 1);
         assert!(d.hints[0].contains("postcondition"));
+    }
+
+    #[test]
+    fn failed_unattributed_counterexample_maps_to_verifier_assertion_unattributed() {
+        let mut cex = ce("r", "none");
+        cex.vow_id = vow_verify::UNATTRIBUTED_VOW_ID;
+        cex.violation = "division or remainder by zero".to_string();
+
+        let out = to_output(
+            VerifyOutcome::Failed {
+                function: "r".to_string(),
+                description: "[Counterexample]".to_string(),
+                counterexamples: vec![cex],
+            },
+            vec![],
+            None,
+        );
+
+        let diagnostic = &out.diagnostics[0];
+        assert_eq!(diagnostic.code, ErrorCode::VerifierAssertionUnattributed);
+        assert_eq!(diagnostic.blame, Blame::None);
+        assert!(!diagnostic.message.contains("contract violation"));
+        assert!(diagnostic.message.contains("division or remainder by zero"));
     }
 
     #[test]

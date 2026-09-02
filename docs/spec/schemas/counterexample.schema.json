@@ -22,7 +22,7 @@
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Function-local ID of the violated vow clause"
+      "description": "Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow"
     },
     "source": {
       "oneOf": [

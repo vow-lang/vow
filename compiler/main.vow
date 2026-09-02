@@ -534,11 +534,11 @@ fn inst_len_by_id(f: IrFunction, inst_id: i64) -> i64 {
 
 fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path: String) -> VerifyCE {
     let vow_id: i64 = vr.vow_id;
-    // Rust serializes an ESBMC failure with no `vow:N` label as public
-    // `vow_id: 0` (`Counterexample.vow_id.unwrap_or(0)`). Keep the raw `-1`
-    // sentinel internally for vow matching, but do not leak it into the JSON API.
+    // Keep the raw `-1` sentinel internally for vow matching. The JSON API uses
+    // a reserved non-contract id so an unattributed property cannot collide
+    // with the function's real vow 0.
     let public_vow_id: i64 = {
-        if vow_id < 0 { 0 } else { vow_id }
+        if vow_id < 0 { verifier_unattributed_vow_id() } else { vow_id }
     };
     let mut ce_violation: String = String::from("");
     let mut ce_blame: i64 = DIAG_BLAME_NONE();
@@ -789,8 +789,8 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     }
     // Synthetic verifier-only ids never match a runtime-emitted vow_id, so an
     // exact id comparison would always diverge — skip them.
-    if ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() {
-        return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op sentinel)"));
+    if ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() || ce.vow_id == verifier_unattributed_vow_id() {
+        return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op / unattributed-property sentinel)"));
     }
     let fi: i64 = replay_find_fn(fns, ce.function);
     if fi < 0 {
@@ -5222,8 +5222,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("argument expression.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `blame` is `\"none\"`, `violation` describes the failed verifier-model check\n"));
-    r.push_str(String::from("(such as collection bounds or capacity, unwrap-on-None, or shift count) rather\n"));
-    r.push_str(String::from("than exposing raw verifier output.\n"));
+    r.push_str(String::from("(such as division by zero, collection bounds or capacity, unwrap-on-None, or\n"));
+    r.push_str(String::from("shift count) rather than exposing raw verifier output.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
@@ -6962,6 +6962,24 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made -- the counterexample is the actionable finding.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### VerifierAssertionUnattributed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Verification\n"));
+    r.push_str(String::from("**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: \"none\"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"VerifierAssertionUnattributed\",\n"));
+    r.push_str(String::from("  \"severity\": \"error\",\n"));
+    r.push_str(String::from("  \"message\": \"verification failed in `remainder` on an unattributed property: division or remainder by zero\",\n"));
+    r.push_str(String::from("  \"span\": { \"file\": \"\", \"offset\": 0, \"length\": 0 }\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Runtime Errors\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).\n"));
@@ -8307,7 +8325,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    \"vow_id\": {\n"));
     r.push_str(String::from("      \"type\": \"integer\",\n"));
     r.push_str(String::from("      \"minimum\": 0,\n"));
-    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause\"\n"));
+    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"source\": {\n"));
     r.push_str(String::from("      \"oneOf\": [\n"));
@@ -8446,7 +8464,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
-    r.push_str(String::from("        \"RegionRootEscape\"\n"));
+    r.push_str(String::from("        \"RegionRootEscape\",\n"));
+    r.push_str(String::from("        \"VerifierAssertionUnattributed\"\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"description\": \"Machine-readable error code\"\n"));
     r.push_str(String::from("    },\n"));
@@ -10348,8 +10367,8 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("argument expression.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `blame` is `\"none\"`, `violation` describes the failed verifier-model check\n"));
-    r.push_str(String::from("(such as collection bounds or capacity, unwrap-on-None, or shift count) rather\n"));
-    r.push_str(String::from("than exposing raw verifier output.\n"));
+    r.push_str(String::from("(such as division by zero, collection bounds or capacity, unwrap-on-None, or\n"));
+    r.push_str(String::from("shift count) rather than exposing raw verifier output.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
@@ -12094,6 +12113,24 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made -- the counterexample is the actionable finding.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### VerifierAssertionUnattributed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Verification\n"));
+    r.push_str(String::from("**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: \"none\"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"VerifierAssertionUnattributed\",\n"));
+    r.push_str(String::from("  \"severity\": \"error\",\n"));
+    r.push_str(String::from("  \"message\": \"verification failed in `remainder` on an unattributed property: division or remainder by zero\",\n"));
+    r.push_str(String::from("  \"span\": { \"file\": \"\", \"offset\": 0, \"length\": 0 }\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Runtime Errors\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).\n"));
@@ -13440,7 +13477,7 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("    \"vow_id\": {\n"));
     r.push_str(String::from("      \"type\": \"integer\",\n"));
     r.push_str(String::from("      \"minimum\": 0,\n"));
-    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause\"\n"));
+    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"source\": {\n"));
     r.push_str(String::from("      \"oneOf\": [\n"));
@@ -13579,7 +13616,8 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
-    r.push_str(String::from("        \"RegionRootEscape\"\n"));
+    r.push_str(String::from("        \"RegionRootEscape\",\n"));
+    r.push_str(String::from("        \"VerifierAssertionUnattributed\"\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"description\": \"Machine-readable error code\"\n"));
     r.push_str(String::from("    },\n"));
