@@ -1,0 +1,37 @@
+// TEST: category model-drift
+// The lowering unit tests independently pin opcode selection; these contracts
+// prove the resulting float arithmetic opcodes remain modelable by ESBMC.
+module FloatArithmeticVerified
+
+fn add(a: f64, b: f64) -> f64 vow {
+    requires: a - a == a - a,
+    requires: b - b == b - b,
+    ensures: result == a + b
+} {
+    a + b
+}
+
+fn sub(a: f64, b: f64) -> f64 vow {
+    requires: a - a == a - a,
+    requires: b - b == b - b,
+    ensures: result == a - b
+} {
+    a - b
+}
+
+fn mul(a: f64, b: f64) -> f64 vow {
+    requires: a - a == a - a,
+    requires: b - b == b - b,
+    ensures: result == a * b
+} {
+    a * b
+}
+
+fn div(a: f64, b: f64) -> f64 vow {
+    requires: a - a == a - a,
+    requires: b - b == b - b,
+    requires: b != b - b,
+    ensures: result == a / b
+} {
+    a / b
+}
