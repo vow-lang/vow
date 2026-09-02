@@ -968,12 +968,14 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
 // Scans stderr once for both the VowViolation marker (confirm/diverge) and a
 // structured non-VowViolation abort marker (a runtime abort that preempted
 // the predicted VowViolation), so replay_one_ce doesn't walk stderr twice.
-// Classification is per line, keyed off that line's LAST `"error":"<kind>"`
-// occurrence (mirroring the Rust replay path's right-to-left envelope scan):
-// debug_str/debug_i64/debug_u64 write to stderr without a trailing newline,
-// so debug output can coalesce onto the same line as a real runtime envelope
-// (before or after it), and only the rightmost envelope is the one the
-// process actually produced last.
+// Classification is keyed off the LAST envelope-bearing line overall (each
+// line's own kind picked via its LAST `"error":"<kind>"` occurrence, mirroring
+// the Rust replay path's right-to-left envelope scan): nothing runs after the
+// runtime writes its final envelope and aborts, so the last matching line —
+// violation or abort — is the event that actually terminated the run, and an
+// earlier line whose debug output happens to look like an envelope must not
+// take precedence over it. Every match overwrites both fields so only the
+// winning line's classification survives.
 fn replay_scan_stderr(err: String) -> ReplayScan {
     let n: i64 = err.len();
     let mut start: i64 = 0;
@@ -985,11 +987,11 @@ fn replay_scan_stderr(err: String) -> ReplayScan {
             let line: String = err.substring(start, i);
             let kind: String = replay_last_error_kind_in_line(line);
             if kind == String::from("VowViolation") {
-                if violation_line.len() == 0 {
-                    violation_line = line;
-                }
-            } else if kind.len() > 0 && abort_kind.len() == 0 {
+                violation_line = line;
+                abort_kind = String::from("");
+            } else if kind.len() > 0 {
                 abort_kind = kind;
+                violation_line = String::from("");
             }
             start = i + 1;
         }
