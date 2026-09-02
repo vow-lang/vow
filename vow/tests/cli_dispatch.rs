@@ -121,3 +121,40 @@ fn legacy_no_subcommand_invocation_builds() {
     );
     assert_eq!(json["status"], "Unverified");
 }
+
+#[test]
+fn build_reports_io_error_when_output_directory_cannot_be_created() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source = write_program(&dir, "m.vow");
+    let blocker = dir.path().join("blocker");
+    std::fs::write(&blocker, "not a directory").unwrap();
+    let output_path = blocker.join("sub").join("myout");
+
+    let out = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            source.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let json = parse_json(&stdout);
+
+    assert_eq!(out.status.code(), Some(1), "stdout: {stdout}");
+    assert_eq!(json["status"], "CompileFailed");
+    let diagnostic = json["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["error_code"] == "IoError")
+        .unwrap_or_else(|| panic!("expected IoError diagnostic, got: {json}"));
+    let message = diagnostic["message"].as_str().unwrap();
+    assert!(message.contains(blocker.join("sub").to_str().unwrap()));
+    assert!(
+        !message.contains("myout.o"),
+        "mkdir failure should name the directory, not a later object write: {message}"
+    );
+}
