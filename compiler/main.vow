@@ -534,11 +534,11 @@ fn inst_len_by_id(f: IrFunction, inst_id: i64) -> i64 {
 
 fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path: String) -> VerifyCE {
     let vow_id: i64 = vr.vow_id;
-    // Rust serializes an ESBMC failure with no `vow:N` label as public
-    // `vow_id: 0` (`Counterexample.vow_id.unwrap_or(0)`). Keep the raw `-1`
-    // sentinel internally for vow matching, but do not leak it into the JSON API.
+    // Keep the raw `-1` sentinel internally for vow matching. The JSON API uses
+    // a reserved non-contract id so an unattributed property cannot collide
+    // with the function's real vow 0.
     let public_vow_id: i64 = {
-        if vow_id < 0 { 0 } else { vow_id }
+        if vow_id < 0 { verifier_unattributed_vow_id() } else { vow_id }
     };
     let mut ce_violation: String = String::from("");
     let mut ce_blame: i64 = DIAG_BLAME_NONE();
@@ -789,8 +789,8 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     }
     // Synthetic verifier-only ids never match a runtime-emitted vow_id, so an
     // exact id comparison would always diverge — skip them.
-    if ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() {
-        return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op sentinel)"));
+    if ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() || ce.vow_id == verifier_unattributed_vow_id() {
+        return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op / unattributed-property sentinel)"));
     }
     let fi: i64 = replay_find_fn(fns, ce.function);
     if fi < 0 {
