@@ -1644,6 +1644,8 @@ fn codegen_failure_diagnostic(result: i64, path: String, obj_path: String) -> Di
         diag_error(EC_LINK_FAILED(), String::from("native linker failed"), path, 0, 0)
     } else if result == CLIF_ERR_IO() {
         diag_error(EC_IO_ERROR(), str2(String::from("cannot write the generated object file: "), obj_path), path, 0, 0)
+    } else if result == CLIF_ERR_IO_MKDIR() {
+        diag_error(EC_IO_ERROR(), str2(String::from("cannot create the output directory: "), skill_parent_dir(obj_path)), path, 0, 0)
     } else {
         diag_error(EC_CODEGEN_FAILED(), String::from("native code generation failed"), path, 0, 0)
     }
@@ -6912,22 +6914,23 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Module loading, Code Generation\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Two build-pipeline\n"));
+    r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Three build-pipeline\n"));
     r.push_str(String::from("sites produce this code: a `use` declaration naming a module the driver cannot\n"));
-    r.push_str(String::from("read, and a generated object file whose parent directory the backend cannot\n"));
-    r.push_str(String::from("create or write into (permission denied, full disk, read-only filesystem, or a\n"));
-    r.push_str(String::from("path component that is not a directory). Missing output parent directories are\n"));
-    r.push_str(String::from("created automatically. The object bytes are already built by the time the\n"));
-    r.push_str(String::from("write is attempted, so this is the filesystem's answer rather than a backend\n"));
-    r.push_str(String::from("defect -- which is why it is not `CodegenFailed`.\n"));
-    r.push_str(String::from("When this code comes from module loading, compilation stops before type-checking,\n"));
-    r.push_str(String::from("so diagnostics do not include follow-on errors for names from the missing module.\n"));
+    r.push_str(String::from("read, a generated object's output directory the backend cannot create, and a\n"));
+    r.push_str(String::from("generated object file the backend cannot write (full disk, read-only\n"));
+    r.push_str(String::from("filesystem, or another write failure). The object bytes are already built by\n"));
+    r.push_str(String::from("the time either the directory creation or the write is attempted, so this is\n"));
+    r.push_str(String::from("the filesystem's answer rather than a backend defect -- which is why it is not\n"));
+    r.push_str(String::from("`CodegenFailed`. When this code comes from module loading, compilation stops\n"));
+    r.push_str(String::from("before type-checking, so diagnostics do not include follow-on errors for names\n"));
+    r.push_str(String::from("from the missing module.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
     r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
-    r.push_str(String::from("verify the `-o` destination's parent directory can be created and written to,\n"));
-    r.push_str(String::from("that every existing path component is a directory, and that the filesystem has\n"));
-    r.push_str(String::from("free space. Re-running the same build after fixing the filesystem succeeds;\n"));
+    r.push_str(String::from("the compiler creates missing parent directories automatically; verify that no\n"));
+    r.push_str(String::from("path component is a regular file, that permissions allow creating directories\n"));
+    r.push_str(String::from("and writing the object, and that the filesystem is writable and has free\n"));
+    r.push_str(String::from("space. Re-running the same build after fixing the filesystem succeeds;\n"));
     r.push_str(String::from("changing the source will not help.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### VerificationSkipped\n"));
@@ -12076,22 +12079,23 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Module loading, Code Generation\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Two build-pipeline\n"));
+    r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Three build-pipeline\n"));
     r.push_str(String::from("sites produce this code: a `use` declaration naming a module the driver cannot\n"));
-    r.push_str(String::from("read, and a generated object file whose parent directory the backend cannot\n"));
-    r.push_str(String::from("create or write into (permission denied, full disk, read-only filesystem, or a\n"));
-    r.push_str(String::from("path component that is not a directory). Missing output parent directories are\n"));
-    r.push_str(String::from("created automatically. The object bytes are already built by the time the\n"));
-    r.push_str(String::from("write is attempted, so this is the filesystem's answer rather than a backend\n"));
-    r.push_str(String::from("defect -- which is why it is not `CodegenFailed`.\n"));
-    r.push_str(String::from("When this code comes from module loading, compilation stops before type-checking,\n"));
-    r.push_str(String::from("so diagnostics do not include follow-on errors for names from the missing module.\n"));
+    r.push_str(String::from("read, a generated object's output directory the backend cannot create, and a\n"));
+    r.push_str(String::from("generated object file the backend cannot write (full disk, read-only\n"));
+    r.push_str(String::from("filesystem, or another write failure). The object bytes are already built by\n"));
+    r.push_str(String::from("the time either the directory creation or the write is attempted, so this is\n"));
+    r.push_str(String::from("the filesystem's answer rather than a backend defect -- which is why it is not\n"));
+    r.push_str(String::from("`CodegenFailed`. When this code comes from module loading, compilation stops\n"));
+    r.push_str(String::from("before type-checking, so diagnostics do not include follow-on errors for names\n"));
+    r.push_str(String::from("from the missing module.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
     r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
-    r.push_str(String::from("verify the `-o` destination's parent directory can be created and written to,\n"));
-    r.push_str(String::from("that every existing path component is a directory, and that the filesystem has\n"));
-    r.push_str(String::from("free space. Re-running the same build after fixing the filesystem succeeds;\n"));
+    r.push_str(String::from("the compiler creates missing parent directories automatically; verify that no\n"));
+    r.push_str(String::from("path component is a regular file, that permissions allow creating directories\n"));
+    r.push_str(String::from("and writing the object, and that the filesystem is writable and has free\n"));
+    r.push_str(String::from("space. Re-running the same build after fixing the filesystem succeeds;\n"));
     r.push_str(String::from("changing the source will not help.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### VerificationSkipped\n"));

@@ -79,6 +79,7 @@ unsafe fn read_vow_string(vow_vec_ptr: i64) -> &'static str {
 const CLIF_ERR_UNSUPPORTED: i64 = -3;
 const CLIF_ERR_IO: i64 = -4;
 const CLIF_ERR_WIDE_AGGREGATE_FIELD: i64 = -5;
+const CLIF_ERR_IO_MKDIR: i64 = -6;
 
 // ---------------------------------------------------------------------------
 // IR type/opcode constants (must match compiler/ir.vow)
@@ -2904,8 +2905,14 @@ pub unsafe extern "C" fn __vow_clif_finish(ctx_ptr: i64, obj_path_ptr: i64) -> i
         }
     };
 
-    if let Some(parent) = std::path::Path::new(obj_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if let Some(parent) = std::path::Path::new(obj_path).parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "clif_shim: create object directory {}: {e}",
+            parent.display()
+        );
+        return CLIF_ERR_IO_MKDIR;
     }
 
     // The object bytes are already built, so a failed write is the
@@ -5802,7 +5809,10 @@ mod tests {
     /// is only reachable from hand-built IR like this. See issue #1164.
     #[test]
     fn float_remainder_is_refused_as_unsupported() {
-        for (name, op, ty) in [("f32", IOP_REM_F32, ITY_F32), ("f64", IOP_REM_F64, ITY_F64)] {
+        for (name, op, ty, const_op, const_data) in [
+            ("f32", IOP_REM_F32, ITY_F32, IOP_CONST_F32, IDATA_CONST_F32),
+            ("f64", IOP_REM_F64, ITY_F64, IOP_CONST_F64, IDATA_CONST_F64),
+        ] {
             let ctx = __vow_clif_create(0, 0);
             assert_ne!(ctx, 0);
             declare_test_function(ctx, 0, name, ITY_UNIT, false);
@@ -5810,8 +5820,8 @@ mod tests {
                 assert_eq!(__vow_clif_fn_begin(ctx, 0, ITY_UNIT, 0), 0);
             }
             add_test_block(ctx);
-            add_test_inst(ctx, 0, IOP_CONST_F64, ty, IDATA_CONST_F64, 0, 1, &[]);
-            add_test_inst(ctx, 1, IOP_CONST_F64, ty, IDATA_CONST_F64, 0, 2, &[]);
+            add_test_inst(ctx, 0, const_op, ty, const_data, 0, 1, &[]);
+            add_test_inst(ctx, 1, const_op, ty, const_data, 0, 2, &[]);
             add_test_inst(ctx, 2, op, ty, IDATA_NONE, 0, 0, &[0, 1]);
             add_test_inst(ctx, 3, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[]);
             unsafe {
@@ -5825,40 +5835,63 @@ mod tests {
         }
     }
 
-    #[test]
-    fn finish_creates_a_missing_parent_directory() {
-        let ctx = build_noop_ctx();
-
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let object_path = temp_dir.path().join("no_such_dir").join("noop.o");
-        let object_path_vec = vow_string(object_path.to_str().unwrap());
-        let status = unsafe { __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64) };
-
-        assert_eq!(status, 0);
-        assert!(object_path.exists());
-    }
-
-    /// A non-directory path component is the filesystem's answer, not a
-    /// backend defect: `__vow_clif_finish` must report it as `CLIF_ERR_IO` so
+    /// An unwritable object path is the filesystem's answer, not a backend
+    /// defect: `__vow_clif_finish` must report it as `CLIF_ERR_IO` so
     /// `codegen_failure_diagnostic` reaches `IoError` rather than blaming the
     /// backend, matching what `CompiledObject::write_to_file` produces on the
-    /// Rust side.
+    /// Rust side. The parent directory already exists here (so `mkdir` is a
+    /// no-op); the object path itself is an existing directory, which is what
+    /// makes `fs::write` fail rather than `create_dir_all`.
     #[test]
-    fn finish_reports_a_non_directory_parent_as_io() {
+    fn finish_reports_an_unwritable_object_path_as_io() {
         assert_ne!(CLIF_ERR_IO, CLIF_ERR_UNSUPPORTED);
         assert_ne!(CLIF_ERR_IO, -1);
 
         let ctx = build_noop_ctx();
 
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let blocker_path = temp_dir.path().join("blocker");
-        std::fs::write(&blocker_path, b"not a directory").unwrap();
-        let object_path = blocker_path.join("noop.o");
+        let object_path = temp_dir.path().join("noop.o");
+        std::fs::create_dir(&object_path).unwrap();
         let object_path_vec = vow_string(object_path.to_str().unwrap());
         let status = unsafe { __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64) };
 
         assert_eq!(status, CLIF_ERR_IO);
+        assert!(object_path.is_dir());
+    }
+
+    /// A regular file blocking a path component that needs to become a
+    /// directory must report the distinct `CLIF_ERR_IO_MKDIR` status, so
+    /// `codegen_failure_diagnostic` can name the directory that failed to be
+    /// created instead of blaming the (never-attempted) object write.
+    #[test]
+    fn finish_reports_a_blocked_parent_directory_as_io_mkdir() {
+        assert_ne!(CLIF_ERR_IO_MKDIR, CLIF_ERR_IO);
+        assert_ne!(CLIF_ERR_IO_MKDIR, -1);
+
+        let ctx = build_noop_ctx();
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let blocking_file = temp_dir.path().join("blocking_file");
+        std::fs::write(&blocking_file, "not a directory").unwrap();
+        let object_path = blocking_file.join("noop.o");
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        let status = unsafe { __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64) };
+
+        assert_eq!(status, CLIF_ERR_IO_MKDIR);
         assert!(!object_path.exists());
+    }
+
+    #[test]
+    fn finish_creates_missing_parent_directories() {
+        let ctx = build_noop_ctx();
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let object_path = temp_dir.path().join("missing").join("deep").join("noop.o");
+        let object_path_vec = vow_string(object_path.to_str().unwrap());
+        let status = unsafe { __vow_clif_finish(ctx, &object_path_vec as *const VowVec as i64) };
+
+        assert_eq!(status, 0);
+        assert!(object_path.is_file());
     }
 
     #[test]

@@ -550,22 +550,23 @@ runtime archive are installed and accessible. When building Vow itself, run
 
 **Phase:** Module loading, Code Generation
 
-**Meaning:** The compiler could not read or write a file. Two build-pipeline
+**Meaning:** The compiler could not read or write a file. Three build-pipeline
 sites produce this code: a `use` declaration naming a module the driver cannot
-read, and a generated object file whose parent directory the backend cannot
-create or write into (permission denied, full disk, read-only filesystem, or a
-path component that is not a directory). Missing output parent directories are
-created automatically. The object bytes are already built by the time the
-write is attempted, so this is the filesystem's answer rather than a backend
-defect — which is why it is not `CodegenFailed`.
-When this code comes from module loading, compilation stops before type-checking,
-so diagnostics do not include follow-on errors for names from the missing module.
+read, a generated object's output directory the backend cannot create, and a
+generated object file the backend cannot write (full disk, read-only
+filesystem, or another write failure). The object bytes are already built by
+the time either the directory creation or the write is attempted, so this is
+the filesystem's answer rather than a backend defect — which is why it is not
+`CodegenFailed`. When this code comes from module loading, compilation stops
+before type-checking, so diagnostics do not include follow-on errors for names
+from the missing module.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
-verify the `-o` destination's parent directory can be created and written to,
-that every existing path component is a directory, and that the filesystem has
-free space. Re-running the same build after fixing the filesystem succeeds;
+the compiler creates missing parent directories automatically; verify that no
+path component is a regular file, that permissions allow creating directories
+and writing the object, and that the filesystem is writable and has free
+space. Re-running the same build after fixing the filesystem succeeds;
 changing the source will not help.
 
 ### VerificationSkipped
