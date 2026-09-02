@@ -36,6 +36,7 @@ BOOTSTRAP_WORKFLOW = WORKFLOWS / "bootstrap.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
 EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
 FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
+RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
 FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
@@ -191,6 +192,30 @@ class CiWorkflowTest(unittest.TestCase):
         for name in ("build-and-test", "build-and-test-macos"):
             with self.subTest(job=name):
                 self.assertIn("concat_vow.sh", jobs[name])
+
+
+class ReleaseWorkflowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        entry = re.compile(
+            r"^\s{10}- os: (\S+)\n"
+            r"\s{12}arch: (\S+)\n"
+            r"\s{12}runner: (\S+)\n"
+            r"\s{12}verify: (true|false)$",
+            re.MULTILINE,
+        )
+        self.matrix = {
+            (os_name, arch): {"runner": runner, "verify": verify}
+            for os_name, arch, runner, verify in entry.findall(text)
+        }
+
+    def test_release_matrix_verifies_supported_platforms(self) -> None:
+        self.assertEqual("true", self.matrix[("linux", "x86_64")]["verify"])
+        self.assertEqual("true", self.matrix[("macos", "aarch64")]["verify"])
+        self.assertEqual(
+            {"runner": "macos-15-intel", "verify": "false"},
+            self.matrix[("macos", "x86_64")],
+        )
 
 
 class FullTestWorkflowTest(unittest.TestCase):
