@@ -2111,23 +2111,18 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, val);
                 }
                 IOP_WDIV | IOP_WREM => {
-                    let val = if let Some(sym) = wide_helper_symbol(op, ity) {
-                        let Some(&fr) = extern_func_refs.get(sym) else {
-                            report_missing_wide_helper(sym);
-                            return -1;
-                        };
-                        emit_divisor_traps(&mut builder, op, ity, arg!(0), arg!(1));
-                        let call = builder.ins().call(fr, &[arg!(0), arg!(1)]);
-                        builder.inst_results(call)[0]
-                    } else {
-                        let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
-                        match (op, signed) {
-                            (IOP_WDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
-                            (IOP_WDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
-                            (IOP_WREM, true) => builder.ins().srem(arg!(0), arg!(1)),
-                            (IOP_WREM, false) => builder.ins().urem(arg!(0), arg!(1)),
-                            _ => unreachable!(),
-                        }
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let Some(val) = emit_integer_div_or_rem(
+                        &mut builder,
+                        &extern_func_refs,
+                        overflow_ref,
+                        op,
+                        ity,
+                        signed,
+                        arg!(0),
+                        arg!(1),
+                    ) else {
+                        return -1;
                     };
                     set_val!(iid, val);
                 }
@@ -2160,34 +2155,18 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, result);
                 }
                 IOP_CDIV | IOP_CREM => {
-                    let wide = wide_helper_symbol(op, ity);
-                    let cl_ty = builder.func.dfg.value_type(arg!(1));
-                    // Cranelift's own `sdiv` traps on `MIN / -1` at the
-                    // narrower widths; the routed 128-bit path has to
-                    // reproduce that, and on `/!` it is an ArithmeticOverflow.
-                    let trap_if = if cl_ty == types::I128 {
-                        wide_divisor_trap_condition(&mut builder, op, ity, arg!(0), arg!(1))
-                    } else {
-                        let zero = builder.ins().iconst(cl_ty, 0);
-                        builder.ins().icmp(IntCC::Equal, arg!(1), zero)
-                    };
-                    emit_overflow_check(&mut builder, trap_if, overflow_ref);
-                    let val = if let Some(sym) = wide {
-                        let Some(&fr) = extern_func_refs.get(sym) else {
-                            report_missing_wide_helper(sym);
-                            return -1;
-                        };
-                        let call = builder.ins().call(fr, &[arg!(0), arg!(1)]);
-                        builder.inst_results(call)[0]
-                    } else {
-                        let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
-                        match (op, signed) {
-                            (IOP_CDIV, true) => builder.ins().sdiv(arg!(0), arg!(1)),
-                            (IOP_CDIV, false) => builder.ins().udiv(arg!(0), arg!(1)),
-                            (IOP_CREM, true) => builder.ins().srem(arg!(0), arg!(1)),
-                            (IOP_CREM, false) => builder.ins().urem(arg!(0), arg!(1)),
-                            _ => unreachable!(),
-                        }
+                    let signed = dk == IDATA_INTEGER && ity_is_signed(dv);
+                    let Some(val) = emit_integer_div_or_rem(
+                        &mut builder,
+                        &extern_func_refs,
+                        overflow_ref,
+                        op,
+                        ity,
+                        signed,
+                        arg!(0),
+                        arg!(1),
+                    ) else {
+                        return -1;
                     };
                     set_val!(iid, val);
                 }
@@ -3022,23 +3001,42 @@ fn wide_iconst(builder: &mut FunctionBuilder<'_>, bits: u128) -> Value {
     builder.ins().iconcat(lo, hi)
 }
 
-/// Build the divisor condition Cranelift traps on for the narrower widths: a
-/// zero divisor always, plus `MIN / -1` for signed division, whose true
-/// quotient has no representation. Signed remainder is excluded deliberately —
-/// `sdiv` traps on `MIN / -1` but `srem` does not, and `i64::MIN % -1` returns
-/// 0 today, which `wrapping_rem` in the helper also gives.
-fn wide_divisor_trap_condition(
+/// Build the condition under which integer division or remainder must abort:
+/// a zero divisor always, plus `MIN / -1` for signed division. Signed
+/// remainder is excluded deliberately: `MIN % -1` is representable as zero.
+fn divisor_abort_condition(
     builder: &mut FunctionBuilder<'_>,
     op: i64,
     ity: i64,
     dividend: Value,
     divisor: Value,
 ) -> Value {
-    let zero = wide_iconst(builder, 0);
+    let cl_ty = builder.func.dfg.value_type(divisor);
+    let zero = if cl_ty == types::I128 {
+        wide_iconst(builder, 0)
+    } else {
+        builder.ins().iconst(cl_ty, 0)
+    };
     let mut condition = builder.ins().icmp(IntCC::Equal, divisor, zero);
-    if ity == ITY_I128 && (op == IOP_WDIV || op == IOP_CDIV) {
-        let min = wide_iconst(builder, i128::MIN as u128);
-        let neg_one = wide_iconst(builder, -1i128 as u128);
+    if ity_is_signed(ity) && (op == IOP_WDIV || op == IOP_CDIV) {
+        let (min, neg_one) = if cl_ty == types::I128 {
+            (
+                wide_iconst(builder, i128::MIN as u128),
+                wide_iconst(builder, -1i128 as u128),
+            )
+        } else {
+            let min = match ity {
+                ITY_I8 => i8::MIN as i64,
+                ITY_I16 => i16::MIN as i64,
+                ITY_I32 => i32::MIN as i64,
+                ITY_I64 => i64::MIN,
+                _ => unreachable!("signed division must have a signed integer type"),
+            };
+            (
+                builder.ins().iconst(cl_ty, min),
+                builder.ins().iconst(cl_ty, -1),
+            )
+        };
         let dividend_is_min = builder.ins().icmp(IntCC::Equal, dividend, min);
         let divisor_is_neg_one = builder.ins().icmp(IntCC::Equal, divisor, neg_one);
         let overflows = builder.ins().band(dividend_is_min, divisor_is_neg_one);
@@ -3047,49 +3045,36 @@ fn wide_divisor_trap_condition(
     condition
 }
 
-/// Trap so 128-bit `/` and `%` abort exactly where `i64` `/` and `%` do
-/// rather than reaching the runtime helper.
-///
-/// The two conditions trap separately so each carries the same `TrapCode`
-/// Cranelift's own lowering uses — `INTEGER_DIVISION_BY_ZERO` for the zero
-/// divisor, `INTEGER_OVERFLOW` for `MIN / -1` (see `isa/*/lower.isle`, which
-/// distinguishes them). The checked operators still merge both conditions via
-/// [`wide_divisor_trap_condition`], because they report a single
-/// `ArithmeticOverflow` through `emit_overflow_check` rather than trapping
-/// with a code.
-fn emit_divisor_traps(
+#[allow(clippy::too_many_arguments)]
+fn emit_integer_div_or_rem(
     builder: &mut FunctionBuilder<'_>,
+    extern_func_refs: &HashMap<String, FuncRef>,
+    overflow_ref: FuncRef,
     op: i64,
     ity: i64,
+    signed: bool,
     dividend: Value,
     divisor: Value,
-) {
-    let zero = wide_iconst(builder, 0);
-    let is_zero = builder.ins().icmp(IntCC::Equal, divisor, zero);
-    emit_conditional_trap(builder, is_zero, TrapCode::INTEGER_DIVISION_BY_ZERO);
+) -> Option<Value> {
+    let abort_if = divisor_abort_condition(builder, op, ity, dividend, divisor);
+    emit_overflow_check(builder, abort_if, overflow_ref);
 
-    if ity == ITY_I128 && (op == IOP_WDIV || op == IOP_CDIV) {
-        let min = wide_iconst(builder, i128::MIN as u128);
-        let neg_one = wide_iconst(builder, -1i128 as u128);
-        let dividend_is_min = builder.ins().icmp(IntCC::Equal, dividend, min);
-        let divisor_is_neg_one = builder.ins().icmp(IntCC::Equal, divisor, neg_one);
-        let overflows = builder.ins().band(dividend_is_min, divisor_is_neg_one);
-        emit_conditional_trap(builder, overflows, TrapCode::INTEGER_OVERFLOW);
+    if let Some(sym) = wide_helper_symbol(op, ity) {
+        let Some(&func_ref) = extern_func_refs.get(sym) else {
+            report_missing_wide_helper(sym);
+            return None;
+        };
+        let call = builder.ins().call(func_ref, &[dividend, divisor]);
+        return Some(builder.inst_results(call)[0]);
     }
-}
 
-/// Trap with `code` when `condition` holds, continuing in a fresh block.
-fn emit_conditional_trap(builder: &mut FunctionBuilder<'_>, condition: Value, code: TrapCode) {
-    let trap_block = builder.create_block();
-    let cont_block = builder.create_block();
-    builder
-        .ins()
-        .brif(condition, trap_block, &[], cont_block, &[]);
-    builder.switch_to_block(trap_block);
-    builder.seal_block(trap_block);
-    builder.ins().trap(code);
-    builder.switch_to_block(cont_block);
-    builder.seal_block(cont_block);
+    let is_div = op == IOP_WDIV || op == IOP_CDIV;
+    Some(match (is_div, signed) {
+        (true, true) => builder.ins().sdiv(dividend, divisor),
+        (true, false) => builder.ins().udiv(dividend, divisor),
+        (false, true) => builder.ins().srem(dividend, divisor),
+        (false, false) => builder.ins().urem(dividend, divisor),
+    })
 }
 
 fn report_missing_wide_helper(sym: &str) {

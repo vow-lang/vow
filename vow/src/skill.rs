@@ -1628,6 +1628,11 @@ mutable, arena-owned copy, use `String::from("...")`.
 Wrapping operators silently wrap on overflow. For unsigned operands, including
 `u8`, division and remainder use unsigned semantics.
 
+Division and remainder are the exception when no wrapped result exists. A zero
+divisor aborts with `ArithmeticOverflow` for `/`, `%`, `/!`, and `%!`; signed
+`MIN / -1` likewise aborts for both `/` and `/!`. These rules apply at every
+integer width. Signed `MIN % -1` is representable as `0` and does not abort.
+
 For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
 native floating-point arithmetic. Unchecked `%` is accepted by the frontend
 and lowers to a floating-point remainder opcode, but native backends do not yet
@@ -1665,9 +1670,9 @@ never hides a program that can die at the operator. Widths `i8`/`u8` through
 `/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler
 routes them through runtime helpers; this is invisible in the language, and
 their trap behaviour matches the narrower widths exactly. Division or
-remainder by zero aborts, as does `/` and `/!` on `MIN / -1` for `i128`, whose
-quotient is not representable. `MIN % -1` is `0` and does not abort, at every
-width.
+remainder by zero aborts at every width, as does signed `/` and `/!` on
+`MIN / -1`, whose quotient is not representable. `MIN % -1` is `0` and does
+not abort.
 
 128-bit values are also **scalar-only** for now. Locals, parameters, returns,
 and temporaries carry both limbs correctly, but a 128-bit value placed inside
@@ -2889,13 +2894,14 @@ that path produces `Unverified` (exit 0).
 
 The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits
 with whatever its `main` returns, with one reserved exception: any runtime abort — out-of-memory,
-contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal
-mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`**. By
-convention `134` is reserved for aborts: it is never produced *spontaneously* by a normal `main`
-return, so a program that does not itself return or `process_exit(134)` can treat any `134` as a
-runtime abort rather than an application result. The reservation is a convention, not enforced — a
-program that deliberately exits `134` opts out. See the *Exit status* note under Runtime Errors in
-[`errors.md`](errors.md) for the full list and rationale.
+contract violation, arithmetic overflow, division or remainder by zero, unwrap-on-`None`,
+index-out-of-bounds, region-literal mutation, stack overflow, or a sanitizer trap — terminates with
+the reserved status **`134`**. By convention `134` is reserved for aborts: it is never produced
+*spontaneously* by a normal `main` return, so a program that does not itself return or
+`process_exit(134)` can treat any `134` as a runtime abort rather than an application result. The
+reservation is a convention, not enforced — a program that deliberately exits `134` opts out. See
+the *Exit status* note under Runtime Errors in [`errors.md`](errors.md) for the full list and
+rationale.
 
 ## Build Output JSON
 
@@ -3177,7 +3183,9 @@ acts on the exact value needs an arbitrary-precision number parser. See
 {"error":"ArithmeticOverflow"}
 ```
 
-Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runtime.
+Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows, or
+when checked or unchecked division/remainder has no result because the divisor
+is zero or signed division evaluates `MIN / -1`.
 
 ### UnwrapOnNone
 
@@ -4779,17 +4787,24 @@ number parser; a default `double` parser silently rounds it.
 
 ### ArithmeticOverflow
 
-**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`) overflows at runtime.
+**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`)
+overflows at runtime; or checked or unchecked division/remainder encounters a
+zero divisor; or signed `/` or `/!` evaluates `MIN / -1`.
 
 ```json
 {"error":"ArithmeticOverflow"}
 ```
 
-**Fix:** Use wrapping arithmetic (`+`, `-`, etc.) if overflow is acceptable, or add bounds contracts to prevent overflow.
+**Fix:** For addition, subtraction, or multiplication, use wrapping arithmetic
+if overflow is acceptable, or add bounds contracts to prevent overflow. For
+division and remainder, rule out a zero divisor and, for signed division, the
+`MIN / -1` case.
 
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run. A checked operator's abort is part of the operator's
-meaning, not a debug-mode check: wrapping arithmetic is spelled `+`, `-`, `*`.
+meaning, not a debug-mode check. Division and remainder also abort when no
+result exists, regardless of whether their checked or unchecked spelling is
+used.
 
 ### UnwrapOnNone
 
@@ -6763,6 +6778,11 @@ mutable, arena-owned copy, use `String::from("...")`.
 Wrapping operators silently wrap on overflow. For unsigned operands, including
 `u8`, division and remainder use unsigned semantics.
 
+Division and remainder are the exception when no wrapped result exists. A zero
+divisor aborts with `ArithmeticOverflow` for `/`, `%`, `/!`, and `%!`; signed
+`MIN / -1` likewise aborts for both `/` and `/!`. These rules apply at every
+integer width. Signed `MIN % -1` is representable as `0` and does not abort.
+
 For `f32` and `f64`, the unchecked `+`, `-`, `*`, and `/` operators lower to
 native floating-point arithmetic. Unchecked `%` is accepted by the frontend
 and lowers to a floating-point remainder opcode, but native backends do not yet
@@ -6800,9 +6820,9 @@ never hides a program that can die at the operator. Widths `i8`/`u8` through
 `/!`, `%!`, and `*!` have no native lowering at 128-bit width, so the compiler
 routes them through runtime helpers; this is invisible in the language, and
 their trap behaviour matches the narrower widths exactly. Division or
-remainder by zero aborts, as does `/` and `/!` on `MIN / -1` for `i128`, whose
-quotient is not representable. `MIN % -1` is `0` and does not abort, at every
-width.
+remainder by zero aborts at every width, as does signed `/` and `/!` on
+`MIN / -1`, whose quotient is not representable. `MIN % -1` is `0` and does
+not abort.
 
 128-bit values are also **scalar-only** for now. Locals, parameters, returns,
 and temporaries carry both limbs correctly, but a 128-bit value placed inside
@@ -8025,13 +8045,14 @@ that path produces `Unverified` (exit 0).
 
 The table above is the exit status of the `vowc` **compiler**. A **compiled Vow program** exits
 with whatever its `main` returns, with one reserved exception: any runtime abort — out-of-memory,
-contract violation, arithmetic overflow, unwrap-on-`None`, index-out-of-bounds, region-literal
-mutation, stack overflow, or a sanitizer trap — terminates with the reserved status **`134`**. By
-convention `134` is reserved for aborts: it is never produced *spontaneously* by a normal `main`
-return, so a program that does not itself return or `process_exit(134)` can treat any `134` as a
-runtime abort rather than an application result. The reservation is a convention, not enforced — a
-program that deliberately exits `134` opts out. See the *Exit status* note under Runtime Errors in
-[`errors.md`](errors.md) for the full list and rationale.
+contract violation, arithmetic overflow, division or remainder by zero, unwrap-on-`None`,
+index-out-of-bounds, region-literal mutation, stack overflow, or a sanitizer trap — terminates with
+the reserved status **`134`**. By convention `134` is reserved for aborts: it is never produced
+*spontaneously* by a normal `main` return, so a program that does not itself return or
+`process_exit(134)` can treat any `134` as a runtime abort rather than an application result. The
+reservation is a convention, not enforced — a program that deliberately exits `134` opts out. See
+the *Exit status* note under Runtime Errors in [`errors.md`](errors.md) for the full list and
+rationale.
 
 ## Build Output JSON
 
@@ -8313,7 +8334,9 @@ acts on the exact value needs an arbitrary-precision number parser. See
 {"error":"ArithmeticOverflow"}
 ```
 
-Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runtime.
+Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows, or
+when checked or unchecked division/remainder has no result because the divisor
+is zero or signed division evaluates `MIN / -1`.
 
 ### UnwrapOnNone
 
@@ -9918,17 +9941,24 @@ number parser; a default `double` parser silently rounds it.
 
 ### ArithmeticOverflow
 
-**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`) overflows at runtime.
+**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`)
+overflows at runtime; or checked or unchecked division/remainder encounters a
+zero divisor; or signed `/` or `/!` evaluates `MIN / -1`.
 
 ```json
 {"error":"ArithmeticOverflow"}
 ```
 
-**Fix:** Use wrapping arithmetic (`+`, `-`, etc.) if overflow is acceptable, or add bounds contracts to prevent overflow.
+**Fix:** For addition, subtraction, or multiplication, use wrapping arithmetic
+if overflow is acceptable, or add bounds contracts to prevent overflow. For
+division and remainder, rule out a zero divisor and, for signed division, the
+`MIN / -1` case.
 
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run. A checked operator's abort is part of the operator's
-meaning, not a debug-mode check: wrapping arithmetic is spelled `+`, `-`, `*`.
+meaning, not a debug-mode check. Division and remainder also abort when no
+result exists, regardless of whether their checked or unchecked spelling is
+used.
 
 ### UnwrapOnNone
 

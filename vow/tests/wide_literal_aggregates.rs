@@ -567,25 +567,17 @@ fn wide_division_and_checked_multiply_run_through_runtime_helpers() {
     }
 }
 
-/// The divisor-zero trap on the routed path must abort rather than reach the
-/// runtime helper, matching what `i64 / 0` does today.
-///
-/// The two operator families abort differently, and deliberately so. A
-/// *checked* operator's abort is specified behaviour, so it is reported:
-/// `__vow_arithmetic_overflow` prints the `ArithmeticOverflow` envelope and
-/// exits the reserved status `134` (`cli.md`), which is a normal exit and so
-/// carries an exit code. The *unchecked* `/` and `%` reach the backend's own
-/// divisor trap, which is a `ud2`: the process dies on `SIGILL` and has no
-/// exit code at all. Asserting only "does not return" would not distinguish
-/// them, and would pass again if a checked operator regressed to a bare trap.
+/// Every divisor-zero abort on the routed path must use the runtime reporter,
+/// regardless of whether the source operator is checked or unchecked. This
+/// keeps the abort machine-readable and gives it the reserved exit status 134.
 #[test]
 fn wide_division_by_zero_traps() {
     ensure_runtime_archive();
-    for (name, expression, diagnosed) in [
-        ("div", "x / y", false),
-        ("rem", "x % y", false),
-        ("checked_div", "x /! y", true),
-        ("checked_rem", "x %! y", true),
+    for (name, expression) in [
+        ("div", "x / y"),
+        ("rem", "x % y"),
+        ("checked_div", "x /! y"),
+        ("checked_rem", "x %! y"),
     ] {
         let dir = tempfile::TempDir::new().unwrap();
         let source_path = dir.path().join("wide_div_zero.vow");
@@ -619,22 +611,14 @@ fn wide_division_by_zero_traps() {
             .output()
             .expect("failed to run compiled program");
         let stderr = String::from_utf8_lossy(&run.stderr);
-        if diagnosed {
-            assert_eq!(
-                run.status.code(),
-                Some(134),
-                "{name}: a checked operator's divisor-zero abort must exit 134,                  not die on a bare trap; stderr: {stderr:?}"
-            );
-            assert!(
-                stderr.contains(r#"{"error":"ArithmeticOverflow"}"#),
-                "{name}: a checked operator's abort must be diagnosed; stderr: {stderr:?}"
-            );
-        } else {
-            assert_eq!(
-                run.status.code(),
-                None,
-                "{name}: division by zero must abort, not return"
-            );
-        }
+        assert_eq!(
+            run.status.code(),
+            Some(134),
+            "{name}: a divisor-zero abort must exit 134, not die on a bare trap; stderr: {stderr:?}"
+        );
+        assert!(
+            stderr.contains(r#"{"error":"ArithmeticOverflow"}"#),
+            "{name}: a divisor-zero abort must be diagnosed; stderr: {stderr:?}"
+        );
     }
 }

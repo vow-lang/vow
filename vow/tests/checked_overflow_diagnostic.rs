@@ -202,3 +202,40 @@ fn checked_operators_are_diagnosed_in_release_at_every_width() {
         );
     }
 }
+
+#[test]
+fn division_abort_cases_are_diagnosed_in_release() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cases = [
+        ("i32_div_zero", "i32", "10", "/", "0"),
+        ("i64_div_zero", "i64", "10", "/", "0"),
+        ("u32_div_zero", "u32", "10", "/", "0"),
+        ("i32_rem_zero", "i32", "10", "%", "0"),
+        ("i8_div_min", "i8", "-128", "/", "-1"),
+        ("i32_div_min", "i32", "-2147483648", "/", "-1"),
+        ("i64_div_min", "i64", "-9223372036854775808", "/", "-1"),
+        (
+            "i64_checked_div_min",
+            "i64",
+            "-9223372036854775808",
+            "/!",
+            "-1",
+        ),
+    ];
+
+    for (tag, ty, seed, op, rhs) in cases {
+        let source = overflow_program(ty, seed, op, rhs);
+        let result = build_and_run(dir.path(), &source, Some("release"), tag);
+        assert_eq!(
+            result.exit,
+            Some(ABORT_EXIT),
+            "{tag}: `{op}` must abort with {ABORT_EXIT}, not a bare trap; stderr: {:?}",
+            result.stderr
+        );
+        assert!(
+            result.stderr.contains(OVERFLOW_JSON),
+            "{tag}: `{op}` must emit {OVERFLOW_JSON}; got: {:?}",
+            result.stderr
+        );
+    }
+}

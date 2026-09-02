@@ -661,17 +661,24 @@ number parser; a default `double` parser silently rounds it.
 
 ### ArithmeticOverflow
 
-**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`) overflows at runtime.
+**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`)
+overflows at runtime; or checked or unchecked division/remainder encounters a
+zero divisor; or signed `/` or `/!` evaluates `MIN / -1`.
 
 ```json
 {"error":"ArithmeticOverflow"}
 ```
 
-**Fix:** Use wrapping arithmetic (`+`, `-`, etc.) if overflow is acceptable, or add bounds contracts to prevent overflow.
+**Fix:** For addition, subtraction, or multiplication, use wrapping arithmetic
+if overflow is acceptable, or add bounds contracts to prevent overflow. For
+division and remainder, rule out a zero divisor and, for signed division, the
+`MIN / -1` case.
 
 The abort is emitted in every build mode, release included, so this cannot be
 deferred to a debug run. A checked operator's abort is part of the operator's
-meaning, not a debug-mode check: wrapping arithmetic is spelled `+`, `-`, `*`.
+meaning, not a debug-mode check. Division and remainder also abort when no
+result exists, regardless of whether their checked or unchecked spelling is
+used.
 
 ### UnwrapOnNone
 

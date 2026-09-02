@@ -1,9 +1,11 @@
-// TEST: exit 132
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
 module I128DivMinByNegOne
 
 // `MIN / -1` has no representable quotient. Cranelift's own `sdiv` traps on it
 // at the narrower widths (`i64::MIN / -1` aborts today); the routed 128-bit
-// path emits that check itself, so this must abort rather than wrap to MIN.
+// path reports that check itself, so this must diagnose the abort rather than
+// wrap to MIN or die on a bare trap.
 fn neg_one() -> i128 {
     -1
 }

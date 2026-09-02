@@ -1,9 +1,10 @@
-// TEST: exit 132
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
 module I128DivByZero
 
 // 128-bit `/` routes through a vow-runtime helper, so the divisor-zero trap is
-// emitted by the backend rather than by Cranelift's own `sdiv` lowering. It
-// must still abort exactly like `i64 / 0` does, in every build mode.
+// reported by the backend before the helper call. It must abort with the same
+// machine-readable diagnostic as every other arithmetic runtime abort.
 fn zero() -> i128 {
     0
 }

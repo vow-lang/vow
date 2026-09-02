@@ -1,16 +1,16 @@
 // TEST: exit 134
 // TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
-module I128RemByZero
+module I64DivByZero
 
-fn zero() -> i128 {
+fn zero() -> i64 {
     0
 }
 
-fn remainder() -> i128 {
-    10 % zero()
+fn divide() -> i64 {
+    10 / zero()
 }
 
 fn main() -> i32 {
-    remainder();
+    divide();
     0
 }
