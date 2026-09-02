@@ -1,0 +1,18 @@
+// Float values have no runtime print or float-to-integer conversion yet, so
+// this fixture guards successful codegen, linking, and execution. The verify
+// fixture proves the arithmetic result semantics independently.
+module FloatArithmetic
+
+fn add_f32(a: f32, b: f32) -> f32 { a + b }
+fn sub_f32(a: f32, b: f32) -> f32 { a - b }
+fn mul_f32(a: f32, b: f32) -> f32 { a * b }
+fn div_f32(a: f32, b: f32) -> f32 { a / b }
+
+fn add_f64(a: f64, b: f64) -> f64 { a + b }
+fn sub_f64(a: f64, b: f64) -> f64 { a - b }
+fn mul_f64(a: f64, b: f64) -> f64 { a * b }
+fn div_f64(a: f64, b: f64) -> f64 { a / b }
+
+fn main() -> i32 {
+    0
+}
