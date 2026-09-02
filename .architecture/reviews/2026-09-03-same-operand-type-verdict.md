@@ -198,4 +198,71 @@ makes a `vow-types` seam the safer unattended pick.
 
 ## Design
 
-_Written in step 4 (design-it-twice + adjudication); appended after this section was first committed._
+Design-it-twice: three parallel sub-agents each produced a radically different interface for the
+`same_operand_verdict` seam; a fourth sub-agent that authored none of them adjudicated against
+depth → locality → seam placement → test surface → blast radius.
+
+**Winner — Design C: `Result<Ty, OperandError>`.**
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperandClass { Numeric, Integer }        // .admits(&Ty) selects the class predicate
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OperandError { WrongClass { lhs: Ty }, Mismatch { lhs: Ty, rhs: Ty } }
+
+fn same_operand_ty(lhs: Ty, rhs: Ty, class: OperandClass) -> Result<Ty, OperandError> {
+    if lhs == Ty::Never { return Ok(rhs); }   // (b) Never short-circuits before the class check
+    if rhs == Ty::Never { return Ok(lhs); }
+    let (lhs, rhs) = absorb_lit_int_operand(lhs, rhs);   // (a) failures carry post-absorb types
+    if !class.admits(&lhs) { return Err(OperandError::WrongClass { lhs }); }
+    if lhs != rhs { return Err(OperandError::Mismatch { lhs, rhs }); }
+    Ok(lhs)
+}
+```
+
+Each twin collapses to `match same_operand_ty(lhs, rhs, OperandClass::Numeric) { Ok(ty) => ty,
+Err(WrongClass{lhs}) => { emit; Ty::Unit }, Err(Mismatch{lhs,rhs}) => { emit; Ty::Unit } }`, keeping
+its four message/hint literals inline at the call site. `ErrorCode::TypeMismatch` is shared.
+
+- **Depth (decisive)** — all three designs hide the same decision; C hides it behind the strictly
+  smallest novel surface. The success bucket folds into the prelude's `Ok`, so the only new type a
+  caller learns is the two-variant `OperandError`; the happy path reads `Ok(ty) => ty` with the bare
+  prelude name.
+- **Locality / test surface** — C ties the runner-up: the decision (including the subtle
+  `Never`-before-absorb ordering and the lhs-only class check) lives in one pure function, unit-tested
+  on `(Ty, Ty, OperandClass)` with no `Checker`; the message strings stay inline at the two call sites.
+- **Seam placement** — a real seam (two adapters, numeric and integer) at the one axis that varies, the
+  class predicate, named at the call site via `OperandClass::Numeric` rather than a leaked predicate.
+
+**Runner-up design — Design A: bespoke `enum SameOperandVerdict { Ok(Ty), WrongClass(Ty),
+Mismatch(Ty, Ty) }`.** The direct `cast_verdict` twin; identical to C on locality, seam placement, test
+surface, and blast radius. It lost on depth alone: its `SameOperandVerdict::Ok(Ty)` re-implements the
+semantics of `Result::Ok` and must be *fully qualified in every match arm*, because a bare `Ok(x)`
+pattern binds to the prelude's `Result::Ok` and fails to type-check (confirmed: even `cast_verdict`
+writes `CastVerdict::Ok` at its call site). `cast_verdict` is bespoke only because of its non-error
+`LiteralRange` follow-up bucket, which fits neither `Option` nor `Result`; this seam has no such
+bucket — exactly one success value and two distinct failure reasons — so it is textbook `Result<Ty, E>`
+and *extends* the file's established `Option`-returning-seam convention (`method_result_type`,
+`integer_type_range`, `merge_result_ty`) rather than diverging from it.
+
+**Eliminated — Design B: data-driven `OperandClass` policy struct + shared `check_operand_class`
+emitter.** A five-field struct of message fragments is a wide, shallow interface (fails depth); it
+splits message assembly across a `format!` template that does not cleanly express the "a numeric type"
+vs "an integer type" article difference or the non-parallel "matching types" / "matching integer types"
+hint tail — forcing an extra eight-string equality test to avoid silent corruption (fails locality and
+test surface). Its own author recommended against it: with only two operand classes and no third
+operator family in the tree, the flexibility is speculative (YAGNI). The correct promotion trigger is a
+*third* operator family arriving with the same `Never`→absorb→class→mismatch shape.
+
+**Corrections applied to the winner before implementation** (from the adjudicator):
+
+- Derive `OperandError` as `Debug, Clone, PartialEq, Eq` (holds a non-`Copy` `Ty`); `OperandClass` as
+  `Debug, Clone, Copy, PartialEq, Eq`.
+- Do **not** symmetrize the class check — it tests `lhs` only, after absorb, so `(I64, Str, Numeric)`
+  yields `Mismatch{I64, Str}` (not `WrongClass`); pin this.
+- Move the message text verbatim; the unguarded "a/an" article and the non-parallel hint tail are the
+  exact copy-paste-swap bug the refactor risks, so add a `Checker`-level assertion on each twin's
+  `WrongClass` message (no golden test covers it today).
+- Pin the non-obvious `(LitInt, F64, Numeric) → Mismatch{LitInt, F64}` edge: absorb does not fire
+  (`F64` is not an integer), `LitInt` passes the numeric class check, then mismatches the float.
