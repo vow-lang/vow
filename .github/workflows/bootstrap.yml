@@ -110,7 +110,9 @@ jobs:
     # with the arm64 macOS ESBMC artifact, while Stage 3 skips ESBMC to roughly
     # halve wall time. Verification does not affect codegen, so the SHA-256
     # fixed-point check remains meaningful.
-    runs-on: macos-latest
+    # Pinned (not macos-latest) to match release.yml's macos/aarch64 leg: both
+    # jobs depend on the runner resolving to arm64 for the install-esbmc pin.
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
