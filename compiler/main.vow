@@ -1002,7 +1002,7 @@ fn replay_scan_stderr(err: String) -> ReplayScan {
 // line (rightmost wins), or "" if the line has none. The kind may be
 // "VowViolation" — the caller decides what that means for this line.
 fn replay_last_error_kind_in_line(line: String) -> String {
-    let marker: String = String::from("\"error\":\"");
+    let marker: String = String::from("{\"error\":\"");
     let n: i64 = line.len();
     let m: i64 = marker.len();
     let mut i: i64 = 0;
