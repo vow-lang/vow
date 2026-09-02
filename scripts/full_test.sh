@@ -423,6 +423,29 @@ for vow_file in examples/*.vow; do
     echo "$rust_json" > "$TMPDIR/rust_${name}.json"
     echo "$self_json" > "$TMPDIR/self_${name}.json"
 done
+
+missing_parent_fixture="examples/hello.vow"
+rust_missing_parent_output="$TMPDIR/rust_missing_output_parent/out"
+self_missing_parent_output="$TMPDIR/self_missing_output_parent/out"
+rust_json="" self_json="" rust_exit=0 self_exit=0
+rust_json=$($RUST build --no-verify "$missing_parent_fixture" -o "$rust_missing_parent_output" 2>/dev/null) || rust_exit=$?
+self_json=$(run_self build --no-verify "$missing_parent_fixture" -o "$self_missing_parent_output" 2>/dev/null) || self_exit=$?
+
+if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
+    fail "build-no-verify/missing-output-parent" "empty output (rust=$rust_exit, self=$self_exit)"
+else
+    compare_json "build-no-verify/missing-output-parent" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$missing_parent_fixture"
+fi
+
+for name_output in "rust:$rust_missing_parent_output" "self:$self_missing_parent_output"; do
+    compiler="${name_output%%:*}"
+    output="${name_output#*:}"
+    if [ -x "$output" ]; then
+        pass "build-no-verify/${compiler}-creates-output-parent"
+    else
+        fail "build-no-verify/${compiler}-creates-output-parent" "missing executable: $output"
+    fi
+done
 echo ""
 
 # ─── Section 2: Verify ─────────────────────────────────────────────
@@ -735,6 +758,52 @@ if [ ${#errors[@]} -eq 0 ]; then
     pass "$name"
 else
     fail "$name" "$(IFS='; '; echo "${errors[*]}")"
+fi
+echo ""
+
+name="verify_jobs_reports_first_hard_failure"
+fixture="tests/verify-fail/verify_jobs_multi_hard_failure.vow"
+errors=()
+for mode in verify build; do
+    rust_json="" self_json="" rust_exit=0 self_exit=0
+    case "$mode" in
+        verify)
+            rust_json=$("$RUST" verify --no-cache --verify-jobs 3 "$fixture" 2>/dev/null) || rust_exit=$?
+            self_json=$(run_self verify --no-cache --verify-jobs 3 "$fixture" 2>/dev/null) || self_exit=$?
+            ;;
+        build)
+            rust_json=$("$RUST" build --no-cache --verify-jobs 3 "$fixture" -o "$TMPDIR/multi_hard_rust" 2>/dev/null) || rust_exit=$?
+            self_json=$(run_self build --no-cache --verify-jobs 3 "$fixture" -o "$TMPDIR/multi_hard_self" 2>/dev/null) || self_exit=$?
+            ;;
+    esac
+
+    compare_json "$name/$mode" "$rust_json" "$self_json" "$rust_exit" "$self_exit" "$fixture"
+    for compiler in rust self; do
+        if [ "$compiler" = "rust" ]; then
+            result_json="$rust_json"
+            result_exit="$rust_exit"
+        else
+            result_json="$self_json"
+            result_exit="$self_exit"
+        fi
+        actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$result_json" 2>/dev/null) || actual_status=""
+        ce_count=$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1]).get('counterexamples') or []))" "$result_json" 2>/dev/null) || ce_count=""
+        ce_function=$(python3 -c "import json,sys; c=json.loads(sys.argv[1]).get('counterexamples') or []; print(c[0].get('function','') if c else '')" "$result_json" 2>/dev/null) || ce_function=""
+        if [ "$result_exit" -eq 0 ]; then
+            errors+=("$mode/$compiler exited 0")
+        elif [ "$actual_status" != "VerifyFailed" ]; then
+            errors+=("$mode/$compiler status=$actual_status")
+        elif [ "$ce_count" != "1" ]; then
+            errors+=("$mode/$compiler counterexamples=$ce_count")
+        elif [ "$ce_function" != "first_bad" ]; then
+            errors+=("$mode/$compiler counterexample function=$ce_function")
+        fi
+    done
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "$name/policy"
+else
+    fail "$name/policy" "$(IFS='; '; echo "${errors[*]}")"
 fi
 echo ""
 
@@ -1221,7 +1290,7 @@ fi
 rust_human=$($RUST --help --human 2>/dev/null) || true
 self_human=$(run_self --help --human 2>/dev/null) || true
 
-if echo "$rust_human" | grep -q "USAGE" && echo "$self_human" | grep -q "USAGE"; then
+if [[ "$rust_human" == *USAGE* ]] && [[ "$self_human" == *USAGE* ]]; then
     pass "help/human"
 else
     fail "help/human" "human help output missing USAGE"

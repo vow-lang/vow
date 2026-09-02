@@ -534,11 +534,11 @@ fn inst_len_by_id(f: IrFunction, inst_id: i64) -> i64 {
 
 fn build_ce_from_result(f: IrFunction, ir_mod: IrModule, vr: VerifyResult, path: String) -> VerifyCE {
     let vow_id: i64 = vr.vow_id;
-    // Rust serializes an ESBMC failure with no `vow:N` label as public
-    // `vow_id: 0` (`Counterexample.vow_id.unwrap_or(0)`). Keep the raw `-1`
-    // sentinel internally for vow matching, but do not leak it into the JSON API.
+    // Keep the raw `-1` sentinel internally for vow matching. The JSON API uses
+    // a reserved non-contract id so an unattributed property cannot collide
+    // with the function's real vow 0.
     let public_vow_id: i64 = {
-        if vow_id < 0 { 0 } else { vow_id }
+        if vow_id < 0 { verifier_unattributed_vow_id() } else { vow_id }
     };
     let mut ce_violation: String = String::from("");
     let mut ce_blame: i64 = DIAG_BLAME_NONE();
@@ -789,8 +789,8 @@ fn replay_one_ce(ce: VerifyCE, fns: Vec<IrFunction>, path: String, argv0: String
     }
     // Synthetic verifier-only ids never match a runtime-emitted vow_id, so an
     // exact id comparison would always diverge — skip them.
-    if ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() {
-        return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op sentinel)"));
+    if ce.vow_id == caller_precondition_vow_id() || ce.vow_id == unsupported_op_vow_id() || ce.vow_id == verifier_unattributed_vow_id() {
+        return replay_skip(String::from("replay: synthetic counterexample id (caller-precondition / unsupported-op / unattributed-property sentinel)"));
     }
     let fi: i64 = replay_find_fn(fns, ce.function);
     if fi < 0 {
@@ -1337,7 +1337,9 @@ fn verify_collect_and_report(
         if st == VERIFY_FAILED() {
             eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
             emit_ce_vars(vr);
-            ces.push(build_ce_from_result(f, ir_mod, vr, path));
+            if ces.len() == 0 {
+                ces.push(build_ce_from_result(f, ir_mod, vr, path));
+            }
             return 0;
         }
         if st == VERIFY_TIMEOUT() {
@@ -1372,7 +1374,9 @@ fn verify_collect_and_report(
     if st == VERIFY_FAILED() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
         emit_ce_vars(vr);
-        ces.push(build_ce_from_result(f, ir_mod, vr, path));
+        if ces.len() == 0 {
+            ces.push(build_ce_from_result(f, ir_mod, vr, path));
+        }
         return 0;
     }
     if st == VERIFY_TIMEOUT() || st == VERIFY_UNKNOWN() {
@@ -5144,6 +5148,14 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("For a multi-function `verify` or verified `build`, a halt-class result (definitive\n"));
+    r.push_str(String::from("counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function\n"));
+    r.push_str(String::from("checks from being launched. Checks already claimed by parallel workers finish, and the compiler\n"));
+    r.push_str(String::from("reports the halt from the lowest module-declaration-order function in that claimed set. Therefore\n"));
+    r.push_str(String::from("`counterexamples[]` contains at most one entry; a reported soft failure leaves it empty and uses\n"));
+    r.push_str(String::from("`verify_status` instead. Fix the reported failure and run verification again to surface a later\n"));
+    r.push_str(String::from("failure.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
@@ -5214,8 +5226,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("argument expression.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `blame` is `\"none\"`, `violation` describes the failed verifier-model check\n"));
-    r.push_str(String::from("(such as collection bounds or capacity, unwrap-on-None, or shift count) rather\n"));
-    r.push_str(String::from("than exposing raw verifier output.\n"));
+    r.push_str(String::from("(such as division by zero, collection bounds or capacity, unwrap-on-None, or\n"));
+    r.push_str(String::from("shift count) rather than exposing raw verifier output.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
@@ -5227,7 +5239,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
-    r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
+    r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |\n"));
     r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
     r.push_str(String::from("\n"));
@@ -6893,16 +6905,21 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Two build-pipeline\n"));
     r.push_str(String::from("sites produce this code: a `use` declaration naming a module the driver cannot\n"));
-    r.push_str(String::from("read, and a generated object file the backend cannot write (unwritable output\n"));
-    r.push_str(String::from("directory, full disk, read-only filesystem). The object bytes are already\n"));
-    r.push_str(String::from("built by the time the write is attempted, so this is the filesystem's answer\n"));
-    r.push_str(String::from("rather than a backend defect -- which is why it is not `CodegenFailed`.\n"));
+    r.push_str(String::from("read, and a generated object file whose parent directory the backend cannot\n"));
+    r.push_str(String::from("create or write into (permission denied, full disk, read-only filesystem, or a\n"));
+    r.push_str(String::from("path component that is not a directory). Missing output parent directories are\n"));
+    r.push_str(String::from("created automatically. The object bytes are already built by the time the\n"));
+    r.push_str(String::from("write is attempted, so this is the filesystem's answer rather than a backend\n"));
+    r.push_str(String::from("defect -- which is why it is not `CodegenFailed`.\n"));
+    r.push_str(String::from("When this code comes from module loading, compilation stops before type-checking,\n"));
+    r.push_str(String::from("so diagnostics do not include follow-on errors for names from the missing module.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
     r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
-    r.push_str(String::from("verify the `-o` destination's parent directory exists and is writable, and\n"));
-    r.push_str(String::from("that the filesystem has free space. Re-running the same build after fixing the\n"));
-    r.push_str(String::from("filesystem succeeds; changing the source will not help.\n"));
+    r.push_str(String::from("verify the `-o` destination's parent directory can be created and written to,\n"));
+    r.push_str(String::from("that every existing path component is a directory, and that the filesystem has\n"));
+    r.push_str(String::from("free space. Re-running the same build after fixing the filesystem succeeds;\n"));
+    r.push_str(String::from("changing the source will not help.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));
@@ -6948,6 +6965,24 @@ fn skill_bundle() -> String {
     r.push_str(String::from("**Fix:** If the abort is unreachable in practice, say so in the contract -- a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made -- the counterexample is the actionable finding.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### VerifierAssertionUnattributed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Verification\n"));
+    r.push_str(String::from("**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: \"none\"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"VerifierAssertionUnattributed\",\n"));
+    r.push_str(String::from("  \"severity\": \"error\",\n"));
+    r.push_str(String::from("  \"message\": \"verification failed in `remainder` on an unattributed property: division or remainder by zero\",\n"));
+    r.push_str(String::from("  \"span\": { \"file\": \"\", \"offset\": 0, \"length\": 0 }\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Runtime Errors\n"));
     r.push_str(String::from("\n"));
@@ -8294,7 +8329,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    \"vow_id\": {\n"));
     r.push_str(String::from("      \"type\": \"integer\",\n"));
     r.push_str(String::from("      \"minimum\": 0,\n"));
-    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause\"\n"));
+    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"source\": {\n"));
     r.push_str(String::from("      \"oneOf\": [\n"));
@@ -8433,7 +8468,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
-    r.push_str(String::from("        \"RegionRootEscape\"\n"));
+    r.push_str(String::from("        \"RegionRootEscape\",\n"));
+    r.push_str(String::from("        \"VerifierAssertionUnattributed\"\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"description\": \"Machine-readable error code\"\n"));
     r.push_str(String::from("    },\n"));
@@ -10261,6 +10297,14 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: \"panicked\"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("For a multi-function `verify` or verified `build`, a halt-class result (definitive\n"));
+    r.push_str(String::from("counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function\n"));
+    r.push_str(String::from("checks from being launched. Checks already claimed by parallel workers finish, and the compiler\n"));
+    r.push_str(String::from("reports the halt from the lowest module-declaration-order function in that claimed set. Therefore\n"));
+    r.push_str(String::from("`counterexamples[]` contains at most one entry; a reported soft failure leaves it empty and uses\n"));
+    r.push_str(String::from("`verify_status` instead. Fix the reported failure and run verification again to surface a later\n"));
+    r.push_str(String::from("failure.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
@@ -10331,8 +10375,8 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("argument expression.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("When `blame` is `\"none\"`, `violation` describes the failed verifier-model check\n"));
-    r.push_str(String::from("(such as collection bounds or capacity, unwrap-on-None, or shift count) rather\n"));
-    r.push_str(String::from("than exposing raw verifier output.\n"));
+    r.push_str(String::from("(such as division by zero, collection bounds or capacity, unwrap-on-None, or\n"));
+    r.push_str(String::from("shift count) rather than exposing raw verifier output.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Fields Reference\n"));
     r.push_str(String::from("\n"));
@@ -10344,7 +10388,7 @@ fn skill_support_content_reference_cli_md_31f8541a() -> String {
     r.push_str(String::from("| `message`          | string              | CompileFailed     | Compatibility error category/detail (for example \"parse error\", \"type error\", \"module load error\", backend/link detail, or \"failed to emit frontend diagnostics: {io_error}\"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |\n"));
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
-    r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
+    r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |\n"));
     r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, `\"tool_not_found\"`, or `\"panicked\"` (verifier worker thread crashed -- no counterexample available) |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
     r.push_str(String::from("\n"));
@@ -12016,16 +12060,21 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Meaning:** The compiler could not read or write a file. Two build-pipeline\n"));
     r.push_str(String::from("sites produce this code: a `use` declaration naming a module the driver cannot\n"));
-    r.push_str(String::from("read, and a generated object file the backend cannot write (unwritable output\n"));
-    r.push_str(String::from("directory, full disk, read-only filesystem). The object bytes are already\n"));
-    r.push_str(String::from("built by the time the write is attempted, so this is the filesystem's answer\n"));
-    r.push_str(String::from("rather than a backend defect -- which is why it is not `CodegenFailed`.\n"));
+    r.push_str(String::from("read, and a generated object file whose parent directory the backend cannot\n"));
+    r.push_str(String::from("create or write into (permission denied, full disk, read-only filesystem, or a\n"));
+    r.push_str(String::from("path component that is not a directory). Missing output parent directories are\n"));
+    r.push_str(String::from("created automatically. The object bytes are already built by the time the\n"));
+    r.push_str(String::from("write is attempted, so this is the filesystem's answer rather than a backend\n"));
+    r.push_str(String::from("defect -- which is why it is not `CodegenFailed`.\n"));
+    r.push_str(String::from("When this code comes from module loading, compilation stops before type-checking,\n"));
+    r.push_str(String::from("so diagnostics do not include follow-on errors for names from the missing module.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Check the path in the diagnostic message. For a module load, verify\n"));
     r.push_str(String::from("the `use` path resolves relative to the importing file. For an object write,\n"));
-    r.push_str(String::from("verify the `-o` destination's parent directory exists and is writable, and\n"));
-    r.push_str(String::from("that the filesystem has free space. Re-running the same build after fixing the\n"));
-    r.push_str(String::from("filesystem succeeds; changing the source will not help.\n"));
+    r.push_str(String::from("verify the `-o` destination's parent directory can be created and written to,\n"));
+    r.push_str(String::from("that every existing path component is a directory, and that the filesystem has\n"));
+    r.push_str(String::from("free space. Re-running the same build after fixing the filesystem succeeds;\n"));
+    r.push_str(String::from("changing the source will not help.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### VerificationSkipped\n"));
     r.push_str(String::from("\n"));
@@ -12071,6 +12120,24 @@ fn skill_support_content_reference_errors_md_5d90ef26() -> String {
     r.push_str(String::from("**Fix:** If the abort is unreachable in practice, say so in the contract -- a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made -- the counterexample is the actionable finding.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### VerifierAssertionUnattributed\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Verification\n"));
+    r.push_str(String::from("**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: \"none\"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"VerifierAssertionUnattributed\",\n"));
+    r.push_str(String::from("  \"severity\": \"error\",\n"));
+    r.push_str(String::from("  \"message\": \"verification failed in `remainder` on an unattributed property: division or remainder by zero\",\n"));
+    r.push_str(String::from("  \"span\": { \"file\": \"\", \"offset\": 0, \"length\": 0 }\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Runtime Errors\n"));
     r.push_str(String::from("\n"));
@@ -13418,7 +13485,7 @@ fn skill_support_content_schemas_counterexample_schema_json_4a456c17() -> String
     r.push_str(String::from("    \"vow_id\": {\n"));
     r.push_str(String::from("      \"type\": \"integer\",\n"));
     r.push_str(String::from("      \"minimum\": 0,\n"));
-    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause\"\n"));
+    r.push_str(String::from("      \"description\": \"Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"source\": {\n"));
     r.push_str(String::from("      \"oneOf\": [\n"));
@@ -13557,7 +13624,8 @@ fn skill_support_content_schemas_diagnostic_schema_json_a46eae68() -> String {
     r.push_str(String::from("        \"LinkFailed\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
     r.push_str(String::from("        \"RegionLinear\",\n"));
-    r.push_str(String::from("        \"RegionRootEscape\"\n"));
+    r.push_str(String::from("        \"RegionRootEscape\",\n"));
+    r.push_str(String::from("        \"VerifierAssertionUnattributed\"\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"description\": \"Machine-readable error code\"\n"));
     r.push_str(String::from("    },\n"));

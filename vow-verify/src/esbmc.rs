@@ -231,6 +231,7 @@ pub fn extract_assert_label(output: &str) -> Option<&'static str> {
                 "btreemap capacity" => "btreemap exceeded the verifier's internal capacity limit",
                 "integer shift count" => "shift amount exceeds the operand's bit width",
                 "unwrap-none" => "unwrap() called on None",
+                "division by zero" => "division or remainder by zero",
                 _ => continue,
             };
             return Some(description);
@@ -1957,6 +1958,22 @@ VERIFICATION SUCCESSFUL";
                 "failed to map {label}"
             );
         }
+    }
+
+    #[test]
+    fn extract_assert_label_maps_division_by_zero() {
+        let output = "[Counterexample]\n\n\
+                      Violated property:\n\
+                        file /tmp/test.c line 8 column 10 function r\n\
+                        division by zero\n\
+                        CWE: CWE-369\n\
+                        b != 0\n\n\
+                      VERIFICATION FAILED";
+
+        assert_eq!(
+            extract_assert_label(output),
+            Some("division or remainder by zero")
+        );
     }
 
     #[test]

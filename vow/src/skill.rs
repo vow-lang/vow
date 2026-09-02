@@ -2904,6 +2904,14 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
+For a multi-function `verify` or verified `build`, a halt-class result (definitive
+counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function
+checks from being launched. Checks already claimed by parallel workers finish, and the compiler
+reports the halt from the lowest module-declaration-order function in that claimed set. Therefore
+`counterexamples[]` contains at most one entry; a reported soft failure leaves it empty and uses
+`verify_status` instead. Fix the reported failure and run verification again to surface a later
+failure.
+
 ### Verified Example
 
 ```json
@@ -2974,8 +2982,8 @@ caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
-(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
-than exposing raw verifier output.
+(such as division by zero, collection bounds or capacity, unwrap-on-None, or
+shift count) rather than exposing raw verifier output.
 
 ### Fields Reference
 
@@ -2987,7 +2995,7 @@ than exposing raw verifier output.
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
-| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
+| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
@@ -4653,16 +4661,21 @@ runtime archive are installed and accessible. When building Vow itself, run
 
 **Meaning:** The compiler could not read or write a file. Two build-pipeline
 sites produce this code: a `use` declaration naming a module the driver cannot
-read, and a generated object file the backend cannot write (unwritable output
-directory, full disk, read-only filesystem). The object bytes are already
-built by the time the write is attempted, so this is the filesystem's answer
-rather than a backend defect — which is why it is not `CodegenFailed`.
+read, and a generated object file whose parent directory the backend cannot
+create or write into (permission denied, full disk, read-only filesystem, or a
+path component that is not a directory). Missing output parent directories are
+created automatically. The object bytes are already built by the time the
+write is attempted, so this is the filesystem's answer rather than a backend
+defect — which is why it is not `CodegenFailed`.
+When this code comes from module loading, compilation stops before type-checking,
+so diagnostics do not include follow-on errors for names from the missing module.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
-verify the `-o` destination's parent directory exists and is writable, and
-that the filesystem has free space. Re-running the same build after fixing the
-filesystem succeeds; changing the source will not help.
+verify the `-o` destination's parent directory can be created and written to,
+that every existing path component is a directory, and that the filesystem has
+free space. Re-running the same build after fixing the filesystem succeeds;
+changing the source will not help.
 
 ### VerificationSkipped
 
@@ -4708,6 +4721,24 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 **Fix:** If the abort is unreachable in practice, say so in the contract — a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.
 
 **Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
+
+### VerifierAssertionUnattributed
+
+**Phase:** Verification
+**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "none"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+
+```json
+{
+  "error_code": "VerifierAssertionUnattributed",
+  "severity": "error",
+  "message": "verification failed in `remainder` on an unattributed property: division or remainder by zero",
+  "span": { "file": "", "offset": 0, "length": 0 }
+}
+```
+
+The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
 ## Runtime Errors
 
@@ -6054,7 +6085,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Function-local ID of the violated vow clause"
+      "description": "Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow"
     },
     "source": {
       "oneOf": [
@@ -6193,7 +6224,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "LinkFailed",
         "RegionConflict",
         "RegionLinear",
-        "RegionRootEscape"
+        "RegionRootEscape",
+        "VerifierAssertionUnattributed"
       ],
       "description": "Machine-readable error code"
     },
@@ -7998,6 +8030,14 @@ program that deliberately exits `134` opts out. See the *Exit status* note under
 | `CompileFailed` | Parse error, type error, module load error, unsupported code generation (including the named 128-bit aggregate-field limitation), backend failure, link failure, or a diagnostic-emission I/O failure (e.g. a broken stderr/stdout pipe other than the tolerated case, or a full disk). Inspect `diagnostics[]`; backend failures use `CodegenUnsupported`, `CodegenFailed`, `LinkFailed`, or `IoError`. |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, the tool was not found, or the verifier worker thread crashed (`verify_status: "panicked"`). Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
+For a multi-function `verify` or verified `build`, a halt-class result (definitive
+counterexample, timeout, unknown, tool error, missing tool, or worker panic) stops new function
+checks from being launched. Checks already claimed by parallel workers finish, and the compiler
+reports the halt from the lowest module-declaration-order function in that claimed set. Therefore
+`counterexamples[]` contains at most one entry; a reported soft failure leaves it empty and uses
+`verify_status` instead. Fix the reported failure and run verification again to surface a later
+failure.
+
 ### Verified Example
 
 ```json
@@ -8068,8 +8108,8 @@ caller argument value; `arg_offset` and `arg_length` still identify the
 argument expression.
 
 When `blame` is `"none"`, `violation` describes the failed verifier-model check
-(such as collection bounds or capacity, unwrap-on-None, or shift count) rather
-than exposing raw verifier output.
+(such as division by zero, collection bounds or capacity, unwrap-on-None, or
+shift count) rather than exposing raw verifier output.
 
 ### Fields Reference
 
@@ -8081,7 +8121,7 @@ than exposing raw verifier output.
 | `message`          | string              | CompileFailed     | Compatibility error category/detail (for example "parse error", "type error", "module load error", backend/link detail, or "failed to emit frontend diagnostics: {io_error}"). Agents should branch on `diagnostics[].error_code`, not parse this free text. |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
-| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
+| `counterexamples`  | array               | Always            | Structured counterexamples (see schema); contains at most one entry per run under the multi-function stopping policy above |
 | `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, `"tool_not_found"`, or `"panicked"` (verifier worker thread crashed — no counterexample available) |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
@@ -9750,16 +9790,21 @@ runtime archive are installed and accessible. When building Vow itself, run
 
 **Meaning:** The compiler could not read or write a file. Two build-pipeline
 sites produce this code: a `use` declaration naming a module the driver cannot
-read, and a generated object file the backend cannot write (unwritable output
-directory, full disk, read-only filesystem). The object bytes are already
-built by the time the write is attempted, so this is the filesystem's answer
-rather than a backend defect — which is why it is not `CodegenFailed`.
+read, and a generated object file whose parent directory the backend cannot
+create or write into (permission denied, full disk, read-only filesystem, or a
+path component that is not a directory). Missing output parent directories are
+created automatically. The object bytes are already built by the time the
+write is attempted, so this is the filesystem's answer rather than a backend
+defect — which is why it is not `CodegenFailed`.
+When this code comes from module loading, compilation stops before type-checking,
+so diagnostics do not include follow-on errors for names from the missing module.
 
 **Fix:** Check the path in the diagnostic message. For a module load, verify
 the `use` path resolves relative to the importing file. For an object write,
-verify the `-o` destination's parent directory exists and is writable, and
-that the filesystem has free space. Re-running the same build after fixing the
-filesystem succeeds; changing the source will not help.
+verify the `-o` destination's parent directory can be created and written to,
+that every existing path component is a directory, and that the filesystem has
+free space. Re-running the same build after fixing the filesystem succeeds;
+changing the source will not help.
 
 ### VerificationSkipped
 
@@ -9805,6 +9850,24 @@ The `message` names the cause: `addition overflows`, `subtraction overflows`, `m
 **Fix:** If the abort is unreachable in practice, say so in the contract — a `requires` that bounds the operands removes the warning, and the bound is then a genuine semantic constraint rather than a verifier appeasement. If wrapping is the intended behaviour, use the wrapping operator (`+`, `-`, `*`, `/`, `%`) and state the wrapped result in the contract. If the abort is a real possibility the caller must handle, the warning is informational.
 
 **Not emitted when:** the contract itself fails. The verifier reports one violated property per run, so a contract counterexample takes precedence and no abort claim is made — the counterexample is the actionable finding.
+
+### VerifierAssertionUnattributed
+
+**Phase:** Verification
+**Meaning:** ESBMC found a failed property that Vow cannot attribute to a user-authored `requires`, `ensures`, or `invariant` clause. The build fails closed with `VerifyFailed`, and the corresponding counterexample uses `blame: "none"` plus a reserved non-contract `vow_id` so it cannot collide with the function's real vow 0. Known examples are division or remainder by zero and a dynamic shift count that exceeds the operand's bit width.
+
+```json
+{
+  "error_code": "VerifierAssertionUnattributed",
+  "severity": "error",
+  "message": "verification failed in `remainder` on an unattributed property: division or remainder by zero",
+  "span": { "file": "", "offset": 0, "length": 0 }
+}
+```
+
+The structured counterexample's `violation` field carries the stable property description instead of raw ESBMC text. `source` may be `null` when the verifier property has not been mapped back to a Vow source span.
+
+**Fix:** Inspect `counterexamples[0].violation` and the reported values. For division or remainder by zero, prevent a zero divisor with a real semantic precondition or a checked branch. For a dynamic shift, keep the count below the left operand's bit width. If the description names an unfamiliar internal assertion, report it as a compiler attribution bug rather than treating the reserved `vow_id` as a contract clause.
 
 ## Runtime Errors
 
@@ -11146,7 +11209,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     "vow_id": {
       "type": "integer",
       "minimum": 0,
-      "description": "Function-local ID of the violated vow clause"
+      "description": "Function-local ID of the violated vow clause, or a reserved verifier sentinel when the failure cannot be attributed to a user-authored vow"
     },
     "source": {
       "oneOf": [
@@ -11284,7 +11347,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "LinkFailed",
         "RegionConflict",
         "RegionLinear",
-        "RegionRootEscape"
+        "RegionRootEscape",
+        "VerifierAssertionUnattributed"
       ],
       "description": "Machine-readable error code"
     },
