@@ -9,9 +9,9 @@ description: Restore or install a checksum-verified ESBMC release
 # releases.
 #
 # `version` and the platform checksums move together: each checksum is of
-# the release archive for that exact version, and it is part of the cache key, so a
-# rotation forces a fresh download and re-verify even if the version is
-# unchanged. To bump:
+# the release archive for that exact version, and it is part of the cache
+# key, so a rotation forces a fresh download and re-verify even if the
+# version is unchanged. To bump:
 #
 #   curl -fsSLO https://github.com/esbmc/esbmc/releases/download/v<N>/esbmc-linux.zip
 #   curl -fsSLO https://github.com/esbmc/esbmc/releases/download/v<N>/esbmc-macos.zip
