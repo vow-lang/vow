@@ -139,9 +139,13 @@ pub fn api_function(x: i64) -> i64 {
 | `()`   | Unit type                |
 | `!`    | Never type (diverges)    |
 
-There is no `isize`/`usize`. Vow targets 64-bit only; `Vec::len()` returns `i64`,
-indices are `i64`. This is deliberate — it preserves binary fixed point
-reproducibility across compilations. See [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md).
+Vow targets 64-bit only and has no `isize`/`usize`. Excluding pointer-width
+types preserves binary fixed-point reproducibility across compilation hosts;
+see [ADR 0001](../adr/0001-numeric-tower-narrow-ints.md). `Vec::len()` and
+indices currently use `i64`, but their signedness is independent of this
+determinism rationale. [ADR 0003](../adr/0003-unsigned-size-types.md) specifies
+that lengths, indices, and capacities will move to fixed-width `u64` as part of
+epic #1104.
 
 **128-bit implementation status:** `i128`/`u128` types and full-range literal
 representation are available to the frontend and IR. Native code generation,
