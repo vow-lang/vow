@@ -17,8 +17,8 @@ Use one of these retention classes:
 
 - `current-baseline`: Keep at most one committed snapshot per report stream,
   such as `complexity-calibration`. When adding a newer snapshot for the same
-  stream, delete or replace the previous one in the same PR unless a reviewer
-  explicitly reclassifies it.
+  stream, delete the previous dated file in the same PR rather than overwriting
+  it in place, unless a reviewer explicitly reclassifies the older snapshot.
 - `release-evidence`: Keep while the snapshot is referenced by a release,
   roadmap, publication, issue, or PR. Include the reference in the report.
 - `temporary-review`: Allowed only while a PR is active. Remove it or
