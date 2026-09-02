@@ -1267,7 +1267,7 @@ fi
 rust_human=$($RUST --help --human 2>/dev/null) || true
 self_human=$(run_self --help --human 2>/dev/null) || true
 
-if echo "$rust_human" | grep -q "USAGE" && echo "$self_human" | grep -q "USAGE"; then
+if [[ "$rust_human" == *USAGE* ]] && [[ "$self_human" == *USAGE* ]]; then
     pass "help/human"
 else
     fail "help/human" "human help output missing USAGE"
