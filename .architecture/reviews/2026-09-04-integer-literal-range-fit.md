@@ -259,5 +259,97 @@ correctness asymmetry (`negative_max` / `i64::MIN`) that has no dedicated test t
 
 ## Design
 
-_Written at step 4 (design-it-twice + adjudication); this section is amended and committed
-separately after the rest of the report._
+Design-it-twice: three parallel sub-agents each produced a *radically different* interface for the
+seam; a fourth sub-agent that authored none of them adjudicated against depth → locality → seam
+placement → test surface → blast radius.
+
+**Winner — Design A: minimal surface, no new type.**
+
+```rust
+/// `Some(range_text)` when `value` does not fit integer type `target`; `None`
+/// when it fits *or* `target` is not an integer (nothing to report). The
+/// returned string is the human range (`-128..=127`, `0..=255`) the diagnostic
+/// interpolates into both its message and its hint. Emission, the error code,
+/// the span, and the literal's own display text stay at the call site.
+fn literal_out_of_range(value: ConstIntValue, target: &Ty) -> Option<String> {
+    let range = integer_type_range(target)?;
+    let out_of_range = if value.negative {
+        range.negative_max.is_none_or(|max| value.magnitude > max)
+    } else {
+        value.magnitude > range.positive_max
+    };
+    if !out_of_range {
+        return None;
+    }
+    Some(match range.negative_max {
+        Some(max) => format!("-{max}..={}", range.positive_max),
+        None => format!("0..={}", range.positive_max),
+    })
+}
+```
+
+`check_integer_value_range` shrinks to a thin `&mut self` **adapter** — the single owner of the
+`LiteralOutOfRange` wording — that both call sites (L1522, L2003) still route through, unchanged:
+
+```rust
+fn check_integer_value_range(&mut self, value: ConstIntValue, target: &Ty, span: Span) {
+    let Some(range_text) = literal_out_of_range(value, target) else {
+        return;
+    };
+    self.emit_error_with_hints(
+        ErrorCode::LiteralOutOfRange,
+        format!("literal {} does not fit in {target} (range {range_text})", value.display()),
+        span,
+        vec![format!("use a value in {range_text} or choose an explicit narrowing intrinsic")],
+    );
+}
+```
+
+- **Depth (decisive)** — A hides the range lookup, the sign-asymmetric fit test, *and* the range-text
+  render behind a two-argument interface that introduces **zero new named types**. It dominates the
+  runner-up on both axes of depth: strictly smaller interface (no type the caller must learn and
+  destructure) and strictly more behaviour hidden (C hands the range-text render back to the caller).
+- **Seam placement** — one adapter, byte-identical wording at both call sites: a *decision-isolation*
+  seam, not a variation-bearing one (contrast the landed `same_operand_ty`, whose two divergent
+  adapters made a real rendering seam). Because nothing renders differently across this seam, the
+  house convention "return a semantic value, render at the call site" has no consumer here — so A's
+  one convention divergence (a "decision" function that also owns range-*text* formatting) is
+  acceptable *in this instance*, where it would not be for `same_operand_ty`. YAGNI (CLAUDE.md) then
+  favours the design that adds no speculative surface.
+- **Test surface** — `literal_out_of_range` is pure and `Checker`-free; asserting the returned
+  `Option<String>` pins both the decision and the exact range-text shape in one assertion, on the
+  `negative_max`/`i64::MIN` asymmetry (`i8 -128` → `None`, `-129` → `Some("-128..=127")`; `u8 -1` and
+  `u8 256` → `Some("0..=255")`; `i128::MIN` magnitude → `None`; non-integer target → `None`). The full
+  message + hint is still pinned end-to-end by one adapter-level test through the checker.
+- **Blast radius** — smallest of the three: one free function, one shrunk method, zero call-site
+  churn, zero new types, zero new derives.
+
+**Runner-up design — Design C: `Option<LiteralRangeMiss>` neutral-bounds newtype.**
+`fn literal_range_miss(value, target) -> Option<LiteralRangeMiss>` where `LiteralRangeMiss { range }`
+is a `Copy` newtype carrying the bounds the literal missed; the adapter re-derives the range text.
+C restores the file convention (the seam returns a *semantic value*, the call site renders) and needs
+no clone. It **lost at depth**: as submitted it introduces a named type the caller must learn and
+destructure (`.range`) while hiding *less* behaviour than A (the caller re-derives the range text).
+Its genuine merits — convention fidelity, semantic-value return — are *locality* (criterion 2)
+virtues, and depth (criterion 1) separated the two before locality was ever reached. C would win only
+if a second adapter with divergent wording were anticipated; with one adapter and byte-identical
+output, that flexibility is speculative (YAGNI). This is the runner-up design carried into the PR body.
+
+**Eliminated — Design B: rich `LiteralRangeMiss { value, target, range }` with `message()` /
+`hints()` / `range_text()` methods.** Fully text-testable off the checker (its one real advantage, at
+criterion 4), but out at criterion 1: a three-method domain type whose methods are pass-through
+formatters is the shallow-module smell CLAUDE.md names explicitly (interface nearly as wide as the
+implementation), it incurs a `Ty` clone on the error path, and its author conceded it is "partly
+YAGNI" for two call sites and one message.
+
+**Corrections applied to the winner before implementation** (from the adjudicator):
+
+- Keep the single `&mut self` adapter; do **not** inline at both call sites — inlining would duplicate
+  the two `format!` templates and is exactly how byte-identical output drifts.
+- `is_none_or` (Rust 1.82) is already used verbatim in the current method body, so MSRV is a non-issue
+  — the extracted function keeps the identical expression.
+- Take `value` by value (`ConstIntValue` is `Copy`), keep `target: &Ty` borrowed — no clone.
+- Doc the return contract: `Some` = range text; `None` covers *both* "fits" and "non-integer target".
+- Pin the asymmetry at the pure layer with exact strings on both arms, plus one adapter-level
+  (`TestEmitter`-style) test locking the full message + hint byte-for-byte, since message assembly
+  lives at the call site.
