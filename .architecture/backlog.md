@@ -6,33 +6,33 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## same-operand-type-verdict
 
-- **Status**: in-flight
+- **Status**: landed
 - **Score**: 23/25 (leverage 4, locality 5, blast radius 1, heat 5)
 - **Files**: ~1 estimated (actual: 1)
-- **Modules**: `vow-types/src/check.rs` (`check_same_numeric` ~L3016, `check_same_integer` ~L3124;
-  call sites L1812/L1818/L1873/L1907)
+- **Modules**: `vow-types/src/check.rs` (`check_same_numeric`, `check_same_integer`;
+  seam `same_operand_ty` at L784, `OperandError` L763, `OperandClass`)
 - **Summary**: collapse the two line-for-line-twin operand-type checks into one pure
   `same_operand_ty(lhs, rhs, class) -> Result<Ty, OperandError>` (Design C, adjudicated over the
   bespoke-enum Design A), mirroring the landed `cast_verdict` seam; each method keeps only its distinct
   `ErrorCode::TypeMismatch` message/hint at the call site.
 - **First seen**: 2026-09-03
 - **Report**: `.architecture/reviews/2026-09-03-same-operand-type-verdict.md`
-- **PR**: #1234
-- **Reason**: picked this firing (top score); within 1 point of the runner-up
-  `integer-literal-range-fit`.
+- **PR**: #1234 (merged 2026-09-03)
 
 ## integer-literal-range-fit
 
 - **Status**: proposed
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated
-- **Modules**: `vow-types/src/check.rs` (`check_integer_value_range`, ~L1582)
+- **Modules**: `vow-types/src/check.rs` (`check_integer_value_range`, ~L1649; call sites L1522, L2003;
+  pure inputs `integer_type_range` L694, `ConstIntValue` L501)
 - **Summary**: extract the pure literal-fits-target decision + range-text into
   `literal_out_of_range(value, target) -> Option<String>`, leaving `emit_error_with_hints` at the
   call site; pins the `negative_max`/`i64::MIN` asymmetry.
 - **First seen**: 2026-08-31
-- **Reason**: runner-up candidate; the natural next pick (re-heated 21→22 as `check.rs` moved to
-  heat 5).
+- **Report**: `.architecture/reviews/2026-09-04-integer-literal-range-fit.md`
+- **Reason**: **picked this firing** (2026-09-04); tied at 22 with the fresh `builtin-constructor-spec`
+  and won on earlier `First seen`. Unblocked now that `same-operand-type-verdict` (#1234) merged.
 
 ## call-argument-coercion-action
 
@@ -81,6 +81,66 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   range) into a pure seam returning a **struct of two findings** (not a single-variant enum — both can
   fire on one expression via `Cast`-folded const counts).
 - **First seen**: 2026-09-03
+
+## builtin-constructor-spec
+
+- **Status**: proposed
+- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Files**: ~1 estimated (large single-file diff, ~150 lines)
+- **Modules**: `vow-types/src/check.rs` (`EnumConstruct` builtin dispatch, ~L2867-3016)
+- **Summary**: extract the inline `match (enum, variant)` builtin-constructor policy (arity, per-arg
+  `ArgExpect`, result shape) into a pure `builtin_constructor_spec(enum, variant) -> Option<CtorSpec>`
+  table, mirroring the landed `method_result_type`/`method_argument_expectations` seams; the generic
+  argument-checking loop and payload-wrapping stay at the call site.
+- **First seen**: 2026-09-04
+- **Reason**: tied at 22 with the picked `integer-literal-range-fit`; lost the tie-break on later
+  `First seen`. Natural next pick, but ~150-line diff carries more behaviour-preservation risk than a
+  ~15-line seam.
+
+## coerce-context-argument-epilogue
+
+- **Status**: proposed
+- **Score**: 21/25 (leverage 3, locality 5, blast radius 1, heat 5)
+- **Files**: ~1 estimated
+- **Modules**: `vow-types/src/check.rs` (~10 sites: L1377, L1464, L2115, L2201, L2663, L2802, L2917,
+  L2999, L3063)
+- **Summary**: collapse the repeated `check_expr + check_contextual_integer_literal_ranges +
+  can_context_coerce + emit-mismatch` epilogue into one `&mut self` helper taking a per-site message
+  closure. `can_context_coerce` (L263) is already pure; this is sibling-epilogue dedup, not a pure
+  seam. Not compiler drift — `compiler/checker.vow` inlines the same glue.
+- **First seen**: 2026-09-04
+- **Reason**: helper is a shallow 4-param wrapper of 3 statements (deletion test on the helper itself);
+  leverage 3 because tests gain nothing (still `&mut self`).
+
+## recover-unknown-name-prologue
+
+- **Status**: proposed
+- **Score**: 18/25 (leverage 2, locality 4, blast radius 1, heat 5)
+- **Files**: ~1 estimated
+- **Modules**: `vow-types/src/check.rs` (L2142 undefined fn, L2773 unknown struct, L3019 unknown enum,
+  L3037 enum-has-no-variant)
+- **Summary**: collapse the four unresolved-name recovery epilogues (`suggest_similar` + emit + drain
+  child exprs + fallback `Ty`) into one `&mut self` recovery helper. `suggest_similar` (L203) already
+  pure; low leverage, divergent messages.
+- **First seen**: 2026-09-04
+
+## division-abort-spec
+
+- **Status**: proposed
+- **Score**: 16/25 (leverage 3, locality 4, blast radius 4, heat 4)
+- **Files**: ~3 estimated (3 crates)
+- **Modules**: `vow-codegen/src/cranelift_backend.rs` (`divisor_abort_condition`, ~L325);
+  `vow-verify/src/c_emitter.rs` (`emit_checked_arith`, ~L2882); `vow-runtime/src/lib.rs`
+  (`define_wide_div_rem!`, ~L2987)
+- **Summary**: extract the triplicated "zero divisor aborts all div/rem; signed div also aborts on
+  `MIN/-1`" policy into a shared pure `division_abort_spec(opcode, ty) -> {check_zero,
+  check_min_neg_one}`; each backend keeps its own emission. `vow-runtime` L2987 documents the manual
+  sync.
+- **First seen**: 2026-09-04
+- **Reason**: blast radius 4 (crosses codegen/verify/runtime) plus byte-identical bootstrap risk — a
+  human-scheduled pick, not unattended. NB an unverified soundness asymmetry noticed nearby (codegen
+  traps wrapping-div-by-zero, verifier may not model it) is recorded in the 2026-09-04 report for a
+  human to triage; deliberately not filed.
 
 ## vec-reserve-next-capacity-seam
 
