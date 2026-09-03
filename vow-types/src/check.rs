@@ -721,6 +721,30 @@ fn integer_type_range(target: &Ty) -> Option<IntegerTypeRange> {
     }
 }
 
+/// Decides whether a constant integer literal fits its target type. `Some`
+/// carries the human range text (`-128..=127`, `0..=255`) the diagnostic
+/// interpolates into both its message and its hint; `None` covers *both* silent
+/// outcomes — the literal fits, or `target` is not an integer type (nothing to
+/// report). Pure and total in its inputs, so the sign-magnitude asymmetry
+/// (`i128::MIN` is one larger in magnitude than `i128::MAX`; unsigned targets
+/// admit no negative) is unit-testable without a `Checker`, mirroring
+/// `cast_verdict` and `same_operand_ty`. Emission stays at the call site.
+fn literal_out_of_range(value: ConstIntValue, target: &Ty) -> Option<String> {
+    let range = integer_type_range(target)?;
+    let out_of_range = if value.negative {
+        range.negative_max.is_none_or(|max| value.magnitude > max)
+    } else {
+        value.magnitude > range.positive_max
+    };
+    if !out_of_range {
+        return None;
+    }
+    Some(match range.negative_max {
+        Some(max) => format!("-{max}..={}", range.positive_max),
+        None => format!("0..={}", range.positive_max),
+    })
+}
+
 fn absorb_lit_int_operand(lhs: Ty, rhs: Ty) -> (Ty, Ty) {
     if lhs.is_lit_int() && rhs.is_integer() {
         (rhs.clone(), rhs)
@@ -1647,20 +1671,8 @@ impl<'e> Checker<'e> {
     }
 
     fn check_integer_value_range(&mut self, value: ConstIntValue, target: &Ty, span: Span) {
-        let Some(range) = integer_type_range(target) else {
+        let Some(range_text) = literal_out_of_range(value, target) else {
             return;
-        };
-        let out_of_range = if value.negative {
-            range.negative_max.is_none_or(|max| value.magnitude > max)
-        } else {
-            value.magnitude > range.positive_max
-        };
-        if !out_of_range {
-            return;
-        }
-        let range_text = match range.negative_max {
-            Some(max) => format!("-{max}..={}", range.positive_max),
-            None => format!("0..={}", range.positive_max),
         };
         self.emit_error_with_hints(
             ErrorCode::LiteralOutOfRange,
@@ -5741,6 +5753,25 @@ mod tests {
     }
 
     #[test]
+    fn literal_out_of_range_diagnostic_is_byte_identical() {
+        // The message + hint are assembled at the call site from the seam's
+        // range text; pin them verbatim, since no golden covers the exact string.
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_stmt(&let_stmt_with_wide_init("i8", 129, true));
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::LiteralOutOfRange);
+        assert_eq!(
+            emitter.0[0].message,
+            "literal -129 does not fit in i8 (range -128..=127)"
+        );
+        assert_eq!(
+            emitter.0[0].hints[0],
+            "use a value in -128..=127 or choose an explicit narrowing intrinsic"
+        );
+    }
+
+    #[test]
     fn explicit_i128_suffix_accepts_the_minimum_negative_value() {
         let expr = make_expr(ExprKind::UnaryOp {
             op: UnOp::Neg,
@@ -7171,6 +7202,56 @@ mod tests {
                 rhs: Ty::F64
             })
         );
+    }
+
+    #[test]
+    fn literal_out_of_range_pins_type_bounds() {
+        let neg = |m| ConstIntValue {
+            magnitude: m,
+            negative: true,
+        };
+        let pos = |m| ConstIntValue {
+            magnitude: m,
+            negative: false,
+        };
+
+        // Signed minimum off-by-one: -128 fits i8, -129 does not. The negative
+        // magnitude bound is one larger than the positive one.
+        assert_eq!(literal_out_of_range(neg(128), &Ty::I8), None);
+        assert_eq!(
+            literal_out_of_range(neg(129), &Ty::I8).as_deref(),
+            Some("-128..=127")
+        );
+        // Positive overflow vs fit on the same signed target.
+        assert_eq!(
+            literal_out_of_range(pos(128), &Ty::I8).as_deref(),
+            Some("-128..=127")
+        );
+        assert_eq!(literal_out_of_range(pos(127), &Ty::I8), None);
+
+        // Unsigned rejects ANY negative (`negative_max: None`) with a `0..=` range.
+        assert_eq!(
+            literal_out_of_range(neg(1), &Ty::U8).as_deref(),
+            Some("0..=255")
+        );
+        assert_eq!(
+            literal_out_of_range(pos(256), &Ty::U8).as_deref(),
+            Some("0..=255")
+        );
+        assert_eq!(literal_out_of_range(pos(255), &Ty::U8), None);
+
+        // i128 special case: the negative magnitude bound (2^127) exceeds the
+        // positive one (2^127 - 1), so the minimum fits but its positive twin does not.
+        assert_eq!(literal_out_of_range(neg(1u128 << 127), &Ty::I128), None);
+        assert_eq!(
+            literal_out_of_range(pos(1u128 << 127), &Ty::I128).as_deref(),
+            Some(
+                "-170141183460469231731687303715884105728..=170141183460469231731687303715884105727"
+            )
+        );
+
+        // A non-integer target has no range: nothing to report.
+        assert_eq!(literal_out_of_range(pos(999), &Ty::Bool), None);
     }
 
     #[test]
