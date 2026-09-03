@@ -731,6 +731,73 @@ fn absorb_lit_int_operand(lhs: Ty, rhs: Ty) -> (Ty, Ty) {
     }
 }
 
+/// The operand class a same-class binary operator requires, applied *after*
+/// `absorb_lit_int_operand`. Selecting the class predicate here lets one
+/// decision procedure serve both the arithmetic (`+ - * /`, incl. checked) and
+/// the bitwise (`& | ^ << >>`) operators, which differ only in this predicate
+/// and in diagnostic wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperandClass {
+    /// `is_numeric_or_lit_int` — arithmetic operators.
+    Numeric,
+    /// `is_integer_or_lit_int` — bitwise operators.
+    Integer,
+}
+
+impl OperandClass {
+    fn admits(self, ty: &Ty) -> bool {
+        match self {
+            OperandClass::Numeric => is_numeric_or_lit_int(ty),
+            OperandClass::Integer => is_integer_or_lit_int(ty),
+        }
+    }
+}
+
+/// Why a same-class binary operator rejects its operand pair. Carries the
+/// *post-`absorb_lit_int_operand`* types, since that is exactly what the
+/// diagnostic displays; the numeric-vs-bitwise wording stays at the call site,
+/// mirroring `cast_verdict`. The variants are pre-split because `WrongClass`
+/// has no meaningful `rhs` to show, and the class check tests the left operand
+/// alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OperandError {
+    /// The (post-absorb) left operand is not of the required class.
+    WrongClass { lhs: Ty },
+    /// Both operands are of the required class but their types differ. This arm
+    /// also catches an out-of-class *right* operand: the left is tested alone,
+    /// so `i32 & str` reaches the equality check and reports here.
+    Mismatch { lhs: Ty, rhs: Ty },
+}
+
+/// Decides the result type of a binary operator whose operands must share one
+/// numeric/integer class. Pure and total in its inputs — no diagnostics, no
+/// `&mut self` — so it is unit-testable on `(Ty, Ty, OperandClass)` alone,
+/// mirroring `cast_verdict` and `integer_type_range`. `Ok(ty)` is the agreed
+/// operand type to propagate; `Err` names which rule failed and carries the
+/// post-absorb types to display.
+///
+/// The branch order matches the original inline methods exactly. A `Never`
+/// operand is unreachable, so the operator inherits the other side unchecked
+/// and reports nothing (`Ok(other)`) — decided *before* absorbing or class-
+/// checking. Then literal absorption runs, then the class check on the left
+/// operand only, then the equality check.
+fn same_operand_ty(lhs: Ty, rhs: Ty, class: OperandClass) -> Result<Ty, OperandError> {
+    if lhs == Ty::Never {
+        return Ok(rhs);
+    }
+    if rhs == Ty::Never {
+        return Ok(lhs);
+    }
+    let (lhs, rhs) = absorb_lit_int_operand(lhs, rhs);
+    if !class.admits(&lhs) {
+        return Err(OperandError::WrongClass { lhs });
+    }
+    if lhs != rhs {
+        return Err(OperandError::Mismatch { lhs, rhs });
+    }
+    Ok(lhs)
+}
+
 pub struct Checker<'e> {
     pub(crate) env: TypeEnv,
     pub(crate) current_return_ty: Ty,
@@ -3014,32 +3081,27 @@ impl<'e> Checker<'e> {
     }
 
     fn check_same_numeric(&mut self, lhs: Ty, rhs: Ty, op_span: Span) -> Ty {
-        if lhs == Ty::Never {
-            return rhs;
+        match same_operand_ty(lhs, rhs, OperandClass::Numeric) {
+            Ok(ty) => ty,
+            Err(OperandError::WrongClass { lhs }) => {
+                self.emit_error_with_hints(
+                    ErrorCode::TypeMismatch,
+                    format!("arithmetic operator requires a numeric type, found `{lhs}`"),
+                    op_span,
+                    vec!["arithmetic operators require numeric operands".to_string()],
+                );
+                Ty::Unit
+            }
+            Err(OperandError::Mismatch { lhs, rhs }) => {
+                self.emit_error_with_hints(
+                    ErrorCode::TypeMismatch,
+                    format!("arithmetic operands have different types: `{lhs}` and `{rhs}`"),
+                    op_span,
+                    vec!["operator requires matching types".to_string()],
+                );
+                Ty::Unit
+            }
         }
-        if rhs == Ty::Never {
-            return lhs;
-        }
-        let (lhs, rhs) = absorb_lit_int_operand(lhs, rhs);
-        if !is_numeric_or_lit_int(&lhs) {
-            self.emit_error_with_hints(
-                ErrorCode::TypeMismatch,
-                format!("arithmetic operator requires a numeric type, found `{lhs}`"),
-                op_span,
-                vec!["arithmetic operators require numeric operands".to_string()],
-            );
-            return Ty::Unit;
-        }
-        if lhs != rhs {
-            self.emit_error_with_hints(
-                ErrorCode::TypeMismatch,
-                format!("arithmetic operands have different types: `{lhs}` and `{rhs}`"),
-                op_span,
-                vec!["operator requires matching types".to_string()],
-            );
-            return Ty::Unit;
-        }
-        lhs
     }
 
     fn validate_arm_pattern(&mut self, pat: &Pat, is_last: bool) -> bool {
@@ -3122,32 +3184,27 @@ impl<'e> Checker<'e> {
     }
 
     fn check_same_integer(&mut self, lhs: Ty, rhs: Ty, op_span: Span) -> Ty {
-        if lhs == Ty::Never {
-            return rhs;
+        match same_operand_ty(lhs, rhs, OperandClass::Integer) {
+            Ok(ty) => ty,
+            Err(OperandError::WrongClass { lhs }) => {
+                self.emit_error_with_hints(
+                    ErrorCode::TypeMismatch,
+                    format!("bitwise operator requires an integer type, found `{lhs}`"),
+                    op_span,
+                    vec!["bitwise operators require integer operands".to_string()],
+                );
+                Ty::Unit
+            }
+            Err(OperandError::Mismatch { lhs, rhs }) => {
+                self.emit_error_with_hints(
+                    ErrorCode::TypeMismatch,
+                    format!("bitwise operands have different types: `{lhs}` and `{rhs}`"),
+                    op_span,
+                    vec!["operator requires matching integer types".to_string()],
+                );
+                Ty::Unit
+            }
         }
-        if rhs == Ty::Never {
-            return lhs;
-        }
-        let (lhs, rhs) = absorb_lit_int_operand(lhs, rhs);
-        if !is_integer_or_lit_int(&lhs) {
-            self.emit_error_with_hints(
-                ErrorCode::TypeMismatch,
-                format!("bitwise operator requires an integer type, found `{lhs}`"),
-                op_span,
-                vec!["bitwise operators require integer operands".to_string()],
-            );
-            return Ty::Unit;
-        }
-        if lhs != rhs {
-            self.emit_error_with_hints(
-                ErrorCode::TypeMismatch,
-                format!("bitwise operands have different types: `{lhs}` and `{rhs}`"),
-                op_span,
-                vec!["operator requires matching integer types".to_string()],
-            );
-            return Ty::Unit;
-        }
-        lhs
     }
 
     fn bind_arm_pattern(&mut self, pat: &Pat, scrutinee_ty: &Ty) {
@@ -6953,6 +7010,167 @@ mod tests {
         // Unrelated non-integer types are a mismatch.
         assert_eq!(cast_verdict(&Ty::Bool, &Ty::I32), CastVerdict::Mismatch);
         assert_eq!(cast_verdict(&Ty::Str, &Ty::I64), CastVerdict::Mismatch);
+    }
+
+    fn numeric_operand_result(lhs: Ty, rhs: Ty) -> (Ty, Vec<Diagnostic>) {
+        let mut emitter = TestEmitter(vec![]);
+        let result = {
+            let mut checker = Checker::new("test.vow", &mut emitter);
+            checker.check_same_numeric(lhs, rhs, dummy_span())
+        };
+        (result, emitter.0)
+    }
+
+    fn integer_operand_result(lhs: Ty, rhs: Ty) -> (Ty, Vec<Diagnostic>) {
+        let mut emitter = TestEmitter(vec![]);
+        let result = {
+            let mut checker = Checker::new("test.vow", &mut emitter);
+            checker.check_same_integer(lhs, rhs, dummy_span())
+        };
+        (result, emitter.0)
+    }
+
+    #[test]
+    fn same_operand_checks_pin_diagnostics_and_result_types() {
+        // A matched, in-class pair yields the operand type and emits nothing.
+        let (ty, diags) = numeric_operand_result(Ty::I64, Ty::I64);
+        assert_eq!(ty, Ty::I64);
+        assert!(diags.is_empty());
+
+        // Arithmetic wrong-class: the article ("a numeric type") is unguarded by
+        // goldens, so pin it exactly.
+        let (ty, diags) = numeric_operand_result(Ty::Str, Ty::Str);
+        assert_eq!(ty, Ty::Unit);
+        assert_eq!(diags[0].code, ErrorCode::TypeMismatch);
+        assert_eq!(
+            diags[0].message,
+            "arithmetic operator requires a numeric type, found `str`"
+        );
+        assert_eq!(
+            diags[0].hints[0],
+            "arithmetic operators require numeric operands"
+        );
+
+        // Arithmetic mismatch on the post-absorb concrete types.
+        let (ty, diags) = numeric_operand_result(Ty::I32, Ty::I64);
+        assert_eq!(ty, Ty::Unit);
+        assert_eq!(
+            diags[0].message,
+            "arithmetic operands have different types: `i32` and `i64`"
+        );
+        assert_eq!(diags[0].hints[0], "operator requires matching types");
+
+        // Bitwise wrong-class: "an integer type" — the a/an difference from the
+        // arithmetic message that a copy-paste swap would silently corrupt.
+        let (ty, diags) = integer_operand_result(Ty::F64, Ty::F64);
+        assert_eq!(ty, Ty::Unit);
+        assert_eq!(
+            diags[0].message,
+            "bitwise operator requires an integer type, found `f64`"
+        );
+        assert_eq!(
+            diags[0].hints[0],
+            "bitwise operators require integer operands"
+        );
+
+        // Bitwise mismatch.
+        let (ty, diags) = integer_operand_result(Ty::I32, Ty::U32);
+        assert_eq!(ty, Ty::Unit);
+        assert_eq!(
+            diags[0].message,
+            "bitwise operands have different types: `i32` and `u32`"
+        );
+        assert_eq!(
+            diags[0].hints[0],
+            "operator requires matching integer types"
+        );
+
+        // A `Never` operand short-circuits before the class check and inherits
+        // the other operand unchecked, emitting nothing — even when that operand
+        // is out of class.
+        let (ty, diags) = numeric_operand_result(Ty::Never, Ty::Str);
+        assert_eq!(ty, Ty::Str);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn same_operand_ty_decides_shared_class_result() {
+        // Agreeing concrete operands propagate their type.
+        assert_eq!(
+            same_operand_ty(Ty::I32, Ty::I32, OperandClass::Numeric),
+            Ok(Ty::I32)
+        );
+        assert_eq!(
+            same_operand_ty(Ty::U8, Ty::U8, OperandClass::Integer),
+            Ok(Ty::U8)
+        );
+
+        // A literal absorbs the concrete integer side before the class/equality
+        // checks, so the result is the concrete type.
+        assert_eq!(
+            same_operand_ty(Ty::LitInt, Ty::I64, OperandClass::Numeric),
+            Ok(Ty::I64)
+        );
+        assert_eq!(
+            same_operand_ty(Ty::I64, Ty::LitInt, OperandClass::Integer),
+            Ok(Ty::I64)
+        );
+
+        // Two literals: absorption needs one concrete integer, so it does not
+        // fire; `LitInt` is in the numeric class and equals itself.
+        assert_eq!(
+            same_operand_ty(Ty::LitInt, Ty::LitInt, OperandClass::Numeric),
+            Ok(Ty::LitInt)
+        );
+
+        // `Never` is unreachable: inherit the other operand unchecked (branch (b)).
+        assert_eq!(
+            same_operand_ty(Ty::Never, Ty::Str, OperandClass::Numeric),
+            Ok(Ty::Str)
+        );
+        assert_eq!(
+            same_operand_ty(Ty::F64, Ty::Never, OperandClass::Numeric),
+            Ok(Ty::F64)
+        );
+
+        // Out-of-class left operand -> WrongClass, carrying the post-absorb type.
+        assert_eq!(
+            same_operand_ty(Ty::Str, Ty::Str, OperandClass::Numeric),
+            Err(OperandError::WrongClass { lhs: Ty::Str })
+        );
+        // The same pair under a different class flips the verdict: `f64` is
+        // numeric but not integer.
+        assert_eq!(
+            same_operand_ty(Ty::F64, Ty::F64, OperandClass::Integer),
+            Err(OperandError::WrongClass { lhs: Ty::F64 })
+        );
+
+        // In-class but unequal concrete types.
+        assert_eq!(
+            same_operand_ty(Ty::I32, Ty::I64, OperandClass::Numeric),
+            Err(OperandError::Mismatch {
+                lhs: Ty::I32,
+                rhs: Ty::I64
+            })
+        );
+        // Out-of-class RIGHT operand: the left is tested alone, so it reaches the
+        // equality check and reports Mismatch (`i32` and `str`), not WrongClass.
+        assert_eq!(
+            same_operand_ty(Ty::I32, Ty::Str, OperandClass::Numeric),
+            Err(OperandError::Mismatch {
+                lhs: Ty::I32,
+                rhs: Ty::Str
+            })
+        );
+        // Absorption does not fire for `LitInt`+`F64` (f64 is not an integer),
+        // so the mismatch carries the un-absorbed `LitInt`.
+        assert_eq!(
+            same_operand_ty(Ty::LitInt, Ty::F64, OperandClass::Numeric),
+            Err(OperandError::Mismatch {
+                lhs: Ty::LitInt,
+                rhs: Ty::F64
+            })
+        );
     }
 
     #[test]
