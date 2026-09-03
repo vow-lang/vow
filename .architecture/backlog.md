@@ -21,16 +21,18 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## integer-literal-range-fit
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
-- **Files**: ~1 estimated
-- **Modules**: `vow-types/src/check.rs` (`check_integer_value_range`, ~L1649; call sites L1522, L2003;
-  pure inputs `integer_type_range` L694, `ConstIntValue` L501)
+- **Files**: ~1 estimated (actual: 1)
+- **Modules**: `vow-types/src/check.rs` (`literal_out_of_range` seam beside `integer_type_range`;
+  adapter `check_integer_value_range`; call sites L1522, L2003)
 - **Summary**: extract the pure literal-fits-target decision + range-text into
-  `literal_out_of_range(value, target) -> Option<String>`, leaving `emit_error_with_hints` at the
-  call site; pins the `negative_max`/`i64::MIN` asymmetry.
+  `literal_out_of_range(value, target) -> Option<String>` (Design A, adjudicated over the
+  neutral-bounds newtype Design C on depth), leaving `emit_error_with_hints` at the call site; pins
+  the `negative_max`/`i64::MIN` asymmetry.
 - **First seen**: 2026-08-31
 - **Report**: `.architecture/reviews/2026-09-04-integer-literal-range-fit.md`
+- **PR**: #1241
 - **Reason**: **picked this firing** (2026-09-04); tied at 22 with the fresh `builtin-constructor-spec`
   and won on earlier `First seen`. Unblocked now that `same-operand-type-verdict` (#1234) merged.
 
