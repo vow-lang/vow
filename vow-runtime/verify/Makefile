@@ -27,8 +27,9 @@ ESBMC ?= esbmc
 # the paths that forces the arena proof to re-run, per scripts/ci_docs_only.py.
 # The pin itself lives in .github/actions/install-esbmc/action.yml.
 UNWIND ?= 5
+SOLVER_FLAGS ?= --boolector
 
 .PHONY: verify
 verify:
 	$(ESBMC) arena.c --unwind $(UNWIND) \
-	    --no-bounds-check --no-pointer-check --64 --boolector
+	    --no-bounds-check --no-pointer-check --64 $(SOLVER_FLAGS)

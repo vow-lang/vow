@@ -1559,6 +1559,19 @@ echo ""
 # ─── Section 11: Arena Primitive ESBMC Verification ────────────────
 
 section_begin "Section 11: Arena Primitive Verification"
+default_solver_command=$(env -u SOLVER_FLAGS make -s -C vow-runtime/verify -n verify)
+override_solver_command=$(make -s -C vow-runtime/verify -n \
+    SOLVER_FLAGS="--z3 --incremental-bmc" verify)
+if [[ "$default_solver_command" == *"--64 --boolector"* \
+    && "$override_solver_command" == *"--64 --z3 --incremental-bmc"* \
+    && "$override_solver_command" != *"--boolector"* \
+    && "$override_solver_command" != *'"--z3 --incremental-bmc"'* ]]; then
+    pass "arena/solver-flags"
+else
+    fail "arena/solver-flags" \
+        "default=$default_solver_command; override=$override_solver_command"
+fi
+
 # The shared runner applies the same 2 GB virtual-memory cap as run_self, so
 # this also guards against a regression in the verify invocation. With the
 # single-shot --unwind 5 --boolector command (#516) the harness stays below
