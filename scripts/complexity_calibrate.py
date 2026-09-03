@@ -200,13 +200,13 @@ def main():
             f"_Retention: `{args.retention_class}` for the `complexity-calibration` stream."
         )
         if args.retention_class == "current-baseline":
-            lines.append("Replace")
             lines.append(
-                "this snapshot in the same PR as the next committed complexity calibration"
+                "When adding a newer snapshot for this stream, delete this dated file in the"
             )
             lines.append(
-                "snapshot unless a reviewer reclassifies it as `release-evidence`._"
+                "same PR rather than overwriting it in place, unless a reviewer reclassifies"
             )
+            lines.append("it as `release-evidence`._")
         else:
             lines[-1] += "_"
         lines.append("")
