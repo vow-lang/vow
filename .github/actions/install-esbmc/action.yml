@@ -105,6 +105,15 @@ runs:
         unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
         rm "/tmp/$ESBMC_ZIP"
 
+    # The macOS release archive ships no libz3 dylib of its own -- the
+    # binary is dynamically linked against Homebrew's z3 install
+    # (/opt/homebrew/opt/z3/lib/libz3.5.1.dylib) and aborts at dyld load
+    # time without it. GitHub's macOS runners don't have z3 preinstalled.
+    - name: Install z3 (macOS runtime dependency)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install z3
+
     # Locate the binary rather than assuming where it sits. The archive
     # layout is not stable across releases -- 8.1 unpacked `bin/esbmc`,
     # 8.5 unpacks `release/bin/esbmc` -- and a hardcoded path silently
