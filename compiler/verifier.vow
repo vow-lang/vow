@@ -396,10 +396,35 @@ fn append_timeout_arg(args: Vec<String>, timeout_secs: String) {
     }
 }
 
-fn append_memlimit_arg(args: Vec<String>, memlimit_arg: String) {
+// `uname -s` reports "Darwin" on macOS. ESBMC's `--memlimit` calls
+// `setrlimit(RLIMIT_DATA, ...)` internally, which Darwin's kernel rejects
+// unconditionally (EINVAL) -- ESBMC then aborts. There is no working
+// memlimit on macOS today, so every `--memlimit` decision checks the host
+// rather than caching it: Vow has no module-level mutable state to memoize
+// into, and an extra `uname` spawn per verified function is cheap next to
+// the ESBMC invocation it precedes. Mirrors default_memlimit_mb in
+// vow-verify/src/solver_strategy.rs.
+fn host_is_macos() -> bool [io] {
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("-s"));
+    let handle: i64 = process_start(String::from("uname"), args);
+    if handle == -1 {
+        return false;
+    }
+    process_wait_timeout(handle, 5000);
+    let stdout: String = process_stdout_for(handle);
+    process_kill(handle);
+    str_find_str(stdout, String::from("Darwin")) >= 0
+}
+
+fn append_memlimit_arg(args: Vec<String>, memlimit_arg: String) [io] {
     // Self-hosted Vow has no memlimit opt-out CLI today; emit the default cap
-    // unconditionally. Keep callers passing the same value to save_esbmc_debug
+    // unconditionally except where it would crash ESBMC outright (see
+    // host_is_macos). Keep callers passing the same value to save_esbmc_debug
     // and this helper if Rust grows a user-facing opt-out.
+    if host_is_macos() {
+        return;
+    }
     args.push(String::from("--memlimit"));
     args.push(memlimit_arg);
 }

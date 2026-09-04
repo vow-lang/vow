@@ -52,6 +52,23 @@ fn check_memory_limit_classifier_ignores_echoed_memlimit_option() -> i64 {
     0
 }
 
+// --memlimit is never emitted on macOS (ESBMC's setrlimit(RLIMIT_DATA) is
+// fatal on Darwin); this asserts append_memlimit_arg agrees with the same
+// host_is_macos() check it uses internally, on whatever platform this test
+// actually runs.
+fn check_append_memlimit_arg_matches_host() -> i64 [io] {
+    let args: Vec<String> = Vec::new();
+    append_memlimit_arg(args, String::from("4096m"));
+    if host_is_macos() {
+        if args.len() != 0 { return 41; }
+    } else {
+        if args.len() != 2 { return 42; }
+        if args[0] != String::from("--memlimit") { return 43; }
+        if args[1] != String::from("4096m") { return 44; }
+    }
+    0
+}
+
 fn check_counterexample_value_names() -> i64 {
     let c_names: Vec<String> = Vec::new();
     c_names.push(String::from("v1"));
@@ -119,7 +136,7 @@ fn check_unattributed_sentinel() -> i64 {
     0
 }
 
-fn main() -> i32 {
+fn main() -> i32 [io] {
     let r1: i64 = check_known_nondet_calls();
     if r1 != 0 { return i64_to_i32_wrap(r1); }
     let r2: i64 = check_unknown_type_fails_loud();
@@ -140,5 +157,7 @@ fn main() -> i32 {
     if r9 != 0 { return i64_to_i32_wrap(r9); }
     let r10: i64 = check_unattributed_sentinel();
     if r10 != 0 { return i64_to_i32_wrap(r10); }
+    let r11: i64 = check_append_memlimit_arg_matches_host();
+    if r11 != 0 { return i64_to_i32_wrap(r11); }
     0
 }

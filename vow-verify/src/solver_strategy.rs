@@ -27,6 +27,7 @@ pub struct SolverConfig {
     pub encoding: Encoding,
     pub timeout_secs: Option<u32>,
     /// Per-ESBMC-process memory cap. `Some(n)` is emitted as `--memlimit nm`.
+    /// See [`default_memlimit_mb`] for why this is never `Some` on macOS.
     pub memlimit_mb: Option<u32>,
 }
 
@@ -34,13 +35,25 @@ pub const DEFAULT_AUTO_TIMEOUT_SECS: u32 = 30;
 /// Default per-ESBMC-process cap. This bounds solver RSS without changing Vow contracts.
 pub const DEFAULT_ESBMC_MEMLIMIT_MB: u32 = 4096;
 
+/// The memlimit a fresh `SolverConfig` starts with. `None` on macOS: ESBMC's
+/// `--memlimit` calls `setrlimit(RLIMIT_DATA, ...)` internally, which Darwin
+/// rejects unconditionally (`EINVAL`) and ESBMC treats as fatal (`abort()`) --
+/// there is no working memlimit on macOS today.
+pub fn default_memlimit_mb() -> Option<u32> {
+    if cfg!(target_os = "macos") {
+        None
+    } else {
+        Some(DEFAULT_ESBMC_MEMLIMIT_MB)
+    }
+}
+
 impl SolverConfig {
     pub fn default_config() -> Self {
         Self {
             solver: Solver::Auto,
             encoding: Encoding::Auto,
             timeout_secs: None,
-            memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
+            memlimit_mb: default_memlimit_mb(),
         }
     }
 
@@ -172,7 +185,7 @@ pub fn classify_function(func: &Function) -> SolverConfig {
         solver,
         encoding: Encoding::Bv, // never auto-select Ir
         timeout_secs: None,
-        memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
+        memlimit_mb: default_memlimit_mb(),
     }
 }
 
@@ -483,7 +496,7 @@ mod tests {
     #[test]
     fn test_default_config_sets_esbmc_memlimit() {
         let c = SolverConfig::default_config();
-        assert_eq!(c.memlimit_mb, Some(DEFAULT_ESBMC_MEMLIMIT_MB));
+        assert_eq!(c.memlimit_mb, default_memlimit_mb());
     }
 
     #[test]
@@ -501,7 +514,12 @@ mod tests {
     #[test]
     fn test_esbmc_args_default() {
         let c = SolverConfig::default_config();
-        assert_eq!(c.esbmc_args(), vec!["--memlimit", "4096m"]);
+        let expected: Vec<&str> = if cfg!(target_os = "macos") {
+            vec![]
+        } else {
+            vec!["--memlimit", "4096m"]
+        };
+        assert_eq!(c.esbmc_args(), expected);
     }
 
     #[test]

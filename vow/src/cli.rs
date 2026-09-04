@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use vow_codegen::{BuildMode, TraceMode};
-use vow_verify::{DEFAULT_ESBMC_MEMLIMIT_MB, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig};
+use vow_verify::{DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig, default_memlimit_mb};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ModeArg {
@@ -91,7 +91,7 @@ pub fn solver_config(
         solver,
         encoding,
         timeout_secs: timeout,
-        memlimit_mb: Some(DEFAULT_ESBMC_MEMLIMIT_MB),
+        memlimit_mb: default_memlimit_mb(),
     };
     config.validate()?;
     Ok(config)
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(config.solver, Solver::Z3);
         assert_eq!(config.encoding, Encoding::Ir);
         assert_eq!(config.timeout_secs, Some(10));
-        assert_eq!(config.memlimit_mb, Some(DEFAULT_ESBMC_MEMLIMIT_MB));
+        assert_eq!(config.memlimit_mb, default_memlimit_mb());
     }
 
     #[test]

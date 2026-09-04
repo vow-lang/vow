@@ -44,6 +44,13 @@ fn memlimit_probe_bounds_real_esbmc_rss_when_enabled() {
         eprintln!("SKIP: set VOW_VERIFY_RUN_MEMLIMIT_RSS=1 to run the real ESBMC RSS probe");
         return;
     }
+    if cfg!(target_os = "macos") {
+        eprintln!(
+            "SKIP: --memlimit has no working enforcement on macOS (ESBMC's \
+             setrlimit(RLIMIT_DATA) call is rejected by Darwin and aborts)"
+        );
+        return;
+    }
 
     let real_esbmc = match find_esbmc() {
         Some(path) => path,
