@@ -2454,16 +2454,30 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         // The concrete operand fixes the result type; an unsuffixed-literal
         // marker coerces to it. Two markers stay a marker (mirrors
         // check_same_numeric in the Rust checker).
+        let mut result_tid: i64 = CTY_I64();
         if ty_is_lit_int(e.ts, lhs_tid) && ty_is_integer(e.ts, rhs_tid) {
-            return rhs_tid;
+            result_tid = rhs_tid;
+        } else if ty_is_lit_int(e.ts, rhs_tid) && ty_is_integer(e.ts, lhs_tid) {
+            result_tid = lhs_tid;
+        } else if ty_is_numeric_or_lit_int(e.ts, lhs_tid) {
+            result_tid = lhs_tid;
         }
-        if ty_is_lit_int(e.ts, rhs_tid) && ty_is_integer(e.ts, lhs_tid) {
-            return lhs_tid;
+        // Checked arithmetic (+!, -!, *!, /!, %!) means "abort instead of
+        // wrapping on integer overflow" — a condition floats have no
+        // equivalent of. Reject float operands here rather than emitting IR
+        // that maps to the integer-only sadd_overflow-family opcodes.
+        let is_checked_arith: bool = op == BINOP_ADD_CHK() || op == BINOP_SUB_CHK()
+            || op == BINOP_MUL_CHK() || op == BINOP_DIV_CHK() || op == BINOP_REM_CHK();
+        if is_checked_arith {
+            let result_tag: i64 = ty_tag(e.ts, result_tid);
+            if result_tag == CTY_F32() || result_tag == CTY_F64() {
+                let msg: String = String::from("checked arithmetic operators do not support `");
+                msg.push_str(ty_tag_name(result_tag));
+                msg.push_str(String::from("`; checked overflow has no meaning for floating-point types"));
+                env_emit_error_code(e, EC_UNSUPPORTED_FEATURE(), msg, expr_span(a, eid));
+            }
         }
-        if ty_is_numeric_or_lit_int(e.ts, lhs_tid) {
-            return lhs_tid;
-        }
-        return CTY_I64();
+        return result_tid;
     }
 
     if tag == EXPR_UNOP() {
