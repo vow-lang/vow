@@ -2068,7 +2068,7 @@ impl<'e> Checker<'e> {
                     | BinOp::SubChecked
                     | BinOp::MulChecked
                     | BinOp::DivChecked
-                    | BinOp::RemChecked => self.check_same_numeric(lhs_ty, rhs_ty, expr.span),
+                    | BinOp::RemChecked => self.check_checked_numeric(lhs_ty, rhs_ty, expr.span),
                     BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                         if lhs_ty.is_lit_int() && rhs_ty.is_lit_int() {
                             self.check_integer_literal_range(lhs, &Ty::I64);
@@ -3206,6 +3206,24 @@ impl<'e> Checker<'e> {
                 Ty::Unit
             }
         }
+    }
+
+    /// Checked arithmetic (`+!`, `-!`, `*!`, `/!`, `%!`) means "abort instead of
+    /// wrapping on integer overflow" — a condition floats have no equivalent of.
+    /// Reject float operands here rather than emitting IR that would map to the
+    /// integer-only `sadd_overflow`-family Cranelift opcodes.
+    fn check_checked_numeric(&mut self, lhs: Ty, rhs: Ty, op_span: Span) -> Ty {
+        let ty = self.check_same_numeric(lhs, rhs, op_span);
+        if ty.is_float() {
+            self.emit_error(
+                ErrorCode::UnsupportedFeature,
+                format!(
+                    "checked arithmetic operators do not support `{ty}`; checked overflow has no meaning for floating-point types"
+                ),
+                op_span,
+            );
+        }
+        ty
     }
 
     fn validate_arm_pattern(&mut self, pat: &Pat, is_last: bool) -> bool {
@@ -7537,6 +7555,15 @@ mod tests {
         (result, emitter.0)
     }
 
+    fn checked_numeric_operand_result(lhs: Ty, rhs: Ty) -> (Ty, Vec<Diagnostic>) {
+        let mut emitter = TestEmitter(vec![]);
+        let result = {
+            let mut checker = Checker::new("test.vow", &mut emitter);
+            checker.check_checked_numeric(lhs, rhs, dummy_span())
+        };
+        (result, emitter.0)
+    }
+
     #[test]
     fn same_operand_checks_pin_diagnostics_and_result_types() {
         // A matched, in-class pair yields the operand type and emits nothing.
@@ -7598,6 +7625,33 @@ mod tests {
         let (ty, diags) = numeric_operand_result(Ty::Never, Ty::Str);
         assert_eq!(ty, Ty::Str);
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn checked_numeric_rejects_float_operands_without_double_reporting() {
+        // A float pair is well-typed arithmetic, but checked overflow has no
+        // meaning for floats: emit exactly one `UnsupportedFeature` diagnostic
+        // and still return the resolved float type (not `Ty::Unit`) so the
+        // expression doesn't cascade into a spurious `TypeMismatch` against an
+        // enclosing `-> f64` return type.
+        let (ty, diags) = checked_numeric_operand_result(Ty::F64, Ty::F64);
+        assert_eq!(ty, Ty::F64);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, ErrorCode::UnsupportedFeature);
+        assert!(diags[0].message.contains("f64"));
+
+        // Integer operands are unaffected: no regression on the existing path.
+        let (ty, diags) = checked_numeric_operand_result(Ty::I64, Ty::I64);
+        assert_eq!(ty, Ty::I64);
+        assert!(diags.is_empty());
+
+        // Mismatched classes: `check_same_numeric` already reports
+        // `TypeMismatch` and returns `Ty::Unit`, which is not a float, so the
+        // new float check must not also fire — no double-report.
+        let (ty, diags) = checked_numeric_operand_result(Ty::F64, Ty::I64);
+        assert_eq!(ty, Ty::Unit);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, ErrorCode::TypeMismatch);
     }
 
     #[test]
