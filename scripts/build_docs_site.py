@@ -15,6 +15,7 @@ gitignored; the hand-written pages (home, tutorial, reference/index) are committ
 
 from __future__ import annotations
 
+import functools
 import re
 import shutil
 from pathlib import Path
@@ -101,13 +102,27 @@ def _heading_anchors(markdown_text: str) -> set[str]:
     return anchors
 
 
+@functools.lru_cache(maxsize=None)
+def _heading_anchors_for(target_path: Path) -> frozenset[str]:
+    return frozenset(_heading_anchors(target_path.read_text()))
+
+
 def _resolve_target(target: str, anchor: str, page: str) -> str:
     """Resolve a `../`-escaping target to its GitHub URL, or raise loudly."""
-    if not (REPO / "docs" / target).exists():
+    target_path = REPO / "docs" / target
+    if not target_path.exists():
         raise SystemExit(
             f"{page}: link '../{target}' has no target at docs/{target}. "
             "Fix the link in the canonical file."
         )
+    if anchor and anchor != "#" and target_path.suffix == ".md":
+        fragment = anchor[1:]
+        valid_anchors = _heading_anchors_for(target_path)
+        if fragment not in valid_anchors:
+            raise SystemExit(
+                f"{page}: link '../{target}{anchor}' has no heading '{fragment}' "
+                f"in docs/{target}. Valid anchors: {sorted(valid_anchors)}"
+            )
     return f"{GITHUB_BLOB}/docs/{target}{anchor}"
 
 

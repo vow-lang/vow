@@ -95,11 +95,11 @@ class RetargetEscapingLinksTest(unittest.TestCase):
 
     def test_link_with_fragment_is_rewritten(self):
         out = bds._retarget_escaping_links(
-            "See [details](../verifier-discipline.md#some-heading).", "grammar.md"
+            "See [details](../verifier-discipline.md#the-core-rule).", "grammar.md"
         )
         self.assertEqual(
             out,
-            f"See [details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md#some-heading).",
+            f"See [details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md#the-core-rule).",
         )
 
     def test_link_with_title_is_rewritten_not_rejected(self):
@@ -118,12 +118,12 @@ class RetargetEscapingLinksTest(unittest.TestCase):
 
     def test_link_with_fragment_and_title_is_rewritten(self):
         out = bds._retarget_escaping_links(
-            'See [details](../verifier-discipline.md#some-heading "Verifier discipline").',
+            'See [details](../verifier-discipline.md#the-core-rule "Verifier discipline").',
             "grammar.md",
         )
         self.assertEqual(
             out,
-            f"See [details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md#some-heading "
+            f"See [details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md#the-core-rule "
             '"Verifier discipline").',
         )
 
@@ -132,6 +132,37 @@ class RetargetEscapingLinksTest(unittest.TestCase):
             bds._retarget_escaping_links(
                 "See [details](../does-not-exist.md).", "grammar.md"
             )
+
+    def test_link_with_valid_fragment_is_rewritten(self):
+        out = bds._retarget_escaping_links(
+            "See [details](../verifier-discipline.md#the-core-rule).", "grammar.md"
+        )
+        self.assertEqual(
+            out,
+            f"See [details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md#the-core-rule).",
+        )
+
+    def test_link_with_stale_fragment_raises(self):
+        with self.assertRaises(SystemExit):
+            bds._retarget_escaping_links(
+                "See [details](../verifier-discipline.md#renamed-heading).",
+                "grammar.md",
+            )
+
+    def test_link_with_punctuation_heading_fragment_is_rewritten(self):
+        # Locks in the double-hyphen slugification behavior end-to-end
+        # (em-dash between two spaces deletes to two literal hyphens), not
+        # just at the pure _slugify_heading layer.
+        out = bds._retarget_escaping_links(
+            "See [details](../adr/0001-numeric-tower-narrow-ints.md"
+            "#0001-numeric-tower--narrow-integer-types).",
+            "grammar.md",
+        )
+        self.assertEqual(
+            out,
+            f"See [details]({bds.GITHUB_BLOB}/docs/adr/0001-numeric-tower-narrow-ints.md"
+            "#0001-numeric-tower--narrow-integer-types).",
+        )
 
     def test_sibling_link_is_untouched(self):
         # No `../` prefix, so it already resolves inside the copied set and
@@ -152,11 +183,11 @@ class RetargetEscapingLinksTest(unittest.TestCase):
 
     def test_reference_style_link_with_fragment_is_rewritten(self):
         out = bds._retarget_escaping_links(
-            "[details]: ../verifier-discipline.md#some-heading", "grammar.md"
+            "[details]: ../verifier-discipline.md#the-core-rule", "grammar.md"
         )
         self.assertEqual(
             out,
-            f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md#some-heading",
+            f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md#the-core-rule",
         )
 
     def test_reference_style_link_with_title_is_rewritten(self):
@@ -174,6 +205,21 @@ class RetargetEscapingLinksTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             bds._retarget_escaping_links(
                 "[details]: ../does-not-exist.md", "grammar.md"
+            )
+
+    def test_reference_style_link_with_valid_fragment_is_rewritten(self):
+        out = bds._retarget_escaping_links(
+            "[details]: ../verifier-discipline.md#the-core-rule", "grammar.md"
+        )
+        self.assertEqual(
+            out,
+            f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md#the-core-rule",
+        )
+
+    def test_reference_style_link_with_stale_fragment_raises(self):
+        with self.assertRaises(SystemExit):
+            bds._retarget_escaping_links(
+                "[details]: ../verifier-discipline.md#renamed-heading", "grammar.md"
             )
 
     def test_reference_style_sibling_link_is_untouched(self):
