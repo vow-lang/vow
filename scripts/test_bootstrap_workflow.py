@@ -38,10 +38,16 @@ EQUIVALENCE_WORKFLOW = WORKFLOWS / "equivalence.yml"
 FULL_TEST_WORKFLOW = WORKFLOWS / "full-test.yml"
 PROMOTED_FIXTURES_WORKFLOW = WORKFLOWS / "promoted-fixtures.yml"
 RELEASE_WORKFLOW = WORKFLOWS / "release.yml"
+INSTALL_ESBMC_ACTION = (
+    REPO_ROOT / ".github" / "actions" / "install-esbmc" / "action.yml"
+)
 FULL_TEST_SCRIPT = REPO_ROOT / "scripts" / "full_test.sh"
 
 # A top-level job key: exactly two spaces, a name, a colon, end of line.
 JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
+
+# A non-wildcard `RUNNER_OS/RUNNER_ARCH` arm of install-esbmc's case statement.
+CASE_ARM = re.compile(r"^ {10}([A-Za-z]+/[A-Za-z0-9]+)\)$", re.MULTILINE)
 
 
 def header(text):
@@ -190,6 +196,16 @@ class CiWorkflowTest(unittest.TestCase):
 
 
 class ReleaseWorkflowTest(unittest.TestCase):
+    # GitHub's runner labels (RUNNER_OS/RUNNER_ARCH) for each of this
+    # matrix's own (os, arch) pairs -- the only place that translation needs
+    # to live.
+    RUNNER_PLATFORM = {
+        ("linux", "x86_64"): "Linux/X64",
+        ("linux", "aarch64"): "Linux/ARM64",
+        ("macos", "aarch64"): "macOS/ARM64",
+        ("macos", "x86_64"): "macOS/X64",
+    }
+
     def setUp(self) -> None:
         text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         entry = re.compile(
@@ -216,6 +232,25 @@ class ReleaseWorkflowTest(unittest.TestCase):
             {"runner": "macos-15-intel", "verify": "false"},
             self.matrix[("macos", "x86_64")],
         )
+
+    def test_verified_platforms_have_a_pinned_case_arm(self) -> None:
+        # A platform can drift out of sync two ways: this matrix turns on
+        # `verify: true` for a platform install-esbmc/action.yml has no
+        # checksum pin for (would fail at release time instead of here), or
+        # action.yml grows a pin for a platform this matrix never verifies.
+        # Compare the two files' sets directly instead of hand-copying either
+        # side into the other.
+        verified = {
+            platform
+            for platform, entry in self.matrix.items()
+            if entry["verify"] == "true"
+        }
+        expected_arms = {self.RUNNER_PLATFORM[platform] for platform in verified}
+
+        action_text = INSTALL_ESBMC_ACTION.read_text(encoding="utf-8")
+        actual_arms = set(CASE_ARM.findall(action_text))
+
+        self.assertEqual(expected_arms, actual_arms)
 
 
 class FullTestWorkflowTest(unittest.TestCase):
