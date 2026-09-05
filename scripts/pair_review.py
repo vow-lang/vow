@@ -1083,6 +1083,10 @@ def review_pair(
                 verdict = "inconclusive"
             finding["verdict"] = verdict
             finding["verdict_detail"] = detail
+            # The gate judges the whole pipeline, not this pair's stage, so a
+            # confirmed divergence isn't yet tied to where it lives -- see
+            # docs/equivalence/README.md's CONFIRMED paragraph.
+            finding["attribution"] = "unlocalized"
             result["findings"].append(finding)
     return result
 

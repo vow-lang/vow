@@ -903,6 +903,30 @@ class ReviewReportTest(unittest.TestCase):
 
         self.assertEqual([1, 2], [f["chunk_index"] for f in result["findings"]])
 
+    def test_findings_carry_an_unlocalized_attribution(self):
+        # A pair review judges end-to-end CLI behaviour, not any one stage, so
+        # a confirmed finding cannot yet be attributed to the pair under
+        # review -- it stays "unlocalized" until a human ties it to a stage.
+        llm = fake_llm(
+            json.dumps({"findings": [{"claim": "diverges", "program": "module M\n"}]})
+        )
+        with mock.patch.object(
+            pair_review, "load_pair_units", return_value=self.two_chunk_sources()
+        ):
+            result = pair_review.review_pair(
+                "lexer",
+                "model",
+                "rust",
+                "self",
+                600,
+                1,
+                max_chunks=1,
+                llm_module=llm,
+                confirm_fn=lambda *_: ("confirmed", "diverges"),
+            )
+
+        self.assertEqual("unlocalized", result["findings"][0]["attribution"])
+
     def test_an_unrunnable_gate_is_an_error_not_a_hypothesis(self):
         # `confirm` returns `error` when equivalence.py could not judge the
         # program at all. Filed as a plain hypothesis it would leave the run
