@@ -1262,7 +1262,10 @@ def _print_summary(report, skipped, confirmed, outdir):
     )
     print(f"  refuted   : {report['refuted']}")
     for pair, finding in confirmed:
-        print(f"    [{pair}] {finding.get('claim', '?')}")
+        attribution = finding.get("attribution", "unlocalized")
+        print(
+            f"    [{attribution}; proposed during {pair}] {finding.get('claim', '?')}"
+        )
         print(f"            {finding['verdict_detail']}")
     print(f"  results   : {outdir / 'results.json'}")
 

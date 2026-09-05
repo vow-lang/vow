@@ -1388,6 +1388,51 @@ class LedgerWritebackTest(unittest.TestCase):
 
         self.assertEqual(2, status)
 
+    def test_summary_prints_attribution_not_bare_pair_name(self):
+        # A confirmed finding is not yet tied to any stage. Printing the
+        # reviewed pair's name alone (the old "[lexer]" form) reads as if the
+        # divergence had been localized there, which the runner cannot claim.
+        confirmed = self.result(
+            findings=[
+                {
+                    "claim": "diverges",
+                    "verdict": "confirmed",
+                    "verdict_detail": "exit codes differ",
+                    "attribution": "unlocalized",
+                }
+            ],
+            plan={"chunk_bytes": 100, "chunks": []},
+            chunks_reviewed=[1],
+            input_tokens=0,
+            output_tokens=0,
+        )
+        compiler = Path(self.directory.name) / "compiler"
+        compiler.touch()
+        stdout = io.StringIO()
+        with (
+            mock.patch.dict("sys.modules", {"llm": usable_llm()}),
+            mock.patch.object(pair_review, "LEDGER", self.ledger_path),
+            mock.patch.object(pair_review, "review_pair", return_value=confirmed),
+            redirect_stdout(stdout),
+        ):
+            pair_review.main(
+                [
+                    "--all",
+                    "--pair",
+                    "lexer",
+                    "--rust",
+                    str(compiler),
+                    "--self",
+                    str(compiler),
+                    "--output-dir",
+                    str(Path(self.directory.name) / "confirmed-summary"),
+                ]
+            )
+
+        output = stdout.getvalue()
+        self.assertIn("[unlocalized; proposed during lexer] diverges", output)
+        self.assertNotIn("[lexer] diverges", output)
+
 
 class SystemPromptTest(unittest.TestCase):
     def test_prompt_demands_a_module_header(self):
