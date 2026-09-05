@@ -12,6 +12,49 @@ import unittest
 import build_docs_site as bds
 
 
+class SlugifyHeadingTest(unittest.TestCase):
+    def test_plain_ascii(self):
+        self.assertEqual(bds._slugify_heading("The core rule"), "the-core-rule")
+
+    def test_numeric_prefix_and_em_dash(self):
+        self.assertEqual(
+            bds._slugify_heading("0001. Numeric tower — narrow integer types"),
+            "0001-numeric-tower--narrow-integer-types",
+        )
+
+    def test_colon(self):
+        self.assertEqual(
+            bds._slugify_heading("Verifier Discipline: Safe vs Unsafe Adaptive Retry"),
+            "verifier-discipline-safe-vs-unsafe-adaptive-retry",
+        )
+
+    def test_inline_code_and_em_dash(self):
+        self.assertEqual(
+            bds._slugify_heading("5. Command Loop — EOF-Safe `stdin_read_line`"),
+            "5-command-loop--eof-safe-stdin_read_line",
+        )
+
+    def test_parens_and_em_dash(self):
+        self.assertEqual(
+            bds._slugify_heading(
+                "2. Output-range postcondition (the weak default — use sparingly)"
+            ),
+            "2-output-range-postcondition-the-weak-default--use-sparingly",
+        )
+
+    def test_arrow_and_em_dash(self):
+        self.assertEqual(
+            bds._slugify_heading("2. CEGIS Broken → Fixed — The Core Workflow"),
+            "2-cegis-broken--fixed--the-core-workflow",
+        )
+
+    def test_asterisk_emphasis(self):
+        self.assertEqual(
+            bds._slugify_heading("WS-1 — Make verification *honest* (the C emitter)"),
+            "ws-1--make-verification-honest-the-c-emitter",
+        )
+
+
 class RetargetEscapingLinksTest(unittest.TestCase):
     def test_plain_link_is_rewritten(self):
         out = bds._retarget_escaping_links(

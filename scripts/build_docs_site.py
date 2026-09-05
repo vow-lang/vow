@@ -54,6 +54,18 @@ ESCAPING_REF_LINK = re.compile(
 )
 
 
+def _slugify_heading(text: str) -> str:
+    """Reproduce GitHub's Markdown heading-to-anchor slug for `text`.
+
+    Verified against `github-slugger` (the de facto reference reimplementation
+    of GitHub's own slugifier) for every real heading currently under `docs/`,
+    including em-dashes, arrows, colons, parens, numbers, and inline code
+    spans. Does not handle `_italic_` underscore-emphasis or in-heading
+    Markdown links — neither construct occurs in this repo's headings today.
+    """
+    return re.sub(r"[^\w -]", "", text.lower(), flags=re.UNICODE).replace(" ", "-")
+
+
 def _resolve_target(target: str, anchor: str, page: str) -> str:
     """Resolve a `../`-escaping target to its GitHub URL, or raise loudly."""
     if not (REPO / "docs" / target).exists():
