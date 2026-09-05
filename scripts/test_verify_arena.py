@@ -53,6 +53,35 @@ class WorkflowTest(unittest.TestCase):
 
         self.assertNotIn("verify_arena.sh", ci)
 
+    def test_workflow_has_a_macos_measurement_job(self) -> None:
+        """Issue #1212: a non-blocking job measures the proof on macOS/arm64.
+
+        It must share the Linux job's gate (same classifier output) and
+        declare its own timeout, but is not required to run the proof the
+        same way -- it measures both capped and uncapped behavior, which
+        `scripts/verify_arena.sh` alone does not expose.
+        """
+        self.assertRegex(
+            self.workflow,
+            re.compile(r"^\s*verify-macos:\s*$", re.MULTILINE),
+        )
+        self.assertRegex(
+            self.workflow,
+            re.compile(r"^\s*runs-on:\s*macos-latest\s*$", re.MULTILINE),
+        )
+
+    def test_macos_job_is_gated_on_the_same_classifier(self) -> None:
+        macos_job = self.workflow.split("verify-macos:", 1)[1]
+
+        self.assertIn("needs.changes.outputs.arena == 'true'", macos_job)
+
+    def test_macos_job_declares_a_timeout(self) -> None:
+        macos_job = self.workflow.split("verify-macos:", 1)[1]
+
+        self.assertRegex(
+            macos_job, re.compile(r"^\s*timeout-minutes:\s*\d+\s*$", re.MULTILINE)
+        )
+
 
 class VerifyArenaTest(unittest.TestCase):
     def test_runner_caps_memory_and_invokes_the_arena_proof(self) -> None:

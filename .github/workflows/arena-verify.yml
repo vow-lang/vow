@@ -24,7 +24,9 @@ on:
     - cron: "29 6 * * *"
   workflow_dispatch: {}
 
-# Checkout, an ESBMC download, and a proof. Nothing here writes.
+# Checkout, an ESBMC download, and a proof. `verify-macos` additionally
+# uploads its measurement log via upload-artifact, which uses the Actions
+# runtime token, not GITHUB_TOKEN.
 permissions:
   contents: read
 
@@ -75,3 +77,121 @@ jobs:
         run: python3 scripts/test_verify_arena.py
       - name: Arena primitive verification
         run: scripts/verify_arena.sh
+
+  # Issue #1212: measure the arena proof's memory behavior on macOS/arm64
+  # before gating on it. Darwin/XNU accounts virtual address space
+  # differently from Linux -- ASLR slides, the dyld shared cache, and malloc
+  # zones can inflate reported VSZ far beyond resident footprint -- so the
+  # `ulimit -v 2000000` cap that scripts/verify_arena.sh enforces on Linux
+  # (see vow-runtime/verify/Makefile for the per-ESBMC-version RSS table it
+  # guards) has never been exercised against Darwin's accounting. This job
+  # is advisory (`continue-on-error: true`) and stays that way until
+  # docs/design/arena_macos_memory_profile.md records real numbers backing a
+  # decision either way. See that doc for the current status.
+  verify-macos:
+    name: Arena primitive verification (macOS measurement)
+    needs: changes
+    if: needs.changes.outputs.arena == 'true'
+    runs-on: macos-latest
+    continue-on-error: true
+    # Generous: Homebrew installing llvm@21 alone is slow on a cold macOS
+    # runner, and this job runs the proof twice (uncapped, then capped) to
+    # compare. Tighten once a real run's wall-clock is known.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Confirm ESBMC reports before any cap
+        run: esbmc --version
+
+      # Isolated in one step (one shell) rather than via verify_arena.sh,
+      # so a Darwin rejection of the cap doesn't abort the job before any
+      # data is captured, and so the post-cap esbmc invocation observes the
+      # same shell's limit -- ulimit does not persist across job steps.
+      # `ulimit -a` / `sw_vers` / `uname -m` cost nothing and pin down
+      # exactly which Darwin build produced the numbers below.
+      - name: Probe ulimit -v support and post-cap dyld cost (Darwin)
+        run: |
+          set +e
+          uname -m
+          sw_vers
+          ulimit -a
+          ulimit -v 2000000
+          echo "ulimit -v 2000000 exit status: $?"
+          echo "ulimit -v readback: $(ulimit -v)"
+          esbmc --version
+          echo "esbmc --version under cap exit status: $?"
+          exit 0
+
+      # Uncapped baseline: what does the real proof cost with no ulimit at
+      # all? Runs `make` directly rather than through verify_arena.sh, which
+      # hardcodes the cap. Samples every running `esbmc` process's VSZ/RSS
+      # (KiB, per `ps`) every second alongside /usr/bin/time -l's own
+      # summary (macOS BSD time reports "maximum resident set size" in
+      # *bytes* on its own line -- a different unit than the sampler).
+      # `ps -p $(pgrep esbmc)` breaks silently if more than one PID matches
+      # or none does, so this filters `ps -A` by command name instead.
+      - name: Baseline peak RSS and VSZ (uncapped)
+        run: |
+          set +e
+          (
+            while true; do
+              ts=$(date +%s)
+              ps -A -o vsz=,rss=,ucomm= | awk -v ts="$ts" '$3 == "esbmc" { print ts, $1, $2 }'
+              sleep 1
+            done
+          ) >> uncapped-sampler.log &
+          sampler_pid=$!
+          /usr/bin/time -l make -C vow-runtime/verify verify > uncapped-output.log 2>&1
+          echo "uncapped proof exit status: $?"
+          kill "$sampler_pid" 2>/dev/null
+          wait "$sampler_pid" 2>/dev/null
+          echo "--- uncapped-output.log (tail) ---"
+          tail -n 40 uncapped-output.log
+          echo "--- uncapped-sampler.log peak VSZ sample (ts vsz_kb rss_kb) ---"
+          sort -k2 -n -r uncapped-sampler.log | head -n 1
+          echo "--- uncapped-sampler.log peak RSS sample (ts vsz_kb rss_kb) ---"
+          sort -k3 -n -r uncapped-sampler.log | head -n 1
+          exit 0
+
+      # The actual gate candidate: the real script, real `ulimit -v
+      # 2000000`. Records whether it passes under the cap, and whether the
+      # sampled VSZ during the run exceeded 2 GiB anyway (cap accepted by
+      # the kernel but not enforced against this workload).
+      - name: Capped peak RSS and VSZ (ulimit -v 2000000)
+        run: |
+          set +e
+          (
+            while true; do
+              ts=$(date +%s)
+              ps -A -o vsz=,rss=,ucomm= | awk -v ts="$ts" '$3 == "esbmc" { print ts, $1, $2 }'
+              sleep 1
+            done
+          ) >> capped-sampler.log &
+          sampler_pid=$!
+          /usr/bin/time -l scripts/verify_arena.sh > capped-output.log 2>&1
+          echo "capped proof exit status: $?"
+          kill "$sampler_pid" 2>/dev/null
+          wait "$sampler_pid" 2>/dev/null
+          echo "--- capped-output.log (tail) ---"
+          tail -n 40 capped-output.log
+          echo "--- capped-sampler.log peak VSZ sample (ts vsz_kb rss_kb) ---"
+          sort -k2 -n -r capped-sampler.log | head -n 1
+          echo "--- capped-sampler.log peak RSS sample (ts vsz_kb rss_kb) ---"
+          sort -k3 -n -r capped-sampler.log | head -n 1
+          exit 0
+
+      - name: Upload measurement logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: arena-macos-memory-profile
+          path: |
+            uncapped-output.log
+            uncapped-sampler.log
+            capped-output.log
+            capped-sampler.log
+          if-no-files-found: warn
