@@ -105,6 +105,16 @@ runs:
         unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
         rm "/tmp/$ESBMC_ZIP"
 
+    # The macOS release archive ships none of its own dylibs -- the binary
+    # is dynamically linked against Homebrew installs of z3, mpfr, gmp,
+    # boost and llvm@21 (confirmed via `llvm-objdump --macho
+    # --dylibs-used`) and aborts at dyld load time without them. GitHub's
+    # macOS runners have none of these preinstalled.
+    - name: Install ESBMC runtime dependencies (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install z3 mpfr gmp boost llvm@21
+
     # Locate the binary rather than assuming where it sits. The archive
     # layout is not stable across releases -- 8.1 unpacked `bin/esbmc`,
     # 8.5 unpacks `release/bin/esbmc` -- and a hardcoded path silently

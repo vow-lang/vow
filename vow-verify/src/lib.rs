@@ -17,5 +17,5 @@ pub use esbmc::{
 };
 pub use solver_strategy::{
     DEFAULT_AUTO_TIMEOUT_SECS, DEFAULT_ESBMC_MEMLIMIT_MB, Encoding, Solver, SolverConfig,
-    classify_function, run_with_fallback,
+    classify_function, default_memlimit_mb, run_with_fallback,
 };
