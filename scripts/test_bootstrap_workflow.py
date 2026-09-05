@@ -205,8 +205,13 @@ class ReleaseWorkflowTest(unittest.TestCase):
         }
 
     def test_release_matrix_verifies_supported_platforms(self) -> None:
-        self.assertEqual("true", self.matrix[("linux", "x86_64")]["verify"])
-        self.assertEqual("true", self.matrix[("macos", "aarch64")]["verify"])
+        for platform in (
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("macos", "aarch64"),
+        ):
+            with self.subTest(platform=platform):
+                self.assertEqual("true", self.matrix[platform]["verify"])
         self.assertEqual(
             {"runner": "macos-15-intel", "verify": "false"},
             self.matrix[("macos", "x86_64")],
