@@ -5072,6 +5072,10 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         let val: i64 = expr_a(a, eid);
         return i64_to_string(val);
     }
+    if tag == EXPR_LIT_FLOAT() {
+        let bits: i64 = expr_a(a, eid);
+        return format_f64_bits(bits as u64);
+    }
     if tag == EXPR_LIT_BOOL() {
         let val: i64 = expr_a(a, eid);
         if val != 0 { return String::from("true"); }
@@ -5119,7 +5123,8 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         // Mirror printer.rs: a non-atomic operand is parenthesized so the cast
         // binds where the source said it did.
         let inner_tag: i64 = expr_tag(a, inner_eid);
-        let atomic: bool = inner_tag == EXPR_LIT_INT() || inner_tag == EXPR_LIT_BOOL()
+        let atomic: bool = inner_tag == EXPR_LIT_INT() || inner_tag == EXPR_LIT_FLOAT()
+            || inner_tag == EXPR_LIT_BOOL()
             || inner_tag == EXPR_LIT_STR() || inner_tag == EXPR_IDENT()
             || inner_tag == EXPR_RESULT() || inner_tag == EXPR_CALL()
             || inner_tag == EXPR_METHOD() || inner_tag == EXPR_FIELD()
