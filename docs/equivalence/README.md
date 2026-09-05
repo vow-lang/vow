@@ -87,6 +87,25 @@ cap lowers the reported coverage and leaves the remaining chunks visibly
 deferred. Rust `#[cfg(test)]` items are excluded — two thirds of the Rust units
 in the declared pairs are tests with no self-hosted counterpart.
 
+Because Tier 3 compiles and executes model-authored candidates under a process
+that carries `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, the four execution sites
+shared with Tier 2 (`run_compiler`/`run_binary` in `scripts/equivalence.py`,
+`run_json`/`run_debug_binary` in `scripts/verifier_runtime.py`) scrub
+credential-shaped environment variables (`*_API_KEY`, `*_TOKEN`) from every
+child process, and run compiled candidate binaries from a disposable working
+directory instead of the checkout root (`scripts/candidate_isolation.py`,
+#1188). `run_binary`'s cwd isolation is gated on `--no-directives` (the flag
+that already marks an input as a candidate rather than a corpus fixture):
+Tier 2's corpus sweep keeps `cwd=REPO_ROOT` unconditionally, since several
+fixtures (`tests/run/fs_read_line_basic.vow` and siblings,
+`tests/multi/vmod_region_roundtrip/main.vow`) open fixture files by a path
+relative to the checkout root. `run_debug_binary`'s isolation is unconditional,
+since it drives compiled `tests/verify*`/`examples` fixtures with no `argv`,
+none of which depend on `cwd=REPO_ROOT`. This closes the cheapest half of the
+isolation gap the issue describes; full sandboxing (filesystem allowlist, no
+network, process-tree/CPU/fd limits) is deliberately left for separate,
+individually reviewed follow-up work.
+
 Everything that is not a function item — a file's `struct`, `enum` and `impl`
 declarations — goes to that file's preamble, which is repeated in every chunk of
 the pair. Cutting from one `fn` token to the next would instead file `struct

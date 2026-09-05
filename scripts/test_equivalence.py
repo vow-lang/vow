@@ -9,6 +9,8 @@ nondeterministic program mistaken for a miscompile.
 
 import io
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -529,6 +531,91 @@ class CompareRuntimeTest(unittest.TestCase):
         self.assertEqual(([], None), (div, why))
 
 
+class CompareRuntimeIsolateCwdForwardingTest(unittest.TestCase):
+    """`isolate_cwd` must reach every run_binary call compare_runtime makes."""
+
+    def run_with(self, **kwargs):
+        with mock.patch.object(
+            equivalence, "run_binary", return_value=binary_result(b"ok")
+        ) as rb:
+            equivalence.compare_runtime("rust", "self", b"", 30, **kwargs)
+        return rb
+
+    def test_default_forwards_false(self):
+        rb = self.run_with()
+
+        self.assertTrue(
+            all(c.kwargs["isolate_cwd"] is False for c in rb.call_args_list)
+        )
+
+    def test_true_is_forwarded_to_every_call(self):
+        rb = self.run_with(isolate_cwd=True)
+
+        self.assertEqual(3, len(rb.call_args_list))
+        self.assertTrue(all(c.kwargs["isolate_cwd"] is True for c in rb.call_args_list))
+
+
+class RunCompilerEnvTest(unittest.TestCase):
+    def test_scrubs_credentials_keeps_path(self):
+        with (
+            mock.patch.dict(
+                os.environ, {"ANTHROPIC_API_KEY": "sk-x", "PATH": "/bin"}, clear=True
+            ),
+            mock.patch.object(
+                equivalence.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired("x", 1),
+            ) as run,
+        ):
+            equivalence.run_compiler("binary", [], 1, False)
+
+        env = run.call_args.kwargs["env"]
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertEqual("/bin", env["PATH"])
+        self.assertEqual(equivalence.REPO_ROOT, run.call_args.kwargs["cwd"])
+
+
+class RunBinaryEnvAndCwdTest(unittest.TestCase):
+    def test_scrubs_credentials(self):
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-x"}, clear=True),
+            mock.patch.object(
+                equivalence.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired("x", 1),
+            ) as run,
+        ):
+            equivalence.run_binary("binary", b"", 1, False)
+
+        self.assertNotIn("OPENAI_API_KEY", run.call_args.kwargs["env"])
+
+    def test_default_keeps_cwd_at_repo_root(self):
+        with mock.patch.object(
+            equivalence.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired("x", 1),
+        ) as run:
+            equivalence.run_binary("binary", b"", 1, False)
+
+        self.assertEqual(equivalence.REPO_ROOT, run.call_args.kwargs["cwd"])
+
+    def test_isolate_cwd_runs_in_a_disposable_directory_with_an_absolute_path(self):
+        with mock.patch.object(
+            equivalence.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired("x", 1),
+        ) as run:
+            equivalence.run_binary(
+                "relative/path/to/bin", b"", 1, False, isolate_cwd=True
+            )
+
+        called_path = Path(run.call_args.args[0][0])
+        self.assertTrue(called_path.is_absolute())
+        self.assertEqual(Path("relative/path/to/bin").resolve(), called_path)
+        cwd = run.call_args.kwargs["cwd"]
+        self.assertNotEqual(equivalence.REPO_ROOT, cwd)
+
+
 class CorpusTest(unittest.TestCase):
     def test_corpus_is_sorted_and_deduplicated(self):
         # Shard k of n must mean the same file set on every run, so ordering is
@@ -810,6 +897,43 @@ class CheckFileCleanupTest(unittest.TestCase):
         garbage = result(parsed=False, exit_code=1)
 
         self.assertEqual([], self.run_check([garbage, garbage]))
+
+
+class CheckFileIsolateCwdWiringTest(unittest.TestCase):
+    """`check_file` isolates the candidate's cwd exactly when directives are
+    not honoured: a corpus fixture may rely on cwd=REPO_ROOT for relative
+    fixture paths, but a model-authored candidate reviewed with
+    --no-directives must not run from the checkout root (#1188).
+    """
+
+    def run_check(self, honour_directives):
+        ok = result(status="Verified", executable=True)
+        with tempfile.TemporaryDirectory() as d:
+            outdir = Path(d) / "out"
+            outdir.mkdir()
+            vow = Path(d) / "case.vow"
+            vow.write_text("fn main() -> i64 { return 0; }\n")
+
+            with (
+                mock.patch.object(equivalence, "run_compiler", side_effect=[ok, ok]),
+                mock.patch.object(
+                    equivalence, "compare_runtime", return_value=([], None)
+                ) as cr,
+            ):
+                equivalence.check_file(
+                    vow, "rust", "self", outdir, 5, honour_directives=honour_directives
+                )
+        return cr
+
+    def test_honoured_directives_keeps_cwd_at_repo_root(self):
+        cr = self.run_check(honour_directives=True)
+
+        self.assertFalse(cr.call_args.kwargs["isolate_cwd"])
+
+    def test_no_directives_isolates_the_cwd(self):
+        cr = self.run_check(honour_directives=False)
+
+        self.assertTrue(cr.call_args.kwargs["isolate_cwd"])
 
 
 class ReconcileTest(unittest.TestCase):
