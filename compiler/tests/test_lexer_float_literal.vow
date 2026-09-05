@@ -1,0 +1,66 @@
+module TestLexerFloatLiteral
+
+use lexer
+use token
+
+fn check_simple_float_literal() -> i32 {
+    let tokens: Vec<Token> = lex(String::from("1.5"));
+    if tokens.len() != 2 { return 1; }
+    let t0: Token = tokens[0];
+    let t1: Token = tokens[1];
+    if t0.tag != tok_lit_float() { return 2; }
+    if t0.span_start != 0 || t0.span_len != 3 { return 3; }
+    let expected_bits: u64 = parse_f64_bits(String::from("1.5"));
+    if t0.int_lo != expected_bits { return 4; }
+    if t1.tag != tok_eof() { return 5; }
+    0
+}
+
+fn check_zero_float_literal() -> i32 {
+    let tokens: Vec<Token> = lex(String::from("0.0"));
+    let t0: Token = tokens[0];
+    if t0.tag != tok_lit_float() { return 10; }
+    let expected_bits: u64 = parse_f64_bits(String::from("0.0"));
+    if t0.int_lo != expected_bits { return 11; }
+    0
+}
+
+// A digit followed by a dot NOT followed by a digit must keep lexing as
+// separate INT / DOT / IDENT tokens (method-call-shaped: `1.abs()`), not
+// collapse into a float literal — regression guard for the existing
+// postfix/method-call dot behavior.
+fn check_dot_not_followed_by_digit_stays_separate() -> i32 {
+    let tokens: Vec<Token> = lex(String::from("1.abs()"));
+    if tokens.len() != 6 { return 20; }
+    let t0: Token = tokens[0];
+    let t1: Token = tokens[1];
+    let t2: Token = tokens[2];
+    if t0.tag != tok_lit_int() { return 21; }
+    if t1.tag != tok_dot() { return 22; }
+    if t2.tag != tok_ident() { return 23; }
+    0
+}
+
+// A trailing bare dot at EOF (no digit follows at all) must not read past
+// the end of source when probing the lookahead byte.
+fn check_dot_at_eof_stays_separate() -> i32 {
+    let tokens: Vec<Token> = lex(String::from("1."));
+    if tokens.len() != 3 { return 30; }
+    let t0: Token = tokens[0];
+    let t1: Token = tokens[1];
+    if t0.tag != tok_lit_int() { return 31; }
+    if t1.tag != tok_dot() { return 32; }
+    0
+}
+
+fn main() -> i32 {
+    let simple: i32 = check_simple_float_literal();
+    if simple != 0 { return simple; }
+    let zero: i32 = check_zero_float_literal();
+    if zero != 0 { return zero; }
+    let dotmethod: i32 = check_dot_not_followed_by_digit_stays_separate();
+    if dotmethod != 0 { return dotmethod; }
+    let doteof: i32 = check_dot_at_eof_stays_separate();
+    if doteof != 0 { return doteof; }
+    0
+}

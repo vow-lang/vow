@@ -1,0 +1,123 @@
+module TestCheckerFloatLiteral
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+use ir
+use ir_printer
+use lower
+use module_io
+
+fn checked_error_count(source: String) -> i64 [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("float_lit.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < parsed.items.len() {
+        item_files.push(String::from("float_lit.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("float_lit.vow"));
+    check_module(check_env, parsed, item_files);
+    dctx.error_count
+}
+
+// The issue's exact repro: a bare float literal `let` binding, and a
+// comparison between a float-typed variable and a bare float literal.
+fn check_issue_repro_comparison() -> i32 [io] {
+    let source: String = String::from(
+        "module MiniFloatLit\nfn lt_lit(a: f64) -> bool {\n    let z: f64 = 1.5;\n    a < z\n}\nfn main() -> i32 { 0 }"
+    );
+    if checked_error_count(source) != 0 { return 1; }
+    0
+}
+
+// The issue's arithmetic variant: a float-typed variable plus a bare float
+// literal.
+fn check_issue_repro_arithmetic() -> i32 [io] {
+    let source: String = String::from(
+        "module MiniFloatLitArith\nfn add_lit(a: f64) -> f64 {\n    a + 0.0\n}\nfn main() -> i32 { 0 }"
+    );
+    if checked_error_count(source) != 0 { return 2; }
+    0
+}
+
+// A bare `let z: f64 = 1.5;` with no comparison at all must also typecheck
+// (the issue notes this simpler case already fails on its own).
+fn check_bare_float_let_binding() -> i32 [io] {
+    let source: String = String::from(
+        "module MiniFloatLitBare\nfn value() -> f64 {\n    let z: f64 = 1.5;\n    z\n}\nfn main() -> i32 { 0 }"
+    );
+    if checked_error_count(source) != 0 { return 3; }
+    0
+}
+
+// Lowering must produce an IOP_CONST_F64 whose `dv` carries the same bit
+// pattern parse_f64_bits("1.5") would, and the C/IR-text emitter must render
+// that constant back as "1.5", not the raw i64 bit pattern.
+fn check_lowered_constant_and_text() -> i32 [io] {
+    let source: String = String::from(
+        "module MiniFloatLitLower\nfn value() -> f64 {\n    let z: f64 = 1.5;\n    z\n}\nfn main() -> i32 { 0 }"
+    );
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, diag_ctx_new(), String::from("float_lower.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut item_index: i64 = 0;
+    while item_index < parsed.items.len() {
+        item_files.push(String::from("float_lower.vow"));
+        item_index = item_index + 1;
+    }
+    let lowered: IrModule = lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    );
+    let expected_bits: u64 = parse_f64_bits(String::from("1.5"));
+    let mut saw_const: bool = false;
+    let mut rendered: String = String::from("");
+    let mut function_index: i64 = 0;
+    while function_index < lowered.functions.len() {
+        let f: IrFunction = lowered.functions[function_index];
+        let mut block_index: i64 = 0;
+        while block_index < f.blocks.len() {
+            let block: IrBlock = f.blocks[block_index];
+            let mut inst_index: i64 = 0;
+            while inst_index < block.insts.len() {
+                let inst: IrInst = block.insts[inst_index];
+                if inst.op == IOP_CONST_F64() {
+                    if inst.dv as u64 == expected_bits {
+                        saw_const = true;
+                        rendered = format_data(inst);
+                    }
+                }
+                inst_index = inst_index + 1;
+            }
+            block_index = block_index + 1;
+        }
+        function_index = function_index + 1;
+    }
+    if !saw_const { return 4; }
+    if rendered != String::from("1.5") { return 5; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let comparison_result: i32 = check_issue_repro_comparison();
+    if comparison_result != 0 { return comparison_result; }
+    let arithmetic_result: i32 = check_issue_repro_arithmetic();
+    if arithmetic_result != 0 { return arithmetic_result; }
+    let bare_result: i32 = check_bare_float_let_binding();
+    if bare_result != 0 { return bare_result; }
+    let lowered_result: i32 = check_lowered_constant_and_text();
+    if lowered_result != 0 { return lowered_result; }
+    0
+}
