@@ -901,6 +901,13 @@ def propose_ledger(document, new, fixed, today):
             if "error_code" not in remaining:
                 entry.pop("rust_error_codes", None)
                 entry.pop("self_hosted_error_codes", None)
+            remaining_expected = (
+                frozenset(entry.get("expected_observables", [])) & remaining
+            )
+            if remaining_expected:
+                entry["expected_observables"] = sorted(remaining_expected)
+            else:
+                entry.pop("expected_observables", None)
         else:
             # Retain the observable and its metadata so a reappearance remains
             # recognizable as a regression rather than a first-time finding.

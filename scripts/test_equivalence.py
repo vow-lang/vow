@@ -90,6 +90,15 @@ def assert_valid_ledger_document(test_case, document):
             if entry.get("status") == "expected":
                 test_case.assertTrue(entry.get("note"), "missing note")
                 test_case.assertIsInstance(entry.get("issue"), int)
+            expected_observables = entry.get("expected_observables")
+            if expected_observables:
+                # `expected_observables ⊆ observable` is something JSON Schema
+                # cannot express (2020-12 has no cross-property subset
+                # keyword), so this helper is the only place it is checked.
+                test_case.assertLessEqual(set(expected_observables), declared)
+                test_case.assertIn(entry.get("status"), ("open", "fixed"))
+                test_case.assertTrue(entry.get("note"), "missing note")
+                test_case.assertIsInstance(entry.get("issue"), int)
             if entry.get("status") in ("open", "expected") and "error_code" in declared:
                 rust_codes = entry.get("rust_error_codes")
                 self_codes = entry.get("self_hosted_error_codes")
@@ -1100,6 +1109,30 @@ class ProposeLedgerTest(unittest.TestCase):
         self.assertEqual({**original, "status": "fixed"}, proposed["corpus"]["a.vow"])
         assert_valid_ledger_document(self, proposed)
 
+    def test_fully_fixing_a_mixed_entry_keeps_expected_observables_as_history(self):
+        # A full fix retains every field verbatim (test_fully_fixed_entry_
+        # keeps_its_history above) so a reappearance reads as a regression.
+        # expected_observables is no exception, even though its own `status:
+        # open` requirement can no longer hold once the whole entry is fixed.
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": ["error_code", "runtime"],
+            "status": "open",
+            "expected_observables": ["error_code"],
+            "note": "intentional diagnostic wording difference",
+            "issue": 588,
+            "rust_error_codes": ["A"],
+            "self_hosted_error_codes": ["B"],
+        }
+        fixed = [{"file": "a.vow", "observables": ["error_code", "runtime"]}]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), [], fixed, "2026-09-01"
+        )
+
+        self.assertEqual({**original, "status": "fixed"}, proposed["corpus"]["a.vow"])
+        assert_valid_ledger_document(self, proposed)
+
     def test_partially_fixed_entry_keeps_only_the_live_observable(self):
         original = {
             "first_seen": "2026-08-25",
@@ -1122,6 +1155,29 @@ class ProposeLedgerTest(unittest.TestCase):
             },
             proposed["corpus"]["a.vow"],
         )
+        assert_valid_ledger_document(self, proposed)
+
+    def test_partial_fix_prunes_the_fixed_observable_from_expected_observables(self):
+        # The `expected` half stopped reproducing; the still-open `runtime`
+        # half never was expected, so it must not carry a stale reference to
+        # an observable that no longer appears in `observable`.
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": ["error_code", "runtime"],
+            "status": "open",
+            "expected_observables": ["error_code"],
+            "note": "intentional diagnostic wording difference",
+            "issue": 588,
+        }
+        fixed = [{"file": "a.vow", "observables": ["error_code"]}]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), [], fixed, "2026-09-01"
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual("runtime", entry["observable"])
+        self.assertNotIn("expected_observables", entry)
         assert_valid_ledger_document(self, proposed)
 
     def test_new_observable_extends_an_existing_entry(self):
@@ -1184,6 +1240,58 @@ class ProposeLedgerTest(unittest.TestCase):
         self.assertEqual(588, entry["issue"])
         self.assertEqual(["A"], entry["rust_error_codes"])
         self.assertEqual(["B"], entry["self_hosted_error_codes"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_further_extending_a_mixed_entry_keeps_its_prior_expected_observables(self):
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": ["error_code", "runtime"],
+            "status": "open",
+            "expected_observables": ["error_code"],
+            "note": "intentional diagnostic wording difference",
+            "issue": 588,
+            "rust_error_codes": ["A"],
+            "self_hosted_error_codes": ["B"],
+        }
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [{"observable": "exit_code"}],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), new, [], "2026-09-01"
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual(["error_code", "exit_code", "runtime"], entry["observable"])
+        self.assertEqual(["error_code"], entry["expected_observables"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_reopening_a_fixed_entry_drops_its_stale_expected_observables(self):
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": ["error_code", "runtime"],
+            "status": "fixed",
+            "expected_observables": ["error_code"],
+            "note": "intentional diagnostic wording difference",
+            "issue": 588,
+        }
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [{"observable": "exit_code"}],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), new, [], "2026-09-01"
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual("exit_code", entry["observable"])
+        self.assertNotIn("expected_observables", entry)
         assert_valid_ledger_document(self, proposed)
 
     def test_untouched_data_round_trips_and_corpus_keys_are_sorted(self):
@@ -1335,6 +1443,43 @@ class ProposeLedgerTest(unittest.TestCase):
         self.assertEqual(["error_code", "runtime"], entry["observable"])
         self.assertEqual(["TypeMismatch"], entry["rust_error_codes"])
         self.assertEqual(["UnknownName"], entry["self_hosted_error_codes"])
+        assert_valid_ledger_document(self, proposed)
+
+    def test_error_code_payload_change_drops_the_stale_expected_observables(self):
+        # reconcile() reports a changed error_code payload as BOTH fixed (the
+        # old codes) and new (the replacement codes) in the same run — see
+        # propose_ledger's module comment. The previously-reviewed
+        # classification applied to the old codes specifically, so it must
+        # not survive onto the unreviewed replacement.
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": ["error_code", "runtime"],
+            "status": "open",
+            "expected_observables": ["error_code"],
+            "note": "intentional diagnostic wording difference",
+            "issue": 588,
+            "rust_error_codes": ["A"],
+            "self_hosted_error_codes": ["B"],
+        }
+        fixed = [{"file": "a.vow", "observables": ["error_code"]}]
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [
+                    {"observable": "error_code", "rust": ["Z"], "self_hosted": ["Y"]}
+                ],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), new, fixed, "2026-09-01"
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual(["error_code", "runtime"], entry["observable"])
+        self.assertNotIn("expected_observables", entry)
+        self.assertEqual(["Z"], entry["rust_error_codes"])
+        self.assertEqual(["Y"], entry["self_hosted_error_codes"])
         assert_valid_ledger_document(self, proposed)
 
 
