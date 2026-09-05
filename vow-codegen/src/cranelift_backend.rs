@@ -2826,6 +2826,14 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // vec ptr
         }
+        "__vow_parse_f64_bits" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // f64 bit pattern (as u64)
+        }
+        "__vow_format_f64_bits" => {
+            sig.params.push(AbiParam::new(types::I64)); // f64 bit pattern (as u64)
+            sig.returns.push(AbiParam::new(types::I64)); // string ptr
+        }
         "__vow_eprintln_str" => {
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
         }
@@ -3600,6 +3608,26 @@ mod tests {
         // The adapter is handed the sort call's own operands, so its parameter
         // list must stay identical to `__vow_vec_sort`'s.
         assert_eq!(sig.params, extern_sig("__vow_vec_sort").params);
+    }
+
+    #[test]
+    fn parse_f64_bits_extern_accepts_string_returns_bits() {
+        let sig = extern_sig("__vow_parse_f64_bits");
+
+        assert_eq!(sig.params.len(), 1);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
+    }
+
+    #[test]
+    fn format_f64_bits_extern_accepts_bits_returns_string() {
+        let sig = extern_sig("__vow_format_f64_bits");
+
+        assert_eq!(sig.params.len(), 1);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
     }
 
     fn make_module(name: &str, funcs: Vec<Function>) -> Module {

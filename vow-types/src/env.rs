@@ -231,6 +231,8 @@ fn builtin_free_fn_signatures() -> Vec<(String, FnSig)> {
         ),
         def("hex_encode", vec![vec_ty(Ty::U8)], Ty::Str, &[]),
         def("hex_decode", vec![Ty::Str], vec_ty(Ty::U8), &[]),
+        def("parse_f64_bits", vec![Ty::Str], Ty::U64, &[]),
+        def("format_f64_bits", vec![Ty::U64], Ty::Str, &[]),
         def("eprintln_str", vec![Ty::Str], Ty::Unit, &[Effect::IO]),
         def("args", vec![], vec_ty(Ty::Str), &[Effect::Read]),
         def("stdin_read", vec![], Ty::Str, &[Effect::Read]),
@@ -808,6 +810,7 @@ debug_i64(I64) -> Unit []
 debug_str(Str) -> Unit []
 debug_u64(U64) -> Unit []
 eprintln_str(Str) -> Unit [IO]
+format_f64_bits(U64) -> Str []
 fs_close(I64) -> I64 [Read]
 fs_exists(Str) -> I64 [Read]
 fs_is_dir(Str) -> I64 [Read]
@@ -871,6 +874,7 @@ memory_peak_bytes() -> U64 [IO]
 memory_root_arena_bytes() -> U64 [IO]
 mul_sat_u8(U8, U8) -> U8 []
 num_cpus() -> I64 [IO]
+parse_f64_bits(Str) -> U64 []
 parse_i16(Str) -> Applied(Enum("Option"), [I16]) []
 parse_i32(Str) -> Applied(Enum("Option"), [I32]) []
 parse_i64(Str) -> Applied(Enum("Option"), [I64]) []

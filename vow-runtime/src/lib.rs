@@ -3391,6 +3391,27 @@ pub unsafe extern "C" fn __vow_hex_decode(s: *const u8) -> *mut u8 {
     result
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_parse_f64_bits(s: *const u8) -> u64 {
+    if s.is_null() {
+        return 0;
+    }
+    sanitize_on_read(s as usize, 0);
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let value = std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|text| text.trim().parse::<f64>().ok())
+        .unwrap_or(0.0);
+    value.to_bits()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_format_f64_bits(bits: u64) -> *mut u8 {
+    let text = f64::from_bits(bits).to_string();
+    unsafe { __vow_string_new(text.as_ptr() as *const c_char, text.len()) }
+}
+
 // ---------------------------------------------------------------------------
 // File I/O runtime
 // ---------------------------------------------------------------------------
@@ -7041,5 +7062,45 @@ mod tests {
             vow_vec_capacity(vec) >= 1,
             "lazy-allocated, cap should be populated"
         );
+    }
+
+    fn make_test_string(s: &str) -> *mut u8 {
+        unsafe { __vow_string_new(s.as_ptr() as *const c_char, s.len()) }
+    }
+
+    #[test]
+    fn parse_f64_bits_null_pointer_returns_zero() {
+        let bits = unsafe { __vow_parse_f64_bits(std::ptr::null()) };
+        assert_eq!(bits, 0);
+    }
+
+    #[test]
+    fn parse_f64_bits_round_trips_known_values() {
+        for text in ["1.5", "0.0", "3.14159", "100.25"] {
+            let s = make_test_string(text);
+            let bits = unsafe { __vow_parse_f64_bits(s) };
+            let expected: f64 = text.parse().unwrap();
+            assert_eq!(bits, expected.to_bits(), "parsing {text}");
+        }
+    }
+
+    #[test]
+    fn format_f64_bits_round_trips_known_values() {
+        for value in [1.5f64, 0.0, 3.14159, 100.25] {
+            let ptr = unsafe { __vow_format_f64_bits(value.to_bits()) };
+            let v = unsafe { &*(ptr as *const VowVec) };
+            let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+            assert_eq!(std::str::from_utf8(bytes).unwrap(), value.to_string());
+        }
+    }
+
+    #[test]
+    fn parse_then_format_f64_bits_round_trips_text() {
+        let s = make_test_string("2.0");
+        let bits = unsafe { __vow_parse_f64_bits(s) };
+        let ptr = unsafe { __vow_format_f64_bits(bits) };
+        let v = unsafe { &*(ptr as *const VowVec) };
+        let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+        assert_eq!(std::str::from_utf8(bytes).unwrap(), "2");
     }
 }

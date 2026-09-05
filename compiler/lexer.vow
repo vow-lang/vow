@@ -278,25 +278,36 @@ fn lex(src: String) -> Vec<Token> {
                 wide_overflow = next_wide.overflow;
                 pos = pos + 1;
             }
-            let suffix: i64 = if pos < src_len { try_suffix(src, pos, src_len) } else { -1 };
-            if suffix != -1 {
-                let slen: i64 = suffix_len(suffix);
-                pos = pos + slen;
-                let tok: Token = if wide_overflow {
-                    make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, pos - start)
-                } else if suffix == tok_suffix_usize() || suffix == tok_suffix_isize() {
-                    make_token(tok_invalid_int(), EC_INVALID_INT_SUFFIX(), 0, unrepresentable_suffix_msg(suffix), start, pos - start)
-                } else {
-                    make_wide_int_token(tok_lit_int_suffixed(), wide_lo, wide_hi, suffix, start, pos - start)
-                };
+            if pos + 1 < src_len && src.byte_at(pos) == 46 && is_digit(src.byte_at(pos + 1)) {
+                pos = pos + 1;
+                while pos < src_len && is_digit(src.byte_at(pos)) {
+                    pos = pos + 1;
+                }
+                let text: String = string_substr(src, start, pos - start);
+                let bits: u64 = parse_f64_bits(text);
+                let tok: Token = make_wide_int_token(tok_lit_float(), bits, 0u64, 0, start, pos - start);
                 tokens.push(tok);
             } else {
-                let tok: Token = if wide_overflow {
-                    make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, pos - start)
+                let suffix: i64 = if pos < src_len { try_suffix(src, pos, src_len) } else { -1 };
+                if suffix != -1 {
+                    let slen: i64 = suffix_len(suffix);
+                    pos = pos + slen;
+                    let tok: Token = if wide_overflow {
+                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, pos - start)
+                    } else if suffix == tok_suffix_usize() || suffix == tok_suffix_isize() {
+                        make_token(tok_invalid_int(), EC_INVALID_INT_SUFFIX(), 0, unrepresentable_suffix_msg(suffix), start, pos - start)
+                    } else {
+                        make_wide_int_token(tok_lit_int_suffixed(), wide_lo, wide_hi, suffix, start, pos - start)
+                    };
+                    tokens.push(tok);
                 } else {
-                    make_wide_int_token(tok_lit_int(), wide_lo, wide_hi, 0, start, pos - start)
-                };
-                tokens.push(tok);
+                    let tok: Token = if wide_overflow {
+                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, pos - start)
+                    } else {
+                        make_wide_int_token(tok_lit_int(), wide_lo, wide_hi, 0, start, pos - start)
+                    };
+                    tokens.push(tok);
+                }
             }
         } else if b == 34 {
             pos = pos + 1;
