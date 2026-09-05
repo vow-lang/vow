@@ -1152,6 +1152,40 @@ class ProposeLedgerTest(unittest.TestCase):
         )
         assert_valid_ledger_document(self, proposed)
 
+    def test_extending_an_expected_entry_preserves_its_classification(self):
+        # `expected` means a human already reviewed and blessed this specific
+        # asymmetry. A new, unrelated observable must still force `open` (the
+        # new finding is unreviewed), but the prior review must not vanish.
+        original = {
+            "first_seen": "2026-08-25",
+            "observable": "error_code",
+            "status": "expected",
+            "note": "intentional diagnostic wording difference",
+            "issue": 588,
+            "rust_error_codes": ["A"],
+            "self_hosted_error_codes": ["B"],
+        }
+        new = [
+            {
+                "file": "a.vow",
+                "divergences": [{"observable": "runtime"}],
+            }
+        ]
+
+        proposed = equivalence.propose_ledger(
+            ledger_document({"a.vow": original}), new, [], "2026-09-01"
+        )
+
+        entry = proposed["corpus"]["a.vow"]
+        self.assertEqual(["error_code", "runtime"], entry["observable"])
+        self.assertEqual("open", entry["status"])
+        self.assertEqual(["error_code"], entry["expected_observables"])
+        self.assertEqual("intentional diagnostic wording difference", entry["note"])
+        self.assertEqual(588, entry["issue"])
+        self.assertEqual(["A"], entry["rust_error_codes"])
+        self.assertEqual(["B"], entry["self_hosted_error_codes"])
+        assert_valid_ledger_document(self, proposed)
+
     def test_untouched_data_round_trips_and_corpus_keys_are_sorted(self):
         untouched = {
             "first_seen": "2026-08-25",

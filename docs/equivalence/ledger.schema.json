@@ -83,6 +83,13 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "Exact sorted self-hosted diagnostic-code multiset for an active error_code divergence."
+          },
+          "expected_observables": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/observableName" },
+            "minItems": 1,
+            "uniqueItems": true,
+            "description": "The subset of 'observable' that was reviewed and classified 'expected' before a different observable's divergence forced the entry-wide 'status' to 'open'. Every name here must also appear in 'observable' (enforced by propose_ledger's construction and by the test suite, not by this schema — 2020-12 has no cross-property subset keyword). Purely a review aid: reconcile() suppresses by the entry-wide 'status' alone, so this does not change suppression behavior."
           }
         },
         "allOf": [
@@ -94,6 +101,14 @@
             "then": {
               "required": ["note", "issue"],
               "description": "An 'expected' asymmetry is a standing decision to suppress a finding, so it must carry the rationale and the tracking issue that justify it. Without this the status enum's own prose is unenforced and an entry can bless a divergence silently."
+            }
+          },
+          {
+            "if": { "required": ["expected_observables"] },
+            "then": {
+              "properties": { "status": { "enum": ["open", "fixed"] } },
+              "required": ["status", "note", "issue"],
+              "description": "expected_observables only makes sense on a mixed entry that a new, unrelated finding forced to 'open' — the same justification requirement as a whole-entry 'expected' classification applies to the part that was previously reviewed. 'fixed' is also allowed: a full fix retains the entry's fields verbatim as history (mirroring rust_error_codes/self_hosted_error_codes), so a still-open entry that gets entirely fixed in the same sweep keeps its expected_observables too."
             }
           },
           {
