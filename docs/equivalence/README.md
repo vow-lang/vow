@@ -211,6 +211,16 @@ failure, not an inherited exception. This lets the per-fixture parity harness
 and the Tier-2 sweep share one registry. `compare_json` has no ledger path: a
 fixture that reaches it must agree outright.
 
+`status` is entry-wide, but `observable` can be plural, so a file that already
+has a reviewed `expected` divergence and then develops an unrelated one is
+proposed as a single mixed entry with `status: "open"` (the new finding still
+needs review) plus `expected_observables` naming the subset that was already
+classified `expected`. This is a proposal-writer aid only: `reconcile()` keeps
+suppressing by the entry-wide `status` alone and never reads
+`expected_observables`, so it does not change suppression behavior — it just
+keeps the prior review visible instead of erasing it when a human looks at
+`ledger.proposed.json`.
+
 Known `counterexamples[].values` divergences instead use a fixture-local
 `// TEST: known-cex-divergence <issue> "<why>" rust-name=<name>
 self-name=<name>` directive. The Tier-2 runner does not emit a

@@ -901,6 +901,13 @@ def propose_ledger(document, new, fixed, today):
             if "error_code" not in remaining:
                 entry.pop("rust_error_codes", None)
                 entry.pop("self_hosted_error_codes", None)
+            remaining_expected = (
+                frozenset(entry.get("expected_observables", [])) & remaining
+            )
+            if remaining_expected:
+                entry["expected_observables"] = sorted(remaining_expected)
+            else:
+                entry.pop("expected_observables", None)
         else:
             # Retain the observable and its metadata so a reappearance remains
             # recognizable as a regression rather than a first-time finding.
@@ -925,8 +932,22 @@ def propose_ledger(document, new, fixed, today):
         observables = carried | {
             divergence["observable"] for divergence in record["divergences"]
         }
+        # A prior `expected` status classified every tracked observable; a
+        # prior `expected_observables` list classified only some of them. A
+        # `fixed` entry's classification is stale (mirrors `carried` above),
+        # so intersecting with `carried` (already `frozenset()` there) drops
+        # it for free instead of needing a third branch.
+        prior_expected = (
+            carried
+            if entry.get("status") == "expected"
+            else frozenset(entry.get("expected_observables", [])) & carried
+        )
         entry["observable"] = _observable_field(observables)
         entry["status"] = "open"
+        if prior_expected:
+            entry["expected_observables"] = sorted(prior_expected)
+        else:
+            entry.pop("expected_observables", None)
 
         error_code = next(
             (
