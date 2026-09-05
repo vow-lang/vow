@@ -1114,7 +1114,10 @@ def _validate_pair_entry(entry):
 def _ledger_outcome(findings):
     verdicts = {finding.get("verdict") for finding in findings}
     if "confirmed" in verdicts:
-        return "confirmed"
+        # The runner judges end-to-end CLI behaviour, not this pair's stage,
+        # so a mechanical run can never earn "confirmed" -- that value is
+        # reserved for a human who has attributed the divergence here.
+        return "unlocalized"
     if "inconclusive" in verdicts:
         return "hypotheses"
     return "clean"

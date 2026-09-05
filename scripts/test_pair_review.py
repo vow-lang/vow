@@ -1042,8 +1042,11 @@ class LedgerWritebackTest(unittest.TestCase):
         self.assertEqual("2026-09-01", written["updated"])
 
     def test_outcome_reflects_strongest_verdict(self):
+        # A runner-confirmed divergence stamps "unlocalized", not "confirmed":
+        # the harness judges the whole pipeline, not this pair's stage, so
+        # "confirmed" is reserved for a human who has completed attribution.
         cases = [
-            ([{"verdict": "confirmed"}], "confirmed"),
+            ([{"verdict": "confirmed"}], "unlocalized"),
             ([{"verdict": "inconclusive"}], "hypotheses"),
             ([{"verdict": "refuted"}], "clean"),
         ]
