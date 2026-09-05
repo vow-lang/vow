@@ -7,6 +7,8 @@ evidence. These tests pin that distinction and the not-applicable bookkeeping
 that keeps a sweep from looking like it measured more than it did.
 """
 
+import os
+import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -129,6 +131,45 @@ class DebugRunTest(unittest.TestCase):
 
         self.assertEqual("VowViolation", violation["error"])
         self.assertIsNone(err)
+
+
+class RunJsonEnvTest(unittest.TestCase):
+    def test_scrubs_credentials_keeps_path_pins_cwd(self):
+        with (
+            mock.patch.dict(
+                os.environ, {"ANTHROPIC_API_KEY": "sk-x", "PATH": "/bin"}, clear=True
+            ),
+            mock.patch.object(
+                verifier_runtime.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired("x", 1),
+            ) as run,
+        ):
+            verifier_runtime.run_json("verifier", [], 1)
+
+        env = run.call_args.kwargs["env"]
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertEqual("/bin", env["PATH"])
+        self.assertEqual(verifier_runtime.REPO_ROOT, run.call_args.kwargs["cwd"])
+
+
+class RunDebugBinaryEnvAndCwdTest(unittest.TestCase):
+    def test_scrubs_credentials_and_isolates_cwd_with_an_absolute_path(self):
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-x"}, clear=True),
+            mock.patch.object(
+                verifier_runtime.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired("x", 1),
+            ) as run,
+        ):
+            verifier_runtime.run_debug_binary("relative/dbg", 1)
+
+        self.assertNotIn("OPENAI_API_KEY", run.call_args.kwargs["env"])
+        called_path = Path(run.call_args.args[0][0])
+        self.assertTrue(called_path.is_absolute())
+        self.assertEqual(Path("relative/dbg").resolve(), called_path)
+        self.assertNotEqual(verifier_runtime.REPO_ROOT, run.call_args.kwargs["cwd"])
 
 
 if __name__ == "__main__":

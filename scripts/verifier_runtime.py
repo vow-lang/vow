@@ -31,6 +31,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import candidate_isolation
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 SELF_MEM_LIMIT = 2_000_000 * 1024
@@ -56,6 +58,7 @@ def run_json(binary, args, timeout, limit=False):
             capture_output=True,
             text=True,
             cwd=REPO_ROOT,
+            env=candidate_isolation.scrubbed_env(),
             timeout=timeout,
             preexec_fn=_limit if limit else None,
         )
@@ -76,16 +79,24 @@ def run_debug_binary(path, timeout):
     Returns `(violation, error)` like `run_json`, because "ran and did not
     violate" and "never finished" are different answers: collapsing both to
     None makes a hung binary read as proof that the verifier was right.
+
+    Runs from a disposable directory with a scrubbed environment: this is a
+    model-authored candidate's own binary, not the verifier itself (#1188).
     """
+    # A relative path resolves against the CHILD's cwd, not the parent's, so
+    # this must happen before a disposable cwd changes what "relative" means.
+    path = Path(path).resolve()
     try:
-        proc = subprocess.run(
-            [str(path)],
-            capture_output=True,
-            text=True,
-            cwd=REPO_ROOT,
-            timeout=timeout,
-            stdin=subprocess.DEVNULL,
-        )
+        with candidate_isolation.disposable_workdir() as d:
+            proc = subprocess.run(
+                [str(path)],
+                capture_output=True,
+                text=True,
+                cwd=d,
+                env=candidate_isolation.scrubbed_env(),
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
     except subprocess.TimeoutExpired:
         return None, f"debug binary timed out after {timeout}s"
     # __vow_violation writes the JSON to stderr, then exits non-zero.
