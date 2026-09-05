@@ -38,13 +38,17 @@ pub const DEFAULT_ESBMC_MEMLIMIT_MB: u32 = 4096;
 /// The memlimit a fresh `SolverConfig` starts with. `None` on macOS: ESBMC's
 /// `--memlimit` calls `setrlimit(RLIMIT_DATA, ...)` internally, which Darwin
 /// rejects unconditionally (`EINVAL`) and ESBMC treats as fatal (`abort()`) --
-/// there is no working memlimit on macOS today.
+/// there is no working memlimit on macOS today. Split via `#[cfg]` attributes
+/// (not a runtime `cfg!()` check) so the platform this isn't reachable on
+/// never compiles it in as dead code for coverage purposes.
+#[cfg(not(target_os = "macos"))]
 pub fn default_memlimit_mb() -> Option<u32> {
-    if cfg!(target_os = "macos") {
-        None
-    } else {
-        Some(DEFAULT_ESBMC_MEMLIMIT_MB)
-    }
+    Some(DEFAULT_ESBMC_MEMLIMIT_MB)
+}
+
+#[cfg(target_os = "macos")]
+pub fn default_memlimit_mb() -> Option<u32> {
+    None
 }
 
 impl SolverConfig {
@@ -511,15 +515,18 @@ mod tests {
         assert_eq!(r.memlimit_mb, Some(1024));
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn test_esbmc_args_default() {
         let c = SolverConfig::default_config();
-        let expected: Vec<&str> = if cfg!(target_os = "macos") {
-            vec![]
-        } else {
-            vec!["--memlimit", "4096m"]
-        };
-        assert_eq!(c.esbmc_args(), expected);
+        assert_eq!(c.esbmc_args(), vec!["--memlimit", "4096m"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_esbmc_args_default_omits_memlimit_on_macos() {
+        let c = SolverConfig::default_config();
+        assert!(c.esbmc_args().is_empty());
     }
 
     #[test]
