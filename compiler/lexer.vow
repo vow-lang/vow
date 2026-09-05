@@ -279,18 +279,11 @@ fn lex(src: String) -> Vec<Token> {
                 pos = pos + 1;
             }
             if pos + 1 < src_len && src.byte_at(pos) == 46 && is_digit(src.byte_at(pos + 1)) {
-                let text: String = empty_str();
-                let mut ti: i64 = start;
-                while ti < pos {
-                    text.push_byte(src.byte_at(ti));
-                    ti = ti + 1;
-                }
-                text.push_byte(46);
                 pos = pos + 1;
                 while pos < src_len && is_digit(src.byte_at(pos)) {
-                    text.push_byte(src.byte_at(pos));
                     pos = pos + 1;
                 }
+                let text: String = string_substr(src, start, pos - start);
                 let bits: u64 = parse_f64_bits(text);
                 let tok: Token = make_wide_int_token(tok_lit_float(), bits, 0u64, 0, start, pos - start);
                 tokens.push(tok);
