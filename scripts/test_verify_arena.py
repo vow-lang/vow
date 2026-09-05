@@ -67,7 +67,7 @@ class WorkflowTest(unittest.TestCase):
         )
         self.assertRegex(
             self.workflow,
-            re.compile(r"^\s*runs-on:\s*macos-latest\s*$", re.MULTILINE),
+            re.compile(r"^\s*runs-on:\s*macos-15\s*$", re.MULTILINE),
         )
 
     def test_macos_job_is_gated_on_the_same_classifier(self) -> None:

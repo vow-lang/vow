@@ -92,7 +92,14 @@ jobs:
     name: Arena primitive verification (macOS measurement)
     needs: changes
     if: needs.changes.outputs.arena == 'true'
-    runs-on: macos-latest
+    # Pinned, not macos-latest: a `macos-latest` run of this job dyld-aborted
+    # on `esbmc --version` with "Library not loaded: .../libz3.5.1.dylib"
+    # because that runner resolved a newer Homebrew z3 bottle than the ESBMC
+    # macOS release links against. bootstrap.yml's bootstrap-macos and
+    # release.yml's macOS leg already pin macos-15 for exactly this reason
+    # (install-esbmc's macOS runtime deps drift with the runner image); this
+    # job now matches them instead of rediscovering the same failure mode.
+    runs-on: macos-15
     continue-on-error: true
     # Generous: Homebrew installing llvm@21 alone is slow on a cold macOS
     # runner, and this job runs the proof twice (uncapped, then capped) to
