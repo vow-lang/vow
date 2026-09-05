@@ -7069,6 +7069,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_f64_bits_null_pointer_returns_zero() {
+        let bits = unsafe { __vow_parse_f64_bits(std::ptr::null()) };
+        assert_eq!(bits, 0);
+    }
+
+    #[test]
     fn parse_f64_bits_round_trips_known_values() {
         for text in ["1.5", "0.0", "3.14159", "100.25"] {
             let s = make_test_string(text);

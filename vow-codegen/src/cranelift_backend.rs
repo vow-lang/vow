@@ -3610,6 +3610,26 @@ mod tests {
         assert_eq!(sig.params, extern_sig("__vow_vec_sort").params);
     }
 
+    #[test]
+    fn parse_f64_bits_extern_accepts_string_returns_bits() {
+        let sig = extern_sig("__vow_parse_f64_bits");
+
+        assert_eq!(sig.params.len(), 1);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
+    }
+
+    #[test]
+    fn format_f64_bits_extern_accepts_bits_returns_string() {
+        let sig = extern_sig("__vow_format_f64_bits");
+
+        assert_eq!(sig.params.len(), 1);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
+    }
+
     fn make_module(name: &str, funcs: Vec<Function>) -> Module {
         Module {
             name: name.to_string(),

@@ -4045,6 +4045,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_f64_bits_extern_accepts_string_returns_bits() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+        let sig = make_extern_sig("__vow_parse_f64_bits", &module_ctx.obj_module);
+
+        assert_eq!(sig.params.len(), 1);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
+    #[test]
+    fn format_f64_bits_extern_accepts_bits_returns_string() {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+        let sig = make_extern_sig("__vow_format_f64_bits", &module_ctx.obj_module);
+
+        assert_eq!(sig.params.len(), 1);
+        assert_eq!(sig.params[0].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, types::I64);
+
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
+    #[test]
     fn create_returns_zero_when_native_isa_builder_fails() {
         assert_eq!(create_module_context(0, 0, Err("unsupported host")), 0);
     }
