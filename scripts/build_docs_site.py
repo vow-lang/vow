@@ -91,7 +91,7 @@ def _heading_anchors(markdown_text: str) -> set[str]:
         match = _ATX_HEADING.match(line)
         if not match:
             continue
-        heading = _CLOSING_HASHES.sub("", match.group(1))
+        heading = _CLOSING_HASHES.sub("", match.group(1)).strip()
         slug = _slugify_heading(heading)
         original_slug = slug
         while slug in occurrences:

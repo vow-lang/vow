@@ -72,6 +72,10 @@ class HeadingAnchorsTest(unittest.TestCase):
         text = "## Heading ##\n"
         self.assertEqual(bds._heading_anchors(text), {"heading"})
 
+    def test_trailing_whitespace_stripped(self):
+        text = "## Foo   \n"
+        self.assertEqual(bds._heading_anchors(text), {"foo"})
+
     def test_duplicate_headings_get_numeric_suffix(self):
         text = "## Foo\n\n## Foo\n"
         self.assertEqual(bds._heading_anchors(text), {"foo", "foo-1"})
