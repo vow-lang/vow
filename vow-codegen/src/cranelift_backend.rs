@@ -2826,6 +2826,14 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // vec ptr
         }
+        "__vow_parse_f64_bits" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // f64 bit pattern (as u64)
+        }
+        "__vow_format_f64_bits" => {
+            sig.params.push(AbiParam::new(types::I64)); // f64 bit pattern (as u64)
+            sig.returns.push(AbiParam::new(types::I64)); // string ptr
+        }
         "__vow_eprintln_str" => {
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
         }
