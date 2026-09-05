@@ -15,10 +15,13 @@ class InstallEsbmcActionTest(unittest.TestCase):
 
         self.assertIn("esbmc-linux.zip", text)
         self.assertIn("esbmc-macos.zip", text)
-        self.assertRegex(
-            text,
-            r"(?m)^  sha256-macos:\n(?:    .*\n)*?    default: [0-9a-f]{64}$",
-        )
+        self.assertIn("esbmc-linux-armv8.zip", text)
+        for input_name in ("sha256-macos", "sha256-linux-arm64"):
+            with self.subTest(input_name=input_name):
+                self.assertRegex(
+                    text,
+                    rf"(?m)^  {input_name}:\n(?:    .*\n)*?    default: [0-9a-f]{{64}}$",
+                )
         self.assertNotIn("ubuntu-24.04", text)
         self.assertIn("sha256sum", text)
         self.assertIn("shasum -a 256", text)
