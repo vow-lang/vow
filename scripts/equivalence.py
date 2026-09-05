@@ -49,6 +49,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import candidate_isolation
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # `ulimit -v` equivalent for self-hosted binaries, in bytes (2 GB).
@@ -206,6 +208,7 @@ def run_compiler(binary, args, timeout, limit_memory):
             capture_output=True,
             check=False,
             cwd=REPO_ROOT,
+            env=candidate_isolation.scrubbed_env(),
             timeout=timeout,
             preexec_fn=_limit_memory if limit_memory else None,
         )
@@ -228,20 +231,31 @@ def run_compiler(binary, args, timeout, limit_memory):
     }
 
 
-def run_binary(path, stdin_data, timeout, limit_memory):
+def _run_binary_at(path, stdin_data, timeout, limit_memory, cwd):
     try:
         proc = subprocess.run(
             [str(path)],
             input=stdin_data,
             capture_output=True,
             check=False,
-            cwd=REPO_ROOT,
+            cwd=cwd,
+            env=candidate_isolation.scrubbed_env(),
             timeout=timeout,
             preexec_fn=_limit_memory if limit_memory else None,
         )
     except subprocess.TimeoutExpired:
         return {"timeout": True, "exit": None, "stdout": b""}
     return {"timeout": False, "exit": proc.returncode, "stdout": proc.stdout}
+
+
+def run_binary(path, stdin_data, timeout, limit_memory, isolate_cwd=False):
+    # A relative path resolves against the CHILD's cwd, not the parent's, so
+    # this must happen before a disposable cwd changes what "relative" means.
+    path = Path(path).resolve()
+    if isolate_cwd:
+        with candidate_isolation.disposable_workdir() as d:
+            return _run_binary_at(path, stdin_data, timeout, limit_memory, d)
+    return _run_binary_at(path, stdin_data, timeout, limit_memory, REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +487,9 @@ def expected_signal(directives):
     return None
 
 
-def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None):
+def compare_runtime(
+    rust_bin, self_bin, stdin_data, timeout, expect_signal=None, isolate_cwd=False
+):
     """Runtime parity, with a nondeterminism guard.
 
     A program whose own output varies between two runs of the SAME binary
@@ -485,8 +501,12 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
     # side (the repo's `ulimit -v` convention, which exists for running the
     # memory-hungry self-hosted *compiler*) would make any program needing more
     # than the cap look like a miscompile.
-    r1 = run_binary(rust_bin, stdin_data, timeout, limit_memory=True)
-    r2 = run_binary(rust_bin, stdin_data, timeout, limit_memory=True)
+    r1 = run_binary(
+        rust_bin, stdin_data, timeout, limit_memory=True, isolate_cwd=isolate_cwd
+    )
+    r2 = run_binary(
+        rust_bin, stdin_data, timeout, limit_memory=True, isolate_cwd=isolate_cwd
+    )
     rust_hung = r1["timeout"] or r2["timeout"]
     if not rust_hung and (r1["stdout"] != r2["stdout"] or r1["exit"] != r2["exit"]):
         return [], "nondeterministic"
@@ -501,7 +521,9 @@ def compare_runtime(rust_bin, self_bin, stdin_data, timeout, expect_signal=None)
     # mismatching run against a stable r1/r2 is reported as a runtime
     # divergence — which is the right answer, since self-hosted-only
     # instability is itself a miscompile. Three runs, not four.
-    s = run_binary(self_bin, stdin_data, timeout, limit_memory=True)
+    s = run_binary(
+        self_bin, stdin_data, timeout, limit_memory=True, isolate_cwd=isolate_cwd
+    )
 
     if rust_hung and s["timeout"]:
         # Neither side finished, so nothing distinguishes them.
@@ -714,6 +736,7 @@ def check_file(
                 declared_stdin,
                 timeout,
                 expect_signal=expected_signal(directives),
+                isolate_cwd=not honour_directives,
             )
             record["divergences"] += rt_div
             if why:
