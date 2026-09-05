@@ -1338,7 +1338,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i64>,
     }
     if op == IOP_CONST_F64() {
         out.push_str(str4(String::from("  v"), i64_to_string(id), String::from(" = "),
-            cemit_str2(i64_to_string(inst.dv), String::from(";\n"))));
+            cemit_str2(format_f64_bits(inst.dv as u64), String::from(";\n"))));
         return;
     }
     if op == IOP_CONST_BOOL() {

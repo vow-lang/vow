@@ -869,6 +869,9 @@ fn parse_primary(p: Parser) -> i64 {
         } else {
             lit_eid
         }
+    } else if tag == tok_lit_float() {
+        let _adv: Token = advance(p);
+        arena_add_expr(p.arena, EXPR_LIT_FLOAT(), t.int_lo as i64, 0, 0, 0)
     } else if tag == tok_invalid_int() {
         push_error_code(p, t.int_val, t.str_val);
         let _adv: Token = advance(p);

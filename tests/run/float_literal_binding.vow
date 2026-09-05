@@ -1,0 +1,21 @@
+// Regression fixture for #1244: the self-hosted checker used to reject a
+// bare float literal used as a `let`-binding initializer, and as an operand
+// of an arithmetic operator, while the Rust compiler accepted the same code.
+// Comparisons are intentionally not exercised here: float comparison codegen
+// has a separate, pre-existing Cranelift lowering gap (icmp is emitted for
+// f64 operands instead of fcmp) that reproduces independently of this issue
+// and is out of scope for this fixture.
+module FloatLiteralBinding
+
+fn add_lit(a: f64) -> f64 {
+    let z: f64 = 0.25;
+    a + z
+}
+
+fn sub_lit(a: f64) -> f64 {
+    a - 0.5
+}
+
+fn main() -> i32 {
+    0
+}

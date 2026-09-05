@@ -1499,6 +1499,8 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("gzip_write_file") { return String::from("__vow_gzip_write_file"); }
     if name == String::from("hex_encode") { return String::from("__vow_hex_encode"); }
     if name == String::from("hex_decode") { return String::from("__vow_hex_decode"); }
+    if name == String::from("parse_f64_bits") { return String::from("__vow_parse_f64_bits"); }
+    if name == String::from("format_f64_bits") { return String::from("__vow_format_f64_bits"); }
     if name == String::from("args") { return String::from("__vow_args"); }
     if name == String::from("stdin_read") { return String::from("__vow_stdin_read"); }
     if name == String::from("stdin_read_line") { return String::from("__vow_stdin_read_line"); }
@@ -1603,6 +1605,8 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("gzip_write_file") { return ITY_I64(); }
     if name == String::from("hex_encode") { return ITY_PTR(); }
     if name == String::from("hex_decode") { return ITY_PTR(); }
+    if name == String::from("parse_f64_bits") { return ITY_U64(); }
+    if name == String::from("format_f64_bits") { return ITY_PTR(); }
     if name == String::from("args") { return ITY_PTR(); }
     if name == String::from("stdin_read") { return ITY_PTR(); }
     if name == String::from("stdin_read_line") { return ITY_PTR(); }
@@ -2527,7 +2531,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if fn_name == String::from("string_split") {
                 lctx_tag(ctx, result, String::from("Vec"));
             }
-            if fn_name == String::from("hex_encode") {
+            if fn_name == String::from("hex_encode") || fn_name == String::from("format_f64_bits") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("process_get_stdout") || fn_name == String::from("process_get_stderr") || fn_name == String::from("process_stdout_for") || fn_name == String::from("process_stderr_for") || fn_name == String::from("proc_sample") {
@@ -5068,6 +5072,10 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         let val: i64 = expr_a(a, eid);
         return i64_to_string(val);
     }
+    if tag == EXPR_LIT_FLOAT() {
+        let bits: i64 = expr_a(a, eid);
+        return format_f64_bits(bits as u64);
+    }
     if tag == EXPR_LIT_BOOL() {
         let val: i64 = expr_a(a, eid);
         if val != 0 { return String::from("true"); }
@@ -5115,7 +5123,8 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         // Mirror printer.rs: a non-atomic operand is parenthesized so the cast
         // binds where the source said it did.
         let inner_tag: i64 = expr_tag(a, inner_eid);
-        let atomic: bool = inner_tag == EXPR_LIT_INT() || inner_tag == EXPR_LIT_BOOL()
+        let atomic: bool = inner_tag == EXPR_LIT_INT() || inner_tag == EXPR_LIT_FLOAT()
+            || inner_tag == EXPR_LIT_BOOL()
             || inner_tag == EXPR_LIT_STR() || inner_tag == EXPR_IDENT()
             || inner_tag == EXPR_RESULT() || inner_tag == EXPR_CALL()
             || inner_tag == EXPR_METHOD() || inner_tag == EXPR_FIELD()

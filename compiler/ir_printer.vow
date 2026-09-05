@@ -205,7 +205,7 @@ fn format_data(inst: IrInst) -> String {
     if dk == IDATA_CONST_I32() { return i64_to_string(inst.dv); }
     if dk == IDATA_CONST_I64() { return i64_to_string(inst.dv); }
     if dk == IDATA_CONST_F32() { return i64_to_string(inst.dv); }
-    if dk == IDATA_CONST_F64() { return i64_to_string(inst.dv); }
+    if dk == IDATA_CONST_F64() { return format_f64_bits(inst.dv as u64); }
     if dk == IDATA_CONST_BOOL() {
         if inst.dv == 0 { return String::from("false"); }
         return String::from("true");

@@ -1,0 +1,23 @@
+// TEST: category model-drift
+// Regression fixture for #1244: proves the self-hosted `c_emitter.vow`/
+// `ir_printer.vow` fix actually feeds ESBMC a real double constant for a
+// bare float literal operand, not the raw i64 bit pattern reinterpreted as a
+// decimal integer. A wrong constant here inflates `0.25` into an enormous
+// value, which breaks the `result <= 2.0` postcondition instead of just
+// differing cosmetically in dumped IR text.
+//
+// The two bounds on `x` are split into separate `requires:` clauses rather
+// than joined with `&&` in one clause: a pre-existing, unrelated vacuity-
+// detection gap in the verifier's `--error-label`/`vow_reach` reachability
+// probe misclassifies a single `&&`-conjoined pair of float comparisons as
+// unreachable (reproduces on today's `main` with plain f64 parameters, no
+// literals involved) — this fixture is not about that gap.
+module FloatLiteralContract
+
+fn add_small(x: f64) -> f64 vow {
+  requires: x >= 0.0,
+  requires: x <= 1.0,
+  ensures: result <= 2.0
+} {
+    x + 0.25
+}

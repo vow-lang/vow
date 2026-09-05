@@ -114,6 +114,8 @@ fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "gzip_write_file" => Some(("__vow_gzip_write_file", Ty::I64)),
         "hex_encode" => Some(("__vow_hex_encode", Ty::Ptr)),
         "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
+        "parse_f64_bits" => Some(("__vow_parse_f64_bits", Ty::U64)),
+        "format_f64_bits" => Some(("__vow_format_f64_bits", Ty::Ptr)),
         "args" => Some(("__vow_args", Ty::Ptr)),
         "stdin_read" => Some(("__vow_stdin_read", Ty::Ptr)),
         "stdin_read_line" => Some(("__vow_stdin_read_line", Ty::Ptr)),
@@ -197,8 +199,8 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
         "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
         | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
         | "string_join" | "int_to_string" | "uint_to_string" | "i64_to_string" | "hex_encode"
-        | "process_get_stdout" | "process_get_stderr" | "process_stdout_for"
-        | "process_stderr_for" => {
+        | "format_f64_bits" | "process_get_stdout" | "process_get_stderr"
+        | "process_stdout_for" | "process_stderr_for" => {
             ctx.inst_struct_type.insert(result, "String".to_string());
         }
         "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
@@ -5649,6 +5651,8 @@ type PairView = PairAlias;
             ("gzip_write_file", "__vow_gzip_write_file", Ty::I64),
             ("hex_encode", "__vow_hex_encode", Ty::Ptr),
             ("hex_decode", "__vow_hex_decode", Ty::Ptr),
+            ("parse_f64_bits", "__vow_parse_f64_bits", Ty::U64),
+            ("format_f64_bits", "__vow_format_f64_bits", Ty::Ptr),
             ("args", "__vow_args", Ty::Ptr),
             ("stdin_read", "__vow_stdin_read", Ty::Ptr),
             ("stdin_read_line", "__vow_stdin_read_line", Ty::Ptr),
