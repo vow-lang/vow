@@ -1116,6 +1116,23 @@ class LedgerWritebackTest(unittest.TestCase):
         self.assertLessEqual(set(pair_schema["required"]), set(entry))
         self.assertLessEqual(set(entry), set(pair_schema["properties"]))
 
+    def test_writeback_never_stamps_confirmed_directly(self):
+        # "confirmed" is a human-only value applied during triage; the
+        # mechanical writeback path must never produce it on its own.
+        self.write(self.result([{"verdict": "confirmed"}]))
+
+        written = json.loads(self.ledger_path.read_text())
+        entry = written["pairs"]["lexer"]
+        self.assertEqual("unlocalized", entry["outcome"])
+
+        schema = json.loads(
+            (pair_review.REPO_ROOT / "docs/equivalence/ledger.schema.json").read_text()
+        )
+        pair_schema = schema["properties"]["pairs"]["additionalProperties"]
+        self.assertLessEqual(set(pair_schema["required"]), set(entry))
+        self.assertLessEqual(set(entry), set(pair_schema["properties"]))
+        self.assertIn(entry["outcome"], pair_schema["properties"]["outcome"]["enum"])
+
     def test_writeback_is_off_by_default(self):
         before = self.ledger_path.read_bytes()
         fake_result = self.result(
