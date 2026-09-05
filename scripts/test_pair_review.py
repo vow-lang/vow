@@ -1433,6 +1433,18 @@ class LedgerWritebackTest(unittest.TestCase):
         self.assertIn("[unlocalized; proposed during lexer] diverges", output)
         self.assertNotIn("[lexer] diverges", output)
 
+    def test_ledger_schema_declares_unlocalized_outcome(self):
+        # Nothing else in the suite pins this enum's contents -- a future edit
+        # that silently dropped a value would only be caught here.
+        schema = json.loads(
+            (pair_review.REPO_ROOT / "docs/equivalence/ledger.schema.json").read_text()
+        )
+        pair_schema = schema["properties"]["pairs"]["additionalProperties"]
+        self.assertEqual(
+            ["clean", "hypotheses", "unlocalized", "confirmed"],
+            pair_schema["properties"]["outcome"]["enum"],
+        )
+
 
 class SystemPromptTest(unittest.TestCase):
     def test_prompt_demands_a_module_header(self):
