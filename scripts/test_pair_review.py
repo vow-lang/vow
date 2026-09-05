@@ -903,6 +903,30 @@ class ReviewReportTest(unittest.TestCase):
 
         self.assertEqual([1, 2], [f["chunk_index"] for f in result["findings"]])
 
+    def test_findings_carry_an_unlocalized_attribution(self):
+        # A pair review judges end-to-end CLI behaviour, not any one stage, so
+        # a confirmed finding cannot yet be attributed to the pair under
+        # review -- it stays "unlocalized" until a human ties it to a stage.
+        llm = fake_llm(
+            json.dumps({"findings": [{"claim": "diverges", "program": "module M\n"}]})
+        )
+        with mock.patch.object(
+            pair_review, "load_pair_units", return_value=self.two_chunk_sources()
+        ):
+            result = pair_review.review_pair(
+                "lexer",
+                "model",
+                "rust",
+                "self",
+                600,
+                1,
+                max_chunks=1,
+                llm_module=llm,
+                confirm_fn=lambda *_: ("confirmed", "diverges"),
+            )
+
+        self.assertEqual("unlocalized", result["findings"][0]["attribution"])
+
     def test_an_unrunnable_gate_is_an_error_not_a_hypothesis(self):
         # `confirm` returns `error` when equivalence.py could not judge the
         # program at all. Filed as a plain hypothesis it would leave the run
@@ -1018,8 +1042,11 @@ class LedgerWritebackTest(unittest.TestCase):
         self.assertEqual("2026-09-01", written["updated"])
 
     def test_outcome_reflects_strongest_verdict(self):
+        # A runner-confirmed divergence stamps "unlocalized", not "confirmed":
+        # the harness judges the whole pipeline, not this pair's stage, so
+        # "confirmed" is reserved for a human who has completed attribution.
         cases = [
-            ([{"verdict": "confirmed"}], "confirmed"),
+            ([{"verdict": "confirmed"}], "unlocalized"),
             ([{"verdict": "inconclusive"}], "hypotheses"),
             ([{"verdict": "refuted"}], "clean"),
         ]
@@ -1088,6 +1115,23 @@ class LedgerWritebackTest(unittest.TestCase):
         entry = json.loads(self.ledger_path.read_text())["pairs"]["lexer"]
         self.assertLessEqual(set(pair_schema["required"]), set(entry))
         self.assertLessEqual(set(entry), set(pair_schema["properties"]))
+
+    def test_writeback_never_stamps_confirmed_directly(self):
+        # "confirmed" is a human-only value applied during triage; the
+        # mechanical writeback path must never produce it on its own.
+        self.write(self.result([{"verdict": "confirmed"}]))
+
+        written = json.loads(self.ledger_path.read_text())
+        entry = written["pairs"]["lexer"]
+        self.assertEqual("unlocalized", entry["outcome"])
+
+        schema = json.loads(
+            (pair_review.REPO_ROOT / "docs/equivalence/ledger.schema.json").read_text()
+        )
+        pair_schema = schema["properties"]["pairs"]["additionalProperties"]
+        self.assertLessEqual(set(pair_schema["required"]), set(entry))
+        self.assertLessEqual(set(entry), set(pair_schema["properties"]))
+        self.assertIn(entry["outcome"], pair_schema["properties"]["outcome"]["enum"])
 
     def test_writeback_is_off_by_default(self):
         before = self.ledger_path.read_bytes()
@@ -1343,6 +1387,63 @@ class LedgerWritebackTest(unittest.TestCase):
             )
 
         self.assertEqual(2, status)
+
+    def test_summary_prints_attribution_not_bare_pair_name(self):
+        # A confirmed finding is not yet tied to any stage. Printing the
+        # reviewed pair's name alone (the old "[lexer]" form) reads as if the
+        # divergence had been localized there, which the runner cannot claim.
+        confirmed = self.result(
+            findings=[
+                {
+                    "claim": "diverges",
+                    "verdict": "confirmed",
+                    "verdict_detail": "exit codes differ",
+                    "attribution": "unlocalized",
+                }
+            ],
+            plan={"chunk_bytes": 100, "chunks": []},
+            chunks_reviewed=[1],
+            input_tokens=0,
+            output_tokens=0,
+        )
+        compiler = Path(self.directory.name) / "compiler"
+        compiler.touch()
+        stdout = io.StringIO()
+        with (
+            mock.patch.dict("sys.modules", {"llm": usable_llm()}),
+            mock.patch.object(pair_review, "LEDGER", self.ledger_path),
+            mock.patch.object(pair_review, "review_pair", return_value=confirmed),
+            redirect_stdout(stdout),
+        ):
+            pair_review.main(
+                [
+                    "--all",
+                    "--pair",
+                    "lexer",
+                    "--rust",
+                    str(compiler),
+                    "--self",
+                    str(compiler),
+                    "--output-dir",
+                    str(Path(self.directory.name) / "confirmed-summary"),
+                ]
+            )
+
+        output = stdout.getvalue()
+        self.assertIn("[unlocalized; proposed during lexer] diverges", output)
+        self.assertNotIn("[lexer] diverges", output)
+
+    def test_ledger_schema_declares_unlocalized_outcome(self):
+        # Nothing else in the suite pins this enum's contents -- a future edit
+        # that silently dropped a value would only be caught here.
+        schema = json.loads(
+            (pair_review.REPO_ROOT / "docs/equivalence/ledger.schema.json").read_text()
+        )
+        pair_schema = schema["properties"]["pairs"]["additionalProperties"]
+        self.assertEqual(
+            ["clean", "hypotheses", "unlocalized", "confirmed"],
+            pair_schema["properties"]["outcome"]["enum"],
+        )
 
 
 class SystemPromptTest(unittest.TestCase):

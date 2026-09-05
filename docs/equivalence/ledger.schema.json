@@ -32,8 +32,8 @@
           },
           "last_reviewed": { "type": "string" },
           "outcome": {
-            "enum": ["clean", "hypotheses", "confirmed"],
-            "description": "clean: reviewed, nothing found. hypotheses: claims raised but none confirmed by the runner. confirmed: at least one runner-confirmed divergence."
+            "enum": ["clean", "hypotheses", "unlocalized", "confirmed"],
+            "description": "clean: reviewed, nothing found. hypotheses: claims raised but none confirmed by the runner. unlocalized: the harness mechanically stamps this for a runner-confirmed divergence — the runner judges whole-pipeline CLI behaviour, never which pair's stage the divergence lives in. confirmed: a human-only value, set once a triager has attributed the divergence to this pair's stage specifically (the runbook's 'Attribute' step). Not sticky across content changes: a complete re-review of the pair overwrites 'outcome' unconditionally, so once content_hash changes and the pair is reviewed again, a human-set 'confirmed' reverts to whatever the harness computes fresh (unlocalized/hypotheses/clean) — new source content is new evidence, not a continuation of the prior triage conclusion."
           },
           "confirmed_issues": {
             "type": "array",

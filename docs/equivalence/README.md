@@ -139,6 +139,21 @@ stage nor the mechanism the model claimed, only that the disagreement is real.
 Locating it is a triage step for a human, and `confirmed_issues` is where that
 conclusion lands.
 
+The tooling carries this distinction explicitly rather than by omission. Every
+runner-confirmed finding is stamped `attribution: "unlocalized"`, and the
+summary prints `[unlocalized; proposed during <pair>]` rather than bare
+`[<pair>]`, so a divergence is never printed as if it had already been tied to
+a stage. The ledger follows the same rule: `write_ledger()` mechanically stamps
+a pair's row `outcome: "unlocalized"`, never `"confirmed"`. A human promotes a
+row to `outcome: "confirmed"` only after completing attribution — verifying the
+divergence actually belongs to that pair's stage, not merely that it surfaced
+during that pair's review — and filing the issue in `confirmed_issues`. That
+promotion is not sticky: a pair's row is overwritten on every complete
+re-review, so once the pair's `content_hash` changes and it is reviewed again,
+`outcome` reverts to whatever the harness computes fresh
+(`unlocalized`/`hypotheses`/`clean`) — new source content is new evidence, not
+a continuation of the prior triage conclusion.
+
 ## Reading a report
 
 Every run states what it did **not** cover — shards skipped, budget exhausted,

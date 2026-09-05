@@ -1083,6 +1083,10 @@ def review_pair(
                 verdict = "inconclusive"
             finding["verdict"] = verdict
             finding["verdict_detail"] = detail
+            # The gate judges the whole pipeline, not this pair's stage, so a
+            # confirmed divergence isn't yet tied to where it lives -- see
+            # docs/equivalence/README.md's CONFIRMED paragraph.
+            finding["attribution"] = "unlocalized"
             result["findings"].append(finding)
     return result
 
@@ -1110,7 +1114,10 @@ def _validate_pair_entry(entry):
 def _ledger_outcome(findings):
     verdicts = {finding.get("verdict") for finding in findings}
     if "confirmed" in verdicts:
-        return "confirmed"
+        # The runner judges end-to-end CLI behaviour, not this pair's stage,
+        # so a mechanical run can never earn "confirmed" -- that value is
+        # reserved for a human who has attributed the divergence here.
+        return "unlocalized"
     if "inconclusive" in verdicts:
         return "hypotheses"
     return "clean"
@@ -1255,7 +1262,10 @@ def _print_summary(report, skipped, confirmed, outdir):
     )
     print(f"  refuted   : {report['refuted']}")
     for pair, finding in confirmed:
-        print(f"    [{pair}] {finding.get('claim', '?')}")
+        attribution = finding.get("attribution", "unlocalized")
+        print(
+            f"    [{attribution}; proposed during {pair}] {finding.get('claim', '?')}"
+        )
         print(f"            {finding['verdict_detail']}")
     print(f"  results   : {outdir / 'results.json'}")
 
