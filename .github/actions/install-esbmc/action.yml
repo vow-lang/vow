@@ -15,8 +15,10 @@ description: Restore or install a checksum-verified ESBMC release
 #
 #   curl -fsSLO https://github.com/esbmc/esbmc/releases/download/v<N>/esbmc-linux.zip
 #   curl -fsSLO https://github.com/esbmc/esbmc/releases/download/v<N>/esbmc-macos.zip
+#   curl -fsSLO https://github.com/esbmc/esbmc/releases/download/v<N>/esbmc-linux-armv8.zip
 #   sha256sum esbmc-linux.zip
 #   shasum -a 256 esbmc-macos.zip
+#   sha256sum esbmc-linux-armv8.zip
 #
 # All are still inputs, so a workflow that needs to pin a different
 # version (bisecting a solver regression, say) can override them.
@@ -33,6 +35,10 @@ inputs:
     description: SHA-256 checksum of the macOS release archive
     required: false
     default: a5a9b4443775c346ed14c9a20c36e459c460f61ebeaa33f89daa14f9ae4d786d
+  sha256-linux-arm64:
+    description: SHA-256 checksum of the Linux ARM64 release archive
+    required: false
+    default: 5470aac77f2057f60b232c95dfe0b9b71fef4e736246a53aeb19aaa549dd37f7
 
 runs:
   using: composite
@@ -43,11 +49,16 @@ runs:
       env:
         ESBMC_SHA256_LINUX: ${{ inputs.sha256 }}
         ESBMC_SHA256_MACOS: ${{ inputs.sha256-macos }}
+        ESBMC_SHA256_LINUX_ARM64: ${{ inputs.sha256-linux-arm64 }}
       run: |
         case "$RUNNER_OS/$RUNNER_ARCH" in
           Linux/X64)
             esbmc_zip=esbmc-linux.zip
             esbmc_sha256="$ESBMC_SHA256_LINUX"
+            ;;
+          Linux/ARM64)
+            esbmc_zip=esbmc-linux-armv8.zip
+            esbmc_sha256="$ESBMC_SHA256_LINUX_ARM64"
             ;;
           macOS/ARM64)
             esbmc_zip=esbmc-macos.zip
