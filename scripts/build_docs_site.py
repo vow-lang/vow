@@ -49,7 +49,7 @@ ESCAPING_LINK = re.compile(r'\]\(\.\./([^)#\s]+)(#[^)\s]*)?(\s+"[^"]*")?\)')
 # line-anchored pattern (per CommonMark, optionally indented up to 3 spaces)
 # rather than folding into ESCAPING_LINK above.
 ESCAPING_REF_LINK = re.compile(
-    r'^(\s{0,3}\[[^\]]+\]:\s*)\.\./([^\s]+?)(#[^\s]*)?(\s+"[^"]*")?\s*$',
+    r'^(\s{0,3}\[[^\]]+\]:\s*)\.\./([^\s#]+)(#[^\s]*)?(\s+"[^"]*")?\s*$',
     re.MULTILINE,
 )
 

@@ -79,23 +79,14 @@ class RetargetEscapingLinksTest(unittest.TestCase):
             f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md",
         )
 
-    def test_reference_style_link_with_fragment_is_rewritten(self):
+    def test_reference_style_link_with_fragment_and_title_is_rewritten(self):
         out = bds._retarget_escaping_links(
-            "[details]: ../verifier-discipline.md#some-heading", "grammar.md"
-        )
-        self.assertEqual(
-            out,
-            f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md#some-heading",
-        )
-
-    def test_reference_style_link_with_title_is_rewritten(self):
-        out = bds._retarget_escaping_links(
-            '[details]: ../verifier-discipline.md "Verifier discipline"',
+            '[details]: ../verifier-discipline.md#some-heading "Verifier discipline"',
             "grammar.md",
         )
         self.assertEqual(
             out,
-            f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md "
+            f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md#some-heading "
             '"Verifier discipline"',
         )
 
