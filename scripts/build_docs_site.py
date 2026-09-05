@@ -15,6 +15,7 @@ gitignored; the hand-written pages (home, tutorial, reference/index) are committ
 
 from __future__ import annotations
 
+import functools
 import re
 import shutil
 from pathlib import Path
@@ -54,13 +55,74 @@ ESCAPING_REF_LINK = re.compile(
 )
 
 
+def _slugify_heading(text: str) -> str:
+    """Reproduce GitHub's Markdown heading-to-anchor slug for `text`.
+
+    Verified against `github-slugger` (the de facto reference reimplementation
+    of GitHub's own slugifier) for every real heading currently under `docs/`,
+    including em-dashes, arrows, colons, parens, numbers, and inline code
+    spans. Does not handle `_italic_` underscore-emphasis or in-heading
+    Markdown links — neither construct occurs in this repo's headings today.
+    """
+    return re.sub(r"[^\w -]", "", text.lower(), flags=re.UNICODE).replace(" ", "-")
+
+
+_FENCE = re.compile(r"^\s{0,3}(```|~~~)")
+_ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*)$")
+_CLOSING_HASHES = re.compile(r"\s+#+\s*$")
+
+
+def _heading_anchors(markdown_text: str) -> set[str]:
+    """Extract the set of GitHub anchor slugs for every heading in `markdown_text`.
+
+    Skips lines inside fenced code blocks (``` or ~~~) so a shell comment like
+    `# build it` isn't mistaken for a heading. Duplicate headings get GitHub's
+    `-1`, `-2`, ... suffixing.
+    """
+    anchors: set[str] = set()
+    occurrences: dict[str, int] = {}
+    in_fence = False
+    for line in markdown_text.splitlines():
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = _ATX_HEADING.match(line)
+        if not match:
+            continue
+        heading = _CLOSING_HASHES.sub("", match.group(1)).strip()
+        slug = _slugify_heading(heading)
+        original_slug = slug
+        while slug in occurrences:
+            occurrences[original_slug] = occurrences.get(original_slug, 0) + 1
+            slug = f"{original_slug}-{occurrences[original_slug]}"
+        occurrences[slug] = 0
+        anchors.add(slug)
+    return anchors
+
+
+@functools.lru_cache(maxsize=None)
+def _heading_anchors_for(target_path: Path) -> frozenset[str]:
+    return frozenset(_heading_anchors(target_path.read_text()))
+
+
 def _resolve_target(target: str, anchor: str, page: str) -> str:
     """Resolve a `../`-escaping target to its GitHub URL, or raise loudly."""
-    if not (REPO / "docs" / target).exists():
+    target_path = REPO / "docs" / target
+    if not target_path.exists():
         raise SystemExit(
             f"{page}: link '../{target}' has no target at docs/{target}. "
             "Fix the link in the canonical file."
         )
+    if anchor and anchor != "#" and target_path.suffix == ".md":
+        fragment = anchor[1:]
+        valid_anchors = _heading_anchors_for(target_path)
+        if fragment not in valid_anchors:
+            raise SystemExit(
+                f"{page}: link '../{target}{anchor}' has no heading '{fragment}' "
+                f"in docs/{target}. Valid anchors: {sorted(valid_anchors)}"
+            )
     return f"{GITHUB_BLOB}/docs/{target}{anchor}"
 
 
