@@ -66,6 +66,41 @@ def _slugify_heading(text: str) -> str:
     return re.sub(r"[^\w -]", "", text.lower(), flags=re.UNICODE).replace(" ", "-")
 
 
+_FENCE = re.compile(r"^\s{0,3}(```|~~~)")
+_ATX_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*)$")
+_CLOSING_HASHES = re.compile(r"\s+#+\s*$")
+
+
+def _heading_anchors(markdown_text: str) -> set[str]:
+    """Extract the set of GitHub anchor slugs for every heading in `markdown_text`.
+
+    Skips lines inside fenced code blocks (``` or ~~~) so a shell comment like
+    `# build it` isn't mistaken for a heading. Duplicate headings get GitHub's
+    `-1`, `-2`, ... suffixing.
+    """
+    anchors: set[str] = set()
+    occurrences: dict[str, int] = {}
+    in_fence = False
+    for line in markdown_text.splitlines():
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = _ATX_HEADING.match(line)
+        if not match:
+            continue
+        heading = _CLOSING_HASHES.sub("", match.group(1))
+        slug = _slugify_heading(heading)
+        original_slug = slug
+        while slug in occurrences:
+            occurrences[original_slug] = occurrences.get(original_slug, 0) + 1
+            slug = f"{original_slug}-{occurrences[original_slug]}"
+        occurrences[slug] = 0
+        anchors.add(slug)
+    return anchors
+
+
 def _resolve_target(target: str, anchor: str, page: str) -> str:
     """Resolve a `../`-escaping target to its GitHub URL, or raise loudly."""
     if not (REPO / "docs" / target).exists():

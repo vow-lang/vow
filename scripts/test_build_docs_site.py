@@ -55,6 +55,34 @@ class SlugifyHeadingTest(unittest.TestCase):
         )
 
 
+class HeadingAnchorsTest(unittest.TestCase):
+    def test_two_headings(self):
+        text = "## Heading One\n\nbody\n\n### Heading Two\n"
+        self.assertEqual(bds._heading_anchors(text), {"heading-one", "heading-two"})
+
+    def test_fenced_code_block_hash_ignored(self):
+        text = "## Real Heading\n\n```\n# build it\n```\n"
+        self.assertEqual(bds._heading_anchors(text), {"real-heading"})
+
+    def test_tilde_fenced_code_block_hash_ignored(self):
+        text = "## Real Heading\n\n~~~\n# build it\n~~~\n"
+        self.assertEqual(bds._heading_anchors(text), {"real-heading"})
+
+    def test_closing_hashes_stripped(self):
+        text = "## Heading ##\n"
+        self.assertEqual(bds._heading_anchors(text), {"heading"})
+
+    def test_duplicate_headings_get_numeric_suffix(self):
+        text = "## Foo\n\n## Foo\n"
+        self.assertEqual(bds._heading_anchors(text), {"foo", "foo-1"})
+
+    def test_duplicate_slug_collision_avoided(self):
+        # "Foo" x2 produces "foo" and "foo-1"; a third, separate heading that
+        # slugifies directly to "foo-1" must not collide with it.
+        text = "## Foo\n\n## Foo\n\n## Foo 1\n"
+        self.assertEqual(bds._heading_anchors(text), {"foo", "foo-1", "foo-1-1"})
+
+
 class RetargetEscapingLinksTest(unittest.TestCase):
     def test_plain_link_is_rewritten(self):
         out = bds._retarget_escaping_links(
