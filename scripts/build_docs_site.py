@@ -44,6 +44,25 @@ REFERENCE_PAGES = [
 # folded into the path and mistaken for a dead target.
 ESCAPING_LINK = re.compile(r'\]\(\.\./([^)#\s]+)(#[^)\s]*)?(\s+"[^"]*")?\)')
 
+# Reference-style link *definitions* (`[label]: ../foo.md`) live on their own
+# line rather than inside a `](...)` construct, so they need a second,
+# line-anchored pattern (per CommonMark, optionally indented up to 3 spaces)
+# rather than folding into ESCAPING_LINK above.
+ESCAPING_REF_LINK = re.compile(
+    r'^(\s{0,3}\[[^\]]+\]:\s*)\.\./([^\s]+?)(#[^\s]*)?(\s+"[^"]*")?\s*$',
+    re.MULTILINE,
+)
+
+
+def _resolve_target(target: str, anchor: str, page: str) -> str:
+    """Resolve a `../`-escaping target to its GitHub URL, or raise loudly."""
+    if not (REPO / "docs" / target).exists():
+        raise SystemExit(
+            f"{page}: link '../{target}' has no target at docs/{target}. "
+            "Fix the link in the canonical file."
+        )
+    return f"{GITHUB_BLOB}/docs/{target}{anchor}"
+
 
 def _retarget_escaping_links(text: str, page: str) -> str:
     """Point `../`-prefixed links at GitHub, failing loudly on a dead target."""
@@ -54,14 +73,21 @@ def _retarget_escaping_links(text: str, page: str) -> str:
             match.group(2) or "",
             match.group(3) or "",
         )
-        if not (REPO / "docs" / target).exists():
-            raise SystemExit(
-                f"{page}: link '../{target}' has no target at docs/{target}. "
-                "Fix the link in the canonical file."
-            )
-        return f"]({GITHUB_BLOB}/docs/{target}{anchor}{title})"
+        url = _resolve_target(target, anchor, page)
+        return f"]({url}{title})"
 
-    return ESCAPING_LINK.sub(repl, text)
+    def ref_repl(match: re.Match[str]) -> str:
+        prefix, target, anchor, title = (
+            match.group(1),
+            match.group(2),
+            match.group(3) or "",
+            match.group(4) or "",
+        )
+        url = _resolve_target(target, anchor, page)
+        return f"{prefix}{url}{title}"
+
+    text = ESCAPING_LINK.sub(repl, text)
+    return ESCAPING_REF_LINK.sub(ref_repl, text)
 
 
 def _reset(path: Path) -> None:
