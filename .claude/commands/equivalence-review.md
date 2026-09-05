@@ -137,8 +137,14 @@ For each one, in this order:
    bug is fixed, forcing the directive's removal.
 5. **Complete the ledger metadata.** Apply `ledger.proposed.json`, then add the issue number and, once
    one exists, the fixture path. The proposal updates corpus history only. Pair-review hashes, dates and
-   outcomes are written separately by the pair-review harness, and only for pairs it reviewed completely;
-   what you add there is confirmed issue numbers.
+   outcomes are written separately by the pair-review harness, and only for pairs it reviewed completely.
+   The harness itself can only ever write `outcome: "unlocalized"` — it judges whole-pipeline CLI
+   behaviour, never which pair's stage a divergence lives in, so it can never earn `"confirmed"` on its
+   own. What you add is the issue number in `confirmed_issues`, and — once step 2's attribution is
+   verified against this pair's stage specifically, not just the pair under review when the model
+   proposed the input — flip that pair's `outcome` to `"confirmed"` by hand. That promotion is not
+   sticky: the harness overwrites `outcome` on the pair's next complete re-review, so a `content_hash`
+   change reverts it to whatever the harness computes fresh.
 
 ## Step 4 — Publish
 
