@@ -73,6 +73,8 @@ jobs:
       - run: cargo build --all
       - name: Verifier-evaluation unit tests
         run: python3 scripts/test_verify_eval.py
+      - name: Candidate isolation unit tests
+        run: python3 scripts/test_candidate_isolation.py
       - name: Equivalence runner unit tests
         run: python3 scripts/test_equivalence.py
       - name: Adversarial pair-review unit tests
