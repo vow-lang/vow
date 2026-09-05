@@ -70,6 +70,45 @@ class RetargetEscapingLinksTest(unittest.TestCase):
         )
         self.assertEqual(out, "See [errors](errors.md#e001).")
 
+    def test_reference_style_link_is_rewritten(self):
+        out = bds._retarget_escaping_links(
+            "[details]: ../verifier-discipline.md", "grammar.md"
+        )
+        self.assertEqual(
+            out,
+            f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md",
+        )
+
+    def test_reference_style_link_with_fragment_is_rewritten(self):
+        out = bds._retarget_escaping_links(
+            "[details]: ../verifier-discipline.md#some-heading", "grammar.md"
+        )
+        self.assertEqual(
+            out,
+            f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md#some-heading",
+        )
+
+    def test_reference_style_link_with_title_is_rewritten(self):
+        out = bds._retarget_escaping_links(
+            '[details]: ../verifier-discipline.md "Verifier discipline"',
+            "grammar.md",
+        )
+        self.assertEqual(
+            out,
+            f"[details]: {bds.GITHUB_BLOB}/docs/verifier-discipline.md "
+            '"Verifier discipline"',
+        )
+
+    def test_reference_style_dead_target_still_raises(self):
+        with self.assertRaises(SystemExit):
+            bds._retarget_escaping_links(
+                "[details]: ../does-not-exist.md", "grammar.md"
+            )
+
+    def test_reference_style_sibling_link_is_untouched(self):
+        out = bds._retarget_escaping_links("[errors]: errors.md#e001", "grammar.md")
+        self.assertEqual(out, "[errors]: errors.md#e001")
+
 
 if __name__ == "__main__":
     unittest.main()
