@@ -32,6 +32,19 @@ fn f() -> i64 {
 
 **Fix:** Remove the invalid character. Vow has no `@` operator.
 
+A float literal whose decimal magnitude overflows `f64` (parses to
+infinity) is also an `InvalidCharacter` error, raised at lex time rather
+than allowed through to produce an uncompilable C `inf` token later in
+the pipeline:
+
+```vow
+fn f() -> f64 {
+    999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999.0
+}
+```
+
+**Fix:** Use a literal whose magnitude is within `f64::MAX` (~1.7976931348623157e308).
+
 ### InvalidIntSuffix
 
 **Phase:** Lexer
