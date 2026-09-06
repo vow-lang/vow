@@ -293,7 +293,14 @@ fn lex(src: String) -> Vec<Token> {
                 let len: i64 = span_len(pos, start);
                 let text: String = string_substr(src, start, len);
                 let bits: u64 = parse_f64_bits(text);
-                let tok: Token = make_wide_int_token(tok_lit_float(), bits, 0u64, 0, start, len);
+                // The literal grammar has no unary minus, so only the
+                // positive-infinity bit pattern (0x7FF0000000000000) is
+                // reachable from magnitude overflow.
+                let tok: Token = if bits == 9218868437227405312u64 {
+                    make_token(tok_invalid_float(), EC_INVALID_CHARACTER(), 0, String::from("float literal out of range"), start, len)
+                } else {
+                    make_wide_int_token(tok_lit_float(), bits, 0u64, 0, start, len)
+                };
                 tokens.push(tok);
             } else {
                 let suffix: i64 = if pos < src_len { try_suffix(src, pos, src_len) } else { -1 };
