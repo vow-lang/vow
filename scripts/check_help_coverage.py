@@ -62,20 +62,6 @@ def extract_table_column(text: str, heading: str, col: int = 0) -> list[str]:
     return items
 
 
-def flatten_json(obj) -> str:
-    """Flatten a JSON object into a single string for substring searching."""
-    if isinstance(obj, dict):
-        parts: list[str] = []
-        for k, v in obj.items():
-            parts.append(k)
-            parts.append(flatten_json(v))
-        return " ".join(parts)
-    elif isinstance(obj, list):
-        return " ".join(str(flatten_json(v)) for v in obj)
-    else:
-        return str(obj)
-
-
 def main():
     if len(sys.argv) != 3:
         print(f"Usage: {sys.argv[0]} <grammar.md> <help-json>", file=sys.stderr)
@@ -94,14 +80,13 @@ def main():
         sys.exit(1)
 
     lang = help_data.get("language", {})
-    flat = flatten_json(lang)
 
     missing = []
 
     # 1. Primitive types
     prims = extract_table_column(grammar, "Primitive Types", 0)
     assert len(prims) >= 6, f"Expected >=6 primitive types, got {len(prims)}: {prims}"
-    types_list = flat
+    types_list = lang.get("types", [])
     for t in prims:
         if t not in types_list:
             missing.append(f"type:{t}")
@@ -110,15 +95,15 @@ def main():
     params = extract_table_column(grammar, "Built-in Parameterized Types", 0)
     assert len(params) >= 4, f"Expected >=4 param types, got {len(params)}: {params}"
     for t in params:
-        base = t.split("<")[0]
-        if base not in types_list:
+        if t not in types_list:
             missing.append(f"type:{t}")
 
     # 3. Effects
     effects = extract_table_column(grammar, "Effect Types", 0)
     assert len(effects) >= 5, f"Expected >=5 effects, got {len(effects)}: {effects}"
+    effects_list = lang.get("effects", [])
     for e in effects:
-        if e not in flat:
+        if e not in effects_list:
             missing.append(f"effect:{e}")
 
     # 4. Builtin functions
@@ -130,9 +115,9 @@ def main():
             if value is not None:
                 builtins.append(value)
     assert len(builtins) >= 5, f"Expected >=5 builtins, got {len(builtins)}: {builtins}"
-    builtins_flat = flatten_json(lang.get("builtins", {}))
+    builtins_dict = lang.get("builtins", {})
     for b in builtins:
-        if b not in builtins_flat:
+        if b not in builtins_dict:
             missing.append(f"builtin:{b}")
 
     # 5. Structural keys
