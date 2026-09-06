@@ -283,6 +283,26 @@ The `examples/` directory contains runnable `.vow` programs:
 - `bisect.vow` — loop invariant
 - `countdown.vow` — while loop
 
+## Test Harnesses (`scripts/full_test.sh` vs `tests/run_tests.sh`)
+
+Two separate scripts walk `tests/run/*.vow` and other `tests/*` directories, and they check
+**different subsets** of the `// TEST:` directives. Do not assume one implies the other.
+
+- **`scripts/full_test.sh`** is the CI-gating harness (wired via `.github/workflows/full-test.yml`
+  and `promoted-fixtures.yml`). Its `run_promoted_run_tests` (Section 4, over `tests/run/*.vow`)
+  parses and checks `TEST: exit`, `TEST: stdout`, `TEST: stdin[-file]`, `TEST: skip`,
+  `TEST: verify-only`, and `TEST: known-divergence`. **It does not check `TEST: stderr`** — stderr
+  is redirected to `/dev/null` at the capture sites.
+- **`tests/run_tests.sh`** is a separate, local-developer-only harness (not invoked by any
+  `.github/workflows/*.yml`). Its Phase 1 (`tests/run/`) and Phase 4 (`tests/debug/`) loops *do*
+  parse and check `TEST: stderr` (substring match against captured stderr), in addition to the
+  directives `full_test.sh` also checks.
+
+So a `// TEST: stderr "..."` line on a `tests/run/*.vow` fixture is real, checked ground truth —
+just not checked by CI. It is enforced only when a developer runs `tests/run_tests.sh` locally.
+Before claiming a directive is "never parsed by any harness," grep `tests/*.sh` as well as
+`scripts/*.sh` — the two harnesses live in different directories and cover different directives.
+
 ## Mutation Testing (`vowc mutants`)
 
 Mutation testing is integrated into the self-hosted compiler as the `vowc mutants` subcommand. It mutates `compiler/*.vow` (or any `--root` directory), runs a tiered oracle (`scripts/bootstrap.sh --skip-cargo` then `scripts/full_test.sh`), and writes structured JSON output to `mutants.out/` (`mutants.json`, `outcomes.json`, per-status `.txt` lists, plus `diff/<id>.diff` and `logs/<id>.log` per mutant). Stdout carries only a one-line summary.

@@ -1,0 +1,16 @@
+// TEST: exit 134
+// TEST: stderr "{\"error\":\"ArithmeticOverflow\"}"
+module U8DivByZero
+
+fn zero() -> u8 {
+    0
+}
+
+fn divide() -> u8 {
+    10 / zero()
+}
+
+fn main() -> i32 {
+    divide();
+    0
+}
