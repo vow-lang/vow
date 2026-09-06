@@ -231,5 +231,162 @@ class RetargetEscapingLinksTest(unittest.TestCase):
         self.assertEqual(out, "[errors]: errors.md#e001")
 
 
+class MaskedMarkdownStructureTest(unittest.TestCase):
+    def test_fenced_block_protects_dead_target_example(self):
+        text = "Example:\n\n```\nSee [guide](../missing.md) for details.\n```\n"
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(out, text)
+
+    def test_fenced_block_protects_existing_target_example(self):
+        text = (
+            "Example:\n\n"
+            "```\n"
+            "See [details](../verifier-discipline.md) for details.\n"
+            "```\n"
+        )
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(out, text)
+
+    def test_tilde_fenced_block_protects_dead_target_example(self):
+        text = "Example:\n\n~~~\nSee [guide](../missing.md) for details.\n~~~\n"
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(out, text)
+
+    def test_fenced_block_protects_reference_style_definition(self):
+        text = "Example:\n\n```\n[details]: ../missing.md\n```\n"
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(out, text)
+
+    def test_inline_code_span_protects_issue_example(self):
+        text = "See `[guide](../missing.md)` for the syntax."
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(out, text)
+
+    def test_double_backtick_span_with_literal_backtick_is_protected(self):
+        text = "See ``[guide](../missing.md)` `` for the syntax."
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(out, text)
+
+    def test_unmatched_backtick_does_not_cascade_past_blank_line(self):
+        text = (
+            "This paragraph has a stray ` backtick with no closer.\n"
+            "\n"
+            "See [details](../verifier-discipline.md) in the next paragraph.\n"
+        )
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(
+            out,
+            (
+                "This paragraph has a stray ` backtick with no closer.\n"
+                "\n"
+                f"See [details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md) "
+                "in the next paragraph.\n"
+            ),
+        )
+
+    def test_code_span_before_real_link_does_not_block_rewrite(self):
+        text = "Use `foo()` and see [details](../verifier-discipline.md)."
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(
+            out,
+            f"Use `foo()` and see [details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md).",
+        )
+
+    def test_stray_backtick_before_fence_does_not_swallow_real_link(self):
+        # A stray unmatched backtick opener, with no closer before the fence,
+        # must not pair with an unrelated same-length backtick run inside the
+        # fence -- that would wrongly protect (and skip rewriting) the real
+        # link sitting between the two.
+        text = (
+            "Prose with `stray backtick and a real link "
+            "[details](../verifier-discipline.md) right before a fence.\n"
+            "```\n"
+            "foo ` bar\n"
+            "```\n"
+        )
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(
+            out,
+            (
+                "Prose with `stray backtick and a real link "
+                f"[details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md) "
+                "right before a fence.\n"
+                "```\n"
+                "foo ` bar\n"
+                "```\n"
+            ),
+        )
+
+    def test_stray_backtick_does_not_swallow_link_through_closing_fence(self):
+        # Mirror of the case above: the false closer sits AFTER the fence
+        # entirely (the fence itself has no backticks in its content).
+        text = (
+            "Prose with `stray and a link "
+            "[details](../verifier-discipline.md) before fence.\n"
+            "```\n"
+            "code here, no backticks\n"
+            "```\n"
+            "After fence text with a closer ` right here.\n"
+        )
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(
+            out,
+            (
+                "Prose with `stray and a link "
+                f"[details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md) "
+                "before fence.\n"
+                "```\n"
+                "code here, no backticks\n"
+                "```\n"
+                "After fence text with a closer ` right here.\n"
+            ),
+        )
+
+    def test_over_indented_pseudo_fence_does_not_suppress_validation(self):
+        # CommonMark caps a fence's own indentation at 3 spaces; an 8-space
+        # indented ``` is not a fence at all. It must not be treated as an
+        # (unterminated) one -- that would silently protect, and skip
+        # validating, every `../` link for the rest of the document.
+        text = (
+            "Some intro text.\n\n"
+            "        ```\n"
+            "Some further prose.\n\n"
+            "See [guide](../missing.md) later in the document.\n"
+        )
+        with self.assertRaises(SystemExit):
+            bds._retarget_escaping_links(text, "grammar.md")
+
+    def test_form_feed_inside_fence_does_not_close_it_early(self):
+        # `_fenced_block_ranges` must treat only `\n` as a line break, not
+        # every separator `str.splitlines()` recognizes -- a form feed in
+        # fenced content must not look like a line boundary that exposes a
+        # literal reference-style definition inside the fence.
+        text = "```\nlet x = 1;\x0c```\n[details]: ../missing.md\n```\n"
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(out, text)
+
+    def test_crlf_blank_line_bounds_stray_backtick(self):
+        # A CRLF blank line must bound the closer search exactly like an LF
+        # one does, so a stray backtick in one paragraph can't pair with a
+        # real code span's opener in a later paragraph and swallow the link
+        # in between.
+        text = (
+            "This paragraph has a stray ` backtick with no closer.\r\n"
+            "\r\n"
+            "See [details](../verifier-discipline.md) in the next paragraph, "
+            "then a `closer`.\r\n"
+        )
+        out = bds._retarget_escaping_links(text, "grammar.md")
+        self.assertEqual(
+            out,
+            (
+                "This paragraph has a stray ` backtick with no closer.\r\n"
+                "\r\n"
+                f"See [details]({bds.GITHUB_BLOB}/docs/verifier-discipline.md) "
+                "in the next paragraph, then a `closer`.\r\n"
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

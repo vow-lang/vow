@@ -107,6 +107,147 @@ def _heading_anchors_for(target_path: Path) -> frozenset[str]:
     return frozenset(_heading_anchors(target_path.read_text()))
 
 
+# A fence line is a run of 3+ identical backticks or tildes, optionally
+# followed by an info string, indented by at most 3 spaces (CommonMark's
+# fence-open/close limit). A deeper indent isn't a fence, and treating it as
+# one risks hitting the "unterminated fence" branch below, which protects to
+# end of document and silently disables `../` link validation past it.
+_FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+# A code span can't cross a paragraph break (CommonMark); this bounds the
+# closer search in `_inline_code_span_ranges` at the next blank line. `\r?`
+# lets this also match a CRLF-terminated blank line (`\r\n\r\n`), which the
+# bare `\n[ \t]*\n` form misses (the `\r` between the two `\n`s isn't in
+# `[ \t]*`).
+_BLANK_LINE = re.compile(r"\r?\n[ \t]*\r?\n")
+
+
+def _iter_lines(text: str):
+    """Yield each line of `text` (trailing `\\n` kept, if present), splitting
+    on `\\n` only -- unlike `str.splitlines()`, which also breaks on `\\v`,
+    `\\f` and other separators that would close a fence early."""
+    start = 0
+    n = len(text)
+    while start <= n:
+        nl = text.find("\n", start)
+        if nl == -1:
+            if start < n:
+                yield text[start:]
+            return
+        yield text[start : nl + 1]
+        start = nl + 1
+
+
+def _fenced_block_ranges(text: str) -> list[tuple[int, int]]:
+    """Character ranges of fenced code blocks (```` ``` ```` or `~~~`), start-of-open-line to end-of-close-line."""
+    ranges: list[tuple[int, int]] = []
+    fence_char: str | None = None
+    fence_len = 0
+    fence_start = 0
+    offset = 0
+    for line in _iter_lines(text):
+        stripped = line.rstrip("\n")
+        m = _FENCE_LINE.match(stripped)
+        if fence_char is None:
+            if m:
+                fence_char = m.group(1)[0]
+                fence_len = len(m.group(1))
+                fence_start = offset
+        elif (
+            m
+            and m.group(1)[0] == fence_char
+            and len(m.group(1)) >= fence_len
+            and m.group(2).strip() == ""
+        ):
+            ranges.append((fence_start, offset + len(line)))
+            fence_char = None
+        offset += len(line)
+    if fence_char is not None:
+        # Unterminated fence: protect to end of document rather than guess.
+        ranges.append((fence_start, len(text)))
+    return ranges
+
+
+def _range_containing(
+    pos: int, ranges: list[tuple[int, int]]
+) -> tuple[int, int] | None:
+    """The (start, end) entry in `ranges` that contains `pos`, or None."""
+    for start, end in ranges:
+        if start <= pos < end:
+            return start, end
+    return None
+
+
+def _inline_code_span_ranges(
+    text: str, fenced_ranges: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Character ranges of inline code spans (backtick-delimited), outside fenced blocks."""
+
+    def _skip_to(pos: int) -> int:
+        hit = _range_containing(pos, fenced_ranges)
+        return hit[1] if hit else pos
+
+    ranges: list[tuple[int, int]] = []
+    backtick_run = re.compile(r"`+")
+    n = len(text)
+    i = 0
+    while i < n:
+        opener = backtick_run.search(text, i)
+        if not opener:
+            break
+        skipped = _skip_to(opener.start())
+        if skipped != opener.start():
+            i = skipped
+            continue
+        run_len = opener.end() - opener.start()
+        # A code span cannot cross a paragraph (blank-line) boundary, or a
+        # fenced block (which also interrupts a paragraph in CommonMark);
+        # bound the closer search at whichever comes first. Without the
+        # fence bound, a stray unmatched opener could pair with an unrelated
+        # backtick run on the far side of (or inside) a fence and swallow
+        # everything in between, including a real link.
+        blank_line = _BLANK_LINE.search(text, opener.end())
+        boundary = blank_line.start() if blank_line else n
+        next_fence_start = min(
+            (start for start, _ in fenced_ranges if start >= opener.end()),
+            default=n,
+        )
+        boundary = min(boundary, next_fence_start)
+
+        search_pos = opener.end()
+        closer = None
+        while search_pos < boundary:
+            candidate = backtick_run.search(text, search_pos)
+            if not candidate or candidate.start() >= boundary:
+                break
+            if candidate.end() - candidate.start() == run_len:
+                closer = candidate
+                break
+            search_pos = candidate.end()
+
+        if closer:
+            ranges.append((opener.start(), closer.end()))
+            i = closer.end()
+        else:
+            # No matching closer before the paragraph boundary: the run is
+            # literal text, not a span delimiter. Resume right after it.
+            i = opener.end()
+    return ranges
+
+
+def _protected_ranges(text: str) -> list[tuple[int, int]]:
+    """Character ranges of fenced blocks and inline code spans, where a
+    literal `](...)`-shaped Markdown example must not be treated as a real
+    link."""
+    fenced = _fenced_block_ranges(text)
+    spans = _inline_code_span_ranges(text, fenced)
+    return fenced + spans
+
+
+def _is_protected(pos: int, ranges: list[tuple[int, int]]) -> bool:
+    return _range_containing(pos, ranges) is not None
+
+
 def _resolve_target(target: str, anchor: str, page: str) -> str:
     """Resolve a `../`-escaping target to its GitHub URL, or raise loudly."""
     target_path = REPO / "docs" / target
@@ -127,9 +268,18 @@ def _resolve_target(target: str, anchor: str, page: str) -> str:
 
 
 def _retarget_escaping_links(text: str, page: str) -> str:
-    """Point `../`-prefixed links at GitHub, failing loudly on a dead target."""
+    """Point `../`-prefixed links at GitHub, failing loudly on a dead target.
+
+    A literal Markdown-link example inside a fenced code block or inline code
+    span (e.g. `` `[guide](../missing.md)` `` shown as prose) is masked first,
+    so it is left untouched instead of being treated as a real link.
+    """
+
+    protected = _protected_ranges(text)
 
     def repl(match: re.Match[str]) -> str:
+        if _is_protected(match.start(), protected):
+            return match.group(0)
         target, anchor, title = (
             match.group(1),
             match.group(2) or "",
@@ -138,7 +288,13 @@ def _retarget_escaping_links(text: str, page: str) -> str:
         url = _resolve_target(target, anchor, page)
         return f"]({url}{title})"
 
+    text = ESCAPING_LINK.sub(repl, text)
+
+    protected = _protected_ranges(text)
+
     def ref_repl(match: re.Match[str]) -> str:
+        if _is_protected(match.start(), protected):
+            return match.group(0)
         prefix, target, anchor, title = (
             match.group(1),
             match.group(2),
@@ -148,7 +304,6 @@ def _retarget_escaping_links(text: str, page: str) -> str:
         url = _resolve_target(target, anchor, page)
         return f"{prefix}{url}{title}"
 
-    text = ESCAPING_LINK.sub(repl, text)
     return ESCAPING_REF_LINK.sub(ref_repl, text)
 
 
