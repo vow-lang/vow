@@ -372,8 +372,7 @@ impl Parser {
                     .unwrap_or(("<error>".to_string(), self.current_span()));
                 if self.at(&TokenKind::LParen) {
                     self.advance();
-                    let args = self.parse_call_args();
-                    let end = self.current_span();
+                    let (args, end) = self.parse_call_args();
                     Expr {
                         kind: ExprKind::MethodCall {
                             receiver: Box::new(lhs),
@@ -394,8 +393,7 @@ impl Parser {
             }
             TokenKind::LParen => {
                 self.advance();
-                let args = self.parse_call_args();
-                let end = self.current_span();
+                let (args, end) = self.parse_call_args();
                 Expr {
                     kind: ExprKind::Call {
                         callee: Box::new(lhs),
@@ -433,7 +431,11 @@ impl Parser {
         }
     }
 
-    fn parse_call_args(&mut self) -> Vec<Expr> {
+    // Returns the closing paren's own span (not the following token's) so
+    // callers can merge it into a Call/MethodCall span that ends exactly at
+    // `)`. `self.current_span()` after this returns would point past the
+    // paren, at whatever token comes next in the enclosing expression.
+    fn parse_call_args(&mut self) -> (Vec<Expr>, Span) {
         let mut args = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at_end() {
             args.push(self.parse_expr_inner(0));
@@ -443,8 +445,10 @@ impl Parser {
                 break;
             }
         }
-        self.expect(TokenKind::RParen);
-        args
+        let end = self
+            .expect(TokenKind::RParen)
+            .unwrap_or_else(|| self.current_span());
+        (args, end)
     }
 
     fn parse_if_expr(&mut self) -> Expr {
@@ -638,15 +642,21 @@ impl Parser {
 
     fn parse_enum_construct(&mut self, first_segment: String, start: Span) -> Expr {
         let mut path = vec![first_segment];
+        let mut last_span = start;
         while self.at(&TokenKind::ColonColon) {
             self.advance();
-            if let Some((segment, _)) = self.expect_ident() {
+            if let Some((segment, seg_span)) = self.expect_ident() {
                 path.push(segment);
+                last_span = seg_span;
             } else {
                 break;
             }
         }
-        let fields = if self.at(&TokenKind::LParen) {
+        // Each arm's `end` is the closing delimiter's own span (or the last
+        // path segment's, when there are no args) — never `self.current_span()`
+        // taken after the delimiter is already consumed, which would point at
+        // the following token instead.
+        let (fields, end) = if self.at(&TokenKind::LParen) {
             self.advance();
             let mut args = Vec::new();
             while !self.at(&TokenKind::RParen) && !self.at_end() {
@@ -657,8 +667,10 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(TokenKind::RParen);
-            args
+            let close = self
+                .expect(TokenKind::RParen)
+                .unwrap_or_else(|| self.current_span());
+            (args, close)
         } else if self.at(&TokenKind::LBrace) && path.len() > 1 && self.looks_like_struct_literal()
         {
             self.advance();
@@ -674,12 +686,13 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(TokenKind::RBrace);
-            args
+            let close = self
+                .expect(TokenKind::RBrace)
+                .unwrap_or_else(|| self.current_span());
+            (args, close)
         } else {
-            vec![]
+            (vec![], last_span)
         };
-        let end = self.current_span();
         Expr {
             kind: ExprKind::EnumConstruct { path, fields },
             span: start.merge(end),
@@ -815,6 +828,55 @@ mod tests {
                 assert!(args.is_empty());
             }
             _ => panic!("expected MethodCall"),
+        }
+    }
+
+    // Regression for #1262: `parse_call_args` consumes the closing `)`
+    // internally, so grabbing `current_span()` after it returned used to
+    // capture the *next* token's span instead of the paren just consumed,
+    // making the reported span 1-2 bytes too long.
+    #[test]
+    fn call_span_ends_at_closing_paren_not_next_token() {
+        let expr = parse_no_errors("f(g())");
+        assert_eq!(expr.span.len, 6, "outer call should span exactly `f(g())`");
+        match &expr.kind {
+            ExprKind::Call { args, .. } => {
+                assert_eq!(args[0].span.len, 3, "inner call should span exactly `g()`");
+            }
+            _ => panic!("expected Call"),
+        }
+    }
+
+    #[test]
+    fn method_call_span_ends_at_closing_paren_not_next_token() {
+        let expr = parse_no_errors("c.push(f())");
+        assert_eq!(
+            expr.span.len, 11,
+            "method call should span exactly `c.push(f())`"
+        );
+        match &expr.kind {
+            ExprKind::MethodCall { args, .. } => {
+                assert_eq!(args[0].span.len, 3, "inner call should span exactly `f()`");
+            }
+            _ => panic!("expected MethodCall"),
+        }
+    }
+
+    #[test]
+    fn enum_construct_span_ends_at_closing_paren_not_next_token() {
+        let expr = parse_no_errors("E::V(f())");
+        assert_eq!(
+            expr.span.len, 9,
+            "enum construct should span exactly `E::V(f())`"
+        );
+        match &expr.kind {
+            ExprKind::EnumConstruct { fields, .. } => {
+                assert_eq!(
+                    fields[0].span.len, 3,
+                    "inner call should span exactly `f()`"
+                );
+            }
+            _ => panic!("expected EnumConstruct"),
         }
     }
 

@@ -3832,6 +3832,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(start_id);
                 call_args.push(end_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_substring"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("String"));
                 return result;
             }
@@ -3839,6 +3840,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_parse_i64_opt"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("Option"));
                 return result;
             }
@@ -3846,6 +3848,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_parse_u64_opt"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("Option"));
                 return result;
             }
@@ -3978,6 +3981,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(k_id);
                 call_args.push(v_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_insert"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("Option"));
                 return result;
             }
@@ -3995,6 +3999,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(recv_id);
                 call_args.push(k_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_get"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("Option"));
                 return result;
             }
