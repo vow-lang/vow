@@ -1,0 +1,12 @@
+// TEST: stderr "left is 'Foo' but right is 'Bar'"
+module AssignExprTypeMismatchStruct
+
+struct Foo { x: i32 }
+struct Bar { y: i32 }
+
+fn main() -> i32 {
+  let mut a: Foo = Foo { x: 1 };
+  let b: Bar = Bar { y: 2 };
+  a = b;
+  0
+}
