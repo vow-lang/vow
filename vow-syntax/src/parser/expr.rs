@@ -658,19 +658,7 @@ impl Parser {
         // the following token instead.
         let (fields, end) = if self.at(&TokenKind::LParen) {
             self.advance();
-            let mut args = Vec::new();
-            while !self.at(&TokenKind::RParen) && !self.at_end() {
-                args.push(self.parse_expr_inner(0));
-                if self.at(&TokenKind::Comma) {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-            let close = self
-                .expect(TokenKind::RParen)
-                .unwrap_or_else(|| self.current_span());
-            (args, close)
+            self.parse_call_args()
         } else if self.at(&TokenKind::LBrace) && path.len() > 1 && self.looks_like_struct_literal()
         {
             self.advance();

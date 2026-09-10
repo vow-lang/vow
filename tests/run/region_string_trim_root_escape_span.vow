@@ -1,0 +1,19 @@
+// TEST: stdout ""
+// Issue #1262 regression: the free-function builtin dispatch in the
+// self-hosted lowerer (compiler/lower.vow's generic `builtin_to_extern`
+// path, used by string_trim/string_to_upper/string_to_lower/string_replace/
+// string_join/string_substr/string_split) never stamped its Call
+// instruction's span, unlike the sibling `.substring()`/`.parse_i64()`
+// method-call lowerings fixed in #1262. Without a span, the RegionRootEscape
+// note anchored to the whole enclosing function instead of the call site.
+// This fixture publishes an inline `string_trim(s)` through a parameter
+// container, making the call the RegionRootEscape source.
+module RegionStringTrimRootEscapeSpan
+
+fn push_trimmed(strs: Vec<String>, s: String) {
+    strs.push(string_trim(s));
+}
+
+fn main() -> i32 {
+    0
+}

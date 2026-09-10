@@ -62,11 +62,16 @@ impl Parser {
         let mut variants = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
             let variant_start = self.current_span();
-            let (variant_name, _) = match self.expect_ident() {
+            let (variant_name, name_span) = match self.expect_ident() {
                 Some(v) => v,
                 None => break,
             };
-            let kind = if self.at(&TokenKind::LParen) {
+            // `variant_end` is the closing delimiter's own span (from
+            // expect()'s return value) for Tuple/Struct variants, or the
+            // variant name's own position for Unit variants — never
+            // self.current_span() re-read after the delimiter is already
+            // consumed, which would land on the following token instead.
+            let (kind, variant_end) = if self.at(&TokenKind::LParen) {
                 self.advance();
                 let mut types = Vec::new();
                 while !self.at(&TokenKind::RParen) && !self.at_end() {
@@ -77,8 +82,10 @@ impl Parser {
                         break;
                     }
                 }
-                self.expect(TokenKind::RParen);
-                VariantKind::Tuple(types)
+                let close = self
+                    .expect(TokenKind::RParen)
+                    .unwrap_or_else(|| self.current_span());
+                (VariantKind::Tuple(types), close)
             } else if self.at(&TokenKind::LBrace) {
                 self.advance();
                 let mut fields = Vec::new();
@@ -102,12 +109,13 @@ impl Parser {
                         break;
                     }
                 }
-                self.expect(TokenKind::RBrace);
-                VariantKind::Struct(fields)
+                let close = self
+                    .expect(TokenKind::RBrace)
+                    .unwrap_or_else(|| self.current_span());
+                (VariantKind::Struct(fields), close)
             } else {
-                VariantKind::Unit
+                (VariantKind::Unit, name_span)
             };
-            let variant_end = self.current_span();
             variants.push(EnumVariant {
                 name: variant_name,
                 kind,
@@ -434,6 +442,32 @@ mod tests {
         assert!(matches!(&e.variants[1].kind, VariantKind::Tuple(ts) if ts.len() == 2));
         assert_eq!(e.variants[2].name, "Struct");
         assert!(matches!(&e.variants[2].kind, VariantKind::Struct(fs) if fs.len() == 1));
+    }
+
+    // Regression for #1262: parse_enum's Tuple/Struct variant arms consumed
+    // the closing `)`/`}` via self.expect(...) and then re-read
+    // self.current_span() for variant_end, landing on the following token
+    // (e.g. the next variant's `,`) instead of the delimiter just consumed —
+    // the same bug parse_call_args had for Call/MethodCall/EnumConstruct.
+    #[test]
+    fn enum_variant_span_ends_at_closing_delimiter_not_next_token() {
+        let src = "enum Shape { Unit, Tuple(i32, i32), Struct { x: i32 } }";
+        let item = parse_item(src);
+        let e = match item {
+            Item::Enum(e) => e,
+            other => panic!("expected enum, got {:?}", other),
+        };
+        let expected = ["Unit", "Tuple(i32, i32)", "Struct { x: i32 }"];
+        for (v, text) in e.variants.iter().zip(expected) {
+            let start = v.span.start as usize;
+            let len = v.span.len as usize;
+            assert_eq!(
+                &src[start..start + len],
+                text,
+                "variant {} span should cover exactly its own text, not bleed into the following token",
+                v.name
+            );
+        }
     }
 
     #[test]

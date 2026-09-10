@@ -2437,6 +2437,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let call_args: Vec<i64> = Vec::new();
                     call_args.push(source_id);
                     let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_pin_to_root"));
+                    lctx_set_inst_span(ctx, result, expr_span(a, eid));
                     lctx_tag(ctx, result, String::from("String"));
                     return result;
                 }
@@ -2444,6 +2445,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let call_args: Vec<i64> = Vec::new();
                     call_args.push(source_id);
                     let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_pin_to_root_val"));
+                    lctx_set_inst_span(ctx, result, expr_span(a, eid));
                     lctx_tag(ctx, result, String::from("Vec"));
                     let elem_path: Vec<String> = lctx_get_vec_elem_path(ctx, source_id);
                     if elem_path.len() > 0 {
@@ -2515,6 +2517,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ai = ai + 1;
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
+            lctx_set_inst_span(ctx, result, expr_span(a, eid));
             // Keep these builtin result tags in sync with tag_builtin_result in the Rust lowerer.
             if fn_name == String::from("fs_read") || fn_name == String::from("fs_read_line") || fn_name == String::from("stdin_read") || fn_name == String::from("stdin_read_line") {
                 lctx_tag(ctx, result, String::from("String"));
