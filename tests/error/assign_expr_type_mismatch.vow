@@ -1,0 +1,9 @@
+// TEST: stderr "assignment type mismatch"
+module AssignExprTypeMismatch
+
+fn main() -> i32 {
+  let mut cur: u64 = 0;
+  let n: i64 = 5;
+  cur = n;
+  0
+}
