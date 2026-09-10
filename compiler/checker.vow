@@ -3078,9 +3078,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         check_contextual_integer_literal_ranges(e, a, rhs_eid, lhs_tid);
         if !is_opaque(lhs_tid) && !is_coercible(e.ts, rhs_tid, lhs_tid) {
             let msg: String = String::from("assignment type mismatch: left is '");
-            msg.push_str(ty_tag_name(ty_tag(e.ts, lhs_tid)));
+            msg.push_str(ty_value_display_name(e.ts, lhs_tid));
             msg.push_str(String::from("' but right is '"));
-            msg.push_str(ty_tag_name(ty_tag(e.ts, rhs_tid)));
+            msg.push_str(ty_value_display_name(e.ts, rhs_tid));
             msg.push_str(String::from("'"));
             env_emit_error(e, msg, expr_span(a, eid));
         }
