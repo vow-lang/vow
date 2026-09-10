@@ -84,9 +84,10 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## builtin-constructor-spec
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
-- **Files**: ~1 estimated (large single-file diff, ~150 lines)
+- **Files**: ~1 estimated (actual: 1; +260/-131 in `vow-types/src/check.rs`)
+- **PR**: #1268
 - **Modules**: `vow-types/src/check.rs` (`EnumConstruct` builtin dispatch, ~L2867-3016)
 - **Summary**: extract the inline `match (enum, variant)` builtin-constructor policy (arity, per-arg
   `ArgExpect`, result shape) into a pure `builtin_constructor_spec(enum, variant) -> Option<CtorSpec>`

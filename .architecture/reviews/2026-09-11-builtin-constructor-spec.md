@@ -4,7 +4,7 @@
 the file every prior firing has deepened. A workspace-wide sub-agent sweep looked for fresh candidates
 outside it (vow-ir, vow-codegen, vow-verify, vow-runtime, vow, vow-syntax, vow-diag); the strongest
 fresh finds are recorded below but none outscored the carried-forward `check.rs` pick.
-**Picked**: `builtin-constructor-spec` — see [PR #TBD] and `.architecture/backlog.md`
+**Picked**: `builtin-constructor-spec` — see [PR #1268](https://github.com/vow-lang/vow/pull/1268) and `.architecture/backlog.md`
 **Degradations**: none — `gh` authenticated, sub-agent available, advisor used at step 4.
 
 Diagram convention (replaces the upstream HTML legend): **solid edges are the interface** a caller
