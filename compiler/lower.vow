@@ -279,6 +279,12 @@ fn lctx_link_phi_input(ctx: LowerCtx, input_id: i64, target_id: i64) {
     lctx_merge_inst_ty(ctx, target_id, lctx_inst_ty(ctx, input_id));
 }
 
+// Unlike the Rust lowerer's `ctx.emit(...)`, this takes no span: callers that
+// need the instruction's diagnostics (e.g. RegionRootEscape) anchored to real
+// source must follow up with `lctx_set_inst_span(ctx, result, expr_span(a, eid))`
+// themselves (see the many call sites doing exactly that below). Nothing
+// enforces this — issue #1262 found and fixed several call sites that had
+// silently omitted it.
 fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2: i64, ds: String) -> i64 {
     if lctx_is_terminated(ctx) {
         return ctx.next_inst_id;

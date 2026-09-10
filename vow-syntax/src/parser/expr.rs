@@ -445,9 +445,7 @@ impl Parser {
                 break;
             }
         }
-        let end = self
-            .expect(TokenKind::RParen)
-            .unwrap_or_else(|| self.current_span());
+        let end = self.expect_span(TokenKind::RParen);
         (args, end)
     }
 
@@ -674,9 +672,7 @@ impl Parser {
                     break;
                 }
             }
-            let close = self
-                .expect(TokenKind::RBrace)
-                .unwrap_or_else(|| self.current_span());
+            let close = self.expect_span(TokenKind::RBrace);
             (args, close)
         } else {
             (vec![], last_span)

@@ -82,9 +82,7 @@ impl Parser {
                         break;
                     }
                 }
-                let close = self
-                    .expect(TokenKind::RParen)
-                    .unwrap_or_else(|| self.current_span());
+                let close = self.expect_span(TokenKind::RParen);
                 (VariantKind::Tuple(types), close)
             } else if self.at(&TokenKind::LBrace) {
                 self.advance();
@@ -109,9 +107,7 @@ impl Parser {
                         break;
                     }
                 }
-                let close = self
-                    .expect(TokenKind::RBrace)
-                    .unwrap_or_else(|| self.current_span());
+                let close = self.expect_span(TokenKind::RBrace);
                 (VariantKind::Struct(fields), close)
             } else {
                 (VariantKind::Unit, name_span)

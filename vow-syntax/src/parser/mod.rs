@@ -117,6 +117,14 @@ impl Parser {
         }
     }
 
+    // Span of the consumed `kind` token, or the current (unconsumed) token's
+    // span on a parse error. Use this instead of `expect(kind)` followed by
+    // `current_span()` — that ordering reads the position *after* the token
+    // it meant to span, landing on whatever follows instead.
+    fn expect_span(&mut self, kind: TokenKind) -> Span {
+        self.expect(kind).unwrap_or_else(|| self.current_span())
+    }
+
     fn expect_ident(&mut self) -> Option<(String, Span)> {
         match self.peek_kind().clone() {
             TokenKind::Ident(name) => {

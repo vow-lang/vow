@@ -252,9 +252,7 @@ impl Parser {
                                 break;
                             }
                         }
-                        let close = self
-                            .expect(TokenKind::RParen)
-                            .unwrap_or_else(|| self.current_span());
+                        let close = self.expect_span(TokenKind::RParen);
                         (inner_pats, close)
                     } else {
                         (Vec::new(), self.current_span())
@@ -276,9 +274,7 @@ impl Parser {
                             break;
                         }
                     }
-                    let end = self
-                        .expect(TokenKind::RParen)
-                        .unwrap_or_else(|| self.current_span());
+                    let end = self.expect_span(TokenKind::RParen);
                     return Pat {
                         kind: PatKind::EnumVariant {
                             path: vec![name],
@@ -304,9 +300,7 @@ impl Parser {
                             break;
                         }
                     }
-                    let end = self
-                        .expect(TokenKind::RBrace)
-                        .unwrap_or_else(|| self.current_span());
+                    let end = self.expect_span(TokenKind::RBrace);
                     return Pat {
                         kind: PatKind::Struct { name, fields },
                         span: start.merge(end),
