@@ -237,7 +237,11 @@ impl Parser {
                             .unwrap_or(("<error>".to_string(), start));
                         path.push(segment);
                     }
-                    let inner = if self.at(&TokenKind::LParen) {
+                    // `end` is the closing paren's own span (from expect()'s
+                    // return value), not self.current_span() re-read after
+                    // the paren is already consumed — that would land on the
+                    // following token instead. Same fix as parse_call_args.
+                    let (inner, end) = if self.at(&TokenKind::LParen) {
                         self.advance();
                         let mut inner_pats = Vec::new();
                         while !self.at(&TokenKind::RParen) && !self.at_end() {
@@ -248,12 +252,11 @@ impl Parser {
                                 break;
                             }
                         }
-                        self.expect(TokenKind::RParen);
-                        inner_pats
+                        let close = self.expect_span(TokenKind::RParen);
+                        (inner_pats, close)
                     } else {
-                        Vec::new()
+                        (Vec::new(), self.current_span())
                     };
-                    let end = self.current_span();
                     return Pat {
                         kind: PatKind::EnumVariant { path, inner },
                         span: start.merge(end),
@@ -271,8 +274,7 @@ impl Parser {
                             break;
                         }
                     }
-                    self.expect(TokenKind::RParen);
-                    let end = self.current_span();
+                    let end = self.expect_span(TokenKind::RParen);
                     return Pat {
                         kind: PatKind::EnumVariant {
                             path: vec![name],
@@ -298,8 +300,7 @@ impl Parser {
                             break;
                         }
                     }
-                    self.expect(TokenKind::RBrace);
-                    let end = self.current_span();
+                    let end = self.expect_span(TokenKind::RBrace);
                     return Pat {
                         kind: PatKind::Struct { name, fields },
                         span: start.merge(end),
@@ -637,5 +638,58 @@ mod tests {
             }
             _ => panic!("expected EnumVariant"),
         }
+    }
+
+    // Regression for #1262: these three `parse_single_pat` arms consumed
+    // the closing `)`/`}` via `self.expect(...)` and then re-read
+    // `self.current_span()` for `end` — the same bug `parse_call_args` had.
+    // A standalone `parse_pat(...)` can't observe this (at EOF,
+    // current_span() happens to land on the right offset), so the pattern
+    // must be parsed as a match arm to expose the trailing token it used to
+    // bleed into.
+    fn parse_match_arm_pat_span_len(src: &str) -> usize {
+        let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
+        let expr = parser.parse_expr_inner(0);
+        assert!(
+            parser.diagnostics.is_empty(),
+            "unexpected errors: {:?}",
+            parser
+                .diagnostics
+                .iter()
+                .map(|e| &e.message)
+                .collect::<Vec<_>>()
+        );
+        match expr.kind {
+            crate::ast::ExprKind::Match { arms, .. } => arms[0].pattern.span.len as usize,
+            _ => panic!("expected Match"),
+        }
+    }
+
+    #[test]
+    fn enum_variant_pat_span_ends_at_paren_not_arrow() {
+        let len = parse_match_arm_pat_span_len("match o { Some(x) => x, _ => 0 }");
+        assert_eq!(
+            len, 7,
+            "pattern should span exactly `Some(x)`, not bleed into ` =>`"
+        );
+    }
+
+    #[test]
+    fn qualified_enum_variant_pat_span_ends_at_paren_not_arrow() {
+        let len = parse_match_arm_pat_span_len("match o { Option::Some(x) => x, _ => 0 }");
+        assert_eq!(
+            len, 15,
+            "pattern should span exactly `Option::Some(x)`, not bleed into ` =>`"
+        );
+    }
+
+    #[test]
+    fn struct_pat_span_ends_at_brace_not_arrow() {
+        let len = parse_match_arm_pat_span_len("match o { Point { x: a, y: b } => a, _ => 0 }");
+        assert_eq!(
+            len, 20,
+            "pattern should span exactly `Point {{ x: a, y: b }}`, not bleed into ` =>`"
+        );
     }
 }

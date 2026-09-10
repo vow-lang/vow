@@ -1162,6 +1162,81 @@ fn selfhosted_string_from_root_escape_note_carries_nonzero_span_length() {
     );
 }
 
+/// Issue #1262 (free-function builtin dispatch sibling): the self-hosted
+/// lowerer's generic `builtin_to_extern` dispatch (used by string_trim,
+/// string_to_upper, string_to_lower, string_replace, string_join,
+/// string_substr, string_split — as opposed to the `.substring()`-style
+/// method-call dispatch #1262 already fixed) must also stamp its Call
+/// instruction's span. This fixture publishes an inline `string_trim(s)`
+/// through a parameter container, making the call the `RegionRootEscape`
+/// source. Unlike the sibling tests above, this checks the note's span is
+/// *tight* (exactly `string_trim(s)`, 14 bytes) rather than merely nonzero —
+/// a `length > 0` check alone would not have caught this bug, since the
+/// unfixed code anchored the note to the whole enclosing function (also
+/// nonzero length, just far too wide).
+#[test]
+fn selfhosted_string_trim_root_escape_note_span_is_call_site_not_whole_function() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_string_trim_root_escape_span.vow");
+    let vowc = root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
+            module_path!()
+        );
+        return;
+    }
+
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let Some(diagnostics) = parsed["diagnostics"].as_array() else {
+        assert!(
+            self_hosted_runtime_link_failure(&parsed, stderr.as_ref()),
+            "diagnostics missing and build did not fail with the recognized \
+             missing-libvow_runtime.a link failure; stdout: {stdout}\nstderr: {stderr}"
+        );
+        eprintln!(
+            "SKIP: self-hosted build failed due to missing libvow_runtime.a \
+             (no diagnostics to check)"
+        );
+        return;
+    };
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "inline string_trim(...) published through a parameter container must emit \
+         a RegionRootEscape note; diagnostics: {diagnostics:?}"
+    );
+    let bad_len: Vec<_> = notes
+        .iter()
+        .filter(|n| n["span"]["length"].as_i64() != Some(14))
+        .collect();
+    assert!(
+        bad_len.is_empty(),
+        "string_trim(...)-sourced RegionRootEscape notes must carry span.length == 14 \
+         (exactly `string_trim(s)`, issue #1262); {} of {} notes had a different length: {bad_len:?}",
+        bad_len.len(),
+        notes.len()
+    );
+}
+
 /// Issue #318 regression guard — Rust↔self-hosted RegionRootEscape
 /// note-count parity on a fixture exercising mixed store-effect source
 /// kinds (ConstantGlobal + AliasOf).

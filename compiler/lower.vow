@@ -279,6 +279,12 @@ fn lctx_link_phi_input(ctx: LowerCtx, input_id: i64, target_id: i64) {
     lctx_merge_inst_ty(ctx, target_id, lctx_inst_ty(ctx, input_id));
 }
 
+// Unlike the Rust lowerer's `ctx.emit(...)`, this takes no span: callers that
+// need the instruction's diagnostics (e.g. RegionRootEscape) anchored to real
+// source must follow up with `lctx_set_inst_span(ctx, result, expr_span(a, eid))`
+// themselves (see the many call sites doing exactly that below). Nothing
+// enforces this — issue #1262 found and fixed several call sites that had
+// silently omitted it.
 fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2: i64, ds: String) -> i64 {
     if lctx_is_terminated(ctx) {
         return ctx.next_inst_id;
@@ -2437,6 +2443,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let call_args: Vec<i64> = Vec::new();
                     call_args.push(source_id);
                     let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_pin_to_root"));
+                    lctx_set_inst_span(ctx, result, expr_span(a, eid));
                     lctx_tag(ctx, result, String::from("String"));
                     return result;
                 }
@@ -2444,6 +2451,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let call_args: Vec<i64> = Vec::new();
                     call_args.push(source_id);
                     let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_pin_to_root_val"));
+                    lctx_set_inst_span(ctx, result, expr_span(a, eid));
                     lctx_tag(ctx, result, String::from("Vec"));
                     let elem_path: Vec<String> = lctx_get_vec_elem_path(ctx, source_id);
                     if elem_path.len() > 0 {
@@ -2515,6 +2523,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ai = ai + 1;
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
+            lctx_set_inst_span(ctx, result, expr_span(a, eid));
             // Keep these builtin result tags in sync with tag_builtin_result in the Rust lowerer.
             if fn_name == String::from("fs_read") || fn_name == String::from("fs_read_line") || fn_name == String::from("stdin_read") || fn_name == String::from("stdin_read_line") {
                 lctx_tag(ctx, result, String::from("String"));
@@ -3832,6 +3841,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(start_id);
                 call_args.push(end_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_substring"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("String"));
                 return result;
             }
@@ -3839,6 +3849,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_parse_i64_opt"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("Option"));
                 return result;
             }
@@ -3846,6 +3857,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_parse_u64_opt"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("Option"));
                 return result;
             }
@@ -3978,6 +3990,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(k_id);
                 call_args.push(v_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_insert"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("Option"));
                 return result;
             }
@@ -3995,6 +4008,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(recv_id);
                 call_args.push(k_id);
                 let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_get"));
+                lctx_set_inst_span(ctx, result, expr_span(a, eid));
                 lctx_tag(ctx, result, String::from("Option"));
                 return result;
             }
