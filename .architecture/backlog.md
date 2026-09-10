@@ -97,8 +97,10 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 - **Reason**: **picked this firing** (2026-09-11); deterministic top at 22 once its 22-point tie-mate
   `integer-literal-range-fit` (#1241) merged. Friction re-verified unchanged (commits #1263/#1264 did
   not touch `check.rs`). Pick was close — top two within 1 pt (runner-up
-  `coerce-context-argument-epilogue` at 21). ~150-line diff carries behaviour-preservation risk,
-  watched by the step-5 diff/estimate guard.
+  `coerce-context-argument-epilogue` at 21). ~150-line single-file diff carries behaviour-preservation
+  risk, guarded by the 11 existing EnumConstruct tests + new unit tests (not the step-5 file-count bail,
+  which fires only if the diff spreads past ~1 file). Adjudicated design C (mirror the landed-seam
+  pattern) over A (minimal, deepens only 8/11) and B (uniform spec, widest interface).
 
 ## comparison-operand-verdict
 

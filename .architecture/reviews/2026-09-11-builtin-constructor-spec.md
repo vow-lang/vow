@@ -80,8 +80,9 @@ payload-dependent wrapping and user-enum path stay inline.
 
 - **Recommendation strength** — Strong. It is the deterministic top of the ranking, mirrors four
   already-landed seams, and is fully pinned by existing tests. The one caveat — a ~150-line
-  heterogeneous diff rather than a ~15-line verdict — is a behaviour-preservation *risk*, watched by
-  the step-5 diff/estimate guard, not a reason to skip.
+  heterogeneous diff rather than a ~15-line verdict — is a behaviour-preservation *risk* guarded by the
+  11 existing EnumConstruct tests plus the new unit tests, not a reason to skip. (The step-5
+  file-count bail is separate: it fires only if the diff spreads past ~1 file, which this does not.)
 
 ### coerce-context-argument-epilogue — collapse the repeated coerce-and-emit epilogue · Worth exploring · score 21/25
 
@@ -179,4 +180,84 @@ firing.
 
 ## Design
 
-_Filled at step 4 after this report was first committed._
+Three interfaces were produced by parallel sub-agents (design-it-twice), each briefed for a
+radically different philosophy. The sub-agents' own advisor was rate-limited; adjudication used the
+routine advisor against the fixed criteria (depth → locality → seam placement → test surface → blast
+radius).
+
+### Design A — minimal surface
+
+Two tiny pure fns: `nullary_builtin_result_ty(enum, variant) -> Option<Ty>` (the 5 fixed-result
+builtins) and `payload_builtin_result_ty(enum, variant, &payload) -> Option<Ty>` (Some/Ok/Err wrap
+shape). `String::from` and **both** `from_raw_parts_copy` blocks stay fully inline. Net line count ~flat.
+Deepens only 8 of 11 builtins on the result-type axis; the ~110-line FFI coercion mass (duplicated
+verbatim between `String` and `Vec`) is left inline and un-deduplicated. Weakness: walks away from the
+arm's largest, gnarliest block — exactly the pain motivating the refactor.
+
+### Design B — maximum expressiveness (uniform `CtorSpec`)
+
+One uniform `CtorSpec { display, arity: Option<Arity>, args: ArgPolicy, result: ResultShape }` plus
+`Arity`, `ArityRecovery`, `ArgPolicy` (4 variants), `ResultShape`, `Slot` enums, and a 3-method
+`&mut self` interpreter. Fully declarative — a new builtin is one data literal *within the shape
+family*. Sub-agent's own honest estimate: **+220–230 new lines, ~370 lines of diff churn** — by far the
+largest diff of the three (the step-5 mid-flight bail is on *file count* > 2×, not line churn, and B is
+still one file, so it would not trip the bail; it simply loses criterion 5). Weakness: forced
+uniformity makes illegal states representable (`CapturePayload`+`arity:Some`, `WrapPayload` with two
+payload slots, etc.), and the interface is nearly as wide as the implementation it hides — the
+shallow-module smell this exercise exists to remove.
+
+### Design C — mirror the landed-seam pattern (WINNER)
+
+```rust
+enum PayloadWrap { Some, Ok, Err }          // Some(p)->Option<p>, Ok(p)->Result<p,Unit>, Err(p)->Result<Never,p>
+enum BuiltinConstructor {
+    Fixed(Ty),                              // String::new->Str; {HashMap,BTreeMap,Vec}::new, Option::None -> Never
+    Payload(PayloadWrap),                   // Some/Ok/Err — call site evaluates fields.first(), seam wraps
+    StringFrom,                             // exact-Str, arity 1 — body stays verbatim at the call site
+    RawParts { display, signature, result },// from_raw_parts_copy (String/Vec) — one arm dedups the two blocks
+}
+fn builtin_constructor(enum_name: &str, variant_name: &str) -> Option<BuiltinConstructor>
+```
+
+Pure, total, name-keyed → neutral value; `None` falls through to the unchanged `lookup_enum`
+user-enum path. The call site is a flat 4-arm `match`, owning every `check_expr`, the
+`check_contextual_integer_literal_ranges` side effect, and all diagnostics — exactly the contract of
+the four landed seams (`method_result_type`, `method_argument_expectations`, `cast_verdict`,
+`same_operand_ty`). **Refinement applied for the implementation** (safer than the sub-agent's
+`ArgExpect`-reuse variant): the `StringFrom` and `RawParts` call-site arms keep the *original argument
+predicates verbatim* (`arg_ty != Ty::Str && arg_ty != Ty::Never`; `!can_context_coerce(&arg_ty,
+&Ty::I64)`) rather than routing through `ArgExpect::accepts`, so no coercion-equivalence lemma has to
+be proved — behaviour is byte-identical by construction. `RawParts { display, signature, result }`
+collapses the two near-verbatim `from_raw_parts_copy` blocks (they differ only in those three values)
+into a single parameterized arm — the real locality win Design A leaves on the table. Net ~−45 lines.
+
+### Adjudication
+
+| Criterion (in order) | A (minimal) | B (uniform spec) | C (landed pattern) |
+|---|---|---|---|
+| 1. Depth | deepens 8/11; two narrow fns | 1 query hides 11 **but** interface ≈ impl width | **all 11 behind one enum + one fn** |
+| 2. Locality | fixed/payload localized; checked builtins get no help | best *within envelope*, undermined by illegal states | all 11 in one table; honest |
+| 3. Seam placement | two narrow seams | right place, over-built | **names→neutral value, matching 4 proven landed adapters** |
+| 4. Test surface | 8/11 Checker-free | pure spec testable | **11 `assert_eq` + `PayloadWrap::apply`, mirrors `cast_verdict_*` unit tests** |
+| 5. Blast radius | smallest (~flat) | largest (~370-line churn, still 1 file) | small (~−45 net) |
+
+**Winner: C.** It resolves on criterion 1 (depth): C covers all 11 builtins behind one coherent,
+narrow interface, where A deepens only 8/11 and abandons the gnarliest FFI block, and B's interface is
+nearly as wide as the implementation it hides. C also matches the four already-landed seams' proven
+seam placement — pattern consistency is itself leverage for an AI-navigable codebase (a maintainer
+learns one pattern, not five) — and has the most-precedented test surface. B ranks last on criterion 1
+(its 5-type interface is the shallow-module smell the exercise fights, and it makes illegal states
+representable) and criterion 5 (largest diff of the three) — all three are single-file, so none trips
+the step-5 file-count bail; B is simply the weakest, not disqualified by a rule. The criteria separate
+the designs cleanly, so this is a decision, not a bail.
+
+**Runner-up design: A (minimal surface).** Safe and small, but under-delivers on depth/locality — it
+deepens 8/11 and leaves the duplicated FFI coercion mass inline, which is precisely the friction the
+pick exists to remove.
+
+**Carried to the PR body:** winner C; runner-up design A and why it lost (deepens only 8/11, leaves the
+FFI dedup on the table).
+
+**Out-of-scope note surfaced by the sub-agents:** `check_contextual_integer_literal_ranges`
+(~L1660-1669) *also* hard-codes the `Some`/`Ok`/`Err` payload-index knowledge — a second site mirroring
+constructor shapes. Unifying it is a separate seam, deliberately not in this diff.
