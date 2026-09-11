@@ -21,7 +21,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## integer-literal-range-fit
 
-- **Status**: in-flight
+- **Status**: landed
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated (actual: 1)
 - **Modules**: `vow-types/src/check.rs` (`literal_out_of_range` seam beside `integer_type_range`;
@@ -32,9 +32,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   the `negative_max`/`i64::MIN` asymmetry.
 - **First seen**: 2026-08-31
 - **Report**: `.architecture/reviews/2026-09-04-integer-literal-range-fit.md`
-- **PR**: #1241
-- **Reason**: **picked this firing** (2026-09-04); tied at 22 with the fresh `builtin-constructor-spec`
-  and won on earlier `First seen`. Unblocked now that `same-operand-type-verdict` (#1234) merged.
+- **PR**: #1241 (merged 2026-09-04)
 
 ## call-argument-coercion-action
 
@@ -86,18 +84,64 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## builtin-constructor-spec
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
-- **Files**: ~1 estimated (large single-file diff, ~150 lines)
+- **Files**: ~1 estimated (actual: 1; +260/-131 in `vow-types/src/check.rs`)
+- **PR**: #1268
 - **Modules**: `vow-types/src/check.rs` (`EnumConstruct` builtin dispatch, ~L2867-3016)
 - **Summary**: extract the inline `match (enum, variant)` builtin-constructor policy (arity, per-arg
   `ArgExpect`, result shape) into a pure `builtin_constructor_spec(enum, variant) -> Option<CtorSpec>`
   table, mirroring the landed `method_result_type`/`method_argument_expectations` seams; the generic
   argument-checking loop and payload-wrapping stay at the call site.
 - **First seen**: 2026-09-04
-- **Reason**: tied at 22 with the picked `integer-literal-range-fit`; lost the tie-break on later
-  `First seen`. Natural next pick, but ~150-line diff carries more behaviour-preservation risk than a
-  ~15-line seam.
+- **Report**: `.architecture/reviews/2026-09-11-builtin-constructor-spec.md`
+- **Reason**: **picked this firing** (2026-09-11); deterministic top at 22 once its 22-point tie-mate
+  `integer-literal-range-fit` (#1241) merged. Friction re-verified unchanged (commits #1263/#1264 did
+  not touch `check.rs`). Pick was close — top two within 1 pt (runner-up
+  `coerce-context-argument-epilogue` at 21). ~150-line single-file diff carries behaviour-preservation
+  risk, guarded by the 11 existing EnumConstruct tests + new unit tests (not the step-5 file-count bail,
+  which fires only if the diff spreads past ~1 file). Adjudicated design C (mirror the landed-seam
+  pattern) over A (minimal, deepens only 8/11) and B (uniform spec, widest interface).
+
+## comparison-operand-verdict
+
+- **Status**: proposed
+- **Score**: 20/25 (leverage 3, locality 4, blast radius 1, heat 5)
+- **Files**: ~1 estimated (~52 lines)
+- **Modules**: `vow-types/src/check.rs` (`Eq|Ne|Lt|Le|Gt|Ge` sub-arm, ~L1898-1950)
+- **Summary**: fold the comparison type-mismatch predicate + zero-comparison-tautology (with the
+  `widened_to` split) into a pure `comparison_verdict(lhs, rhs, never_negative) -> ComparisonVerdict`;
+  caller pre-computes `never_negative` from the existing `zero_comparison_verdict` +
+  `never_negative_operand` helpers, message/hint strings stay at the call site.
+- **First seen**: 2026-09-11
+- **Reason**: leverage 3 — the tautology half is already pure/testable, so the new testable surface is
+  mostly the mismatch predicate + mismatch-over-tautology priority; one call site.
+
+## builtin-function-spec
+
+- **Status**: proposed
+- **Score**: 20/25 (leverage 3, locality 4, blast radius 1, heat 5)
+- **Files**: ~1 estimated (~70 lines)
+- **Modules**: `vow-types/src/check.rs` (`pin_to_root`, `string_matches_literal_at` branches of the
+  `ExprKind::Call` arm, ~L2082-2151)
+- **Summary**: table the two free-function builtins into `builtin_function_spec(name) -> Option<..>`,
+  mirroring `builtin-constructor-spec`, generic arg loop + static-literal emit stay at the call site.
+- **First seen**: 2026-09-11
+- **Reason**: leverage 3 — only two builtins, both non-uniform (`pin_to_root` returns its arg type,
+  `string_matches_literal_at` has a static-literal rule), so the spec is not a clean table; thin.
+
+## oversized-chunk-path-predicate
+
+- **Status**: proposed
+- **Score**: 17/25 (leverage 2, locality 3, blast radius 1, heat 4)
+- **Files**: ~1 estimated (2 sites)
+- **Modules**: `vow-runtime/src/lib.rs` (`__vow_arena_alloc` ~L1020; `arena_grow_backing` fast-skip ~L1246)
+- **Summary**: single-source the must-agree `bytes > OVERSIZED_THRESHOLD || bytes + (align-1) >
+  CHUNK_PAYLOAD` predicate into `const fn takes_oversized_path(bytes, align) -> bool`, called from
+  both sites; the L1246 comment documents that its correctness depends on the L1020 decision.
+- **First seen**: 2026-09-11
+- **Reason**: leverage 2 — one-line predicate; value is a drift-kill, not interface depth. Distinct
+  from `vec-reserve-next-capacity-seam`.
 
 ## coerce-context-argument-epilogue
 
@@ -221,7 +265,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   `hidden_region_count` / `hidden_region_for_store_target` seams.
 - **First seen**: 2026-08-31
 - **Reason**: Too large to automate — blast radius 4, crosses a crate/tier seam and touches codegen
-  output. A human should schedule it. Re-checked 2026-09-03: still large.
+  output. A human should schedule it. Re-checked 2026-09-03: still large. Re-checked 2026-09-11: still large.
 
 ## esbmc-ce-description-heuristic
 
@@ -233,7 +277,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 - **First seen**: 2026-08-31
 - **Reason**: Inert — the only caller destructures `Failed(_)` and discards the description, so
   extraction deepens nothing observable. Latent bugs exist but are unreachable. Re-checked 2026-09-03:
-  caller unchanged. Do not re-surface.
+  caller unchanged. Re-checked 2026-09-11: caller unchanged. Do not re-surface.
 
 ## solver-classify-function
 
@@ -244,4 +288,4 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 - **Summary**: solver-strategy classification for a function.
 - **First seen**: 2026-08-31
 - **Reason**: Already a pure, unit-tested seam (`test_classify_*`). No shallowness to remove.
-  Re-checked 2026-09-03.
+  Re-checked 2026-09-03. Re-checked 2026-09-11.

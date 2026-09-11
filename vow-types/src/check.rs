@@ -822,6 +822,90 @@ fn same_operand_ty(lhs: Ty, rhs: Ty, class: OperandClass) -> Result<Ty, OperandE
     Ok(lhs)
 }
 
+/// How an evaluated payload type becomes a payload-wrapping builtin
+/// constructor's result: `Some(p)` is `Option<p>`, `Ok(p)` is `Result<p, ()>`,
+/// and `Err(p)` is `Result<Never, p>` (an unknown `Ok` type that unifies with
+/// any `Result<T, E>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PayloadWrap {
+    Some,
+    Ok,
+    Err,
+}
+
+impl PayloadWrap {
+    fn apply(self, payload: Ty) -> Ty {
+        let enum_of = |name: &str| Box::new(Ty::Enum(name.to_string()));
+        match self {
+            PayloadWrap::Some => Ty::Applied(enum_of("Option"), vec![payload]),
+            PayloadWrap::Ok => Ty::Applied(enum_of("Result"), vec![payload, Ty::Unit]),
+            PayloadWrap::Err => Ty::Applied(enum_of("Result"), vec![Ty::Never, payload]),
+        }
+    }
+}
+
+/// A compiler-known builtin enum constructor (`Option::Some`, `String::from`,
+/// `Vec::new`, ...), classified from its `Enum::variant` name pair. Pure and
+/// total in the two names — no field evaluation, no diagnostics — mirroring
+/// `method_result_type`/`cast_verdict`: it names *which* builtin this is and its
+/// field-handling regime, while field evaluation, the FFI i64 range-check side
+/// effect, arity errors, and emission stay at the `EnumConstruct` call site.
+/// `None` means "not a compiler builtin", falling through to the
+/// user-defined-enum lookup exactly as `method_result_type`'s `None` falls
+/// through to the unknown-method path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BuiltinConstructor {
+    /// Fixed result type; the constructor's fields are left unevaluated.
+    /// `String::new` -> `Str`; `{HashMap,BTreeMap,Vec}::new` and `Option::None`
+    /// -> `Never` (bottom, so it unifies with any `Option<T>` / `Vec<T>`).
+    Fixed(Ty),
+    /// The first field is evaluated by the caller and wrapped into the result
+    /// enum. `Option::Some`, `Result::Ok`, `Result::Err`.
+    Payload(PayloadWrap),
+    /// `String::from`: arity 1, the sole field must be `Str` (or `Never`),
+    /// result `Str`. Its wrong-arity path evaluates the fields then returns,
+    /// suppressing the per-argument check.
+    StringFrom,
+    /// `String`/`Vec::from_raw_parts_copy`: arity 2, every field is contextually
+    /// coerced to `i64` (the check runs even on wrong arity). `display` prefixes
+    /// the diagnostics, `signature` is the arity hint, `result` is the built type
+    /// (`Str` for `String`, `Never` for `Vec`).
+    RawParts {
+        display: &'static str,
+        signature: &'static str,
+        result: Ty,
+    },
+}
+
+/// Classify a compiler-known builtin enum constructor from its name pair, or
+/// `None` for a user-defined enum. Pure sibling of the `EnumConstruct` arm,
+/// modelled on `method_result_type`: names in, neutral value out, no
+/// diagnostics.
+fn builtin_constructor(enum_name: &str, variant_name: &str) -> Option<BuiltinConstructor> {
+    use BuiltinConstructor::*;
+    Some(match (enum_name, variant_name) {
+        ("String", "new") => Fixed(Ty::Str),
+        ("HashMap", "new") | ("BTreeMap", "new") | ("Vec", "new") | ("Option", "None") => {
+            Fixed(Ty::Never)
+        }
+        ("Option", "Some") => Payload(PayloadWrap::Some),
+        ("Result", "Ok") => Payload(PayloadWrap::Ok),
+        ("Result", "Err") => Payload(PayloadWrap::Err),
+        ("String", "from") => StringFrom,
+        ("String", "from_raw_parts_copy") => RawParts {
+            display: "String::from_raw_parts_copy",
+            signature: "expected signature: (ptr: i64, len: i64) -> String",
+            result: Ty::Str,
+        },
+        ("Vec", "from_raw_parts_copy") => RawParts {
+            display: "Vec::from_raw_parts_copy",
+            signature: "expected signature: (ptr: i64, len: i64) -> Vec<T>",
+            result: Ty::Never,
+        },
+        _ => return None,
+    })
+}
+
 pub struct Checker<'e> {
     pub(crate) env: TypeEnv,
     pub(crate) current_return_ty: Ty,
@@ -2879,152 +2963,86 @@ impl<'e> Checker<'e> {
             ExprKind::EnumConstruct { path, fields } => {
                 let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
                 let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
-                // Handle compiler-known builtins: Option, Result, Vec, String, HashMap
-                match (enum_name, variant_name) {
-                    ("String", "from") => {
-                        if fields.len() != 1 {
-                            self.emit_error_with_hints(
-                                ErrorCode::TypeMismatch,
-                                format!("String::from expects 1 argument but got {}", fields.len()),
-                                expr.span,
-                                vec!["expected signature: (s: String) -> String".to_string()],
-                            );
+                // Compiler-known builtins (Option/Result/Vec/String/HashMap/
+                // BTreeMap): the seam classifies the constructor; this arm owns
+                // field evaluation, the FFI i64 range-check, arity errors, and
+                // emission. `None` falls through to the user-defined-enum lookup.
+                if let Some(builtin) = builtin_constructor(enum_name, variant_name) {
+                    return match builtin {
+                        BuiltinConstructor::Fixed(ty) => ty,
+                        BuiltinConstructor::Payload(wrap) => {
+                            let payload = fields
+                                .first()
+                                .map(|e| self.check_expr(e))
+                                .unwrap_or(Ty::Unit);
+                            wrap.apply(payload)
+                        }
+                        BuiltinConstructor::StringFrom => {
+                            if fields.len() != 1 {
+                                self.emit_error_with_hints(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "String::from expects 1 argument but got {}",
+                                        fields.len()
+                                    ),
+                                    expr.span,
+                                    vec!["expected signature: (s: String) -> String".to_string()],
+                                );
+                                for field in fields {
+                                    self.check_expr(field);
+                                }
+                                return Ty::Str;
+                            }
+                            let arg = &fields[0];
+                            let arg_ty = self.check_expr(arg);
+                            if arg_ty != Ty::Str && arg_ty != Ty::Never {
+                                self.emit_error_with_hints(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "String::from argument has type `{arg_ty}` but expects `String`"
+                                    ),
+                                    arg.span,
+                                    vec!["expected signature: (s: String) -> String".to_string()],
+                                );
+                            }
+                            Ty::Str
+                        }
+                        BuiltinConstructor::RawParts {
+                            display,
+                            signature,
+                            result,
+                        } => {
+                            if fields.len() != 2 {
+                                self.emit_error_with_hints(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "{display} expects 2 arguments but got {}",
+                                        fields.len()
+                                    ),
+                                    expr.span,
+                                    vec![signature.to_string()],
+                                );
+                            }
                             for field in fields {
-                                self.check_expr(field);
+                                let arg_ty = self.check_expr(field);
+                                self.check_contextual_integer_literal_ranges(field, &Ty::I64);
+                                if !can_context_coerce(&arg_ty, &Ty::I64) {
+                                    self.emit_error_with_hints(
+                                        ErrorCode::TypeMismatch,
+                                        format!(
+                                            "{display} argument has type `{arg_ty}` but expects `i64`"
+                                        ),
+                                        field.span,
+                                        vec![
+                                            "raw pointers and lengths cross the FFI boundary as i64"
+                                                .to_string(),
+                                        ],
+                                    );
+                                }
                             }
-                            return Ty::Str;
+                            result
                         }
-                        let arg = &fields[0];
-                        let arg_ty = self.check_expr(arg);
-                        if arg_ty != Ty::Str && arg_ty != Ty::Never {
-                            self.emit_error_with_hints(
-                                ErrorCode::TypeMismatch,
-                                format!(
-                                    "String::from argument has type `{arg_ty}` but expects `String`"
-                                ),
-                                arg.span,
-                                vec!["expected signature: (s: String) -> String".to_string()],
-                            );
-                        }
-                        return Ty::Str;
-                    }
-                    ("String", "from_raw_parts_copy") => {
-                        if fields.len() != 2 {
-                            self.emit_error_with_hints(
-                                ErrorCode::TypeMismatch,
-                                format!(
-                                    "String::from_raw_parts_copy expects 2 arguments but got {}",
-                                    fields.len()
-                                ),
-                                expr.span,
-                                vec![
-                                    "expected signature: (ptr: i64, len: i64) -> String"
-                                        .to_string(),
-                                ],
-                            );
-                        }
-                        for field in fields {
-                            let arg_ty = self.check_expr(field);
-                            self.check_contextual_integer_literal_ranges(field, &Ty::I64);
-                            if !can_context_coerce(&arg_ty, &Ty::I64) {
-                                self.emit_error_with_hints(
-                                    ErrorCode::TypeMismatch,
-                                    format!(
-                                        "String::from_raw_parts_copy argument has type `{arg_ty}` but expects `i64`"
-                                    ),
-                                    field.span,
-                                    vec![
-                                        "raw pointers and lengths cross the FFI boundary as i64"
-                                            .to_string(),
-                                    ],
-                                );
-                            }
-                        }
-                        return Ty::Str;
-                    }
-                    ("String", "new") => {
-                        return Ty::Str;
-                    }
-                    ("HashMap", "new") => {
-                        return Ty::Never;
-                    }
-                    ("BTreeMap", "new") => {
-                        return Ty::Never;
-                    }
-                    ("Option", "None") => {
-                        // None has type Never (bottom) so it unifies with any Option<T>
-                        return Ty::Never;
-                    }
-                    ("Option", "Some") => {
-                        let payload_ty = fields
-                            .first()
-                            .map(|e| self.check_expr(e))
-                            .unwrap_or(Ty::Unit);
-                        return Ty::Applied(
-                            Box::new(Ty::Enum("Option".to_string())),
-                            vec![payload_ty],
-                        );
-                    }
-                    ("Result", "Ok") => {
-                        let payload_ty = fields
-                            .first()
-                            .map(|e| self.check_expr(e))
-                            .unwrap_or(Ty::Unit);
-                        return Ty::Applied(
-                            Box::new(Ty::Enum("Result".to_string())),
-                            vec![payload_ty, Ty::Unit],
-                        );
-                    }
-                    ("Result", "Err") => {
-                        let payload_ty = fields
-                            .first()
-                            .map(|e| self.check_expr(e))
-                            .unwrap_or(Ty::Unit);
-                        // Err has unknown Ok type; use Never so it unifies with any Result<T,E>
-                        return Ty::Applied(
-                            Box::new(Ty::Enum("Result".to_string())),
-                            vec![Ty::Never, payload_ty],
-                        );
-                    }
-                    ("Vec", "new") => {
-                        // Vec::new() returns Vec<T> with unknown element type (Never)
-                        return Ty::Never;
-                    }
-                    ("Vec", "from_raw_parts_copy") => {
-                        if fields.len() != 2 {
-                            self.emit_error_with_hints(
-                                ErrorCode::TypeMismatch,
-                                format!(
-                                    "Vec::from_raw_parts_copy expects 2 arguments but got {}",
-                                    fields.len()
-                                ),
-                                expr.span,
-                                vec![
-                                    "expected signature: (ptr: i64, len: i64) -> Vec<T>"
-                                        .to_string(),
-                                ],
-                            );
-                        }
-                        for field in fields {
-                            let arg_ty = self.check_expr(field);
-                            self.check_contextual_integer_literal_ranges(field, &Ty::I64);
-                            if !can_context_coerce(&arg_ty, &Ty::I64) {
-                                self.emit_error_with_hints(
-                                    ErrorCode::TypeMismatch,
-                                    format!(
-                                        "Vec::from_raw_parts_copy argument has type `{arg_ty}` but expects `i64`"
-                                    ),
-                                    field.span,
-                                    vec![
-                                        "raw pointers and lengths cross the FFI boundary as i64"
-                                            .to_string(),
-                                    ],
-                                );
-                            }
-                        }
-                        return Ty::Never;
-                    }
-                    _ => {}
+                    };
                 }
                 let info = self.env.lookup_enum(enum_name).cloned();
                 match info {
@@ -6348,6 +6366,117 @@ mod tests {
         assert!(checker.has_errors());
         assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
         assert!(emitter.0[0].message.contains("String::from"));
+    }
+
+    #[test]
+    fn enum_construct_string_from_wrong_arity_suppresses_arg_check() {
+        // Two non-`Str` args at the wrong arity (1 expected) emit ONLY the arity
+        // error: `String::from`'s wrong-arity path evaluates the fields but
+        // returns before the per-argument `Str` check. Pins the early return the
+        // `RawParts` dedup must not unify away (no existing test locks the count).
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["String".to_string(), "from".to_string()],
+            fields: vec![int_lit(), int_lit()],
+        }));
+        assert_eq!(ty, Ty::Str);
+        assert_eq!(emitter.0.len(), 1);
+        assert!(
+            emitter.0[0]
+                .message
+                .contains("String::from expects 1 argument")
+        );
+    }
+
+    #[test]
+    fn enum_construct_vec_raw_parts_wrong_arity_still_checks_args() {
+        // One `i32` arg at the wrong arity (2 expected) emits BOTH the arity
+        // error AND the per-argument i64 error: `from_raw_parts_copy` falls
+        // through to the argument loop after the arity diagnostic. Pins the
+        // fall-through that distinguishes it from `String::from`.
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.env.define("ptr", Ty::I32);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["Vec".to_string(), "from_raw_parts_copy".to_string()],
+            fields: vec![ident("ptr")],
+        }));
+        assert_eq!(ty, Ty::Never);
+        assert_eq!(emitter.0.len(), 2);
+        assert!(emitter.0[0].message.contains("expects 2 arguments"));
+        assert!(emitter.0[1].message.contains("expects `i64`"));
+    }
+
+    #[test]
+    fn builtin_constructor_resolves_known_builtins() {
+        use BuiltinConstructor::*;
+        assert_eq!(builtin_constructor("String", "new"), Some(Fixed(Ty::Str)));
+        assert_eq!(
+            builtin_constructor("HashMap", "new"),
+            Some(Fixed(Ty::Never))
+        );
+        assert_eq!(
+            builtin_constructor("BTreeMap", "new"),
+            Some(Fixed(Ty::Never))
+        );
+        assert_eq!(builtin_constructor("Vec", "new"), Some(Fixed(Ty::Never)));
+        assert_eq!(
+            builtin_constructor("Option", "None"),
+            Some(Fixed(Ty::Never))
+        );
+        assert_eq!(
+            builtin_constructor("Option", "Some"),
+            Some(Payload(PayloadWrap::Some))
+        );
+        assert_eq!(
+            builtin_constructor("Result", "Ok"),
+            Some(Payload(PayloadWrap::Ok))
+        );
+        assert_eq!(
+            builtin_constructor("Result", "Err"),
+            Some(Payload(PayloadWrap::Err))
+        );
+        assert_eq!(builtin_constructor("String", "from"), Some(StringFrom));
+        assert!(matches!(
+            builtin_constructor("String", "from_raw_parts_copy"),
+            Some(RawParts {
+                result: Ty::Str,
+                ..
+            })
+        ));
+        assert!(matches!(
+            builtin_constructor("Vec", "from_raw_parts_copy"),
+            Some(RawParts {
+                result: Ty::Never,
+                ..
+            })
+        ));
+        // Not a compiler builtin: falls through to the user-enum lookup.
+        assert_eq!(builtin_constructor("Foo", "Bar"), None);
+        assert_eq!(builtin_constructor("Vec", "with_capacity"), None);
+    }
+
+    #[test]
+    fn payload_wrap_builds_result_types() {
+        assert_eq!(
+            PayloadWrap::Some.apply(Ty::I32),
+            Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32])
+        );
+        assert_eq!(
+            PayloadWrap::Ok.apply(Ty::I32),
+            Ty::Applied(
+                Box::new(Ty::Enum("Result".to_string())),
+                vec![Ty::I32, Ty::Unit]
+            )
+        );
+        assert_eq!(
+            PayloadWrap::Err.apply(Ty::Bool),
+            Ty::Applied(
+                Box::new(Ty::Enum("Result".to_string())),
+                vec![Ty::Never, Ty::Bool]
+            )
+        );
     }
 
     // --- Let binding annotation coercion ---
