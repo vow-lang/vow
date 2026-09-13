@@ -1419,10 +1419,25 @@ fn new_narrow_intrinsic_target(name: String) -> i64 {
     -1
 }
 
-fn builtin_to_extern(name: String) -> String {
+// GENERATE:OPERATIONS:START
+fn catalogue_builtin_to_extern(name: String) -> String {
     if name == String::from("print_str") { return String::from("__vow_string_print"); }
     if name == String::from("print_i64") { return String::from("__vow_print_i64"); }
     if name == String::from("print_u64") { return String::from("__vow_print_u64"); }
+    return String::from("");
+}
+
+fn catalogue_builtin_ret_ty(name: String) -> i64 {
+    if name == String::from("print_str") { return ITY_UNIT(); }
+    if name == String::from("print_i64") { return ITY_UNIT(); }
+    if name == String::from("print_u64") { return ITY_UNIT(); }
+    return -1;
+}
+// GENERATE:OPERATIONS:END
+
+fn builtin_to_extern(name: String) -> String {
+    let cat: String = catalogue_builtin_to_extern(name);
+    if cat != String::from("") { return cat; }
     if name == String::from("eprintln_str") { return String::from("__vow_eprintln_str"); }
     if name == String::from("fs_read") { return String::from("__vow_fs_read"); }
     if name == String::from("fs_open") { return String::from("__vow_fs_open"); }
@@ -1543,9 +1558,8 @@ fn builtin_ret_ty(name: String) -> i64 {
         if lower_str_ends_with(name, String::from("_try")) { return ITY_PTR(); }
         return narrow_target;
     }
-    if name == String::from("print_str") { return ITY_UNIT(); }
-    if name == String::from("print_i64") { return ITY_UNIT(); }
-    if name == String::from("print_u64") { return ITY_UNIT(); }
+    let cat: i64 = catalogue_builtin_ret_ty(name);
+    if cat != -1 { return cat; }
     if name == String::from("eprintln_str") { return ITY_UNIT(); }
     if name == String::from("fs_read") { return ITY_PTR(); }
     if name == String::from("fs_open") { return ITY_I64(); }
