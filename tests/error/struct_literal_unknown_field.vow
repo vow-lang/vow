@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+// TEST: error-count 1
+module StructLiteralUnknownField
+
+struct Foo { x: i32 }
+
+fn main() -> i32 {
+  let f: Foo = Foo { x: 1, y: 2 };
+  0
+}
