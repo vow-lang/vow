@@ -19,6 +19,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   stay at the call site.
 - **First seen**: 2026-09-14
 - **Report**: `.architecture/reviews/2026-09-14-question-operator-verdict.md`
+- **PR**: #1281
 - **Reason**: **picked this firing** (2026-09-14). Fresh candidate surfaced by the step-1 scan; not
   previously carded despite heavy `check.rs` coverage (prior firings carded the cast/operator/method
   arms, never the `?` arm). Scored leverage 4, matching the landed single-arm pure-verdict seams
