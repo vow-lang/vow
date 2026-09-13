@@ -28,11 +28,22 @@ fn vow_debug_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     }
 }
 
-fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
+// GENERATE:OPERATIONS:START
+fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     match name {
         "print_str" => Some(("__vow_string_print", Ty::Unit)),
         "print_i64" => Some(("__vow_print_i64", Ty::Unit)),
         "print_u64" => Some(("__vow_print_u64", Ty::Unit)),
+        _ => None,
+    }
+}
+// GENERATE:OPERATIONS:END
+
+fn vow_static_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
+    if let Some(hit) = catalogue_builtin_to_runtime(name) {
+        return Some(hit);
+    }
+    match name {
         "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
         "fs_read" => Some(("__vow_fs_read", Ty::Ptr)),
         "fs_open" => Some(("__vow_fs_open", Ty::I64)),
@@ -5598,7 +5609,9 @@ type PairView = PairAlias;
 
     #[test]
     fn builtins_lower_to_runtime_symbols_and_return_types() {
-        // Keep this table in lockstep with every arm of vow_builtin_to_runtime.
+        // Keep this table in lockstep with every arm of vow_builtin_to_runtime
+        // (including the catalogue-sourced print_* entries generated into this
+        // file from docs/spec/operations.json -- see catalogue_builtin_to_runtime).
         let cases = [
             ("print_str", "__vow_string_print", Ty::Unit),
             ("print_i64", "__vow_print_i64", Ty::Unit),

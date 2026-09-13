@@ -3307,6 +3307,26 @@ fn narrow_intrinsic_signature(sym: &str) -> Option<(types::Type, types::Type)> {
     Some((source_ty, target_ty))
 }
 
+// GENERATE:OPERATIONS:START
+fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
+    match sym {
+        "__vow_string_print" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_print_i64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_print_u64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        _ => false,
+    }
+}
+// GENERATE:OPERATIONS:END
+
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
@@ -3343,10 +3363,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             }));
         return sig;
     }
+    if catalogue_extern_sig(sym, &mut sig) {
+        return sig;
+    }
     match sym {
-        "__vow_print_i64" | "__vow_print_u64" => {
-            sig.params.push(AbiParam::new(types::I64));
-        }
         "__vow_vec_new" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3526,9 +3546,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_string_print" => {
-            sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_fs_read" => {
             sig.params.push(AbiParam::new(types::I64));

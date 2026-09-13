@@ -2389,6 +2389,26 @@ fn narrow_intrinsic_signature(sym: &str) -> Option<(types::Type, types::Type)> {
     Some((source_ty, target_ty))
 }
 
+// GENERATE:OPERATIONS:START
+fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
+    match sym {
+        "__vow_string_print" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_print_i64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_print_u64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        _ => false,
+    }
+}
+// GENERATE:OPERATIONS:END
+
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
@@ -2425,10 +2445,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             }));
         return sig;
     }
+    if catalogue_extern_sig(sym, &mut sig) {
+        return sig;
+    }
     match sym {
-        "__vow_print_i64" | "__vow_print_u64" => {
-            sig.params.push(AbiParam::new(types::I64)); // value
-        }
         "__vow_vec_new" => {
             sig.params.push(AbiParam::new(types::I64)); // elem_size
             sig.params.push(AbiParam::new(types::I64)); // elem_align
@@ -2609,9 +2629,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        "__vow_string_print" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
         }
         // File I/O runtime
         "__vow_fs_read" => {

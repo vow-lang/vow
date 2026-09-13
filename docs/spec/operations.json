@@ -1,0 +1,28 @@
+{
+  "operations": [
+    {
+      "name": "print_str",
+      "runtime_symbol": "__vow_string_print",
+      "params": ["ptr"],
+      "return": "unit",
+      "doc_signature": "fn(s: String) -> ()",
+      "effects": "[io]"
+    },
+    {
+      "name": "print_i64",
+      "runtime_symbol": "__vow_print_i64",
+      "params": ["i64"],
+      "return": "unit",
+      "doc_signature": "fn(v: i64) -> ()",
+      "effects": "[io]"
+    },
+    {
+      "name": "print_u64",
+      "runtime_symbol": "__vow_print_u64",
+      "params": ["u64"],
+      "return": "unit",
+      "doc_signature": "fn(v: u64) -> ()",
+      "effects": "[io]"
+    }
+  ]
+}
