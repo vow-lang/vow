@@ -127,4 +127,73 @@ natural next firings. No `in-flight` backlog entry has an open PR (the previous 
 
 ## Design
 
-_Pending step 4 — filled after this report is committed._
+Three interfaces were produced **inline** (the sub-agent path was skipped to stay within the shared
+build-memory budget; the design space here is narrow and fully determined by the call site and the two
+landed precedents). Adjudication was done by this skill against the written designs below — the
+**advisor was rate-limited this run**, so the stronger reviewer did not weigh in.
+
+All three are behavior-preserving: `pattern_aggregate_info(&Ty::Unit, _)` is `None`
+(`aggregate_type_name(Unit)` is `None`), so the current arm's inconsistency — the Option-return-mismatch
+branch early-returns and skips the `pattern_aggregates` insert, while the Result and non-tryable branches
+fall through to it on `Ty::Unit` — is non-observable. Every design routes all rejections through a single
+`Ty::Unit` fall-through, which the no-op insert leaves identical.
+
+### Design A — classification enum (mirrors `cast_verdict`)
+
+```rust
+enum QuestionVerdict { Payload(Ty), OptionNeedsOptionReturn, ResultNotLowered, NotTryable }
+fn question_verdict(inner_ty: &Ty, return_ty: &Ty) -> QuestionVerdict
+```
+
+Call site matches four variants; `Payload(ty)` → aggregate + return, the three reject variants each emit
+their message/hint. **Hides**: Option/Result/Never shape-peeling and the return-type cross-check.
+**Trade-off**: a flat four-variant enum conflates the one success with the three failures, so the caller
+match cannot use the idiomatic `Ok`/`Err` split; wording correctly stays at the call site.
+
+### Design B — verdict owns the diagnostics
+
+```rust
+enum QuestionVerdict { Payload(Ty), Reject { message: String, hints: Vec<String> } }
+fn question_verdict(inner_ty: &Ty, return_ty: &Ty) -> QuestionVerdict
+```
+
+Smallest call site (two branches). **Trade-off**: the "pure" decision now owns diagnostic wording, so a
+message reword edits the decision function — diagnostic **locality** regresses, and tests must assert on
+strings or collapse all three rejects into one, losing the ability to pin *which* rejection fired. This
+departs from the house pattern (`cast_verdict`, `same_operand_ty` keep wording at the call site).
+
+### Design C — `Result<Ty, QuestionReject>` (mirrors `same_operand_ty`) — WINNER
+
+```rust
+enum QuestionReject { OptionNeedsOptionReturn, ResultNotLowered, NotTryable }
+fn question_verdict(inner_ty: &Ty, return_ty: &Ty) -> Result<Ty, QuestionReject>
+```
+
+`Ok(payload_ty)` is the type the expression yields; `Err(kind)` names the rejection. The call site does
+`match … { Ok(ty) => ty, Err(reject) => { emit by kind (interpolating the in-scope inner_ty for
+`NotTryable`); Ty::Unit } }`, then runs the unchanged aggregate bookkeeping. `QuestionReject` carries no
+data — the call site already holds `inner_ty` for the one interpolated message.
+
+### Adjudication
+
+Against the criteria, in order:
+
+1. **Depth** — B and C give a two-branch (`Ok`/`Err`) call site; A gives four. A loses.
+2. **Locality** — C keeps diagnostic wording at the call site; B pulls it into the decision function, so
+   a reword edits the "pure" seam. C beats B.
+3. **Seam placement** — C's `Result<Ty, QuestionReject>` names the future-varying axis (`ResultNotLowered`
+   is exactly where "Result propagation gets lowered" will land); B's opaque `Reject { message }` hides
+   the kinds. C wins.
+4. **Test surface** — C is message-independent and mirrors the landed `same_operand_ty` tests
+   (`question_verdict(&opt(i64), &plain) == Err(OptionNeedsOptionReturn)`); B's tests are brittle or
+   lossy. C wins.
+5. **Blast radius** — tie (~1 file).
+
+**Winner: Design C.** It is the exact shape of the most recent landed seam, `same_operand_ty`
+(`Result<Ty, OperandError>`): success carries the propagated `Ty`, failure names the rule that failed,
+wording stays at the call site.
+
+**Runner-up design: Design A.** It shares C's good diagnostic locality and mirrors `cast_verdict`, but
+its flat four-variant enum yields a shallower call site than C's idiomatic `Ok`/`Err` split. **Design B**
+loses hardest: coupling the pure decision to diagnostic wording defeats the locality the extraction
+exists to gain.
