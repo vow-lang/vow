@@ -314,7 +314,26 @@ class CheckDocFactsTest(unittest.TestCase):
             tmp = Path(d)
             _write_fixture_tree(tmp, grammar_effects="[]")
             mismatches = go.check_doc_facts(PRINT_OPS, tmp)
-        self.assertTrue(any("print_str" in m and "grammar.md" in m for m in mismatches))
+        matching = [m for m in mismatches if "print_str" in m and "grammar.md" in m]
+        self.assertTrue(matching)
+        # The mismatch message must carry the *observed* (wrong) value, not
+        # just the fact that something disagreed -- otherwise this test would
+        # pass even if check_doc_facts never actually read the table.
+        self.assertIn("[]", matching[0])
+
+    def test_grammar_missing_row_is_caught(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _write_fixture_tree(tmp)
+            grammar_path = tmp / "docs" / "spec" / "grammar.md"
+            lines = grammar_path.read_text().splitlines(keepends=True)
+            grammar_path.write_text(
+                "".join(line for line in lines if "print_str" not in line)
+            )
+            mismatches = go.check_doc_facts(PRINT_OPS, tmp)
+        self.assertIn("grammar.md: no row found for 'print_str'", mismatches)
 
     def test_main_vow_missing_doc_line_is_caught(self):
         import tempfile
