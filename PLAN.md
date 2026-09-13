@@ -298,3 +298,24 @@ fixture in that directory.
   found, don't audit or refactor either function more broadly.
 - **`vow-types/src/check.rs` changes.** Rust is already correct; this plan restores self-hosted
   parity with it, per `ed4c9b9e` precedent.
+
+## 7. Re-verification note (this run)
+
+This workspace was reused from an earlier attempt. At the start of this run, `PLAN.md` above was
+already committed (`e73c8b12`), and the working tree additionally carried an **uncommitted**
+`compiler/checker.vow` diff plus all three `tests/error/*.vow` fixtures — i.e. a prior implementation
+pass had already applied this exact plan but never committed it. Re-checked before recommitting:
+
+- All five helpers/constants the plan's diffs call (`is_coercible`, `is_opaque`,
+  `ty_value_display_name`, `env_emit_error_code`, `env_lookup_struct`, `expr_span`, `CTY_UNIT`,
+  `EC_TYPE_MISMATCH`) still exist in `compiler/*.vow` with the signatures the plan assumes.
+- The three uncommitted fixtures match the plan's Slice 1/2/3 fixtures verbatim, including the
+  `TEST: error-count` values the plan derived by reasoning (1, 1, 2) — consistent with those counts
+  having actually been confirmed against the Rust oracle rather than guessed.
+
+No plan content changed as a result — the diagnosis, file list, slices, risk areas, and out-of-scope
+list all still hold against current `HEAD`. The implementation stage should treat the existing
+uncommitted `compiler/checker.vow` diff and the three fixtures as a completed first draft to review
+and commit (running the closing integration step in §3 to confirm), rather than redoing the work
+from scratch — but it must still independently confirm the `TEST:` directives against a fresh Rust
+oracle run before committing, per this plan's "don't hand-guess" rule.
