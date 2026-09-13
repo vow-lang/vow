@@ -178,7 +178,7 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - **`vow-verify`** — ESBMC integration. Extracts verification conditions from IR, invokes ESBMC, maps counterexamples back to source via `Origin` metadata.
 - **`vow-perf`** — fixed complexity-class canonicalization, least-squares classification, and cloned-IR operation-count instrumentation for a separate performance-test artifact. Parser, generator, and CLI integration remain tracked by the performance-guarantees roadmap.
 - **`vow-clif-shim`** — `extern "C"` FFI shims wrapping Cranelift for the self-hosted compiler. The self-hosted `clif.vow` calls these shims to produce native object files directly. Uses stack slots (not SSA) to bypass Cranelift dominance requirements for cross-block references in the self-hosted IR.
-- **`vow-runtime`** — vow violation handler (`__vow_violation`), print helpers (`__vow_print_str`, `__vow_print_i64`), arithmetic overflow handler.
+- **`vow-runtime`** — vow violation handler (`__vow_violation`), print helpers (`__vow_string_print`, `__vow_print_i64`), arithmetic overflow handler.
 - **`vow`** — CLI driver (`vowc`). Orchestrates the parallel codegen + verification pipeline. Structured JSON build output.
 - **`vow-diag`** — `Diagnostic`, `ErrorCode`, `Blame` (Caller/Callee), `JsonEmitter`, `HumanEmitter`.
 

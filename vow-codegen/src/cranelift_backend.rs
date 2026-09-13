@@ -2426,9 +2426,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         return sig;
     }
     match sym {
-        "__vow_print_str" => {
-            sig.params.push(AbiParam::new(types::I64)); // ptr
-        }
         "__vow_print_i64" | "__vow_print_u64" => {
             sig.params.push(AbiParam::new(types::I64)); // value
         }
