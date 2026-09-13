@@ -306,16 +306,26 @@ already committed (`e73c8b12`), and the working tree additionally carried an **u
 `compiler/checker.vow` diff plus all three `tests/error/*.vow` fixtures — i.e. a prior implementation
 pass had already applied this exact plan but never committed it. Re-checked before recommitting:
 
-- All five helpers/constants the plan's diffs call (`is_coercible`, `is_opaque`,
+- All eight helpers/constants the plan's diffs call (`is_coercible`, `is_opaque`,
   `ty_value_display_name`, `env_emit_error_code`, `env_lookup_struct`, `expr_span`, `CTY_UNIT`,
   `EC_TYPE_MISMATCH`) still exist in `compiler/*.vow` with the signatures the plan assumes.
 - The three uncommitted fixtures match the plan's Slice 1/2/3 fixtures verbatim, including the
-  `TEST: error-count` values the plan derived by reasoning (1, 1, 2) — consistent with those counts
-  having actually been confirmed against the Rust oracle rather than guessed.
+  `TEST: error-count` values the plan derived by reasoning (1, 1, 2) — this matches the plan's
+  predictions but was **not** independently re-verified against a fresh Rust oracle run this turn;
+  treat it as "consistent with the plan," not as confirmation the counts are correct.
+- No recorded failure was found for the prior, uncommitted implementation attempt: `gh issue view
+  1267 --comments` returns zero comments (the operating contract requires a comment when a run is
+  blocked), there is no `EVIDENCE.md`/log file/`mutants.out/` in the workspace, and both
+  `target/release/vow` and `build/vowc` exist and were built minutes before `compiler/checker.vow`'s
+  last edit — consistent with a bootstrap that completed successfully and an edit pass that was
+  simply mid-flight (not committed) when the run ended, not a run that hit and gave up on one of
+  this plan's §5 risks (e.g. `is_coercible` stricter than `can_context_coerce`, or a bootstrap
+  regression). This is circumstantial, not proof — the implementation stage must still run the full
+  closing integration step in §3 itself rather than assume the prior pass's state is green.
 
 No plan content changed as a result — the diagnosis, file list, slices, risk areas, and out-of-scope
 list all still hold against current `HEAD`. The implementation stage should treat the existing
-uncommitted `compiler/checker.vow` diff and the three fixtures as a completed first draft to review
-and commit (running the closing integration step in §3 to confirm), rather than redoing the work
-from scratch — but it must still independently confirm the `TEST:` directives against a fresh Rust
-oracle run before committing, per this plan's "don't hand-guess" rule.
+uncommitted `compiler/checker.vow` diff and the three fixtures as a completed first draft to review,
+verify, and commit (running the closing integration step in §3), rather than redoing the work from
+scratch — but it must still independently confirm the `TEST:` directives against a fresh Rust oracle
+run before committing, per this plan's "don't hand-guess" rule.
