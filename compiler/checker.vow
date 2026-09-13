@@ -3106,6 +3106,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let last_sid: i64 = list_get(a, path_lid, n_path - 1);
         let sname: String = arena_str(a, last_sid);
         let sidx: i64 = env_lookup_struct(e, sname);
+        if sidx == -1 {
+            let umsg: String = String::from("unknown struct `");
+            umsg.push_str(sname);
+            umsg.push_str(String::from("`"));
+            env_emit_error_code(e, EC_TYPE_MISMATCH(), umsg, expr_span(a, eid));
+        }
         let n_pairs: i64 = list_len(a, fields_lid);
         let n_fields: i64 = n_pairs / 2;
         let mut i: i64 = 0;
@@ -3113,28 +3119,51 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let fname_sid: i64 = list_get(a, fields_lid, i * 2);
             let fname: String = arena_str(a, fname_sid);
             let feid: i64 = list_get(a, fields_lid, i * 2 + 1);
-            let _ftid: i64 = check_expr(e, m, feid);
+            let ftid: i64 = check_expr(e, m, feid);
             if sidx != -1 {
                 let fname_lid: i64 = e.sdef_field_name_lids[sidx];
                 let ftid_lid: i64 = e.sdef_field_tid_lids[sidx];
                 let nf: i64 = e.sdef_field_count[sidx];
                 let mut field_index: i64 = 0;
+                let mut expected_tid: i64 = -1;
                 while field_index < nf {
                     let declared_sid: i64 = ts_arg_get(e.ts, fname_lid, field_index);
                     let ts_local: TyStore = e.ts;
                     if ts_local.strs[declared_sid] == fname {
-                        let expected_tid: i64 = ts_arg_get(e.ts, ftid_lid, field_index);
-                        check_contextual_integer_literal_ranges(e, a, feid, expected_tid);
+                        let expected_tid_here: i64 = ts_arg_get(e.ts, ftid_lid, field_index);
+                        check_contextual_integer_literal_ranges(e, a, feid, expected_tid_here);
+                        expected_tid = expected_tid_here;
                         field_index = nf;
                     } else {
                         field_index = field_index + 1;
                     }
                 }
+                if expected_tid != -1 {
+                    if !is_opaque(expected_tid) && !is_coercible(e.ts, ftid, expected_tid) {
+                        let msg: String = String::from("field `");
+                        msg.push_str(fname);
+                        msg.push_str(String::from("` of struct `"));
+                        msg.push_str(sname);
+                        msg.push_str(String::from("` expects `"));
+                        msg.push_str(ty_value_display_name(e.ts, expected_tid));
+                        msg.push_str(String::from("`, found `"));
+                        msg.push_str(ty_value_display_name(e.ts, ftid));
+                        msg.push_str(String::from("`"));
+                        env_emit_error_code(e, EC_TYPE_MISMATCH(), msg, expr_span(a, feid));
+                    }
+                } else {
+                    let nfmsg: String = String::from("struct `");
+                    nfmsg.push_str(sname);
+                    nfmsg.push_str(String::from("` has no field `"));
+                    nfmsg.push_str(fname);
+                    nfmsg.push_str(String::from("`"));
+                    env_emit_error_code(e, EC_TYPE_MISMATCH(), nfmsg, expr_span(a, feid));
+                }
             }
             i = i + 1;
         }
         if sidx == -1 {
-            return CTY_UNKNOWN();
+            return CTY_UNIT();
         }
         return ts_make_struct(e.ts, sname);
     }
