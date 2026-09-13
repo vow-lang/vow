@@ -31,6 +31,17 @@ introduced. `TypeMismatch` is an existing, already-documented error code
 
 ## 3. TDD slices
 
+**Preflight (checked in this workspace while planning, before any slice):** neither
+`target/release/vow` (Rust stage-0 oracle) nor `build/vowc` (self-hosted, under test) exists yet
+in this workspace — both `ls` and a probe invocation failed with "no such file". The implementation
+stage must run `scripts/bootstrap.sh` once, in full (no `--skip-cargo`), before the first red check
+below, to produce both binaries from a clean slate. Cap cargo's build parallelism explicitly for
+that first run per the operating contract's shared-memory-budget rule (e.g. `CARGO_BUILD_JOBS=<N>`
+or `cargo build --release -p vow -j<N>` sized to the actual per-attempt share, not the host's full
+core count) rather than trusting cargo's default `-j` to the host. Every subsequent
+`compiler/checker.vow` edit only needs `scripts/bootstrap.sh --skip-cargo` to refresh `build/vowc`,
+since `target/release/vow` doesn't change.
+
 **Procedure for every slice below:** don't hand-guess the expected `TEST: error-code` /
 `TEST: error-count` values. For each fixture, run it through the *Rust* compiler first —
 `./target/release/vow build --no-verify <fixture> 2>/dev/null | python3 -m json.tool` — and read
@@ -118,7 +129,19 @@ would be a different error code and would break the parity comparison). Wrapping
 `let f: Foo = ...;` deliberately exercises the return-type fix below: with a bad return type the
 `let` binding's own coercion check should *also* fire, so the Rust oracle for this fixture is
 expected to report **two** `TypeMismatch` diagnostics (unknown struct, then Unit-vs-`Foo`) — run it
-against Rust and confirm this, don't assume.
+against Rust and confirm this, don't assume the count when writing `TEST: error-count`.
+
+Confirmed by inspection (not just plausible) that the self-hosted side will actually produce the
+matching second diagnostic once the `CTY_UNIT()` change below lands: `is_coercible` in
+`compiler/types.vow:327-345` has no `CTY_UNIT`/struct special case — `CTY_UNIT()`'s tag doesn't
+match the `CTY_NEVER()`/`CTY_UNKNOWN()`/`CTY_LIT_INT()`/`CTY_APPLIED()`/`CTY_TUPLE()` branches, so
+`is_coercible(ts, unit_tid, foo_struct_tid)` falls through to the final `tids_equal(ts, from_tid,
+to_tid)`, which is `false` for two different tids. That mirrors Rust's `can_context_coerce(Unit,
+Struct("Foo"))` (`vow-types/src/check.rs:263-286`), which has no `Ty::Unit` special case either and
+falls through the same `Applied`/`Tuple`/`_ => false` match to `false`. So both compilers reject the
+`let`'s own coercion with a second `TypeMismatch` once `EXPR_SLIT`'s error branch returns `CTY_UNIT()`
+instead of `CTY_UNKNOWN()` — the fixture's two-diagnostic count is the actual mechanical
+consequence of the change below, not a hope.
 
 - **Red:** confirm self-hosted exits 0. Today `sidx == -1` emits nothing and returns
   `CTY_UNKNOWN()`, which `is_opaque` treats as coercible to anything, so even the surrounding
