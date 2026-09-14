@@ -135,15 +135,6 @@ pub unsafe extern "C" fn __vow_violation(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_print_str(s: *const u8) {
-    sanitize_on_read(s as usize, 0);
-    let v = unsafe { &*(s as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
-    let _ = std::io::stdout().write_all(bytes);
-    let _ = std::io::stdout().flush();
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn __vow_print_i64(v: i64) {
     print!("{v}");
     let _ = std::io::stdout().flush();
