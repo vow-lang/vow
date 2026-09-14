@@ -1,9 +1,9 @@
 name: Bootstrap
 
 # The three-stage bootstrap and its SHA-256 fixed-point check, moved off the
-# pull-request path. Together the two jobs are ~900s of runner time and, once
-# `build-and-test` was cut to ~280s, the Linux one alone *was* the critical
-# path -- a pull request waited on it and on nothing else.
+# pull-request path. Together the jobs are ~900s+ of runner time and, once
+# `build-and-test` was cut to ~280s, the x86_64 Linux one alone *was* the
+# critical path -- a pull request waited on it and on nothing else.
 #
 # It runs on every push to `main` as well as nightly. That matters more than
 # the cron: a self-hosting break is attributed to the merge commit that caused
@@ -113,6 +113,27 @@ jobs:
     # Pinned (not macos-latest) to match release.yml's macos/aarch64 leg: both
     # jobs depend on the runner resolving to arm64 for the install-esbmc pin.
     runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install ESBMC
+        uses: ./.github/actions/install-esbmc
+      - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
+        run: scripts/bootstrap.sh --stage3-no-verify
+
+  bootstrap-linux-arm64:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # Runs the same verified three-stage bootstrap as Linux/x86_64 and macOS: Stages 1-2 verify
+    # with the arm64 Linux ESBMC artifact, while Stage 3 skips ESBMC to roughly halve wall time.
+    # Verification does not affect codegen, so the SHA-256 fixed-point check remains meaningful.
+    # Runner label matches release.yml's linux/aarch64 leg (ubuntu-24.04-arm) so both jobs depend
+    # on the same GitHub-hosted ARM64 image resolving the install-esbmc pin identically.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

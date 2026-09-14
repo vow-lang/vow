@@ -6,9 +6,10 @@ central correctness claim: `build/vowc` compiles itself to a byte-identical
 binary. Moving that off pull requests trades latency for a later signal, and the
 trade is only sound while several things hold at once -- it still runs on every
 push to `main` (so a break is attributed to one merge), it still runs nightly
-(the backstop), it covers both platforms, and both legs still verify with ESBMC.
-Drop any one and the guarantee quietly becomes something weaker than it
-reads. These are cheap structural assertions, not a substitute for it running.
+(the backstop), it covers every supported platform, and every leg still
+verifies with ESBMC. Drop any one and the guarantee quietly becomes something
+weaker than it reads. These are cheap structural assertions, not a substitute
+for it running.
 
 Deliberately parses with `re` rather than PyYAML. This module runs in
 `build-and-test` before any dependency install, and PyYAML is not in the
@@ -94,16 +95,17 @@ class BootstrapWorkflowTest(unittest.TestCase):
     def test_covers_both_platforms(self) -> None:
         self.assertIn("runs-on: ubuntu-latest", self.jobs["bootstrap"])
         self.assertIn("runs-on: macos-15", self.jobs["bootstrap-macos"])
+        self.assertIn("runs-on: ubuntu-24.04-arm", self.jobs["bootstrap-linux-arm64"])
 
     def test_runs_the_bootstrap_script_on_both_platforms(self) -> None:
-        for name in ("bootstrap", "bootstrap-macos"):
+        for name in ("bootstrap", "bootstrap-macos", "bootstrap-linux-arm64"):
             with self.subTest(job=name):
                 self.assertIn("scripts/bootstrap.sh", self.jobs[name])
 
     def test_bootstrap_verifies_with_esbmc(self) -> None:
         # --stage3-no-verify halves wall time; Stages 1-2 still verify. A bare
         # --no-verify here would silently drop ESBMC from the whole pipeline.
-        for name in ("bootstrap", "bootstrap-macos"):
+        for name in ("bootstrap", "bootstrap-macos", "bootstrap-linux-arm64"):
             with self.subTest(job=name):
                 job = self.jobs[name]
                 self.assertIn("--stage3-no-verify", job)
