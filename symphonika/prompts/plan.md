@@ -44,7 +44,6 @@ Write a plan to `{{workspace.path}}/PLAN.md` covering:
 - **Do not weaken contracts to fit ESBMC.** Bounds like `n <= 10` to satisfy `--unwind` are verification artifacts, not contracts. If a correct contract is unverifiable, plan to mark the function unverifiable, not to distort the contract.
 - **Many small changes beat one large change.** If the issue is broad, split the plan into the minimal first slice that closes the issue, plus a follow-up list. Do not bundle refactors into a bug fix.
 - **Do not run `sudo`.** If a step needs root, plan an alternative.
-- **Do not modify the `symphony/` submodule** (if present) or anything under `build/` (gitignored compiler binary).
 - **The orchestrator squash-merges the PR.** The repository allows squash merges only, and the
   squash subject is taken verbatim from the PR title. Plan accordingly — do not plan for merge
   commits or rebase merges, and do not plan for a human to merge.
