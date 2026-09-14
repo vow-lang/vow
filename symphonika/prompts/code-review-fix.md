@@ -27,15 +27,16 @@ if you need the PR number — do not assume one. Stay on branch
 - Do not modify operational labels in the `sym:*` namespace. Do not
   self-apply `sym:human-needed` — the orchestrator applies that automatically
   when a run ends up blocked.
-- Do not modify the `symphony/` submodule.
 - If `/code-review --fix` genuinely cannot proceed (e.g. no open PR found
-  for this branch), post a `gh pr comment` explaining what blocked you and
-  **exit non-zero (e.g. `exit 1`)**. A non-zero exit routes the FSM through
-  `provider_success: false` to the `to: failed` catch-all and terminates
-  the run as blocked.
+  for this branch), post a `gh pr comment` explaining what blocked you, then
+  **write `BLOCKED.md` in the workspace root** (uncommitted) with the same
+  explanation and exit 0. A Bash tool call's `exit 1` only ends that
+  subshell, not the provider session, so it cannot make `provider_success`
+  false. The FSM instead gates this state's advance on `BLOCKED.md` not
+  existing; writing that file is what routes the run to its blocked exit.
 
 ## Exit
 
 Exit 0 once `/code-review --fix` has run and any fixes it made are pushed
-(or it found nothing to fix). The orchestrator will advance to the next
-state on success.
+(or it found nothing to fix), and no `BLOCKED.md` exists in the workspace.
+The orchestrator will advance to the next state on success.

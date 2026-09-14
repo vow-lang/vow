@@ -80,6 +80,7 @@ write `PLAN.md` yourself and commit it. Ending your turn by returning a sub-agen
 report and nothing else is a failed run.
 
 If you cannot produce a coherent plan (issue is ambiguous, contradictory, or already
-resolved), post `gh issue comment {{issue.number}} --body "<what blocks planning>"`,
-write the same explanation to `{{workspace.path}}/EVIDENCE.md`, and exit without
+resolved), post `gh issue comment {{issue.number}} --body "<what blocks planning>"` (use the local
+`gh` CLI, not the GitHub MCP connector tools — those elicit operator approval and end the run
+waiting for input), write the same explanation to `{{workspace.path}}/BLOCKED.md`, and exit without
 applying any handoff label — do not commit in that case.
