@@ -1,0 +1,16 @@
+// TEST: stdout "1"
+// proc_sample() output is nondeterministic (live /proc RSS/CPU sampling), so
+// this only checks a structural invariant that holds regardless of sampled
+// values: the compiler's own group always appears first, per
+// collect_proc_samples in vow-runtime.
+module ProcSamplePinToRoot
+
+fn sample_pinned() -> String [io] {
+    pin_to_root(proc_sample())
+}
+
+fn main() -> i32 [io] {
+    let s: String = sample_pinned();
+    print_i64(string_starts_with(s, String::from("compiler|")));
+    0
+}

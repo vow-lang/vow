@@ -211,7 +211,7 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
         | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
         | "string_join" | "int_to_string" | "uint_to_string" | "i64_to_string" | "hex_encode"
         | "format_f64_bits" | "process_get_stdout" | "process_get_stderr"
-        | "process_stdout_for" | "process_stderr_for" => {
+        | "process_stdout_for" | "process_stderr_for" | "proc_sample" => {
             ctx.inst_struct_type.insert(result, "String".to_string());
         }
         "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
@@ -7858,6 +7858,52 @@ fn parse_or_default(s: String) -> i64 {
                 .any(|inst| inst.data
                     == InstData::CallExtern("__vow_string_pin_to_root".to_string())),
             "direct pin_to_root(process_get_stdout()) must lower to string pin"
+        );
+    }
+
+    #[test]
+    fn pin_to_root_proc_sample_lowers_to_string_pin() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr(
+                "pin_to_root",
+                vec![call_expr("proc_sample", vec![])],
+            ))),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "pin_proc_sample",
+            vec![],
+            string_ty(),
+            body,
+            vec![Effect::IO],
+        );
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data == InstData::CallExtern("__vow_proc_sample".to_string())),
+            "expected proc_sample extern call"
+        );
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data
+                    == InstData::CallExtern("__vow_string_pin_to_root".to_string())),
+            "direct pin_to_root(proc_sample()) must lower to string pin"
         );
     }
 
