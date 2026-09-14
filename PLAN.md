@@ -1,5 +1,49 @@
 # Plan: #1277 — tag `proc_sample`'s result as heap-returning in Rust's `tag_builtin_result`
 
+## 0. Status at this attempt (reused workspace)
+
+This workspace was reused from an earlier attempt. Slices 1, 2, and 4 below are **already
+committed** on this branch, ahead of this plan commit:
+
+- `643d6f53` `fix(lower): tag proc_sample's result as heap-returning` — the one-line
+  `tag_builtin_result` fix (slice 2) plus the `pin_to_root_proc_sample_lowers_to_string_pin` unit
+  test (slice 1).
+- `40c93815` `test(run): add proc_sample pin_to_root regression fixture` — the
+  `tests/run/proc_sample_pin_to_root.vow` fixture (slice 4). Its commit message records that no
+  runtime divergence was empirically observed for this builtin (freshly-owned allocation, not
+  reused scratch), so the fixture is a regression pin rather than a crash reproduction — this
+  resolves slice 4's "empirical answer" requirement.
+
+(The run context's "Attempt: 1" doesn't match this history — the prior commits predate this
+invocation. Not reconciling that; recorded here so a reviewer isn't confused by the timeline.)
+
+**Nothing here has been pushed and no PR exists yet.** The implementation stage's remaining job
+is *not* to redo slices 1/2/4 — do not re-add the `| "proc_sample"` arm or duplicate either test,
+that would conflict/no-op against the existing commits. Instead it must:
+
+1. Run the gates below (unverified by this planning pass — see the checks in §3a) and fix anything
+   that fails.
+2. `git rm PLAN.md`.
+3. `git fetch origin main` and diff against `origin/main` (not bare `main` — the worktree's local
+   `main` ref is known stale in this repo).
+4. Push and `gh pr create` non-interactively with a lower-case, ≤92-char Conventional Commits
+   title (squash-merge only, per repo policy).
+
+### Gates to run before pushing (none of these were verified by this planning pass)
+
+Run each separately, not `&&`-chained:
+
+```bash
+cargo test -p vow-ir
+cargo clippy --all -- -D warnings
+cargo fmt --all -- --check
+```
+
+Then build+run `tests/run/proc_sample_pin_to_root.vow` the way `scripts/full_test.sh` Section 4
+does (fresh cache to avoid stale-object drift): `VOW_CACHE_DIR=$(mktemp -d) build/vowc build
+--no-verify tests/run/proc_sample_pin_to_root.vow -o /tmp/proc_sample_pin && /tmp/proc_sample_pin`
+— expect stdout `1`.
+
 ## 1. Problem restated
 
 `vow-ir/src/lower/mod.rs::tag_builtin_result` (mod.rs:190-239) tags certain builtins' call
@@ -111,6 +155,32 @@ production change; this plan's fix is Rust-only.
    the issue asks for. If nothing distinguishes tagged from untagged behavior at runtime, say so
    explicitly rather than silently dropping the fixture; keep it anyway as a straightforward
    regression pin for slice 2's fix, unconditional on what was found.
+
+## 3a. Fixture review (checks run during this planning pass, not the gates above)
+
+The committed `tests/run/proc_sample_pin_to_root.vow` was spot-checked against the codebase
+rather than executed (planning stage doesn't build/run code):
+
+- **`// TEST: stdout "1"` directive syntax** — matches the quoted-string format used throughout
+  `tests/run/*.vow` (confirmed via grep of existing fixtures).
+- **`string_starts_with(Str, Str) -> I64`** (`vow-types/src/env.rs:190`) — returns `I64`, not
+  `Bool`, so `print_i64(string_starts_with(...))` type-checks as written. No bug here.
+- **`String::from(...)` / `fn main() -> i32 [io]`** — matches the style of
+  `tests/run/pin_to_root_string.vow`, the cited reference fixture.
+- **`"compiler|"` prefix** — confirmed against the doc comment on `__vow_proc_sample`
+  (`vow-runtime/src/lib.rs:3296-3298`): format is `"<group>|<rss_kb>|<cpu_pct>"`, and the
+  compiler's own group is always sampled/emitted first per `collect_proc_samples`.
+- **Platform gap (non-blocking for CI, worth documenting in the PR body):**
+  `vow-runtime/src/lib.rs:3290-3293` — `read_proc_table` returns empty on `not(target_os =
+  "linux")`, so `__vow_proc_sample` returns `""` there, `string_starts_with("", "compiler|")` is
+  `0`, and this fixture would print `0` instead of `1`. `.github/workflows/full-test.yml` runs
+  both jobs on `ubuntu-latest` only, so this does not break CI. It **would** break a developer
+  running `tests/run_tests.sh` locally on macOS. `TEST: skip` in this harness is unconditional
+  (no platform-conditional variant exists — checked `scripts/full_test.sh`'s skip-parsing and
+  found no `target_os`/platform-gated skip pattern anywhere in `tests/run/*.vow`), so there's no
+  cheap fix within this fixture's format. Leave as-is (matches how other Linux-only-sampling
+  behavior is already handled) but call it out explicitly in the PR description rather than
+  leaving it as a silent local-macOS footgun.
 
 ## 4. Verification surface
 
