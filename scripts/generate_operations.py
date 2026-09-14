@@ -26,9 +26,12 @@ REPO = Path(__file__).resolve().parent.parent
 
 # Closed vocabulary: catalogue tokens -> target-specific spellings. Adding a
 # new token here is the one place a follow-up catalogue slice needs to touch
-# to introduce a new ABI shape.
+# to introduce a new ABI shape. `clif_ret` is the Cranelift `types::*` spelling
+# pushed onto the extern signature's return slot (None for a void return) --
+# gen_cranelift_block() reads this so a non-unit token can never be silently
+# dropped from the Cranelift ABI.
 RETURN_TOKENS = {
-    "unit": {"rust_ty": "Ty::Unit", "ity_const": "ITY_UNIT()"},
+    "unit": {"rust_ty": "Ty::Unit", "ity_const": "ITY_UNIT()", "clif_ret": None},
 }
 PARAM_TOKENS = {
     "ptr": "types::I64",
@@ -53,6 +56,8 @@ def load_catalogue(repo_root: Path) -> list[dict]:
     """
     catalogue_path = repo_root / "docs" / "spec" / "operations.json"
     data = json.loads(catalogue_path.read_text())
+    if not isinstance(data.get("operations"), list):
+        raise ValueError(f"{catalogue_path}: top-level 'operations' key must be a list")
     ops = data["operations"]
 
     seen_names: set[str] = set()
@@ -84,7 +89,13 @@ def load_catalogue(repo_root: Path) -> list[dict]:
                 f"(known: {sorted(RETURN_TOKENS)})"
             )
 
-        for param in op["params"]:
+        params = op["params"]
+        if not isinstance(params, list):
+            raise ValueError(
+                f"operation '{name}' has 'params' of type {type(params).__name__}, "
+                "expected a list"
+            )
+        for param in params:
             if param not in PARAM_TOKENS:
                 raise ValueError(
                     f"operation '{name}' has unknown params token '{param}' "
@@ -119,13 +130,16 @@ def gen_rust_ir_block(ops: list[dict]) -> str:
 def gen_cranelift_block(ops: list[dict]) -> str:
     arm_blocks = []
     for op in ops:
-        pushes = "\n".join(
+        lines = [
             f"            sig.params.push(AbiParam::new({PARAM_TOKENS[p]}));"
             for p in op["params"]
-        )
-        arm_blocks.append(
-            f'        "{op["runtime_symbol"]}" => {{\n{pushes}\n            true\n        }}'
-        )
+        ]
+        clif_ret = RETURN_TOKENS[op["return"]]["clif_ret"]
+        if clif_ret is not None:
+            lines.append(f"            sig.returns.push(AbiParam::new({clif_ret}));")
+        lines.append("            true")
+        body = "\n".join(lines)
+        arm_blocks.append(f'        "{op["runtime_symbol"]}" => {{\n{body}\n        }}')
     arms = "\n".join(arm_blocks)
     return (
         f"{MARKER_START}\n"
@@ -170,8 +184,11 @@ def _replace_between_markers(
 ) -> str:
     """Replace content between start/end marker lines (inclusive).
 
-    Raises ValueError if either marker is missing -- a missing marker must
-    fail loudly in both write and --check mode, never silently no-op.
+    Raises ValueError if either marker is missing, or if a second
+    `start_marker` appears after the first block's end -- a lone orphaned
+    block (e.g. left behind by a bad merge) would otherwise be silently
+    invisible to both write and --check, since only the first pair is ever
+    inspected. Every failure mode here must fail loudly, never silently no-op.
     """
     start_idx = content.find(start_marker)
     if start_idx == -1:
@@ -180,14 +197,29 @@ def _replace_between_markers(
     if end_idx == -1:
         raise ValueError(f"marker '{end_marker}' not found")
     end_idx += len(end_marker)
+    if start_marker in content[end_idx:]:
+        raise ValueError(
+            f"multiple '{start_marker}' blocks found -- the splice mechanism "
+            "only supports one marker pair per file"
+        )
     return content[:start_idx] + replacement + content[end_idx:]
 
 
 def _split_table_row(line: str) -> list[str]:
+    """Split a `| a | b |`-style row into cells.
+
+    Only the empty strings produced by the row's own leading/trailing pipe
+    are dropped -- a genuinely empty interior cell (`| a |  | c |`) is kept,
+    so columns never silently shift.
+    """
     placeholder = "\x00PIPE\x00"
     line = line.replace("\\|", placeholder)
     cells = [c.strip().replace(placeholder, "|") for c in line.split("|")]
-    return [c for c in cells if c != ""]
+    if cells and cells[0] == "":
+        cells = cells[1:]
+    if cells and cells[-1] == "":
+        cells = cells[:-1]
+    return cells
 
 
 def extract_builtin_signatures_table(grammar_text: str) -> dict[str, tuple[str, str]]:
@@ -195,6 +227,10 @@ def extract_builtin_signatures_table(grammar_text: str) -> dict[str, tuple[str, 
     `### Builtin Function Signatures` section of grammar.md, sweeping every
     `####` subsection (Print / IO, Debug, Filesystem, ...) so any catalogued
     op can be looked up by name regardless of which subsection it lives in.
+
+    Raises ValueError on a duplicate row for the same builtin name -- e.g. a
+    stale row left behind in another subsection by a bad merge -- rather than
+    silently keeping whichever row happens to be read last.
     """
     heading = "Builtin Function Signatures"
     heading_level = 3
@@ -223,6 +259,10 @@ def extract_builtin_signatures_table(grammar_text: str) -> dict[str, tuple[str, 
             cells = _split_table_row(line)
             cells = [re.sub(r"`([^`]*)`", r"\1", c) for c in cells]
             if len(cells) >= 3:
+                if cells[0] in table:
+                    raise ValueError(
+                        f"duplicate Builtin Function Signatures row for '{cells[0]}'"
+                    )
                 table[cells[0]] = (cells[1], cells[2])
     return table
 

@@ -110,6 +110,33 @@ class LoadCatalogueTest(unittest.TestCase):
                 go.load_catalogue(tmp)
             self.assertIn("nonsense", str(ctx.exception))
 
+    def test_operations_not_a_list_raises_value_error(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            (tmp / "docs" / "spec").mkdir(parents=True)
+            (tmp / "docs" / "spec" / "operations.json").write_text(
+                json.dumps({"not_operations": []})
+            )
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("operations", str(ctx.exception))
+
+    def test_params_not_a_list_raises_value_error(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            (tmp / "docs" / "spec").mkdir(parents=True)
+            bad = dict(PRINT_OPS[0])
+            bad["params"] = "ptr"
+            self._write(tmp / "docs" / "spec", [bad])
+            with self.assertRaises(ValueError) as ctx:
+                go.load_catalogue(tmp)
+            self.assertIn("print_str", str(ctx.exception))
+            self.assertIn("params", str(ctx.exception))
+
 
 class GenRustIrBlockTest(unittest.TestCase):
     def test_matches_expected_rustfmt_canonical_text(self):
@@ -152,6 +179,25 @@ class GenCraneliftBlockTest(unittest.TestCase):
             "// GENERATE:OPERATIONS:END"
         )
         self.assertEqual(go.gen_cranelift_block(PRINT_OPS), expected)
+
+    def test_non_unit_return_token_pushes_return_slot(self):
+        # RETURN_TOKENS only defines "unit" today (clif_ret=None, no push).
+        # Exercise the clif_ret plumbing itself so a future non-unit token
+        # can't silently regress back to dropping the Cranelift return slot.
+        go.RETURN_TOKENS["fake_i64"] = {
+            "rust_ty": "Ty::I64",
+            "ity_const": "ITY_I64()",
+            "clif_ret": "types::I64",
+        }
+        try:
+            op = dict(PRINT_OPS[1])
+            op["return"] = "fake_i64"
+            block = go.gen_cranelift_block([op])
+        finally:
+            del go.RETURN_TOKENS["fake_i64"]
+        self.assertIn(
+            "sig.returns.push(AbiParam::new(types::I64));\n            true", block
+        )
 
 
 class GenVowLowerBlockTest(unittest.TestCase):
@@ -223,6 +269,22 @@ class ReplaceBetweenMarkersTest(unittest.TestCase):
             )
         self.assertIn(go.MARKER_END, str(ctx.exception))
 
+    def test_second_orphaned_marker_block_raises(self):
+        # A bad merge leaving two marker pairs in one file must not silently
+        # splice only the first and leave the second invisible to --check.
+        content = (
+            "before\n"
+            "// GENERATE:OPERATIONS:START\nold 1\n// GENERATE:OPERATIONS:END\n"
+            "middle\n"
+            "// GENERATE:OPERATIONS:START\nold 2 (orphaned)\n// GENERATE:OPERATIONS:END\n"
+            "after\n"
+        )
+        with self.assertRaises(ValueError) as ctx:
+            go._replace_between_markers(
+                content, go.MARKER_START, go.MARKER_END, "new stuff"
+            )
+        self.assertIn(go.MARKER_START, str(ctx.exception))
+
 
 GRAMMAR_FIXTURE = """\
 ### Builtin Function Signatures
@@ -248,6 +310,20 @@ irrelevant trailing section.
 """
 
 
+class SplitTableRowTest(unittest.TestCase):
+    def test_strips_only_outer_pipe_cells(self):
+        self.assertEqual(go._split_table_row("| foo | bar |"), ["foo", "bar"])
+
+    def test_preserves_genuinely_empty_interior_cell(self):
+        # A blank (unformatted) interior cell must survive splitting --
+        # only the two empty strings produced by the row's own leading and
+        # trailing "|" are dropped, never an interior column.
+        self.assertEqual(go._split_table_row("| foo |  | bar |"), ["foo", "", "bar"])
+
+    def test_escaped_pipe_is_not_a_column_separator(self):
+        self.assertEqual(go._split_table_row(r"| a\|b | c |"), ["a|b", "c"])
+
+
 class ExtractBuiltinSignaturesTableTest(unittest.TestCase):
     def test_sweeps_every_subsection(self):
         table = go.extract_builtin_signatures_table(GRAMMAR_FIXTURE)
@@ -265,6 +341,21 @@ class ExtractBuiltinSignaturesTableTest(unittest.TestCase):
         table = go.extract_builtin_signatures_table(grammar_text)
         for op in PRINT_OPS:
             self.assertEqual(table[op["name"]], (op["doc_signature"], op["effects"]))
+
+    def test_duplicate_row_across_subsections_raises(self):
+        # A stale second row for the same builtin (e.g. left in another
+        # subsection by a bad merge) must not be silently overwritten.
+        duplicated = GRAMMAR_FIXTURE.replace(
+            "#### Print / IO",
+            "#### Debug\n\n"
+            "| Function    | Signature                 | Effects |\n"
+            "|---|---|---|\n"
+            "| `print_str` | `fn(s: String) -> BOGUS`  | `[STALE]` |\n\n"
+            "#### Print / IO",
+        )
+        with self.assertRaises(ValueError) as ctx:
+            go.extract_builtin_signatures_table(duplicated)
+        self.assertIn("print_str", str(ctx.exception))
 
 
 def _write_fixture_tree(
