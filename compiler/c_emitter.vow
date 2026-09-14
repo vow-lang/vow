@@ -213,6 +213,7 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_string_from_u64_in_arena")
     || name == String::from("__vow_string_parse_i64_opt")
     || name == String::from("__vow_string_parse_i64_opt_in_arena")
+    || name == String::from("__vow_string_parse_u64_opt")
     || name == String::from("__vow_string_parse_i8_opt")
     || name == String::from("__vow_string_parse_u8_opt")
     || name == String::from("__vow_string_parse_i16_opt")
@@ -2036,7 +2037,8 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
         return;
     }
     if ds == String::from("__vow_string_parse_i64_opt")
-        || ds == String::from("__vow_string_parse_i64_opt_in_arena") {
+        || ds == String::from("__vow_string_parse_i64_opt_in_arena")
+        || ds == String::from("__vow_string_parse_u64_opt") {
         let ids: String = i64_to_string(id);
         out.push_str(str3(String::from("  v"), ids, String::from(".tag = __VERIFIER_nondet_long();\n")));
         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".tag == 0 || v")));
