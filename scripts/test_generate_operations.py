@@ -10,6 +10,7 @@ plus the real docs/spec/operations.json catalogue for the end-to-end cases.
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -48,71 +49,57 @@ PRINT_OPS = [
 
 
 class LoadCatalogueTest(unittest.TestCase):
-    def _write(self, tmp_path: Path, ops: list) -> Path:
-        catalogue = tmp_path / "operations.json"
-        catalogue.write_text(json.dumps({"operations": ops}))
-        return catalogue
+    def _write(self, tmp_path: Path, ops: list) -> None:
+        spec_dir = tmp_path / "docs" / "spec"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        (spec_dir / "operations.json").write_text(json.dumps({"operations": ops}))
 
     def test_real_catalogue_loads_and_matches_print_ops(self):
         ops = go.load_catalogue(REPO_ROOT)
         self.assertEqual(ops, PRINT_OPS)
 
     def test_missing_required_field_raises(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            (tmp / "docs" / "spec").mkdir(parents=True)
             bad = dict(PRINT_OPS[0])
             del bad["runtime_symbol"]
-            self._write(tmp / "docs" / "spec", [bad])
+            self._write(tmp, [bad])
             with self.assertRaises(ValueError) as ctx:
                 go.load_catalogue(tmp)
             self.assertIn("runtime_symbol", str(ctx.exception))
             self.assertIn("print_str", str(ctx.exception))
 
     def test_duplicate_name_raises(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            (tmp / "docs" / "spec").mkdir(parents=True)
             dup = dict(PRINT_OPS[0])
-            self._write(tmp / "docs" / "spec", [PRINT_OPS[0], dup])
+            self._write(tmp, [PRINT_OPS[0], dup])
             with self.assertRaises(ValueError) as ctx:
                 go.load_catalogue(tmp)
             self.assertIn("print_str", str(ctx.exception))
             self.assertIn("duplicate", str(ctx.exception).lower())
 
     def test_unknown_return_token_raises(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            (tmp / "docs" / "spec").mkdir(parents=True)
             bad = dict(PRINT_OPS[0])
             bad["return"] = "nonsense"
-            self._write(tmp / "docs" / "spec", [bad])
+            self._write(tmp, [bad])
             with self.assertRaises(ValueError) as ctx:
                 go.load_catalogue(tmp)
             self.assertIn("nonsense", str(ctx.exception))
 
     def test_unknown_param_token_raises(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            (tmp / "docs" / "spec").mkdir(parents=True)
             bad = dict(PRINT_OPS[0])
             bad["params"] = ["nonsense"]
-            self._write(tmp / "docs" / "spec", [bad])
+            self._write(tmp, [bad])
             with self.assertRaises(ValueError) as ctx:
                 go.load_catalogue(tmp)
             self.assertIn("nonsense", str(ctx.exception))
 
     def test_operations_not_a_list_raises_value_error(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             (tmp / "docs" / "spec").mkdir(parents=True)
@@ -124,14 +111,11 @@ class LoadCatalogueTest(unittest.TestCase):
             self.assertIn("operations", str(ctx.exception))
 
     def test_params_not_a_list_raises_value_error(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            (tmp / "docs" / "spec").mkdir(parents=True)
             bad = dict(PRINT_OPS[0])
             bad["params"] = "ptr"
-            self._write(tmp / "docs" / "spec", [bad])
+            self._write(tmp, [bad])
             with self.assertRaises(ValueError) as ctx:
                 go.load_catalogue(tmp)
             self.assertIn("print_str", str(ctx.exception))
@@ -390,8 +374,6 @@ def _write_fixture_tree(
 
 class CheckDocFactsTest(unittest.TestCase):
     def test_clean_fixture_reports_no_mismatches(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_fixture_tree(tmp)
@@ -399,8 +381,6 @@ class CheckDocFactsTest(unittest.TestCase):
         self.assertEqual(mismatches, [])
 
     def test_grammar_effects_mismatch_is_caught(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_fixture_tree(tmp, grammar_effects="[]")
@@ -413,8 +393,6 @@ class CheckDocFactsTest(unittest.TestCase):
         self.assertIn("[]", matching[0])
 
     def test_grammar_missing_row_is_caught(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_fixture_tree(tmp)
@@ -427,8 +405,6 @@ class CheckDocFactsTest(unittest.TestCase):
         self.assertIn("grammar.md: no row found for 'print_str'", mismatches)
 
     def test_main_vow_missing_doc_line_is_caught(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_fixture_tree(tmp, main_vow_ok=False)
@@ -436,8 +412,6 @@ class CheckDocFactsTest(unittest.TestCase):
         self.assertTrue(any("print_str" in m and "main.vow" in m for m in mismatches))
 
     def test_skill_rs_missing_doc_line_is_caught(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_fixture_tree(tmp, skill_rs_ok=False)
@@ -465,8 +439,6 @@ def _write_target_fixtures(tmp: Path) -> None:
 
 class WriteAndCheckProjectionsTest(unittest.TestCase):
     def test_write_then_check_reports_clean(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_target_fixtures(tmp)
@@ -475,8 +447,6 @@ class WriteAndCheckProjectionsTest(unittest.TestCase):
         self.assertEqual(mismatches, [])
 
     def test_write_actually_splices_generator_output(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_target_fixtures(tmp)
@@ -486,8 +456,6 @@ class WriteAndCheckProjectionsTest(unittest.TestCase):
         self.assertIn("fn vow_static_builtin_to_runtime() {}", content)
 
     def test_hand_mutated_target_is_flagged_as_drift(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_target_fixtures(tmp)
@@ -500,8 +468,6 @@ class WriteAndCheckProjectionsTest(unittest.TestCase):
         self.assertTrue(any("mod.rs" in m for m in mismatches))
 
     def test_missing_marker_in_target_raises(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             _write_target_fixtures(tmp)

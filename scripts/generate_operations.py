@@ -109,21 +109,25 @@ MARKER_START = "// GENERATE:OPERATIONS:START"
 MARKER_END = "// GENERATE:OPERATIONS:END"
 
 
+def _wrap_marker_block(body: str) -> str:
+    """Wrap a generated function body (ending in "}\\n") in the marker pair
+    every splice target shares."""
+    return f"{MARKER_START}\n{body}{MARKER_END}"
+
+
 def gen_rust_ir_block(ops: list[dict]) -> str:
     arms = "\n".join(
         f'        "{op["name"]}" => Some(("{op["runtime_symbol"]}", '
         f"{RETURN_TOKENS[op['return']]['rust_ty']})),"
         for op in ops
     )
-    return (
-        f"{MARKER_START}\n"
+    return _wrap_marker_block(
         "fn catalogue_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {\n"
         "    match name {\n"
         f"{arms}\n"
         "        _ => None,\n"
         "    }\n"
         "}\n"
-        f"{MARKER_END}"
     )
 
 
@@ -141,15 +145,13 @@ def gen_cranelift_block(ops: list[dict]) -> str:
         body = "\n".join(lines)
         arm_blocks.append(f'        "{op["runtime_symbol"]}" => {{\n{body}\n        }}')
     arms = "\n".join(arm_blocks)
-    return (
-        f"{MARKER_START}\n"
+    return _wrap_marker_block(
         "fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {\n"
         "    match sym {\n"
         f"{arms}\n"
         "        _ => false,\n"
         "    }\n"
         "}\n"
-        f"{MARKER_END}"
     )
 
 
@@ -164,8 +166,7 @@ def gen_vow_lower_block(ops: list[dict]) -> str:
         f"{{ return {RETURN_TOKENS[op['return']]['ity_const']}; }}"
         for op in ops
     )
-    return (
-        f"{MARKER_START}\n"
+    return _wrap_marker_block(
         "fn catalogue_builtin_to_extern(name: String) -> String {\n"
         f"{extern_arms}\n"
         '    return String::from("");\n'
@@ -175,7 +176,6 @@ def gen_vow_lower_block(ops: list[dict]) -> str:
         f"{ret_ty_arms}\n"
         "    return -1;\n"
         "}\n"
-        f"{MARKER_END}"
     )
 
 
