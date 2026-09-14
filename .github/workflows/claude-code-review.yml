@@ -37,6 +37,6 @@ jobs:
 
           claude_args: |
             --model claude-sonnet-5
-            --allowedTools "Agent,Task,Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(ls:*),Bash(wc:*)"
+            --permission-mode auto
 
           prompt: '/code-review xhigh --comment ${{ github.event.pull_request.number }}'
