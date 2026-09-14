@@ -682,6 +682,52 @@ fn cast_verdict(src: &Ty, tgt: &Ty) -> CastVerdict {
     CastVerdict::Ok
 }
 
+/// Why the `?` operator rejects its operand. Carries no data — the one
+/// interpolated diagnostic reads `inner_ty`, which the call site already holds —
+/// so diagnostic wording stays at the call site, mirroring `cast_verdict` and
+/// `same_operand_ty`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuestionReject {
+    /// `?` on an `Option` inside a function that does not return `Option`.
+    OptionNeedsOptionReturn,
+    /// `?` on a `Result`: Err-propagation lowering does not exist yet.
+    ResultNotLowered,
+    /// The operand is neither `Option`, `Result`, nor an unreachable `Never`.
+    NotTryable,
+}
+
+/// Decides the type a `?` expression yields, or why it is rejected. Pure and
+/// total in its inputs — no diagnostics, no `&mut self` — so the Option/Result/
+/// Never policy, including the "Option `?` requires an Option return"
+/// cross-check, is unit-testable on `(inner_ty, return_ty)` alone, mirroring
+/// `cast_verdict` and `same_operand_ty`. `Ok(ty)` is the payload type to
+/// propagate (`Option`'s arg0, or `Never` for an unreachable operand); `Err`
+/// names the rule that failed. Emission and the `pattern_aggregates` bookkeeping
+/// stay at the call site.
+///
+/// The branch order matches the original inline arm exactly: `Option` (with the
+/// return-type cross-check) before `Result`, then the unreachable `Never`
+/// short-circuit, then the catch-all rejection.
+fn question_verdict(inner_ty: &Ty, return_ty: &Ty) -> Result<Ty, QuestionReject> {
+    match inner_ty {
+        Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option") => {
+            let returns_option = matches!(
+                return_ty,
+                Ty::Applied(ret_base, _) if matches!(ret_base.as_ref(), Ty::Enum(n) if n == "Option")
+            );
+            if !returns_option {
+                return Err(QuestionReject::OptionNeedsOptionReturn);
+            }
+            Ok(args.first().cloned().unwrap_or(Ty::Unit))
+        }
+        Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result") => {
+            Err(QuestionReject::ResultNotLowered)
+        }
+        Ty::Never => Ok(Ty::Never),
+        _ => Err(QuestionReject::NotTryable),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct IntegerTypeRange {
     positive_max: u128,
@@ -2775,49 +2821,33 @@ impl<'e> Checker<'e> {
             }
             ExprKind::Question { expr: inner } => {
                 let inner_ty = self.check_expr(inner);
-                let payload_ty = match &inner_ty {
-                    Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option") =>
-                    {
-                        if !matches!(
-                            &self.current_return_ty,
-                            Ty::Applied(ret_base, _) if matches!(ret_base.as_ref(), Ty::Enum(n) if n == "Option")
-                        ) {
-                            self.emit_error_with_hints(
-                                ErrorCode::TypeMismatch,
+                let payload_ty = match question_verdict(&inner_ty, &self.current_return_ty) {
+                    Ok(ty) => ty,
+                    Err(reject) => {
+                        let (message, hint) = match reject {
+                            QuestionReject::OptionNeedsOptionReturn => (
                                 "the `?` operator on Option requires the caller to return `Option`"
                                     .to_string(),
-                                inner.span,
-                                vec!["`?` on Option propagates None to the caller".to_string()],
-                            );
-                            return Ty::Unit;
-                        }
-                        args.first().cloned().unwrap_or(Ty::Unit)
-                    }
-                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result") =>
-                    {
-                        self.emit_error_with_hints(
-                            ErrorCode::TypeMismatch,
-                            "Result propagation with `?` is not lowered yet".to_string(),
-                            inner.span,
-                            vec![
+                                "`?` on Option propagates None to the caller".to_string(),
+                            ),
+                            QuestionReject::ResultNotLowered => (
+                                "Result propagation with `?` is not lowered yet".to_string(),
                                 "use an explicit `match` on Result until Err propagation is lowered"
                                     .to_string(),
-                            ],
-                        );
-                        Ty::Unit
-                    }
-                    Ty::Never => Ty::Never,
-                    _ => {
-                        self.emit_error_with_hints(
-                            ErrorCode::TypeMismatch,
-                            format!(
-                                "the `?` operator requires `Option<T>` or `Result<T,E>`, found `{inner_ty}`"
                             ),
-                            inner.span,
-                            vec![
+                            QuestionReject::NotTryable => (
+                                format!(
+                                    "the `?` operator requires `Option<T>` or `Result<T,E>`, found `{inner_ty}`"
+                                ),
                                 "`?` unwraps Option or Result, propagating None/Err to the caller"
                                     .to_string(),
-                            ],
+                            ),
+                        };
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            message,
+                            inner.span,
+                            vec![hint],
                         );
                         Ty::Unit
                     }
@@ -7170,6 +7200,57 @@ mod tests {
         // Unrelated non-integer types are a mismatch.
         assert_eq!(cast_verdict(&Ty::Bool, &Ty::I32), CastVerdict::Mismatch);
         assert_eq!(cast_verdict(&Ty::Str, &Ty::I64), CastVerdict::Mismatch);
+    }
+
+    #[test]
+    fn question_verdict_classifies_try_propagation() {
+        let option_of =
+            |inner: Ty| Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![inner]);
+        let result_of =
+            |ok: Ty, err: Ty| Ty::Applied(Box::new(Ty::Enum("Result".to_string())), vec![ok, err]);
+
+        // `?` on Option inside an Option-returning function unwraps the payload (arg0);
+        // the return type's own argument is irrelevant to the rule.
+        assert_eq!(
+            question_verdict(&option_of(Ty::I64), &option_of(Ty::Unit)),
+            Ok(Ty::I64)
+        );
+        // A payload-less Option yields Unit rather than panicking on the missing arg0.
+        assert_eq!(
+            question_verdict(&option_of(Ty::Unit), &option_of(Ty::Unit)),
+            Ok(Ty::Unit)
+        );
+
+        // `?` on Option demands an Option return: a plain type, or a non-Option
+        // applied type such as Result, both fail the cross-check.
+        assert_eq!(
+            question_verdict(&option_of(Ty::I64), &Ty::I64),
+            Err(QuestionReject::OptionNeedsOptionReturn)
+        );
+        assert_eq!(
+            question_verdict(&option_of(Ty::I64), &result_of(Ty::I64, Ty::Str)),
+            Err(QuestionReject::OptionNeedsOptionReturn)
+        );
+
+        // Result propagation is not lowered yet, whatever the return type.
+        assert_eq!(
+            question_verdict(&result_of(Ty::I64, Ty::Str), &result_of(Ty::I64, Ty::Str)),
+            Err(QuestionReject::ResultNotLowered)
+        );
+
+        // An unreachable operand propagates as `Never`, never a rejection — decided
+        // before the tryable check, mirroring the `Never` short-circuits elsewhere.
+        assert_eq!(question_verdict(&Ty::Never, &Ty::Unit), Ok(Ty::Never));
+
+        // Anything that is neither Option, Result, nor Never is not tryable.
+        assert_eq!(
+            question_verdict(&Ty::I64, &option_of(Ty::I64)),
+            Err(QuestionReject::NotTryable)
+        );
+        assert_eq!(
+            question_verdict(&Ty::Str, &Ty::Unit),
+            Err(QuestionReject::NotTryable)
+        );
     }
 
     fn numeric_operand_result(lhs: Ty, rhs: Ty) -> (Ty, Vec<Diagnostic>) {

@@ -4,6 +4,33 @@ Persisted candidate memory for the `pm-deepen` routine. Statuses: proposed | in-
 landed | dropped | rejected. Never delete rows — `landed`/`dropped`/`rejected` are the memory
 that stops the next firing re-deriving them. See `.architecture/reviews/` for the scored reports.
 
+## question-operator-verdict
+
+- **Status**: in-flight
+- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Files**: ~1 estimated
+- **Modules**: `vow-types/src/check.rs` (`ExprKind::Question` arm of `check_expr_inner`, ~L2776-2830;
+  seam sited beside `cast_verdict` L668 / `same_operand_ty` L808)
+- **Summary**: extract the inline 5-way `?`-operator payload policy (Option-ok → unwrap arg0;
+  Option-without-Option-return → reject; Result → reject "not lowered"; `Never` → propagate; anything
+  else → reject "needs Option/Result") into a pure
+  `question_verdict(inner_ty, return_ty) -> Result<Ty, QuestionReject>`, mirroring the landed
+  `same_operand_ty` Result-shaped seam; diagnostic emission and the `pattern_aggregates` bookkeeping
+  stay at the call site.
+- **First seen**: 2026-09-14
+- **Report**: `.architecture/reviews/2026-09-14-question-operator-verdict.md`
+- **PR**: #1281
+- **Reason**: **picked this firing** (2026-09-14). Fresh candidate surfaced by the step-1 scan; not
+  previously carded despite heavy `check.rs` coverage (prior firings carded the cast/operator/method
+  arms, never the `?` arm). Scored leverage 4, matching the landed single-arm pure-verdict seams
+  `cast_verdict`/`builtin-constructor-spec`; above the leverage-3 error-reason-only extractions
+  (`arm-pattern-support-classifier`, `builtin-receiver-kind`) because the success path returns a
+  computed payload `Ty` used downstream, not just a rejection reason. Deterministic top at 22; pick was
+  close — runner-up candidates `coerce-context-argument-epilogue` and `call-argument-coercion-action`
+  at 21 (within 1 pt). Adjudicated
+  design C (Result-shaped, mirrors `same_operand_ty`) over A (classification enum à la `cast_verdict`)
+  and B (verdict owns the diagnostic strings). Adjudicated without an advisor (rate-limited this run).
+
 ## same-operand-type-verdict
 
 - **Status**: landed
@@ -84,10 +111,10 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## builtin-constructor-spec
 
-- **Status**: in-flight
+- **Status**: landed
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated (actual: 1; +260/-131 in `vow-types/src/check.rs`)
-- **PR**: #1268
+- **PR**: #1268 (merged 2026-09-11)
 - **Modules**: `vow-types/src/check.rs` (`EnumConstruct` builtin dispatch, ~L2867-3016)
 - **Summary**: extract the inline `match (enum, variant)` builtin-constructor policy (arity, per-arg
   `ArgExpect`, result shape) into a pure `builtin_constructor_spec(enum, variant) -> Option<CtorSpec>`
@@ -95,13 +122,9 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   argument-checking loop and payload-wrapping stay at the call site.
 - **First seen**: 2026-09-04
 - **Report**: `.architecture/reviews/2026-09-11-builtin-constructor-spec.md`
-- **Reason**: **picked this firing** (2026-09-11); deterministic top at 22 once its 22-point tie-mate
-  `integer-literal-range-fit` (#1241) merged. Friction re-verified unchanged (commits #1263/#1264 did
-  not touch `check.rs`). Pick was close — top two within 1 pt (runner-up
-  `coerce-context-argument-epilogue` at 21). ~150-line single-file diff carries behaviour-preservation
-  risk, guarded by the 11 existing EnumConstruct tests + new unit tests (not the step-5 file-count bail,
-  which fires only if the diff spreads past ~1 file). Adjudicated design C (mirror the landed-seam
-  pattern) over A (minimal, deepens only 8/11) and B (uniform spec, widest interface).
+- **Reason**: picked 2026-09-11; **merged 2026-09-11** (reconciled 2026-09-14 via
+  `gh pr view 1268` → MERGED). Adjudicated design C (mirror the landed-seam pattern) over A (minimal,
+  deepens only 8/11) and B (uniform spec, widest interface).
 
 ## comparison-operand-verdict
 
