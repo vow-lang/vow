@@ -3644,6 +3644,20 @@ mod tests {
         assert_eq!(sig.returns[0].value_type, types::I64);
     }
 
+    // Coverage-parity twin of vow-clif-shim's
+    // `catalogue_print_externs_accept_a_single_i64_and_return_nothing` --
+    // both crates get the same generated `catalogue_extern_sig` block from
+    // scripts/generate_operations.py, so both get a direct test of it.
+    #[test]
+    fn catalogue_print_externs_accept_a_single_i64_and_return_nothing() {
+        for sym in ["__vow_string_print", "__vow_print_i64", "__vow_print_u64"] {
+            let sig = extern_sig(sym);
+            assert_eq!(sig.params.len(), 1, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert!(sig.returns.is_empty(), "{sym}");
+        }
+    }
+
     fn make_module(name: &str, funcs: Vec<Function>) -> Module {
         Module {
             name: name.to_string(),
