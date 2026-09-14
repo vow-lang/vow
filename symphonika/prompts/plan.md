@@ -25,14 +25,14 @@ You are the **planning** agent. Do not write code in this stage. Produce a writt
 - `CLAUDE.md` — language-design principles, production-quality bar, development discipline, contract-authoring rules, PR policy (squash merges only).
 - `docs/spec/` — authoritative spec: `index.md`, `grammar.md`, `cli.md`, `contracts.md`, `errors.md`, `examples.md`. Any change to syntax, semantics, builtins, operators, effects, or CLI flags **must** be reflected here.
 - `docs/adr/` (if present) — accepted architecture decisions.
-- The crate(s) and self-hosted module(s) touched by the issue. The compiler is in `crates/` (Rust stage 0) and `compiler/` (self-hosted). Changes to language semantics **must** land in both compilers in the same session.
+- The crate(s) and self-hosted module(s) touched by the issue. The Rust bootstrap compiler is a workspace of crates at the repo root (`vow-syntax/`, `vow-types/`, `vow-ir/`, `vow-codegen/`, etc.; there is no `crates/` subdirectory); the self-hosted compiler is in `compiler/`. Changes to language semantics **must** land in both compilers in the same session.
 
 ## What to produce
 
 Write a plan to `{{workspace.path}}/PLAN.md` covering:
 
 1. **Problem restated** in one paragraph.
-2. **Files to touch** — exact paths in both `crates/` and `compiler/` if the change is cross-cutting, plus any `docs/spec/*.md` updates required by the change.
+2. **Files to touch** — exact paths in both the relevant root-level Rust crate(s) and `compiler/` if the change is cross-cutting, plus any `docs/spec/*.md` updates required by the change.
 3. **TDD slices** — a numbered list of small red-green-refactor steps. Each slice names the test file/location, the behavior under test, and the production code that will make it pass. Prefer vertical slices over horizontal refactors.
 4. **Verification surface** — if the change touches contracts, codegen, or the C model: which properties ESBMC will need to prove, and whether any test fixtures under `tests/run/` or `examples/` need to grow.
 5. **Risk areas** — anything that could break the binary fixed point (`compiler/` codegen ordering, `BTreeMap` vs `HashMap`, stack-slot layout in `vow-clif-shim`), the `parse → print → parse` idempotency, or the `cargo clippy --all -- -D warnings` gate.
