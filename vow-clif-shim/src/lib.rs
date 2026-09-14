@@ -3307,6 +3307,26 @@ fn narrow_intrinsic_signature(sym: &str) -> Option<(types::Type, types::Type)> {
     Some((source_ty, target_ty))
 }
 
+// GENERATE:OPERATIONS:START
+fn catalogue_extern_sig(sym: &str, sig: &mut Signature) -> bool {
+    match sym {
+        "__vow_string_print" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_print_i64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        "__vow_print_u64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            true
+        }
+        _ => false,
+    }
+}
+// GENERATE:OPERATIONS:END
+
 fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
     let call_conv = obj_module.isa().default_call_conv();
     let mut sig = Signature::new(call_conv);
@@ -3343,13 +3363,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             }));
         return sig;
     }
+    if catalogue_extern_sig(sym, &mut sig) {
+        return sig;
+    }
     match sym {
-        "__vow_print_str" => {
-            sig.params.push(AbiParam::new(types::I64));
-        }
-        "__vow_print_i64" | "__vow_print_u64" => {
-            sig.params.push(AbiParam::new(types::I64));
-        }
         "__vow_vec_new" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3529,9 +3546,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_string_print" => {
-            sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_fs_read" => {
             sig.params.push(AbiParam::new(types::I64));
@@ -4070,6 +4084,28 @@ mod tests {
         assert_eq!(sig.params[0].value_type, types::I64);
         assert_eq!(sig.returns.len(), 1);
         assert_eq!(sig.returns[0].value_type, types::I64);
+
+        unsafe { __vow_clif_destroy(ctx) };
+    }
+
+    #[test]
+    fn catalogue_print_externs_accept_a_single_i64_and_return_nothing() {
+        // Covers all three Operation-Catalogue-sourced arms of
+        // catalogue_extern_sig (docs/spec/operations.json): print_str's
+        // runtime symbol __vow_string_print, print_i64, and print_u64.
+        // Only __vow_print_i64 was previously exercised here (via
+        // wide_arguments_to_narrow_externs_are_rejected), leaving the other
+        // two arms uncovered.
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        let module_ctx = unsafe { &*(ctx as *const ModuleContext) };
+
+        for sym in ["__vow_string_print", "__vow_print_i64", "__vow_print_u64"] {
+            let sig = make_extern_sig(sym, &module_ctx.obj_module);
+            assert_eq!(sig.params.len(), 1, "{sym}");
+            assert_eq!(sig.params[0].value_type, types::I64, "{sym}");
+            assert!(sig.returns.is_empty(), "{sym}");
+        }
 
         unsafe { __vow_clif_destroy(ctx) };
     }

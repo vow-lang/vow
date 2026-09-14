@@ -93,6 +93,10 @@ jobs:
         run: python3 scripts/test_build_docs_site.py
       - name: Help-coverage staleness-gate unit tests
         run: python3 scripts/test_check_help_coverage.py
+      - name: Operation Catalogue projection freshness
+        run: python3 scripts/generate_operations.py --check
+      - name: Operation Catalogue generator unit tests
+        run: python3 scripts/test_generate_operations.py
       - name: Benchmark skeleton fidelity unit tests
         run: |
           python3 scripts/test_benchmark_contracts.py

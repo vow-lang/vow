@@ -157,6 +157,36 @@ scripts/bootstrap.sh --skip-cargo                 # rebuild build/vowc
 
 The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) will catch drift between `grammar.md` and `--help`.
 
+## Operation Catalogue
+
+`docs/spec/operations.json` is the Operation Catalogue: the single checked, hand-edited source of
+runtime-symbol, ABI, return-shape, and doc facts for a growing set of Builtin Operations (currently
+`print_str`/`print_i64`/`print_u64`, epic #375's tracer bullet). It is deliberately narrower than
+`vow-types/src/env.rs::builtin_free_fn_signatures()` — that table (and its self-hosted counterpart in
+`compiler/env.vow`) remains the single source for signature/effects and is never read or replaced by
+this catalogue.
+
+`scripts/generate_operations.py` regenerates and validates the catalogue's projections:
+
+```bash
+python3 scripts/generate_operations.py          # regenerate all projections
+python3 scripts/generate_operations.py --check  # validate without writing (CI-gating)
+```
+
+It splices generated lookup functions between `// GENERATE:OPERATIONS:START` / `:END` markers — the
+same marker convention `scripts/generate_help.py` uses for `// GENERATE:SKILL_*` — into:
+
+- `vow-ir/src/lower/mod.rs` (`catalogue_builtin_to_runtime`)
+- `vow-codegen/src/cranelift_backend.rs` and `vow-clif-shim/src/lib.rs` (`catalogue_extern_sig`)
+- `compiler/lower.vow` (`catalogue_builtin_to_extern`, `catalogue_builtin_ret_ty`)
+
+`docs/spec/grammar.md`'s Builtin Function Signatures table and the generated help-JSON in
+`compiler/main.vow`/`vow/src/skill.rs` are **checked against** the catalogue (not generated from it) —
+`--check` fails if any drift.
+
+Follow-up issues (#1271–#1275) extend this same catalogue with more operation groups; they should add
+entries and target files to the existing generator rather than inventing a new mechanism.
+
 ## Architecture
 
 Vow is a Rust workspace where each crate maps to one compiler pipeline stage. The planned pipeline is:
@@ -178,7 +208,7 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - **`vow-verify`** — ESBMC integration. Extracts verification conditions from IR, invokes ESBMC, maps counterexamples back to source via `Origin` metadata.
 - **`vow-perf`** — fixed complexity-class canonicalization, least-squares classification, and cloned-IR operation-count instrumentation for a separate performance-test artifact. Parser, generator, and CLI integration remain tracked by the performance-guarantees roadmap.
 - **`vow-clif-shim`** — `extern "C"` FFI shims wrapping Cranelift for the self-hosted compiler. The self-hosted `clif.vow` calls these shims to produce native object files directly. Uses stack slots (not SSA) to bypass Cranelift dominance requirements for cross-block references in the self-hosted IR.
-- **`vow-runtime`** — vow violation handler (`__vow_violation`), print helpers (`__vow_print_str`, `__vow_print_i64`), arithmetic overflow handler.
+- **`vow-runtime`** — vow violation handler (`__vow_violation`), print helpers (`__vow_string_print`, `__vow_print_i64`), arithmetic overflow handler.
 - **`vow`** — CLI driver (`vowc`). Orchestrates the parallel codegen + verification pipeline. Structured JSON build output.
 - **`vow-diag`** — `Diagnostic`, `ErrorCode`, `Blame` (Caller/Callee), `JsonEmitter`, `HumanEmitter`.
 
