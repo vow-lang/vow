@@ -3,7 +3,7 @@
 **Scope**: `vow-types/src/check.rs` and `vow-ir/src/lower/mod.rs` — the two hottest compiler
 files in the last 120 commits (check.rs 14 touches, lower/mod.rs 10, the latter freshly churned
 by #1288 two days ago). Hot-spot inference per step 1; no path argument was given.
-**Picked**: `builtin-result-tag` — see PR (link added at step 6) and `.architecture/backlog.md`
+**Picked**: `builtin-result-tag` — see [PR #1290](https://github.com/vow-lang/vow/pull/1290) and `.architecture/backlog.md`
 **Degradations**: none. `gh` authenticated; explore sub-agent available; advisor available for
 adjudication.
 
