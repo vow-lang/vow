@@ -162,5 +162,68 @@ test-surface gain, so `builtin-result-tag` is also the stronger *deepening*.
 
 ## Design
 
-Written at step 4 (design-it-twice), after this report was first committed; the file is amended and
-re-committed with the adjudicated interface, the losing designs, and the reasoning.
+Design-it-twice: four interfaces were produced in parallel by sub-agents (A/B/C/D), then adjudicated
+against fixed criteria in order — **depth → locality → seam placement → test surface → blast radius**
+— by the advisor. All four expose the same pure test surface (`name -> tag`, no `LowerCtx`), preserve
+the `_try`+`narrow_intrinsic_target` early-path ordering, and keep the load-bearing `ends_with("_try")`
+guard (without it `_wrap`/`_sat` names would wrongly classify as `Option`, since
+`narrow_intrinsic_target` also parses those modes). There is exactly one caller, so the seam's value
+is testability and locality, not multiple adapters.
+
+### Winner — Design A (enum verdict)
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuiltinResultTag { StringHeap, VecHeap, OptionOf(Ty) }
+
+fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> { /* _try+narrow early path, then name match */ }
+
+fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
+    match builtin_result_tag(name) { /* apply ctx.inst_struct_type / inst_option_elem_ty inserts */ }
+}
+```
+
+- **Hides**: the two-phase precedence, the ~40-name table, and the narrow-target gap (u8/i32 not
+  supported → those `_try` names fall through) behind one `&str` signature.
+- **Seam placement**: the volatile axis is *name → result shape*; A puts exactly that behind the seam
+  and keeps the ctx-encoding strings (`"String"`/`"Vec"`/`"Option"`) **outside** it, in the wrapper —
+  the policy answers a typed fact, the string is merely how today's `HashMap<InstId, String>` spells
+  it. Composes the existing pure `narrow_intrinsic_target` rather than duplicating its parse.
+- **Test surface**: illegal states unrepresentable (an `Option` result always carries its element
+  `Ty`); testable with a plain `&str`.
+- **Blast radius**: one file — enum + fn + wrapper + test + comment move.
+
+### Runner-up design — C (const data table)
+
+Same pure seam as A, but the explicit-name policy is a `const &[(&str, BuiltinResultTag)]` with a
+linear-scan lookup. **Lost on blast radius after tying A on depth/locality/seam/test-surface.** Its
+one unique gain over A — an *iterable* table a future test could walk to mechanically check
+`compiler/lower.vow` parity — is out of scope for this behaviour-preserving change, so it pays blast
+radius (const table + a keys-unique test to recover the `unreachable_patterns` lint A keeps for free,
+plus ~20 repeated `Heap("String")` rows vs A's `|`-grouped arm) for leverage this PR cannot cash. The
+C sub-agent reached the same conclusion: "adopt the pure seam regardless; pick the table only if the
+parity check is on the roadmap."
+
+### Losing designs
+
+- **B — fold the tag into `vow_static_builtin_to_runtime`** (a third tuple field across ~110 rows).
+  Buys a genuinely attractive anti-drift invariant (a builtin has a heap tag **iff** its runtime
+  return is `Ty::Ptr`) and true one-row builtin adds. **Lost on seam placement and blast radius**: it
+  welds a codegen concern (extern symbol / IR return type) to a heap-tracking concern (the tag), and
+  introduces a precedence flip that is behaviour-neutral only under a name-set disjointness nothing
+  enforces — a latent hazard. It also rewrites two large existing tests, carries a catalogue-`Plain`
+  trap (a future generated heap-returning op would silently lose its tag), and weakens structural
+  parity with `compiler/lower.vow`. Its invariant is preserved as a follow-up finding below rather
+  than adopted.
+- **D — minimal tuple** `Option<(&'static str, Option<Ty>)>` carrying the ctx struct-name string
+  across the seam. Smallest wrapper. **Lost on test surface**: the tuple permits illegal states —
+  `("Option", None)` yields a half-tagged `Option` (a real `pin_to_root` bug class) that A's enum
+  makes unrepresentable — and couples the seam to the ctx representation.
+
+### Follow-up finding (not implemented; carried to the PR body)
+
+Design B surfaced a real latent invariant worth recording: every `Ty::Ptr`-returning static builtin
+in `vow_static_builtin_to_runtime` has a heap/Option tag, and no non-`Ptr` row does. A future
+table-fold, or a C-style iterable table, could **assert** this and turn the hand-maintained
+`compiler/lower.vow` sync comment into a mechanical check. Out of scope here (behaviour-preserving,
+one-file); noted for a human to schedule. No ADR proposed.
