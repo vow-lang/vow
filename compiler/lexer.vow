@@ -97,11 +97,11 @@ fn keyword_bool_val(s: String) -> i64 vow {
 // next byte cannot continue an identifier. `byte_at` yields -1 past the end of
 // the source, which `is_ident_cont`'s `requires b >= 0` rejects under
 // --mode debug, so every suffix-tail probe must go through this.
-fn suffix_ends_at(src: String, idx: i64, src_len: i64) -> bool {
+fn suffix_ends_at(src: String, idx: u64, src_len: u64) -> bool {
     idx >= src_len || !is_ident_cont(src.byte_at(idx))
 }
 
-fn try_suffix(src: String, pos: i64, src_len: i64) -> i64 {
+fn try_suffix(src: String, pos: u64, src_len: u64) -> i64 {
     if pos >= src_len { return -1; }
     let b0: i64 = src.byte_at(pos);
     if b0 == 105 {
@@ -245,13 +245,13 @@ fn wide_literal_push_digit(lo: u64, hi: u64, overflow: bool, digit: i64) -> Wide
 }
 
 fn lex(src: String) -> Vec<Token> {
-    let mut pos: i64 = 0;
-    let src_len: i64 = src.len();
+    let mut pos: u64 = 0u64;
+    let src_len: u64 = src.len() as u64;
     let tokens: Vec<Token> = Vec::new();
 
     while pos < src_len {
         let b: i64 = src.byte_at(pos);
-        let start: i64 = pos;
+        let start: i64 = pos as i64;
 
         if is_whitespace(b) {
             pos = pos + 1;
@@ -264,7 +264,7 @@ fn lex(src: String) -> Vec<Token> {
             let tag: i64 = keyword_tag(ident);
             let iv: i64 = if tag == tok_lit_bool() { keyword_bool_val(ident) } else { 0 };
             let sv: String = if tag == tok_ident() { ident } else { empty_str() };
-            let tok: Token = make_token(tag, iv, 0, sv, start, pos - start);
+            let tok: Token = make_token(tag, iv, 0, sv, start, (pos as i64) - start);
             tokens.push(tok);
         } else if is_digit(b) {
             let mut wide_lo: u64 = 0u64;
@@ -283,28 +283,28 @@ fn lex(src: String) -> Vec<Token> {
                 while pos < src_len && is_digit(src.byte_at(pos)) {
                     pos = pos + 1;
                 }
-                let text: String = string_substr(src, start, pos - start);
+                let text: String = string_substr(src, start, (pos as i64) - start);
                 let bits: u64 = parse_f64_bits(text);
-                let tok: Token = make_wide_int_token(tok_lit_float(), bits, 0u64, 0, start, pos - start);
+                let tok: Token = make_wide_int_token(tok_lit_float(), bits, 0u64, 0, start, (pos as i64) - start);
                 tokens.push(tok);
             } else {
                 let suffix: i64 = if pos < src_len { try_suffix(src, pos, src_len) } else { -1 };
                 if suffix != -1 {
                     let slen: i64 = suffix_len(suffix);
-                    pos = pos + slen;
+                    pos = pos + (slen as u64);
                     let tok: Token = if wide_overflow {
-                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, pos - start)
+                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, (pos as i64) - start)
                     } else if suffix == tok_suffix_usize() || suffix == tok_suffix_isize() {
-                        make_token(tok_invalid_int(), EC_INVALID_INT_SUFFIX(), 0, unrepresentable_suffix_msg(suffix), start, pos - start)
+                        make_token(tok_invalid_int(), EC_INVALID_INT_SUFFIX(), 0, unrepresentable_suffix_msg(suffix), start, (pos as i64) - start)
                     } else {
-                        make_wide_int_token(tok_lit_int_suffixed(), wide_lo, wide_hi, suffix, start, pos - start)
+                        make_wide_int_token(tok_lit_int_suffixed(), wide_lo, wide_hi, suffix, start, (pos as i64) - start)
                     };
                     tokens.push(tok);
                 } else {
                     let tok: Token = if wide_overflow {
-                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, pos - start)
+                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, (pos as i64) - start)
                     } else {
-                        make_wide_int_token(tok_lit_int(), wide_lo, wide_hi, 0, start, pos - start)
+                        make_wide_int_token(tok_lit_int(), wide_lo, wide_hi, 0, start, (pos as i64) - start)
                     };
                     tokens.push(tok);
                 }
@@ -332,7 +332,7 @@ fn lex(src: String) -> Vec<Token> {
             if pos < src_len {
                 pos = pos + 1;
             }
-            let tok: Token = make_token(tok_lit_string(), 0, 0, s, start, pos - start);
+            let tok: Token = make_token(tok_lit_string(), 0, 0, s, start, (pos as i64) - start);
             tokens.push(tok);
         } else if b == 43 {
             let b1: i64 = src.byte_at(pos + 1);
@@ -528,7 +528,7 @@ fn lex(src: String) -> Vec<Token> {
         }
     }
 
-    let eof: Token = make_token(tok_eof(), 0, 0, empty_str(), pos, 0);
+    let eof: Token = make_token(tok_eof(), 0, 0, empty_str(), pos as i64, 0);
     tokens.push(eof);
     tokens
 }
