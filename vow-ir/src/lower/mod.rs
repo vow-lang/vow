@@ -7956,6 +7956,52 @@ fn parse_or_default(s: String) -> i64 {
     }
 
     #[test]
+    fn pin_to_root_args_lowers_to_vec_pin() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr(
+                "pin_to_root",
+                vec![call_expr("args", vec![])],
+            ))),
+            span: sp(),
+        };
+        let vec_string_ty = Type::Generic {
+            name: "Vec".to_string(),
+            args: vec![string_ty()],
+            span: sp(),
+        };
+        let fn_def = make_fn("pin_args", vec![], vec_string_ty, body, vec![Effect::IO]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data == InstData::CallExtern("__vow_args".to_string())),
+            "expected args extern call"
+        );
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data
+                    == InstData::CallExtern("__vow_vec_pin_to_root_val".to_string())),
+            "direct pin_to_root(args()) must lower to vec pin, exercising the \
+             BuiltinResultTag::VecHeap arm of tag_builtin_result"
+        );
+    }
+
+    #[test]
     fn pin_to_root_preserves_vec_element_metadata() {
         let vec_box_ty = Type::Generic {
             name: "Vec".to_string(),
