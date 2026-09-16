@@ -6,9 +6,9 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## builtin-result-tag
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
-- **Files**: ~1 estimated
+- **Files**: ~1 estimated (actual: 1; +79/-31 in `vow-ir/src/lower/mod.rs`)
 - **Modules**: `vow-ir/src/lower/mod.rs` (`tag_builtin_result` L201-251, single caller L1808;
   seam sited beside the pure `narrow_intrinsic_target` L161-183 and the `vow_static_builtin_to_runtime`
   name table L60-159)
@@ -20,6 +20,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   untouched (behaviour-preserving, no new drift).
 - **First seen**: 2026-09-16
 - **Report**: `.architecture/reviews/2026-09-16-builtin-result-tag.md`
+- **PR**: #1290
 - **Reason**: **picked this firing** (2026-09-16). Fresh candidate — `tag_builtin_result` was hand-
   edited by #1288 two days prior (adding `proc_sample`), evidence the untested list already drifts.
   Scored leverage 4 by precedent with the landed `builtin_constructor_spec` (same shape: one dispatch
