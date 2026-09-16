@@ -4,11 +4,35 @@ Persisted candidate memory for the `pm-deepen` routine. Statuses: proposed | in-
 landed | dropped | rejected. Never delete rows — `landed`/`dropped`/`rejected` are the memory
 that stops the next firing re-deriving them. See `.architecture/reviews/` for the scored reports.
 
-## question-operator-verdict
+## builtin-result-tag
 
 - **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
-- **Files**: ~1 estimated
+- **Files**: ~1 estimated (actual: 1; +79/-31 in `vow-ir/src/lower/mod.rs`)
+- **Modules**: `vow-ir/src/lower/mod.rs` (`tag_builtin_result` L201-251, single caller L1808;
+  seam sited beside the pure `narrow_intrinsic_target` L161-183 and the `vow_static_builtin_to_runtime`
+  name table L60-159)
+- **Summary**: extract the ~40-name builtin-result classification (String heap / Vec heap /
+  `Option<elem_ty>`) into a pure `builtin_result_tag(name) -> Option<BuiltinResultTag>`, mirroring the
+  landed `builtin_constructor_spec` seam; `tag_builtin_result` keeps only the `ctx.inst_struct_type`
+  / `inst_option_elem_ty` inserts. Preserves the `_try`+`narrow_intrinsic_target` early-path ordering
+  (the `i16_to_u8_try` / `i64_to_i32_try` fall-through traps). Rust-only; `compiler/lower.vow`
+  untouched (behaviour-preserving, no new drift).
+- **First seen**: 2026-09-16
+- **Report**: `.architecture/reviews/2026-09-16-builtin-result-tag.md`
+- **PR**: #1290
+- **Reason**: **picked this firing** (2026-09-16). Fresh candidate — `tag_builtin_result` was hand-
+  edited by #1288 two days prior (adding `proc_sample`), evidence the untested list already drifts.
+  Scored leverage 4 by precedent with the landed `builtin_constructor_spec` (same shape: one dispatch
+  site, name-keyed table, pure spec output). Tied `call-argument-coercion-action` at 22; won the
+  deterministic tie-break on most-recently-touched file (`lower/mod.rs` #1288 > `cranelift_backend.rs`
+  #1279). Runner-up *candidate* by score `coerce-context-argument-epilogue` (21, within 1 pt).
+
+## question-operator-verdict
+
+- **Status**: landed
+- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Files**: ~1 estimated (actual: 1)
 - **Modules**: `vow-types/src/check.rs` (`ExprKind::Question` arm of `check_expr_inner`, ~L2776-2830;
   seam sited beside `cast_verdict` L668 / `same_operand_ty` L808)
 - **Summary**: extract the inline 5-way `?`-operator payload policy (Option-ok → unwrap arg0;
@@ -19,7 +43,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   stay at the call site.
 - **First seen**: 2026-09-14
 - **Report**: `.architecture/reviews/2026-09-14-question-operator-verdict.md`
-- **PR**: #1281
+- **PR**: #1281 (merged 2026-09-14; reconciled 2026-09-16 via `gh pr view 1281` → MERGED)
 - **Reason**: **picked this firing** (2026-09-14). Fresh candidate surfaced by the step-1 scan; not
   previously carded despite heavy `check.rs` coverage (prior firings carded the cast/operator/method
   arms, never the `?` arm). Scored leverage 4, matching the landed single-arm pure-verdict seams
@@ -129,29 +153,33 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 ## comparison-operand-verdict
 
 - **Status**: proposed
-- **Score**: 20/25 (leverage 3, locality 4, blast radius 1, heat 5)
+- **Score**: 18/25 (leverage 2, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated (~52 lines)
-- **Modules**: `vow-types/src/check.rs` (`Eq|Ne|Lt|Le|Gt|Ge` sub-arm, ~L1898-1950)
+- **Modules**: `vow-types/src/check.rs` (`Eq|Ne|Lt|Le|Gt|Ge` sub-arm, now ~L2028-2080)
 - **Summary**: fold the comparison type-mismatch predicate + zero-comparison-tautology (with the
   `widened_to` split) into a pure `comparison_verdict(lhs, rhs, never_negative) -> ComparisonVerdict`;
   caller pre-computes `never_negative` from the existing `zero_comparison_verdict` +
   `never_negative_operand` helpers, message/hint strings stay at the call site.
 - **First seen**: 2026-09-11
-- **Reason**: leverage 3 — the tautology half is already pure/testable, so the new testable surface is
-  mostly the mismatch predicate + mismatch-over-tautology priority; one call site.
+- **Reason**: **rescored 20→18** on 2026-09-16 (leverage 3→2): the step-1 explore pass found the
+  tautology half is already extracted (`zero_comparison_verdict` L565, `never_negative_operand`
+  L1927) and the composite verdict cannot be fully pure — `never_negative_operand` reads
+  `self.nonneg_casts` — so the only un-extracted pure piece is a one-line mismatch predicate.
+  Partially resolved by prior seams. Eligible but low; not vetoed.
 
 ## builtin-function-spec
 
 - **Status**: proposed
-- **Score**: 20/25 (leverage 3, locality 4, blast radius 1, heat 5)
+- **Score**: 18/25 (leverage 2, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated (~70 lines)
 - **Modules**: `vow-types/src/check.rs` (`pin_to_root`, `string_matches_literal_at` branches of the
   `ExprKind::Call` arm, ~L2082-2151)
 - **Summary**: table the two free-function builtins into `builtin_function_spec(name) -> Option<..>`,
   mirroring `builtin-constructor-spec`, generic arg loop + static-literal emit stay at the call site.
 - **First seen**: 2026-09-11
-- **Reason**: leverage 3 — only two builtins, both non-uniform (`pin_to_root` returns its arg type,
-  `string_matches_literal_at` has a static-literal rule), so the spec is not a clean table; thin.
+- **Reason**: **rescored 20→18** on 2026-09-16 (leverage 3→2): the step-1 explore pass confirmed the
+  extraction "mostly moves" — only two bespoke builtins, each with its own per-arg checking that
+  cannot leave the `&mut self` call site, so the pure spec mostly relabels. Thin.
 
 ## oversized-chunk-path-predicate
 
@@ -225,12 +253,15 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 ## negation-verdict
 
 - **Status**: proposed
-- **Score**: 18/25 (leverage 2, locality 4, blast radius 1, heat 5)
+- **Score**: 20/25 (leverage 3, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated
-- **Modules**: `vow-types/src/check.rs` (`UnaryOp::Neg` arm, ~L1952-1974)
+- **Modules**: `vow-types/src/check.rs` (`UnaryOp::Neg` arm, now ~L2161-2183)
 - **Summary**: extract the 3-way `{Unsigned, NonNumeric, Ok}` negation decision into a pure verdict,
-  leaving the two emits at the call site.
+  leaving the two emits and the literal-folding (L2138-2158) at the call site.
 - **First seen**: 2026-09-03
+- **Reason**: **rescored 18→20** on 2026-09-16 (leverage 2→3): the step-1 explore pass confirmed the
+  arm is a *total pure function of `operand_ty`*, testable with zero `&mut self` — a clean textbook
+  seam, the strongest runner-up by deepening quality this firing.
 
 ## builtin-receiver-kind
 
@@ -288,7 +319,8 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   `hidden_region_count` / `hidden_region_for_store_target` seams.
 - **First seen**: 2026-08-31
 - **Reason**: Too large to automate — blast radius 4, crosses a crate/tier seam and touches codegen
-  output. A human should schedule it. Re-checked 2026-09-03: still large. Re-checked 2026-09-11: still large.
+  output. A human should schedule it. Re-checked 2026-09-03: still large. Re-checked 2026-09-11: still
+  large. Re-checked 2026-09-16: still large.
 
 ## esbmc-ce-description-heuristic
 
@@ -300,7 +332,8 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 - **First seen**: 2026-08-31
 - **Reason**: Inert — the only caller destructures `Failed(_)` and discards the description, so
   extraction deepens nothing observable. Latent bugs exist but are unreachable. Re-checked 2026-09-03:
-  caller unchanged. Re-checked 2026-09-11: caller unchanged. Do not re-surface.
+  caller unchanged. Re-checked 2026-09-11: caller unchanged. Re-checked 2026-09-16: caller unchanged.
+  Do not re-surface.
 
 ## solver-classify-function
 
@@ -311,4 +344,4 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 - **Summary**: solver-strategy classification for a function.
 - **First seen**: 2026-08-31
 - **Reason**: Already a pure, unit-tested seam (`test_classify_*`). No shallowness to remove.
-  Re-checked 2026-09-03. Re-checked 2026-09-11.
+  Re-checked 2026-09-03. Re-checked 2026-09-11. Re-checked 2026-09-16.

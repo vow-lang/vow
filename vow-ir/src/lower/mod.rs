@@ -196,15 +196,22 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(String, Ty)> {
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuiltinResultTag {
+    StringHeap,
+    VecHeap,
+    OptionOf(Ty),
+}
+
 // Keep this list in sync with the builtin result tags in compiler/lower.vow.
-// pin_to_root depends on these heap tags for direct builtin call results.
-fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
+fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
+    // The narrowing _try early path runs before the explicit table: for targets i8/i16/u16/u32 the
+    // element type is recoverable from the name. The ends_with("_try") guard is load-bearing —
+    // narrow_intrinsic_target also parses _wrap/_sat, which return a plain integer, not an Option.
     if name.ends_with("_try")
         && let Some(target) = narrow_intrinsic_target(name)
     {
-        ctx.inst_struct_type.insert(result, "Option".to_string());
-        ctx.inst_option_elem_ty.insert(result, target);
-        return;
+        return Some(BuiltinResultTag::OptionOf(target));
     }
     match name {
         "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
@@ -212,41 +219,41 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
         | "string_join" | "int_to_string" | "uint_to_string" | "i64_to_string" | "hex_encode"
         | "format_f64_bits" | "process_get_stdout" | "process_get_stderr"
         | "process_stdout_for" | "process_stderr_for" | "proc_sample" => {
-            ctx.inst_struct_type.insert(result, "String".to_string());
+            Some(BuiltinResultTag::StringHeap)
         }
         "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
-            ctx.inst_struct_type.insert(result, "Vec".to_string());
+            Some(BuiltinResultTag::VecHeap)
         }
-        "parse_i8" => {
-            ctx.inst_struct_type.insert(result, "Option".to_string());
-            ctx.inst_option_elem_ty.insert(result, Ty::I8);
-        }
-        "parse_i16" => {
-            ctx.inst_struct_type.insert(result, "Option".to_string());
-            ctx.inst_option_elem_ty.insert(result, Ty::I16);
-        }
-        "parse_u16" => {
-            ctx.inst_struct_type.insert(result, "Option".to_string());
-            ctx.inst_option_elem_ty.insert(result, Ty::U16);
-        }
-        "parse_u32" => {
-            ctx.inst_struct_type.insert(result, "Option".to_string());
-            ctx.inst_option_elem_ty.insert(result, Ty::U32);
-        }
+        "parse_i8" => Some(BuiltinResultTag::OptionOf(Ty::I8)),
+        "parse_i16" => Some(BuiltinResultTag::OptionOf(Ty::I16)),
+        "parse_u16" => Some(BuiltinResultTag::OptionOf(Ty::U16)),
+        "parse_u32" => Some(BuiltinResultTag::OptionOf(Ty::U32)),
         "parse_u8" | "i16_to_u8_try" | "i32_to_u8_try" | "i64_to_u8_try" | "i128_to_u8_try"
         | "u16_to_u8_try" | "u32_to_u8_try" | "u64_to_u8_try" | "u128_to_u8_try" => {
-            ctx.inst_struct_type.insert(result, "Option".to_string());
-            ctx.inst_option_elem_ty.insert(result, Ty::U8);
+            Some(BuiltinResultTag::OptionOf(Ty::U8))
         }
         "parse_i32" | "i64_to_i32_try" | "u32_to_i32_try" | "u64_to_i32_try" => {
-            ctx.inst_struct_type.insert(result, "Option".to_string());
-            ctx.inst_option_elem_ty.insert(result, Ty::I32);
+            Some(BuiltinResultTag::OptionOf(Ty::I32))
         }
-        "parse_i64" => {
-            ctx.inst_struct_type.insert(result, "Option".to_string());
-            ctx.inst_option_elem_ty.insert(result, Ty::I64);
+        "parse_i64" => Some(BuiltinResultTag::OptionOf(Ty::I64)),
+        _ => None,
+    }
+}
+
+// pin_to_root depends on these heap tags for direct builtin call results.
+fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
+    match builtin_result_tag(name) {
+        Some(BuiltinResultTag::StringHeap) => {
+            ctx.inst_struct_type.insert(result, "String".to_string());
         }
-        _ => {}
+        Some(BuiltinResultTag::VecHeap) => {
+            ctx.inst_struct_type.insert(result, "Vec".to_string());
+        }
+        Some(BuiltinResultTag::OptionOf(target)) => {
+            ctx.inst_struct_type.insert(result, "Option".to_string());
+            ctx.inst_option_elem_ty.insert(result, target);
+        }
+        None => {}
     }
 }
 
@@ -1764,7 +1771,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     return result;
                 }
                 // pin_to_root relies on lowering-time String/Vec tags. Keep
-                // tag_builtin_result in sync for heap-returning builtins, or a
+                // builtin_result_tag in sync for heap-returning builtins, or a
                 // direct pin_to_root(builtin_call()) becomes a no-op here.
                 return source_id;
             }
@@ -5402,6 +5409,47 @@ mod tests {
         Span::new(0, 1)
     }
 
+    #[test]
+    fn builtin_result_tag_classifies_names() {
+        use BuiltinResultTag::{OptionOf, StringHeap, VecHeap};
+        // Explicit heap struct-type arms (representatives, incl. the #1288 proc_sample addition).
+        assert_eq!(builtin_result_tag("fs_read"), Some(StringHeap));
+        assert_eq!(builtin_result_tag("proc_sample"), Some(StringHeap));
+        // Contains "_to_" but is not a narrowing name: must reach the String arm, not the early path.
+        assert_eq!(builtin_result_tag("i64_to_string"), Some(StringHeap));
+        assert_eq!(builtin_result_tag("args"), Some(VecHeap));
+        assert_eq!(builtin_result_tag("string_split"), Some(VecHeap));
+        // Explicit Option parse_* arms.
+        assert_eq!(builtin_result_tag("parse_i8"), Some(OptionOf(Ty::I8)));
+        assert_eq!(builtin_result_tag("parse_u32"), Some(OptionOf(Ty::U32)));
+        assert_eq!(builtin_result_tag("parse_i64"), Some(OptionOf(Ty::I64)));
+        // Narrowing _try early path: targets i8/i16/u16/u32 are recoverable from the name, so these
+        // are NOT in the explicit match and must resolve via narrow_intrinsic_target.
+        assert_eq!(builtin_result_tag("i16_to_i8_try"), Some(OptionOf(Ty::I8)));
+        assert_eq!(
+            builtin_result_tag("u64_to_u32_try"),
+            Some(OptionOf(Ty::U32))
+        );
+        assert_eq!(
+            builtin_result_tag("i32_to_i16_try"),
+            Some(OptionOf(Ty::I16))
+        );
+        // Fall-through traps: u8/i32 are NOT narrow_intrinsic_target targets, so these _try names
+        // bypass the early path and must hit the explicit arms.
+        assert_eq!(builtin_result_tag("i16_to_u8_try"), Some(OptionOf(Ty::U8)));
+        assert_eq!(builtin_result_tag("i128_to_u8_try"), Some(OptionOf(Ty::U8)));
+        assert_eq!(
+            builtin_result_tag("i64_to_i32_try"),
+            Some(OptionOf(Ty::I32))
+        );
+        // Guard: narrow_intrinsic_target also parses _wrap/_sat, but those return a plain integer,
+        // not an Option; the ends_with("_try") guard is load-bearing in keeping them untagged.
+        assert_eq!(builtin_result_tag("i16_to_i8_wrap"), None);
+        assert_eq!(builtin_result_tag("i32_to_i8_sat"), None);
+        // Unknown builtin.
+        assert_eq!(builtin_result_tag("definitely_not_a_builtin"), None);
+    }
+
     fn unit_ty() -> Type {
         Type::Unit { span: sp() }
     }
@@ -7904,6 +7952,52 @@ fn parse_or_default(s: String) -> i64 {
                 .any(|inst| inst.data
                     == InstData::CallExtern("__vow_string_pin_to_root".to_string())),
             "direct pin_to_root(proc_sample()) must lower to string pin"
+        );
+    }
+
+    #[test]
+    fn pin_to_root_args_lowers_to_vec_pin() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr(
+                "pin_to_root",
+                vec![call_expr("args", vec![])],
+            ))),
+            span: sp(),
+        };
+        let vec_string_ty = Type::Generic {
+            name: "Vec".to_string(),
+            args: vec![string_ty()],
+            span: sp(),
+        };
+        let fn_def = make_fn("pin_args", vec![], vec_string_ty, body, vec![Effect::IO]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data == InstData::CallExtern("__vow_args".to_string())),
+            "expected args extern call"
+        );
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data
+                    == InstData::CallExtern("__vow_vec_pin_to_root_val".to_string())),
+            "direct pin_to_root(args()) must lower to vec pin, exercising the \
+             BuiltinResultTag::VecHeap arm of tag_builtin_result"
         );
     }
 
