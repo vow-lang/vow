@@ -3654,165 +3654,155 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 if let Some(tag) = result_tag {
                     ctx.inst_struct_type.insert(result, tag.to_string());
                 }
-                result
-            } else {
-                match (recv, method.as_str()) {
-                    (Some("String"), "substring") => {
-                        let start_id = args
-                            .first()
-                            .map(|e| lower_consumed_expr(ctx, e))
-                            .unwrap_or_else(|| {
-                                ctx.emit(
-                                    Opcode::ConstI64,
-                                    Ty::I64,
-                                    vec![],
-                                    InstData::ConstI64(0),
-                                    span,
-                                )
-                            });
-                        let end_id = args
-                            .get(1)
-                            .map(|e| lower_consumed_expr(ctx, e))
-                            .unwrap_or_else(|| {
-                                ctx.emit(
-                                    Opcode::ConstI64,
-                                    Ty::I64,
-                                    vec![],
-                                    InstData::ConstI64(0),
-                                    span,
-                                )
-                            });
-                        let result = ctx.emit(
-                            Opcode::Call,
-                            Ty::Ptr,
-                            vec![recv_id, start_id, end_id],
-                            InstData::CallExtern("__vow_string_substring".to_string()),
-                            span,
-                        );
-                        ctx.inst_struct_type.insert(result, "String".to_string());
-                        result
+                return result;
+            }
+            match (recv, method.as_str()) {
+                (Some("String"), "substring") => {
+                    let start_id = args
+                        .first()
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(
+                                Opcode::ConstI64,
+                                Ty::I64,
+                                vec![],
+                                InstData::ConstI64(0),
+                                span,
+                            )
+                        });
+                    let end_id = args
+                        .get(1)
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(
+                                Opcode::ConstI64,
+                                Ty::I64,
+                                vec![],
+                                InstData::ConstI64(0),
+                                span,
+                            )
+                        });
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![recv_id, start_id, end_id],
+                        InstData::CallExtern("__vow_string_substring".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "String".to_string());
+                    result
+                }
+                (Some("BTreeMap"), "insert") => {
+                    let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
+                    let k_id = args
+                        .first()
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(ctx, e, key_ast_ty.as_ref())
+                        })
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let v_id = args
+                        .get(1)
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(
+                                ctx,
+                                e,
+                                value_ast_ty.as_ref(),
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![recv_id, k_id, v_id],
+                        InstData::CallExtern("__vow_btreemap_insert".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "Option".to_string());
+                    result
+                }
+                (Some("HashMap"), "insert") => {
+                    let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
+                    let k_id = args
+                        .first()
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(ctx, e, key_ast_ty.as_ref())
+                        })
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let v_id = args
+                        .get(1)
+                        .map(|e| {
+                            lower_consumed_expr_with_expected_ast_type(
+                                ctx,
+                                e,
+                                value_ast_ty.as_ref(),
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![recv_id, k_id, v_id],
+                        InstData::CallExtern("__vow_map_insert".to_string()),
+                        span,
+                    )
+                }
+                (_, "push") => {
+                    let elem_ty = ctx
+                        .inst_vec_elem_types
+                        .get(&recv_id)
+                        .and_then(|path| path.first())
+                        .filter(|name| is_scalar_field_type_name(name))
+                        .map(|name| scalar_ty_for_field_type_name(name))
+                        .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
+                    let elem_id = args
+                        .first()
+                        .map(|e| {
+                            if let Some(ty) = elem_ty {
+                                record_wide_control_flow_context(ctx, e, ty);
+                            }
+                            let original = lower_consumed_expr(ctx, e);
+                            elem_ty
+                                .map(|ty| lower_narrow_literal(ctx, e, original, ty))
+                                .unwrap_or(original)
+                        })
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![recv_id, elem_id],
+                        InstData::CallExtern("__vow_vec_push_val".to_string()),
+                        span,
+                    )
+                }
+                // Result's empty variant is `Err` (tag 1); Option's is `None`
+                // (tag 0). The struct tag alone is not enough — parameters carry
+                // only a declared AST type — so consult both sources. The type
+                // checker admits `unwrap` on nothing else, so anything neither
+                // source calls a Result is an Option.
+                (recv, "unwrap") => {
+                    let declared = ctx
+                        .inst_declared_ast_types
+                        .get(&recv_id)
+                        .cloned()
+                        .and_then(|ast_ty| non_scalar_type_tag(&ast_ty, &ctx.type_aliases));
+                    let is_result = recv == Some("Result") || declared.as_deref() == Some("Result");
+                    lower_unwrap(ctx, expr, recv_id, i64::from(is_result), span)
+                }
+                _ => {
+                    for a in args {
+                        lower_consumed_expr(ctx, a);
                     }
-                    (Some("BTreeMap"), "insert") => {
-                        let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
-                        let k_id = args
-                            .first()
-                            .map(|e| {
-                                lower_consumed_expr_with_expected_ast_type(
-                                    ctx,
-                                    e,
-                                    key_ast_ty.as_ref(),
-                                )
-                            })
-                            .unwrap_or_else(|| {
-                                ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                            });
-                        let v_id = args
-                            .get(1)
-                            .map(|e| {
-                                lower_consumed_expr_with_expected_ast_type(
-                                    ctx,
-                                    e,
-                                    value_ast_ty.as_ref(),
-                                )
-                            })
-                            .unwrap_or_else(|| {
-                                ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                            });
-                        let result = ctx.emit(
-                            Opcode::Call,
-                            Ty::Ptr,
-                            vec![recv_id, k_id, v_id],
-                            InstData::CallExtern("__vow_btreemap_insert".to_string()),
-                            span,
-                        );
-                        ctx.inst_struct_type.insert(result, "Option".to_string());
-                        result
-                    }
-                    (Some("HashMap"), "insert") => {
-                        let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
-                        let k_id = args
-                            .first()
-                            .map(|e| {
-                                lower_consumed_expr_with_expected_ast_type(
-                                    ctx,
-                                    e,
-                                    key_ast_ty.as_ref(),
-                                )
-                            })
-                            .unwrap_or_else(|| {
-                                ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                            });
-                        let v_id = args
-                            .get(1)
-                            .map(|e| {
-                                lower_consumed_expr_with_expected_ast_type(
-                                    ctx,
-                                    e,
-                                    value_ast_ty.as_ref(),
-                                )
-                            })
-                            .unwrap_or_else(|| {
-                                ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                            });
-                        ctx.emit(
-                            Opcode::Call,
-                            Ty::Unit,
-                            vec![recv_id, k_id, v_id],
-                            InstData::CallExtern("__vow_map_insert".to_string()),
-                            span,
-                        )
-                    }
-                    (_, "push") => {
-                        let elem_ty = ctx
-                            .inst_vec_elem_types
-                            .get(&recv_id)
-                            .and_then(|path| path.first())
-                            .filter(|name| is_scalar_field_type_name(name))
-                            .map(|name| scalar_ty_for_field_type_name(name))
-                            .filter(|ty| matches!(ty, Ty::I128 | Ty::U128));
-                        let elem_id = args
-                            .first()
-                            .map(|e| {
-                                if let Some(ty) = elem_ty {
-                                    record_wide_control_flow_context(ctx, e, ty);
-                                }
-                                let original = lower_consumed_expr(ctx, e);
-                                elem_ty
-                                    .map(|ty| lower_narrow_literal(ctx, e, original, ty))
-                                    .unwrap_or(original)
-                            })
-                            .unwrap_or_else(|| {
-                                ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                            });
-                        ctx.emit(
-                            Opcode::Call,
-                            Ty::Unit,
-                            vec![recv_id, elem_id],
-                            InstData::CallExtern("__vow_vec_push_val".to_string()),
-                            span,
-                        )
-                    }
-                    // Result's empty variant is `Err` (tag 1); Option's is `None`
-                    // (tag 0). The struct tag alone is not enough — parameters carry
-                    // only a declared AST type — so consult both sources. The type
-                    // checker admits `unwrap` on nothing else, so anything neither
-                    // source calls a Result is an Option.
-                    (recv, "unwrap") => {
-                        let declared = ctx
-                            .inst_declared_ast_types
-                            .get(&recv_id)
-                            .cloned()
-                            .and_then(|ast_ty| non_scalar_type_tag(&ast_ty, &ctx.type_aliases));
-                        let is_result =
-                            recv == Some("Result") || declared.as_deref() == Some("Result");
-                        lower_unwrap(ctx, expr, recv_id, i64::from(is_result), span)
-                    }
-                    _ => {
-                        for a in args {
-                            lower_consumed_expr(ctx, a);
-                        }
-                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                    }
+                    ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                 }
             }
         }
