@@ -6,11 +6,13 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## builtin-method-spec
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
-- **Files**: ~1 estimated. **Diff estimate: ~250 lines removed / ~120 added (net ~ −130), plus ~60
-  lines of new unit tests.** The file count alone cannot catch a runaway one-file refactor, so step 5
-  watches the line estimate too.
+- **Files**: ~1 estimated (**actual: 1**). Diff estimate was ~250 removed / ~120 added plus ~60 test
+  lines; **actual 430 added / 384 deleted in 1 file, net +46**. About 262 of that churn is the five
+  kept arms re-indented one level into the new `else` block, counted on both sides; excluding it,
+  real churn is ~552 against ~430 estimated — a 28% overshoot, inside the 2x bail-out threshold, and
+  driven by the table growing from an estimated 18 rows to 20.
 - **Modules**: `vow-ir/src/lower/mod.rs:3519-3902` — the `match (recv_struct, method)` in the
   `ExprKind::MethodCall` arm of `lower_expr` (`:1405`). Seam sited beside the landed `builtin_result_tag`
   (`:199-259`) and the `vow_static_builtin_to_runtime` name table (`:60-159`).
@@ -24,6 +26,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   behaviour-preserving, so no new drift is introduced — same precedent as `builtin-result-tag`.
 - **First seen**: 2026-09-18
 - **Report**: `.architecture/reviews/2026-09-18-builtin-method-spec.md`
+- **PR**: #1299
 - **Reason**: **picked this firing** (2026-09-18). Fresh candidate; the arm had never been carded
   despite heavy `lower/mod.rs` coverage (prior firings carded `unwrap-payload-ty` and the landed
   `builtin-result-tag`, never the method-dispatch table). Leverage 4 by precedent with the landed
@@ -41,6 +44,16 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   (`:3772`) returns a bare `Ty::I64` and tags nothing. **No overlap with `builtin_result_tag`**: that
   seam is keyed on free-function builtin names and dispatches only at `:1815`; `BTreeMap::get`'s bare
   `"Option"` tag (no element type) is not expressible as `BuiltinResultTag::OptionOf(Ty)`.
+  Adjudicated **design A** (minimal surface: one enum + a 4-tuple) over **C** (shape-variant enum,
+  the runner-up design), **B** (uniform spec, 24 arms) and **D** (single adapter, spec private). A
+  and C tied on depth, seam placement and test surface; A won on blast radius. A correction during
+  adjudication changed the winner: the first pass ranked C above A on depth, believing only C could
+  table `parse_i64`/`parse_u64` — A's result tag is the fourth tuple slot, independent of
+  `MethodArg`, so A tables them too, reaching 20 of 25 arms.
+  **Landed:** IR identity verified differentially against `HEAD~1` over `tests/run/` — 212 identical,
+  0 different, 1 skipped for a type error pre-existing on both compilers. Gate: build, clippy
+  `-D warnings`, 1676 tests / 0 failures, fmt — all green. `clippy::type_complexity` does **not**
+  fire on the 4-tuple, settling design A's one open question empirically.
 
 ## builtin-result-tag
 
