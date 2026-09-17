@@ -27,7 +27,7 @@ section ("IR lowering", "instruction-value uniformity"). Architecture terms are 
 ### builtin-method-spec — table the uniform builtin-method lowering arms · Strong · score 22/25
 
 - **Files**: `vow-ir/src/lower/mod.rs:3519-3902` (the `match (recv_struct, method)` in the
-  `ExprKind::MethodCall` arm of `lower_expr_inner`); seam sited beside the landed
+  `ExprKind::MethodCall` arm of `lower_expr` (`:1405`); seam sited beside the landed
   `builtin_result_tag` (L199-259) and `vow_static_builtin_to_runtime` (L60-159) tables.
   **File-count estimate: 1.** **Diff estimate: ~250 lines removed, ~120 added (net ≈ −130), plus
   ~60 lines of new unit tests.** Step 5 watches the real diff against these numbers, not against the
@@ -107,7 +107,7 @@ section ("IR lowering", "instruction-value uniformity"). Architecture terms are 
 
 ```mermaid
 graph LR
-  D[lower_expr_inner<br/>MethodCall arm] --> A1[String::len ...emit]
+  D[lower_expr<br/>MethodCall arm] --> A1[String::len ...emit]
   D --> A2[String::eq ...emit]
   D --> A3[String::contains ...emit]
   D --> A4[BTreeMap::get ...emit]
@@ -117,7 +117,7 @@ graph LR
 
 ```mermaid
 graph LR
-  D[lower_expr_inner<br/>MethodCall arm] --> S[builtin_method_spec]
+  D[lower_expr<br/>MethodCall arm] --> S[builtin_method_spec]
   D --> AP[apply_method_spec]
   S -.-> T[18-row table:<br/>symbol, ret_ty, arity,<br/>consume, fallback, tag]
   AP -.-> E[ctx.emit + inst_struct_type]
@@ -443,4 +443,141 @@ IR-level diff to catch it — which is why `arena-variant-rule` is ranked below 
 
 ## Design
 
-Written at step 4 — see below.
+Produced with `codebase-design`'s **design-it-twice** pattern: four sub-agents in parallel, each
+briefed to commit fully to one philosophy. All four were written here before adjudication.
+
+**Correction applied during the design pass**: the enclosing function is `lower_expr`
+(`vow-ir/src/lower/mod.rs:1405`), not `lower_expr_inner`. Fixed above and in the backlog.
+
+**Fact that moved the design**: `String::parse_i64` (`:3642-3652`) and `String::parse_u64`
+(`:3653-3663`) are *zero-argument* calls whose results are tagged `inst_struct_type = "Option"`. A
+design that hangs the result tag off the one-argument row cannot express them; a design that factors
+the result orthogonally to arity tables them as ordinary rows. That is **20 of 25 arms**, not 18 —
+the candidate card's estimate was conservative.
+
+### Design A — minimal surface
+
+`enum MethodArg { Absent, Consumed, ConsumedOrZero, Unconsumed }` plus
+`fn builtin_method_spec(recv, method) -> Option<(&'static str, Ty, MethodArg, Option<&'static str>)>`.
+Two names total, one line per row; the applier is ~26 lines inlined at the call site, not a function.
+
+*Hides*: the emission recipe, the missing-argument protocol, the consumption decision, the
+result-tagging protocol, dispatch precedence, symbol spelling.
+*Dependencies*: two `&str` in, four `Copy` values out. Nothing else crosses.
+*Trade-offs (its own account)*: the 4-tuple is positional and sits near `clippy::type_complexity`'s
+budget — a fifth slot fails `-D warnings`, so the next asymmetric method forces a migration to a
+struct. `MethodArg` conflates arity, consumption and fallback onto one axis, so it cannot express a
+combination that does not already exist. The inlined applier ships three visibly near-duplicate
+`operands.push` branches that a reviewer will want to fold — and folding them re-hides the
+asymmetries the table exists to expose. Tables 18 arms: `parse_i64`/`parse_u64` are unreachable,
+because `Absent` carries no room for a result tag.
+
+### Design B — maximum flexibility / uniform spec
+
+Six named types (`ArgLowering` with 5 variants, `MissingArg`, `ArgSpec`, `ResultTag`, `ResultSpec`,
+`MethodSpec`) over a positional `args: &'static [ArgSpec]`, plus an applier, three private helpers,
+six shorthand constants and two `const fn` constructors. Tables **24 of 25 arms** — everything but
+`unwrap` — by giving the spec a vocabulary for map-key / map-value / vec-element argument lowering.
+
+*Hides*: the most of any design, including `known_map_argument_ast_types` and the `Vec::push`
+wide-literal prelude.
+*Trade-offs (its own account, and unusually candid)*: **~115 lines of machinery must be read before
+the first row can be written**, against ~35 for a narrow spec. Four of five `ArgLowering` variants
+serve one or two rows each — *"a variant with one user is a renamed `if`"* — and
+`ConsumedAsVecElem` is named for a shape but carries `push`-specific knowledge. The type system does
+not bound the table: four arguments on a one-argument extern compiles. Worst, it *confers intent on
+accidents* — `HashMap::insert`'s `ConstUnit` fallback for a missing key is inherited nonsense that
+reads as a decision once tabled. It also widens the shape gap with `compiler/lower.vow` more than
+any other design, making the recurring equivalence review harder.
+
+### Design C — shape-variant enum (make illegal states unrepresentable)
+
+```rust
+enum ArgMode { Consumed, Borrowed }
+enum MissingArg { Unit, ZeroI64 }
+enum MethodResult { Scalar(Ty), TaggedPtr(&'static str) }
+enum MethodLowering {
+    NoArg  { symbol: &'static str, result: MethodResult },
+    OneArg { symbol: &'static str, result: MethodResult, mode: ArgMode, missing: MissingArg },
+}
+fn method_lowering(recv_struct: Option<&str>, method: &str) -> Option<MethodLowering>
+fn emit_method_lowering(ctx, lowering, recv_id, args, span) -> InstId
+```
+
+Two tiers — `typed_receiver_lowering` then `.or_else(any_receiver_lowering)` — making the
+receiver-specific-before-Vec precedence *structural* rather than positional.
+
+*Hides*: the emission ritual, the missing-argument dance, which lowering entry point to call, that a
+`Ty::Ptr` result needs a `pin_to_root` tag, that the Vec methods are a fallthrough tier, and — in a
+doc comment — that `tag_builtin_result` is the **wrong** helper here, because its `OptionOf` arm
+also writes `inst_option_elem_ty`, which this call site has never written.
+*Deliberately does not hide*: the three asymmetries are each a named variant occurring exactly once
+(`Borrowed`, `ZeroI64`, `TaggedPtr`), so `grep -c` becomes a correctness argument.
+*Trade-offs (its own account)*: ~6 lines per row instead of 1, roughly +60 lines across the table —
+a reader scanning for one method pays for that. Four of five nonsense classes are excluded; the leak
+is `Scalar(Ty::Ptr)`, an untagged heap handle, still writable. `emit_method_lowering` re-admits at
+the interpreter boundary what the enum excluded at the table (it takes `args` even for `NoArg`).
+Arm-order safety is asserted by test, not by type.
+
+### Design D — optimised for the most common caller (single adapter)
+
+A new `vow-ir/src/lower/builtin_method.rs` exporting exactly one item,
+`pub(super) fn lower_uniform_builtin_method(ctx, recv_struct, method, args, recv_id, span) ->
+Option<InstId>`. The spec table and its types are private to that module; the call site becomes
+`if let Some(id) = ... { id } else { match ... /* inline arms */ }`.
+
+*Hides*: that a spec table exists at all.
+*Trade-offs (its own account)*: **`&mut LowerCtx` on the interface means the interface is not the
+test surface.** It tests *past* its own interface, against a private `uniform_method`. It argues
+correctly that `codebase-design` licenses internal seams — but that is a license, not an
+endorsement, and a design that publishes the spec gets the property for free. Six parameters, one
+below `clippy::too_many_arguments`. And it *hides something a reviewer wants visible*: the three
+asymmetries are the strongest evidence this code has drifted, and D moves them behind a privacy
+wall.
+
+### Adjudication
+
+Criteria, in the order `pm-deepen` fixes them: **depth**, **locality**, **seam placement**, **test
+surface**, **blast radius**.
+
+**Winner: Design C.**
+
+1. **Depth.** C tables 20 of 25 arms against A's 18, because factoring `MethodResult` orthogonally
+   to arity is what reaches `parse_i64`/`parse_u64`. B tables 24 but pays ~115 lines of vocabulary
+   for the last four, and its own report concedes four of five `ArgLowering` variants have one or
+   two users. Depth is behaviour per unit of interface *learned*; B adds interface faster than it
+   adds behaviour. C's four small types are each load-bearing.
+2. **Locality.** C and B concentrate best. C's two-tier `method_lowering` puts the
+   receiver-precedence rule in one `.or_else`, where A and D leave it as arm ordering a reader must
+   notice and preserve.
+3. **Seam placement.** Decisive against B and D. C's seam is where something actually varies: the
+   `(receiver, method)` → shape mapping. B's seam is drawn around argument-lowering *protocols*,
+   four of which have one adapter each — by `codebase-design`'s own rule, *one adapter is a
+   hypothetical seam*. D draws its seam around the whole adapter, which is defensible, but then the
+   thing that actually varies sits behind a privacy wall.
+4. **Test surface.** Decisive against D. *"The interface is the test surface"* — D's interface takes
+   `&mut LowerCtx`, so its valuable assertions are made against a private function. A, B and C all
+   expose a pure two-`&str` lookup. C additionally makes *whole-table* properties assertable:
+   "`contains` is the **only** borrowing row", "`truncate` is the **only** zero-defaulting row",
+   "every `Ptr` result carries a tag". Those are claims about the table rather than about rows, and
+   they are exactly the claims the 384-line match made unfalsifiable.
+5. **Blast radius.** A is smallest (two names, no new types beyond one enum). C is larger by ~55
+   lines of type vocabulary. This is the one criterion A wins, and it is last in the order.
+
+**Runner-up design: Design A (minimal surface).** It loses on depth and on extensibility, and its
+own report supplies the deciding evidence: the 4-tuple sits near `clippy::type_complexity`'s budget,
+so the design has **no headroom** — the next asymmetric builtin method forces exactly the migration
+it was meant to avoid. Its inlined applier also ships near-duplicate branches whose obvious cleanup
+would re-hide the asymmetries. C pays ~60 lines to make those asymmetries unwritable-when-wrong
+rather than merely written down.
+
+**Adopted from the losers.** From A: the `Some(match { ... _ => return None })` shape, which keeps
+rows to one line where the shape allows. From D: the load-bearing *"the table must never claim an
+arm the call site handles inline"* test — the only guard on hoisting the table above the residual
+`match`, which C's own sketch independently identifies as its highest-value test. From B: the
+explicit IR-identity audit, carried into the PR body as a checklist.
+
+**Scope.** Implement the 20 tabelable arms (18 uniform + `parse_i64`/`parse_u64`). The five that
+stay inline — `substring` (two arguments), both `insert`s (map argument-type lookups), `push`
+(wide-literal narrowing), `unwrap` (delegates to `lower_unwrap`) — each need something the table
+cannot carry without becoming Design B.

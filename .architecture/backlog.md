@@ -12,7 +12,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   lines of new unit tests.** The file count alone cannot catch a runaway one-file refactor, so step 5
   watches the line estimate too.
 - **Modules**: `vow-ir/src/lower/mod.rs:3519-3902` — the `match (recv_struct, method)` in the
-  `ExprKind::MethodCall` arm of `lower_expr_inner`. Seam sited beside the landed `builtin_result_tag`
+  `ExprKind::MethodCall` arm of `lower_expr` (`:1405`). Seam sited beside the landed `builtin_result_tag`
   (`:199-259`) and the `vow_static_builtin_to_runtime` name table (`:60-159`).
 - **Summary**: table the 18 uniform builtin-method lowering arms into a pure
   `builtin_method_spec(recv, method) -> Option<MethodSpec>` carrying `{symbol, ret_ty, arity,
