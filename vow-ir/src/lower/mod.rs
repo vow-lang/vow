@@ -5348,6 +5348,121 @@ mod tests {
         );
     }
 
+    /// Every row, so a typo'd symbol or a wrong result type in any one of the
+    /// twenty cannot hide behind a spot check.
+    #[test]
+    fn builtin_method_spec_covers_every_row() {
+        use MethodArg::{Absent, Consumed, ConsumedOrZero, Unconsumed};
+        let rows: &[(Option<&str>, &str, (&str, Ty, MethodArg, Option<&str>))] = &[
+            (
+                Some("String"),
+                "len",
+                ("__vow_string_len", Ty::I64, Absent, None),
+            ),
+            (
+                Some("String"),
+                "push_str",
+                ("__vow_string_push_str", Ty::Unit, Consumed, None),
+            ),
+            (
+                Some("String"),
+                "eq",
+                ("__vow_string_eq", Ty::Bool, Consumed, None),
+            ),
+            (
+                Some("String"),
+                "contains",
+                ("__vow_string_contains", Ty::Bool, Unconsumed, None),
+            ),
+            (
+                Some("String"),
+                "byte_at",
+                ("__vow_string_byte_at", Ty::I64, Consumed, None),
+            ),
+            (
+                Some("String"),
+                "push_byte",
+                ("__vow_string_push_byte", Ty::Unit, Consumed, None),
+            ),
+            (
+                Some("String"),
+                "clear",
+                ("__vow_string_clear", Ty::Unit, Absent, None),
+            ),
+            (
+                Some("String"),
+                "parse_i64",
+                (
+                    "__vow_string_parse_i64_opt",
+                    Ty::Ptr,
+                    Absent,
+                    Some("Option"),
+                ),
+            ),
+            (
+                Some("String"),
+                "parse_u64",
+                (
+                    "__vow_string_parse_u64_opt",
+                    Ty::Ptr,
+                    Absent,
+                    Some("Option"),
+                ),
+            ),
+            (
+                Some("HashMap"),
+                "len",
+                ("__vow_map_len", Ty::I64, Absent, None),
+            ),
+            (
+                Some("HashMap"),
+                "get",
+                ("__vow_map_get", Ty::I64, Consumed, None),
+            ),
+            (
+                Some("HashMap"),
+                "contains_key",
+                ("__vow_map_contains", Ty::Bool, Consumed, None),
+            ),
+            (
+                Some("HashMap"),
+                "remove",
+                ("__vow_map_remove", Ty::Unit, Consumed, None),
+            ),
+            (
+                Some("BTreeMap"),
+                "len",
+                ("__vow_btreemap_len", Ty::I64, Absent, None),
+            ),
+            (
+                Some("BTreeMap"),
+                "get",
+                ("__vow_btreemap_get", Ty::Ptr, Consumed, Some("Option")),
+            ),
+            (
+                Some("BTreeMap"),
+                "contains",
+                ("__vow_btreemap_contains", Ty::Bool, Consumed, None),
+            ),
+            (None, "len", ("__vow_vec_len", Ty::I64, Absent, None)),
+            (None, "pop", ("__vow_vec_pop", Ty::Unit, Absent, None)),
+            (None, "clear", ("__vow_vec_clear", Ty::Unit, Absent, None)),
+            (
+                None,
+                "truncate",
+                ("__vow_vec_truncate", Ty::Unit, ConsumedOrZero, None),
+            ),
+        ];
+        assert_eq!(rows.len(), 20, "the table has twenty rows");
+        for &(recv, method, expected) in rows {
+            assert_eq!(
+                builtin_method_spec(recv, method),
+                Some(expected),
+                "{recv:?}.{method}"
+            );
+        }
+    }
+
     #[test]
     fn builtin_method_spec_prefers_receiver_rows_over_vec_fallback() {
         // `len` and `clear` are the only two names spelled in both tiers.
@@ -6302,6 +6417,113 @@ fn area(s: Shape) -> i64 {
                 "narrow payload slot {slot} must stay I64:\n{func:#?}"
             );
         }
+    }
+
+    /// The applier half of the `builtin_method_spec` seam: the table says *what*
+    /// to emit, and this pins that the emission actually happens — every
+    /// `MethodArg` branch, the operand order, and the result tag. The pure table
+    /// tests cannot reach any of this, because none of it is a function of the
+    /// two `&str` keys.
+    #[test]
+    fn tabled_builtin_methods_emit_their_extern_calls() {
+        let module = lower_source_to_module(
+            r#"
+module TabledMethodLowering
+
+fn exercise(hay: String, needle: String, m: BTreeMap<i64, i64>) -> i64 {
+    let n: i64 = hay.len();
+    let found: bool = hay.contains(needle);
+    let hit: Option<i64> = m.get(n);
+    let mut v: Vec<i64> = Vec::new();
+    v.truncate(n);
+    n
+}
+"#,
+            "tabled_method_lowering.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+        let call = |sym: &str| {
+            insts
+                .iter()
+                .find(|inst| {
+                    inst.opcode == Opcode::Call
+                        && inst.data == InstData::CallExtern(sym.to_string())
+                })
+                .unwrap_or_else(|| panic!("no call to {sym}:\n{func:#?}"))
+        };
+
+        // MethodArg::Absent — receiver only, and the declared result type.
+        let len = call("__vow_string_len");
+        assert_eq!(len.ty, Ty::I64);
+        assert_eq!(len.args.len(), 1, "len takes the receiver alone");
+
+        // MethodArg::Unconsumed — String::contains, the one borrowing row.
+        let contains = call("__vow_string_contains");
+        assert_eq!(contains.ty, Ty::Bool);
+        assert_eq!(contains.args.len(), 2, "receiver then needle");
+
+        // MethodArg::Consumed, plus the result tag: BTreeMap::get is the only
+        // tabled row that records an `inst_struct_type` for its result.
+        let get = call("__vow_btreemap_get");
+        assert_eq!(get.ty, Ty::Ptr);
+        assert_eq!(get.args.len(), 2);
+
+        // MethodArg::ConsumedOrZero — Vec::truncate.
+        let truncate = call("__vow_vec_truncate");
+        assert_eq!(truncate.ty, Ty::Unit);
+        assert_eq!(truncate.args.len(), 2);
+    }
+
+    /// The missing-argument fallbacks, which are *not* dead code: the type checker
+    /// does not enforce builtin-method arity, so `hay.contains()` and `v.truncate()`
+    /// reach lowering with an empty argument list and each synthesises a constant.
+    /// Which constant differs per row, and that difference is emitted IR — the two
+    /// `ConstUnit` rows and `truncate`'s `ConstI64(0)` are pinned separately here.
+    #[test]
+    fn tabled_builtin_methods_synthesise_their_missing_arguments() {
+        let module = lower_source_to_module(
+            r#"
+module MissingArgumentLowering
+
+fn exercise(hay: String, other: String) -> i64 {
+    let borrowed: bool = hay.contains();
+    let consumed: bool = hay.eq();
+    let v: Vec<i64> = Vec::new();
+    v.truncate();
+    v.len()
+}
+"#,
+            "missing_argument_lowering.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+        let arg_of = |sym: &str| {
+            let call = insts
+                .iter()
+                .find(|inst| {
+                    inst.opcode == Opcode::Call
+                        && inst.data == InstData::CallExtern(sym.to_string())
+                })
+                .unwrap_or_else(|| panic!("no call to {sym}:\n{func:#?}"));
+            let arg = call.args[1];
+            *insts
+                .iter()
+                .find(|inst| inst.id == arg)
+                .unwrap_or_else(|| panic!("{sym}'s argument {arg:?} not found"))
+        };
+
+        // MethodArg::Unconsumed and MethodArg::Consumed both fall back to ConstUnit.
+        assert_eq!(arg_of("__vow_string_contains").opcode, Opcode::ConstUnit);
+        assert_eq!(arg_of("__vow_string_eq").opcode, Opcode::ConstUnit);
+        // MethodArg::ConsumedOrZero falls back to a zero length instead, so that
+        // `v.truncate()` truncates to 0 rather than passing unit as an i64.
+        let len = arg_of("__vow_vec_truncate");
+        assert_eq!(len.opcode, Opcode::ConstI64);
+        assert_eq!(len.data, InstData::ConstI64(0));
+        assert_eq!(len.ty, Ty::I64);
     }
 
     /// `.unwrap()` must lower to a guarded tag check, not the method-call
