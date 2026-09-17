@@ -540,44 +540,74 @@ wall.
 Criteria, in the order `pm-deepen` fixes them: **depth**, **locality**, **seam placement**, **test
 surface**, **blast radius**.
 
-**Winner: Design C.**
+**A correction made during adjudication, recorded because it changed the winner.** The first pass
+scored Design C above Design A on *depth*, on the grounds that only C could table
+`parse_i64`/`parse_u64`. That is wrong, and Design A's own report is where the error came from: A
+claims those arms are unreachable because `MethodArg::Absent` "carries no room for a result tag".
+But A's result tag is the **fourth tuple slot**, independent of `MethodArg` — the row
 
-1. **Depth.** C tables 20 of 25 arms against A's 18, because factoring `MethodResult` orthogonally
-   to arity is what reaches `parse_i64`/`parse_u64`. B tables 24 but pays ~115 lines of vocabulary
-   for the last four, and its own report concedes four of five `ArgLowering` variants have one or
-   two users. Depth is behaviour per unit of interface *learned*; B adds interface faster than it
-   adds behaviour. C's four small types are each load-bearing.
-2. **Locality.** C and B concentrate best. C's two-tier `method_lowering` puts the
-   receiver-precedence rule in one `.or_else`, where A and D leave it as arm ordering a reader must
-   notice and preserve.
-3. **Seam placement.** Decisive against B and D. C's seam is where something actually varies: the
-   `(receiver, method)` → shape mapping. B's seam is drawn around argument-lowering *protocols*,
-   four of which have one adapter each — by `codebase-design`'s own rule, *one adapter is a
-   hypothetical seam*. D draws its seam around the whole adapter, which is defensible, but then the
-   thing that actually varies sits behind a privacy wall.
-4. **Test surface.** Decisive against D. *"The interface is the test surface"* — D's interface takes
-   `&mut LowerCtx`, so its valuable assertions are made against a private function. A, B and C all
-   expose a pure two-`&str` lookup. C additionally makes *whole-table* properties assertable:
-   "`contains` is the **only** borrowing row", "`truncate` is the **only** zero-defaulting row",
-   "every `Ptr` result carries a tag". Those are claims about the table rather than about rows, and
-   they are exactly the claims the 384-line match made unfalsifiable.
-5. **Blast radius.** A is smallest (two names, no new types beyond one enum). C is larger by ~55
-   lines of type vocabulary. This is the one criterion A wins, and it is last in the order.
+```rust
+(Some("String"), "parse_i64") => ("__vow_string_parse_i64_opt", Ty::Ptr, Absent, Some("Option")),
+```
 
-**Runner-up design: Design A (minimal surface).** It loses on depth and on extensibility, and its
-own report supplies the deciding evidence: the 4-tuple sits near `clippy::type_complexity`'s budget,
-so the design has **no headroom** — the next asymmetric builtin method forces exactly the migration
-it was meant to avoid. Its inlined applier also ships near-duplicate branches whose obvious cleanup
-would re-hide the asymmetries. C pays ~60 lines to make those asymmetries unwritable-when-wrong
-rather than merely written down.
+types fine, and A's applier emits `vec![recv_id]` → `Call`/`Ty::Ptr`/`CallExtern` → the
+`inst_struct_type` insert, which is byte-identical to `:3642-3652`. **Both A and C table 20 arms.**
+With that gap closed the ranking inverts.
 
-**Adopted from the losers.** From A: the `Some(match { ... _ => return None })` shape, which keeps
-rows to one line where the shape allows. From D: the load-bearing *"the table must never claim an
-arm the call site handles inline"* test — the only guard on hoisting the table above the residual
-`match`, which C's own sketch independently identifies as its highest-value test. From B: the
-explicit IR-identity audit, carried into the PR body as a checklist.
+**Winner: Design A (minimal surface), with the table extended to 20 arms.**
 
-**Scope.** Implement the 20 tabelable arms (18 uniform + `parse_i64`/`parse_u64`). The five that
-stay inline — `substring` (two arguments), both `insert`s (map argument-type lookups), `push`
-(wide-literal narrowing), `unwrap` (delegates to `lower_unwrap`) — each need something the table
-cannot carry without becoming Design B.
+1. **Depth — tie.** Both table 20 of 25 (18 uniform + `parse_i64`/`parse_u64`). B tables 24 but pays
+   ~115 lines of vocabulary for the last four, and its own report concedes four of its five
+   `ArgLowering` variants have one or two users — *"a variant with one user is a renamed `if`"*.
+   Depth is behaviour per unit of interface *learned*; B adds interface faster than behaviour.
+2. **Locality — narrow edge to C.** C's two-tier `typed_receiver_lowering().or_else(any_receiver_
+   lowering)` makes the receiver-specific-before-Vec precedence structural, where A leaves it as arm
+   ordering a reader must notice. Real, but it is one `match` in one function either way, and A
+   pins the same precedence with a test.
+3. **Seam placement — tie between A and C, decisive against B and D.** A and C place the identical
+   seam: `(receiver struct tag, method name)` → lowering shape, a pure function of two `&str`. B
+   draws its seam around argument-lowering *protocols*, four of which have one adapter each — by
+   `codebase-design`'s own rule, *one adapter is a hypothetical seam, two is a real one*. D draws
+   its seam around the whole adapter, which is defensible, but the thing that actually varies then
+   sits behind a privacy wall.
+4. **Test surface — tie between A, B and C; decisive against D.** *"The interface is the test
+   surface"* — D's interface takes `&mut LowerCtx`, so its valuable assertions are made against a
+   private `uniform_method`, i.e. by testing past its own interface. A, B and C all expose a pure
+   two-`&str` lookup. The whole-table properties C advertises ("`contains` is the **only** borrowing
+   row") are equally assertable under A: `MethodArg::Unconsumed` occurs once, and A's own test 3
+   asserts exactly that.
+5. **Blast radius — A wins.** A adds two names (one enum, one function). C adds four types and
+   roughly +60 lines of vocabulary and per-row literals to describe the same 20 behaviours. With the
+   first four criteria at a tie or a narrow edge, this decides it — and it is the criterion this
+   repo's `CLAUDE.md` restates independently: *"when a module's interface is nearly as wide as its
+   implementation, collapse it"*, and *"many small changes beat one large change"*.
+
+C's conceded structural flaw reinforces the order rather than deciding it: `emit_method_lowering`
+takes `args` even for `NoArg`, so the nonsense the enum excludes at the table is re-admitted one
+layer down at the interpreter. A has the same 2×2 branching, but inline at the call site, where it
+does not masquerade as a checked signature.
+
+**Runner-up design: Design C (shape-variant enum).** It loses on blast radius after tying on depth,
+seam placement and test surface. Its genuine advantage — precedence expressed as two tiers rather
+than as arm order — is worth revisiting if the table outgrows one screen.
+
+**Adopted from the losers.** From D: the load-bearing *"the table must never claim an arm the call
+site handles inline"* test. Hoisting the table above the residual `match` re-sequences it ahead of
+arms that used to precede it, and that test is the only guard; C's sketch independently names it its
+highest-value test too. It is written first, red. From C: the doc-comment warning that
+`tag_builtin_result` is the **wrong** helper here — its `OptionOf` arm also writes
+`inst_option_elem_ty`, which this call site has never written, so reusing it would change emitted
+metadata. From B: the explicit IR-identity audit, carried into the PR body as a checklist.
+
+**One open question deliberately left to the gate.** A's report warns that
+`Option<(&'static str, Ty, MethodArg, Option<&'static str>)>` sits near `clippy::type_complexity`'s
+default budget. That is A's own estimate, not a measurement. `cargo clippy --all -- -D warnings` is
+already part of this repo's quality gate and settles it; if the lint fires, the tuple becomes a
+named four-field struct and this note records why. Restructuring pre-emptively around a guess would
+be the wrong order.
+
+**Scope.** Implement the 20 tabelable arms. The five that stay inline — `substring` (two arguments),
+both `insert`s (map argument-type lookups), `push` (wide-literal narrowing), `unwrap` (delegates to
+`lower_unwrap`) — each need something the table cannot carry without becoming Design B.
+
+**Adjudicated with the advisor**, which is what surfaced the depth error above.
