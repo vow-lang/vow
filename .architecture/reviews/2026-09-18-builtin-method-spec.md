@@ -611,3 +611,51 @@ both `insert`s (map argument-type lookups), `push` (wide-literal narrowing), `un
 `lower_unwrap`) — each need something the table cannot carry without becoming Design B.
 
 **Adjudicated with the advisor**, which is what surfaced the depth error above.
+
+## Implementation result
+
+Landed as Design A with the table at 20 rows.
+
+**Test-first.** The four unit tests were written first and seen to fail — 26 compile errors,
+`builtin_method_spec` and `MethodArg` not found — then made to pass. The load-bearing one is
+`builtin_method_spec_declines_the_arms_lowered_inline`, adopted from Design D: hoisting the table
+above the residual `match` re-sequences it ahead of arms that used to precede it, and that test is
+the only guard. It asserts `None` for every inline method name against all seven receivers the table
+otherwise recognises.
+
+**Quality gate** (each step a separate command, never `&&`-chained):
+
+| Step | Result |
+|---|---|
+| `cargo build -j6 --all` | pass |
+| `cargo clippy -j6 --all -- -D warnings` | pass |
+| `cargo test -j6 --all` | **1676 passed, 0 failed** |
+| `cargo fmt --all --check` | clean |
+
+**The open question is settled empirically.** `clippy::type_complexity` does **not** fire on
+`Option<(&'static str, Ty, MethodArg, Option<&'static str>)>`. Design A's report flagged this as a
+risk on its own estimate; the gate measured it. No migration to a named struct is needed, and the
+tuple stays.
+
+**IR identity, verified differentially.** The pre-change compiler was built from `HEAD~1` in a
+scratch checkout and both binaries were run over the whole `tests/run/` corpus with
+`build --dump-ir --no-verify`:
+
+```
+identical=212   DIFFERENT=0   skipped=1
+```
+
+The one skipped program, `tests/run/u64_marker_propagation.vow`, fails type-checking identically on
+**both** compilers (`error[TypeMismatch]` at `:413`) and so never reaches IR emission — a
+pre-existing condition in this tree, unaffected by this change.
+
+**Diff size against the estimate.** The card estimated ~250 lines removed / ~120 added plus ~60 test
+lines. Actual: **430 added / 384 deleted in 1 file** (file-count estimate exact). About 262 of that
+814-line churn is the five kept arms being re-indented one level into the new `else` block, counted
+on both sides; net change is **+46 lines**. Excluding the re-indent, real churn is ~552 lines against
+~430 estimated — a 28% overshoot, well inside the 2x bail-out threshold, and driven by the table
+growing from the estimated 18 rows to 20.
+
+**`CONTEXT.md`**: not created. This repo has none, and the concepts the seam is named after —
+*builtin method*, *receiver*, *lowering* — are already defined in `docs/spec/grammar.md`. Creating a
+glossary solely to restate them would be noise.
