@@ -2,41 +2,51 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [opened, ready_for_review]
+    paths-ignore:
+      - 'announcements/**'
+      - 'docs/**'
+      - '**/*.md'
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   claude-review:
-    if: ${{ !github.event.pull_request.draft }}
+    # Skip drafts and dependabot — Claude review is expensive and not useful
+    # for either case.
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
-      issues: read
+      issues: write
       id-token: write
       actions: read
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
-          fetch-depth: 50
-          persist-credentials: false
+          fetch-depth: 1
 
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@9cdae7f0d995e3ba7c33f226087fdf82a59cd520 # v1.0.223
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: |
+            google-labs-jules
+            dependabot[bot]
+            autofix-ci
+
+          prompt: '/code-review xhigh --comment ${{ github.event.pull_request.number }}'
 
           use_sticky_comment: false
           include_fix_links: true
           track_progress: false
 
-          additional_permissions: |
-            actions: read
-
           claude_args: |
             --model claude-sonnet-5
             --permission-mode auto
-
-          prompt: '/code-review xhigh --comment ${{ github.event.pull_request.number }}'
