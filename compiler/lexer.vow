@@ -244,7 +244,10 @@ fn wide_literal_push_digit(lo: u64, hi: u64, overflow: bool, digit: i64) -> Wide
     }
 }
 
-fn span_len(pos: u64, start: i64) -> i64 {
+fn span_len(pos: u64, start: i64) -> i64 vow {
+    requires: (pos as i64) >= start,
+    ensures: result >= 0
+} {
     (pos as i64) - start
 }
 
@@ -287,9 +290,10 @@ fn lex(src: String) -> Vec<Token> {
                 while pos < src_len && is_digit(src.byte_at(pos)) {
                     pos = pos + 1;
                 }
-                let text: String = string_substr(src, start, span_len(pos, start));
+                let len: i64 = span_len(pos, start);
+                let text: String = string_substr(src, start, len);
                 let bits: u64 = parse_f64_bits(text);
-                let tok: Token = make_wide_int_token(tok_lit_float(), bits, 0u64, 0, start, span_len(pos, start));
+                let tok: Token = make_wide_int_token(tok_lit_float(), bits, 0u64, 0, start, len);
                 tokens.push(tok);
             } else {
                 let suffix: i64 = if pos < src_len { try_suffix(src, pos, src_len) } else { -1 };
