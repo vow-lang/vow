@@ -756,6 +756,32 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   refactor restructures two mutually-recursive `&mut self` walkers — high cost, and it needs a
   decision about which traversal is correct, which is a human's call.
 
+## builtin-method-arity-check
+
+- **Status**: proposed
+- **Score**: n/a — **not a deepening candidate.** Recorded here so the finding survives; a future
+  firing should not try to "deepen" it, and a human should decide whether to file it.
+- **Files**: n/a (diagnosis only)
+- **Modules**: `vow-types/src/check.rs` (`ExprKind::MethodCall` arm, builtin-method branch)
+- **Summary**: the type checker does **not** enforce arity for builtin methods. `hay.contains()` and
+  `v.truncate()` type-check with no argument and reach IR lowering with an empty argument list,
+  where the lowerer synthesises a placeholder constant (`ConstUnit`, or `ConstI64(0)` for
+  `truncate`). Reproduced directly against `./target/debug/vow build --dump-ir --no-verify` on
+  2026-09-18:
+  - `fn f(hay: String) -> bool { hay.contains() }` → `ConstUnit()` then
+    `Call[extern:__vow_string_contains](%0, %1)`
+  - `fn f(a: String, b: String) -> bool { a.eq() }` → same shape for `__vow_string_eq`
+  - `v.truncate()` → `ConstI64[0]()` then `Call[extern:__vow_vec_truncate](%2, %5)`
+- **First seen**: 2026-09-18
+- **Report**: `.architecture/reviews/2026-09-18-builtin-method-spec.md`
+- **Reason**: surfaced while closing a coverage gap on PR #1299, which needed to know whether the
+  lowerer's missing-argument fallbacks were reachable. They are. The behaviour is pre-existing and
+  was preserved exactly by #1299 — pinned there by
+  `tabled_builtin_methods_synthesise_their_missing_arguments` — so the tests now *document* it. For
+  `v.truncate()` the zero fallback is plausibly intended ("truncate to 0"); for `contains()` and
+  `eq()` passing unit into a call that reads a `String` looks like a genuine checker gap. Deciding
+  which is which is a human's call, which is why this is recorded rather than filed.
+
 ## clif-shim-region-parity
 
 - **Status**: dropped
