@@ -244,6 +244,13 @@ fn wide_literal_push_digit(lo: u64, hi: u64, overflow: bool, digit: i64) -> Wide
     }
 }
 
+fn span_len(pos: u64, start: i64) -> i64 vow {
+    requires: (pos as i64) >= start,
+    ensures: result == (pos as i64) - start
+} {
+    (pos as i64) -! start
+}
+
 fn lex(src: String) -> Vec<Token> {
     let mut pos: u64 = 0u64;
     let src_len: u64 = src.len() as u64;
@@ -264,7 +271,7 @@ fn lex(src: String) -> Vec<Token> {
             let tag: i64 = keyword_tag(ident);
             let iv: i64 = if tag == tok_lit_bool() { keyword_bool_val(ident) } else { 0 };
             let sv: String = if tag == tok_ident() { ident } else { empty_str() };
-            let tok: Token = make_token(tag, iv, 0, sv, start, (pos as i64) - start);
+            let tok: Token = make_token(tag, iv, 0, sv, start, span_len(pos, start));
             tokens.push(tok);
         } else if is_digit(b) {
             let mut wide_lo: u64 = 0u64;
@@ -283,7 +290,7 @@ fn lex(src: String) -> Vec<Token> {
                 while pos < src_len && is_digit(src.byte_at(pos)) {
                     pos = pos + 1;
                 }
-                let len: i64 = (pos as i64) - start;
+                let len: i64 = span_len(pos, start);
                 let text: String = string_substr(src, start, len);
                 let bits: u64 = parse_f64_bits(text);
                 let tok: Token = make_wide_int_token(tok_lit_float(), bits, 0u64, 0, start, len);
@@ -293,7 +300,7 @@ fn lex(src: String) -> Vec<Token> {
                 if suffix != -1 {
                     let slen: i64 = suffix_len(suffix);
                     pos = pos + (slen as u64);
-                    let len: i64 = (pos as i64) - start;
+                    let len: i64 = span_len(pos, start);
                     let tok: Token = if wide_overflow {
                         make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, len)
                     } else if suffix == tok_suffix_usize() || suffix == tok_suffix_isize() {
@@ -303,7 +310,7 @@ fn lex(src: String) -> Vec<Token> {
                     };
                     tokens.push(tok);
                 } else {
-                    let len: i64 = (pos as i64) - start;
+                    let len: i64 = span_len(pos, start);
                     let tok: Token = if wide_overflow {
                         make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, len)
                     } else {
@@ -335,7 +342,7 @@ fn lex(src: String) -> Vec<Token> {
             if pos < src_len {
                 pos = pos + 1;
             }
-            let tok: Token = make_token(tok_lit_string(), 0, 0, s, start, (pos as i64) - start);
+            let tok: Token = make_token(tok_lit_string(), 0, 0, s, start, span_len(pos, start));
             tokens.push(tok);
         } else if b == 43 {
             let b1: i64 = src.byte_at(pos + 1);
