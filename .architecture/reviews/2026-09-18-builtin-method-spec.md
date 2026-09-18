@@ -629,7 +629,7 @@ otherwise recognises.
 |---|---|
 | `cargo build -j6 --all` | pass |
 | `cargo clippy -j6 --all -- -D warnings` | pass |
-| `cargo test -j6 --all` | **1676 passed, 0 failed** |
+| `cargo test -j6 --all` | **1679 passed, 0 failed** |
 | `cargo fmt --all --check` | clean |
 
 **The open question is settled empirically.** `clippy::type_complexity` does **not** fire on
@@ -650,11 +650,37 @@ The one skipped program, `tests/run/u64_marker_propagation.vow`, fails type-chec
 pre-existing condition in this tree, unaffected by this change.
 
 **Diff size against the estimate.** The card estimated ~250 lines removed / ~120 added plus ~60 test
-lines. Actual: **430 added / 384 deleted in 1 file** (file-count estimate exact). About 262 of that
-814-line churn is the five kept arms being re-indented one level into the new `else` block, counted
-on both sides; net change is **+46 lines**. Excluding the re-indent, real churn is ~552 lines against
-~430 estimated — a 28% overshoot, well inside the 2x bail-out threshold, and driven by the table
-growing from the estimated 18 rows to 20.
+lines, in 1 file. Final: **1 file, 498 added / 240 deleted** — file-count estimate exact, and inside
+the 2x bail-out threshold. The first cut was larger (430/384) because wrapping the five kept arms in
+an `else { match ... }` re-indented 131 pre-existing lines; see below.
+
+**A CI gate found a real test gap, and the fix found a real language fact.** `codecov/patch` is
+`informational: false` with a 95% target in `codecov.yml` — a genuine gate, not advice. The first
+push measured **65%**, for two different reasons, only one of which was a real gap:
+
+1. *Not a real gap.* The `else { match ... }` wrapper re-indented the five kept arms, so codecov
+   counted 131 pre-existing lines as new. Those lines are exercised only by the `tests/run/` corpus
+   through the **uninstrumented release binary**, so they read as uncovered — the same structural
+   under-measurement `codecov.yml`'s own comment describes for `project`, biting `patch`. Fixed by
+   returning early from the table hit instead: the `match` is `lower_expr`'s tail expression with no
+   work after it, so this is equivalent, and it leaves the kept arms at their original indentation
+   and out of the diff entirely. This also makes the PR far easier to review. Coverage rose to 87%.
+2. *A real gap.* Four table rows were never asserted individually, and **no Rust test exercised the
+   applier at all** — only the uninstrumented corpus did. The table test is now exhaustive over all
+   twenty rows (and asserts the row count), and two lowering tests pin the applier.
+
+Closing the second gap turned up a fact worth recording: **the missing-argument fallbacks are not
+dead code.** The type checker does *not* enforce builtin-method arity, so `hay.contains()` and
+`v.truncate()` reach lowering with an empty argument list and each synthesises its constant —
+verified directly against the compiler. That is what makes the per-row `ConstUnit` vs `ConstI64(0)`
+distinction load-bearing rather than defensive: `v.truncate()` really does truncate to 0. It is
+pre-existing behaviour, preserved exactly and now pinned by
+`tabled_builtin_methods_synthesise_their_missing_arguments`. Whether the checker *should* accept a
+zero-argument `contains()` is a separate question, out of scope for a behaviour-preserving refactor
+and not filed.
+
+Final patch coverage: **100%** (0 of 276 added lines uncovered), measured with
+`cargo llvm-cov -p vow-ir --lib` against the `origin/main...HEAD` diff.
 
 **`CONTEXT.md`**: not created. This repo has none, and the concepts the seam is named after —
 *builtin method*, *receiver*, *lowering* — are already defined in `docs/spec/grammar.md`. Creating a
