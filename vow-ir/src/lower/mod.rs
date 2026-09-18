@@ -257,6 +257,91 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
     }
 }
 
+/// How a uniform builtin method's single argument reaches the emitted call.
+///
+/// The three non-`Consumed` variants exist because three arms of the builtin-method
+/// dispatch disagree with their siblings. Each disagreement is a table field, not a
+/// normalisation: changing one changes emitted IR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MethodArg {
+    /// No argument operand. The call takes the receiver alone, and any `args` present
+    /// at the call site are dropped without being lowered.
+    Absent,
+    /// `lower_consumed_expr`; a missing argument becomes `ConstUnit`/`Ty::Unit`.
+    Consumed,
+    /// `lower_consumed_expr`; a missing argument becomes `ConstI64(0)`/`Ty::I64`.
+    /// Only `Vec::truncate`, where the zero is a length rather than a placeholder.
+    ConsumedOrZero,
+    /// `lower_expr`, deliberately *not* consumed; a missing argument becomes
+    /// `ConstUnit`/`Ty::Unit`. Only `String::contains`.
+    Unconsumed,
+}
+
+/// The uniform builtin-method lowering table: every `(receiver, method)` pair whose
+/// IR is one `Opcode::Call` to a fixed extern with a fixed result type.
+///
+/// Receiver struct tag (as recorded in `LowerCtx::inst_struct_type`, `None` when the
+/// receiver carries no tag) and method name in; `(extern symbol, result type,
+/// argument mode, result struct tag)` out.
+///
+/// `None` means "not a uniform builtin method". `String::substring` (two arguments),
+/// both map `insert`s (receiver argument-type lookups), `Vec::push` (wide-literal
+/// narrowing) and `unwrap` (lowers to a branch, not a call) do extra work and stay
+/// inline at the dispatch site, as does the drop-the-arguments fallback. The table is
+/// consulted *before* those arms, so it must never claim a pair one of them owns —
+/// `builtin_method_spec_declines_the_arms_lowered_inline` is the guard.
+///
+/// The result tag is independent of the argument mode, which is what lets the
+/// zero-argument `parse_i64`/`parse_u64` rows carry one. This is deliberately *not*
+/// `tag_builtin_result`: that helper's `OptionOf` arm also writes
+/// `inst_option_elem_ty`, which this call site has never written, so routing these
+/// results through it would change emitted metadata.
+///
+/// Arm order is the dispatch order: the `Some("String")` rows shadow the
+/// wildcard-receiver rows for `len` and `clear`, so a `String` receiver never reaches
+/// `__vow_vec_len`.
+///
+/// Keep this table in sync with the builtin method lowering in `compiler/lower.vow`.
+fn builtin_method_spec(
+    recv: Option<&str>,
+    method: &str,
+) -> Option<(&'static str, Ty, MethodArg, Option<&'static str>)> {
+    use MethodArg::{Absent, Consumed, ConsumedOrZero, Unconsumed};
+    Some(match (recv, method) {
+        (Some("String"), "len") => ("__vow_string_len", Ty::I64, Absent, None),
+        (Some("String"), "push_str") => ("__vow_string_push_str", Ty::Unit, Consumed, None),
+        (Some("String"), "eq") => ("__vow_string_eq", Ty::Bool, Consumed, None),
+        (Some("String"), "contains") => ("__vow_string_contains", Ty::Bool, Unconsumed, None),
+        (Some("String"), "byte_at") => ("__vow_string_byte_at", Ty::I64, Consumed, None),
+        (Some("String"), "push_byte") => ("__vow_string_push_byte", Ty::Unit, Consumed, None),
+        (Some("String"), "clear") => ("__vow_string_clear", Ty::Unit, Absent, None),
+        (Some("String"), "parse_i64") => (
+            "__vow_string_parse_i64_opt",
+            Ty::Ptr,
+            Absent,
+            Some("Option"),
+        ),
+        (Some("String"), "parse_u64") => (
+            "__vow_string_parse_u64_opt",
+            Ty::Ptr,
+            Absent,
+            Some("Option"),
+        ),
+        (Some("HashMap"), "len") => ("__vow_map_len", Ty::I64, Absent, None),
+        (Some("HashMap"), "get") => ("__vow_map_get", Ty::I64, Consumed, None),
+        (Some("HashMap"), "contains_key") => ("__vow_map_contains", Ty::Bool, Consumed, None),
+        (Some("HashMap"), "remove") => ("__vow_map_remove", Ty::Unit, Consumed, None),
+        (Some("BTreeMap"), "len") => ("__vow_btreemap_len", Ty::I64, Absent, None),
+        (Some("BTreeMap"), "get") => ("__vow_btreemap_get", Ty::Ptr, Consumed, Some("Option")),
+        (Some("BTreeMap"), "contains") => ("__vow_btreemap_contains", Ty::Bool, Consumed, None),
+        (_, "len") => ("__vow_vec_len", Ty::I64, Absent, None),
+        (_, "pop") => ("__vow_vec_pop", Ty::Unit, Absent, None),
+        (_, "clear") => ("__vow_vec_clear", Ty::Unit, Absent, None),
+        (_, "truncate") => ("__vow_vec_truncate", Ty::Unit, ConsumedOrZero, None),
+        _ => return None,
+    })
+}
+
 fn propagate_vec_element_metadata(ctx: &mut LowerCtx, source: InstId, result: InstId) {
     let Some(elem_types) = ctx.inst_vec_elem_types.get(&source).cloned() else {
         return;
@@ -3516,94 +3601,62 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     None
                 }
             });
-            match (recv_struct.as_deref(), method.as_str()) {
-                (Some("String"), "len") => ctx.emit(
+            let recv = recv_struct.as_deref();
+            // Twenty builtin methods lower to a single extern call with a fixed result
+            // type; `builtin_method_spec` owns those rows. Consulting the table before
+            // the arms below re-sequences it ahead of arms that used to precede it,
+            // which is sound only because no table row shares a method name with any
+            // arm here — `builtin_method_spec_declines_the_arms_lowered_inline` is the
+            // guard, and it must be extended whenever a row is added.
+            if let Some((symbol, ret_ty, arg, result_tag)) =
+                builtin_method_spec(recv, method.as_str())
+            {
+                let mut operands = vec![recv_id];
+                // The three argument branches are deliberately not folded together: the
+                // lowering entry point and the missing-argument constant are exactly the
+                // asymmetries the table exists to make visible, and a shared branch would
+                // bury them again.
+                match arg {
+                    MethodArg::Absent => {}
+                    MethodArg::Consumed => operands.push(
+                        args.first()
+                            .map(|e| lower_consumed_expr(ctx, e))
+                            .unwrap_or_else(|| {
+                                ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                            }),
+                    ),
+                    MethodArg::Unconsumed => {
+                        operands.push(args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(
+                            || ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span),
+                        ))
+                    }
+                    MethodArg::ConsumedOrZero => operands.push(
+                        args.first()
+                            .map(|e| lower_consumed_expr(ctx, e))
+                            .unwrap_or_else(|| {
+                                ctx.emit(
+                                    Opcode::ConstI64,
+                                    Ty::I64,
+                                    vec![],
+                                    InstData::ConstI64(0),
+                                    span,
+                                )
+                            }),
+                    ),
+                }
+                let result = ctx.emit(
                     Opcode::Call,
-                    Ty::I64,
-                    vec![recv_id],
-                    InstData::CallExtern("__vow_string_len".to_string()),
+                    ret_ty,
+                    operands,
+                    InstData::CallExtern(symbol.to_string()),
                     span,
-                ),
-                (Some("String"), "push_str") => {
-                    let arg_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::Unit,
-                        vec![recv_id, arg_id],
-                        InstData::CallExtern("__vow_string_push_str".to_string()),
-                        span,
-                    )
+                );
+                if let Some(tag) = result_tag {
+                    ctx.inst_struct_type.insert(result, tag.to_string());
                 }
-                (Some("String"), "eq") => {
-                    let arg_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::Bool,
-                        vec![recv_id, arg_id],
-                        InstData::CallExtern("__vow_string_eq".to_string()),
-                        span,
-                    )
-                }
-                (Some("String"), "contains") => {
-                    let arg_expr = args.first();
-                    let arg_id = arg_expr.map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
-                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                    });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::Bool,
-                        vec![recv_id, arg_id],
-                        InstData::CallExtern("__vow_string_contains".to_string()),
-                        span,
-                    )
-                }
-                (Some("String"), "byte_at") => {
-                    let idx_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::I64,
-                        vec![recv_id, idx_id],
-                        InstData::CallExtern("__vow_string_byte_at".to_string()),
-                        span,
-                    )
-                }
-                (Some("String"), "push_byte") => {
-                    let byte_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::Unit,
-                        vec![recv_id, byte_id],
-                        InstData::CallExtern("__vow_string_push_byte".to_string()),
-                        span,
-                    )
-                }
-                (Some("String"), "clear") => ctx.emit(
-                    Opcode::Call,
-                    Ty::Unit,
-                    vec![recv_id],
-                    InstData::CallExtern("__vow_string_clear".to_string()),
-                    span,
-                ),
+                return result;
+            }
+            match (recv, method.as_str()) {
                 (Some("String"), "substring") => {
                     let start_id = args
                         .first()
@@ -3639,42 +3692,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     ctx.inst_struct_type.insert(result, "String".to_string());
                     result
                 }
-                (Some("String"), "parse_i64") => {
-                    let result = ctx.emit(
-                        Opcode::Call,
-                        Ty::Ptr,
-                        vec![recv_id],
-                        InstData::CallExtern("__vow_string_parse_i64_opt".to_string()),
-                        span,
-                    );
-                    ctx.inst_struct_type.insert(result, "Option".to_string());
-                    result
-                }
-                (Some("String"), "parse_u64") => {
-                    let result = ctx.emit(
-                        Opcode::Call,
-                        Ty::Ptr,
-                        vec![recv_id],
-                        InstData::CallExtern("__vow_string_parse_u64_opt".to_string()),
-                        span,
-                    );
-                    ctx.inst_struct_type.insert(result, "Option".to_string());
-                    result
-                }
-                (Some("HashMap"), "len") => ctx.emit(
-                    Opcode::Call,
-                    Ty::I64,
-                    vec![recv_id],
-                    InstData::CallExtern("__vow_map_len".to_string()),
-                    span,
-                ),
-                (Some("BTreeMap"), "len") => ctx.emit(
-                    Opcode::Call,
-                    Ty::I64,
-                    vec![recv_id],
-                    InstData::CallExtern("__vow_btreemap_len".to_string()),
-                    span,
-                ),
                 (Some("BTreeMap"), "insert") => {
                     let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
                     let k_id = args
@@ -3707,38 +3724,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     ctx.inst_struct_type.insert(result, "Option".to_string());
                     result
                 }
-                (Some("BTreeMap"), "get") => {
-                    let k_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    let result = ctx.emit(
-                        Opcode::Call,
-                        Ty::Ptr,
-                        vec![recv_id, k_id],
-                        InstData::CallExtern("__vow_btreemap_get".to_string()),
-                        span,
-                    );
-                    ctx.inst_struct_type.insert(result, "Option".to_string());
-                    result
-                }
-                (Some("BTreeMap"), "contains") => {
-                    let k_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::Bool,
-                        vec![recv_id, k_id],
-                        InstData::CallExtern("__vow_btreemap_contains".to_string()),
-                        span,
-                    )
-                }
                 (Some("HashMap"), "insert") => {
                     let (key_ast_ty, value_ast_ty) = known_map_argument_ast_types(ctx, recv_id);
                     let k_id = args
@@ -3769,58 +3754,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     )
                 }
-                (Some("HashMap"), "get") => {
-                    let k_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::I64,
-                        vec![recv_id, k_id],
-                        InstData::CallExtern("__vow_map_get".to_string()),
-                        span,
-                    )
-                }
-                (Some("HashMap"), "contains_key") => {
-                    let k_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::Bool,
-                        vec![recv_id, k_id],
-                        InstData::CallExtern("__vow_map_contains".to_string()),
-                        span,
-                    )
-                }
-                (Some("HashMap"), "remove") => {
-                    let k_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::Unit,
-                        vec![recv_id, k_id],
-                        InstData::CallExtern("__vow_map_remove".to_string()),
-                        span,
-                    )
-                }
-                (_, "len") => ctx.emit(
-                    Opcode::Call,
-                    Ty::I64,
-                    vec![recv_id],
-                    InstData::CallExtern("__vow_vec_len".to_string()),
-                    span,
-                ),
                 (_, "push") => {
                     let elem_ty = ctx
                         .inst_vec_elem_types
@@ -3848,41 +3781,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         Ty::Unit,
                         vec![recv_id, elem_id],
                         InstData::CallExtern("__vow_vec_push_val".to_string()),
-                        span,
-                    )
-                }
-                (_, "pop") => ctx.emit(
-                    Opcode::Call,
-                    Ty::Unit,
-                    vec![recv_id],
-                    InstData::CallExtern("__vow_vec_pop".to_string()),
-                    span,
-                ),
-                (_, "clear") => ctx.emit(
-                    Opcode::Call,
-                    Ty::Unit,
-                    vec![recv_id],
-                    InstData::CallExtern("__vow_vec_clear".to_string()),
-                    span,
-                ),
-                (_, "truncate") => {
-                    let len_id = args
-                        .first()
-                        .map(|e| lower_consumed_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(
-                                Opcode::ConstI64,
-                                Ty::I64,
-                                vec![],
-                                InstData::ConstI64(0),
-                                span,
-                            )
-                        });
-                    ctx.emit(
-                        Opcode::Call,
-                        Ty::Unit,
-                        vec![recv_id, len_id],
-                        InstData::CallExtern("__vow_vec_truncate".to_string()),
                         span,
                     )
                 }
@@ -5410,6 +5308,259 @@ mod tests {
     }
 
     #[test]
+    fn builtin_method_spec_tables_the_uniform_arms() {
+        use MethodArg::{Absent, Consumed};
+        assert_eq!(
+            builtin_method_spec(Some("String"), "byte_at"),
+            Some(("__vow_string_byte_at", Ty::I64, Consumed, None))
+        );
+        assert_eq!(
+            builtin_method_spec(Some("HashMap"), "remove"),
+            Some(("__vow_map_remove", Ty::Unit, Consumed, None))
+        );
+        assert_eq!(
+            builtin_method_spec(Some("BTreeMap"), "len"),
+            Some(("__vow_btreemap_len", Ty::I64, Absent, None))
+        );
+        assert_eq!(
+            builtin_method_spec(None, "pop"),
+            Some(("__vow_vec_pop", Ty::Unit, Absent, None))
+        );
+        // Zero-argument rows can still tag their result: the tag slot is independent
+        // of MethodArg, which is what lets the parse_* arms join the table.
+        assert_eq!(
+            builtin_method_spec(Some("String"), "parse_i64"),
+            Some((
+                "__vow_string_parse_i64_opt",
+                Ty::Ptr,
+                Absent,
+                Some("Option")
+            ))
+        );
+        assert_eq!(
+            builtin_method_spec(Some("String"), "parse_u64"),
+            Some((
+                "__vow_string_parse_u64_opt",
+                Ty::Ptr,
+                Absent,
+                Some("Option")
+            ))
+        );
+    }
+
+    /// Every row, so a typo'd symbol or a wrong result type in any one of the
+    /// twenty cannot hide behind a spot check.
+    #[test]
+    fn builtin_method_spec_covers_every_row() {
+        use MethodArg::{Absent, Consumed, ConsumedOrZero, Unconsumed};
+        let rows: &[(Option<&str>, &str, (&str, Ty, MethodArg, Option<&str>))] = &[
+            (
+                Some("String"),
+                "len",
+                ("__vow_string_len", Ty::I64, Absent, None),
+            ),
+            (
+                Some("String"),
+                "push_str",
+                ("__vow_string_push_str", Ty::Unit, Consumed, None),
+            ),
+            (
+                Some("String"),
+                "eq",
+                ("__vow_string_eq", Ty::Bool, Consumed, None),
+            ),
+            (
+                Some("String"),
+                "contains",
+                ("__vow_string_contains", Ty::Bool, Unconsumed, None),
+            ),
+            (
+                Some("String"),
+                "byte_at",
+                ("__vow_string_byte_at", Ty::I64, Consumed, None),
+            ),
+            (
+                Some("String"),
+                "push_byte",
+                ("__vow_string_push_byte", Ty::Unit, Consumed, None),
+            ),
+            (
+                Some("String"),
+                "clear",
+                ("__vow_string_clear", Ty::Unit, Absent, None),
+            ),
+            (
+                Some("String"),
+                "parse_i64",
+                (
+                    "__vow_string_parse_i64_opt",
+                    Ty::Ptr,
+                    Absent,
+                    Some("Option"),
+                ),
+            ),
+            (
+                Some("String"),
+                "parse_u64",
+                (
+                    "__vow_string_parse_u64_opt",
+                    Ty::Ptr,
+                    Absent,
+                    Some("Option"),
+                ),
+            ),
+            (
+                Some("HashMap"),
+                "len",
+                ("__vow_map_len", Ty::I64, Absent, None),
+            ),
+            (
+                Some("HashMap"),
+                "get",
+                ("__vow_map_get", Ty::I64, Consumed, None),
+            ),
+            (
+                Some("HashMap"),
+                "contains_key",
+                ("__vow_map_contains", Ty::Bool, Consumed, None),
+            ),
+            (
+                Some("HashMap"),
+                "remove",
+                ("__vow_map_remove", Ty::Unit, Consumed, None),
+            ),
+            (
+                Some("BTreeMap"),
+                "len",
+                ("__vow_btreemap_len", Ty::I64, Absent, None),
+            ),
+            (
+                Some("BTreeMap"),
+                "get",
+                ("__vow_btreemap_get", Ty::Ptr, Consumed, Some("Option")),
+            ),
+            (
+                Some("BTreeMap"),
+                "contains",
+                ("__vow_btreemap_contains", Ty::Bool, Consumed, None),
+            ),
+            (None, "len", ("__vow_vec_len", Ty::I64, Absent, None)),
+            (None, "pop", ("__vow_vec_pop", Ty::Unit, Absent, None)),
+            (None, "clear", ("__vow_vec_clear", Ty::Unit, Absent, None)),
+            (
+                None,
+                "truncate",
+                ("__vow_vec_truncate", Ty::Unit, ConsumedOrZero, None),
+            ),
+        ];
+        assert_eq!(rows.len(), 20, "the table has twenty rows");
+        for &(recv, method, expected) in rows {
+            assert_eq!(
+                builtin_method_spec(recv, method),
+                Some(expected),
+                "{recv:?}.{method}"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_method_spec_prefers_receiver_rows_over_vec_fallback() {
+        // `len` and `clear` are the only two names spelled in both tiers.
+        assert_eq!(
+            builtin_method_spec(Some("String"), "len").unwrap().0,
+            "__vow_string_len"
+        );
+        assert_eq!(
+            builtin_method_spec(Some("HashMap"), "len").unwrap().0,
+            "__vow_map_len"
+        );
+        assert_eq!(
+            builtin_method_spec(Some("BTreeMap"), "len").unwrap().0,
+            "__vow_btreemap_len"
+        );
+        assert_eq!(
+            builtin_method_spec(Some("Widget"), "len").unwrap().0,
+            "__vow_vec_len"
+        );
+        assert_eq!(builtin_method_spec(None, "len").unwrap().0, "__vow_vec_len");
+        assert_eq!(
+            builtin_method_spec(Some("String"), "clear").unwrap().0,
+            "__vow_string_clear"
+        );
+        // Maps have no clear extern of their own, so they take the Vec row, as before.
+        assert_eq!(
+            builtin_method_spec(Some("HashMap"), "clear").unwrap().0,
+            "__vow_vec_clear"
+        );
+        // `pop` and `truncate` have no receiver-specific row at all.
+        assert_eq!(
+            builtin_method_spec(Some("String"), "pop").unwrap().0,
+            "__vow_vec_pop"
+        );
+        assert_eq!(
+            builtin_method_spec(Some("String"), "truncate").unwrap().0,
+            "__vow_vec_truncate"
+        );
+    }
+
+    #[test]
+    fn builtin_method_spec_pins_the_three_asymmetries() {
+        use MethodArg::{Consumed, ConsumedOrZero, Unconsumed};
+        // String::contains borrows its needle; all seventeen siblings consume.
+        assert_eq!(
+            builtin_method_spec(Some("String"), "contains").unwrap().2,
+            Unconsumed
+        );
+        assert_eq!(
+            builtin_method_spec(Some("String"), "eq").unwrap().2,
+            Consumed
+        );
+        // Vec::truncate defaults a missing length to 0, not to unit.
+        assert_eq!(
+            builtin_method_spec(None, "truncate").unwrap().2,
+            ConsumedOrZero
+        );
+        assert_eq!(
+            builtin_method_spec(Some("HashMap"), "remove").unwrap().2,
+            Consumed
+        );
+        // Two sibling map lookups, two result shapes: only BTreeMap::get is an Option.
+        assert_eq!(
+            builtin_method_spec(Some("BTreeMap"), "get"),
+            Some(("__vow_btreemap_get", Ty::Ptr, Consumed, Some("Option")))
+        );
+        assert_eq!(
+            builtin_method_spec(Some("HashMap"), "get"),
+            Some(("__vow_map_get", Ty::I64, Consumed, None))
+        );
+    }
+
+    #[test]
+    fn builtin_method_spec_declines_the_arms_lowered_inline() {
+        // The table is consulted before the residual match, so it must never claim a
+        // pair that match handles: the inline arm would become unreachable with no
+        // compiler warning. Every receiver-agnostic inline arm is checked against
+        // every receiver the table otherwise recognises.
+        for recv in [
+            None,
+            Some("String"),
+            Some("HashMap"),
+            Some("BTreeMap"),
+            Some("Vec"),
+            Some("Option"),
+            Some("Result"),
+        ] {
+            for method in ["substring", "insert", "push", "unwrap"] {
+                assert_eq!(builtin_method_spec(recv, method), None, "{recv:?}.{method}");
+            }
+        }
+        // And a pair no arm owns still falls through to the residual catch-all.
+        assert_eq!(builtin_method_spec(Some("Widget"), "frobnicate"), None);
+        // A String-only row must not fire on an untagged receiver.
+        assert_eq!(builtin_method_spec(None, "eq"), None);
+    }
+
+    #[test]
     fn builtin_result_tag_classifies_names() {
         use BuiltinResultTag::{OptionOf, StringHeap, VecHeap};
         // Explicit heap struct-type arms (representatives, incl. the #1288 proc_sample addition).
@@ -6266,6 +6417,113 @@ fn area(s: Shape) -> i64 {
                 "narrow payload slot {slot} must stay I64:\n{func:#?}"
             );
         }
+    }
+
+    /// The applier half of the `builtin_method_spec` seam: the table says *what*
+    /// to emit, and this pins that the emission actually happens — every
+    /// `MethodArg` branch, the operand order, and the result tag. The pure table
+    /// tests cannot reach any of this, because none of it is a function of the
+    /// two `&str` keys.
+    #[test]
+    fn tabled_builtin_methods_emit_their_extern_calls() {
+        let module = lower_source_to_module(
+            r#"
+module TabledMethodLowering
+
+fn exercise(hay: String, needle: String, m: BTreeMap<i64, i64>) -> i64 {
+    let n: i64 = hay.len();
+    let found: bool = hay.contains(needle);
+    let hit: Option<i64> = m.get(n);
+    let mut v: Vec<i64> = Vec::new();
+    v.truncate(n);
+    n
+}
+"#,
+            "tabled_method_lowering.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+        let call = |sym: &str| {
+            insts
+                .iter()
+                .find(|inst| {
+                    inst.opcode == Opcode::Call
+                        && inst.data == InstData::CallExtern(sym.to_string())
+                })
+                .unwrap_or_else(|| panic!("no call to {sym}:\n{func:#?}"))
+        };
+
+        // MethodArg::Absent — receiver only, and the declared result type.
+        let len = call("__vow_string_len");
+        assert_eq!(len.ty, Ty::I64);
+        assert_eq!(len.args.len(), 1, "len takes the receiver alone");
+
+        // MethodArg::Unconsumed — String::contains, the one borrowing row.
+        let contains = call("__vow_string_contains");
+        assert_eq!(contains.ty, Ty::Bool);
+        assert_eq!(contains.args.len(), 2, "receiver then needle");
+
+        // MethodArg::Consumed, plus the result tag: BTreeMap::get is the only
+        // tabled row that records an `inst_struct_type` for its result.
+        let get = call("__vow_btreemap_get");
+        assert_eq!(get.ty, Ty::Ptr);
+        assert_eq!(get.args.len(), 2);
+
+        // MethodArg::ConsumedOrZero — Vec::truncate.
+        let truncate = call("__vow_vec_truncate");
+        assert_eq!(truncate.ty, Ty::Unit);
+        assert_eq!(truncate.args.len(), 2);
+    }
+
+    /// The missing-argument fallbacks, which are *not* dead code: the type checker
+    /// does not enforce builtin-method arity, so `hay.contains()` and `v.truncate()`
+    /// reach lowering with an empty argument list and each synthesises a constant.
+    /// Which constant differs per row, and that difference is emitted IR — the two
+    /// `ConstUnit` rows and `truncate`'s `ConstI64(0)` are pinned separately here.
+    #[test]
+    fn tabled_builtin_methods_synthesise_their_missing_arguments() {
+        let module = lower_source_to_module(
+            r#"
+module MissingArgumentLowering
+
+fn exercise(hay: String, other: String) -> i64 {
+    let borrowed: bool = hay.contains();
+    let consumed: bool = hay.eq();
+    let v: Vec<i64> = Vec::new();
+    v.truncate();
+    v.len()
+}
+"#,
+            "missing_argument_lowering.vow",
+        );
+
+        let func = &module.functions[0];
+        let insts = insts_of(func);
+        let arg_of = |sym: &str| {
+            let call = insts
+                .iter()
+                .find(|inst| {
+                    inst.opcode == Opcode::Call
+                        && inst.data == InstData::CallExtern(sym.to_string())
+                })
+                .unwrap_or_else(|| panic!("no call to {sym}:\n{func:#?}"));
+            let arg = call.args[1];
+            *insts
+                .iter()
+                .find(|inst| inst.id == arg)
+                .unwrap_or_else(|| panic!("{sym}'s argument {arg:?} not found"))
+        };
+
+        // MethodArg::Unconsumed and MethodArg::Consumed both fall back to ConstUnit.
+        assert_eq!(arg_of("__vow_string_contains").opcode, Opcode::ConstUnit);
+        assert_eq!(arg_of("__vow_string_eq").opcode, Opcode::ConstUnit);
+        // MethodArg::ConsumedOrZero falls back to a zero length instead, so that
+        // `v.truncate()` truncates to 0 rather than passing unit as an i64.
+        let len = arg_of("__vow_vec_truncate");
+        assert_eq!(len.opcode, Opcode::ConstI64);
+        assert_eq!(len.data, InstData::ConstI64(0));
+        assert_eq!(len.ty, Ty::I64);
     }
 
     /// `.unwrap()` must lower to a guarded tag check, not the method-call
