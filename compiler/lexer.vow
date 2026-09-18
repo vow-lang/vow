@@ -246,9 +246,9 @@ fn wide_literal_push_digit(lo: u64, hi: u64, overflow: bool, digit: i64) -> Wide
 
 fn span_len(pos: u64, start: i64) -> i64 vow {
     requires: (pos as i64) >= start,
-    ensures: result >= 0
+    ensures: result == (pos as i64) - start
 } {
-    (pos as i64) - start
+    (pos as i64) -! start
 }
 
 fn lex(src: String) -> Vec<Token> {
@@ -300,19 +300,21 @@ fn lex(src: String) -> Vec<Token> {
                 if suffix != -1 {
                     let slen: i64 = suffix_len(suffix);
                     pos = pos + (slen as u64);
+                    let len: i64 = span_len(pos, start);
                     let tok: Token = if wide_overflow {
-                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, span_len(pos, start))
+                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, len)
                     } else if suffix == tok_suffix_usize() || suffix == tok_suffix_isize() {
-                        make_token(tok_invalid_int(), EC_INVALID_INT_SUFFIX(), 0, unrepresentable_suffix_msg(suffix), start, span_len(pos, start))
+                        make_token(tok_invalid_int(), EC_INVALID_INT_SUFFIX(), 0, unrepresentable_suffix_msg(suffix), start, len)
                     } else {
-                        make_wide_int_token(tok_lit_int_suffixed(), wide_lo, wide_hi, suffix, start, span_len(pos, start))
+                        make_wide_int_token(tok_lit_int_suffixed(), wide_lo, wide_hi, suffix, start, len)
                     };
                     tokens.push(tok);
                 } else {
+                    let len: i64 = span_len(pos, start);
                     let tok: Token = if wide_overflow {
-                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, span_len(pos, start))
+                        make_token(tok_invalid_int(), EC_UNEXPECTED_TOKEN(), 0, String::from("integer literal out of range"), start, len)
                     } else {
-                        make_wide_int_token(tok_lit_int(), wide_lo, wide_hi, 0, start, span_len(pos, start))
+                        make_wide_int_token(tok_lit_int(), wide_lo, wide_hi, 0, start, len)
                     };
                     tokens.push(tok);
                 }
