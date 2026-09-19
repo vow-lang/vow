@@ -65,7 +65,7 @@ struct SkipRange {
 // sites.
 fn scan_all_sites(src: String, file_path: String) -> Vec<Site> {
     let sites: Vec<Site> = Vec::new();
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     let mut i: i64 = 0;
     let mut clause_idx: i64 = 0;
     while i < n {
@@ -243,7 +243,7 @@ fn make_op_site(src: String, file: String, off: i64, len: i64, from_text: String
 
 // Skip whitespace, returning new offset.
 fn skip_ws(src: String, i: i64) -> i64 {
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     let mut k: i64 = i;
     while k < n {
         let c: i64 = src.byte_at(k);
@@ -262,7 +262,7 @@ fn skip_ws(src: String, i: i64) -> i64 {
 // `invariant` clauses. Returns position past the matching `}`, or -1 on
 // imbalance. clause_index restarts at 0 for each call (one vow block).
 fn scan_vow_block_contracts(src: String, start: i64, file_path: String, sites: Vec<Site>) -> i64 {
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     if start >= n || src.byte_at(start) != 123 { return -1; }
     let mut depth: i64 = 1;
     let mut k: i64 = start + 1;
@@ -295,7 +295,7 @@ fn scan_vow_block_contracts(src: String, start: i64, file_path: String, sites: V
 // Skip a brace-balanced block starting at `{` at position k. Returns
 // position past the matching `}`, or -1 on imbalance.
 fn skip_brace_block(src: String, start: i64) -> i64 {
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     if start >= n || src.byte_at(start) != 123 { return -1; }
     let mut depth: i64 = 1;
     let mut k: i64 = start + 1;
@@ -344,7 +344,7 @@ fn default_for_ty(ty: String) -> String {
 // Returns -1 if the function shape isn't recognized or the return type is
 // unsupported.
 fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites: Vec<Site>) -> i64 {
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     let mut k: i64 = skip_ws(src, i_after_kw);
     if k >= n || !is_ident_start(src.byte_at(k)) { return -1; }
     while k < n && is_ident_cont(src.byte_at(k)) { k = k + 1; }
@@ -454,7 +454,7 @@ fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites:
 // return the byte offset past the clause expression (where scanning should
 // resume). On failure (no colon, etc.), return -1.
 fn parse_contract_clause(src: String, i: i64, file_path: String, sites: Vec<Site>, kw: String, clause_index: i64) -> i64 {
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     let mut k: i64 = i;
     while k < n {
         let c: i64 = src.byte_at(k);
@@ -543,7 +543,7 @@ fn make_const_site(src: String, file: String, off: i64, len: i64, from_text: Str
 fn compute_skip_ranges(src: String) -> Vec<i64> {
     let ranges: Vec<i64> = Vec::new();
     add_extern_ranges(src, ranges);
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     let mut i: i64 = 0;
     while i < n {
         // line is [line_start, line_end_excl)
@@ -582,7 +582,7 @@ fn compute_skip_ranges(src: String) -> Vec<i64> {
 // The scan is comment- and string-aware so that braces inside string
 // literals or line comments inside the block don't unbalance counting.
 fn add_extern_ranges(src: String, ranges: Vec<i64>) {
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     let mut i: i64 = 0;
     while i < n {
         let b: i64 = src.byte_at(i);
@@ -665,7 +665,7 @@ fn add_extern_ranges(src: String, ranges: Vec<i64>) {
 // PAST the trailing newline of that line, or -1 if no matching marker
 // is found.
 fn find_generate_end(src: String, start: i64, name: String) -> i64 {
-    let n: i64 = src.len();
+    let n: i64 = src.len() as i64;
     let expected: String = String::from("// GENERATE:");
     expected.push_str(name);
     expected.push_str(String::from(":END"));
@@ -676,7 +676,7 @@ fn find_generate_end(src: String, start: i64, name: String) -> i64 {
             k = k + 1;
         }
         let line_end: i64 = k;
-        if line_end - line_start == expected.len() {
+        if line_end - line_start == expected.len() as i64 {
             let line: String = string_substr(src, line_start, line_end - line_start);
             if line == expected {
                 if k < n {
@@ -693,8 +693,8 @@ fn find_generate_end(src: String, start: i64, name: String) -> i64 {
 
 // True if [off, off+len) intersects any (start, end) pair in ranges.
 fn is_skipped(off: i64, len: i64, ranges: Vec<i64>) -> bool {
-    let n: i64 = ranges.len();
-    let mut i: i64 = 0;
+    let n: u64 = ranges.len() as u64;
+    let mut i: u64 = 0u64;
     let site_end: i64 = off + len;
     while i + 1 < n {
         let r_start: i64 = ranges[i];
@@ -715,8 +715,8 @@ fn enumerate_sites(src: String, file_path: String) -> Vec<Site> {
         return raw;
     }
     let kept: Vec<Site> = Vec::new();
-    let n: i64 = raw.len();
-    let mut i: i64 = 0;
+    let n: u64 = raw.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         let s: Site = raw[i];
         if !is_skipped(s.off, s.len, ranges) {
