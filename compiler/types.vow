@@ -55,7 +55,7 @@ fn ty_a(ts: TyStore, tid: i64) -> i64 { ts.data[tid * 3 + 1] }
 fn ty_b(ts: TyStore, tid: i64) -> i64 { ts.data[tid * 3 + 2] }
 
 fn ty_add(ts: TyStore, tag: i64, a: i64, b: i64) -> i64 {
-    let tid: i64 = ts.data.len() / 3;
+    let tid: i64 = (ts.data.len() / 3) as i64;
     ts.data.push(tag);
     ts.data.push(a);
     ts.data.push(b);
@@ -63,29 +63,29 @@ fn ty_add(ts: TyStore, tag: i64, a: i64, b: i64) -> i64 {
 }
 
 fn ts_intern_name(ts: TyStore, name: String) -> i64 {
-    let n: i64 = ts.strs.len();
-    let mut i: i64 = 0;
+    let n: u64 = ts.strs.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         if ts.strs[i] == name {
-            return i;
+            return i as i64;
         }
         i = i + 1;
     }
     ts.strs.push(name);
-    n
+    n as i64
 }
 
 fn ts_add_args(ts: TyStore, items: Vec<i64>) -> i64 {
-    let lid: i64 = ts.arg_head.len();
-    let head: i64 = ts.arg_data.len();
-    let n: i64 = items.len();
-    let mut i: i64 = 0;
+    let lid: i64 = ts.arg_head.len() as i64;
+    let head: i64 = ts.arg_data.len() as i64;
+    let n: u64 = items.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         ts.arg_data.push(items[i]);
         i = i + 1;
     }
     ts.arg_head.push(head);
-    ts.arg_size.push(n);
+    ts.arg_size.push(n as i64);
     lid
 }
 
