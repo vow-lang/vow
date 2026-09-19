@@ -57,11 +57,11 @@ struct FrontendPrep {
 
 fn frontend_dir_path(path: String) -> String {
     let mut last_slash: i64 = -1;
-    let mut i: i64 = 0;
-    let n: i64 = path.len();
+    let mut i: u64 = 0u64;
+    let n: u64 = path.len() as u64;
     while i < n {
-        if path.byte_at(i) == 47 {
-            last_slash = i;
+        if path.byte_at(i as i64) == 47 {
+            last_slash = i as i64;
         }
         i = i + 1;
     }
@@ -97,8 +97,8 @@ fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String [
 
 fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, item_files: Vec<String>, visited: Vec<String>, dctx: DiagCtx) [io] {
     let uses: Vec<i64> = m.uses;
-    let n_uses: i64 = uses.len();
-    let mut ui: i64 = 0;
+    let n_uses: u64 = uses.len() as u64;
+    let mut ui: u64 = 0u64;
     while ui < n_uses {
         let use_lid: i64 = uses[ui];
         let dep_path: String = resolve_use_path(arena, root_dir, use_lid);
@@ -114,8 +114,8 @@ fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: V
                 let dep_m: Module = parse_module_into(tokens, arena, dctx, dep_path);
                 load_frontend_deps(root_dir, dep_m, arena, all_items, item_files, visited, dctx);
                 let dep_items: Vec<i64> = dep_m.items;
-                let n_dep: i64 = dep_items.len();
-                let mut di: i64 = 0;
+                let n_dep: u64 = dep_items.len() as u64;
+                let mut di: u64 = 0u64;
                 while di < n_dep {
                     all_items.push(dep_items[di]);
                     item_files.push(dep_path);
@@ -169,8 +169,8 @@ fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) 
     trace_span(t, String::from("module-load"), PID_COMPILER(), TID_MAIN(), t_load, trace_now(t) - t_load, String::from(""));
     let t_merge: i64 = trace_now(t);
     let root_items: Vec<i64> = m.items;
-    let n_root: i64 = root_items.len();
-    let mut ri: i64 = 0;
+    let n_root: u64 = root_items.len() as u64;
+    let mut ri: u64 = 0u64;
     while ri < n_root {
         all_items.push(root_items[ri]);
         item_files.push(path);
@@ -183,7 +183,7 @@ fn frontend_prepare_path_traced(path: String, module_root: String, t: TraceCtx) 
         arena: arena,
     };
     trace_span(t, String::from("merge"), PID_COMPILER(), TID_MAIN(), t_merge, trace_now(t) - t_merge, String::from(""));
-    let n_items: i64 = all_items.len();
+    let n_items: i64 = all_items.len() as i64;
     let e: CheckEnv = env_new(dctx, path);
     let t_check: i64 = trace_now(t);
     if !diag_ctx_has_errors(dctx) {
@@ -241,7 +241,7 @@ fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) ->
     // bails before this path on errors, but pinning the delta keeps the
     // recount correct under future stage reordering or upstream invariant
     // changes.
-    let pre_diags_len: i64 = checked.dctx.diags.len();
+    let pre_diags_len: u64 = checked.dctx.diags.len() as u64;
     let ir_mod: IrModule = {
         if checked.n_errors > 0 {
             // Keep callers on one lowered entry point even when checking fails.
@@ -290,8 +290,8 @@ fn frontend_lower_path_traced(path: String, module_root: String, t: TraceCtx) ->
     let dctx_after: DiagCtx = checked.dctx;
     let all_diags: Vec<Diagnostic> = dctx_after.diags;
     let mut region_new_errors: i64 = 0;
-    let mut di: i64 = pre_diags_len;
-    while di < all_diags.len() {
+    let mut di: u64 = pre_diags_len;
+    while di < all_diags.len() as u64 {
         if all_diags[di].severity == SEV_ERROR() {
             region_new_errors = region_new_errors + 1;
         }
