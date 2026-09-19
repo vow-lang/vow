@@ -119,8 +119,8 @@ fn absolutize_path(path: String) -> String [io] {
         return path;
     }
     let mut out: String = process_get_stdout();
-    while out.len() > 0 && (out.byte_at(out.len() - 1) == 10 || out.byte_at(out.len() - 1) == 13) {
-        out = string_substr(out, 0, out.len() - 1);
+    while out.len() > 0 && (out.byte_at(out.len() as i64 - 1) == 10 || out.byte_at(out.len() as i64 - 1) == 13) {
+        out = string_substr(out, 0, out.len() as i64 - 1);
     }
     if out.len() == 0 || out.byte_at(0) != 47 {
         return path;
@@ -150,7 +150,7 @@ fn worktree_remove(workdir: String) -> i64 [io] {
 fn join_workdir(workdir: String, repo_relative: String) -> String {
     let r: String = String::from("");
     r.push_str(workdir);
-    if workdir.len() > 0 && workdir.byte_at(workdir.len() - 1) != 47 {
+    if workdir.len() > 0 && workdir.byte_at(workdir.len() as i64 - 1) != 47 {
         r.push_byte(47);
     }
     r.push_str(repo_relative);
@@ -160,7 +160,7 @@ fn join_workdir(workdir: String, repo_relative: String) -> String {
 fn join_path(dir: String, name: String) -> String {
     let r: String = String::from("");
     r.push_str(dir);
-    if dir.len() > 0 && dir.byte_at(dir.len() - 1) != 47 {
+    if dir.len() > 0 && dir.byte_at(dir.len() as i64 - 1) != 47 {
         r.push_byte(47);
     }
     r.push_str(name);
@@ -202,8 +202,8 @@ fn site_to_json(s: Site) -> String {
 fn enumerate_root(read_dir: String, repo_relative_root: String) -> Vec<Site> [read] {
     let all: Vec<Site> = Vec::new();
     let entries: Vec<String> = fs_listdir(read_dir);
-    let n: i64 = entries.len();
-    let mut i: i64 = 0;
+    let n: u64 = entries.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         let name: String = entries[i];
         if ends_with(name, String::from(".vow")) && !starts_with(name, String::from("test_")) {
@@ -212,8 +212,8 @@ fn enumerate_root(read_dir: String, repo_relative_root: String) -> Vec<Site> [re
             let src: String = fs_read(read_full);
             if src.len() > 0 {
                 let file_sites: Vec<Site> = enumerate_sites(src, display_full);
-                let m: i64 = file_sites.len();
-                let mut j: i64 = 0;
+                let m: u64 = file_sites.len() as u64;
+                let mut j: u64 = 0u64;
                 while j < m {
                     all.push(file_sites[j]);
                     j = j + 1;
@@ -228,7 +228,7 @@ fn enumerate_root(read_dir: String, repo_relative_root: String) -> Vec<Site> [re
 // True iff `s` is a (possibly signed) decimal integer literal.
 // Used to preserve the accepted decimal-literal spelling for integer flags.
 fn is_decimal_int_literal(s: String) -> bool {
-    let n: i64 = s.len();
+    let n: i64 = s.len() as i64;
     if n == 0 { return false; }
     let mut start: i64 = 0;
     if s.byte_at(0) == 45 || s.byte_at(0) == 43 { start = 1; }
@@ -267,10 +267,10 @@ fn classify_oracle_rc(rc: i64) -> i64 {
 // paths require it.
 fn shell_quote(s: String) -> String {
     let r: String = String::from("'");
-    let n: i64 = s.len();
-    let mut i: i64 = 0;
+    let n: u64 = s.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
-        let b: i64 = s.byte_at(i);
+        let b: i64 = s.byte_at(i as i64);
         if b == 39 {
             r.push_byte(39);
             r.push_byte(92);
@@ -351,8 +351,8 @@ fn log_path_for(output_dir: String, id: i64) -> String {
 // supplied here; per-record commas are added between entries.
 fn sites_array_json(sites: Vec<Site>) -> String {
     let r: String = String::from("[\n");
-    let n: i64 = sites.len();
-    let mut i: i64 = 0;
+    let n: u64 = sites.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         if i > 0 { r.push_str(String::from(",\n")); }
         r.push_str(String::from("  "));
@@ -418,7 +418,7 @@ fn write_outcomes_json(output_dir: String, sites: Vec<Site>, statuses: Vec<i64>,
     let body: String = String::from("{\"version\":1,\"summary\":");
     body.push_str(summary);
     body.push_str(String::from(",\"outcomes\":[\n"));
-    let n: i64 = sites.len();
+    let n: i64 = sites.len() as i64;
     let mut i: i64 = 0;
     while i < n {
         if i > 0 { body.push_str(String::from(",\n")); }
@@ -444,12 +444,12 @@ fn write_status_lists(output_dir: String, sites: Vec<Site>, statuses: Vec<i64>) 
     buckets.push(ST_TIMEOUT());
     buckets.push(ST_UNVIABLE());
     buckets.push(ST_UNRUN());
-    let n: i64 = sites.len();
-    let mut bi: i64 = 0;
-    while bi < buckets.len() {
+    let n: u64 = sites.len() as u64;
+    let mut bi: u64 = 0u64;
+    while bi < buckets.len() as u64 {
         let bs: i64 = buckets[bi];
         let body: String = String::from("");
-        let mut i: i64 = 0;
+        let mut i: u64 = 0u64;
         while i < n {
             if statuses[i] == bs {
                 let s: Site = sites[i];
@@ -531,7 +531,7 @@ fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
     let all_sites: Vec<Site> = enumerate_root(read_root, root);
     // Filter to this shard's mutants only.
     let shard_sites: Vec<Site> = Vec::new();
-    let total_n: i64 = all_sites.len();
+    let total_n: i64 = all_sites.len() as i64;
     let mut gid: i64 = 0;
     while gid < total_n {
         if (gid % shard_y) == shard_x {
@@ -541,7 +541,7 @@ fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
     }
     write_mutants_json(output_dir, shard_sites, shard_x, shard_y);
 
-    let n: i64 = shard_sites.len();
+    let n: i64 = shard_sites.len() as i64;
     let statuses: Vec<i64> = Vec::new();
     let tiers: Vec<i64> = Vec::new();
     let oracle_mss: Vec<i64> = Vec::new();
@@ -649,7 +649,7 @@ fn run_mutants_list(argv: Vec<String>) -> i32 [io, read] {
     let shard_x: i64 = shard[0];
     let shard_y: i64 = shard[1];
     let sites: Vec<Site> = enumerate_root(root_used, root_used);
-    let n: i64 = sites.len();
+    let n: i64 = sites.len() as i64;
     let mut emitted: i64 = 0;
     let mut id: i64 = 0;
     while id < n {
@@ -683,8 +683,8 @@ fn run_mutants(argv: Vec<String>) -> i32 [io, read, write] {
     }
     let inner: Vec<String> = Vec::new();
     inner.push(String::from("vowc-mutants"));
-    let mut i: i64 = 2;
-    while i < argv.len() {
+    let mut i: u64 = 2u64;
+    while i < argv.len() as u64 {
         inner.push(argv[i]);
         i = i + 1;
     }
