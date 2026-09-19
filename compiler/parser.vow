@@ -39,10 +39,11 @@ fn at(p: Parser, tag: i64) -> bool {
 
 fn peek_offset(p: Parser, offset: i64) -> Token {
     let idx: i64 = p.pos + offset;
-    if idx >= 0 && idx < p.tokens.len() {
+    let n: u64 = p.tokens.len() as u64;
+    if idx >= 0 && (idx as u64) < n {
         p.tokens[idx]
-    } else if p.tokens.len() > 0 {
-        p.tokens[p.tokens.len() - 1]
+    } else if n > 0 {
+        p.tokens[n - 1]
     } else {
         make_token(tok_eof(), 0, 0, String::from(""), 0, 0)
     }
@@ -54,7 +55,7 @@ fn at_end(p: Parser) -> bool {
 
 fn advance(p: Parser) -> Token {
     let t: Token = peek(p);
-    if p.pos + 1 < p.tokens.len() {
+    if p.pos + 1 < p.tokens.len() as i64 {
         p.pos = p.pos + 1;
     }
     t
@@ -990,7 +991,7 @@ fn parse_path_expr(p: Parser, first_sid: i64, span_start: i64) -> i64 {
     }
     let path_lid: i64 = arena_add_list(p.arena, path_items);
     if at(p, tok_lbrace()) {
-        let n_segs: i64 = path_items.len();
+        let n_segs: u64 = path_items.len() as u64;
         if n_segs > 1 && looks_like_struct_literal(p) {
             let _lb: Token = advance(p);
             let val_items: Vec<i64> = Vec::new();
