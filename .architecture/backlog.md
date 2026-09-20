@@ -6,7 +6,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## narrow-literal-context-admission
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated
 - **Modules**: `vow-ir/src/lower/mod.rs` — admission predicate at `:1698-1701` (binop operand),
@@ -20,6 +20,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   hand-rolling a second `&str -> Ty` map.
 - **First seen**: 2026-09-21
 - **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **PR**: #1327
 - **Reason**: **picked this firing** (2026-09-21). `U64` is handled three incompatible ways in one
   file: rejected before the call at `:1700`/`:1805`/`:2134`/`:3540` (8-type lists), admitted then
   conditionally escaped at `:4600` via the `wide_literal_contexts` guard (`:4604-4611`), and admitted
@@ -33,6 +34,29 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   gave the same file. Rust-only: `compiler/lower.vow` mirrors the chain at `:4867-4888` and is
   untouched because the change is behaviour-preserving — same precedent as `builtin-result-tag` and
   `builtin-method-spec`.
+  **Branch adopted, not created**: the run was started on `sym/vow/routine/refactor-audit/01M30GVTZN`
+  (non-default, 0 commits ahead of `origin/main`, no upstream, unpublished), so per the autonomy
+  contract it was adopted and **not** renamed to `pm-deepen/<slug>` — the caller's harness identifies
+  the run by that branch. The slug is recorded here instead.
+  **Corrected during the design pass**: the `let` site is a *fifth* U64-excluding context, not one of
+  the admitting ones — `:4741-4759` emits a bare `IntCast` to `U64` rather than re-lowering, skipping
+  both the `wide_literal_contexts` escape and `lower_integer_marker_as`. So the split is 5 exclude /
+  2 admit. Two further rows were found and deliberately left out of scope: `{I128, U128}` at six
+  sites, and `{U64, I128, U128}` at `:1497`/`:4334`/`:4604`.
+  **Adjudicated design C** (domain fact: `narrow_int_width` + `diverges_from_speculative_int`,
+  derived from `IntegerType { width, signedness }`) over **B** (context parameter on
+  `lower_narrow_literal`, the runner-up design, which supplied the binding 13-site audit) and **A**
+  (minimal surface, 2-variant enum). C won on depth — it is the only design that *derives* the
+  membership instead of re-spelling the 8-set and 9-set inside the new seam — and on seam placement
+  (two real adapters matching two mechanisms the file already distinguishes) and test surface (an
+  exhaustive `match` with no `_` arm).
+  **Opened as #1327.** Verification: differential IR over `tests/run/` against the parent commit with
+  a fresh `VOW_CACHE_DIR` — **213/213 byte-identical, 0 different** (212 produced IR; the 213th,
+  `u64_marker_propagation.vow`, fails type-checking identically on both sides, a pre-existing
+  Rust-stage-0 divergence also recorded by the 2026-09-18 firing). Gate: build, clippy `-D warnings`,
+  1682 tests / 0 failures, fmt — all green. Diff: 1 file, 169 added / 57 deleted, of which ~135
+  added lines are the three new tests — inside the ~1-file estimate. One clippy fix during
+  implementation (`needless_borrow` on the reused `scalar_ty_for_field_type_name` call).
 
 ## loop-scope-break-policy
 
