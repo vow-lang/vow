@@ -15,8 +15,8 @@ pub use vow_types::check::{
 
 use crate::types::{
     BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId,
-    IntegerType, Module, Opcode, RegionId, RegionSummary, StructLayout, Ty, VariantLayout,
-    VowEntry, VowId,
+    IntegerType, IntegerWidth, Module, Opcode, RegionId, RegionSummary, StructLayout, Ty,
+    VariantLayout, VowEntry, VowId,
 };
 
 fn vow_debug_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
@@ -1695,10 +1695,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 } else {
                     lhs_ty
                 };
-                if matches!(
-                    operand_ty,
-                    Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
-                ) {
+                if narrow_int_width(operand_ty).is_some() {
                     lhs_id = lower_narrow_literal(ctx, lhs, lhs_id, operand_ty);
                     if !matches!(op, BinOp::Shl | BinOp::Shr) {
                         rhs_id = lower_narrow_literal(ctx, rhs, rhs_id, operand_ty);
@@ -1793,17 +1790,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     }
                     if let Some(info) = &call_info
                         && let Some(&param_ty) = info.param_tys.get(i)
-                        && matches!(
-                            param_ty,
-                            Ty::I8
-                                | Ty::U8
-                                | Ty::I16
-                                | Ty::U16
-                                | Ty::I32
-                                | Ty::U32
-                                | Ty::I128
-                                | Ty::U128
-                        )
+                        && narrow_int_width(param_ty).is_some()
                     {
                         record_wide_control_flow_context(ctx, a, param_ty);
                         let original = lower_consumed_expr(ctx, a);
@@ -2122,17 +2109,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     if let Some(current) = ctx.lookup(name) {
                         let current_ty = ctx.inst_ty(current);
                         let declared_ast_type = ctx.inst_declared_ast_types.get(&current).cloned();
-                        if matches!(
-                            current_ty,
-                            Ty::I8
-                                | Ty::U8
-                                | Ty::I16
-                                | Ty::U16
-                                | Ty::I32
-                                | Ty::U32
-                                | Ty::I128
-                                | Ty::U128
-                        ) {
+                        if narrow_int_width(current_ty).is_some() {
                             new_val = lower_narrow_literal(ctx, rhs, new_val, current_ty);
                         }
                         if let Some(ast_type) = declared_ast_type {
@@ -3535,10 +3512,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // shares its Cranelift register width -- otherwise a plain literal arm
             // (e.g. `None => -1`) merging with a genuinely narrow-typed arm (e.g.
             // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
-            if matches!(
-                phi_ty,
-                Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
-            ) {
+            if narrow_int_width(phi_ty).is_some() {
                 for i in 0..arm_results.len() {
                     let arm_block = arm_results[i].0;
                     let up_id = arm_results[i].1;
@@ -4145,6 +4119,41 @@ fn integer_type_for_ir_ty(ty: Ty) -> IntegerType {
     }
 }
 
+/// The IR integer type of `ty`, or `None` when `ty` is not an IR integer.
+///
+/// Guards `integer_type_for_ir_ty`, whose `_ => IntegerType::I64` fallback
+/// would otherwise report `bool`, `f32` and `ptr` as 64-bit signed integers.
+fn ir_integer_type(ty: Ty) -> Option<IntegerType> {
+    ir_ty_is_integer(ty).then(|| integer_type_for_ir_ty(ty))
+}
+
+/// The width a value of contextual type `ty` must be re-lowered at.
+///
+/// Coercible integer markers are lowered speculatively at `i64` before their
+/// context is known. `None` means that speculative lowering already occupies a
+/// register of the right width, so nothing needs redoing to keep Cranelift
+/// Phis and binary operands width-consistent. That covers non-integers and
+/// *both* 64-bit integers -- `i64`, the speculative type itself, and `u64`,
+/// which differs from it only in signedness, and signedness travels on the
+/// opcode's `InstData::Integer` rather than on the operand.
+fn narrow_int_width(ty: Ty) -> Option<IntegerWidth> {
+    ir_integer_type(ty)
+        .map(|int| int.width)
+        .filter(|width| *width != IntegerWidth::W64)
+}
+
+/// Whether `ty`'s IR integer type differs from the speculative `i64` default
+/// in *any* respect -- width or signedness.
+///
+/// Strictly admits one type more than `narrow_int_width(..).is_some()`: `u64`,
+/// which shares `i64`'s register width but not its signedness, so a value left
+/// at the speculative type is the wrong *type* even though it is the right
+/// *size*. Used where the result is observed by IR type equality rather than
+/// by register width.
+fn diverges_from_speculative_int(ty: Ty) -> bool {
+    ir_integer_type(ty).is_some_and(|int| int != IntegerType::I64)
+}
+
 fn expr_is_integer_literal(expr: &Expr) -> bool {
     expr_is_coercible_int_marker(expr)
 }
@@ -4595,10 +4604,7 @@ fn lower_integer_marker_as(ctx: &mut LowerCtx, expr: &Expr, ty: Ty) -> Option<In
 /// their overflow behavior; control-flow results are explicitly reduced after
 /// their Phi so later users observe the annotated type.
 fn lower_narrow_literal(ctx: &mut LowerCtx, expr: &Expr, original: InstId, ty: Ty) -> InstId {
-    if !matches!(
-        ty,
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::U64 | Ty::I128 | Ty::U128
-    ) {
+    if !diverges_from_speculative_int(ty) {
         return original;
     }
     if matches!(ty, Ty::U64 | Ty::I128 | Ty::U128)
@@ -4720,22 +4726,14 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                 .as_ref()
                 .map(|ann| resolve_type_alias(ann, &ctx.type_aliases))
             {
-                if type_name == "i8" {
-                    val = lower_narrow_literal(ctx, init, val, Ty::I8);
-                } else if type_name == "u8" {
-                    val = lower_narrow_literal(ctx, init, val, Ty::U8);
-                } else if type_name == "i16" {
-                    val = lower_narrow_literal(ctx, init, val, Ty::I16);
-                } else if type_name == "u16" {
-                    val = lower_narrow_literal(ctx, init, val, Ty::U16);
-                } else if type_name == "i32" {
-                    val = lower_narrow_literal(ctx, init, val, Ty::I32);
-                } else if type_name == "u32" {
-                    val = lower_narrow_literal(ctx, init, val, Ty::U32);
-                } else if type_name == "i128" {
-                    val = lower_narrow_literal(ctx, init, val, Ty::I128);
-                } else if type_name == "u128" {
-                    val = lower_narrow_literal(ctx, init, val, Ty::U128);
+                // `scalar_ty_for_field_type_name` falls back to `Ty::I64` for
+                // any name it does not know, and `narrow_int_width` rejects
+                // `i64` -- so unknown annotations are ignored here exactly as
+                // they were by the name chain this replaced. `u64` is likewise
+                // rejected: it is reduced by the explicit `IntCast` below.
+                let annotated = scalar_ty_for_field_type_name(type_name);
+                if narrow_int_width(annotated).is_some() {
+                    val = lower_narrow_literal(ctx, init, val, annotated);
                 }
             }
             if let Some(AstType::Named {
@@ -4958,11 +4956,9 @@ fn lower_function_with_pattern_aggregates(
     let mut trailing = lower_block_inner(&mut ctx, &fn_def.body);
     ctx.pop_scope();
 
-    if matches!(
-        return_ty,
-        Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::U64 | Ty::I128 | Ty::U128
-    ) && let Some(expr) = &fn_def.body.trailing_expr
-    {
+    // No type gate here: `lower_narrow_literal` returns `original` untouched,
+    // before any `ctx` mutation, for exactly the types this used to exclude.
+    if let Some(expr) = &fn_def.body.trailing_expr {
         trailing = lower_narrow_literal(&mut ctx, expr, trailing, return_ty);
     }
 
@@ -5994,10 +5990,125 @@ type PairView = PairAlias;
         }
     }
 
+    const ALL_TYS: [Ty; 16] = [
+        Ty::I8,
+        Ty::U8,
+        Ty::I16,
+        Ty::U16,
+        Ty::I32,
+        Ty::U32,
+        Ty::I64,
+        Ty::U64,
+        Ty::I128,
+        Ty::U128,
+        Ty::F32,
+        Ty::F64,
+        Ty::Bool,
+        Ty::Unit,
+        Ty::Ptr,
+        Ty::LinearPtr,
+    ];
+
+    #[test]
+    fn narrow_int_width_and_divergence_are_exhaustive_over_ty() {
+        // The inner `match` has no `_` arm on purpose: a new `Ty` variant
+        // becomes a compile error here rather than silently inheriting the
+        // speculative `i64` default.
+        fn expected(ty: Ty) -> (Option<IntegerWidth>, bool) {
+            match ty {
+                Ty::I8 | Ty::U8 => (Some(IntegerWidth::W8), true),
+                Ty::I16 | Ty::U16 => (Some(IntegerWidth::W16), true),
+                Ty::I32 | Ty::U32 => (Some(IntegerWidth::W32), true),
+                Ty::I64 => (None, false),
+                // Same register width as the speculative default, different
+                // signedness -- the one type the two predicates disagree on.
+                Ty::U64 => (None, true),
+                Ty::I128 | Ty::U128 => (Some(IntegerWidth::W128), true),
+                Ty::F32 | Ty::F64 | Ty::Bool | Ty::Unit | Ty::Ptr | Ty::LinearPtr => (None, false),
+            }
+        }
+
+        for ty in ALL_TYS {
+            let (want_width, want_diverges) = expected(ty);
+            assert_eq!(narrow_int_width(ty), want_width, "{ty:?}");
+            assert_eq!(diverges_from_speculative_int(ty), want_diverges, "{ty:?}");
+        }
+    }
+
+    #[test]
+    fn narrow_seam_reproduces_the_legacy_inline_gates() {
+        // The two predicates the seam replaced, spelled out locally exactly as
+        // they appeared inline before the extraction.
+        let legacy_eight = |ty: Ty| {
+            matches!(
+                ty,
+                Ty::I8 | Ty::U8 | Ty::I16 | Ty::U16 | Ty::I32 | Ty::U32 | Ty::I128 | Ty::U128
+            )
+        };
+        let legacy_nine = |ty: Ty| {
+            matches!(
+                ty,
+                Ty::I8
+                    | Ty::U8
+                    | Ty::I16
+                    | Ty::U16
+                    | Ty::I32
+                    | Ty::U32
+                    | Ty::U64
+                    | Ty::I128
+                    | Ty::U128
+            )
+        };
+
+        for ty in ALL_TYS {
+            assert_eq!(narrow_int_width(ty).is_some(), legacy_eight(ty), "{ty:?}");
+            assert_eq!(diverges_from_speculative_int(ty), legacy_nine(ty), "{ty:?}");
+        }
+    }
+
+    #[test]
+    fn let_annotation_narrowing_reproduces_the_old_name_chain() {
+        // Composing the existing `&str -> Ty` mapper with the width predicate
+        // must reproduce the 8-branch `if/else` chain the `let` arm used to
+        // carry, row for row -- including the names it silently ignored.
+        for (name, want) in [
+            ("i8", Some(Ty::I8)),
+            ("u8", Some(Ty::U8)),
+            ("i16", Some(Ty::I16)),
+            ("u16", Some(Ty::U16)),
+            ("i32", Some(Ty::I32)),
+            ("u32", Some(Ty::U32)),
+            ("i128", Some(Ty::I128)),
+            ("u128", Some(Ty::U128)),
+            // `u64` is reduced by the explicit `IntCast` emitted just after the
+            // annotation chain, not by re-lowering. Admitting it here would make
+            // `ctx.inst_ty(val) == Ty::U64` hold and delete that cast.
+            ("u64", None),
+            ("i64", None),
+            ("f32", None),
+            ("f64", None),
+            ("bool", None),
+            // Unknown names reach `scalar_ty_for_field_type_name`'s `Ty::I64`
+            // fallback, which the width predicate then rejects -- which is what
+            // makes reusing that mapper safe here.
+            ("Point", None),
+            ("T", None),
+            ("", None),
+        ] {
+            let annotated = scalar_ty_for_field_type_name(name);
+            assert_eq!(
+                narrow_int_width(annotated).map(|_| annotated),
+                want,
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn integer_literals_lower_at_their_native_ir_width() {
         let cases = [
             ("i8", 7, Ty::I8, Opcode::ConstU8, InstData::ConstU8(7)),
+            ("u8", 7, Ty::U8, Opcode::ConstU8, InstData::ConstU8(7)),
             ("i16", 7, Ty::I16, Opcode::ConstI32, InstData::ConstI32(7)),
             ("u16", 7, Ty::U16, Opcode::ConstI32, InstData::ConstI32(7)),
             ("u32", 7, Ty::U32, Opcode::ConstI32, InstData::ConstI32(7)),
@@ -6015,6 +6126,7 @@ type PairView = PairAlias;
                 Opcode::ConstU128,
                 InstData::ConstU128(u128::MAX),
             ),
+            ("u64", 7, Ty::U64, Opcode::ConstU64, InstData::ConstU64(7)),
         ];
 
         for (name, value, expected_ty, expected_op, expected_data) in cases {
