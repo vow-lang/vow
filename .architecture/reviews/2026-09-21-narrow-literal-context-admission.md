@@ -371,4 +371,117 @@ precedent `builtin-result-tag` and `builtin-method-spec` set.
 
 ## Design
 
-Written at step 4, after this report was first committed. See below.
+Three designs were produced in parallel by sub-agents, each briefed to a radically different
+interface philosophy, then adjudicated against the fixed criteria in order: **depth**, **locality**,
+**seam placement**, **test surface**, **blast radius**. The hard constraint above all of them: the
+change must be strictly behaviour-preserving — no compiled program's IR may change.
+
+All three independently found a fact the candidate card got wrong, and the card is corrected here:
+**the `let` site is a *fifth* U64-excluding context, not one of the admitting ones.** The 8-branch
+chain never passes `Ty::U64` to `lower_narrow_literal`; instead `:4741-4759` emits a bare `IntCast`
+to `U64` when `ctx.inst_ty(val) != Ty::U64`. That is *not* equivalent to re-lowering — it skips both
+the `wide_literal_contexts` escape (`:4604`) and `lower_integer_marker_as` (`:4612`). So the split is
+5 exclude / 2 admit, and the `let` site is the one place in the file where **both** mechanisms are
+visible in source: re-lowering fixes width, `IntCast` fixes signedness.
+
+### Design A — minimal surface: `narrow_target(ty, NarrowRule) -> Option<Ty>`
+
+A 2-variant enum (`WidthOnly` / `WidthAndSignedness`) and one pure function; `lower_narrow_literal`'s
+signature untouched. Net −24 lines.
+
+*Honest weakness, stated by its own author*: the returned `Ty` always equals the input, so at five of
+six sites the `Option` is a dressed-up `bool`. More seriously — it gives a respectable name to
+something that may be a bug: if `u64` *ought* to re-narrow at binop operands, this hardens the
+omission into vocabulary and makes it harder to notice.
+
+### Design B — context parameter inside: `NarrowContext::admits(ty)`
+
+`lower_narrow_literal` gains a `context: NarrowContext` parameter; all 13 call sites declare their
+context; a 3-variant enum holds the rows. Net +45 lines.
+
+**B produced the single most valuable artifact of the three — a full 13-site audit — and two of its
+findings are binding on the winner:**
+
+1. **There is a third row the candidate card missed**: six sites are pre-filtered to `{I128, U128}`
+   (`:2186`, `:2203`, `:2992`, `:3200`, `:3773`, `:4472`) — three inline, three in their producer
+   (`known_index_assignment_ty` `:4313`, the `.filter()`s at `:3763` and `:4469`).
+2. **At 7 of 13 sites the type test cannot leave the call site**, because it also gates a
+   *neighbouring* call — usually `record_wide_control_flow_context`, which writes the
+   pointer-keyed `wide_literal_contexts` and thereby changes `ExprKind::Lit(Int)` lowering at
+   `:1495`; or, at `:3538`, a block-surgery loop that would emit a spurious `Upsilon` for
+   `phi_ty == Ty::I64`. Deleting such a guard is an IR change.
+
+*Why it lost*: its core claim — "a caller learns *which context am I* instead of *which types are
+admitted here*" — holds at only 6 of 13 sites by its author's own audit; at the other 7 the call site
+still writes `NarrowContext::Annotated.admits(param_ty)` and still reasons about membership. And like
+A, it re-types the 8-set and 9-set as literal `matches!` arms inside the new seam: the lists survive,
+they just move. It is also the only design that grows the file.
+
+### Design C — the domain fact: `narrow_int_width` + `diverges_from_speculative_int` · **WINNER**
+
+Every integer-typed value in this lowerer is first emitted at a **speculative default** of
+`Ty::I64` — a default already spelled three times (`integer_type_for_ir_ty`'s `_ => IntegerType::I64`
+at `:4143`, `emit_integer_zero`'s `_` arm at `:4548`, `scalar_ty_for_field_type_name`'s
+`_ => Ty::I64` at `:723`). Re-lowering is therefore not a question about *where the call is*. It is
+one question: **how does the contextual `IntegerType` differ from `IntegerType::I64`?** Since
+`IntegerType` is `{ width, signedness }` (`vow-ir/src/types.rs:62-66`), there are exactly four ways
+to ask it, and the file already asks all four:
+
+| set | predicate on `IntegerType` vs `I64` | members | sites |
+|---|---|---|---|
+| **A** | `width != W64` | 8: I8 U8 I16 U16 I32 U32 I128 U128 | `:1698` `:1796` `:2125` `:3538` `:4723` |
+| **B** | `!= IntegerType::I64` | 9: A ∪ {U64} | `:4598` `:4961` |
+| **C** | range ⊄ `i64` | 3: U64 I128 U128 | `:1497` `:4334` `:4604` |
+| **D** | `width > W64` | 2: I128 U128 | the six `{I128,U128}` sites B found |
+
+```rust
+fn ir_integer_type(ty: Ty) -> Option<IntegerType>;
+fn narrow_int_width(ty: Ty) -> Option<IntegerWidth>;   // set A: width != W64
+fn diverges_from_speculative_int(ty: Ty) -> bool;      // set B: != IntegerType::I64
+```
+
+**Interface**: builds entirely on helpers that already exist — `ir_ty_is_integer` (`:1354`, verified
+to cover exactly the ten integer variants, so `ir_integer_type(Ty::Bool)` is `None` rather than
+`Some(I64)` via the `_` fallback) and `integer_type_for_ir_ty` (`:4132`). Nothing becomes `pub`.
+
+**Why it won, criterion by criterion:**
+
+- **Depth** — it is the only design where the membership is *derived* rather than *enumerated*. A and
+  B both re-spell the 8-set and 9-set as literal `matches!` arms inside the new seam; the lists
+  survive, they just move. C reduces set A to `width != W64` over a mapper that already exists, so a
+  caller learns one fact instead of a list.
+- **Seam placement** — **two adapters, not one**, and both are real rather than hypothetical: they
+  correspond to two mechanisms the file already distinguishes, with the `let` site at `:4720-4759`
+  doing both, visibly, in source. A's 2-variant enum is the same split under a name that does not say
+  why.
+- **Test surface** — an exhaustive `match` over all 16 `Ty` variants **with no `_` arm** makes a new
+  `Ty` variant a compile error. A's `_ => false` and B's `matches!` rows both default silently.
+- **Blast radius** — C ≈ −15 net, A ≈ −24, B ≈ +45. A and C are effectively equivalent; B loses.
+
+**Where C is rationalizing, recorded honestly**: `emit_integer_zero:4533-4542` delegates the eight
+set-A types to `emit_narrow_integer_constant` and then re-spells `U64` by hand, producing
+byte-identical IR to what delegation would have produced. A designed split would have put `Ty::U64`
+in the delegating arm. That duplication is evidence the current state **accreted** rather than being
+reasoned; C's model explains the result, but cannot claim the author reasoned this way.
+
+**Runner-up design: B**, for the call-site audit that constrains the implementation. A is the closer
+design on shape but contributed less evidence.
+
+**Two scope decisions taken here, deliberately:**
+
+- **Set D is NOT folded in**, though C recommended it to make the `Option<IntegerWidth>` payload
+  live. Those six sites are outside the seven this candidate was scored on; two of them (`:2203`,
+  `:3773`) keep a producer-side filter that would then state the rule twice; and the file-count and
+  diff estimate the pick was gated on did not include them. Recorded as a follow-up instead — along
+  with set C (`:1497`, `:4334`, `:4604`), folding `emit_integer_zero`'s hand-spelled `U64` arm into
+  its delegation, and `emit_integer_zero`'s `_` arm (`:4548-4554`), which today silently returns an
+  `I64` constant for `Bool`/`Ptr`/`F32`/`Unit`.
+- **No guard is deleted that also gates neighbouring work**, per B's finding. Only `:4961` is
+  removed, being provably redundant with `lower_narrow_literal`'s own self-gate (which returns
+  `original` before any `ctx` mutation); all three designs agree on that one. The `Shl`/`Shr`
+  right-operand exception at `:1702-1704` stays at the call site, being an operand rule rather than
+  a type rule. The `let` site's `u64` `IntCast` block at `:4741-4759` is untouched and must still
+  fire — which depends on `narrow_int_width(Ty::U64)` being `None`, the single row where an error
+  silently deletes an `IntCast`. It is pinned by test.
+
+**Adjudicated with the advisor**, which saw all three written designs and the criteria.
