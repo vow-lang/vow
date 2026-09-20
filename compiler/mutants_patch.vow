@@ -3,16 +3,16 @@ module Patch
 // Pure splice: return src with bytes [off, off+len) replaced by `replacement`.
 fn splice(src: String, off: i64, len: i64, replacement: String) -> String {
     let r: String = String::from("");
-    let n: i64 = src.len();
+    let n: u64 = src.len() as u64;
     let mut i: i64 = 0;
     while i < off {
         r.push_byte(src.byte_at(i));
         i = i + 1;
     }
     r.push_str(replacement);
-    let mut j: i64 = off + len;
+    let mut j: u64 = (off + len) as u64;
     while j < n {
-        r.push_byte(src.byte_at(j));
+        r.push_byte(src.byte_at(j as i64));
         j = j + 1;
     }
     r
