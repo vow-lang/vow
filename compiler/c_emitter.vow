@@ -1996,9 +1996,10 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, inst_ty_by_id: Vec<i
             let strings: Vec<String> = m.strings;
             if lit_idx < strings.len() as i64 {
                 let literal: String = strings[lit_idx];
-                out.push_str(str5(String::from("  v"), ids, String::from(".len = "), i64_to_string(literal.len() as i64), String::from(";\n")));
+                let len: u64 = literal.len() as u64;
+                out.push_str(str5(String::from("  v"), ids, String::from(".len = "), i64_to_string(len as i64), String::from(";\n")));
                 let mut j: u64 = 0u64;
-                while j < literal.len() as u64 {
+                while j < len {
                     out.push_str(str6(String::from("  v"), ids, String::from(".data["), i64_to_string(j as i64), String::from("] = (int8_t)"), cemit_str2(i64_to_string(literal.byte_at(j as i64)), String::from(";\n"))));
                     j = j + 1;
                 }
@@ -3600,7 +3601,7 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
     let empty_modelable: Vec<i64> = Vec::new();
 
     let mut fi: u64 = 0u64;
-    while fi < fns.len() as u64 {
+    while fi < n {
         let f: IrFunction = fns[fi];
         emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max, false, false, 0);
         out.push_byte(10);
