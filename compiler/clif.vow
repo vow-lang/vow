@@ -12,11 +12,11 @@ fn str2(a: String, b: String) -> String {
 
 fn clif_find_inst(f: IrFunction, id: i64) -> IrInst {
     let blocks: Vec<IrBlock> = f.blocks;
-    let mut bi: i64 = 0;
-    while bi < blocks.len() {
+    let mut bi: u64 = 0u64;
+    while bi < blocks.len() as u64 {
         let insts: Vec<IrInst> = blocks[bi].insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
+        let mut ii: u64 = 0u64;
+        while ii < insts.len() as u64 {
             if insts[ii].id == id {
                 return insts[ii];
             }
@@ -28,15 +28,16 @@ fn clif_find_inst(f: IrFunction, id: i64) -> IrInst {
 }
 
 fn clif_store_effect_advance(flat: Vec<i64>, start: i64) -> i64 {
-    if start + 1 >= flat.len() {
-        return flat.len();
+    let flat_len: i64 = flat.len() as i64;
+    if start + 1 >= flat_len {
+        return flat_len;
     }
     let kind: i64 = flat[start + 1];
     let mut i: i64 = start + 2;
     if kind == RSUM_KIND_ALIAS_OF() {
         i = i + 1;
     } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
-        if i < flat.len() {
+        if i < flat_len {
             let raw_n: i64 = flat[i];
             let n: i64 = {
                 if raw_n < 0 {
@@ -46,22 +47,22 @@ fn clif_store_effect_advance(flat: Vec<i64>, start: i64) -> i64 {
                 }
             };
             i = i + 1;
-            let remaining: i64 = flat.len() - i;
+            let remaining: i64 = flat_len - i;
             if n > remaining {
-                return flat.len();
+                return flat_len;
             }
             i = i + n;
         }
     }
-    if i > flat.len() {
-        return flat.len();
+    if i > flat_len {
+        return flat_len;
     }
     i
 }
 
 fn clif_i64_vec_contains(v: Vec<i64>, x: i64) -> bool {
-    let mut i: i64 = 0;
-    while i < v.len() {
+    let mut i: u64 = 0u64;
+    while i < v.len() as u64 {
         if v[i] == x {
             return true;
         }
@@ -72,8 +73,8 @@ fn clif_i64_vec_contains(v: Vec<i64>, x: i64) -> bool {
 
 fn clif_clone_i64_vec(src: Vec<i64>) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
-    while i < src.len() {
+    let mut i: u64 = 0u64;
+    while i < src.len() as u64 {
         out.push(src[i]);
         i = i + 1;
     }
@@ -83,7 +84,7 @@ fn clif_clone_i64_vec(src: Vec<i64>) -> Vec<i64> {
 fn clif_hidden_store_targets(flat: Vec<i64>) -> Vec<i64> {
     let targets: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
-    while i + 1 < flat.len() {
+    while i + 1 < flat.len() as i64 {
         let target: i64 = flat[i];
         // Rust collects all targets then sorts/dedups; this dedups before sorting.
         // Both paths produce the same sorted unique slot order.
@@ -92,9 +93,9 @@ fn clif_hidden_store_targets(flat: Vec<i64>) -> Vec<i64> {
         }
         i = clif_store_effect_advance(flat, i);
     }
-    let mut a: i64 = 1;
-    while a < targets.len() {
-        let mut b: i64 = a;
+    let mut a: u64 = 1u64;
+    while a < targets.len() as u64 {
+        let mut b: u64 = a;
         while b > 0 && targets[b] < targets[b - 1] {
             let tmp: i64 = targets[b - 1];
             targets[b - 1] = targets[b];
@@ -113,8 +114,8 @@ fn clif_hidden_store_target_region(f: IrFunction, target_param: i64) -> i64 {
         hidden_idx = hidden_idx + 1;
     }
     let targets: Vec<i64> = clif_hidden_store_targets(flat);
-    let mut i: i64 = 0;
-    while i < targets.len() {
+    let mut i: u64 = 0u64;
+    while i < targets.len() as u64 {
         if targets[i] == target_param {
             return region_pack(REGION_KIND_CALLER(), hidden_idx);
         }
@@ -188,11 +189,11 @@ fn clif_value_receiver_route(f: IrFunction, receiver: IrInst, seen: Vec<i64>) ->
         let mut have: bool = false;
         let mut merged: i64 = region_root();
         let mut candidate_arm: bool = false;
-        let mut bi: i64 = 0;
-        while bi < blocks.len() {
+        let mut bi: u64 = 0u64;
+        while bi < blocks.len() as u64 {
             let insts: Vec<IrInst> = blocks[bi].insts;
-            let mut ii: i64 = 0;
-            while ii < insts.len() {
+            let mut ii: u64 = 0u64;
+            while ii < insts.len() as u64 {
                 let up: IrInst = insts[ii];
                 if up.op == IOP_UPSILON()
                     && up.dk == IDATA_PHI_TARGET()
@@ -423,16 +424,16 @@ fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
     let result: Vec<String> = Vec::new();
     let has_debug: bool = mode == 1 || mode == 3;
     let fns: Vec<IrFunction> = m.functions;
-    let mut fi: i64 = 0;
-    while fi < fns.len() {
+    let mut fi: u64 = 0u64;
+    while fi < fns.len() as u64 {
         let f: IrFunction = fns[fi];
         let blocks: Vec<IrBlock> = f.blocks;
-        let mut bi: i64 = 0;
-        while bi < blocks.len() {
+        let mut bi: u64 = 0u64;
+        while bi < blocks.len() as u64 {
             let blk: IrBlock = blocks[bi];
             let insts: Vec<IrInst> = blk.insts;
-            let mut ii: i64 = 0;
-            while ii < insts.len() {
+            let mut ii: u64 = 0u64;
+            while ii < insts.len() as u64 {
                 let inst: IrInst = insts[ii];
                 let skip: bool = inst.op == IOP_DEBUG_CALL() && !has_debug;
                 if inst.dk == IDATA_CALL_EXTERN() && !skip && inst.ds != "__vow_string_literal" {
@@ -462,8 +463,8 @@ fn clif_compile_function(ctx: i64, func_idx: i64, f: IrFunction) -> i64 [io] {
     }
 
     let blocks: Vec<IrBlock> = f.blocks;
-    let n_blocks: i64 = blocks.len();
-    let mut bi: i64 = 0;
+    let n_blocks: u64 = blocks.len() as u64;
+    let mut bi: u64 = 0u64;
     while bi < n_blocks {
         let rc_blk: i64 = __vow_clif_fn_block(ctx);
         if rc_blk != 0 {
@@ -471,8 +472,8 @@ fn clif_compile_function(ctx: i64, func_idx: i64, f: IrFunction) -> i64 [io] {
         }
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let n_insts: i64 = insts.len();
-        let mut ii: i64 = 0;
+        let n_insts: u64 = insts.len() as u64;
+        let mut ii: u64 = 0u64;
         while ii < n_insts {
             let inst: IrInst = insts[ii];
             if inst.op != IOP_COMPLEXITY_DESCRIPTOR() {
@@ -492,8 +493,8 @@ fn clif_compile_function(ctx: i64, func_idx: i64, f: IrFunction) -> i64 [io] {
     }
 
     let vows: Vec<IrVowEntry> = f.vows;
-    let n_vows: i64 = vows.len();
-    let mut vi: i64 = 0;
+    let n_vows: u64 = vows.len() as u64;
+    let mut vi: u64 = 0u64;
     while vi < n_vows {
         let ve: IrVowEntry = vows[vi];
         let bids: Vec<i64> = ve.binding_ids;
@@ -537,22 +538,22 @@ fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> 
     }
 
     let strings: Vec<String> = m.strings;
-    let mut si: i64 = 0;
-    while si < strings.len() {
+    let mut si: u64 = 0u64;
+    while si < strings.len() as u64 {
         __vow_clif_add_string(ctx, strings[si]);
         si = si + 1;
     }
 
     let extern_syms: Vec<String> = collect_extern_syms(m, mode);
-    let mut ei: i64 = 0;
-    while ei < extern_syms.len() {
+    let mut ei: u64 = 0u64;
+    while ei < extern_syms.len() as u64 {
         __vow_clif_declare_extern(ctx, extern_syms[ei]);
         ei = ei + 1;
     }
 
     let fns: Vec<IrFunction> = m.functions;
-    let n_fns: i64 = fns.len();
-    let mut fi: i64 = 0;
+    let n_fns: u64 = fns.len() as u64;
+    let mut fi: u64 = 0u64;
     while fi < n_fns {
         let f: IrFunction = fns[fi];
         let is_main: i64 = {
@@ -564,10 +565,10 @@ fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> 
         };
         __vow_clif_declare_function(
             ctx,
-            fi,
+            fi as i64,
             f.name,
             f.params,
-            f.params.len(),
+            f.params.len() as i64,
             f.return_ty,
             is_main,
             f.rsum_return_kind,
@@ -576,10 +577,10 @@ fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> 
         fi = fi + 1;
     }
 
-    let mut ci: i64 = 0;
+    let mut ci: u64 = 0u64;
     while ci < n_fns {
         let f: IrFunction = fns[ci];
-        let result: i64 = clif_compile_function(ctx, ci, f);
+        let result: i64 = clif_compile_function(ctx, ci as i64, f);
         if result != 0 {
             let msg: String = str2(String::from("clif: compile_function failed for "), f.name);
             eprintln_str(msg);
