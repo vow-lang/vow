@@ -4,9 +4,236 @@ Persisted candidate memory for the `pm-deepen` routine. Statuses: proposed | in-
 landed | dropped | rejected. Never delete rows — `landed`/`dropped`/`rejected` are the memory
 that stops the next firing re-deriving them. See `.architecture/reviews/` for the scored reports.
 
+## narrow-literal-context-admission
+
+- **Status**: proposed
+- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Files**: ~1 estimated
+- **Modules**: `vow-ir/src/lower/mod.rs` — admission predicate at `:1698-1701` (binop operand),
+  `:1796-1806` (call argument), `:2125-2135` (assign to ident), `:3538-3541` (match-result Phi),
+  `:4598-4602` (`lower_narrow_literal` self-gate), `:4723-4739` (`let` annotation, 8-branch `if/else`
+  over type-name strings), `:4961-4964` (fn trailing return). 13 call sites of `lower_narrow_literal`
+  (`:4597`).
+- **Summary**: one context-keyed pure seam answering "must a value of type `T` be re-lowered at its
+  native narrow width in this context?", replacing seven inline spellings of the membership; the
+  `let` chain composes the existing `scalar_ty_for_field_type_name` (`:691-724`) rather than
+  hand-rolling a second `&str -> Ty` map.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: **picked this firing** (2026-09-21). `U64` is handled three incompatible ways in one
+  file: rejected before the call at `:1700`/`:1805`/`:2134`/`:3540` (8-type lists), admitted then
+  conditionally escaped at `:4600` via the `wide_literal_contexts` guard (`:4604-4611`), and admitted
+  outright at `:4961-4964` plus the nine unfiltered call sites. The escape shows the *intended* policy
+  is "U64 is admitted but yields to an explicit wide context"; the four 8-type pre-filters predate it.
+  The change is behaviour-preserving — the table reproduces today's per-context membership row for
+  row. **Tie at 22 with `loop-scope-break-policy`**, broken by the rubric's deterministic rule (equal
+  blast radius 1, equal heat 5 → most recently touched file: `lower/mod.rs` 2026-09-18 vs `check.rs`
+  2026-09-14). Heat 5 is load-bearing: at heat 4 this scores 21 and the runner-up wins outright;
+  `lower/mod.rs` is 21 commits/90d, last touched three days ago, the same grade the 2026-09-18 firing
+  gave the same file. Rust-only: `compiler/lower.vow` mirrors the chain at `:4867-4888` and is
+  untouched because the change is behaviour-preserving — same precedent as `builtin-result-tag` and
+  `builtin-method-spec`.
+
+## loop-scope-break-policy
+
+- **Status**: proposed
+- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Files**: ~1 estimated
+- **Modules**: `vow-types/src/check.rs:2671-2686` (`While`), `:2687-2718` (`ForEach`), `:2719-2755`
+  (`Loop`); consumers `:2756-2784` (`Break`), `:2785-2794` (`Continue`); state `:980` (`in_loop`),
+  `:983` (`break_types_stack`).
+- **Summary**: `loop_kind_spec(kind) -> LoopSpec { vow_context, break_slot }` over
+  `{Push(None), Push(Some(vec![])), NoPush}` plus a private `with_loop_scope` applier owning
+  `in_loop` and the stack symmetrically; each arm keeps its own type computation.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: **runner-up candidate** this firing at 22, one tie-break step behind the pick, and the
+  natural next firing. `ForEach` increments `in_loop` but **never pushes onto `break_types_stack`**
+  (`:2713-2715`), where `While` pushes `None` (`:2680-2684`) and `Loop` pushes `Some(Vec::new())`
+  (`:2723-2727`). Three wrong behaviours follow: `loop { for i in v { break 42; } break 7; }` merges
+  `42` into the outer `loop`'s type while `vow_syntax::ast::loop_break_values`
+  (`vow-syntax/src/ast.rs:402`, `:431`) never walks a for-each body, so type-check and lowering
+  (`vow-ir/src/lower/mod.rs:4371`, `:4417`) disagree; `while c { for i in v { break 42; } }` blames
+  the `while`; a top-level `for i in v { break 42; }` is silently accepted. `ExprKind::ForEach` has
+  **zero** test coverage in `check.rs`. The deepening is behaviour-preserving via the `NoPush` row;
+  the anomaly itself is a correctness fix worth a separate issue.
+
+## builtin-arg-layout-spec
+
+- **Status**: proposed
+- **Score**: 21/25 (leverage 4, locality 4, blast radius 1, heat 4)
+- **Files**: ~1 estimated
+- **Modules**: `vow-verify/src/c_emitter.rs` — tables `:218-227`, `:233-240`, `:296-318`, `:320-326`,
+  `:332-339`; inline destructurings `:1346-1351`, `:1413-1418`, `:1452-1457`, `:1474-1479`,
+  `:1489-1494`, `:1588-1594`, `:1613-1619`; arena-offset closure `:1704-1714`.
+- **Summary**: `builtin_arg_layout(name) -> Option<ArgLayout { arena_offset, receiver, value, extra }>`,
+  collapsing thirteen restatements of the "plain ⇒ receiver `args[0]`; `_in_arena` ⇒ arena `args[0]`,
+  receiver `args[1]`" convention.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: `__vow_vec_pin_to_root_val` is absent from `vec_model_receiver_arg` (`:218-226`) while
+  its twin `__vow_string_pin_to_root` is present at `:307`. It *is* in `is_vec_model_creator`
+  (`:178`), so its result becomes a `__vow_vec_t`, but `collect_typed_vars` (`:366-370`) never marks
+  its source, so `emit_inst` (`:1341-1344`) can emit `__vow_vec_t v{id} = int64_t v{source};` — the
+  `int64_t = __vow_vec_t` class this file's own comment at `:260-262` cites issue #505 for. Latent in
+  the common flow. Held at 21 on heat 4 (`c_emitter.rs`, 16 commits/90d, last 2026-09-02).
+
+## parse-opt-payload-spec
+
+- **Status**: proposed
+- **Score**: 21/25 (leverage 4, locality 4, blast radius 1, heat 4)
+- **Files**: ~1 estimated
+- **Modules**: `vow-verify/src/c_emitter.rs:1636-1686` (7 arms); same 9-name set re-spelled at
+  `:414-422` (`collect_option_vars`) and `:535-543` (`is_known_builtin`).
+- **Summary**: `parse_opt_model(name) -> Option<OptionParseModel { payload_nondet, payload_range }>`;
+  the two list sites become `.is_some()`.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: `:1677` emits `__VERIFIER_nondet_ulong()`, which the preamble never declares —
+  `emit_c_preamble` (`:2966`) declares `__VERIFIER_nondet_unsigned_long`, the spelling
+  `c_nondet_suffix` (`:2094-2112`) calls canonical, and every other unsigned sibling (`u8` `:1649`,
+  `u16` `:1670`) uses plain `__VERIFIER_nondet_long()`. Two tests pin the two spellings independently
+  (`:3690`, `:4475`) and neither compiles the emitted C, which is why it survived.
+
+## extern-heap-origin-kind
+
+- **Status**: proposed
+- **Score**: 20/25 (leverage 4, locality 4, blast radius 1, heat 3)
+- **Files**: ~1 estimated
+- **Modules**: `vow-ir/src/region.rs:1917-1977` (five predicates + the `||` chain
+  `heap_producing_extern`); consumers `:1694`, `:2029-2048`, `:3049`, `:3195`.
+- **Summary**: `extern_heap_origin(sym) -> Option<HeapOriginKind>`, one row per family with a single
+  `_in_arena` suffix rule; `heap_producing_extern` collapses to `.is_some()`.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: rows are missing because the kind tag is discarded at the `||` join.
+  `__vow_btreemap_new` is absent from `map_creation_extern` (`:1967-1969`) though lowering emits it at
+  `vow-ir/src/lower/mod.rs:3100` exactly parallel to `__vow_map_new` at `:3088`, so every
+  `BTreeMap::new()` is classified non-heap. The eight
+  `__vow_string_parse_{i8,i16,i32,u8,u16,u32,u64}_opt` siblings are absent from
+  `option_creation_extern` (`:1960-1965`). `vec_creation_extern` (`:1925`) omits the `_in_arena`
+  variants that `string_creation_extern` spells out for all 14 of its families. Held at 20 on heat 3
+  — `region.rs` is 11 commits/90d, last touched 2026-08-17.
+
+## extern-container-op-spec
+
+- **Status**: proposed
+- **Score**: 20/25 (leverage 4, locality 4, blast radius 1, heat 3)
+- **Files**: ~1 estimated
+- **Modules**: `vow-ir/src/region.rs:1979-1994` (`for_each_extern_store_edge`), `:1996-2013`
+  (`extern_growth_target`), `:2015-2027` (`extern_mutation_operation`), `:2406-2414`
+  (`vec_clear_targets`), `:2416-2435` (`vec_element_write_source`).
+- **Summary**: `extern_container_op(sym) -> Option<ContainerOp { receiver_arg, stored_value_args, label, grows }>`
+  with the five functions becoming thin appliers.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: `__vow_vec_push_val`, `__vow_vec_push_val_in_arena` and `__vow_vec_set_val`
+  (`:1981-1983`) are known store edges and element writes but appear in **neither**
+  `extern_growth_target` nor `extern_mutation_operation`, while their non-`_val` twins do (`:1998`,
+  `:2017`) — so a push into a rodata-backed `Vec` via `__vow_vec_push_val` escapes
+  `check_literal_mutations_post_inference` (`:3358-3414`). Arity guards drift on the identical symbol
+  pair: `args.len() >= 3` at `:1984` vs `!args.is_empty()` at `:2007`/`:2010`. Overlaps
+  `extern-heap-origin-kind` in the same file — whichever lands first re-anchors the other's lines.
+
+## extern-abi-spec-table
+
+- **Status**: dropped
+- **Score**: 23/25 before the filter (leverage 4, locality 5, blast radius 1, heat 5)
+- **Files**: ~1 estimated (132 arms / 625 lines)
+- **Modules**: `vow-codegen/src/cranelift_backend.rs:2451-3075` (the `match sym` inside
+  `make_extern_sig`, `:2412-3077`); 9 call sites; an independently-maintained identical copy at
+  `vow-clif-shim/src/lib.rs:3330+`.
+- **Summary**: `extern_abi_spec(sym) -> Option<ExternAbi { params, ret }>`, with `make_extern_sig`
+  keeping only the call conv, the three computed families and an applier.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: **dropped — competes with a recorded architectural direction** (a judgement drop, not
+  the ADR hard filter, which `docs/adr/0001-0003` do not trigger; `dropped` is reversible). `CLAUDE.md`
+  designates `docs/spec/operations.json` + `scripts/generate_operations.py` as the single checked
+  source of runtime-symbol/ABI facts and splices `catalogue_extern_sig` into *this very function*
+  between `GENERATE:OPERATIONS` markers (`:2392-2410`); it states that follow-ups #1271–1275 "should
+  add entries and target files to the existing generator rather than inventing a new mechanism". A
+  hand-rolled parallel Rust table is that invention. **Reopen when #1271–1275 extend the catalogue to
+  these operation groups** — the two divergences found are worth carrying into that work:
+  `__vow_fs_write` is declared `-> i32` in `vow-runtime/src/lib.rs:3516` while
+  `cranelift_backend.rs:2654-2658` and `vow-ir/src/lower/mod.rs:53` both say `i64`, and every sibling
+  `__vow_fs_*` status return is `i64` (`:3429`, `:3495`, `:3507`, `:3556`, `:3604`, `:3622`, `:3688`);
+  and `__vow_string_eq` (`:1896`) / `__vow_string_contains` (`:1910`) return `i64` where IR types them
+  `Ty::Bool` and Cranelift declares `types::I8` (`:2577`, `:2582`), unlike `__vow_map_contains`
+  (`:4227`) and `__vow_btreemap_contains` (`:4407`) which are `-> bool`. The vow-codegen and
+  vow-clif-shim tables were diffed symbol-by-symbol and are currently in sync — no drift between them.
+
+## model-capacity-bound-spec
+
+- **Status**: dropped
+- **Score**: 19/25 (leverage 3, locality 4, blast radius 1, heat 4)
+- **Files**: ~1 estimated (12 sites)
+- **Modules**: `vow-verify/src/c_emitter.rs:1338`, `:1355`, `:1363`, `:1421`, `:1446`, `:1483`,
+  `:1498`, `:1735`, `:1814`, `:1936-1962`, `:2047-2052`, `:2260-2286`.
+- **Summary**: `model_capacity_spec(kind, limits) -> CapacitySpec { c_ty, max, bound_is_inclusive, extra_invariant }`,
+  making the `<` vs `<=` choice one reviewable column instead of twelve string literals.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: **dropped — leverage 3.** The `<`-at-create / `<=`-at-havoc split correlates cleanly
+  with "freshly created value" vs "opaque incoming value": coherent but undocumented policy, not a
+  defect. The one self-inconsistency is within strings — `__vow_string_new` (`:1421`) assumes
+  `len < string_max` while `__vow_string_push_str` (`:1483`) asserts `<= string_max`, so `push_str`
+  may model a string `string_new` never can; `push_byte` (`:1498`) uses `<`. Deciding which is correct
+  is a behaviour fork the autonomy contract reserves for a human. Tests pin both spellings separately
+  (`<=` at `:5618`, `:5661`, `:5697`, `:6448`, `:6496`, `:6544`; `<` at `:5993`, `:6622`, `:6827`),
+  which is why nothing flags the split.
+
+## fs-path-arg-prologue
+
+- **Status**: dropped
+- **Score**: 19/25 (leverage 3, locality 4, blast radius 1, heat 4)
+- **Files**: ~1 estimated
+- **Modules**: `vow-runtime/src/lib.rs:3411`, `:3429`, `:3516`, `:3537`, `:3556`, `:3574`, `:3604`,
+  `:3622`, `:3640`, `:3664`, `:3688`.
+- **Summary**: `vow_path_arg(ptr) -> Option<&str>` collapsing the identical null-check →
+  `sanitize_on_read` → `VowVec` deref → `from_utf8` prologue repeated across nine `__vow_fs_*` entry
+  points.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: **dropped — leverage 3.** Real repeated prologue, but the seam is an argument-decoding
+  helper rather than a policy table, and each caller's error sentinel differs, so the epilogue stays
+  at the call site either way. Worth doing; not the highest-leverage deepening available.
+
+## narrowing-conversion-matrix
+
+- **Status**: dropped
+- **Score**: n/a — excluded by the leverage-1 hard filter
+- **Files**: n/a
+- **Modules**: `vow-types/src/env.rs:352-461` (three near-identical generator loops) and
+  `vow-ir/src/lower/mod.rs:161-184` + `:78-116`.
+- **Summary**: unify the 27 source→target × 3 mode narrowing-conversion name matrix spelled on both
+  sides of the type-checker/lowering seam.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: **dropped — leverage 1, fails the deletion test.** Both sides were enumerated in full:
+  81 names each, **no live drift**. The only asymmetries are intentional-looking (u8 accepts
+  `i128`/`u128` sources; no other target does). Complexity would move to a shared constant, not
+  concentrate. Recorded so a future firing does not re-derive and re-drop it.
+
+## main-help-prologue
+
+- **Status**: dropped
+- **Score**: ~16/25 (leverage 2, locality 3, blast radius 1, heat 4)
+- **Files**: ~1 estimated
+- **Modules**: `vow/src/main.rs:826-1084`.
+- **Summary**: collapse the eight byte-identical
+  `if x.help { if x.human { skill::human() } else { skill::json() } return }` prologues and seven
+  `source file required` epilogues.
+- **First seen**: 2026-09-21
+- **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
+- **Reason**: **dropped — leverage 2.** The interface would shrink but callers do the same work; the
+  seam is a formatting/exit helper, not a policy table. Overlaps the existing `driver-command-epilogue`
+  entry. Worth noting for whoever takes that one: `Some(Command::Mutants(_))` (`:1008-1014`) is the
+  lone arm carrying no `--help` handling at all.
+
 ## builtin-method-spec
 
-- **Status**: in-flight
+- **Status**: landed
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated (**actual: 1**). Diff estimate was ~250 removed / ~120 added plus ~60 test
   lines; **actual 430 added / 384 deleted in 1 file, net +46**. About 262 of that churn is the five
@@ -26,7 +253,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   behaviour-preserving, so no new drift is introduced — same precedent as `builtin-result-tag`.
 - **First seen**: 2026-09-18
 - **Report**: `.architecture/reviews/2026-09-18-builtin-method-spec.md`
-- **PR**: #1299
+- **PR**: #1299 (merged 2026-09-18; reconciled 2026-09-21 via `gh pr view 1299` → MERGED)
 - **Reason**: **picked this firing** (2026-09-18). Fresh candidate; the arm had never been carded
   despite heavy `lower/mod.rs` coverage (prior firings carded `unwrap-payload-ty` and the landed
   `builtin-result-tag`, never the method-dispatch table). Leverage 4 by precedent with the landed
@@ -795,7 +1022,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   output. A human should schedule it. Re-checked 2026-09-03: still large. Re-checked 2026-09-11: still
   large. Re-checked 2026-09-16: still large. Re-checked 2026-09-18: still large — but the sibling
   `hidden-region-store-targets` (19/25) is the tractable slice of the same idea and is now carded
-  separately, so a human scheduling this can start there.
+  separately, so a human scheduling this can start there. Re-checked 2026-09-21: still large.
 
 ## esbmc-ce-description-heuristic
 
@@ -829,3 +1056,4 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 - **First seen**: 2026-08-31
 - **Reason**: Already a pure, unit-tested seam (`test_classify_*`). No shallowness to remove.
   Re-checked 2026-09-03. Re-checked 2026-09-11. Re-checked 2026-09-16. Re-checked 2026-09-18.
+  Re-checked 2026-09-21.
