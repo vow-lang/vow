@@ -51,14 +51,14 @@ fn cx_read_source(path: String) -> CxReadSource [read] {
 // branch-count form is the one comparable to the AST decision count.
 fn cx_cyclomatic_ir(f: IrFunction) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: i64 = blocks.len();
+    let nb: u64 = blocks.len() as u64;
     let mut branches: i64 = 0;
-    let mut bi: i64 = 0;
+    let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: i64 = insts.len();
-        let mut ii: i64 = 0;
+        let ni: u64 = insts.len() as u64;
+        let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_BRANCH() { branches = branches + 1; }
@@ -74,8 +74,8 @@ fn cx_analyze_ir(f: IrFunction) -> CxIr {
 }
 
 fn cx_vec_has(v: Vec<i64>, x: i64) -> bool {
-    let n: i64 = v.len();
-    let mut i: i64 = 0;
+    let n: u64 = v.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         if v[i] == x { return true; }
         i = i + 1;
@@ -87,14 +87,14 @@ fn cx_vec_has(v: Vec<i64>, x: i64) -> bool {
 // consume/borrow ops).
 fn cx_fn_count_op(f: IrFunction, want: i64) -> i64 {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: i64 = blocks.len();
+    let nb: u64 = blocks.len() as u64;
     let mut c: i64 = 0;
-    let mut bi: i64 = 0;
+    let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: i64 = insts.len();
-        let mut ii: i64 = 0;
+        let ni: u64 = insts.len() as u64;
+        let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
             if inst.op == want { c = c + 1; }
@@ -111,13 +111,13 @@ fn cx_fn_count_op(f: IrFunction, want: i64) -> i64 {
 fn cx_fn_callees(f: IrFunction) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: i64 = blocks.len();
-    let mut bi: i64 = 0;
+    let nb: u64 = blocks.len() as u64;
+    let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: i64 = insts.len();
-        let mut ii: i64 = 0;
+        let ni: u64 = insts.len() as u64;
+        let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() {
@@ -142,8 +142,8 @@ fn cx_henry_kafura(nloc: i64, fan_in: i64, fan_out: i64) -> i64 {
 // Is `name` a linear struct? Lookup over parallel name/is-linear Vecs built
 // from the module's struct definitions.
 fn cx_struct_is_linear(name: String, names: Vec<String>, slin: Vec<i64>) -> bool {
-    let n: i64 = names.len();
-    let mut i: i64 = 0;
+    let n: u64 = names.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         let nm: String = names[i];
         if nm == name {
@@ -697,8 +697,8 @@ fn cx_popcount(mask: i64) -> i64 {
 }
 
 fn cx_seen_contains(seen: Vec<String>, s: String) -> bool {
-    let n: i64 = seen.len();
-    let mut i: i64 = 0;
+    let n: u64 = seen.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         let e: String = seen[i];
         if e == s { return true; }
@@ -766,7 +766,7 @@ fn cx_pred_bind_pattern(a: AstArena, pid: i64, bound: Vec<String>) {
 
 fn cx_pred_block(a: AstArena, bid: i64, depth: i64, acc: Vec<i64>, seen: Vec<String>, collect_free_vars: bool, bound: Vec<String>) {
     if bid < 0 { return; }
-    let mark: i64 = bound.len();
+    let mark: i64 = bound.len() as i64;
     let slid: i64 = blk_stmts(a, bid);
     let n: i64 = list_len(a, slid);
     let mut i: i64 = 0;
@@ -847,7 +847,7 @@ fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<Stri
     }
     if tag == EXPR_FOR() {
         cx_pred_walk(a, expr_a(a, eid), depth + 1, acc, seen, collect_free_vars, bound);
-        let mark: i64 = bound.len();
+        let mark: i64 = bound.len() as i64;
         let info_lid: i64 = expr_c(a, eid);
         if list_len(a, info_lid) > 0 {
             bound.push(arena_str(a, list_get(a, info_lid, 0)));
@@ -870,7 +870,7 @@ fn cx_pred_walk(a: AstArena, eid: i64, depth: i64, acc: Vec<i64>, seen: Vec<Stri
         let n_arms: i64 = list_len(a, arms_lid) / 2;
         let mut i: i64 = 0;
         while i < n_arms {
-            let mark: i64 = bound.len();
+            let mark: i64 = bound.len() as i64;
             cx_pred_bind_pattern(a, list_get(a, arms_lid, i * 2), bound);
             cx_pred_walk(a, list_get(a, arms_lid, i * 2 + 1), depth + 1, acc, seen, collect_free_vars, bound);
             bound.truncate(mark);
@@ -966,7 +966,7 @@ fn cx_analyze_contract(a: AstArena, fid: i64) -> CxContract {
             i = i + 1;
         }
     }
-    CxContract { n_req: n_req, n_ens: n_ens, n_inv: n_inv, predicate_nodes: acc[0], predicate_depth: acc[1], free_vars: seen.len(), has_vec_quant: acc[2] }
+    CxContract { n_req: n_req, n_ens: n_ens, n_inv: n_inv, predicate_nodes: acc[0], predicate_depth: acc[1], free_vars: seen.len() as i64, has_vec_quant: acc[2] }
 }
 
 fn cx_contract_predicate_cost(ct: CxContract) -> i64 {
@@ -1439,7 +1439,7 @@ fn cx_analyze_fn(a: AstArena, fid: i64, src: String, struct_names: Vec<String>, 
     let h_n1: i64 = cx_popcount(hacc[0]);
     let h_bign1: i64 = hacc[1];
     let h_bign2: i64 = hacc[2];
-    let h_n2: i64 = seen.len();
+    let h_n2: i64 = seen.len() as i64;
     let h_vocab: i64 = h_n1 + h_n2;
     let h_length: i64 = h_bign1 + h_bign2;
     let h_volume_s: i64 = cx_sat(h_length * cx_log2_milli(h_vocab));
