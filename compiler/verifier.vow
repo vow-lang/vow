@@ -66,10 +66,10 @@ struct MultiPropertyResult {
 }
 
 fn str_contains_byte(s: String, b: i64) -> bool {
-    let n: i64 = s.len();
-    let mut i: i64 = 0;
+    let n: u64 = s.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
-        if s.byte_at(i) == b {
+        if s.byte_at(i as i64) == b {
             return true;
         }
         i = i + 1;
@@ -78,8 +78,8 @@ fn str_contains_byte(s: String, b: i64) -> bool {
 }
 
 fn str_find_str(haystack: String, needle: String) -> i64 {
-    let hlen: i64 = haystack.len();
-    let nlen: i64 = needle.len();
+    let hlen: i64 = haystack.len() as i64;
+    let nlen: i64 = needle.len() as i64;
     if nlen == 0 { return 0; }
     if nlen > hlen { return -1; }
     let mut i: i64 = 0;
@@ -108,10 +108,10 @@ fn ascii_lower_byte(b: i64) -> i64 {
 
 fn str_ascii_lower(s: String) -> String {
     let out: String = String::from("");
-    let n: i64 = s.len();
-    let mut i: i64 = 0;
+    let n: u64 = s.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
-        out.push_byte(ascii_lower_byte(s.byte_at(i)));
+        out.push_byte(ascii_lower_byte(s.byte_at(i as i64)));
         i = i + 1;
     }
     out
@@ -120,7 +120,7 @@ fn str_ascii_lower(s: String) -> String {
 fn str_substring(s: String, start: i64, end: i64) -> String {
     let r: String = String::from("");
     let mut i: i64 = start;
-    while i < end && i < s.len() {
+    while i < end && i < s.len() as i64 {
         r.push_byte(s.byte_at(i));
         i = i + 1;
     }
@@ -132,7 +132,7 @@ fn is_ws(b: i64) -> bool {
 }
 
 fn str_trim(s: String) -> String {
-    let n: i64 = s.len();
+    let n: i64 = s.len() as i64;
     let mut start: i64 = 0;
     while start < n && is_ws(s.byte_at(start)) {
         start = start + 1;
@@ -153,7 +153,7 @@ fn str_to_i64(s: String) -> i64 {
 }
 
 fn split_lines(s: String, lines: Vec<String>) {
-    let n: i64 = s.len();
+    let n: i64 = s.len() as i64;
     let mut start: i64 = 0;
     let mut i: i64 = 0;
     while i < n {
@@ -169,7 +169,7 @@ fn split_lines(s: String, lines: Vec<String>) {
 }
 
 fn str_find_byte(s: String, b: i64) -> i64 {
-    let n: i64 = s.len();
+    let n: i64 = s.len() as i64;
     let mut i: i64 = 0;
     while i < n {
         if s.byte_at(i) == b {
@@ -185,9 +185,9 @@ fn emit_harness(f: IrFunction) -> String {
     out.push_str(verifier_c_func_name(f));
     out.push_byte(40);
     let params: Vec<i64> = f.params;
-    let np: i64 = params.len();
+    let np: u64 = params.len() as u64;
     let mut count: i64 = 0;
-    let mut pi: i64 = 0;
+    let mut pi: u64 = 0u64;
     while pi < np {
         let pty: i64 = params[pi];
         if pty != ITY_UNIT() {
@@ -211,8 +211,8 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
     let out: String = {
         if callee_fis.len() > 0 {
             let modelable_fi_set: Vec<i64> = Vec::new();
-            let mut ci: i64 = 0;
-            while ci < callee_fis.len() {
+            let mut ci: u64 = 0u64;
+            while ci < callee_fis.len() as u64 {
                 modelable_fi_set.push(callee_fis[ci]);
                 ci = ci + 1;
             }
@@ -304,8 +304,8 @@ fn verify_tmp_path() -> String [io] {
 fn verify_tmp_dir_for_path(tmp_path: String) -> String {
     // Suffix must match the filename appended by verify_tmp_path.
     let suffix: String = String::from("/esbmc.c");
-    let n: i64 = tmp_path.len();
-    let sn: i64 = suffix.len();
+    let n: i64 = tmp_path.len() as i64;
+    let sn: i64 = suffix.len() as i64;
     if n <= sn {
         return String::from("");
     }
@@ -441,8 +441,8 @@ fn run_esbmc(esbmc_bin: String, c_source: String, max_k_step: String, tmp_path: 
     esbmc_args.push(String::from("--max-k-step"));
     esbmc_args.push(max_k_step);
     esbmc_args.push(String::from("--64"));
-    let mut ea: i64 = 0;
-    while ea < extra_args.len() {
+    let mut ea: u64 = 0u64;
+    while ea < extra_args.len() as u64 {
         esbmc_args.push(extra_args[ea]);
         ea = ea + 1;
     }
@@ -567,9 +567,9 @@ fn parse_unknown_reason(combined: String) -> String {
     }
     let lines: Vec<String> = Vec::new();
     split_lines(combined, lines);
-    let n: i64 = lines.len();
+    let n: u64 = lines.len() as u64;
     let mut reason: String = String::from("");
-    let mut i: i64 = 0;
+    let mut i: u64 = 0u64;
     while i < n {
         let line: String = str_trim(lines[i]);
         if line == String::from("VERIFICATION UNKNOWN") {
@@ -604,13 +604,13 @@ fn parsed_vow_label_none() -> ParsedVowLabel {
 
 fn parse_vow_label_text(rest: String) -> ParsedVowLabel {
     if str_starts_with(rest, String::from("pre:")) {
-        let payload: String = str_substring(rest, 4, rest.len());
+        let payload: String = str_substring(rest, 4, rest.len() as i64);
         let sep: i64 = str_find_str(payload, String::from(":"));
         if sep < 0 {
             return parsed_vow_label_none();
         }
         let func_id: i64 = str_to_i64(str_substring(payload, 0, sep));
-        let vow_id: i64 = str_to_i64(str_substring(payload, sep + 1, payload.len()));
+        let vow_id: i64 = str_to_i64(str_substring(payload, sep + 1, payload.len() as i64));
         if func_id < 0 || vow_id < 0 {
             return parsed_vow_label_none();
         }
@@ -634,16 +634,16 @@ fn parse_vow_label_text(rest: String) -> ParsedVowLabel {
 fn parse_vow_label(output: String) -> ParsedVowLabel {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: i64 = lines.len();
+    let n: u64 = lines.len() as u64;
     let mut in_violated: bool = false;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0u64;
     while i < n {
         let line: String = str_trim(lines[i]);
         if line == String::from("Violated property:") {
             in_violated = true;
         } else if in_violated {
             if str_starts_with(line, String::from("vow:")) {
-                let rest: String = str_substring(line, 4, line.len());
+                let rest: String = str_substring(line, 4, line.len() as i64);
                 return parse_vow_label_text(rest);
             }
         }
@@ -686,9 +686,9 @@ fn describe_assert_label(label: String) -> String {
 fn parse_assert_label(output: String) -> String {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: i64 = lines.len();
+    let n: u64 = lines.len() as u64;
     let mut in_violated: bool = false;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0u64;
     while i < n {
         let line: String = str_trim(lines[i]);
         if line == String::from("Violated property:") {
@@ -724,18 +724,18 @@ fn parse_arith_label_text(rest: String) -> ParsedArithSite {
     if !arith_cause_is_known(cause) {
         return parsed_arith_site_none();
     }
-    let payload: String = str_substring(rest, sep1 + 1, rest.len());
+    let payload: String = str_substring(rest, sep1 + 1, rest.len() as i64);
     let sep2: i64 = str_find_str(payload, String::from(":"));
     if sep2 < 0 {
         return parsed_arith_site_none();
     }
     let owner: i64 = str_to_i64(str_substring(payload, 0, sep2));
-    let rest2: String = str_substring(payload, sep2 + 1, payload.len());
+    let rest2: String = str_substring(payload, sep2 + 1, payload.len() as i64);
     let sep3: i64 = str_find_str(rest2, String::from(":"));
     if sep3 < 0 {
         return parsed_arith_site_none();
     }
-    let tail: String = str_substring(rest2, sep3 + 1, rest2.len());
+    let tail: String = str_substring(rest2, sep3 + 1, rest2.len() as i64);
     if str_find_str(tail, String::from(":")) >= 0 {
         return parsed_arith_site_none();
     }
@@ -750,16 +750,16 @@ fn parse_arith_label_text(rest: String) -> ParsedArithSite {
 fn parse_arith_site(output: String) -> ParsedArithSite {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: i64 = lines.len();
+    let n: u64 = lines.len() as u64;
     let mut in_violated: bool = false;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0u64;
     while i < n {
         let line: String = str_trim(lines[i]);
         if line == String::from("Violated property:") {
             in_violated = true;
         } else if in_violated {
             if str_starts_with(line, String::from("arith:")) {
-                let rest: String = str_substring(line, 6, line.len());
+                let rest: String = str_substring(line, 6, line.len() as i64);
                 let site: ParsedArithSite = parse_arith_label_text(rest);
                 if site.cause.len() > 0 {
                     return site;
@@ -788,7 +788,7 @@ fn parse_vow_id(output: String) -> i64 {
 // Read the run of ASCII digits starting at `pos`, returning the parsed value or
 // -1 when no digit is present.
 fn parse_digits_at(line: String, pos: i64) -> i64 {
-    let n: i64 = line.len();
+    let n: i64 = line.len() as i64;
     let mut end: i64 = pos;
     let mut scanning: bool = true;
     while end < n && scanning {
@@ -816,7 +816,7 @@ fn parse_digits_at(line: String, pos: i64) -> i64 {
 // version would fail silently (every clause `unknown`) on exactly the kind of
 // format change this function was just repaired for.
 fn find_vow_claim_id(line: String) -> i64 {
-    let n: i64 = line.len();
+    let n: i64 = line.len() as i64;
     let mut base: i64 = 0;
     while base < n {
         let rest: String = str_substring(line, base, n);
@@ -853,8 +853,8 @@ fn find_vow_claim_id(line: String) -> i64 {
 fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>) {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: i64 = lines.len();
-    let mut i: i64 = 0;
+    let n: u64 = lines.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         let line: String = str_trim(lines[i]);
         let mut has_verdict: bool = false;
@@ -870,11 +870,11 @@ fn parse_multi_property_verdicts(output: String, ids: Vec<i64>, proven: Vec<i64>
             let id: i64 = find_vow_claim_id(line);
             if id >= 0 {
                 let mut found: i64 = -1;
-                let mut k: i64 = 0;
-                while k < ids.len() {
+                let mut k: u64 = 0u64;
+                while k < ids.len() as u64 {
                     if ids[k] == id {
-                        found = k;
-                        k = ids.len();
+                        found = k as i64;
+                        k = ids.len() as u64;
                     } else {
                         k = k + 1;
                     }
@@ -932,13 +932,13 @@ fn verify_function_multi_property(esbmc_bin: String, f: IrFunction, m: IrModule,
 // function_has_requires in vow-verify/src/esbmc.rs.
 fn function_has_requires(f: IrFunction) -> bool {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: i64 = blocks.len();
-    let mut bi: i64 = 0;
+    let nb: u64 = blocks.len() as u64;
+    let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: i64 = insts.len();
-        let mut ii: i64 = 0;
+        let ni: u64 = insts.len() as u64;
+        let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_VOW_REQ() {
@@ -988,13 +988,13 @@ fn verify_function_vacuity(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_
 // function_has_ensures in vow-verify/src/esbmc.rs (#81 PR-C).
 fn function_has_ensures(f: IrFunction) -> bool {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: i64 = blocks.len();
-    let mut bi: i64 = 0;
+    let nb: u64 = blocks.len() as u64;
+    let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: i64 = insts.len();
-        let mut ii: i64 = 0;
+        let ni: u64 = insts.len() as u64;
+        let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_VOW_ENS() {
@@ -1019,15 +1019,15 @@ fn returns_scalar(f: IrFunction) -> bool {
 // parameters and empty returns are skipped — sound but incomplete (#81 PR-C).
 fn body_replaceable_result(f: IrFunction) -> bool {
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: i64 = blocks.len();
+    let nb: u64 = blocks.len() as u64;
     let mut result_id: i64 = -1;
     let mut n_returns: i64 = 0;
-    let mut bi: i64 = 0;
+    let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: i64 = insts.len();
-        let mut ii: i64 = 0;
+        let ni: u64 = insts.len() as u64;
+        let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_RETURN() {
@@ -1052,12 +1052,12 @@ fn body_replaceable_result(f: IrFunction) -> bool {
     if result_id < 0 {
         return false;
     }
-    bi = 0;
+    bi = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: i64 = insts.len();
-        let mut ii: i64 = 0;
+        let ni: u64 = insts.len() as u64;
+        let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
             if inst.id == result_id && inst.op != IOP_GET_ARG() {
@@ -1109,9 +1109,9 @@ fn verify_function_trivial(esbmc_bin: String, f: IrFunction, m: IrModule, max_k_
 fn parse_assignments(output: String, names: Vec<String>, values: Vec<String>) {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: i64 = lines.len();
+    let n: u64 = lines.len() as u64;
     let mut in_ce: bool = false;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0u64;
     while i < n {
         let line: String = str_trim(lines[i]);
         if line == String::from("[Counterexample]") {
@@ -1127,7 +1127,7 @@ fn parse_assignments(output: String, names: Vec<String>, values: Vec<String>) {
                     let is_ident: bool = (first_byte >= 65 && first_byte <= 90) || (first_byte >= 97 && first_byte <= 122) || first_byte == 95;
                     if is_ident {
                         if !str_starts_with(name, String::from("__blk_")) {
-                            let val_raw: String = str_trim(str_substring(line, eq_pos + 1, line.len()));
+                            let val_raw: String = str_trim(str_substring(line, eq_pos + 1, line.len() as i64));
                             let paren_pos: i64 = str_find_str(val_raw, String::from(" ("));
                             let val: String = {
                                 if paren_pos >= 0 {
@@ -1150,9 +1150,9 @@ fn parse_assignments(output: String, names: Vec<String>, values: Vec<String>) {
 fn parse_block_visits(output: String, visits: Vec<i64>) {
     let lines: Vec<String> = Vec::new();
     split_lines(output, lines);
-    let n: i64 = lines.len();
+    let n: u64 = lines.len() as u64;
     let mut in_ce: bool = false;
-    let mut i: i64 = 0;
+    let mut i: u64 = 0u64;
     while i < n {
         let line: String = str_trim(lines[i]);
         if line == String::from("[Counterexample]") {
@@ -1164,9 +1164,9 @@ fn parse_block_visits(output: String, visits: Vec<i64>) {
             if eq_pos > 0 {
                 let name: String = str_trim(str_substring(line, 0, eq_pos));
                 if str_starts_with(name, String::from("__blk_")) {
-                    let val: String = str_trim(str_substring(line, eq_pos + 1, line.len()));
+                    let val: String = str_trim(str_substring(line, eq_pos + 1, line.len() as i64));
                     if val == String::from("1") {
-                        let blk_str: String = str_substring(name, 6, name.len());
+                        let blk_str: String = str_substring(name, 6, name.len() as i64);
                         let blk_id: i64 = str_to_i64(blk_str);
                         if blk_id >= 0 {
                             visits.push(blk_id);
@@ -1180,8 +1180,8 @@ fn parse_block_visits(output: String, visits: Vec<i64>) {
 }
 
 fn map_lookup(keys: Vec<String>, vals: Vec<String>, key: String) -> String {
-    let n: i64 = keys.len();
-    let mut i: i64 = 0;
+    let n: u64 = keys.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         if keys[i] == key {
             return vals[i];
@@ -1192,8 +1192,8 @@ fn map_lookup(keys: Vec<String>, vals: Vec<String>, key: String) -> String {
 }
 
 fn map_has_key(keys: Vec<String>, key: String) -> bool {
-    let n: i64 = keys.len();
-    let mut i: i64 = 0;
+    let n: u64 = keys.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         if keys[i] == key {
             return true;
@@ -1206,13 +1206,13 @@ fn map_has_key(keys: Vec<String>, key: String) -> bool {
 fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
     let params: Vec<i64> = f.params;
     let param_names: Vec<String> = f.param_names;
-    let np: i64 = params.len();
+    let np: u64 = params.len() as u64;
     let mut cl_idx: i64 = 0;
-    let mut ir_idx: i64 = 0;
+    let mut ir_idx: u64 = 0u64;
     while ir_idx < np {
         let pty: i64 = params[ir_idx];
         if pty != ITY_UNIT() {
-            if ir_idx < param_names.len() {
+            if ir_idx < param_names.len() as u64 {
                 let pk: String = String::from("p");
                 pk.push_str(i64_to_string(cl_idx));
                 map_keys.push(pk);
@@ -1223,18 +1223,18 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
         ir_idx = ir_idx + 1;
     }
     let blocks: Vec<IrBlock> = f.blocks;
-    let nb: i64 = blocks.len();
-    let mut bi: i64 = 0;
+    let nb: u64 = blocks.len() as u64;
+    let mut bi: u64 = 0u64;
     while bi < nb {
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
-        let ni: i64 = insts.len();
-        let mut ii: i64 = 0;
+        let ni: u64 = insts.len() as u64;
+        let mut ii: u64 = 0u64;
         while ii < ni {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
                 let arg_idx: i64 = inst.dv;
-                if arg_idx < param_names.len() {
+                if arg_idx < param_names.len() as i64 {
                     let vk: String = String::from("v");
                     vk.push_str(i64_to_string(inst.id));
                     map_keys.push(vk);
@@ -1247,8 +1247,8 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
     }
     let ln_ids: Vec<i64> = f.local_names_ids;
     let ln_strs: Vec<String> = f.local_names_strs;
-    let nln: i64 = ln_ids.len();
-    let mut li: i64 = 0;
+    let nln: u64 = ln_ids.len() as u64;
+    let mut li: u64 = 0u64;
     while li < nln {
         let lk: String = String::from("v");
         lk.push_str(i64_to_string(ln_ids[li]));
@@ -1261,8 +1261,8 @@ fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
 }
 
 fn map_ce_values(c_names: Vec<String>, c_values: Vec<String>, map_keys: Vec<String>, map_vals: Vec<String>, out_names: Vec<String>, out_values: Vec<String>) {
-    let n: i64 = c_names.len();
-    let mut i: i64 = 0;
+    let n: u64 = c_names.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         let src: String = map_lookup(map_keys, map_vals, c_names[i]);
         if src.len() > 0 {

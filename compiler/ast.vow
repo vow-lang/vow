@@ -132,22 +132,22 @@ fn arena_new() -> AstArena {
 }
 
 fn arena_intern_str(a: AstArena, s: String) -> i64 {
-    let idx: i64 = a.strs.len();
+    let idx: i64 = a.strs.len() as i64;
     a.strs.push(s);
     idx
 }
 
 fn arena_add_list(a: AstArena, items: Vec<i64>) -> i64 {
-    let lid: i64 = a.list_head.len();
-    let head: i64 = a.list_data.len();
-    let n: i64 = items.len();
-    let mut i: i64 = 0;
+    let lid: i64 = a.list_head.len() as i64;
+    let head: i64 = a.list_data.len() as i64;
+    let n: u64 = items.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
         a.list_data.push(items[i]);
         i = i + 1;
     }
     a.list_head.push(head);
-    a.list_size.push(n);
+    a.list_size.push(n as i64);
     lid
 }
 
@@ -160,7 +160,7 @@ fn list_get(a: AstArena, lid: i64, i: i64) -> i64 {
 }
 
 fn arena_add_expr(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
-    let eid: i64 = a.expr_data.len() / 5;
+    let eid: i64 = (a.expr_data.len() / 5) as i64;
     a.expr_data.push(tag);
     a.expr_data.push(av);
     a.expr_data.push(bv);
@@ -217,7 +217,7 @@ fn expr_folds_to_zero(a: AstArena, eid: i64) -> bool {
 }
 
 fn arena_add_type(a: AstArena, tag: i64, av: i64, bv: i64, span: i64) -> i64 {
-    let tid: i64 = a.type_data.len() / 4;
+    let tid: i64 = (a.type_data.len() / 4) as i64;
     a.type_data.push(tag);
     a.type_data.push(av);
     a.type_data.push(bv);
@@ -263,7 +263,7 @@ fn loop_break_value_eids(a: AstArena, bid: i64) -> Vec<i64> {
     let values: Vec<i64> = Vec::new();
     loop_break_push_block_exprs(a, bid, pending);
     while pending.len() > 0 {
-        let last: i64 = pending.len() - 1;
+        let last: u64 = (pending.len() as u64) - 1;
         let eid: i64 = pending[last];
         pending.pop();
         if eid != -1 {
@@ -375,10 +375,10 @@ fn ext_fns_lid(a: AstArena, xid: i64) -> i64 { a.ext_data[xid * 3 + 1] }
 
 fn clone_string(src: String) -> String {
     let out: String = String::from("");
-    let n: i64 = src.len();
-    let mut i: i64 = 0;
+    let n: u64 = src.len() as u64;
+    let mut i: u64 = 0u64;
     while i < n {
-        out.push_byte(src.byte_at(i));
+        out.push_byte(src.byte_at(i as i64));
         i = i + 1;
     }
     out
@@ -399,7 +399,7 @@ fn alias_span(a: AstArena, aid: i64) -> i64 { a.alias_data[aid * 3 + 2] }
 fn ext_span(a: AstArena, xid: i64) -> i64 { a.ext_data[xid * 3 + 2] }
 
 fn arena_add_stmt(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
-    let sid: i64 = a.stmt_data.len() / 5;
+    let sid: i64 = (a.stmt_data.len() / 5) as i64;
     a.stmt_data.push(tag);
     a.stmt_data.push(av);
     a.stmt_data.push(bv);
@@ -409,7 +409,7 @@ fn arena_add_stmt(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -
 }
 
 fn arena_add_pat(a: AstArena, tag: i64, av: i64, bv: i64, span: i64) -> i64 {
-    let pid: i64 = a.pat_data.len() / 4;
+    let pid: i64 = (a.pat_data.len() / 4) as i64;
     a.pat_data.push(tag);
     a.pat_data.push(av);
     a.pat_data.push(bv);
@@ -418,7 +418,7 @@ fn arena_add_pat(a: AstArena, tag: i64, av: i64, bv: i64, span: i64) -> i64 {
 }
 
 fn arena_add_blk(a: AstArena, stmts_lid: i64, trail_eid: i64, span: i64) -> i64 {
-    let bid: i64 = a.blk_data.len() / 3;
+    let bid: i64 = (a.blk_data.len() / 3) as i64;
     a.blk_data.push(stmts_lid);
     a.blk_data.push(trail_eid);
     a.blk_data.push(span);
@@ -426,7 +426,7 @@ fn arena_add_blk(a: AstArena, stmts_lid: i64, trail_eid: i64, span: i64) -> i64 
 }
 
 fn arena_add_fn(a: AstArena, name_sid: i64, params_lid: i64, ret_tid: i64, eff: i64, body_bid: i64, vow_lid: i64, is_declaration: i64, span: i64) -> i64 {
-    let fid: i64 = a.fn_data.len() / 8;
+    let fid: i64 = (a.fn_data.len() / 8) as i64;
     a.fn_data.push(name_sid);
     a.fn_data.push(params_lid);
     a.fn_data.push(ret_tid);
@@ -439,7 +439,7 @@ fn arena_add_fn(a: AstArena, name_sid: i64, params_lid: i64, ret_tid: i64, eff: 
 }
 
 fn arena_add_vow_clause(a: AstArena, kind: i64, eid: i64, span: i64) -> i64 {
-    let cid: i64 = a.vow_data.len() / 3;
+    let cid: i64 = (a.vow_data.len() / 3) as i64;
     a.vow_data.push(kind);
     a.vow_data.push(eid);
     a.vow_data.push(span);
@@ -450,7 +450,7 @@ fn vow_clause_kind(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3] }
 fn vow_clause_expr(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3 + 1] }
 
 fn arena_add_sdef(a: AstArena, name_sid: i64, fields_lid: i64, is_linear: i64, span: i64) -> i64 {
-    let sid: i64 = a.sdef_data.len() / 4;
+    let sid: i64 = (a.sdef_data.len() / 4) as i64;
     a.sdef_data.push(name_sid);
     a.sdef_data.push(fields_lid);
     a.sdef_data.push(is_linear);
@@ -459,7 +459,7 @@ fn arena_add_sdef(a: AstArena, name_sid: i64, fields_lid: i64, is_linear: i64, s
 }
 
 fn arena_add_edef(a: AstArena, name_sid: i64, variants_lid: i64, span: i64) -> i64 {
-    let eid: i64 = a.edef_data.len() / 3;
+    let eid: i64 = (a.edef_data.len() / 3) as i64;
     a.edef_data.push(name_sid);
     a.edef_data.push(variants_lid);
     a.edef_data.push(span);
@@ -467,7 +467,7 @@ fn arena_add_edef(a: AstArena, name_sid: i64, variants_lid: i64, span: i64) -> i
 }
 
 fn arena_add_cdef(a: AstArena, name_sid: i64, type_tid: i64, value_eid: i64, span: i64) -> i64 {
-    let cid: i64 = a.cdef_data.len() / 4;
+    let cid: i64 = (a.cdef_data.len() / 4) as i64;
     a.cdef_data.push(name_sid);
     a.cdef_data.push(type_tid);
     a.cdef_data.push(value_eid);
@@ -476,7 +476,7 @@ fn arena_add_cdef(a: AstArena, name_sid: i64, type_tid: i64, value_eid: i64, spa
 }
 
 fn arena_add_alias(a: AstArena, name_sid: i64, type_tid: i64, span: i64) -> i64 {
-    let aid: i64 = a.alias_data.len() / 3;
+    let aid: i64 = (a.alias_data.len() / 3) as i64;
     a.alias_data.push(name_sid);
     a.alias_data.push(type_tid);
     a.alias_data.push(span);
@@ -484,7 +484,7 @@ fn arena_add_alias(a: AstArena, name_sid: i64, type_tid: i64, span: i64) -> i64 
 }
 
 fn arena_add_ext(a: AstArena, vow_lid: i64, fns_lid: i64, span: i64) -> i64 {
-    let xid: i64 = a.ext_data.len() / 3;
+    let xid: i64 = (a.ext_data.len() / 3) as i64;
     a.ext_data.push(vow_lid);
     a.ext_data.push(fns_lid);
     a.ext_data.push(span);
