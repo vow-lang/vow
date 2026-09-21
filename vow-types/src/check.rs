@@ -1651,7 +1651,7 @@ impl<'e> Checker<'e> {
                     self.check_contextual_integer_literal_ranges(init, &defaulted_ty);
                     defaulted_ty
                 };
-                self.bind_pattern(pattern, &binding_ty);
+                self.bind_pattern(pattern, Some(init), &binding_ty);
                 Ty::Unit
             }
             Stmt::Expr {
@@ -1897,22 +1897,66 @@ impl<'e> Checker<'e> {
             .is_some_and(|sig| sig.return_ty == Ty::Never)
     }
 
-    fn bind_pattern(&mut self, pat: &Pat, ty: &Ty) {
+    /// `let` binds only irrefutable identifier/wildcard/tuple patterns, and
+    /// tuple patterns only against a syntactic tuple-literal initializer of
+    /// matching arity — tuple values have no IR-lowering representation, so
+    /// destructuring is a compile-time desugaring into per-element `let`s,
+    /// never a runtime projection. Every rejected shape below must emit
+    /// `UnsupportedPattern` rather than silently bind nothing, or a name used
+    /// after a malformed `let` reads as "undefined identifier" instead of a
+    /// clear error at the binding site.
+    fn bind_pattern(&mut self, pat: &Pat, init: Option<&Expr>, ty: &Ty) {
         match &pat.kind {
             PatKind::Ident { name, is_mut } => {
                 self.env.define_mut(name, ty.clone(), *is_mut, pat.span);
             }
             PatKind::Wildcard => {}
             PatKind::Tuple(pats) => {
-                if let Ty::Tuple(tys) = ty
-                    && pats.len() == tys.len()
-                {
-                    for (p, t) in pats.iter().zip(tys.iter()) {
-                        self.bind_pattern(p, t);
+                let tys = match ty {
+                    Ty::Tuple(tys) if tys.len() == pats.len() => Some(tys),
+                    _ => None,
+                };
+                let elems = match init.map(|e| &e.kind) {
+                    Some(ExprKind::Tuple(elems)) if elems.len() == pats.len() => Some(elems),
+                    _ => None,
+                };
+                match (tys, elems) {
+                    (Some(tys), Some(elems)) => {
+                        for ((p, t), e) in pats.iter().zip(tys.iter()).zip(elems.iter()) {
+                            if self.is_linear_ty(t) {
+                                self.emit_error_with_hints(
+                                    ErrorCode::UnsupportedPattern,
+                                    "tuple destructuring cannot bind a linear-typed element",
+                                    p.span,
+                                    vec![format!(
+                                        "`{t}` is linear; bind the whole tuple's owner separately instead"
+                                    )],
+                                );
+                                continue;
+                            }
+                            self.bind_pattern(p, Some(e), t);
+                        }
+                    }
+                    _ => {
+                        self.emit_error_with_hints(
+                            ErrorCode::UnsupportedPattern,
+                            "tuple destructuring requires a tuple literal initializer with matching arity",
+                            pat.span,
+                            vec![
+                                "rewrite as `let (a, b) = (expr1, expr2);` with one element per pattern slot".to_string(),
+                            ],
+                        );
                     }
                 }
             }
-            _ => {}
+            _ => {
+                self.emit_error_with_hints(
+                    ErrorCode::UnsupportedPattern,
+                    "let bindings only support identifier, wildcard, and tuple patterns",
+                    pat.span,
+                    vec!["refutable patterns (literals, enum variants, struct fields, or-patterns) are not allowed in `let`".to_string()],
+                );
+            }
         }
     }
 
@@ -3542,7 +3586,8 @@ mod tests {
     use super::*;
     use vow_diag::Diagnostic;
     use vow_syntax::ast::{
-        BinOp, Block, Expr, ExprKind, FnDef, Item, Lit, Module, Param, Stmt, Type, Visibility,
+        BinOp, Block, Expr, ExprKind, FnDef, Item, Lit, Module, Param, Pat, PatKind, Stmt, Type,
+        Visibility,
     };
     use vow_syntax::span::Span;
 
@@ -5740,6 +5785,227 @@ mod tests {
         let mut checker = new_checker(&mut emitter);
         checker.check_stmt(&let_stmt_with_i32_init(2147483647));
         assert!(!checker.has_errors());
+    }
+
+    // --- check_stmt with tuple-pattern let bindings (desugared, not first-class values) ---
+
+    fn tuple_ty_ann(names: &[&str]) -> Type {
+        Type::Tuple {
+            elems: names
+                .iter()
+                .map(|n| Type::Named {
+                    name: n.to_string(),
+                    span: dummy_span(),
+                })
+                .collect(),
+            span: dummy_span(),
+        }
+    }
+
+    fn ident_pat(name: &str) -> Pat {
+        Pat {
+            kind: PatKind::Ident {
+                name: name.to_string(),
+                is_mut: false,
+            },
+            span: dummy_span(),
+        }
+    }
+
+    fn tuple_pat(pats: Vec<Pat>) -> Pat {
+        Pat {
+            kind: PatKind::Tuple(pats),
+            span: dummy_span(),
+        }
+    }
+
+    fn tuple_expr(elems: Vec<Expr>) -> Expr {
+        make_expr(ExprKind::Tuple(elems))
+    }
+
+    fn int_lit_n(v: u128) -> Expr {
+        make_expr(ExprKind::Lit(Lit::Int(v)))
+    }
+
+    fn pat_let_stmt(pattern: Pat, ty: Option<Type>, init: Expr) -> Stmt {
+        Stmt::Let {
+            pattern,
+            ty,
+            init: Box::new(init),
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn check_stmt_let_tuple_literal_binds_each_element() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_stmt(&pat_let_stmt(
+            tuple_pat(vec![ident_pat("a"), ident_pat("b")]),
+            Some(tuple_ty_ann(&["i64", "i64"])),
+            tuple_expr(vec![int_lit_n(1), int_lit_n(2)]),
+        ));
+        assert!(!checker.has_errors(), "{:?}", emitter.0);
+        assert_eq!(checker.env.lookup("a"), Some(&Ty::I64));
+        assert_eq!(checker.env.lookup("b"), Some(&Ty::I64));
+    }
+
+    #[test]
+    fn check_stmt_let_tuple_literal_infers_without_annotation() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_stmt(&pat_let_stmt(
+            tuple_pat(vec![ident_pat("a"), ident_pat("b")]),
+            None,
+            tuple_expr(vec![int_lit_n(1), int_lit_n(2)]),
+        ));
+        assert!(!checker.has_errors(), "{:?}", emitter.0);
+        assert_eq!(checker.env.lookup("a"), Some(&Ty::I64));
+        assert_eq!(checker.env.lookup("b"), Some(&Ty::I64));
+    }
+
+    #[test]
+    fn check_stmt_let_nested_tuple_literal_binds_all_leaves() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_stmt(&pat_let_stmt(
+            tuple_pat(vec![
+                ident_pat("a"),
+                tuple_pat(vec![ident_pat("b"), ident_pat("c")]),
+            ]),
+            None,
+            tuple_expr(vec![
+                int_lit_n(1),
+                tuple_expr(vec![int_lit_n(2), int_lit_n(3)]),
+            ]),
+        ));
+        assert!(!checker.has_errors(), "{:?}", emitter.0);
+        assert_eq!(checker.env.lookup("a"), Some(&Ty::I64));
+        assert_eq!(checker.env.lookup("b"), Some(&Ty::I64));
+        assert_eq!(checker.env.lookup("c"), Some(&Ty::I64));
+    }
+
+    #[test]
+    fn check_stmt_let_tuple_arity_mismatch_no_annotation_single_diagnostic() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_stmt(&pat_let_stmt(
+            tuple_pat(vec![ident_pat("a"), ident_pat("b")]),
+            None,
+            tuple_expr(vec![int_lit_n(1), int_lit_n(2), int_lit_n(3)]),
+        ));
+        assert_eq!(emitter.0.len(), 1, "{:?}", emitter.0);
+        assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+    }
+
+    #[test]
+    fn check_stmt_let_tuple_arity_mismatch_with_annotation_two_diagnostics() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_stmt(&pat_let_stmt(
+            tuple_pat(vec![ident_pat("a"), ident_pat("b")]),
+            Some(tuple_ty_ann(&["i64", "i64"])),
+            tuple_expr(vec![int_lit_n(1), int_lit_n(2), int_lit_n(3)]),
+        ));
+        assert_eq!(emitter.0.len(), 2, "{:?}", emitter.0);
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert_eq!(emitter.0[1].code, ErrorCode::UnsupportedPattern);
+    }
+
+    #[test]
+    fn check_stmt_let_tuple_non_literal_initializer_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        // `t` has tuple type but is a variable reference, not a tuple literal —
+        // the desugaring can only look through a syntactic tuple literal.
+        checker.check_stmt(&pat_let_stmt(
+            ident_pat("t"),
+            Some(tuple_ty_ann(&["i64", "i64"])),
+            tuple_expr(vec![int_lit_n(1), int_lit_n(2)]),
+        ));
+        checker.check_stmt(&pat_let_stmt(
+            tuple_pat(vec![ident_pat("a"), ident_pat("b")]),
+            None,
+            ident("t"),
+        ));
+        assert_eq!(emitter.0.len(), 1, "{:?}", emitter.0);
+        assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+    }
+
+    #[test]
+    fn check_stmt_let_refutable_enum_pattern_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let pat = Pat {
+            kind: PatKind::EnumVariant {
+                path: vec!["Some".to_string()],
+                inner: vec![ident_pat("x")],
+            },
+            span: dummy_span(),
+        };
+        checker.check_stmt(&pat_let_stmt(pat, None, int_lit_n(1)));
+        assert_eq!(emitter.0.len(), 1, "{:?}", emitter.0);
+        assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+    }
+
+    #[test]
+    fn check_stmt_let_or_pattern_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let pat = Pat {
+            kind: PatKind::Or(vec![ident_pat("a"), ident_pat("b")]),
+            span: dummy_span(),
+        };
+        checker.check_stmt(&pat_let_stmt(pat, None, int_lit_n(1)));
+        assert_eq!(emitter.0.len(), 1, "{:?}", emitter.0);
+        assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+    }
+
+    #[test]
+    fn check_stmt_let_bare_literal_pattern_rejected() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let pat = Pat {
+            kind: PatKind::Lit(Lit::Int(5)),
+            span: dummy_span(),
+        };
+        checker.check_stmt(&pat_let_stmt(pat, None, int_lit_n(5)));
+        assert_eq!(emitter.0.len(), 1, "{:?}", emitter.0);
+        assert_eq!(emitter.0[0].code, ErrorCode::UnsupportedPattern);
+    }
+
+    #[test]
+    fn check_stmt_let_tuple_linear_element_rejected() {
+        use crate::env::StructInfo;
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.env.define_struct(
+            "Token",
+            StructInfo {
+                fields: vec![("id".to_string(), Ty::I64)],
+                is_linear: true,
+            },
+        );
+        let token_lit = make_expr(ExprKind::StructLiteral {
+            name: "Token".to_string(),
+            fields: vec![("id".to_string(), int_lit_n(1))],
+        });
+        checker.check_stmt(&pat_let_stmt(
+            tuple_pat(vec![ident_pat("a"), ident_pat("b")]),
+            None,
+            tuple_expr(vec![token_lit, int_lit_n(2)]),
+        ));
+        assert!(checker.has_errors());
+        // `b` is still bound: only the linear leaf is rejected, not the whole pattern.
+        assert_eq!(checker.env.lookup("b"), Some(&Ty::I64));
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.code == ErrorCode::UnsupportedPattern),
+            "{:?}",
+            emitter.0
+        );
     }
 
     fn let_stmt_with_wide_init(target: &str, magnitude: u128, negative: bool) -> Stmt {

@@ -635,13 +635,7 @@ fn parse_let_stmt(p: Parser) -> i64 {
         t.span_start
     };
     let _kw: bool = expect(p, tok_kw_let());
-    let is_mut: i64 = if at(p, tok_kw_mut()) {
-        let _m: Token = advance(p);
-        1
-    } else {
-        0
-    };
-    let name_sid: i64 = expect_ident(p);
+    let pat_pid: i64 = parse_pattern(p);
     let mut annot_tid: i64 = -1;
     if at(p, tok_colon()) {
         let _c: Token = advance(p);
@@ -652,7 +646,6 @@ fn parse_let_stmt(p: Parser) -> i64 {
     if at(p, tok_semicolon()) {
         let _sc: Token = advance(p);
     }
-    let pat_pid: i64 = arena_add_pat(p.arena, PAT_IDENT(), name_sid, is_mut, 0);
     let span: i64 = span_pack_to_here(p, span_start);
     arena_add_stmt(p.arena, STMT_LET(), pat_pid, annot_tid, init_eid, span)
 }

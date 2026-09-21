@@ -260,12 +260,13 @@ fn f(o: Option<i64>) -> i64 {
 ### UnsupportedPattern
 
 **Phase:** Type Checker
-**Meaning:** A parsed `match` pattern or scrutinee is not in the subset that
-the compiler can lower safely. Match currently accepts enum-valued scrutinees,
-qualified unit variants, qualified tuple variants with `_` or immutable
-identifier payloads, and final catchall `_` or immutable identifier arms. A
-tuple-variant pattern must bind exactly the number of payloads declared by the
-variant.
+**Meaning:** A parsed `match` pattern or scrutinee, or a `let` pattern, is not
+in the subset that the compiler can lower safely.
+
+Match currently accepts enum-valued scrutinees, qualified unit variants,
+qualified tuple variants with `_` or immutable identifier payloads, and final
+catchall `_` or immutable identifier arms. A tuple-variant pattern must bind
+exactly the number of payloads declared by the variant.
 
 ```vow
 fn f(n: i64) -> i64 {
@@ -282,6 +283,42 @@ fn f(n: i64) -> i64 {
 payloads, provide exactly one `_` or immutable identifier for each declared
 payload and inspect bound values separately. Unsupported patterns fail before
 lowering and never produce an executable.
+
+`let` only binds identifier, wildcard, and tuple patterns; all other pattern
+kinds (literals, enum variants, struct patterns, or-patterns) are refutable
+and rejected outright, since `let` requires the pattern to always match:
+
+```vow
+fn f(o: Option<i64>) -> i64 {
+    let Option::Some(x) = o;
+    x
+}
+```
+
+**Output:** `let bindings only support identifier, wildcard, and tuple patterns`
+
+A tuple `let` pattern additionally requires the initializer to be a tuple
+literal of exactly the same arity, at every nesting level — tuple *values*
+have no runtime representation, so `let (a, b) = ...` is a compile-time
+desugaring into `let a = ...; let b = ...;`, never a projection out of a
+materialized tuple:
+
+```vow
+fn pair() -> (i64, i64) { (1, 2) }
+
+fn f() -> i64 {
+    let (a, b) = pair();
+    a + b
+}
+```
+
+**Output:** `tuple destructuring requires a tuple literal initializer with matching arity`
+
+**Fix:** Rewrite the pattern as `let (a, b) = (expr1, expr2);` with one
+initializer element per pattern slot, or bind a single identifier and access
+elements once tuples are supported as first-class values (tracked separately;
+not yet implemented). A tuple `let` pattern also cannot bind a linear-typed
+element — bind the whole owner to a single identifier instead.
 
 ### ImmutableAssignment
 

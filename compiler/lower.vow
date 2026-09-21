@@ -4839,22 +4839,65 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
         let pat_id: i64 = stmt_a(a, sid);
         let ann_tid: i64 = stmt_b(a, sid);
         let init_eid: i64 = stmt_c(a, sid);
-        if ann_tid != -1 {
-            lctx_record_wide_expected_ast_context(ctx, a, init_eid, ann_tid);
-            let context_ann_tid: i64 = lower_resolve_alias_tid(
-                a, ann_tid, ctx.type_alias_names, ctx.type_alias_target_tids
-            );
-            if type_tag(a, context_ann_tid) == TY_NAMED() {
-                let context_name: String = arena_str(a, type_a(a, context_ann_tid));
-                lctx_record_wide_control_flow_context(
-                    ctx, a, init_eid, ity_for_scalar_type_name(context_name)
-                );
-            }
+        if pat_tag(a, pat_id) == PAT_TUPLE() {
+            lower_tuple_let(ctx, pat_id, ann_tid, init_eid);
+        } else {
+            lower_let_binding(ctx, pat_id, ann_tid, init_eid, stmt_span(a, sid));
         }
-        let mut val: i64 = lower_expr(ctx, init_eid);
-        lctx_set_inst_span(ctx, val, stmt_span(a, sid));
-        let ptag: i64 = pat_tag(a, pat_id);
-        if ptag == PAT_IDENT() {
+    } else if tag == STMT_EXPR() {
+        let expr_eid: i64 = stmt_a(a, sid);
+        lower_expr(ctx, expr_eid);
+    }
+}
+
+// Tuple destructuring has no IR-lowering representation for tuple *values*
+// -- it is a compile-time desugaring only, checked by `bind_tuple_pattern`
+// (checker.vow) to apply solely to a tuple pattern matched against a
+// syntactic tuple-literal initializer of the same arity at every nesting
+// level. So this rewrites `let (a, b) = (x, y);` into `let a = x; let b =
+// y;` leaf by leaf, recursing for nested tuples, and never lowers the
+// `EXPR_TUPLE` initializer node itself -- which also gets every existing
+// per-leaf annotation special case (i128/u128 widening, Vec element
+// tracking, ...) for free via `lower_let_binding`.
+fn lower_tuple_let(ctx: LowerCtx, pat_id: i64, ann_tid: i64, init_eid: i64) {
+    let a: AstArena = ctx.arena;
+    let pats_lid: i64 = pat_a(a, pat_id);
+    let n: i64 = list_len(a, pats_lid);
+    let init_elems_lid: i64 = expr_a(a, init_eid);
+    let has_ann: bool = ann_tid != -1 && type_tag(a, ann_tid) == TY_TUPLE();
+    let ann_elems_lid: i64 = if has_ann { type_a(a, ann_tid) } else { -1 };
+    let mut i: i64 = 0;
+    while i < n {
+        let sub_pat_id: i64 = list_get(a, pats_lid, i);
+        let sub_init_eid: i64 = list_get(a, init_elems_lid, i);
+        let sub_ann_tid: i64 = if has_ann { list_get(a, ann_elems_lid, i) } else { -1 };
+        if pat_tag(a, sub_pat_id) == PAT_TUPLE() {
+            lower_tuple_let(ctx, sub_pat_id, sub_ann_tid, sub_init_eid);
+        } else {
+            lower_let_binding(ctx, sub_pat_id, sub_ann_tid, sub_init_eid, expr_span(a, sub_init_eid));
+        }
+        i = i + 1;
+    }
+}
+
+fn lower_let_binding(ctx: LowerCtx, pat_id: i64, ann_tid: i64, init_eid: i64, span: i64) {
+    let a: AstArena = ctx.arena;
+    if ann_tid != -1 {
+        lctx_record_wide_expected_ast_context(ctx, a, init_eid, ann_tid);
+        let context_ann_tid: i64 = lower_resolve_alias_tid(
+            a, ann_tid, ctx.type_alias_names, ctx.type_alias_target_tids
+        );
+        if type_tag(a, context_ann_tid) == TY_NAMED() {
+            let context_name: String = arena_str(a, type_a(a, context_ann_tid));
+            lctx_record_wide_control_flow_context(
+                ctx, a, init_eid, ity_for_scalar_type_name(context_name)
+            );
+        }
+    }
+    let mut val: i64 = lower_expr(ctx, init_eid);
+    lctx_set_inst_span(ctx, val, span);
+    let ptag: i64 = pat_tag(a, pat_id);
+    if ptag == PAT_IDENT() {
             let name_sid: i64 = pat_a(a, pat_id);
             let name: String = arena_str(a, name_sid);
             if ann_tid != -1 {
@@ -4919,10 +4962,6 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
             ctx.func.local_names_ids.push(val);
             ctx.func.local_names_strs.push(name);
             lctx_define(ctx, name, val);
-        }
-    } else if tag == STMT_EXPR() {
-        let expr_eid: i64 = stmt_a(a, sid);
-        lower_expr(ctx, expr_eid);
     }
 }
 
