@@ -67,9 +67,10 @@ The rule has three consequences for this firing.
   - `:5533-5535` — the function's trailing return, 9 types.
 
   The Rust twin is already deep: `narrow_int_width` / `diverges_from_speculative_int` at
-  `vow-ir/src/lower/mod.rs:4139-4155` (#1327). **File-count estimate: 2** — `compiler/lower.vow` plus
-  a new `compiler/tests/test_lower_narrow_int_width.vow`. It becomes 3 if the Rust keep-in-sync
-  comment is repointed.
+  `vow-ir/src/lower/mod.rs:4139-4155` (#1327). **File-count estimate: 2** at scoring (`compiler/lower.vow` plus
+  a new `compiler/tests/test_lower_narrow_int_width.vow`). **Revised to 3 at step 4**, because the
+  adjudicated design adds `ity_int_width_bits` to `compiler/ir.vow`. A Rust keep-in-sync comment
+  makes 4.
 - **Score**: 22/25 — leverage 4, locality 4, blast radius 1, heat 5
   - *Leverage 4*: seven sites stop restating membership, and the four 8-type pre-filters in front of
     `lower_narrow_literal` stop second-guessing the function's own gate. This is the grade #1327
@@ -452,4 +453,132 @@ three mirrors on heat (`builtin-arg-layout-spec`, heat 4).
 
 ## Design
 
-*Written at step 4, after this report is committed.*
+Three sub-agents worked in parallel, each briefed to produce a deliberately different interface.
+Every design must keep each site's membership row for row (8 types at five sites, 9 at two), so the
+self-hosted IR stays byte-identical.
+
+### Design A: minimal surface, an exact mirror of the Rust names
+
+- **Interface**: two functions in `compiler/lower.vow`, both with the Rust names and no new
+  vocabulary.
+  - `narrow_int_width(ty: i64) -> i64` is a four-row width table: 8, 16, 32 or 128, and 0 for
+    none. There is no 64 row.
+  - `diverges_from_speculative_int(ty: i64) -> bool` is `ir_ty_is_integer(ty) && ty != ITY_I64()`.
+- **Sites**:
+  - The four 8-type pre-filters become `narrow_int_width(..) != 0`.
+  - The self-gate becomes `!diverges_from_speculative_int(ty)`.
+  - The `let` chain becomes `let annotated = ity_for_scalar_type_name(type_name); if
+    narrow_int_width(annotated) != 0 { … }`, and the `u64` `IntCast` branch after it is unchanged.
+  - The trailing return keeps its gate, re-spelled over `diverges_from_speculative_int`.
+- **Hides**: which `ITY_*` codes are integers, and at what width. The numbering is non-contiguous.
+  It also hides that `u64` is the one code on which the two predicates disagree.
+- **Test**: `compiler/tests/test_lower_narrow_int_width.vow`, with three checks mirroring Rust's
+  three tests:
+  - exhaustive over the 16 codes plus out-of-range codes;
+  - a differential against the legacy 8-type and 9-type lists over codes -1 to 16;
+  - the `let` composition row by row, including unknown names.
+- **Trade-offs**:
+  - There is no general width accessor, so `narrow_int_width` is its own table rather than being
+    derived from an integer shape.
+  - The width value is never read; every site only tests `!= 0`.
+- **Diff**: about +19/−44 in `lower.vow` and about 105 test lines, in 2 files.
+
+### Design B: the integer-shape fact lives with the `ITY_*` codes in `ir.vow`
+
+- **Interface**: one domain accessor in `compiler/ir.vow`, next to the codes. It is the
+  self-hosted twin of Rust's `IntegerWidth::bits()` (`vow-ir/src/types.rs:44-54`):
+  - `ity_int_width_bits(ty: i64) -> i64` returns 8, 16, 32, 64 or 128, and 0 for non-integers
+    and unknown codes.
+
+  The two predicates stay in `compiler/lower.vow` with the Rust names, because "i64 is the
+  speculative default" is a lowering rule:
+  - `narrow_int_width` is the width with 64 mapped to 0;
+  - `diverges_from_speculative_int` is `ity_int_width_bits(ty) != 0 && ty != ITY_I64()`.
+- **Sites**: the same as A.
+- **Rejected alternatives**:
+  - An `IntShape` struct return was rejected because structs are heap-allocated
+    (`grammar.md:804`) and this is the hot lowering path.
+  - `ity_int_is_signed` was left out because nothing would call it yet.
+- **Hides**: the same as A. In addition, the width and integer-ness of a code live in the one
+  module every `ITY_*` consumer already imports. The test also pins
+  `ity_int_width_bits(ty) != 0 ⇔ ir_ty_is_integer(ty)`.
+- **Trade-offs**:
+  - It touches one more file, the one that 10 modules import. The change is additive, and a grep
+    of the flat namespace built by `concat_vow.sh` found no name clash.
+  - It opens a natural home for later consumers, which are out of scope here:
+    - `module_io.vow:531-558`, the integer-type wire codec;
+    - c_emitter's `ity_is_wide`.
+- **Diff**: about +10 in `ir.vow`, about +16/−44 in `lower.vow` and about 110 test lines, in 3 files.
+
+### Design C: optimised for the most common caller, a context-keyed entry point
+
+- **Interface**:
+  - six `NARROW_CTX_*()` codes: `DEFAULT`, `BINOP_OPERAND`, `CALL_ARG`, `ASSIGN`, `MATCH_PHI`
+    and `LET_ANNOTATION`;
+  - `narrow_admits(ty, nctx) -> bool`, derived as *integer ∧ ≠ i64 ∧ (≠ u64 ∨ nctx = DEFAULT)*;
+  - `lower_narrow_literal_in(ctx, a, eid, original, ty, nctx)`, which gates and then delegates to
+    the unchanged `lower_narrow_literal`.
+- **Sites**:
+  - The call-argument, assignment and `let` sites call the entry point unconditionally.
+  - The binop and Phi sites keep a gate, `narrow_admits(.., CTX)`, because neither one delegates.
+  - The trailing return drops its gate, as Rust did at `mod.rs:4995`.
+- **Hides**: the per-context `u64` decision, now written as a row.
+- **Trade-offs**, as its own author stated them:
+  - Six codes carry one bit. `DEFAULT` is exactly `diverges_from_speculative_int`, and every
+    other row is exactly `narrow_int_width(..) != 0`.
+  - It introduces a swapped-argument bug class: `(ty, nctx)` are both `i64`.
+  - It is a **differently shaped seam** from Rust's. Under the parity reading this report relies
+    on (a mirror *completes* the landed change), that lands a second vocabulary for one policy in
+    one compiler only. To be parity-honest it would have to change Rust too. That would re-open
+    the 2026-09-21 adjudication, which rejected exactly this context-parameter shape for Rust.
+- **Diff**: about net 0 in `lower.vow` and about 140 test lines. Rust gets 0 lines if the change
+  is Vow-only, or about +30–45 if Rust is changed to match.
+
+### Adjudication criteria
+
+These are applied in order: **depth**, **locality**, **seam placement**, **test surface**, **blast
+radius**.
+
+### Verdict: Design B
+
+The advisor adjudicated.
+
+- **Depth.** B is the only design that *derives* the membership from a width fact instead of
+  re-spelling it. A's `narrow_int_width` is its own four-row table with a conspicuous missing 64
+  row. That is the same "re-spells the set inside the new seam" defect that lost the Rust
+  adjudication one firing ago: the 2026-09-21 report picked its design C for exactly this reason, in
+  the same file, over the same policy. C's six codes carry one bit.
+- **Locality.** The width fact sits beside the `ITY_*` codes. Whoever adds a code therefore sees the
+  width decision in the same place.
+- **Seam placement.** `ir.vow` is the module every `ITY_*` consumer already imports. Two prospective
+  adapters are named, not a hypothetical one: `module_io.vow:531-558`'s integer-type codec and
+  `c_emitter`'s `ity_is_wide`. Both are out of scope here.
+- **Test surface.** B's test additionally pins `ity_int_width_bits(ty) != 0 ⇔
+  ir_ty_is_integer(ty)`.
+- **Blast radius.** A wins here, 2 files against 3, but this is the tie-breaker between
+  *otherwise-equal* designs, and they are not equal.
+
+**Runner-up design: A.** It lost on depth: its width table re-spells membership instead of deriving
+it.
+
+**Why C lost.** It fails on parity, the objection its own author called decisive. A context-keyed
+seam in the self-hosted compiler alone is a second vocabulary for a policy that Rust expresses as
+`narrow_int_width` / `diverges_from_speculative_int`. That undoes the "a mirror completes the landed
+change" reading this report relies on.
+
+**Decisions carried into implementation:**
+
+- **Keep the trailing-return gate**, re-spelled over `diverges_from_speculative_int`. Rust deleted
+  its equivalent at `mod.rs:4995`. Both choices produce identical output: `block_result_eid` is pure
+  and `lower_narrow_literal` returns before mutating `ctx`. The difference is deliberate, and the PR
+  says so.
+- **No contracts on the new functions.**
+  - `lower.vow:1347-1349` records a latent Cranelift bug with inline OR-chain postconditions once
+    `lower.vow` is imported into a compiler test, which the new test does.
+  - The only tight `ensures` would restate the body.
+  - A `requires` bounding `ty` could not be discharged at call sites that pass arbitrary codes.
+- **File-count estimate revised from 2 to 3** (`ir.vow`, `lower.vow`, the new test) before
+  implementation, so step 5 watches the diff against the real number.
+- **Rust**: no functional edit. A comment next to `narrow_int_width` /
+  `diverges_from_speculative_int` names the self-hosted twins, following the keep-in-sync pattern at
+  `mod.rs:206`. It is comment-only, so it has no codecov exposure.
