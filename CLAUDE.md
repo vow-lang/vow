@@ -86,6 +86,8 @@ title by editing the PR title, not by amending commits.
 
 When implementing changes across Vow compilers, always modify BOTH the Rust compiler and the self-hosted compiler in the same session. Run the full test suite (`cargo test` and self-hosted tests) after changes to both.
 
+This applies to behaviour-preserving refactors and unattended architecture-deepening runs too. "Rust-only, so no new drift" is not an exemption: the self-hosted compiler is the primary one, and a Rust-only refactor widens the gap between the two. If a change cannot be expressed in Vow (no generics, traits, or closures), do not land the Rust half alone — drop or re-scope the change. Earlier Rust-only landings recorded in `.architecture/` are outstanding debt, not precedent.
+
 ## Bootstrap Commands (Rust Stage 0)
 
 These Rust workspace commands build the stage 0 bootstrap compiler only. For day-to-day development, use `build/vowc` (see below).
