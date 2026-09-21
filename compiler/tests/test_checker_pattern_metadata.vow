@@ -1,0 +1,134 @@
+module TestCheckerPatternMetadata
+
+use lexer
+use token
+use ast
+use diag
+use parser
+use checker
+use env
+use module_io
+
+fn checked_env(source: String) -> CheckEnv [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(
+        lex(source), arena, dctx, String::from("pat_meta.vow")
+    );
+    let item_files: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < parsed.items.len() {
+        item_files.push(String::from("pat_meta.vow"));
+        i = i + 1;
+    }
+    let check_env: CheckEnv = env_new(dctx, String::from("pat_meta.vow"));
+    check_module(check_env, parsed, item_files);
+    check_env
+}
+
+fn env_error_count(check_env: CheckEnv) -> i64 {
+    let dctx: DiagCtx = check_env.dctx;
+    dctx.error_count
+}
+
+fn count_named(names: Vec<String>, wanted: String) -> i64 {
+    let mut count: i64 = 0;
+    let mut i: i64 = 0;
+    while i < names.len() {
+        if names[i] == wanted {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    count
+}
+
+// A struct payload bound by an enum-variant arm and an enum scrutinee bound
+// by a bare-identifier catch-all both register aggregate metadata at their
+// pattern ids, which are arena-wide and therefore beyond the initially empty
+// pat_* arrays.
+fn pattern_source() -> String {
+    String::from(
+        "module PatMeta\nstruct Box { v: i64 }\nenum Payload { Boxed(Box), Empty }\nfn boxed_v(p: Payload) -> i64 {\n    match p {\n        Payload::Boxed(b) => { b.v },\n        Payload::Empty => { -1 },\n    }\n}\nfn catch_all(p: Payload) -> i64 {\n    match p {\n        Payload::Empty => { -1 },\n        other => { 0 },\n    }\n}\nfn main() -> i32 { 0 }"
+    )
+}
+
+fn check_pattern_source_is_accepted() -> i32 [io] {
+    let check_env: CheckEnv = checked_env(pattern_source());
+    if env_error_count(check_env) != 0 { return 1; }
+    0
+}
+
+fn check_aggregate_bindings_are_recorded() -> i32 [io] {
+    let check_env: CheckEnv = checked_env(pattern_source());
+    let names: Vec<String> = check_env.pat_aggregate_names;
+    if count_named(names, String::from("Box")) != 1 { return 2; }
+    if count_named(names, String::from("Payload")) != 1 { return 3; }
+    0
+}
+
+// Slots that never received a real write must keep the placeholder values
+// that lower.vow's `pid < len` guard treats as "no metadata".
+fn check_unwritten_slots_keep_placeholders() -> i32 [io] {
+    let check_env: CheckEnv = checked_env(pattern_source());
+    let names: Vec<String> = check_env.pat_aggregate_names;
+    let option_tys: Vec<i64> = check_env.pat_option_elem_tys;
+    let linear_flags: Vec<i64> = check_env.pat_aggregate_linear;
+    if option_tys.len() != names.len() { return 4; }
+    if linear_flags.len() != names.len() { return 5; }
+    let mut placeholders: i64 = 0;
+    let mut i: i64 = 0;
+    while i < names.len() {
+        if names[i].len() == 0 {
+            placeholders = placeholders + 1;
+            if option_tys[i] != -1 { return 6; }
+            if linear_flags[i] != 0 { return 7; }
+        }
+        i = i + 1;
+    }
+    if placeholders == 0 { return 8; }
+    0
+}
+
+// `.unwrap()` on an aggregate-payload Option registers the same kind of
+// sparse metadata, keyed by expression id, in the question_* arrays.
+fn unwrap_source() -> String {
+    String::from(
+        "module UnwrapMeta\nstruct Box { v: i64 }\nfn first(o: Option<Box>) -> i64 [panic] {\n    let b: Box = o.unwrap();\n    b.v\n}\nfn main() -> i32 { 0 }"
+    )
+}
+
+fn check_unwrap_aggregate_is_recorded() -> i32 [io] {
+    let check_env: CheckEnv = checked_env(unwrap_source());
+    if env_error_count(check_env) != 0 { return 9; }
+    let names: Vec<String> = check_env.question_aggregate_names;
+    let option_tys: Vec<i64> = check_env.question_option_elem_tys;
+    let linear_flags: Vec<i64> = check_env.question_aggregate_linear;
+    if count_named(names, String::from("Box")) != 1 { return 10; }
+    if option_tys.len() != names.len() { return 11; }
+    if linear_flags.len() != names.len() { return 12; }
+    let mut placeholders: i64 = 0;
+    let mut i: i64 = 0;
+    while i < names.len() {
+        if names[i].len() == 0 {
+            placeholders = placeholders + 1;
+            if option_tys[i] != -1 { return 13; }
+            if linear_flags[i] != 0 { return 14; }
+        }
+        i = i + 1;
+    }
+    if placeholders == 0 { return 15; }
+    0
+}
+
+fn main() -> i32 [io] {
+    let accepted_result: i32 = check_pattern_source_is_accepted();
+    if accepted_result != 0 { return accepted_result; }
+    let recorded_result: i32 = check_aggregate_bindings_are_recorded();
+    if recorded_result != 0 { return recorded_result; }
+    let placeholder_result: i32 = check_unwritten_slots_keep_placeholders();
+    if placeholder_result != 0 { return placeholder_result; }
+    let unwrap_result: i32 = check_unwrap_aggregate_is_recorded();
+    if unwrap_result != 0 { return unwrap_result; }
+    0
+}
