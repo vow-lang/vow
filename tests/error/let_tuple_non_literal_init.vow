@@ -1,0 +1,12 @@
+// TEST: error-code UnsupportedPattern
+// TEST: stderr "tuple destructuring requires a tuple literal initializer"
+module LetTupleNonLiteralInit
+
+fn pair() -> (i64, i64) {
+    (1, 2)
+}
+
+fn main() -> i32 {
+    let (a, b) = pair();
+    0
+}

@@ -1,0 +1,12 @@
+// TEST: error-code UnsupportedPattern
+// TEST: stderr "tuple destructuring cannot bind a linear-typed element"
+module LetTupleLinearElement
+
+linear struct Token {
+    id: i64,
+}
+
+fn main() -> i32 {
+    let (a, b) = (Token { id: 1 }, 2);
+    0
+}

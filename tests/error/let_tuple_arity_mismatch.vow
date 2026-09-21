@@ -1,0 +1,8 @@
+// TEST: error-code UnsupportedPattern
+// TEST: stderr "tuple destructuring requires a tuple literal initializer with matching arity"
+module LetTupleArityMismatch
+
+fn main() -> i32 {
+    let (a, b) = (1, 2, 3);
+    0
+}

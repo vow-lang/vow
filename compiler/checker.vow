@@ -1578,7 +1578,7 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
                 }
                 at_tid
             };
-            bind_pattern(e, m, pat_pid, bound_tid, stmt_span(a, sid));
+            bind_pattern(e, m, pat_pid, init_eid, bound_tid, stmt_span(a, sid));
             result_tid = CTY_UNIT();
         } else {
             let eid: i64 = stmt_a(a, sid);
@@ -1604,7 +1604,13 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
     final_tid
 }
 
-fn bind_pattern(e: CheckEnv, m: Module, pid: i64, tid: i64, decl_span: i64) [io] {
+// `let` binds only irrefutable identifier/wildcard/tuple patterns, and tuple
+// patterns only against a syntactic tuple-literal initializer of matching
+// arity -- tuple values have no IR-lowering representation, so destructuring
+// is a compile-time desugaring into per-element `let`s, never a runtime
+// projection. Every rejected shape must emit EC_UNSUPPORTED_PATTERN rather
+// than silently binding nothing.
+fn bind_pattern(e: CheckEnv, m: Module, pid: i64, init_eid: i64, tid: i64, decl_span: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
     if tag == PAT_IDENT() {
@@ -1612,6 +1618,56 @@ fn bind_pattern(e: CheckEnv, m: Module, pid: i64, tid: i64, decl_span: i64) [io]
         let name: String = arena_str(a, name_sid);
         let is_mut: i64 = pat_b(a, pid);
         env_define_var_m(e, name, tid, is_mut, decl_span);
+        return;
+    }
+    if tag == PAT_WILD() {
+        return;
+    }
+    if tag == PAT_TUPLE() {
+        bind_tuple_pattern(e, m, pid, init_eid, tid, decl_span);
+        return;
+    }
+    env_emit_error_code(
+        e,
+        EC_UNSUPPORTED_PATTERN(),
+        String::from("let bindings only support identifier, wildcard, and tuple patterns"),
+        pat_span(a, pid),
+    );
+}
+
+fn bind_tuple_pattern(e: CheckEnv, m: Module, pid: i64, init_eid: i64, tid: i64, decl_span: i64) [io] {
+    let a: AstArena = m.arena;
+    let pats_lid: i64 = pat_a(a, pid);
+    let n: i64 = list_len(a, pats_lid);
+    let ty_ok: bool = ty_tag(e.ts, tid) == CTY_TUPLE() && ts_arg_len(e.ts, ty_a(e.ts, tid)) == n;
+    let init_ok: bool = init_eid != -1 && expr_tag(a, init_eid) == EXPR_TUPLE() && list_len(a, expr_a(a, init_eid)) == n;
+    if !ty_ok || !init_ok {
+        env_emit_error_code(
+            e,
+            EC_UNSUPPORTED_PATTERN(),
+            String::from("tuple destructuring requires a tuple literal initializer with matching arity"),
+            pat_span(a, pid),
+        );
+        return;
+    }
+    let elems_lid: i64 = ty_a(e.ts, tid);
+    let init_elems_lid: i64 = expr_a(a, init_eid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sub_pid: i64 = list_get(a, pats_lid, i);
+        let sub_tid: i64 = ts_arg_get(e.ts, elems_lid, i);
+        let sub_init_eid: i64 = list_get(a, init_elems_lid, i);
+        if is_linear_ty(e, sub_tid) != 0 {
+            env_emit_error_code(
+                e,
+                EC_UNSUPPORTED_PATTERN(),
+                String::from("tuple destructuring cannot bind a linear-typed element"),
+                pat_span(a, sub_pid),
+            );
+        } else {
+            bind_pattern(e, m, sub_pid, sub_init_eid, sub_tid, decl_span);
+        }
+        i = i + 1;
     }
 }
 

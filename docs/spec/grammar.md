@@ -537,7 +537,22 @@ declared `let`, not `let mut`.
 
 ```vow
 let (a, b): (i64, i64) = (1, 2);
+let (a, (b, c)) = (1, (2, 3));
+let (_, b) = (side_effecting_call(), 2);
 ```
+
+`let` accepts identifier, wildcard (`_`), and tuple patterns, recursively for
+nested tuples. There is no runtime tuple value: a tuple `let` pattern is a
+compile-time desugaring into one independent `let` per leaf, so the
+initializer must be a syntactic tuple literal of exactly the same arity at
+every nesting level (`let (a, b) = f();`, where `f` returns a tuple, is
+rejected — tuples are not yet first-class values). A wildcard leaf still
+evaluates and lowers its corresponding initializer element for its effects;
+it just binds no name. A tuple `let` pattern cannot bind a linear-typed
+element. All other pattern kinds (literals, enum variants, struct patterns,
+or-patterns) are refutable and are rejected in `let` position, since a `let`
+pattern must always match. Rejected shapes produce `error[UnsupportedPattern]`
+(see `errors.md`).
 
 ## Control Flow
 

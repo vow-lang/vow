@@ -1,0 +1,9 @@
+// TEST: error-code UnsupportedPattern
+// TEST: stderr "let bindings only support identifier, wildcard, and tuple patterns"
+module LetRefutablePattern
+
+fn main() -> i32 {
+    let x: i64 = 5;
+    let 5 = x;
+    0
+}

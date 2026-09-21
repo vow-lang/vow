@@ -1,0 +1,22 @@
+// TEST: exit 0
+module LetTupleDestructure
+
+fn side_effect(x: i64) -> i64 {
+    x + 1
+}
+
+fn main() -> i32 {
+    let (a, b): (i64, i64) = (1, 2);
+    if a != 1 { return 1; }
+    if b != 2 { return 2; }
+
+    let (c, (d, e)) = (10, (20, 30));
+    if c != 10 { return 3; }
+    if d != 20 { return 4; }
+    if e != 30 { return 5; }
+
+    let (_, f) = (side_effect(41), 99);
+    if f != 99 { return 6; }
+
+    0
+}

@@ -3,8 +3,8 @@ pub mod items;
 pub mod types;
 
 use crate::ast::{
-    Block, ConstDef, Effect, Expr, ExprKind, FnDef, Item, Module, Param, Pat, PatKind, Stmt, Type,
-    UseDecl, Visibility, VowBlock, VowClause,
+    Block, ConstDef, Effect, Expr, ExprKind, FnDef, Item, Module, Param, Stmt, Type, UseDecl,
+    Visibility, VowBlock, VowClause,
 };
 use crate::lexer::Lexer;
 use crate::span::Span;
@@ -576,18 +576,7 @@ impl Parser {
         let start = self.current_span();
         self.expect(TokenKind::KwLet)?;
 
-        let is_mut = if self.at(&TokenKind::KwMut) {
-            self.advance();
-            true
-        } else {
-            false
-        };
-
-        let (name, name_span) = self.expect_ident()?;
-        let pattern = Pat {
-            kind: PatKind::Ident { name, is_mut },
-            span: name_span,
-        };
+        let pattern = self.parse_pat_inner();
 
         let ty = if self.at(&TokenKind::Colon) {
             self.advance();
@@ -748,6 +737,93 @@ pub fn parse_module(source: &str, file: &str) -> (Module, Vec<Diagnostic>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::PatKind;
+
+    fn let_pattern(src: &str) -> PatKind {
+        let full = format!("module M fn f() -> i64 {{ {src} 0 }}");
+        let (module, diags) = parse_module(&full, "<test>");
+        assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+        match &module.items[0] {
+            Item::Fn(f) => match &f.body.stmts[0] {
+                Stmt::Let { pattern, .. } => pattern.kind.clone(),
+                other => panic!("expected Stmt::Let, got {other:?}"),
+            },
+            other => panic!("expected Fn item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_let_tuple_pattern() {
+        let kind = let_pattern("let (a, b): (i64, i64) = (1, 2);");
+        match kind {
+            PatKind::Tuple(pats) => {
+                assert_eq!(pats.len(), 2);
+                assert_eq!(
+                    pats[0].kind,
+                    PatKind::Ident {
+                        name: "a".to_string(),
+                        is_mut: false
+                    }
+                );
+                assert_eq!(
+                    pats[1].kind,
+                    PatKind::Ident {
+                        name: "b".to_string(),
+                        is_mut: false
+                    }
+                );
+            }
+            other => panic!("expected PatKind::Tuple, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_let_mut_ident_pattern_still_works() {
+        let kind = let_pattern("let mut x = 1;");
+        assert_eq!(
+            kind,
+            PatKind::Ident {
+                name: "x".to_string(),
+                is_mut: true
+            }
+        );
+    }
+
+    #[test]
+    fn print_parse_roundtrip_let_tuple_pattern() {
+        let src = "module M fn f() -> i64 { let (a, (b, c)): (i64, (i64, i64)) = (1, (2, 3)); 0 }";
+        let (module, diags) = parse_module(src, "<test>");
+        assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+        let printed1 = crate::printer::print_module(&module);
+        let (reparsed, diags2) = parse_module(&printed1, "<test>");
+        assert!(diags2.is_empty(), "unexpected diagnostics: {:?}", diags2);
+        let printed2 = crate::printer::print_module(&reparsed);
+        assert_eq!(printed1, printed2, "printed form not idempotent");
+    }
+
+    #[test]
+    fn parse_let_tuple_pattern_with_mut_element() {
+        let kind = let_pattern("let (mut a, b) = (1, 2);");
+        match kind {
+            PatKind::Tuple(pats) => {
+                assert_eq!(
+                    pats[0].kind,
+                    PatKind::Ident {
+                        name: "a".to_string(),
+                        is_mut: true
+                    }
+                );
+                assert_eq!(
+                    pats[1].kind,
+                    PatKind::Ident {
+                        name: "b".to_string(),
+                        is_mut: false
+                    }
+                );
+            }
+            other => panic!("expected PatKind::Tuple, got {other:?}"),
+        }
+    }
 
     // A lex error carries its own diagnostic code through to the emitted
     // Diagnostic. Before `LexError` had a `code`, every lexer failure was

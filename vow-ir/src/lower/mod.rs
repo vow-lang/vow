@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use vow_diag::Blame;
 use vow_syntax::ast::{
-    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
-    Type as AstType, UnOp, VariantKind, VowBlock, loop_break_values,
+    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module as AstModule, Pat, PatKind,
+    Stmt, Type as AstType, UnOp, VariantKind, VowBlock, loop_break_values,
 };
 use vow_syntax::span::Span;
 pub use vow_types::check::{
@@ -4695,11 +4695,45 @@ fn backpatch_upsilon(ctx: &mut LowerCtx, block_id: BlockId, upsilon_id: InstId, 
     }
 }
 
+/// Tuple destructuring has no IR-lowering representation for tuple *values*
+/// (see the module-level `todo!()` for unhandled `ExprKind`s) — it is purely
+/// a compile-time desugaring, checked by `vow-types` to apply only to a
+/// tuple pattern matched against a syntactic tuple-literal initializer of
+/// the same arity at every nesting level. So this rewrites `let (a, b) =
+/// (x, y);` into `let a = x; let b = y;` and re-enters `lower_stmt` per
+/// element — never lowering the `ExprKind::Tuple` node itself — which also
+/// gets nested tuples and every existing scalar-annotation special case
+/// (i128/u128 widening, Vec element tracking, ...) for free per leaf.
+fn lower_tuple_let(ctx: &mut LowerCtx, pats: &[Pat], init: &Expr, ty: Option<&AstType>) {
+    let ExprKind::Tuple(elems) = &init.kind else {
+        unreachable!("vow-types guarantees a tuple-literal initializer for a tuple let pattern")
+    };
+    let elem_tys: Vec<Option<AstType>> = match ty {
+        Some(AstType::Tuple { elems: tys, .. }) if tys.len() == pats.len() => {
+            tys.iter().cloned().map(Some).collect()
+        }
+        _ => vec![None; pats.len()],
+    };
+    for ((pat, elem), elem_ty) in pats.iter().zip(elems.iter()).zip(elem_tys) {
+        let synthetic = Stmt::Let {
+            pattern: pat.clone(),
+            ty: elem_ty,
+            init: Box::new(elem.clone()),
+            span: pat.span,
+        };
+        lower_stmt(ctx, &synthetic);
+    }
+}
+
 fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
     match stmt {
         Stmt::Let {
             pattern, init, ty, ..
         } => {
+            if let PatKind::Tuple(pats) = &pattern.kind {
+                lower_tuple_let(ctx, pats, init, ty.as_ref());
+                return;
+            }
             if let Some(expected) = ty {
                 record_wide_expected_ast_context(ctx, init, expected);
             }
@@ -7359,6 +7393,192 @@ fn parse_or_default(s: String) -> i64 {
         assert!(ret.is_some());
         let const_id = const_inst.unwrap().id;
         assert_eq!(ret.unwrap().args, vec![const_id]);
+    }
+
+    fn tuple_expr(elems: Vec<Expr>) -> Expr {
+        Expr {
+            kind: ExprKind::Tuple(elems),
+            span: sp(),
+        }
+    }
+
+    fn ident_pat(name: &str) -> Pat {
+        Pat {
+            kind: PatKind::Ident {
+                name: name.to_string(),
+                is_mut: false,
+            },
+            span: sp(),
+        }
+    }
+
+    fn wildcard_pat() -> Pat {
+        Pat {
+            kind: PatKind::Wildcard,
+            span: sp(),
+        }
+    }
+
+    fn tuple_pat(pats: Vec<Pat>) -> Pat {
+        Pat {
+            kind: PatKind::Tuple(pats),
+            span: sp(),
+        }
+    }
+
+    fn tuple_ty(elems: Vec<Type>) -> Type {
+        Type::Tuple { elems, span: sp() }
+    }
+
+    #[test]
+    fn lower_let_tuple_pattern_desugars_to_independent_bindings() {
+        let let_stmt = Stmt::Let {
+            pattern: tuple_pat(vec![ident_pat("a"), ident_pat("b")]),
+            ty: Some(tuple_ty(vec![i64_ty(), i64_ty()])),
+            init: Box::new(tuple_expr(vec![int_expr(1), int_expr(2)])),
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::BinaryOp {
+                    op: BinOp::Add,
+                    lhs: Box::new(ident_expr("a")),
+                    rhs: Box::new(ident_expr("b")),
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let fn_def = make_fn("tuple_let", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let entry = &func.blocks[0];
+        // No `ExprKind::Tuple` node is ever lowered as a standalone value — if it
+        // were, `lower_expr`'s catch-all `todo!()` would have panicked this test.
+        let const_insts: Vec<_> = entry
+            .insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::ConstI64)
+            .collect();
+        assert_eq!(const_insts.len(), 2, "expected two independent ConstI64s");
+        assert_eq!(const_insts[0].data, InstData::ConstI64(1));
+        assert_eq!(const_insts[1].data, InstData::ConstI64(2));
+
+        let add = entry
+            .insts
+            .iter()
+            .find(|i| i.opcode == Opcode::WrappingAdd)
+            .expect("expected addition of the two bound elements");
+        assert_eq!(add.args, vec![const_insts[0].id, const_insts[1].id]);
+    }
+
+    #[test]
+    fn lower_let_nested_tuple_pattern_binds_every_leaf() {
+        let let_stmt = Stmt::Let {
+            pattern: tuple_pat(vec![
+                ident_pat("a"),
+                tuple_pat(vec![ident_pat("b"), ident_pat("c")]),
+            ]),
+            ty: None,
+            init: Box::new(tuple_expr(vec![
+                int_expr(1),
+                tuple_expr(vec![int_expr(2), int_expr(3)]),
+            ])),
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: Some(Box::new(ident_expr("c"))),
+            span: sp(),
+        };
+        let fn_def = make_fn("nested_tuple_let", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let entry = &func.blocks[0];
+        let const_insts: Vec<_> = entry
+            .insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::ConstI64)
+            .collect();
+        assert_eq!(const_insts.len(), 3, "expected three independent ConstI64s");
+        let name_for = |val: i64| -> Option<&String> {
+            const_insts
+                .iter()
+                .find(|i| i.data == InstData::ConstI64(val))
+                .and_then(|i| func.local_names.get(&i.id.0))
+        };
+        assert_eq!(name_for(1), Some(&"a".to_string()));
+        assert_eq!(name_for(2), Some(&"b".to_string()));
+        assert_eq!(name_for(3), Some(&"c".to_string()));
+    }
+
+    #[test]
+    fn lower_let_wildcard_tuple_element_still_lowers_its_initializer() {
+        let let_stmt = Stmt::Let {
+            pattern: tuple_pat(vec![wildcard_pat(), ident_pat("b")]),
+            ty: None,
+            init: Box::new(tuple_expr(vec![
+                call_expr("debug_i64", vec![int_expr(5)]),
+                int_expr(2),
+            ])),
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: Some(Box::new(ident_expr("b"))),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "wildcard_tuple_let",
+            vec![],
+            i64_ty(),
+            body,
+            vec![Effect::IO],
+        );
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let entry = &func.blocks[0];
+        assert!(
+            entry
+                .insts
+                .iter()
+                .any(|i| i.data == InstData::CallExtern("__vow_debug_i64".to_string())),
+            "the discarded element's call must still be emitted for its side effect"
+        );
     }
 
     #[test]
