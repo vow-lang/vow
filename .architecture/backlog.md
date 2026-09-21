@@ -31,9 +31,10 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   blast radius 1, equal heat 5 → most recently touched file: `lower/mod.rs` 2026-09-18 vs `check.rs`
   2026-09-14). Heat 5 is load-bearing: at heat 4 this scores 21 and the runner-up wins outright;
   `lower/mod.rs` is 21 commits/90d, last touched three days ago, the same grade the 2026-09-18 firing
-  gave the same file. Rust-only: `compiler/lower.vow` mirrors the chain at `:4867-4888` and is
-  untouched because the change is behaviour-preserving — same precedent as `builtin-result-tag` and
-  `builtin-method-spec`.
+  gave the same file. **Parity gap, not precedent:** landed Rust-only; `compiler/lower.vow` mirrors
+  the chain at `:4867-4888` and was left untouched. `CLAUDE.md` requires both compilers to change
+  together, with no exemption for behaviour-preserving changes — outstanding debt, like
+  `builtin-result-tag` and `builtin-method-spec`.
   **Branch adopted, not created**: the run was started on `sym/vow/routine/refactor-audit/01M30GVTZN`
   (non-default, 0 commits ahead of `origin/main`, no upstream, unpublished), so per the autonomy
   contract it was adopted and **not** renamed to `pm-deepen/<slug>` — the caller's harness identifies
@@ -272,9 +273,11 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   consume_arg, missing_arg, result_struct_tag}`, with a generic applier keeping `ctx.emit` and the
   `inst_struct_type` insert at the call site. The 7 non-uniform arms (`String::substring`,
   `String::parse_i64`, `String::parse_u64`, `HashMap::insert`, `BTreeMap::insert`, `Vec::push`, the
-  `unwrap` fallback) stay inline — each does real extra work. Rust-only; `compiler/lower.vow` (which
-  mirrors the same arms at `:3810/3826/3949/3967`) is untouched because the change is
-  behaviour-preserving, so no new drift is introduced — same precedent as `builtin-result-tag`.
+  `unwrap` fallback) stay inline — each does real extra work. **Parity gap, not precedent:** landed
+  Rust-only; `compiler/lower.vow` (which mirrors the same arms at `:3810/3826/3949/3967`) was left
+  untouched. `CLAUDE.md` requires both compilers to change in the same session, with no exemption for
+  behaviour-preserving changes, so this is an outstanding debt and must not be cited to justify
+  skipping the self-hosted side.
 - **First seen**: 2026-09-18
 - **Report**: `.architecture/reviews/2026-09-18-builtin-method-spec.md`
 - **PR**: #1299 (merged 2026-09-18; reconciled 2026-09-21 via `gh pr view 1299` → MERGED)
@@ -318,8 +321,9 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   `Option<elem_ty>`) into a pure `builtin_result_tag(name) -> Option<BuiltinResultTag>`, mirroring the
   landed `builtin_constructor_spec` seam; `tag_builtin_result` keeps only the `ctx.inst_struct_type`
   / `inst_option_elem_ty` inserts. Preserves the `_try`+`narrow_intrinsic_target` early-path ordering
-  (the `i16_to_u8_try` / `i64_to_i32_try` fall-through traps). Rust-only; `compiler/lower.vow`
-  untouched (behaviour-preserving, no new drift).
+  (the `i16_to_u8_try` / `i64_to_i32_try` fall-through traps). **Parity gap, not precedent:** landed
+  Rust-only; `compiler/lower.vow` was left untouched, which `CLAUDE.md` does not permit for
+  behaviour-preserving changes. Outstanding debt, not a pattern to repeat.
 - **First seen**: 2026-09-16
 - **Report**: `.architecture/reviews/2026-09-16-builtin-result-tag.md`
 - **PR**: #1290 (merged 2026-09-16; reconciled 2026-09-18 via `gh pr view 1290` → MERGED)
