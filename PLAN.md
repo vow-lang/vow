@@ -46,6 +46,19 @@ installed self-hosted compiler using an isolated `VOW_CACHE_DIR`):
      hard-fail via `compare_test` → `status == TestsPassed`) has no test that exercises
      `bind_arm_pattern`'s `PAT_IDENT` aggregate branch.
 
+**Probe: Section 10b is not subject to the same masking.** Section 10b also has an
+empty-output→SKIP guard (`full_test.sh:1516`), so the unit-test route only works if a test binary
+that *aborts* still yields non-empty `vow test` JSON. Verified with the installed self-hosted
+compiler on a scratch copy of `compiler/` plus a probe test whose `main` does an OOB `v[0] = 5`:
+`vow test <copy> --filter zzprobe` → exit 1, stdout
+`{"status":"TestsFailed","total":1,"passed":0,"failed":1,…,"exit_code":134,"stderr":"{\"error\":\"IndexOutOfBounds\"}…"}`.
+So a crashing unit test is a `TestsFailed` document → `compare_test` hard-fails
+(`status != TestsPassed`), not a SKIP. The Rust-side `vow test` was not built in the planning run;
+Slice 1 must repeat this probe with `target/release/vow` (see §3) — if it ever yields empty stdout
+for an aborting test, the unit test alone cannot close #1329 and the closing slice must also
+harden the empty-output guard at that single Section 10b site (keep the other sites in the
+follow-up).
+
 So mutant 3897 is **not equivalent**; per CLAUDE.md "Mutation Testing" the actionable response is
 (a) a test that catches it. A separate, bigger finding — Tier 2 silently downgrades a
 self-hosted-compiler crash on the fixture corpus to SKIP — is real but is a different defect
@@ -77,9 +90,20 @@ new file on `compiler/tests/test_checker_float_literal.vow` (`parse_module_into`
 `check_module`, then inspect the `CheckEnv`).
 
 Fast red/green loop without touching the tree: copy `compiler/` to `$TMPDIR/…`, apply the mutation
-there with `sed`, and run `vow test <copy> --filter checker_pattern_metadata`. Use a fresh
-`VOW_CACHE_DIR=$(mktemp -d -p $TMPDIR)` per build (the compile cache ignores compiler changes —
-see memory note).
+there with `sed` (`sed -i '2012s/ <= pid {/ > pid {/'`), and run
+`target/release/vow test <copy> --filter checker_pattern_metadata` (and `~/.local/bin/vow test …`
+for the self-hosted side). **No `vowc` rebuild is needed per slice**: the mutation lives in the
+source under test, pulled into the test binary via `use checker`, so `vow test <mutated copy>`
+already links the mutated loop. Use a fresh `VOW_CACHE_DIR=$(mktemp -d -p $TMPDIR)` per run (the
+compile cache ignores compiler changes — see memory note). Gotcha for the assertions: chained
+field access on struct values reads the wrong field (CLAUDE.md "Gotchas"), so bind first —
+`let names: Vec<String> = check_env.pat_aggregate_names;`, `let paths: Vec<Vec<String>> =
+check_env.pat_vec_elem_paths;`, etc. — before indexing.
+
+**Slice 0 — Rust-side probe (no commit).** Build the Rust compiler (`cargo build --release -p vow
+-j4`) and repeat the §1 abort probe with `target/release/vow test <scratch copy> --filter
+zzprobe`. Expect non-empty `TestsFailed` JSON. If stdout is empty, stop and apply the
+single-site Section 10b guard described in §1 before continuing.
 
 **Slice 1 — pin the PAT_IDENT aggregate metadata (kills 3897).**
 * Test: `check_pat_ident_aggregate_metadata()` in the new file. Source under test (mirror
