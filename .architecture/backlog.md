@@ -6,7 +6,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 ## narrow-int-width-self-hosted
 
-- **Status**: proposed
+- **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
 - **Files**: ~2 estimated (`compiler/lower.vow` + new `compiler/tests/test_lower_narrow_int_width.vow`)
 - **Modules**: `compiler/lower.vow` — `lower_narrow_literal` self-gate `:2112-2116` (9-set), binop
@@ -18,6 +18,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   rather than re-spelled membership lists; behaviour-preserving row for row.
 - **First seen**: 2026-09-22
 - **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **PR**: #1334
 - **Reason**: **picked this firing** (2026-09-22), the first under the #1330 parity rule. Three-way
   tie at 22 with `builtin-result-tag-self-hosted` and `builtin-method-spec-self-hosted` — all in
   `lower.vow`, so the rubric's three tie-break keys tie; broken by two recorded extensions (smaller
@@ -25,6 +26,14 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   self-hosted-only mirror of an already-landed Rust seam completes, not halves, a change; recorded
   explicitly in the report. Branch adopted (`sym/vow/routine/refactor-audit/01M33370Q9`), not
   renamed.
+- **Adjudicated design B** (the `ity_int_width_bits` domain fact in `ir.vow`, with the two predicates
+  in `lower.vow`) over **A** (minimal mirror, the runner-up design, which re-spelled the width set
+  inside its own table) and **C** (context-keyed entry point, which would put a second vocabulary for
+  the policy in one compiler only). **Opened as #1334.** Verification: differential self-hosted IR
+  over 675 inputs including the concatenated compiler — 675/675 byte-identical; bootstrap fixed point
+  `c5bd7496…` with verification on; `cargo test --all` 1699/0; `scripts/full_test.sh` 1088 passed /
+  0 failed / 19 skipped. Diff: 4 files, +151/−43, inside the step-4 estimate of 3 files plus the
+  optional Rust comment.
 
 ## builtin-result-tag-self-hosted
 
