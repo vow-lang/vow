@@ -582,3 +582,31 @@ change" reading this report relies on.
 - **Rust**: no functional edit. A comment next to `narrow_int_width` /
   `diverges_from_speculative_int` names the self-hosted twins, following the keep-in-sync pattern at
   `mod.rs:206`. It is comment-only, so it has no codecov exposure.
+
+### Landed
+
+- **Test-first**: the new `compiler/tests/test_lower_narrow_int_width.vow` was written and run
+  before the seam existed. Both compilers reported `compile_error` — `undefined function
+  ity_int_width_bits`, `narrow_int_width`, `diverges_from_speculative_int` — then `TestsPassed` on
+  both once the seam was added, before any site was rewired.
+- **Differential self-hosted IR**: `build --dump-ir --no-verify` from the pre-change fixed point
+  against the post-change one, over 675 inputs (`tests/run`, `tests/debug`, `tests/error`,
+  `tests/fixtures`, `tests/multi`, `tests/verify*`, `examples/`, `benchmarks/`, plus the whole
+  concatenated compiler from `scripts/concat_vow.sh clif`, a 10 MB dump), each with a fresh
+  `VOW_CACHE_DIR`: **675/675 byte-identical, 0 different**. 477 inputs produce IR; the other 198 are
+  `tests/error` fixtures that fail identically on both sides, plus the pre-existing
+  `tests/run/u64_marker_propagation.vow` type error that #1327 also recorded.
+- **Bootstrap** (`scripts/bootstrap.sh --skip-cargo`, verification on): fixed point reached,
+  `sha256(vowc2) == sha256(vowc3)` = `c5bd7496…`.
+- **Quality gate**, each step run as a separate command:
+  - `cargo fmt --all --check` — clean;
+  - `cargo clippy --all -- -D warnings` — clean;
+  - `cargo build --all` — clean;
+  - `cargo test --all` — **1699 passed, 0 failed**;
+  - `scripts/full_test.sh` — **1088 passed, 0 failed, 19 skipped** in 2424s. Its Section 10b runs
+    `vow test compiler/` under both compilers and compares them, so the new test is checked on
+    both sides and by the parity comparison.
+- **Diff**: 4 files, +151 / −43 — `compiler/ir.vow` +11, `compiler/lower.vow` +28/−43,
+  `compiler/tests/test_lower_narrow_int_width.vow` +110, `vow-ir/src/lower/mod.rs` +2 (comment).
+  The file-count estimate set at step 4 was 3, plus the optional Rust comment: **4 actual**, inside
+  the estimate.
