@@ -8,7 +8,9 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 
 - **Status**: in-flight
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
-- **Files**: ~2 estimated (`compiler/lower.vow` + new `compiler/tests/test_lower_narrow_int_width.vow`)
+- **Files**: ~2 at scoring, **revised to 3 at step 4** (`compiler/ir.vow`, `compiler/lower.vow`,
+  new `compiler/tests/test_lower_narrow_int_width.vow`); **actual 4** with the Rust keep-in-sync
+  comment
 - **Modules**: `compiler/lower.vow` — `lower_narrow_literal` self-gate `:2112-2116` (9-set), binop
   operand `:2375-2377`, call argument `:2623-2627`, assign to ident `:3442-3444`, match-result Phi
   `:4473-4475` (8-set each), `let` annotation `:4909-4932` (8 `if`s over type names), fn trailing
