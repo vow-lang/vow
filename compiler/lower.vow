@@ -1734,6 +1734,23 @@ fn ir_ty_is_float(ty: i64) -> bool {
     ty == ITY_F32() || ty == ITY_F64()
 }
 
+// The width a value of contextual type `ty` must be re-lowered at, or 0 when
+// the speculative i64 lowering already occupies a register of the right width:
+// non-integers and both 64-bit integers (u64's signedness travels on the
+// opcode). Twin of `narrow_int_width` in vow-ir/src/lower/mod.rs.
+fn narrow_int_width(ty: i64) -> i64 {
+    let bits: i64 = ity_int_width_bits(ty);
+    if bits == 64 { return 0; }
+    bits
+}
+
+// Whether `ty` is an integer type differing from the speculative i64 in width
+// or signedness: the narrow_int_width set plus u64. Twin of
+// `diverges_from_speculative_int` in vow-ir/src/lower/mod.rs.
+fn diverges_from_speculative_int(ty: i64) -> bool {
+    ity_int_width_bits(ty) != 0 && ty != ITY_I64()
+}
+
 fn block_result_eid(a: AstArena, bid: i64) -> i64 {
     let trail_eid: i64 = blk_trail(a, bid);
     if trail_eid != -1 {
@@ -2109,9 +2126,7 @@ fn lower_narrow_literal(ctx: LowerCtx, a: AstArena, eid: i64, original: i64, ty:
     if eid == -1 {
         return original;
     }
-    if ty != ITY_I8() && ty != ITY_U8() && ty != ITY_I16() &&
-       ty != ITY_U16() && ty != ITY_I32() && ty != ITY_U32() &&
-       ty != ITY_U64() && ty != ITY_I128() && ty != ITY_U128() {
+    if !diverges_from_speculative_int(ty) {
         return original;
     }
     if (ty == ITY_U64() || ty == ITY_I128() || ty == ITY_U128()) &&
@@ -2372,9 +2387,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // Re-lower a literal operand as an `operand_ty`-native constant instead
         // of the default i64, so it shares a register width with a genuinely
         // `operand_ty`-typed sibling operand in the same binary op.
-        if operand_ty == ITY_I8() || operand_ty == ITY_U8() || operand_ty == ITY_I16() ||
-           operand_ty == ITY_U16() || operand_ty == ITY_I32() || operand_ty == ITY_U32() ||
-           operand_ty == ITY_I128() || operand_ty == ITY_U128() {
+        if narrow_int_width(operand_ty) != 0 {
             let narrow_op: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IOP_CONST_U8() } else { IOP_CONST_I32() };
             let narrow_data: i64 = if operand_ty == ITY_I8() || operand_ty == ITY_U8() { IDATA_CONST_U8() } else { IDATA_CONST_I32() };
             if expr_is_const_int(a, lhs_eid) {
@@ -2620,11 +2633,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     lctx_record_wide_control_flow_context(ctx, a, arg_eid, param_tys[ai]);
                 }
                 let mut arg_id: i64 = lower_consumed_expr(ctx, arg_eid);
-                if ai < n_param_tys &&
-                   (param_tys[ai] == ITY_I8() || param_tys[ai] == ITY_U8() ||
-                    param_tys[ai] == ITY_I16() || param_tys[ai] == ITY_U16() ||
-                    param_tys[ai] == ITY_I32() || param_tys[ai] == ITY_U32() ||
-                    param_tys[ai] == ITY_I128() || param_tys[ai] == ITY_U128()) {
+                if ai < n_param_tys && narrow_int_width(param_tys[ai]) != 0 {
                     arg_id = lower_narrow_literal(ctx, a, arg_eid, arg_id, param_tys[ai]);
                 }
                 call_args.push(arg_id);
@@ -3439,9 +3448,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let current_id: i64 = lctx_lookup(ctx, name);
             let current_ast_tid: i64 = lctx_get_declared_ast_tid(ctx, current_id);
             let current_ty: i64 = lctx_inst_ty(ctx, current_id);
-            if current_ty == ITY_I8() || current_ty == ITY_U8() || current_ty == ITY_I16() ||
-               current_ty == ITY_U16() || current_ty == ITY_I32() || current_ty == ITY_U32() ||
-               current_ty == ITY_I128() || current_ty == ITY_U128() {
+            if narrow_int_width(current_ty) != 0 {
                 rhs_id = lower_narrow_literal(ctx, a, rhs_eid, rhs_id, current_ty);
             }
             lctx_tag_declared_ast_tid(ctx, rhs_id, current_ast_tid);
@@ -4470,9 +4477,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         // Cranelift register width -- otherwise a plain literal arm (e.g.
         // `None => -1`) merging with a genuinely narrow-typed arm (e.g.
         // `Some(v) => v`) produces a width-mismatched Cranelift Phi.
-        if result_ty == ITY_I8() || result_ty == ITY_U8() || result_ty == ITY_I16() ||
-           result_ty == ITY_U16() || result_ty == ITY_I32() || result_ty == ITY_U32() ||
-           result_ty == ITY_I128() || result_ty == ITY_U128() {
+        if narrow_int_width(result_ty) != 0 {
             let mut fi: i64 = 0;
             while fi < n_merge_arms {
                 if reachable_result_markers[fi] && reachable_result_tys[fi] != result_ty {
@@ -4906,29 +4911,11 @@ fn lower_let_binding(ctx: LowerCtx, pat_id: i64, ann_tid: i64, init_eid: i64, sp
                 if atag == TY_NAMED() {
                     let type_name_sid: i64 = type_a(a, resolved_ann_tid);
                     let type_name: String = arena_str(a, type_name_sid);
-                    if type_name == String::from("i8") {
-                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_I8());
-                    }
-                    if type_name == String::from("u8") {
-                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_U8());
-                    }
-                    if type_name == String::from("i16") {
-                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_I16());
-                    }
-                    if type_name == String::from("u16") {
-                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_U16());
-                    }
-                    if type_name == String::from("i32") {
-                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_I32());
-                    }
-                    if type_name == String::from("u32") {
-                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_U32());
-                    }
-                    if type_name == String::from("i128") {
-                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_I128());
-                    }
-                    if type_name == String::from("u128") {
-                        val = lower_narrow_literal(ctx, a, init_eid, val, ITY_U128());
+                    // Unknown names map to ITY_I64 and u64 is 64 bits wide, so both are
+                    // rejected; u64 is reduced by the IntCast just below.
+                    let annotated: i64 = ity_for_scalar_type_name(type_name);
+                    if narrow_int_width(annotated) != 0 {
+                        val = lower_narrow_literal(ctx, a, init_eid, val, annotated);
                     }
                     if type_name == String::from("u64") && lctx_inst_ty(ctx, val) != ITY_U64() {
                         let cast_args: Vec<i64> = Vec::new();
@@ -5530,9 +5517,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     let mut trailing: i64 = lower_block_inner(ctx, body_bid);
     lctx_pop_scope(ctx);
 
-    if ir_ret == ITY_I8() || ir_ret == ITY_U8() || ir_ret == ITY_I16() ||
-       ir_ret == ITY_U16() || ir_ret == ITY_I32() || ir_ret == ITY_U32() ||
-       ir_ret == ITY_U64() || ir_ret == ITY_I128() || ir_ret == ITY_U128() {
+    if diverges_from_speculative_int(ir_ret) {
         let result_eid: i64 = block_result_eid(a, body_bid);
         if result_eid != -1 {
             trailing = lower_narrow_literal(ctx, a, result_eid, trailing, ir_ret);

@@ -4127,6 +4127,8 @@ fn ir_integer_type(ty: Ty) -> Option<IntegerType> {
     ir_ty_is_integer(ty).then(|| integer_type_for_ir_ty(ty))
 }
 
+// Keep narrow_int_width and diverges_from_speculative_int in sync with their
+// twins in compiler/lower.vow (over ity_int_width_bits in compiler/ir.vow).
 /// The width a value of contextual type `ty` must be re-lowered at.
 ///
 /// Coercible integer markers are lowered speculatively at `i64` before their
