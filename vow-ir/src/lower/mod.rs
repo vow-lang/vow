@@ -203,7 +203,7 @@ enum BuiltinResultTag {
     OptionOf(Ty),
 }
 
-// Keep this list in sync with the builtin result tags in compiler/lower.vow.
+// Keep this enum and classifier in sync with BRT_* and builtin_result_tag in compiler/lower.vow.
 fn builtin_result_tag(name: &str) -> Option<BuiltinResultTag> {
     // The narrowing _try early path runs before the explicit table: for targets i8/i16/u16/u32 the
     // element type is recoverable from the name. The ends_with("_try") guard is load-bearing —
@@ -5595,41 +5595,82 @@ mod tests {
     #[test]
     fn builtin_result_tag_classifies_names() {
         use BuiltinResultTag::{OptionOf, StringHeap, VecHeap};
-        // Explicit heap struct-type arms (representatives, incl. the #1288 proc_sample addition).
-        assert_eq!(builtin_result_tag("fs_read"), Some(StringHeap));
-        assert_eq!(builtin_result_tag("proc_sample"), Some(StringHeap));
-        // Contains "_to_" but is not a narrowing name: must reach the String arm, not the early path.
-        assert_eq!(builtin_result_tag("i64_to_string"), Some(StringHeap));
-        assert_eq!(builtin_result_tag("args"), Some(VecHeap));
-        assert_eq!(builtin_result_tag("string_split"), Some(VecHeap));
-        // Explicit Option parse_* arms.
-        assert_eq!(builtin_result_tag("parse_i8"), Some(OptionOf(Ty::I8)));
-        assert_eq!(builtin_result_tag("parse_u32"), Some(OptionOf(Ty::U32)));
-        assert_eq!(builtin_result_tag("parse_i64"), Some(OptionOf(Ty::I64)));
-        // Narrowing _try early path: targets i8/i16/u16/u32 are recoverable from the name, so these
-        // are NOT in the explicit match and must resolve via narrow_intrinsic_target.
-        assert_eq!(builtin_result_tag("i16_to_i8_try"), Some(OptionOf(Ty::I8)));
-        assert_eq!(
-            builtin_result_tag("u64_to_u32_try"),
-            Some(OptionOf(Ty::U32))
-        );
-        assert_eq!(
-            builtin_result_tag("i32_to_i16_try"),
-            Some(OptionOf(Ty::I16))
-        );
-        // Fall-through traps: u8/i32 are NOT narrow_intrinsic_target targets, so these _try names
-        // bypass the early path and must hit the explicit arms.
-        assert_eq!(builtin_result_tag("i16_to_u8_try"), Some(OptionOf(Ty::U8)));
-        assert_eq!(builtin_result_tag("i128_to_u8_try"), Some(OptionOf(Ty::U8)));
-        assert_eq!(
-            builtin_result_tag("i64_to_i32_try"),
-            Some(OptionOf(Ty::I32))
-        );
-        // Guard: narrow_intrinsic_target also parses _wrap/_sat, but those return a plain integer,
-        // not an Option; the ends_with("_try") guard is load-bearing in keeping them untagged.
+
+        for name in [
+            "fs_read",
+            "fs_read_line",
+            "stdin_read",
+            "stdin_read_line",
+            "string_substr",
+            "string_trim",
+            "string_to_upper",
+            "string_to_lower",
+            "string_replace",
+            "string_join",
+            "int_to_string",
+            "uint_to_string",
+            "i64_to_string",
+            "hex_encode",
+            "format_f64_bits",
+            "process_get_stdout",
+            "process_get_stderr",
+            "process_stdout_for",
+            "process_stderr_for",
+            "proc_sample",
+        ] {
+            assert_eq!(builtin_result_tag(name), Some(StringHeap), "{name}");
+        }
+        for name in [
+            "args",
+            "fs_listdir",
+            "string_split",
+            "vec_sort",
+            "hex_decode",
+        ] {
+            assert_eq!(builtin_result_tag(name), Some(VecHeap), "{name}");
+        }
+        for (name, ty) in [
+            ("i16_to_i8_try", Ty::I8),
+            ("u16_to_i8_try", Ty::I8),
+            ("i32_to_i8_try", Ty::I8),
+            ("u32_to_i8_try", Ty::I8),
+            ("i64_to_i8_try", Ty::I8),
+            ("u64_to_i8_try", Ty::I8),
+            ("i32_to_i16_try", Ty::I16),
+            ("u32_to_i16_try", Ty::I16),
+            ("i64_to_i16_try", Ty::I16),
+            ("u64_to_i16_try", Ty::I16),
+            ("i32_to_u16_try", Ty::U16),
+            ("u32_to_u16_try", Ty::U16),
+            ("i64_to_u16_try", Ty::U16),
+            ("u64_to_u16_try", Ty::U16),
+            ("i64_to_u32_try", Ty::U32),
+            ("u64_to_u32_try", Ty::U32),
+            ("parse_i8", Ty::I8),
+            ("parse_i16", Ty::I16),
+            ("parse_u16", Ty::U16),
+            ("parse_u32", Ty::U32),
+            ("parse_i64", Ty::I64),
+            ("parse_u8", Ty::U8),
+            ("i16_to_u8_try", Ty::U8),
+            ("i32_to_u8_try", Ty::U8),
+            ("i64_to_u8_try", Ty::U8),
+            ("i128_to_u8_try", Ty::U8),
+            ("u16_to_u8_try", Ty::U8),
+            ("u32_to_u8_try", Ty::U8),
+            ("u64_to_u8_try", Ty::U8),
+            ("u128_to_u8_try", Ty::U8),
+            ("parse_i32", Ty::I32),
+            ("i64_to_i32_try", Ty::I32),
+            ("u32_to_i32_try", Ty::I32),
+            ("u64_to_i32_try", Ty::I32),
+        ] {
+            assert_eq!(builtin_result_tag(name), Some(OptionOf(ty)), "{name}");
+        }
+
+        // narrow_intrinsic_target also parses _wrap/_sat, but only _try returns Option.
         assert_eq!(builtin_result_tag("i16_to_i8_wrap"), None);
         assert_eq!(builtin_result_tag("i32_to_i8_sat"), None);
-        // Unknown builtin.
         assert_eq!(builtin_result_tag("definitely_not_a_builtin"), None);
     }
 

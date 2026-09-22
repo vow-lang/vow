@@ -1,0 +1,122 @@
+module TestLowerBuiltinResultTag
+
+use ast
+use ir
+use lower
+
+fn expect_tag(name: String, want: i64, code: i64) -> i64 {
+    if builtin_result_tag(name) != want { return code; }
+    0
+}
+
+fn check_string_rows() -> i64 {
+    let mut r: i64 = expect_tag(String::from("fs_read"), BRT_STRING(), 1);
+    if r == 0 { r = expect_tag(String::from("fs_read_line"), BRT_STRING(), 2); }
+    if r == 0 { r = expect_tag(String::from("stdin_read"), BRT_STRING(), 3); }
+    if r == 0 { r = expect_tag(String::from("stdin_read_line"), BRT_STRING(), 4); }
+    if r == 0 { r = expect_tag(String::from("string_substr"), BRT_STRING(), 5); }
+    if r == 0 { r = expect_tag(String::from("string_trim"), BRT_STRING(), 6); }
+    if r == 0 { r = expect_tag(String::from("string_to_upper"), BRT_STRING(), 7); }
+    if r == 0 { r = expect_tag(String::from("string_to_lower"), BRT_STRING(), 8); }
+    if r == 0 { r = expect_tag(String::from("string_replace"), BRT_STRING(), 9); }
+    if r == 0 { r = expect_tag(String::from("string_join"), BRT_STRING(), 10); }
+    if r == 0 { r = expect_tag(String::from("int_to_string"), BRT_STRING(), 11); }
+    if r == 0 { r = expect_tag(String::from("uint_to_string"), BRT_STRING(), 12); }
+    if r == 0 { r = expect_tag(String::from("i64_to_string"), BRT_STRING(), 13); }
+    if r == 0 { r = expect_tag(String::from("hex_encode"), BRT_STRING(), 14); }
+    if r == 0 { r = expect_tag(String::from("format_f64_bits"), BRT_STRING(), 15); }
+    if r == 0 { r = expect_tag(String::from("process_get_stdout"), BRT_STRING(), 16); }
+    if r == 0 { r = expect_tag(String::from("process_get_stderr"), BRT_STRING(), 17); }
+    if r == 0 { r = expect_tag(String::from("process_stdout_for"), BRT_STRING(), 18); }
+    if r == 0 { r = expect_tag(String::from("process_stderr_for"), BRT_STRING(), 19); }
+    if r == 0 { r = expect_tag(String::from("proc_sample"), BRT_STRING(), 20); }
+    r
+}
+
+fn check_vec_rows() -> i64 {
+    let mut r: i64 = expect_tag(String::from("args"), BRT_VEC(), 21);
+    if r == 0 { r = expect_tag(String::from("fs_listdir"), BRT_VEC(), 22); }
+    if r == 0 { r = expect_tag(String::from("string_split"), BRT_VEC(), 23); }
+    if r == 0 { r = expect_tag(String::from("vec_sort"), BRT_VEC(), 24); }
+    if r == 0 { r = expect_tag(String::from("hex_decode"), BRT_VEC(), 25); }
+    r
+}
+
+fn check_dynamic_try_rows() -> i64 {
+    let mut r: i64 = expect_tag(String::from("i16_to_i8_try"), ITY_I8(), 26);
+    if r == 0 { r = expect_tag(String::from("u16_to_i8_try"), ITY_I8(), 27); }
+    if r == 0 { r = expect_tag(String::from("i32_to_i8_try"), ITY_I8(), 28); }
+    if r == 0 { r = expect_tag(String::from("u32_to_i8_try"), ITY_I8(), 29); }
+    if r == 0 { r = expect_tag(String::from("i64_to_i8_try"), ITY_I8(), 30); }
+    if r == 0 { r = expect_tag(String::from("u64_to_i8_try"), ITY_I8(), 31); }
+    if r == 0 { r = expect_tag(String::from("i32_to_i16_try"), ITY_I16(), 32); }
+    if r == 0 { r = expect_tag(String::from("u32_to_i16_try"), ITY_I16(), 33); }
+    if r == 0 { r = expect_tag(String::from("i64_to_i16_try"), ITY_I16(), 34); }
+    if r == 0 { r = expect_tag(String::from("u64_to_i16_try"), ITY_I16(), 35); }
+    if r == 0 { r = expect_tag(String::from("i32_to_u16_try"), ITY_U16(), 36); }
+    if r == 0 { r = expect_tag(String::from("u32_to_u16_try"), ITY_U16(), 37); }
+    if r == 0 { r = expect_tag(String::from("i64_to_u16_try"), ITY_U16(), 38); }
+    if r == 0 { r = expect_tag(String::from("u64_to_u16_try"), ITY_U16(), 39); }
+    if r == 0 { r = expect_tag(String::from("i64_to_u32_try"), ITY_U32(), 40); }
+    if r == 0 { r = expect_tag(String::from("u64_to_u32_try"), ITY_U32(), 41); }
+    r
+}
+
+fn check_explicit_option_rows() -> i64 {
+    let mut r: i64 = expect_tag(String::from("parse_i8"), ITY_I8(), 42);
+    if r == 0 { r = expect_tag(String::from("parse_i16"), ITY_I16(), 43); }
+    if r == 0 { r = expect_tag(String::from("parse_u16"), ITY_U16(), 44); }
+    if r == 0 { r = expect_tag(String::from("parse_u32"), ITY_U32(), 45); }
+    if r == 0 { r = expect_tag(String::from("parse_i64"), ITY_I64(), 46); }
+    if r == 0 { r = expect_tag(String::from("parse_u8"), ITY_U8(), 47); }
+    if r == 0 { r = expect_tag(String::from("i16_to_u8_try"), ITY_U8(), 48); }
+    if r == 0 { r = expect_tag(String::from("i32_to_u8_try"), ITY_U8(), 49); }
+    if r == 0 { r = expect_tag(String::from("i64_to_u8_try"), ITY_U8(), 50); }
+    if r == 0 { r = expect_tag(String::from("i128_to_u8_try"), ITY_U8(), 51); }
+    if r == 0 { r = expect_tag(String::from("u16_to_u8_try"), ITY_U8(), 52); }
+    if r == 0 { r = expect_tag(String::from("u32_to_u8_try"), ITY_U8(), 53); }
+    if r == 0 { r = expect_tag(String::from("u64_to_u8_try"), ITY_U8(), 54); }
+    if r == 0 { r = expect_tag(String::from("u128_to_u8_try"), ITY_U8(), 55); }
+    if r == 0 { r = expect_tag(String::from("parse_i32"), ITY_I32(), 56); }
+    if r == 0 { r = expect_tag(String::from("i64_to_i32_try"), ITY_I32(), 57); }
+    if r == 0 { r = expect_tag(String::from("u32_to_i32_try"), ITY_I32(), 58); }
+    if r == 0 { r = expect_tag(String::from("u64_to_i32_try"), ITY_I32(), 59); }
+    r
+}
+
+fn check_negative_rows() -> i64 {
+    let mut r: i64 = expect_tag(String::from("i16_to_i8_wrap"), BRT_NONE(), 60);
+    if r == 0 { r = expect_tag(String::from("i32_to_i8_sat"), BRT_NONE(), 61); }
+    if r == 0 { r = expect_tag(String::from("definitely_not_a_builtin"), BRT_NONE(), 62); }
+    r
+}
+
+fn check_applier() -> i64 {
+    let ctx: LowerCtx = lctx_new(String::from("test"), ITY_UNIT(), 0, arena_new(), Vec::new());
+    tag_builtin_result(ctx, String::from("fs_read"), 100);
+    if lctx_get_tag(ctx, 100) != String::from("String") { return 63; }
+    if lctx_find_option_elem_ty(ctx, 100) != -1 { return 64; }
+
+    tag_builtin_result(ctx, String::from("args"), 101);
+    if lctx_get_tag(ctx, 101) != String::from("Vec") { return 65; }
+    if lctx_find_option_elem_ty(ctx, 101) != -1 { return 66; }
+
+    tag_builtin_result(ctx, String::from("parse_u32"), 102);
+    if lctx_get_tag(ctx, 102) != String::from("Option") { return 67; }
+    if lctx_find_option_elem_ty(ctx, 102) != ITY_U32() { return 68; }
+
+    tag_builtin_result(ctx, String::from("i16_to_i8_wrap"), 103);
+    if lctx_get_tag(ctx, 103) != String::from("") { return 69; }
+    if lctx_find_option_elem_ty(ctx, 103) != -1 { return 70; }
+    0
+}
+
+fn main() -> i32 {
+    let mut r: i64 = check_string_rows();
+    if r == 0 { r = check_vec_rows(); }
+    if r == 0 { r = check_dynamic_try_rows(); }
+    if r == 0 { r = check_explicit_option_rows(); }
+    if r == 0 { r = check_negative_rows(); }
+    if r == 0 { r = check_applier(); }
+    i64_to_i32_wrap(r)
+}
