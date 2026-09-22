@@ -4,9 +4,72 @@ Persisted candidate memory for the `pm-deepen` routine. Statuses: proposed | in-
 landed | dropped | rejected. Never delete rows — `landed`/`dropped`/`rejected` are the memory
 that stops the next firing re-deriving them. See `.architecture/reviews/` for the scored reports.
 
-## narrow-literal-context-admission
+## narrow-int-width-self-hosted
 
 - **Status**: in-flight
+- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Files**: ~2 at scoring, **revised to 3 at step 4** (`compiler/ir.vow`, `compiler/lower.vow`,
+  new `compiler/tests/test_lower_narrow_int_width.vow`); **actual 4** with the Rust keep-in-sync
+  comment
+- **Modules**: `compiler/lower.vow` — `lower_narrow_literal` self-gate `:2112-2116` (9-set), binop
+  operand `:2375-2377`, call argument `:2623-2627`, assign to ident `:3442-3444`, match-result Phi
+  `:4473-4475` (8-set each), `let` annotation `:4909-4932` (8 `if`s over type names), fn trailing
+  return `:5533-5535` (9-set). Rust twin already deep: `vow-ir/src/lower/mod.rs:4139-4155`.
+- **Summary**: mirror the landed Rust `narrow_int_width` / `diverges_from_speculative_int` seam
+  (#1327) into the self-hosted lowerer, derived from an integer-width accessor over `ITY_*` codes
+  rather than re-spelled membership lists; behaviour-preserving row for row.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **PR**: #1334
+- **Reason**: **picked this firing** (2026-09-22), the first under the #1330 parity rule. Three-way
+  tie at 22 with `builtin-result-tag-self-hosted` and `builtin-method-spec-self-hosted` — all in
+  `lower.vow`, so the rubric's three tie-break keys tie; broken by two recorded extensions (smaller
+  file-count estimate — tie at 2; more inline sites collapsed — 7 vs 1). Parity reading: a
+  self-hosted-only mirror of an already-landed Rust seam completes, not halves, a change; recorded
+  explicitly in the report. Branch adopted (`sym/vow/routine/refactor-audit/01M33370Q9`), not
+  renamed.
+- **Adjudicated design B** (the `ity_int_width_bits` domain fact in `ir.vow`, with the two predicates
+  in `lower.vow`) over **A** (minimal mirror, the runner-up design, which re-spelled the width set
+  inside its own table) and **C** (context-keyed entry point, which would put a second vocabulary for
+  the policy in one compiler only). **Opened as #1334.** Verification: differential self-hosted IR
+  over 675 inputs including the concatenated compiler — 675/675 byte-identical; bootstrap fixed point
+  `c5bd7496…` with verification on; `cargo test --all` 1699/0; `scripts/full_test.sh` 1088 passed /
+  0 failed / 19 skipped. Diff: 4 files, +151/−43, inside the step-4 estimate of 3 files plus the
+  optional Rust comment.
+
+## builtin-result-tag-self-hosted
+
+- **Status**: proposed
+- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Files**: ~2 estimated
+- **Modules**: `compiler/lower.vow:2541-2603` (inline in the `ext != ""` builtin-call branch of
+  `lower_expr`); Rust twin `vow-ir/src/lower/mod.rs:207-241` (#1290).
+- **Summary**: mirror `builtin_result_tag` into the self-hosted lowerer as a pure classification
+  (`kind` + option element `ITY`), leaving `lctx_tag`/`lctx_tag_option_elem` at the call site.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: **runner-up candidate** 2026-09-22 (tied at 22, lost tie-break key 5 — 1 site vs 7).
+  Row-for-row identical to Rust, no drift; strictly behaviour-preserving. The natural next firing.
+
+## builtin-method-spec-self-hosted
+
+- **Status**: proposed
+- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Files**: ~2 estimated (~−200/+110 in `lower.vow`, ~100-line test)
+- **Modules**: `compiler/lower.vow:3747-4114` (`EXPR_METHOD`, 20 uniform rows + 6 inline arms);
+  Rust twin `builtin_method_spec`, `vow-ir/src/lower/mod.rs:305` (#1299).
+- **Summary**: mirror `builtin_method_spec` into the self-hosted lowerer.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: tied at 22; lost tie-break key 5. **Argument-mode drift vs Rust**: `push_str`/`eq`/
+  `byte_at`/`push_byte`/`contains` use `lower_expr` (`:3768/3784/3800/3816/3882`), `truncate`
+  `lower_expr` + `ConstI64(0)`, HashMap `get`/`contains_key`/`remove` use `lower_consumed_expr` with
+  no missing-arg guard; dead empty `if` at `:3896`. A behaviour-preserving mirror needs 5 arg modes,
+  not Rust's 4 — decide before implementing.
+
+## narrow-literal-context-admission
+
+- **Status**: landed
 - **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
 - **Files**: ~1 estimated
 - **Modules**: `vow-ir/src/lower/mod.rs` — admission predicate at `:1698-1701` (binop operand),
@@ -20,7 +83,9 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   hand-rolling a second `&str -> Ty` map.
 - **First seen**: 2026-09-21
 - **Report**: `.architecture/reviews/2026-09-21-narrow-literal-context-admission.md`
-- **PR**: #1327
+- **PR**: #1327 (merged 2026-09-21; reconciled 2026-09-22 via `gh pr view 1327` → MERGED). The
+  self-hosted half is carded separately as `narrow-int-width-self-hosted` so this `landed` row does
+  not hard-filter it.
 - **Reason**: **picked this firing** (2026-09-21). `U64` is handled three incompatible ways in one
   file: rejected before the call at `:1700`/`:1805`/`:2134`/`:3540` (8-type lists), admitted then
   conditionally escaped at `:4600` via the `wide_literal_contexts` guard (`:4604-4611`), and admitted
@@ -62,7 +127,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 ## loop-scope-break-policy
 
 - **Status**: proposed
-- **Score**: 22/25 (leverage 4, locality 4, blast radius 1, heat 5)
+- **Score**: 19/25 (leverage 3, locality 4, blast radius 2, heat 5)
 - **Files**: ~1 estimated
 - **Modules**: `vow-types/src/check.rs:2671-2686` (`While`), `:2687-2718` (`ForEach`), `:2719-2755`
   (`Loop`); consumers `:2756-2784` (`Break`), `:2785-2794` (`Continue`); state `:980` (`in_loop`),
@@ -82,6 +147,12 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   the `while`; a top-level `for i in v { break 42; }` is silently accepted. `ExprKind::ForEach` has
   **zero** test coverage in `check.rs`. The deepening is behaviour-preserving via the `NoPush` row;
   the anomaly itself is a correctness fix worth a separate issue.
+- **Parity re-check 2026-09-22** (rescored 22→19: leverage 4→3, blast radius 1→2): **the premise
+  does not hold.** Self-hosted `EXPR_FOR` *does* push loop kind 0 (`compiler/checker.vow:2998-2999`)
+  and `break` with a value is rejected under kind 0 (`:3101`), matching `grammar.md:674/723`. The
+  `NoPush` row would import the Rust bug into the primary compiler. Remaining work is a Rust
+  correctness fix (ForEach pushes `None`) plus a cosmetic Vow seam — file as a fix, not a deepening.
+  Rust anchors drifted +44 (While `:2715`, ForEach `:2731`, Loop `:2763`). Report: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`.
 
 ## builtin-arg-layout-spec
 
@@ -102,11 +173,15 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   its source, so `emit_inst` (`:1341-1344`) can emit `__vow_vec_t v{id} = int64_t v{source};` — the
   `int64_t = __vow_vec_t` class this file's own comment at `:260-262` cites issue #505 for. Latent in
   the common flow. Held at 21 on heat 4 (`c_emitter.rs`, 16 commits/90d, last 2026-09-02).
+- **Parity re-check 2026-09-22** (score unchanged): `compiler/c_emitter.vow:716-767` carries the same
+  tables and ~14 inline restatements, and the **same** missing `__vow_vec_pin_to_root_val` receiver
+  row (`:727-737`, present in `is_vec_model_constructor` `:687`). Now ~3 files (`c_emitter.rs`,
+  `c_emitter.vow`, `compiler/tests/test_c_emitter.vow`). Report: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`.
 
 ## parse-opt-payload-spec
 
 - **Status**: proposed
-- **Score**: 21/25 (leverage 4, locality 4, blast radius 1, heat 4)
+- **Score**: 19/25 (leverage 3, locality 4, blast radius 1, heat 4)
 - **Files**: ~1 estimated
 - **Modules**: `vow-verify/src/c_emitter.rs:1636-1686` (7 arms); same 9-name set re-spelled at
   `:414-422` (`collect_option_vars`) and `:535-543` (`is_known_builtin`).
@@ -119,6 +194,10 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   `c_nondet_suffix` (`:2094-2112`) calls canonical, and every other unsigned sibling (`u8` `:1649`,
   `u16` `:1670`) uses plain `__VERIFIER_nondet_long()`. Two tests pin the two spellings independently
   (`:3690`, `:4475`) and neither compiles the emitted C, which is why it survived.
+- **Parity re-check 2026-09-22** (rescored 21→19: leverage 4→3): the Vow side is already factored via
+  `emit_narrow_parse_option` (`compiler/c_emitter.vow:1953-1964`) and does **not** have the
+  `nondet_ulong` bug; only the i32 arm (`:2270-2281`) is still inline. What remains is a Rust fix.
+  Overlaps `nondet-spec`. Report: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`.
 
 ## extern-heap-origin-kind
 
@@ -139,6 +218,8 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   `option_creation_extern` (`:1960-1965`). `vec_creation_extern` (`:1925`) omits the `_in_arena`
   variants that `string_creation_extern` spells out for all 14 of its families. Held at 20 on heat 3
   — `region.rs` is 11 commits/90d, last touched 2026-08-17.
+- **Parity re-check 2026-09-22** (score unchanged): `compiler/region.vow:4263-4318` matches row for
+  row, with the same missing rows; ~3–4 files for both compilers. Report: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`.
 
 ## extern-container-op-spec
 
@@ -159,6 +240,9 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   `check_literal_mutations_post_inference` (`:3358-3414`). Arity guards drift on the identical symbol
   pair: `args.len() >= 3` at `:1984` vs `!args.is_empty()` at `:2007`/`:2010`. Overlaps
   `extern-heap-origin-kind` in the same file — whichever lands first re-anchors the other's lines.
+- **Parity re-check 2026-09-22** (score unchanged): `compiler/region.vow:4320-4384` + `:1519-1545`
+  match row for row incl. the missing `push_val` rows; no arity-guard drift on the Vow side (uniform
+  `pos >= 0 && pos < len`). Report: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`.
 
 ## extern-abi-spec-table
 
@@ -640,6 +724,9 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   divergence to close, not a live bug, and a PR landing it must say so. Runner-up **candidate** this
   firing (21, one point behind the pick).
 - **Report**: `.architecture/reviews/2026-09-18-builtin-method-spec.md`
+- **Parity re-check 2026-09-22** (score unchanged): `vow-runtime` is linked by both compilers
+  (`vow-linker/src/lib.rs:4`, `vow-clif-shim/src/lib.rs:2918`); no `.vow` twin, so the parity rule is
+  satisfied trivially. Report: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`.
 
 ## negation-verdict
 
@@ -731,7 +818,7 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 ## arena-variant-rule
 
 - **Status**: proposed
-- **Score**: 21/25 (leverage 4, locality 4, blast radius 1, heat 4)
+- **Score**: 20/25 (leverage 4, locality 4, blast radius 2, heat 4)
 - **Files**: ~1 estimated (136 lines, 22 arms)
 - **Modules**: `vow-codegen/src/cranelift_backend.rs:769-904`; 2 production call sites (`:1582`,
   `:3156`). Target shape already exists in `vow-clif-shim/src/lib.rs:625-819`
@@ -752,11 +839,14 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   to catch a regression — only the bootstrap triple. Coverage is the 213-program `tests/run/` corpus
   (`string_substring.vow`, `dealloc_string.vow`, `region_string_trim_root_escape_span.vow`,
   `cmdloop.vow`).
+- **Parity re-check 2026-09-22** (rescored 21→20: blast radius 1→2): the `compiler/clif.vow:244-380`
+  copy agrees with backend + shim but is now an edit target — three implementations plus tests.
+  Report: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`.
 
 ## esbmc-auto-timeout-policy
 
 - **Status**: proposed
-- **Score**: 21/25 (leverage 4, locality 4, blast radius 1, heat 4)
+- **Score**: 20/25 (leverage 4, locality 4, blast radius 2, heat 4)
 - **Files**: ~2 estimated (43 Rust lines)
 - **Modules**: `vow-verify/src/esbmc.rs:942-964` (`effective_multi_property_config`) and
   `vow-verify/src/solver_strategy.rs:227-246` (`bv_config_for`). Self-hosted mirror at
@@ -777,6 +867,9 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   `Z3`. Deciding which spelling is correct is a fork the autonomy contract reserves for a human. The
   duplication has reached the tests too (`solver_strategy.rs:1091/1102/1115` vs `esbmc.rs:2001`
   assert the same four facts).
+- **Parity re-check 2026-09-22** (rescored 21→20: blast radius 1→2): under the #1330 rule
+  `compiler/verifier.vow:504-517` is an edit target, not documentation. Still a behaviour fork.
+  Report: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`.
 
 ## builtin-generic-arity-spec
 
@@ -1050,7 +1143,8 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   output. A human should schedule it. Re-checked 2026-09-03: still large. Re-checked 2026-09-11: still
   large. Re-checked 2026-09-16: still large. Re-checked 2026-09-18: still large — but the sibling
   `hidden-region-store-targets` (19/25) is the tractable slice of the same idea and is now carded
-  separately, so a human scheduling this can start there. Re-checked 2026-09-21: still large.
+  separately, so a human scheduling this can start there. Re-checked 2026-09-21: still large. Re-checked 2026-09-22:
+  still large; under the #1330 rule `compiler/clif.vow` joins the edit set.
 
 ## esbmc-ce-description-heuristic
 
@@ -1074,6 +1168,129 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
   Eligible but low-scoring — 6 lines, one production call site.
 - **Report**: `.architecture/reviews/2026-09-18-builtin-method-spec.md`
 
+## nondet-spec
+
+- **Status**: proposed
+- **Score**: 21/25 (leverage 4, locality 5, blast radius 2, heat 4)
+- **Files**: ~5–6 estimated
+- **Modules**: harness `vow-verify/src/esbmc.rs:109-127` / `compiler/verifier_harness.vow:14-37`;
+  body suffix `vow-verify/src/c_emitter.rs:2094-2112` / `compiler/c_emitter.vow:664-679`; preamble
+  `c_emitter.rs:2950-2971` (17 externs) / `c_emitter.vow:3440-3459` (13).
+- **Summary**: one nondet table per compiler generating harness calls, body suffixes and preamble
+  declarations.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: drift — Rust harness `uchar`/`ushort`/`uint` vs long names everywhere else; Vow body
+  falls back to `int` for i128/u128; Rust `parse_u32_opt` calls undeclared `__VERIFIER_nondet_ulong`
+  (`c_emitter.rs:1677`); test suites pin opposite spellings (`esbmc.rs:1173-1195` vs
+  `test_verifier.vow:8-26`). Behaviour-changing on Rust; **open question**: does ESBMC treat the
+  SV-COMP short names specially? Test both spellings against the installed ESBMC before picking.
+
+## bool-context-verdict
+
+- **Status**: proposed
+- **Score**: 21/25 (leverage 4, locality 4, blast radius 2, heat 5)
+- **Files**: ~4–5 estimated
+- **Modules**: `vow-types/src/check.rs:1474`, `:1513`, `:1550`, `:2162`, `:2170`, `:2229`, `:2685`;
+  `compiler/checker.vow:806` (only check), `:2350-2352`, `:2493-2495`, `:2865` (no check).
+- **Summary**: one `require_bool(context)` seam per compiler.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: the self-hosted checker accepts `if 5 {}`, `1 && true`, `!3`, which Rust rejects. A
+  correctness fix that makes the primary compiler reject more programs — `examples/` and
+  `benchmarks/` (self-hosted only) were not swept. File as a fix. Shared gap: neither checks a
+  `while` condition.
+
+## cex-const-fold-self-hosted
+
+- **Status**: proposed
+- **Score**: 20/25 (leverage 3, locality 4, blast radius 1, heat 5)
+- **Files**: ~3 estimated
+- **Modules**: `compiler/main.vow:240-278`, `:288-334`; Rust seam `vow/src/cex_eval.rs:33-47`.
+- **Summary**: a self-hosted `fold_binary_i64` shared by both `main.vow` folders.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: both Vow copies fold checked `+!`/`-!`/`*!` as wrapping (#585 fixed Rust only); the
+  first lacks the `IOP_CONST_U64` case. Behaviour-changing on the self-hosted side.
+
+## violated-property-lines
+
+- **Status**: proposed
+- **Score**: 19/25 (leverage 3, locality 4, blast radius 1, heat 4)
+- **Files**: ~3 estimated
+- **Modules**: `vow-verify/src/esbmc.rs:196-212`, `:217-241`, `:297-313`, `:381-400`;
+  `compiler/verifier.vow:634-653`, `:686-705`, `:750-772`, `:1109-1148`, `:1150-1180`.
+- **Summary**: one section-scanner per compiler (`violated_property_lines`, `counterexample_lines`).
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: drift on malformed labels and multi-CE output; Vow `parse_block_visits` is write-only
+  dead code that never strips ` (binary)`.
+
+## ty-carries-region
+
+- **Status**: proposed
+- **Score**: 18/25 (leverage 3, locality 4, blast radius 1, heat 3)
+- **Files**: ~3–4 estimated
+- **Modules**: `vow-ir/src/region.rs:3650-3656` (8 names, 5 callers) + `:2689`;
+  `compiler/region.vow:3285-3291` (12 names, 7 callers).
+- **Summary**: `ty_carries_region` / `ity_carries_region` as a derived fact (`Ptr`/`LinearPtr`).
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: #995 (`f5d2a16e`) added i8/i16/u16/u32 to the Vow list only. The principled seam changes
+  i128/u128 on both sides — a behaviour fork for a human.
+
+## vec-elem-untagged-scalars
+
+- **Status**: proposed
+- **Score**: 20/25 (leverage 3, locality 4, blast radius 1, heat 5)
+- **Files**: ~2–3 estimated
+- **Modules**: `vow-ir/src/lower/mod.rs:841-855`, `:4817-4820`, `:4950-4953`, `:5191-5194`,
+  `:3733-3738`; `compiler/lower.vow:1276-1278`, `:4950-4953`, `:5469-5473`, `:5753`, `:4052`.
+- **Summary**: one "Vec element types not recorded" predicate per compiler.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: four different list contents across eight sites; Rust push lowering filters to
+  I128/U128 where Vow does not (PLAUSIBLE: `v.push(5)` on `Vec<u64>` lowers differently).
+  Behaviour-changing; adjacent to `narrow-int-width-self-hosted` — land that first.
+
+## branch-result-merge
+
+- **Status**: proposed
+- **Score**: 20/25 (leverage 3, locality 4, blast radius 1, heat 5)
+- **Files**: ~2 estimated
+- **Modules**: Rust `merge_result_ty` `vow-types/src/check.rs:480-494` (used `:2665`, `:2697`,
+  `:2782`); Vow `merge_result_tid` `compiler/checker.vow:2283-2288` (loop/match only) and inline `if`
+  merge `:2871-2890`.
+- **Summary**: give the self-hosted checker Rust's `Never`/incompatible handling via one merge seam.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: parity gap in the Vow checker only; behaviour-changing on the self-hosted side.
+
+## test-status-failure-set
+
+- **Status**: dropped
+- **Score**: n/a — not a deepening
+- **Files**: n/a
+- **Modules**: `vow/src/test_runner.rs:388-393` vs `compiler/main.vow:2319-2328`.
+- **Summary**: which `vowc test` statuses count as failures.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: **bug, not a deepening.** Rust omits `"timeout"` (produced at `:38-44`), so a run whose
+  only failure is a timeout exits 0; Vow counts it. Recorded for a human to file.
+
+## esbmc-status-classify
+
+- **Status**: dropped
+- **Score**: ~15/25 (leverage 2, locality 3, blast radius 1, heat 4)
+- **Files**: ~2 estimated
+- **Modules**: `vow-verify/src/esbmc.rs:916`; `compiler/verifier.vow:535-543` + 5 `exit_code == -2`
+  sites (`:924`, `:979`, `:1101`, `:1380`, `:1409`).
+- **Summary**: timeout classification of ESBMC output.
+- **First seen**: 2026-09-22
+- **Report**: `.architecture/reviews/2026-09-22-narrow-int-width-self-hosted.md`
+- **Reason**: **dropped — leverage 2.** Small drift fix (Rust misses "Timed out", Vow misses
+  "TIMEOUT"), not a deepening.
+
 ## solver-classify-function
 
 - **Status**: dropped
@@ -1084,4 +1301,4 @@ that stops the next firing re-deriving them. See `.architecture/reviews/` for th
 - **First seen**: 2026-08-31
 - **Reason**: Already a pure, unit-tested seam (`test_classify_*`). No shallowness to remove.
   Re-checked 2026-09-03. Re-checked 2026-09-11. Re-checked 2026-09-16. Re-checked 2026-09-18.
-  Re-checked 2026-09-21.
+  Re-checked 2026-09-21. Re-checked 2026-09-22.
