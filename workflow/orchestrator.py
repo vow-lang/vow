@@ -119,7 +119,7 @@ def run_workflow(
     def _make_agent_llm(role: str, system_fn) -> AgentLLM:
         ac = agent_configs.get(role, {})
         mc = make_config(
-            ac.get("model", "claude-sonnet-4-20250514"),
+            ac.get("model", "claude-sonnet-5"),
             max_tokens=ac.get("max_tokens", 8192),
             temperature=ac.get("temperature", 0.0),
         )

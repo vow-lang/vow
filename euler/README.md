@@ -44,10 +44,10 @@ bounded model checker proves them correct.
 
 ```bash
 # Run all problems against a model
-uv run --project euler euler/run.py run --model claude-sonnet-4-20250514
+uv run --project euler euler/run.py run --model claude-sonnet-5
 
 # Run a single problem
-uv run --project euler euler/run.py run --model claude-sonnet-4-20250514 --problem E001
+uv run --project euler euler/run.py run --model claude-sonnet-5 --problem E001
 
 # Generate results report
 uv run --project euler euler/run.py report

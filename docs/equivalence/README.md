@@ -300,13 +300,13 @@ python3 scripts/equivalence.py --rust target/release/vow --self build/vowc \
 
 # Tier 3 — adversarial pair review (needs ANTHROPIC_API_KEY or OPENAI_API_KEY)
 python3 scripts/pair_review.py --dry-run --all
-python3 scripts/pair_review.py --model claude-sonnet-4-20250514 \
+python3 scripts/pair_review.py --model claude-sonnet-5 \
   --update-ledger --date <YYYY-MM-DD>
 
 # Separate verifier-model soundness question (c_emitter pair only)
 python3 scripts/pair_review.py --mode soundness --dry-run
 python3 scripts/pair_review.py --mode soundness \
-  --model claude-sonnet-4-20250514
+  --model claude-sonnet-5
 ```
 
 Bootstrap first (`cargo build --all --release && scripts/bootstrap.sh --skip-cargo`): both tiers must

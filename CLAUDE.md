@@ -366,14 +366,14 @@ A Python CLI tool (managed by `uv`) that runs frontier LLMs against the benchmar
 ```bash
 # From repo root (requires uv):
 uv run --project bench bench/run.py validate-references                             # verify all reference.vow files
-uv run --project bench bench/run.py run --model claude-sonnet-4-20250514 --benchmark E01  # single benchmark
-uv run --project bench bench/run.py run --model claude-sonnet-4-20250514                  # full suite
-uv run --project bench bench/run.py run --model claude-sonnet-4-20250514 --resume         # resume partial run
+uv run --project bench bench/run.py run --model claude-sonnet-5 --benchmark E01  # single benchmark
+uv run --project bench bench/run.py run --model claude-sonnet-5                  # full suite
+uv run --project bench bench/run.py run --model claude-sonnet-5 --resume         # resume partial run
 uv run --project bench bench/run.py report --run-id <id>                            # generate comparison report
 uv run --project bench bench/run.py report                                          # report on most recent run
 
 # Or from bench/:
-cd bench && uv run python run.py run --model claude-sonnet-4-20250514
+cd bench && uv run python run.py run --model claude-sonnet-5
 ```
 
 **Architecture:** Direct API calls (Anthropic/OpenAI SDKs), not agent tool use. Each benchmark is a single conversation: system prompt (skill docs ~35KB) + spec + skeleton → LLM returns Vow code → `vow verify` → CEGIS loop if needed. Temperature 0.0 for reproducibility.

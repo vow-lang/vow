@@ -139,8 +139,8 @@ The `bench/` directory contains a Python CLI tool that runs frontier LLMs agains
 cd bench
 uv sync
 uv run python run.py validate-references                             # verify all reference solutions
-uv run python run.py run --model claude-sonnet-4-20250514 --benchmark E01  # single benchmark
-uv run python run.py run --model claude-sonnet-4-20250514                  # full suite
+uv run python run.py run --model claude-sonnet-5 --benchmark E01  # single benchmark
+uv run python run.py run --model claude-sonnet-5                  # full suite
 uv run python run.py report                                          # generate comparison report
 ```
 

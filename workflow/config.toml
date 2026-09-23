@@ -10,16 +10,16 @@ verify_timeout = 120        # seconds
 memory_limit = 2000000      # ulimit -v value (KB)
 
 [agents.coder]
-model = "claude-sonnet-4-20250514"
+model = "claude-sonnet-5"
 max_tokens = 8192
 temperature = 0.0
 
 [agents.analyst]
-model = "claude-sonnet-4-20250514"
+model = "claude-sonnet-5"
 max_tokens = 4096
 temperature = 0.0
 
 [agents.reviewer]
-model = "claude-sonnet-4-20250514"
+model = "claude-sonnet-5"
 max_tokens = 4096
 temperature = 0.0

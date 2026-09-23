@@ -19,7 +19,7 @@ total miscompile of a benchmark reference that had been invisible to the fixed p
 - `AUTO_FILE_ISSUES` (default: **no**) — if yes, file issues for confirmed divergences; if no, list them
   in the recap under "Recommend filing".
 - `COMMIT_MODE` (default: **PR**) — dated branch + PR for human review; never merge it yourself.
-- `MODEL` (default: `claude-sonnet-4-20250514`) — the reviewing model.
+- `MODEL` (default: `claude-sonnet-5`) — the reviewing model.
 
 ## Step 0 — Baseline and a trustworthy compiler pair
 
