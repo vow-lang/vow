@@ -351,6 +351,8 @@ Skip-list: `// GENERATE:<NAME>:START`/`:END` blocks and `extern "C" { ... }` blo
 
 **Local-only.** Mutation testing is not wired into CI — a full Tier-2 sweep across `compiler/*.vow` is multi-hour wall-clock and would burn through GitHub Actions budget on every nightly. Run it on the developer machine on whatever cadence suits the project (e.g., before tagging a release, or after a substantial compiler change). To split the work, shard explicitly with `--shard 0/8` etc. and run shards sequentially over multiple sessions; the determinism guarantee means the union of `mutants.out/` across shards is well-defined.
 
+**Track shard progress persistently.** Because shards are explicitly designed to run sequentially across multiple sessions, keep a checklist (e.g. `TASKS.md`) recording which shard indices are done vs. pending, alongside each shard's `mutants.out/` location. Update it as each shard completes so a new session can resume from the right shard instead of re-deriving progress from `mutants.out/` state or guessing.
+
 When a `missed.txt` entry appears, the actionable response is to either (a) write a test that catches the mutation, or (b) file an issue documenting why the mutation is equivalent and out of scope. See `docs/mutants.md` for the full output schema and known limitations.
 
 ## Vericoding Benchmark Suite
@@ -377,6 +379,8 @@ cd bench && uv run python run.py run --model claude-sonnet-4-20250514
 ```
 
 **Architecture:** Direct API calls (Anthropic/OpenAI SDKs), not agent tool use. Each benchmark is a single conversation: system prompt (skill docs ~35KB) + spec + skeleton → LLM returns Vow code → `vow verify` → CEGIS loop if needed. Temperature 0.0 for reproducibility.
+
+**Cost confirmation required.** A full-suite `bench/run.py run` (no `--benchmark` filter) calls frontier LLM APIs (Anthropic/OpenAI) across all ~40 benchmarks, with CEGIS retries on top — real, non-trivial API spend. Confirm with the user before starting a full-suite run; a single `--benchmark` run does not need confirmation.
 
 **Files:**
 - `bench/run.py` — CLI entry point (`run`, `report`, `validate-references`)
