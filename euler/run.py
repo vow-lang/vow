@@ -24,14 +24,14 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from benchmark_contracts import compare_skeleton
+from benchmark_contracts import compare_skeleton  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # LLM abstraction (inline, no dependency on bench/)
 # ---------------------------------------------------------------------------
 
-import anthropic
-import openai
+import anthropic  # noqa: E402
+import openai  # noqa: E402
 
 
 @dataclass
@@ -767,7 +767,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
 
     run_p = subparsers.add_parser("run", help="Run problems against an LLM")
-    run_p.add_argument("--model", default="claude-sonnet-4-20250514", help="Model ID")
+    run_p.add_argument("--model", default="claude-sonnet-5", help="Model ID")
     run_p.add_argument("--problem", help="Run single problem by ID (e.g. E001)")
     run_p.add_argument(
         "--resume", action="store_true", help="Skip already-completed problems"

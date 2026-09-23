@@ -1274,7 +1274,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Adversarial pair review (#1083)", allow_abbrev=False
     )
-    ap.add_argument("--model", default="claude-sonnet-4-20250514")
+    ap.add_argument("--model", default="claude-sonnet-5")
     ap.add_argument(
         "--mode",
         choices=tuple(MODES),

@@ -92,7 +92,7 @@ def generate_report(results_dir: Path, run_id: str) -> str:
 def _short_name(model_id: str) -> str:
     parts = model_id.split("-")
     if "claude" in model_id:
-        # claude-sonnet-4-20250514 -> Sonnet 4
+        # claude-sonnet-5 -> Sonnet 5
         if len(parts) >= 3:
             return f"{parts[1].title()} {parts[2]}"
     return model_id

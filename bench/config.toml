@@ -4,7 +4,7 @@
 #   OPENAI_API_KEY for OpenAI models
 
 [[models]]
-id = "claude-sonnet-4-20250514"
+id = "claude-sonnet-5"
 provider = "anthropic"
 
 [[models]]
