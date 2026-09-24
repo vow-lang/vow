@@ -301,7 +301,10 @@ enum MethodArg {
 /// wildcard-receiver rows for `len` and `clear`, so a `String` receiver never reaches
 /// `__vow_vec_len`.
 ///
-/// Keep this table in sync with the builtin method lowering in `compiler/lower.vow`.
+/// Keep row membership, extern symbol, result type and result tag in sync with
+/// `compiler/lower.vow`'s packed `builtin_method_spec`. Its five argument modes
+/// preserve self-hosted lowering differences; they are not a one-for-one mirror
+/// of this table's four `MethodArg` variants.
 fn builtin_method_spec(
     recv: Option<&str>,
     method: &str,
