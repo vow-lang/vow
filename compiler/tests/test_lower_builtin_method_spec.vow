@@ -1,0 +1,194 @@
+module TestLowerBuiltinMethodSpec
+
+use lexer
+use ast
+use diag
+use parser
+use ir
+use lower
+
+fn same_bool(left: bool, right: bool) -> bool {
+    (left && right) || (!left && !right)
+}
+
+fn expect_spec(
+    recv: String,
+    method: String,
+    symbol: String,
+    result_ty: i64,
+    arg_mode: i64,
+    result_tag: i64,
+    patches_span: bool,
+    code: i64,
+) -> i64 {
+    let spec: i64 = builtin_method_spec(recv, method);
+    if spec == 0 { return code; }
+    if method_spec_extern_symbol(spec) != symbol { return code + 1; }
+    if method_spec_result_ty(spec) != result_ty { return code + 2; }
+    if method_spec_arg_mode(spec) != arg_mode { return code + 3; }
+    if method_spec_result_tag(spec) != result_tag { return code + 4; }
+    if !same_bool(method_spec_patches_span(spec), patches_span) { return code + 5; }
+    0
+}
+
+fn check_all_rows() -> i64 {
+    let mut r: i64 = expect_spec(String::from("String"), String::from("len"), String::from("__vow_string_len"), ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 1);
+    if r == 0 { r = expect_spec(String::from("String"), String::from("push_str"), String::from("__vow_string_push_str"), ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 7); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("eq"), String::from("__vow_string_eq"), ITY_BOOL(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 13); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("contains"), String::from("__vow_string_contains"), ITY_BOOL(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 19); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("byte_at"), String::from("__vow_string_byte_at"), ITY_I64(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 25); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("push_byte"), String::from("__vow_string_push_byte"), ITY_UNIT(), METHOD_ARG_EXPR_UNIT(), METHOD_TAG_NONE(), false, 31); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("clear"), String::from("__vow_string_clear"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 37); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("parse_i64"), String::from("__vow_string_parse_i64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), true, 43); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("parse_u64"), String::from("__vow_string_parse_u64_opt"), ITY_PTR(), METHOD_ARG_NONE(), METHOD_TAG_OPTION(), true, 49); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("len"), String::from("__vow_map_len"), ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 55); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("get"), String::from("__vow_map_get"), ITY_I64(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 61); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("contains_key"), String::from("__vow_map_contains"), ITY_BOOL(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 67); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("remove"), String::from("__vow_map_remove"), ITY_UNIT(), METHOD_ARG_CONSUMED(), METHOD_TAG_NONE(), false, 73); }
+    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("len"), String::from("__vow_btreemap_len"), ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 79); }
+    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("get"), String::from("__vow_btreemap_get"), ITY_PTR(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_OPTION(), true, 85); }
+    if r == 0 { r = expect_spec(String::from("BTreeMap"), String::from("contains"), String::from("__vow_btreemap_contains"), ITY_BOOL(), METHOD_ARG_CONSUMED_UNIT(), METHOD_TAG_NONE(), false, 91); }
+    if r == 0 { r = expect_spec(String::from("Widget"), String::from("len"), String::from("__vow_vec_len"), ITY_I64(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 97); }
+    if r == 0 { r = expect_spec(String::from(""), String::from("pop"), String::from("__vow_vec_pop"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 103); }
+    if r == 0 { r = expect_spec(String::from("HashMap"), String::from("clear"), String::from("__vow_vec_clear"), ITY_UNIT(), METHOD_ARG_NONE(), METHOD_TAG_NONE(), false, 109); }
+    if r == 0 { r = expect_spec(String::from("String"), String::from("truncate"), String::from("__vow_vec_truncate"), ITY_UNIT(), METHOD_ARG_EXPR_ZERO(), METHOD_TAG_NONE(), false, 115); }
+    r
+}
+
+fn check_precedence_and_declines() -> i64 {
+    let string_len: i64 = builtin_method_spec(String::from("String"), String::from("len"));
+    if string_len == 0 || method_spec_extern_symbol(string_len) != String::from("__vow_string_len") { return 130; }
+    let map_len: i64 = builtin_method_spec(String::from("HashMap"), String::from("len"));
+    if map_len == 0 || method_spec_extern_symbol(map_len) != String::from("__vow_map_len") { return 131; }
+    let tree_len: i64 = builtin_method_spec(String::from("BTreeMap"), String::from("len"));
+    if tree_len == 0 || method_spec_extern_symbol(tree_len) != String::from("__vow_btreemap_len") { return 132; }
+    if builtin_method_spec(String::from("String"), String::from("substring")) != 0 { return 133; }
+    if builtin_method_spec(String::from("HashMap"), String::from("insert")) != 0 { return 134; }
+    if builtin_method_spec(String::from("BTreeMap"), String::from("insert")) != 0 { return 135; }
+    if builtin_method_spec(String::from("Vec"), String::from("push")) != 0 { return 136; }
+    if builtin_method_spec(String::from("Option"), String::from("unwrap")) != 0 { return 137; }
+    if builtin_method_spec(String::from("Widget"), String::from("frobnicate")) != 0 { return 138; }
+    if builtin_method_spec(String::from(""), String::from("eq")) != 0 { return 139; }
+    0
+}
+
+fn inst_opcode_by_id(function: IrFunction, id: i64) -> i64 {
+    let mut block_index: i64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: i64 = 0;
+        while inst_index < block.insts.len() {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.id == id { return inst.op; }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    -1
+}
+
+fn lower_fixture(source: String, file: String) -> IrModule {
+    let arena: AstArena = arena_new();
+    let parsed: Module = parse_module_into(lex(source), arena, diag_ctx_new(), file);
+    let item_files: Vec<String> = Vec::new();
+    item_files.push(file);
+    lower_module_vow(
+        parsed, Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), item_files
+    )
+}
+
+fn check_emitted_calls() -> i64 {
+    let lowered: IrModule = lower_fixture(
+        String::from("module MethodSpecCalls\nfn exercise(hay: String, needle: String, map: HashMap<i64, i64>, tree: BTreeMap<i64, i64>) -> i64 {\n    let n: i64 = hay.len(123);\n    let found: bool = hay.contains(needle);\n    let map_value: i64 = map.get(n);\n    let tree_value: Option<i64> = tree.get(n);\n    let v: Vec<i64> = Vec::new();\n    v.truncate(n);\n    n\n}"),
+        String::from("method_spec_calls.vow")
+    );
+    if lowered.functions.len() != 1 { return 150; }
+    let function: IrFunction = lowered.functions[0];
+    let seen: Vec<bool> = Vec::new();
+    seen.push(false);
+    seen.push(false);
+    seen.push(false);
+    seen.push(false);
+    seen.push(false);
+    let mut block_index: i64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: i64 = 0;
+        while inst_index < block.insts.len() {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                if inst.ds == String::from("__vow_string_len") {
+                    if inst.ty != ITY_I64() || inst.args.len() != 1 { return 151; }
+                    seen[0] = true;
+                } else if inst.ds == String::from("__vow_string_contains") {
+                    if inst.ty != ITY_BOOL() || inst.args.len() != 2 { return 152; }
+                    seen[1] = true;
+                } else if inst.ds == String::from("__vow_map_get") {
+                    if inst.ty != ITY_I64() || inst.args.len() != 2 { return 153; }
+                    seen[2] = true;
+                } else if inst.ds == String::from("__vow_btreemap_get") {
+                    if inst.ty != ITY_PTR() || inst.args.len() != 2 { return 154; }
+                    seen[3] = true;
+                } else if inst.ds == String::from("__vow_vec_truncate") {
+                    if inst.ty != ITY_UNIT() || inst.args.len() != 2 { return 155; }
+                    seen[4] = true;
+                }
+            }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    let mut i: i64 = 0;
+    while i < seen.len() {
+        if !seen[i] { return 156 + i; }
+        i = i + 1;
+    }
+    0
+}
+
+fn check_missing_argument_fallbacks() -> i64 {
+    let lowered: IrModule = lower_fixture(
+        String::from("module MethodSpecFallbacks\nfn exercise(hay: String, tree: BTreeMap<i64, i64>) -> i64 {\n    let equal: bool = hay.eq();\n    let found: bool = hay.contains();\n    let tree_value: Option<i64> = tree.get();\n    let present: bool = tree.contains();\n    let v: Vec<i64> = Vec::new();\n    v.truncate();\n    v.len()\n}"),
+        String::from("method_spec_fallbacks.vow")
+    );
+    if lowered.functions.len() != 1 { return 170; }
+    let function: IrFunction = lowered.functions[0];
+    let mut unit_fallbacks: i64 = 0;
+    let mut zero_fallbacks: i64 = 0;
+    let mut block_index: i64 = 0;
+    while block_index < function.blocks.len() {
+        let block: IrBlock = function.blocks[block_index];
+        let mut inst_index: i64 = 0;
+        while inst_index < block.insts.len() {
+            let inst: IrInst = block.insts[inst_index];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && inst.args.len() == 2 {
+                if inst.ds == String::from("__vow_string_eq") || inst.ds == String::from("__vow_string_contains") || inst.ds == String::from("__vow_btreemap_get") || inst.ds == String::from("__vow_btreemap_contains") {
+                    if inst_opcode_by_id(function, inst.args[1]) != IOP_CONST_UNIT() { return 171; }
+                    unit_fallbacks = unit_fallbacks + 1;
+                } else if inst.ds == String::from("__vow_vec_truncate") {
+                    if inst_opcode_by_id(function, inst.args[1]) != IOP_CONST_I64() { return 172; }
+                    zero_fallbacks = zero_fallbacks + 1;
+                }
+            }
+            inst_index = inst_index + 1;
+        }
+        block_index = block_index + 1;
+    }
+    if unit_fallbacks != 4 { return 173; }
+    if zero_fallbacks != 1 { return 174; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_all_rows();
+    if r1 != 0 { return i64_to_i32_wrap(r1); }
+    let r2: i64 = check_precedence_and_declines();
+    if r2 != 0 { return i64_to_i32_wrap(r2); }
+    let r3: i64 = check_emitted_calls();
+    if r3 != 0 { return i64_to_i32_wrap(r3); }
+    let r4: i64 = check_missing_argument_fallbacks();
+    if r4 != 0 { return i64_to_i32_wrap(r4); }
+    0
+}
