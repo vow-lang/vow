@@ -1,3 +1,24 @@
+# [0.9.0](https://github.com/vow-lang/vow/compare/v0.8.0...v0.9.0) (2026-09-27)
+
+
+### Bug Fixes
+
+* **checker:** reject type-mismatched assignments in self-hosted checker ([#1264](https://github.com/vow-lang/vow/issues/1264)) ([ed4c9b9](https://github.com/vow-lang/vow/commit/ed4c9b9eb46dce02ad6224debd45e4a0e51ea4da))
+* **checker:** validate struct-literal field types and names ([#1278](https://github.com/vow-lang/vow/issues/1278)) ([fab6d1d](https://github.com/vow-lang/vow/commit/fab6d1d13f369ff22c55c5329cfd6e9ae916eea4))
+* **ci:** check exact help-JSON fields instead of a flattened blob ([#1258](https://github.com/vow-lang/vow/issues/1258)) ([9eecc3d](https://github.com/vow-lang/vow/commit/9eecc3d14784b6dbdf6583df2db7b96e63d70ed1))
+* **diag:** anchor call/enum-ctor/builtin-method spans correctly ([#1263](https://github.com/vow-lang/vow/issues/1263)) ([0762f00](https://github.com/vow-lang/vow/commit/0762f0022557e60728de542fa88c5afabc930b01))
+* **docs:** mask code spans and fenced blocks before escaping-link rewrite ([#1250](https://github.com/vow-lang/vow/issues/1250)) ([d79ae6e](https://github.com/vow-lang/vow/commit/d79ae6ea4584c45f6a3b69ec08fcfdee261e1b3f))
+* **lexer:** use checked subtraction in span_len instead of dropping its contract ([#1306](https://github.com/vow-lang/vow/issues/1306)) ([3f41dfc](https://github.com/vow-lang/vow/commit/3f41dfc837d1412585e90d93caba1ac94ee2b194))
+* **lower:** tag proc_sample as heap-returning in tag_builtin_result ([#1288](https://github.com/vow-lang/vow/issues/1288)) ([f3182d1](https://github.com/vow-lang/vow/commit/f3182d19d8bf9fdc9bcb1ccec462236f06a23261))
+* port symphonika's blocked-sentinel gate, trim impl.md ([#1284](https://github.com/vow-lang/vow/issues/1284)) ([e52e690](https://github.com/vow-lang/vow/commit/e52e69043ba8a34387f7a0843194492554525541))
+* **symphonika:** gate implement stage on an open PR, not just a commit ([#1280](https://github.com/vow-lang/vow/issues/1280)) ([9befaad](https://github.com/vow-lang/vow/commit/9befaad97027afe41f8ce166cecb4b1694744282))
+* **verify:** port parse_u64_opt verifier model to self-hosted emitter ([#1289](https://github.com/vow-lang/vow/issues/1289)) ([4b37ef2](https://github.com/vow-lang/vow/commit/4b37ef2a26a0c42a9b14d18b27d7d63b127a3b8a))
+
+
+### Features
+
+* **compiler:** implement let (a, b) tuple destructuring ([#1333](https://github.com/vow-lang/vow/issues/1333)) ([0e4059f](https://github.com/vow-lang/vow/commit/0e4059f7609d0f6281e60cffd04a66f0de63b1c6))
+
 # [0.8.0](https://github.com/vow-lang/vow/compare/v0.7.0...v0.8.0) (2026-09-06)
 
 
