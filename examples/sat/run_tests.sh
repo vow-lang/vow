@@ -13,7 +13,7 @@ fi
 
 mkdir -p "$LOCAL_DIR"
 
-zsh -lc "ulimit -v 2000000; TMPDIR='$TMP_ROOT' '$REPO_ROOT/build/vowc' build --no-verify '$SAT_DIR/main.vow' -o '$BIN'" >/dev/null
+zsh -lc "TMPDIR='$TMP_ROOT' '$REPO_ROOT/build/vowc' build --no-verify '$SAT_DIR/main.vow' -o '$BIN'" >/dev/null
 
 failures=0
 

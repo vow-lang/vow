@@ -33,7 +33,7 @@ fn main() -> i32 [io] {
 ## Verify
 
 ```console
-$ ulimit -v 2000000; build/vowc verify max.vow
+$ build/vowc verify max.vow
 {"status":"VerifyFailed","function":"max",
  "counterexamples":[
    {"function":"max","vow_id":1,"blame":"Callee",
@@ -65,7 +65,7 @@ fn max(a: i64, b: i64) -> i64 vow {
 ```
 
 ```console
-$ ulimit -v 2000000; build/vowc verify max.vow
+$ build/vowc verify max.vow
 {"status":"Verified","executable":null,"diagnostics":[],"counterexamples":[]}
 ```
 

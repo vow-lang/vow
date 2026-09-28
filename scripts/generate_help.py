@@ -986,7 +986,7 @@ def build_skill_entrypoint() -> str:
             "## Core workflow",
             "",
             "1. Write a `.vow` file with explicit contracts.",
-            "2. Run `ulimit -v 2000000; build/vowc build <file.vow>`.",
+            "2. Run `build/vowc build <file.vow>`.",
             "3. Parse stdout JSON and inspect `status`, `diagnostics`, and `counterexamples`.",
             "4. Fix compile errors, verification failures, or weak contracts, then rerun.",
             "",

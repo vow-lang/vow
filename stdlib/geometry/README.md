@@ -19,7 +19,7 @@ Full signatures and contracts:
 ## Usage
 
 ```
-ulimit -v 2000000; build/vowc build stdlib/geometry/main.vow -o /tmp/geo_demo && /tmp/geo_demo
+build/vowc build stdlib/geometry/main.vow -o /tmp/geo_demo && /tmp/geo_demo
 ```
 
 ## Key idea: exact overflow bounds

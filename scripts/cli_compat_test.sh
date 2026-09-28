@@ -100,11 +100,11 @@ run_mode() {
     case "$mode" in
         build-no-verify)
             rust_json=$($RUST build --no-verify "$vow_file" -o "$TMPDIR/rust_${name}" 2>/dev/null) || rust_exit=$?
-            self_json=$(ulimit -v 2000000; $SELF build --no-verify "$vow_file" -o "$TMPDIR/self_${name}" 2>/dev/null) || self_exit=$?
+            self_json=$($SELF build --no-verify "$vow_file" -o "$TMPDIR/self_${name}" 2>/dev/null) || self_exit=$?
             ;;
         verify)
             rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
-            self_json=$(ulimit -v 2000000; $SELF verify "$vow_file" 2>/dev/null) || self_exit=$?
+            self_json=$($SELF verify "$vow_file" 2>/dev/null) || self_exit=$?
             ;;
     esac
 

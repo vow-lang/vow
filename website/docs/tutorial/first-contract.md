@@ -26,7 +26,7 @@ fn main() -> i32 [io] {
 ```
 
 ```console
-$ ulimit -v 2000000; build/vowc build divide.vow
+$ build/vowc build divide.vow
 {"status":"Verified","executable":"divide","diagnostics":[],"counterexamples":[]}
 ```
 
@@ -57,8 +57,8 @@ Build with `--no-verify` — we want to observe the *runtime* check here, not ha
 static verifier weigh in — then run it:
 
 ```console
-$ ulimit -v 2000000; build/vowc build --mode debug --no-verify divide.vow
-$ ulimit -v 2000000; ./divide
+$ build/vowc build --mode debug --no-verify divide.vow
+$ ./divide
 {"error":"VowViolation","vow_id":0,"blame":"Caller",
  "description":"requires: y != 0","values":{"y":0}}
 ```

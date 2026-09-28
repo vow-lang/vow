@@ -39,10 +39,10 @@ A few things to notice:
 ## Build and run
 
 ```console
-$ ulimit -v 2000000; build/vowc build hello.vow
+$ build/vowc build hello.vow
 {"status":"Unverified","executable":"hello","diagnostics":[],"counterexamples":[]}
 
-$ ulimit -v 2000000; ./hello
+$ ./hello
 Hello, world!
 ```
 

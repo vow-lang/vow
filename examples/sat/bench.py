@@ -123,7 +123,6 @@ def build_vow_solver(force: bool = False) -> Path:
     env = dict(os.environ)
     env["TMPDIR"] = env.get("TMPDIR", str(DEFAULT_TMPDIR))
     cmd = (
-        f"ulimit -v 2000000; "
         f"'{REPO_ROOT / 'build' / 'vowc'}' build --no-verify "
         f"'{SCRIPT_DIR / 'main.vow'}' -o '{DEFAULT_SOLVER_BIN}'"
     )

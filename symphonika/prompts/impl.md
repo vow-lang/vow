@@ -14,10 +14,8 @@ If a previous attempt left work here, `git log main..HEAD` shows it.
 `CLAUDE.md` governs everything else in this repo — language rules, contract authoring, the
 dual-compiler rule, docs/spec updates, the quality gate, and commit/PR conventions. Defer to it.
 
-## Two rules CLAUDE.md doesn't cover
+## One rule CLAUDE.md doesn't cover
 
-- Prefix any self-compiled binary you run with `ulimit -v 2000000` — bounds virtual memory so a
-  runaway allocation fails fast instead of hanging the sandbox.
 - Never commit `build/vowc` or anything else under `build/` (gitignored). Never `git add -f` it.
 
 ## This stage's deliverable is an open PR, not a commit

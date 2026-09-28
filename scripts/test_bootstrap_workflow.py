@@ -115,9 +115,9 @@ class BootstrapWorkflowTest(unittest.TestCase):
     def compiler_test_step(self) -> str:
         """Just the tier-1 comparison step.
 
-        Job-wide assertions are worthless here: `ulimit` and `timeout-minutes`
-        both already appear elsewhere in this job, so a job-scoped `assertIn`
-        stays green even if the step is deleted outright.
+        Job-wide assertions are worthless here: `timeout-minutes` already
+        appears elsewhere in this job, so a job-scoped `assertIn` stays green
+        even if the step is deleted outright.
         """
         linux = self.jobs["bootstrap"]
         start = linux.index("equivalence tier 1")
@@ -135,14 +135,12 @@ class BootstrapWorkflowTest(unittest.TestCase):
                 self.assertIn(command, step)
         self.assertLess(linux.index("scripts/bootstrap.sh"), linux.index(self_test))
 
-    def test_the_address_space_cap_covers_only_the_self_hosted_binary(self) -> None:
-        # Capping the Rust compiler or python3 as well would turn a memory
-        # limit into a spurious parity failure. full_test.sh's run_self scopes
-        # it the same way.
+    def test_the_compiler_test_step_sets_no_memory_cap(self) -> None:
+        # A cap on one side only would turn a memory limit into a spurious
+        # parity failure.
         step = self.compiler_test_step()
 
-        self.assertIn("( ulimit -v 2000000; build/vowc test compiler/ )", step)
-        self.assertNotRegex(step, r"^\s+ulimit -v \d+$")
+        self.assertNotIn("ulimit", step)
 
     def test_linux_compiler_test_comparison_is_blocking(self) -> None:
         # No `continue-on-error`, and a step-level bound so a #1171 overrun

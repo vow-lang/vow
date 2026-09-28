@@ -37,7 +37,7 @@ fn main() -> i32 [io] {
 ```
 
 ```console
-$ ulimit -v 2000000; build/vowc verify sumrange.vow
+$ build/vowc verify sumrange.vow
 {"status":"Verified","executable":null,"diagnostics":[],"counterexamples":[]}
 ```
 

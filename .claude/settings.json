@@ -19,7 +19,6 @@
       "Bash(cargo test*)",
       "Bash(cargo clippy*)",
       "Bash(cargo fmt*)",
-      "Bash(ulimit -v 2000000*)",
       "Bash(scripts/bootstrap.sh*)",
       "Bash(scripts/full_test.sh*)",
       "Bash(scripts/cli_compat_test.sh*)",

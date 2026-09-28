@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 sys.modules.setdefault("anthropic", MagicMock())
 sys.modules.setdefault("openai", MagicMock())
 
-from run import SELF_HOSTED_MEM_LIMIT, resolve_compiler
+from run import resolve_compiler
 
 
 class ResolveCompilerTests(unittest.TestCase):
@@ -21,10 +21,7 @@ class ResolveCompilerTests(unittest.TestCase):
                 compiler.parent.mkdir(parents=True, exist_ok=True)
                 compiler.touch()
 
-            self.assertEqual(
-                resolve_compiler(root),
-                (self_hosted, SELF_HOSTED_MEM_LIMIT, True),
-            )
+            self.assertEqual(resolve_compiler(root), (self_hosted, True))
 
     def test_ignores_legacy_self_hosted_compiler(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -35,7 +32,7 @@ class ResolveCompilerTests(unittest.TestCase):
                 compiler.parent.mkdir(parents=True, exist_ok=True)
                 compiler.touch()
 
-            self.assertEqual(resolve_compiler(root), (rust, None, False))
+            self.assertEqual(resolve_compiler(root), (rust, False))
 
 
 if __name__ == "__main__":

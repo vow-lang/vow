@@ -52,13 +52,6 @@ class CorpusTest(unittest.TestCase):
         self.assertTrue((verifier_runtime.REPO_ROOT / "CLAUDE.md").exists())
 
 
-class ViolationParsingTest(unittest.TestCase):
-    def test_memory_limit_matches_the_repo_convention(self):
-        # `ulimit -v 2000000` is the repo-wide rule for self-compiled binaries;
-        # expressed in bytes here because setrlimit takes bytes.
-        self.assertEqual(2_000_000 * 1024, verifier_runtime.SELF_MEM_LIMIT)
-
-
 def _verify_failed(*replay_values):
     return {
         "status": "VerifyFailed",

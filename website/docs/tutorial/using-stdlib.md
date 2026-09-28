@@ -18,8 +18,8 @@ So there are two practical ways to use a stdlib module:
 Each module ships a `main.vow` you can build and run directly:
 
 ```console
-$ ulimit -v 2000000; build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
-$ ulimit -v 2000000; /tmp/math_demo
+$ build/vowc build --no-verify stdlib/math/main.vow -o /tmp/math_demo
+$ /tmp/math_demo
 ```
 
 ### 2. Copy the module into your project
@@ -46,8 +46,8 @@ fn max_example() -> i64 {
 ```
 
 ```console
-$ ulimit -v 2000000; build/vowc build --no-verify myproject/main.vow -o myproject/app
-$ ulimit -v 2000000; myproject/app
+$ build/vowc build --no-verify myproject/main.vow -o myproject/app
+$ myproject/app
 ```
 
 For a multi-file module, copy **all** its sibling files together — e.g. `geometry`

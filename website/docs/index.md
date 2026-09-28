@@ -27,7 +27,7 @@ fn main() -> i32 [io] {
 ```
 
 ```console
-$ ulimit -v 2000000; build/vowc build divide.vow
+$ build/vowc build divide.vow
 {"status":"Verified","executable":"divide", ...}
 ```
 

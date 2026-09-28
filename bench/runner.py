@@ -100,7 +100,6 @@ def run_benchmark(
     system_prompt: str,
     vow_binary: Path,
     verify_timeout: int = 120,
-    memory_limit: int | None = None,
 ) -> BenchmarkResult:
     start = time.time()
     max_iters = bench.max_cegis_iterations
@@ -159,9 +158,7 @@ def run_benchmark(
             )
             verify_outputs.append(mismatch_output)
             if iteration < max_iters:
-                previous_violations.append(
-                    f"skeleton mismatch: {fidelity.message}"
-                )
+                previous_violations.append(f"skeleton mismatch: {fidelity.message}")
                 messages.append(
                     {
                         "role": "user",
@@ -189,9 +186,7 @@ def run_benchmark(
             )
 
         # Verify
-        vr = run_verify(
-            vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit
-        )
+        vr = run_verify(vow_binary, code, timeout=verify_timeout)
         verify_outputs.append(vr.raw_json)
 
         if vr.status == "Verified":
@@ -244,9 +239,7 @@ def run_benchmark(
     # Exhausted iterations
     elapsed = time.time() - start
     last_vr = (
-        run_verify(
-            vow_binary, final_code, timeout=verify_timeout, memory_limit=memory_limit
-        )
+        run_verify(vow_binary, final_code, timeout=verify_timeout)
         if final_code
         else None
     )
