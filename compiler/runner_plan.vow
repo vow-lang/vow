@@ -1,0 +1,152 @@
+module RunnerPlan
+
+// The complete input to the `vow test` execution loop. `files` is already
+// filtered and sorted; an empty `module_root` delegates module resolution to
+// the entry file's parent directory.
+struct TestSelection {
+    files: Vec<String>,
+    module_root: String,
+}
+
+fn strip_vow_ext(path: String) -> String {
+    let n: i64 = path.len();
+    if n > 4 {
+        let d: i64 = path.byte_at(n - 4);
+        let v: i64 = path.byte_at(n - 3);
+        let o: i64 = path.byte_at(n - 2);
+        let w: i64 = path.byte_at(n - 1);
+        if d == 46 && v == 118 && o == 111 && w == 119 {
+            return string_substr(path, 0, n - 4);
+        }
+    }
+    path
+}
+
+// Return the final path component without its `.vow` extension. Filtering and
+// result names use this one definition so parent directories never participate.
+fn file_stem_from_path(path: String) -> String {
+    let parts: Vec<String> = string_split(path, String::from("/"));
+    if parts.len() == 0 {
+        return strip_vow_ext(path);
+    }
+    strip_vow_ext(parts[parts.len() - 1])
+}
+
+// Byte-wise lexicographic order mirrors Rust PathBuf ordering for the
+// ASCII-clean paths accepted by test discovery.
+fn test_path_lt(a: String, b: String) -> bool {
+    let na: i64 = a.len();
+    let nb: i64 = b.len();
+    let mut i: i64 = 0;
+    while i < na && i < nb {
+        let ca: i64 = a.byte_at(i);
+        let cb: i64 = b.byte_at(i);
+        if ca < cb { return true; }
+        if ca > cb { return false; }
+        i = i + 1;
+    }
+    na < nb
+}
+
+fn sort_test_paths(paths: Vec<String>) {
+    let n: i64 = paths.len();
+    let mut i: i64 = 1;
+    while i < n {
+        let current: String = paths[i];
+        let mut j: i64 = i;
+        while j > 0 && test_path_lt(current, paths[j - 1]) {
+            paths[j] = paths[j - 1];
+            j = j - 1;
+        }
+        paths[j] = current;
+        i = i + 1;
+    }
+}
+
+fn is_test_file(name: String) -> bool {
+    if string_ends_with(name, String::from(".vow")) == 0 {
+        return false;
+    }
+    if string_starts_with(name, String::from("test_")) != 0 {
+        return true;
+    }
+    let n: i64 = name.len();
+    if n > 9 {
+        let suffix: String = string_substr(name, n - 9, 9);
+        if suffix == String::from("_test.vow") {
+            return true;
+        }
+    }
+    false
+}
+
+fn test_path_join(dir: String, entry: String) -> String {
+    let joined: String = String::from("");
+    let n: i64 = dir.len();
+    if n > 0 && dir.byte_at(n - 1) == 47 {
+        joined.push_str(string_substr(dir, 0, n - 1));
+    } else {
+        joined.push_str(dir);
+    }
+    joined.push_str(String::from("/"));
+    joined.push_str(entry);
+    joined
+}
+
+fn test_filter_matches(path: String, filter: String) -> bool {
+    filter.len() == 0 || file_stem_from_path(path).contains(filter)
+}
+
+// Discover and filter in one traversal. Symlink entries are skipped, matching
+// Rust DirEntry::file_type lstat semantics; a direct scan path retains the
+// existing behavior and is selected by stem filter regardless of its filename.
+fn discover_selected_tests(root: String, filter: String, root_is_dir: bool) -> Vec<String> [io] {
+    let files: Vec<String> = Vec::new();
+    if !root_is_dir {
+        if test_filter_matches(root, filter) {
+            files.push(root);
+        }
+        return files;
+    }
+
+    let stack: Vec<String> = Vec::new();
+    stack.push(root);
+    while stack.len() > 0 {
+        let dir: String = stack[stack.len() - 1];
+        stack.pop();
+        let entries: Vec<String> = fs_listdir(dir);
+        let mut i: i64 = 0;
+        while i < entries.len() {
+            let entry: String = entries[i];
+            let full: String = test_path_join(dir, entry);
+            if fs_is_symlink(full) == 1 {
+                i = i + 1;
+                continue;
+            }
+            if fs_is_dir(full) == 1 {
+                stack.push(full);
+            } else if is_test_file(entry) && test_filter_matches(full, filter) {
+                files.push(full);
+            }
+            i = i + 1;
+        }
+    }
+    sort_test_paths(files);
+    files
+}
+
+// Build the only selection interface consumed by `run_test`. The caller owns
+// nonexistent-path diagnostics; this function assumes `scan_path` exists.
+fn select_tests(scan_path: String, filter: String, module_root_override: String) -> TestSelection [io] {
+    let scan_is_dir: bool = fs_is_dir(scan_path) == 1;
+    let files: Vec<String> = discover_selected_tests(scan_path, filter, scan_is_dir);
+    let module_root: String = {
+        if module_root_override.len() > 0 { module_root_override }
+        else if scan_is_dir { scan_path }
+        else { String::from("") }
+    };
+    TestSelection {
+        files: files,
+        module_root: module_root,
+    }
+}

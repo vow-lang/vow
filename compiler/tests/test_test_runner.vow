@@ -1,0 +1,32 @@
+module TestTestRunner
+
+use runner_plan
+
+fn main() -> i32 [io] {
+    let directory: TestSelection = select_tests(
+        String::from("compiler/tests"),
+        String::from("smoke"),
+        String::from("")
+    );
+    if directory.files.len() != 1 { return 1; }
+    if directory.files[0] != String::from("compiler/tests/test_smoke.vow") { return 2; }
+    if directory.module_root != String::from("compiler/tests") { return 3; }
+
+    let explicit: TestSelection = select_tests(
+        String::from("compiler/tests/test_smoke.vow"),
+        String::from("smoke"),
+        String::from("compiler")
+    );
+    if explicit.files.len() != 1 { return 4; }
+    if explicit.files[0] != String::from("compiler/tests/test_smoke.vow") { return 5; }
+    if explicit.module_root != String::from("compiler") { return 6; }
+
+    let unmatched: TestSelection = select_tests(
+        String::from("compiler/tests/test_smoke.vow"),
+        String::from("missing"),
+        String::from("")
+    );
+    if unmatched.files.len() != 0 { return 7; }
+    if unmatched.module_root != String::from("") { return 8; }
+    0
+}
