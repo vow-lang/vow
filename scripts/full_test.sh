@@ -57,13 +57,20 @@ section_finalize() {
 
 # ─── Helpers ────────────────────────────────────────────────────────
 
+# Optional per-process virtual-memory cap (KB) for self-hosted runs. Unset or
+# empty means unlimited. The limit is inherited by ESBMC children and is per
+# process, not aggregate; a host-level cap (e.g. a cgroup) bounds the total.
+apply_vmem_limit() {
+    if [ -n "${VOW_ULIMIT_KB:-}" ]; then ulimit -v "$VOW_ULIMIT_KB"; fi
+}
+
 run_self() {
-    (ulimit -v 2000000; "$SELF" "$@")
+    (apply_vmem_limit; "$SELF" "$@")
 }
 
 run_self_bin() {
     local bin="$1"; shift
-    (ulimit -v 2000000; "$bin" "$@")
+    (apply_vmem_limit; "$bin" "$@")
 }
 
 setup_compilers() {
@@ -1572,10 +1579,10 @@ else
         "default=$default_solver_command; override=$override_solver_command"
 fi
 
-# The shared runner applies the same 2 GB virtual-memory cap as run_self, so
-# this also guards against a regression in the verify invocation. With the
+# The shared runner applies the same VOW_ULIMIT_KB cap as run_self, so under a
+# cap this also guards against a regression in the verify invocation. With the
 # single-shot --unwind 5 --boolector command (#516) the harness stays below
-# the cap, but --incremental-bmc / Bitwuzla blew past it (#546).
+# 2 GB, but --incremental-bmc / Bitwuzla blew past it (#546).
 if command -v esbmc >/dev/null 2>&1; then
     if scripts/verify_arena.sh >"$TMPDIR/arena_verify.log" 2>&1; then
         pass "arena/esbmc"
@@ -1591,7 +1598,7 @@ echo ""
 
 section_begin "Section 12: vowc mutants Smoke Test"
 if [ -f tests/mutants/tests.sh ]; then
-    if (ulimit -v 2000000; VOWC_BIN="$SELF" bash tests/mutants/tests.sh) >"$TMPDIR/vowc-mutants-tests.log" 2>&1; then
+    if (apply_vmem_limit; VOWC_BIN="$SELF" bash tests/mutants/tests.sh) >"$TMPDIR/vowc-mutants-tests.log" 2>&1; then
         pass "vowc-mutants/tests"
     else
         fail "vowc-mutants/tests" "$(tail -10 "$TMPDIR/vowc-mutants-tests.log")"

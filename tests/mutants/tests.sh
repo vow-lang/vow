@@ -34,7 +34,7 @@ setup() {
 }
 
 run_vowm() {
-    (ulimit -v 2000000; "$VOWC" mutants "$@")
+    (if [ -n "${VOW_ULIMIT_KB:-}" ]; then ulimit -v "$VOW_ULIMIT_KB"; fi; "$VOWC" mutants "$@")
 }
 
 assert_eq() {

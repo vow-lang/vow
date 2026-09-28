@@ -12,7 +12,7 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 run_vowc() {
-    (ulimit -v 2000000; "$VOWC_BIN" "$@")
+    (if [ -n "${VOW_ULIMIT_KB:-}" ]; then ulimit -v "$VOW_ULIMIT_KB"; fi; "$VOWC_BIN" "$@")
 }
 
 FAKE_BIN="$TMP_ROOT/bin"

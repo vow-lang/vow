@@ -55,7 +55,8 @@ class WorkflowTest(unittest.TestCase):
 
 
 class VerifyArenaTest(unittest.TestCase):
-    def test_runner_caps_memory_and_invokes_the_arena_proof(self) -> None:
+    def run_runner(self, vmem_kb: str | None) -> tuple[str, str]:
+        """Run the runner against a fake esbmc; return (captured output, ambient vmem)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             capture_path = temp_path / "invocation.txt"
@@ -78,21 +79,40 @@ set -euo pipefail
             env = os.environ.copy()
             env["ARENA_TEST_CAPTURE"] = str(capture_path)
             env["ESBMC"] = str(fake_esbmc)
+            env.pop("VOW_ULIMIT_KB", None)
+            if vmem_kb is not None:
+                env["VOW_ULIMIT_KB"] = vmem_kb
 
+            ambient = subprocess.run(
+                ["bash", "-c", "ulimit -v"],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
             subprocess.run([RUNNER], cwd=temp_path, env=env, check=True)
+            return capture_path.read_text(encoding="utf-8"), ambient
 
-            self.assertEqual(
-                capture_path.read_text(encoding="utf-8"),
-                "\n".join(
-                    [
-                        "vmem_kb=2000000",
-                        f"working_directory={REPO_ROOT / 'vow-runtime' / 'verify'}",
-                        "arguments= <arena.c> <--unwind> <5> <--no-bounds-check> "
-                        "<--no-pointer-check> <--64> <--boolector>",
-                        "",
-                    ]
-                ),
-            )
+    def expected(self, vmem: str) -> str:
+        return "\n".join(
+            [
+                f"vmem_kb={vmem}",
+                f"working_directory={REPO_ROOT / 'vow-runtime' / 'verify'}",
+                "arguments= <arena.c> <--unwind> <5> <--no-bounds-check> "
+                "<--no-pointer-check> <--64> <--boolector>",
+                "",
+            ]
+        )
+
+    def test_runner_leaves_memory_unlimited_by_default(self) -> None:
+        captured, ambient = self.run_runner(None)
+
+        self.assertEqual(captured, self.expected(ambient))
+
+    def test_runner_caps_memory_when_vow_ulimit_kb_is_set(self) -> None:
+        captured, _ = self.run_runner("2000000")
+
+        self.assertEqual(captured, self.expected("2000000"))
 
 
 if __name__ == "__main__":
