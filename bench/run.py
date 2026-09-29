@@ -249,7 +249,7 @@ def _validate_compare(root: Path, benchmarks: list) -> None:
 
 def _default_models() -> list[str]:
     return [
-        "claude-sonnet-5",
+        "claude-sonnet-5-5",
     ]
 
 
@@ -332,7 +332,7 @@ def main() -> None:
 
     # run
     run_parser = subparsers.add_parser("run", help="Run benchmarks")
-    run_parser.add_argument("--model", help="Model ID (e.g. claude-sonnet-5)")
+    run_parser.add_argument("--model", help="Model ID (e.g. claude-sonnet-5-5)")
     run_parser.add_argument(
         "--all", action="store_true", help="Run all configured models"
     )

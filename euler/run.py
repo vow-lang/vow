@@ -767,7 +767,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
 
     run_p = subparsers.add_parser("run", help="Run problems against an LLM")
-    run_p.add_argument("--model", default="claude-sonnet-5", help="Model ID")
+    run_p.add_argument("--model", default="claude-sonnet-5-5", help="Model ID")
     run_p.add_argument("--problem", help="Run single problem by ID (e.g. E001)")
     run_p.add_argument(
         "--resume", action="store_true", help="Skip already-completed problems"
